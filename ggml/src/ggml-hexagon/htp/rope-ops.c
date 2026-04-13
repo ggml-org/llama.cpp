@@ -15,10 +15,10 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
-// Redefined the types GGML_ROPE_TYPE_NORMAL & GGML_ROPE_TYPE_NEOX as we cant include ggml.h
+// Redefined the types GGML_ROPE_TYPE_NORMAL & GGML_ROPE_TYPE_NEOX as we can't include ggml.h
 #define HTP_ROPE_TYPE_NORMAL 0
 #define HTP_ROPE_TYPE_NEOX   2
 
@@ -253,10 +253,10 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     struct htp_rope_context * rctx = (struct htp_rope_context *) data;
     struct htp_ops_context * octx = rctx->octx;
 
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    const struct htp_tensor * src2 = &octx->src2;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * src2 = octx->src[2];
+    const struct htp_tensor * dst  = octx->dst;
 
     htp_rope_preamble;
 
@@ -284,7 +284,7 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
     dma_queue * dma_queue = octx->ctx->dma[ith];
     const int32_t * pos = (const int32_t *) src1->data;
-    const float * freq_factors = src2->data ? (const float *) src2->data : NULL;
+    const float * freq_factors = src2 ? (const float *) src2->data : NULL;
 
     uint32_t ir = 0;
     uint32_t prev_i2 = (uint32_t) -1;
@@ -333,8 +333,8 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                     //         (unsigned) HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - rctx->t_start));
                 }
 
-                // Skip DMA transactions from prev block (if any)
-                // No need to wait for these since the DMA is setup for in-order processing
+                // Skip output DMA transactions from prev block (if any)
+                // No need to wait for those here since we're explicitly waiting for the latest prefecthes below.
                 for (uint32_t d=0; d < dma_depth; d++) { dma_queue_pop_nowait(dma_queue); }
 
                 // Compute loop
@@ -384,10 +384,10 @@ done:
 static int execute_op_rope_f32(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    const struct htp_tensor * src2 = &octx->src2;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * src2 = octx->src[2];
+    const struct htp_tensor * dst  = octx->dst;
 
     const char * op_type = "rope-f32";
 
@@ -400,7 +400,9 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t ne0 = dst->ne[0];
+    const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t n_threads = MIN(octx->n_threads, src0_nrows);
 
     const size_t src0_row_size = src0->nb[1];
     const size_t dst_row_size  = dst->nb[1];
@@ -422,19 +424,16 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    // Assign sizes
     octx->src0_spad.size_per_thread = src0_spad_per_thread;
     octx->dst_spad.size_per_thread  = dst_spad_per_thread;
     octx->src0_spad.size = n_threads * src0_spad_per_thread;
     octx->dst_spad.size  = n_threads * dst_spad_per_thread;
     octx->src1_spad.size = 0;
 
-    // Assign pointers
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = NULL;
-    octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
+    octx->src0_spad.data = octx->ctx->vtcm_base;                        octx->src0_spad.src = NULL;
+    octx->src1_spad.data = NULL;                                        octx->src1_spad.src = NULL;
+    octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size; octx->dst_spad.src  = NULL;
 
-    // Fill context
     struct htp_rope_context rctx;
     memset(&rctx, 0, sizeof(struct htp_rope_context));
 
@@ -465,17 +464,14 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     rctx.dst_row_size_aligned  = dst_row_size_aligned;
     rctx.theta_cache_offset    = theta_cache_size_aligned;
 
-    uint32_t ne0 = dst->ne[0];
-    uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
     rctx.src0_nrows = src0_nrows;
+    rctx.src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
 
     FARF(HIGH, "rope-f32 n-rows %u n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n", rctx.src0_nrows, rctx.n_dims, ne0,
          rctx.ext_factor, rctx.theta_scale, rctx.attn_factor);
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        uint32_t n_jobs = MIN(n_threads, src0_nrows);
-        rctx.src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
-        worker_pool_run_func(octx->ctx->worker_pool, rope_job_f32, &rctx, n_jobs);
+        worker_pool_run_func(octx->ctx->worker_pool, rope_job_f32, &rctx, n_threads);
     }
 
     return err;
@@ -484,7 +480,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 int op_rope(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    switch (octx->src0.type) {
+    switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
             err = execute_op_rope_f32(octx);
             break;

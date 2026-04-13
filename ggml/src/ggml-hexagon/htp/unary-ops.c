@@ -9,12 +9,14 @@
 #include <string.h>
 
 #include "hex-dma.h"
+#include "hvx-exp.h"
+#include "hvx-sigmoid.h"
 #include "hvx-utils.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
 struct htp_unary_context {
@@ -65,34 +67,61 @@ static void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
                                   uint8_t * restrict pad,
                                   const int num_elems,
                                   float     epsilon) {
+    (void)pad;
+
     const HVX_Vector * restrict v_src = (HVX_Vector *) src;
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
 
-    HVX_Vector sum_v     = Q6_V_vsplat_R(0x00000000);
+    const int nvec = num_elems / VLEN_FP32;    // number of full vectors
+    const int nloe = num_elems % VLEN_FP32;    // leftover elements
+
+    // Compute sum of squares for full vectors
+    HVX_Vector sum_v = Q6_V_vsplat_R(0x00000000);
     HVX_Vector epsilon_v = hvx_vec_splat_f32(epsilon);
 
-    int step_of_1 = num_elems >> 5;
     #pragma unroll(4)
-    for (int i = 0; i < step_of_1; i++) {
+    for (int i = 0; i < nvec; i++) {
         HVX_Vector v1 = v_src[i];
         HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, v1);
-        sum_v         = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
     }
 
-    sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v)); // replicated over all lanes
+    // Handle tail elements using vectorized ops with masking
+    if (nloe > 0) {
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
+        HVX_Vector v1 = Q6_V_vand_QV(bmask, v_src[nvec]);
+        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, v1);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
+    }
+
+    // Reduce HVX sum
+    sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
 
     HVX_Vector t_v            = hvx_vec_splat_f32((float) num_elems);
     HVX_Vector denom_v        = hvx_vec_inverse_f32(t_v);
     HVX_Vector mean_v         = Q6_Vqf32_vmpy_VsfVsf(sum_v, denom_v);
     HVX_Vector mean_epsilon_v = Q6_Vqf32_vadd_Vqf32Vsf(mean_v, epsilon_v);
 
+    // Scale full vectors
     HVX_Vector scale_v = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
 
     #pragma unroll(4)
-    for (int i = 0; i < step_of_1; i++) {
+    for (int i = 0; i < nvec; i++) {
         HVX_Vector v1 = v_src[i];
         HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_v);
-        v_dst[i]      = Q6_Vsf_equals_Vqf32(v2);
+        v_dst[i] = Q6_Vsf_equals_Vqf32(v2);
+    }
+
+    // Handle tail elements using vectorized ops with masking
+    if (nloe > 0) {
+
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
+        HVX_Vector v1 = Q6_V_vand_QV(bmask, v_src[nvec]);
+        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_v);
+        HVX_Vector result = Q6_Vsf_equals_Vqf32(v2);
+
+        // Store with masking to avoid overwriting memory beyond the tensor
+        hvx_vec_store_a(&v_dst[nvec], nloe * 4, result);
     }
 }
 
@@ -166,11 +195,80 @@ static void sqrt_f32(const float * restrict src,
     }
 }
 
+static void neg_f32(const float * restrict src,
+                    float * restrict dst,
+                    uint8_t * restrict spad,
+                    const uint32_t num_rows,
+                    const uint32_t row_elems,
+                    const size_t   row_size,
+                    int32_t *      op_params) {
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+
+        hvx_scale_f32_aa(dst_local, src_local, row_elems, -1.0f);
+    }
+}
+
+static void exp_f32(const float * restrict src,
+                    float * restrict dst,
+                    uint8_t * restrict spad,
+                    const uint32_t num_rows,
+                    const uint32_t row_elems,
+                    const size_t   row_size,
+                    int32_t *      op_params) {
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+
+        hvx_exp_f32(dst_local, src_local, row_elems, false);
+    }
+}
+
+static void sigmoid_f32(const float * restrict src,
+                        float * restrict dst,
+                        uint8_t * restrict spad,
+                        const uint32_t num_rows,
+                        const uint32_t row_elems,
+                        const size_t   row_size,
+                        int32_t *      op_params) {
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+
+        hvx_sigmoid_f32_aa(dst_local, src_local, row_elems);
+    }
+}
+
+static void softplus_f32(const float * restrict src,
+                         float * restrict dst,
+                         uint8_t * restrict spad,
+                         const uint32_t num_rows,
+                         const uint32_t row_elems,
+                         const size_t   row_size,
+                         int32_t *      op_params) {
+    // softplus(x) = log(1 + exp(x))
+    // Match CPU reference: ggml_compute_softplus_f32() in ggml-impl.h
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const float * restrict src_f = (const float *)((const uint8_t *)src + (ir * row_size));
+        float * restrict dst_f       = (float *)((uint8_t *)dst + (ir * row_size));
+
+        for (uint32_t i = 0; i < row_elems; i++) {
+            float x = src_f[i];
+            // For x > 20: softplus(x) ≈ x (avoids exp overflow)
+            dst_f[i] = (x > 20.0f) ? x : logf(1.0f + expf(x));
+        }
+    }
+}
+
 static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
     struct htp_ops_context * octx = uctx->octx;
-    const struct htp_tensor * src = &octx->src0;
-    const struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * src = octx->src[0];
+    const struct htp_tensor * dst = octx->dst;
 
     htp_unary_preamble;
 
@@ -247,6 +345,18 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
             case HTP_OP_SQRT:
                 sqrt_f32(src0_spad, dst_spad, NULL, block_size, ne0, src0_row_size_aligned, op_params);
                 break;
+            case HTP_OP_UNARY_NEG:
+                neg_f32(src0_spad, dst_spad, NULL, block_size, ne0, src0_row_size_aligned, op_params);
+                break;
+            case HTP_OP_UNARY_EXP:
+                exp_f32(src0_spad, dst_spad, NULL, block_size, ne0, src0_row_size_aligned, op_params);
+                break;
+            case HTP_OP_UNARY_SIGMOID:
+                sigmoid_f32(src0_spad, dst_spad, NULL, block_size, ne0, src0_row_size_aligned, op_params);
+                break;
+            case HTP_OP_UNARY_SOFTPLUS:
+                softplus_f32(src0_spad, dst_spad, NULL, block_size, ne0, src0_row_size_aligned, op_params);
+                break;
             default:
                 break;
         }
@@ -277,8 +387,8 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
 static int execute_op_unary_f32(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    const struct htp_tensor * src0 = &octx->src0;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
 
     const char * op_type = NULL;
 
@@ -295,14 +405,26 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
         case HTP_OP_SQRT:
             op_type = "sqrt-f32";
             break;
+        case HTP_OP_UNARY_NEG:
+            op_type = "neg-f32";
+            break;
+        case HTP_OP_UNARY_EXP:
+            op_type = "exp-f32";
+            break;
+        case HTP_OP_UNARY_SIGMOID:
+            op_type = "sigmoid-f32";
+            break;
+        case HTP_OP_UNARY_SOFTPLUS:
+            op_type = "softplus-f32";
+            break;
 
         default:
             FARF(ERROR, "Unsupported unary Op %u\n", octx->op);
             return HTP_STATUS_NO_SUPPORT;
     }
 
-    const int      n_threads  = octx->n_threads;
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
     const size_t src0_row_size = src0->nb[1];
     const size_t dst_row_size  = dst->nb[1];
@@ -338,11 +460,9 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
          octx->src0_spad.size, octx->src1_spad.size, octx->dst_spad.size);
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        uint32_t n_jobs = MIN(n_threads, src0_nrows);
-
         struct htp_unary_context uctx = {
             .octx                  = octx,
-            .src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs,
+            .src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads,
             .src0_nrows            = src0_nrows,
 
             .data_src0             = (const uint8_t *)src0->data,
@@ -361,7 +481,7 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
             .nc                    = src0->ne[0],
         };
 
-        worker_pool_run_func(octx->ctx->worker_pool, unary_job_f32_per_thread, &uctx, n_jobs);
+        worker_pool_run_func(octx->ctx->worker_pool, unary_job_f32_per_thread, &uctx, n_threads);
     }
 
     return err;
@@ -370,7 +490,7 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
 int op_unary(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    switch (octx->src0.type) {
+    switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
             err = execute_op_unary_f32(octx);
             break;

@@ -12,7 +12,7 @@
 #include "hex-dma.h"
 
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
 #ifndef MIN
@@ -164,13 +164,19 @@ static void quicksort_values_indices_desc(float * values, int32_t * indices, int
     if (i < right) quicksort_values_indices_desc(values, indices, i, right);
 }
 
+// LUT for ramp initialization of argsort output (first 32 members)
+int32_t argosrt_ramp_lut[32] __attribute__((aligned(VLEN))) = {
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+};
+
 static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_argsort_context * actx = (struct htp_argsort_context *)data;
     struct htp_ops_context * octx = actx->octx;
 
     // Unpack context
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst = octx->dst;
 
     // Scratchpad memory
     uint8_t * spad = octx->src0_spad.data + octx->src0_spad.size_per_thread * i;
@@ -205,8 +211,12 @@ static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
     // Padded to 128 bytes.
 
     size_t values_size = hex_round_up(ne00 * sizeof(float), 128);
+    size_t num_vec_ind_values = hmx_ceil_div(ne00, VLEN/(sizeof(int32_t)));
     float * values_buf = (float *) spad;
     int32_t * indices_buf = (int32_t *) (spad + values_size);
+    HVX_Vector * indices_buf_vec = (HVX_Vector *) (spad + values_size);
+    const HVX_Vector ind_init_vec = *(HVX_Vector *)argosrt_ramp_lut;
+    const HVX_Vector ind_diff_vec = Q6_V_vsplat_R(32);
 
     for (uint32_t r = start_row; r < end_row; r++) {
         uint32_t src_offset = r * nb01;
@@ -218,9 +228,11 @@ static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
         hex_l2fetch(src_ptr, ne00 * sizeof(float), ne00 * sizeof(float), 1);
         hvx_copy_f32_au((uint8_t*)values_buf, src_ptr, ne00);
 
-        // Initialize indices
-        for (uint32_t j = 0; j < ne00; j++) {
-            indices_buf[j] = j;
+        // Initialize indices - Start with values 0..31, add 32 for additional vec iterations
+        HVX_Vector curr_ind_vec = ind_init_vec;
+        for (uint32_t j_vec = 0; j_vec < num_vec_ind_values; j_vec++) {
+            indices_buf_vec[j_vec] = curr_ind_vec;
+            curr_ind_vec = Q6_Vw_vadd_VwVw(curr_ind_vec, ind_diff_vec);
         }
 
         // Sort values and mirror swaps to indices
@@ -237,13 +249,16 @@ static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
 
 int op_argsort(struct htp_ops_context * octx) {
     // Check supported types
-    if (octx->src0.type != HTP_TYPE_F32) {
+    if (octx->src[0]->type != HTP_TYPE_F32) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    const uint32_t total_rows = octx->src[0]->ne[1] * octx->src[0]->ne[2] * octx->src[0]->ne[3];
+    const uint32_t n_threads = MIN(total_rows, octx->n_threads);
+
     // Allocate scratchpad
     // We need 1 row of float + 1 row of int32 per thread.
-    uint32_t ne00 = octx->src0.ne[0];
+    uint32_t ne00 = octx->src[0]->ne[0];
     size_t values_size  = hex_round_up(ne00 * sizeof(float), 128);
     size_t indices_size = hex_round_up(ne00 * sizeof(int32_t), 128);
     size_t spad_per_thread = values_size + indices_size;
@@ -251,7 +266,7 @@ int op_argsort(struct htp_ops_context * octx) {
     // Make sure we round up to 256 for alignment requirements
     spad_per_thread = hex_round_up(spad_per_thread, 256);
 
-    size_t total_spad_size = spad_per_thread * octx->n_threads;
+    size_t total_spad_size = spad_per_thread * n_threads;
 
     if (octx->ctx->vtcm_size < total_spad_size) {
         FARF(ERROR, "argsort: VTCM size too small. Needed %zu, have %zu", total_spad_size, octx->ctx->vtcm_size);
@@ -263,19 +278,16 @@ int op_argsort(struct htp_ops_context * octx) {
     octx->src0_spad.size_per_thread = spad_per_thread;
 
     FARF(HIGH, "argsort: %ux%ux%ux%u -> %ux%ux%ux%u (0x%x, 0x%x)",
-         octx->src0.ne[0], octx->src0.ne[1], octx->src0.ne[2], octx->src0.ne[3],
-         octx->dst.ne[0], octx->dst.ne[1], octx->dst.ne[2], octx->dst.ne[3],
-         octx->src0.data, octx->dst.data);
-
-    uint32_t total_rows = octx->src0.ne[1] * octx->src0.ne[2] * octx->src0.ne[3];
-    uint32_t n_jobs = MIN(total_rows, octx->n_threads);
+         octx->src[0]->ne[0], octx->src[0]->ne[1], octx->src[0]->ne[2], octx->src[0]->ne[3],
+         octx->dst->ne[0], octx->dst->ne[1], octx->dst->ne[2], octx->dst->ne[3],
+         octx->src[0]->data, octx->dst->data);
 
     struct htp_argsort_context actx;
     actx.octx = octx;
-    actx.nrows_per_thread = (total_rows + n_jobs - 1) / n_jobs;
+    actx.nrows_per_thread = (total_rows + n_threads - 1) / n_threads;
 
     // Run jobs
-    worker_pool_run_func(octx->ctx->worker_pool, htp_argsort_f32, &actx, n_jobs);
+    worker_pool_run_func(octx->ctx->worker_pool, htp_argsort_f32, &actx, n_threads);
 
     return HTP_STATUS_OK;
 }

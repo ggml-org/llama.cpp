@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ChatSettings } from '$lib/components/app';
-	import type { SettingsSectionTitle } from '$lib/constants/settings-sections';
+	import type { SettingsSectionTitle } from '$lib/constants';
 
 	interface Props {
 		onOpenChange?: (open: boolean) => void;

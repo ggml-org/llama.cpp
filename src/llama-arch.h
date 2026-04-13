@@ -4,6 +4,7 @@
 
 #include <string>
 #include <set>
+#include <vector>
 
 //
 // gguf constants (sync with gguf.py)
@@ -59,6 +60,7 @@ enum llm_arch {
     LLM_ARCH_GEMMA2,
     LLM_ARCH_GEMMA3,
     LLM_ARCH_GEMMA3N,
+    LLM_ARCH_GEMMA4,
     LLM_ARCH_GEMMA_EMBEDDING,
     LLM_ARCH_STARCODER2,
     LLM_ARCH_MAMBA,
@@ -76,6 +78,7 @@ enum llm_arch {
     LLM_ARCH_ARCTIC,
     LLM_ARCH_DEEPSEEK,
     LLM_ARCH_DEEPSEEK2,
+    LLM_ARCH_DEEPSEEK2OCR,
     LLM_ARCH_CHATGLM,
     LLM_ARCH_GLM4,
     LLM_ARCH_GLM4_MOE,
@@ -126,6 +129,7 @@ enum llm_arch {
     LLM_ARCH_RND1,
     LLM_ARCH_PANGU_EMBED,
     LLM_ARCH_MISTRAL3,
+    LLM_ARCH_MISTRAL4,
     LLM_ARCH_PADDLEOCR,
     LLM_ARCH_MIMO2,
     LLM_ARCH_STEP35,
@@ -166,6 +170,7 @@ enum llm_kv {
     LLM_KV_CONTEXT_LENGTH,
     LLM_KV_EMBEDDING_LENGTH,
     LLM_KV_EMBEDDING_LENGTH_OUT,
+    LLM_KV_EMBEDDING_LENGTH_PER_LAYER,
     LLM_KV_FEATURES_LENGTH,
     LLM_KV_BLOCK_COUNT,
     LLM_KV_LEADING_DENSE_BLOCK_COUNT,
@@ -188,6 +193,7 @@ enum llm_kv {
     LLM_KV_EXPERT_GROUP_SCALE,
     LLM_KV_EXPERTS_PER_GROUP,
     LLM_KV_MOE_EVERY_N_LAYERS,
+    LLM_KV_MOE_LATENT_SIZE,
     LLM_KV_NEXTN_PREDICT_LAYERS,
     LLM_KV_NUM_DEEPSTACK_LAYERS,
     LLM_KV_POOLING_TYPE,
@@ -233,11 +239,15 @@ enum llm_kv {
     LLM_KV_ATTENTION_TEMPERATURE_SCALE,
     LLM_KV_ATTENTION_KEY_LENGTH_MLA,
     LLM_KV_ATTENTION_VALUE_LENGTH_MLA,
+    LLM_KV_ATTENTION_KEY_LENGTH_SWA,
+    LLM_KV_ATTENTION_VALUE_LENGTH_SWA,
     LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,
     LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
     LLM_KV_ATTENTION_INDEXER_TOP_K,
+    LLM_KV_ATTENTION_SHARED_KV_LAYERS,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
+    LLM_KV_ROPE_DIMENSION_COUNT_SWA,
     LLM_KV_ROPE_DIMENSION_SECTIONS,
     LLM_KV_ROPE_FREQ_BASE,
     LLM_KV_ROPE_FREQ_BASE_SWA,
@@ -362,6 +372,9 @@ enum llm_tensor {
     LLM_TENSOR_FFN_GATE_INP_SHEXP,
     LLM_TENSOR_FFN_NORM,
     LLM_TENSOR_FFN_POST_NORM,
+    LLM_TENSOR_FFN_POST_NORM_1,
+    LLM_TENSOR_FFN_POST_NORM_2,
+    LLM_TENSOR_FFN_PRE_NORM_2,
     LLM_TENSOR_FFN_GATE,
     LLM_TENSOR_FFN_DOWN,
     LLM_TENSOR_FFN_UP,
@@ -381,9 +394,12 @@ enum llm_tensor {
     LLM_TENSOR_FFN_GATE_CHEXPS,
     LLM_TENSOR_FFN_UP_CHEXPS,
     LLM_TENSOR_FFN_EXP_PROBS_B,
+    LLM_TENSOR_FFN_LATENT_DOWN,
+    LLM_TENSOR_FFN_LATENT_UP,
     LLM_TENSOR_ATTN_Q_NORM,
     LLM_TENSOR_ATTN_K_NORM,
     LLM_TENSOR_LAYER_OUT_NORM,
+    LLM_TENSOR_LAYER_OUT_SCALE,
     LLM_TENSOR_POST_ATTN_NORM,
     LLM_TENSOR_POST_MLP_NORM,
     LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
@@ -569,8 +585,6 @@ struct LLM_TN_IMPL {
     const int bid;
     const int xid;
 
-    const std::set<llm_tensor> model_tensors;
-
     LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid);
 
     std::string str() const;
@@ -608,12 +622,15 @@ struct llm_tensor_info {
     ggml_op op;
 };
 
+std::vector<llm_arch> llm_arch_all();
+
 const char * llm_arch_name(llm_arch arch);
 
 llm_arch llm_arch_from_string(const std::string & name);
 
 const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
 
-bool llm_arch_is_recurrent(const llm_arch & arch);
-bool llm_arch_is_hybrid   (const llm_arch & arch);
-bool llm_arch_is_diffusion(const llm_arch & arch);
+bool llm_arch_is_recurrent      (const llm_arch & arch);
+bool llm_arch_is_hybrid         (const llm_arch & arch);
+bool llm_arch_is_diffusion      (const llm_arch & arch);
+bool llm_arch_supports_sm_tensor(const llm_arch & arch);

@@ -1,6 +1,7 @@
 #include "arg.h"
 #include "common.h"
 
+#include <clocale>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -100,6 +101,8 @@ static void write_help(std::ostringstream & ss, const md_file & md) {
 }
 
 int main(int, char **) {
+    std::setlocale(LC_NUMERIC, "C");
+
     for (const auto & md : md_files) {
         std::ifstream infile(md.fname);
         if (!infile.is_open()) {

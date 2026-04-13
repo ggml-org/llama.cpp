@@ -56,6 +56,9 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
         cur = ggml_add(ctx0, cur, ffn_residual);
         cb(cur, "post_moe", il);
 
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
+
         // Input for next layer
         inpL = cur;
     }
@@ -100,8 +103,8 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
         int                       il) {
-    const int64_t n_embd_head = hparams.n_embd_head_v;
-    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+    const int64_t n_embd_head = hparams.n_embd_head_v();
+    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     // Order: joint QG projection, QG split, Q norm, KV projection, K norm, RoPE, attention
 
@@ -351,7 +354,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     cb(last_conv_states, "last_conv_states", il);
 
     ggml_tensor * state_update_target =
-        ggml_view_1d(ctx0, conv_states_all, (conv_kernel_size - 1) * conv_channels * n_seqs,
+        ggml_view_2d(ctx0, conv_states_all, (conv_kernel_size - 1) * conv_channels, n_seqs, conv_states_all->nb[1],
                      kv_head * (conv_kernel_size - 1) * conv_channels * ggml_element_size(conv_states_all));
     cb(state_update_target, "state_update_target", il);
 
@@ -406,23 +409,24 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     //v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
 
     // if head keys and value keys are different, repeat to force tensors into matching shapes
+    // TODO: avoid repeats for fused GDN, needs broadcast configuration for GDN op [TAG_GGML_GDN_BCAST]
     if (num_k_heads != num_v_heads) {
         GGML_ASSERT(num_v_heads % num_k_heads == 0);
         int64_t repeat_factor = num_v_heads / num_k_heads;
 
-        // repeat interleave: reshape to (repeat part, 1, remaining part), do repeat, then reshape back
-        ggml_tensor * q_reshaped = ggml_reshape_3d(ctx0, q_conv, head_k_dim, 1, num_k_heads * n_seq_tokens * n_seqs);
-        ggml_tensor * k_reshaped = ggml_reshape_3d(ctx0, k_conv, head_k_dim, 1, num_k_heads * n_seq_tokens * n_seqs);
+        // repeat interleave: reshape to (repeat part, 1, remaining part...), do repeat, then reshape back
+        ggml_tensor * q_reshaped = ggml_reshape_4d(ctx0, q_conv, head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
+        ggml_tensor * k_reshaped = ggml_reshape_4d(ctx0, k_conv, head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
 
         // Repeat along the third dimension (the new dimension with size 1)
         ggml_tensor * q_repeated =
-            ggml_repeat_4d(ctx0, q_reshaped, head_k_dim, repeat_factor, num_k_heads * n_seq_tokens * n_seqs, 1);
+            ggml_repeat_4d(ctx0, q_reshaped, head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
         ggml_tensor * k_repeated =
-            ggml_repeat_4d(ctx0, k_reshaped, head_k_dim, repeat_factor, num_k_heads * n_seq_tokens * n_seqs, 1);
+            ggml_repeat_4d(ctx0, k_reshaped, head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
 
         // Reshape back to merge the head and repeat dimensions
-        // From [head_dim, num_k_heads, repeat_factor, n_seq_tokens * n_seqs]
-        // Back to [head_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs]
+        // From [head_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs]
+        // Back to [head_dim, repeat_factor * num_k_heads, n_seq_tokens, n_seqs]
         q_conv = ggml_reshape_4d(ctx0, q_repeated, head_k_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs);
         k_conv = ggml_reshape_4d(ctx0, k_repeated, head_k_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs);
     }
@@ -431,13 +435,8 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     cb(k_conv, "k_conv_predelta", il);
     cb(v_conv, "v_conv_predelta", il);
 
-    // Choose between build_delta_net_chunking, build_delta_net_recurrent, and build_delta_net_autoregressive based on n_tokens
-    std::pair<ggml_tensor *, ggml_tensor *> attn_out; // pair of (output, new_state)
-    if (n_seq_tokens == 1) {
-        attn_out = build_delta_net_autoregressive(q_conv, k_conv, v_conv, gate, beta, state, il);
-    } else {
-        attn_out = build_delta_net_chunking(q_conv, k_conv, v_conv, gate, beta, state, il);
-    }
+    auto attn_out = build_delta_net(q_conv, k_conv, v_conv, gate, beta, state, il);
+
     ggml_tensor * output    = attn_out.first;
     ggml_tensor * new_state = attn_out.second;
     cb(output, "attn_output", il);
@@ -446,7 +445,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     // Update the recurrent states
     ggml_build_forward_expand(gf,
             ggml_cpy(ctx0, new_state,
-                ggml_view_1d(ctx0, ssm_states_all, hparams.n_embd_s() * n_seqs,
+                ggml_view_2d(ctx0, ssm_states_all, hparams.n_embd_s(), n_seqs, ssm_states_all->nb[1],
                     kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
 
     // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
@@ -475,11 +474,15 @@ ggml_tensor * llm_build_qwen3next::build_layer_ffn(ggml_tensor * cur, const int 
         // MoE branch
         ggml_tensor * moe_out =
             build_moe_ffn(cur,
-                model.layers[il].ffn_gate_inp, model.layers[il].ffn_up_exps,
-                model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
+                model.layers[il].ffn_gate_inp,
+                model.layers[il].ffn_up_exps,
+                model.layers[il].ffn_gate_exps,
+                model.layers[il].ffn_down_exps,
                 nullptr,
-                n_expert, n_expert_used, LLM_FFN_SILU,
-                true, false, 0.0, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
+                n_expert, n_expert_used,
+                LLM_FFN_SILU, true,
+                hparams.expert_weights_scale,
+                LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
                 nullptr, model.layers[il].ffn_gate_up_exps);
         cb(moe_out, "ffn_moe_out", il);
 

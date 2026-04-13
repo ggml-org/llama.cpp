@@ -11,6 +11,7 @@ export const SETTINGS_KEYS = {
 	SYSTEM_MESSAGE: 'systemMessage',
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT: 'copyTextAttachmentsAsPlainText',
+	SEND_ON_ENTER: 'sendOnEnter',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
 	PDF_AS_IMAGE: 'pdfAsImage',
 	ASK_FOR_TITLE_CONFIRMATION: 'askForTitleConfirmation',
@@ -24,6 +25,7 @@ export const SETTINGS_KEYS = {
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',
 	AUTO_SHOW_SIDEBAR_ON_NEW_CHAT: 'autoShowSidebarOnNewChat',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
+	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
 	// Sampling
 	TEMPERATURE: 'temperature',
 	DYNATEMP_RANGE: 'dynatemp_range',
@@ -46,8 +48,16 @@ export const SETTINGS_KEYS = {
 	DRY_BASE: 'dry_base',
 	DRY_ALLOWED_LENGTH: 'dry_allowed_length',
 	DRY_PENALTY_LAST_N: 'dry_penalty_last_n',
+	// MCP
+	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
+	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
+	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
+	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
+	// Performance
+	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
+	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	CUSTOM: 'custom'
 } as const;

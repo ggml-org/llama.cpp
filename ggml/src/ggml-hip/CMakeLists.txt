@@ -11,6 +11,10 @@ endif()
 list(APPEND CMAKE_PREFIX_PATH  ${ROCM_PATH})
 list(APPEND CMAKE_PREFIX_PATH "${ROCM_PATH}/lib64/cmake")
 
+if (NOT DEFINED CMAKE_HIP_FLAGS_DEBUG)
+    set(CMAKE_HIP_FLAGS_DEBUG "-g -O2")
+endif()
+
 # CMake on Windows doesn't support the HIP language yet
 if (WIN32)
     set(CXX_IS_HIPCC TRUE)
@@ -43,14 +47,15 @@ find_package(hip     REQUIRED)
 find_package(hipblas REQUIRED)
 find_package(rocblas REQUIRED)
 
+if (GGML_HIP_RCCL)
+    find_package(rccl REQUIRED)
+endif()
+
 if (${hip_VERSION} VERSION_LESS 6.1)
     message(FATAL_ERROR "At least ROCM/HIP V6.1 is required")
 endif()
 
 message(STATUS "HIP and hipBLAS found")
-
-# Workaround old compilers
-set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} --gpu-max-threads-per-block=1024")
 
 file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
 list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
@@ -70,12 +75,11 @@ if (GGML_CUDA_FA_ALL_QUANTS)
     list(APPEND GGML_SOURCES_ROCM ${SRCS})
     add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
 else()
-    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*q4_0-q4_0.cu")
-    list(APPEND GGML_SOURCES_ROCM ${SRCS})
-    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*q8_0-q8_0.cu")
-    list(APPEND GGML_SOURCES_ROCM ${SRCS})
-    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*f16-f16.cu")
-    list(APPEND GGML_SOURCES_ROCM ${SRCS})
+    list(APPEND GGML_SOURCES_ROCM
+        ../ggml-cuda/template-instances/fattn-vec-instance-f16-f16.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu)
 endif()
 
 ggml_add_backend_library(ggml-hip
@@ -118,6 +122,10 @@ if (NOT GGML_HIP_MMQ_MFMA)
     add_compile_definitions(GGML_HIP_NO_MMQ_MFMA)
 endif()
 
+if (GGML_HIP_RCCL)
+    add_compile_definitions(GGML_USE_NCCL) # RCCL has the same interface as NCCL.
+endif()
+
 if (GGML_HIP_EXPORT_METRICS)
     set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -Rpass-analysis=kernel-resource-usage --save-temps")
 endif()
@@ -128,6 +136,11 @@ endif()
 
 if (CXX_IS_HIPCC)
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
+    if (WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+        # CMake on Windows doesn't support the HIP language yet.
+        # Therefore we workaround debug build's failure on HIP backend this way.
+        set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES COMPILE_FLAGS "-O2 -g")
+    endif()
     target_link_libraries(ggml-hip PRIVATE hip::device)
 else()
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE HIP)
@@ -135,6 +148,10 @@ endif()
 
 if (GGML_STATIC)
     message(FATAL_ERROR "Static linking not supported for HIP/ROCm")
+endif()
+
+if (GGML_HIP_RCCL)
+    target_link_libraries(ggml-hip PRIVATE ggml-base roc::rccl)
 endif()
 
 target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)

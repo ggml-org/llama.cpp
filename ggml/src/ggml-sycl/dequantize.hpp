@@ -14,6 +14,7 @@
 #define GGML_SYCL_DEQUANTIZE_HPP
 
 #include "common.hpp"
+#include "convert.hpp"
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
 typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
@@ -140,6 +141,22 @@ static __dpct_inline__ void dequantize_q5_1(const void *vx, const int64_t ib,
 #else
     v.x() = sycl::fma(v.x(), d, m);
     v.y() = sycl::fma(v.y(), d, m);
+#endif // GGML_SYCL_F16
+}
+
+static __dpct_inline__ void dequantize_q8_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
+                                            const int iqs, dfloat2 &v) {
+    const dfloat d = (const dfloat)*((const sycl::half*)d_ptr + ib);
+
+    v.x() = ((const int8_t *)qs)[iqs + 0];
+    v.y() = ((const int8_t *)qs)[iqs + 1];
+
+#ifdef GGML_SYCL_F16
+    v.s0() *= d;
+    v.s1() *= d;
+#else
+    v.x() *= d;
+    v.y() *= d;
 #endif // GGML_SYCL_F16
 }
 
@@ -837,5 +854,37 @@ static void dequantize_block_mxfp4(const void * __restrict__ vx, dst_t * __restr
         y[j+16] = d * kvalues_mxfp4[q4[j] >>  4]*0.5f;
     }
 }
+
+
+template <typename dst_t>
+static void dequantize_block_nvfp4(
+        const void * __restrict__ vx,
+        dst_t * __restrict__ yy,
+        const int64_t ne) {
+    auto          item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+    const int64_t i        = item_ct1.get_group(2);
+    const int     tid      = item_ct1.get_local_id(2);
+
+    const int64_t base = i * QK_NVFP4;
+    if (base >= ne) {
+        return;
+    }
+
+    const block_nvfp4 * x = (const block_nvfp4 *) vx;
+    const block_nvfp4 & xb = x[i];
+
+    const int sub = tid / (QK_NVFP4_SUB / 2);
+    const int j = tid % (QK_NVFP4_SUB / 2);
+
+    const float d = ggml_sycl_ue4m3_to_fp32(xb.d[sub]);
+    const uint8_t q = xb.qs[sub * (QK_NVFP4_SUB / 2) + j];
+
+    const int64_t y0 = base + sub * QK_NVFP4_SUB + j;
+    const int64_t y1 = y0 + QK_NVFP4_SUB / 2;
+
+    yy[y0] = ggml_sycl_cast<dst_t>(d * kvalues_mxfp4[q & 0x0F]);
+    yy[y1] = ggml_sycl_cast<dst_t>(d * kvalues_mxfp4[q >> 4]);
+}
+
 
 #endif // GGML_SYCL_DEQUANTIZE_HPP

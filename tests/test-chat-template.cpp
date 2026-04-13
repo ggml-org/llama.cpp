@@ -1,4 +1,5 @@
 #include <string>
+#include <utility>
 #include <vector>
 #include <sstream>
 #include <regex>
@@ -21,17 +22,16 @@
 
 using json = nlohmann::ordered_json;
 
-int main_automated_tests(void);
+static int main_automated_tests(void);
 
-void run_multiple(std::string dir_path, bool stop_on_first_failure, json input, bool use_common = false);
-void run_single(std::string contents, json input, bool use_common = false, const std::string & output_path = "");
+static void run_multiple(const std::string& dir_path, bool stop_on_first_failure, const json& input, bool use_common = false);
+static void run_single(const std::string& contents, json input, bool use_common = false, const std::string & output_path = "");
 
-
-
-std::string HELP = R"(
+static std::string HELP = R"(
 Usage: test-chat-template [OPTIONS] PATH_TO_TEMPLATE
 Options:
   -h, --help               Show this help message and exit.
+  --with-tools             Add a tool and a tool call to the default JSON input
   --json <path>            Path to the JSON input file.
   --stop-on-first-fail     Stop testing on the first failure (default: false).
   --no-common              Use direct Jinja engine instead of common chat templates (default: use common).
@@ -41,7 +41,7 @@ If PATH_TO_TEMPLATE is a directory, runs all .jinja files in that directory.
 If PATH_TO_TEMPLATE is omitted, runs automated tests (default CI mode).
 )";
 
-std::string DEFAULT_JSON = R"({
+static std::string DEFAULT_JSON = R"({
     "messages": [
         {
             "role": "user",
@@ -57,12 +57,65 @@ std::string DEFAULT_JSON = R"({
     "add_generation_prompt": true
 })";
 
+static std::string DEFAULT_JSON_WITH_TOOLS = R"({
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hello, how are you?"
+        },
+        {
+            "role": "assistant",
+            "content": "I am fine, thank you!"
+        },
+        {
+            "role": "user",
+            "content": "Call a tool!"
+        },
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call00001",
+                    "type": "function",
+                    "function": {
+                        "name": "test",
+                        "arguments": { "arg": "hello" }
+                    }
+                }
+            ]
+        }
+    ],
+    "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "test",
+                "description": "Test",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "arg": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": ["arg"]
+            }
+        }
+    ],
+    "bos_token": "<s>",
+    "eos_token": "</s>",
+    "add_generation_prompt": true
+})";
+
+
 int main(int argc, char ** argv) {
     std::vector<std::string> args(argv, argv + argc);
 
     std::string tmpl_path;
     std::string json_path;
     std::string output_path;
+    std::string & json_to_use = DEFAULT_JSON;
     bool stop_on_first_fail = false;
     bool use_common = true;
 
@@ -70,9 +123,12 @@ int main(int argc, char ** argv) {
         if (args[i] == "--help" || args[i] == "-h") {
             std::cout << HELP << "\n";
             return 0;
-        } else if (args[i] == "--json" && i + 1 < args.size()) {
+        }
+        if (args[i] == "--json" && i + 1 < args.size()) {
             json_path = args[i + 1];
             i++;
+        } else if (args[i] == "--with-tools") {
+            json_to_use = DEFAULT_JSON_WITH_TOOLS;
         } else if (args[i] == "--stop-on-first-fail") {
             stop_on_first_fail = true;
         } else if (args[i] == "--output" && i + 1 < args.size()) {
@@ -105,7 +161,7 @@ int main(int argc, char ** argv) {
             std::istreambuf_iterator<char>());
         input_json = json::parse(content);
     } else {
-        input_json = json::parse(DEFAULT_JSON);
+        input_json = json::parse(json_to_use);
     }
 
     std::filesystem::path p(tmpl_path);
@@ -125,7 +181,7 @@ int main(int argc, char ** argv) {
     return 0;
 }
 
-void run_multiple(std::string dir_path, bool stop_on_first_fail, json input, bool use_common) {
+void run_multiple(const std::string& dir_path, bool stop_on_first_fail, const json& input, bool use_common) {
     std::vector<std::string> failed_tests;
 
     // list all files in models/templates/ and run each
@@ -180,7 +236,7 @@ static std::string format_using_common(
     common_chat_templates_inputs inputs;
     inputs.use_jinja = true;
     inputs.messages = messages;
-    inputs.tools = tools;
+    inputs.tools = std::move(tools);
     inputs.add_generation_prompt = true;
     auto output = common_chat_templates_apply(tmpls.get(), inputs).prompt;
     output = normalize_newlines(output);
@@ -209,7 +265,7 @@ static jinja::value_string format_using_direct_engine(
 
     jinja::runtime runtime(ctx);
     const jinja::value results = runtime.execute(ast);
-    auto parts = runtime.gather_string_parts(results);
+    auto parts = jinja::runtime::gather_string_parts(results);
 
     std::cout << "\n=== RESULTS ===\n";
     for (const auto & part : parts->as_string().parts) {
@@ -220,7 +276,7 @@ static jinja::value_string format_using_direct_engine(
 }
 
 
-void run_single(std::string contents, json input, bool use_common, const std::string & output_path) {
+void run_single(const std::string& contents, json input, bool use_common, const std::string & output_path) {
     jinja::enable_debug(true);
 
     jinja::value_string output_parts;
@@ -298,6 +354,7 @@ int main_automated_tests(void) {
         std::string bos_token = "";
         std::string eos_token = "";
         bool supported_with_jinja = true;
+        std::vector<llama_chat_message> extra_conversation = {};
     };
     std::vector<TestCase> test_cases {
         {
@@ -548,6 +605,26 @@ int main_automated_tests(void) {
             /* .expected_output_jinja= */ "<seed:bos>system\nYou are a helpful assistant<seed:eos><seed:bos>user\nHello<seed:eos><seed:bos>assistant\nHi there<seed:eos><seed:bos>user\nWho are you<seed:eos><seed:bos>assistant\nI am an assistant<seed:eos><seed:bos>user\nAnother question<seed:eos><seed:bos>assistant\n",
             /* .bos_token= */ "<seed:bos>",
             /* .eos_token= */ "<seed:eos>",
+        },
+        {
+            /* .name= */ "ibm-granite/granite-3.x (tool call)",
+            /* .template_str= */ "{%- for message in messages %}\n    {%- if message['role'] == 'assistant_tool_call' %}\n    {{- '<|start_of_role|>assistant<|end_of_role|><|tool_call|>' + message['content'] + '<|end_of_text|>\\n' }}\n    {%- else %}\n    {{- '<|start_of_role|>' + message['role'] + '<|end_of_role|>' + message['content'] + '<|end_of_text|>\\n' }}\n    {%- endif %}\n    {%- if loop.last and add_generation_prompt %}\n    {{- '<|start_of_role|>assistant<|end_of_role|>' }}\n    {%- endif %}\n{%- endfor %}",
+            /* .expected_output= */       "<|start_of_role|>system<|end_of_role|>You are a helpful assistant<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Hello<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>Hi there<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Who are you<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>   I am an assistant   <|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Another question<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>What is the weather?<|end_of_text|>\n<|start_of_role|>assistant_tool_call<|end_of_role|><|tool_call|>[{\"name\": \"get_weather\", \"arguments\": {\"location\": \"NYC\"}}]<|end_of_text|>\n<|start_of_role|>tool_response<|end_of_role|>{\"temperature\": 72}<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>",
+            /* .expected_output_jinja= */ "<|start_of_role|>system<|end_of_role|>You are a helpful assistant<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Hello<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>Hi there<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Who are you<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>   I am an assistant   <|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Another question<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>What is the weather?<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|><|tool_call|>[{\"name\": \"get_weather\", \"arguments\": {\"location\": \"NYC\"}}]<|end_of_text|>\n<|start_of_role|>tool_response<|end_of_role|>{\"temperature\": 72}<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>",
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+            /* .supported_with_jinja= */ true,
+            /* .extra_conversation= */ {{"user", "What is the weather?"}, {"assistant_tool_call", "[{\"name\": \"get_weather\", \"arguments\": {\"location\": \"NYC\"}}]"}, {"tool_response", "{\"temperature\": 72}"}},
+        },
+        {
+            /* .name= */ "ibm-granite/granite-4.0 (tool call)",
+            /* .template_str= */ "{%- for message in messages %}\n    {%- if message['role'] == 'assistant_tool_call' %}\n    {{- '<|start_of_role|>assistant<|end_of_role|><|tool_call|>' + message['content'] + '<|end_of_text|>\\n' }}\n    {%- else %}\n    {{- '<|start_of_role|>' + message['role'] + '<|end_of_role|>' + message['content'] + '<|end_of_text|>\\n' }}\n    {%- endif %}\n    {%- if loop.last and add_generation_prompt %}\n    {{- '<|start_of_role|>assistant<|end_of_role|>' }}\n    {%- endif %}\n{%- endfor %}\n{# <tool_call> <tools> #}",
+            /* .expected_output= */       "<|start_of_role|>system<|end_of_role|>You are a helpful assistant<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Hello<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>Hi there<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Who are you<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>   I am an assistant   <|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Another question<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>What is the weather?<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|><|tool_call|><tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"location\": \"NYC\"}}\n</tool_call><|end_of_text|>\n<|start_of_role|>tool_response<|end_of_role|>{\"temperature\": 72}<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>",
+            /* .expected_output_jinja= */ "",
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+            /* .supported_with_jinja= */ true,
+            /* .extra_conversation= */ {{"user", "What is the weather?"}, {"assistant_tool_call", "<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"location\": \"NYC\"}}\n</tool_call>"}, {"tool_response", "{\"temperature\": 72}"}},
         }
     };
     std::vector<char> formatted_chat(1024);
@@ -560,7 +637,7 @@ int main_automated_tests(void) {
     supported_tmpl.resize(res);
     res = llama_chat_builtin_templates(supported_tmpl.data(), supported_tmpl.size());
     std::cout << "Built-in chat templates:\n";
-    for (auto tmpl : supported_tmpl) {
+    for (const auto *tmpl : supported_tmpl) {
         std::cout << "  " << tmpl << "\n";
     }
 
@@ -571,11 +648,13 @@ int main_automated_tests(void) {
 
     for (const auto & test_case : test_cases) {
         std::cout << "\n\n=== " << test_case.name << " ===\n\n";
-        formatted_chat.resize(1024);
+        auto conv = conversation;
+        conv.insert(conv.end(), test_case.extra_conversation.begin(), test_case.extra_conversation.end());
+        formatted_chat.resize(2048);
         res = llama_chat_apply_template(
             test_case.template_str.c_str(),
-            conversation.data(),
-            conversation.size(),
+            conv.data(),
+            conv.size(),
             add_generation_prompt,
             formatted_chat.data(),
             formatted_chat.size()
@@ -592,6 +671,7 @@ int main_automated_tests(void) {
     }
 
     std::vector<common_chat_msg> messages;
+    messages.reserve(conversation.size());
     for (const auto & msg : conversation) {
         messages.push_back(simple_msg(msg.role, msg.content));
     }
@@ -601,11 +681,15 @@ int main_automated_tests(void) {
         }
         std::cout << "\n\n=== " << test_case.name << " (jinja) ===\n\n";
         try {
+            auto msgs = messages;
+            for (const auto & msg : test_case.extra_conversation) {
+                msgs.push_back(simple_msg(msg.role, msg.content));
+            }
             auto output = format_using_common(
                                 test_case.template_str,
                                 test_case.bos_token,
                                 test_case.eos_token,
-                                messages);
+                                msgs);
             auto expected_output = normalize_newlines(test_case.expected_output_jinja.empty() ? test_case.expected_output : test_case.expected_output_jinja);
             if (output != expected_output) {
                 std::cout << "Template:```\n" << test_case.template_str << "\n```";
@@ -621,58 +705,6 @@ int main_automated_tests(void) {
             assert(false);
         }
     }
-
-    // TODO: llama_chat_format_single will be deprecated, remove these tests later
-
-    // test llama_chat_format_single for system message
-    std::cout << "\n\n=== llama_chat_format_single (system message) ===\n\n";
-    std::vector<common_chat_msg> chat2;
-    auto sys_msg = simple_msg("system", "You are a helpful assistant");
-
-    auto fmt_sys = [&](std::string tmpl_str) {
-        auto tmpls = common_chat_templates_init(/* model= */ nullptr, tmpl_str);
-        auto output = common_chat_format_single(tmpls.get(), chat2, sys_msg, false, /* use_jinja= */ false);
-        std::cout << "fmt_sys(" << tmpl_str << ") : " << output << "\n";
-        std::cout << "-------------------------\n";
-        return output;
-    };
-    assert(fmt_sys("chatml") == "<|im_start|>system\nYou are a helpful assistant<|im_end|>\n");
-    assert(fmt_sys("mistral-v1") == " [INST] You are a helpful assistant\n\n");
-    assert(fmt_sys("mistral-v3") == "[INST] You are a helpful assistant\n\n");
-    assert(fmt_sys("mistral-v3-tekken") == "[INST]You are a helpful assistant\n\n");
-    assert(fmt_sys("mistral-v7") == "[SYSTEM_PROMPT] You are a helpful assistant[/SYSTEM_PROMPT]");
-    assert(fmt_sys("llama2") == "[INST] You are a helpful assistant\n");
-    assert(fmt_sys("llama2-sys") == "[INST] <<SYS>>\nYou are a helpful assistant\n<</SYS>>\n\n");
-    assert(fmt_sys("mistral") == "[INST] You are a helpful assistant\n"); // for old pre-v1 templates
-    assert(fmt_sys("gemma")  == ""); // for gemma, system message is merged with user message
-    assert(fmt_sys("llama3") == "<|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant<|eot_id|>");
-    assert(fmt_sys("gigachat") == "<s>You are a helpful assistant<|message_sep|>");
-
-
-    // test llama_chat_format_single for user message
-    std::cout << "\n\n=== llama_chat_format_single (user message) ===\n\n";
-    chat2.push_back(simple_msg("system", "You are a helpful assistant"));
-    chat2.push_back(simple_msg("user", "Hello"));
-    chat2.push_back(simple_msg("assistant", "I am assistant"));
-    auto new_msg = simple_msg("user", "How are you");
-
-    auto fmt_single = [&](const std::string & tmpl_str) {
-        auto tmpls = common_chat_templates_init(/* model= */ nullptr, tmpl_str.c_str());
-        auto output = common_chat_format_single(tmpls.get(), chat2, new_msg, true, /* use_jinja= */ false);
-        std::cout << "fmt_single(" << tmpl_str << ") : " << output << "\n";
-        std::cout << "-------------------------\n";
-        return output;
-    };
-    assert(fmt_single("chatml") == "\n<|im_start|>user\nHow are you<|im_end|>\n<|im_start|>assistant\n");
-    assert(fmt_single("mistral-v1") == " [INST] How are you [/INST]");
-    assert(fmt_single("mistral-v3") == "[INST] How are you[/INST]");
-    assert(fmt_single("mistral-v3-tekken") == "[INST]How are you[/INST]");
-    assert(fmt_single("mistral-v7") == "[INST] How are you[/INST]");
-    assert(fmt_single("llama2") == "[INST] How are you [/INST]");
-    assert(fmt_single("mistral") == "[INST] How are you [/INST]"); // for old pre-v1 templates
-    assert(fmt_single("gemma")  == "\n<start_of_turn>user\nHow are you<end_of_turn>\n<start_of_turn>model\n");
-    assert(fmt_single("llama3") == "<|start_header_id|>user<|end_header_id|>\n\nHow are you<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
-    // assert(fmt_single("gigachat") == "user<|role_sep|>How are you<|message_sep|>available functions<|role_sep|>[]<|message_sep|>assistant<|role_sep|>");
 
     std::cout << "\nOK: All tests passed successfully.\n";
 

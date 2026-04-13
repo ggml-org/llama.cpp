@@ -8,9 +8,10 @@
 		tooltip: string;
 		variant?: 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link';
 		size?: 'default' | 'sm' | 'lg' | 'icon';
+		iconSize?: string;
 		class?: string;
 		disabled?: boolean;
-		onclick: () => void;
+		onclick: (e?: MouseEvent) => void;
 		'aria-label'?: string;
 	}
 
@@ -21,6 +22,7 @@
 		size = 'sm',
 		class: className = '',
 		disabled = false,
+		iconSize = 'h-3 w-3',
 		onclick,
 		'aria-label': ariaLabel
 	}: Props = $props();
@@ -38,7 +40,7 @@
 		>
 			{@const IconComponent = icon}
 
-			<IconComponent class="h-3 w-3" />
+			<IconComponent class={iconSize} />
 		</Button>
 	</Tooltip.Trigger>
 

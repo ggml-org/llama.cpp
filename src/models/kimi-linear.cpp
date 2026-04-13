@@ -1,5 +1,4 @@
 #include "models.h"
-#include "ggml.h"
 
 #include "llama-memory-recurrent.h"
 
@@ -103,7 +102,7 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
     const int64_t kv_lora_rank = hparams.n_lora_kv;
     // qk_rope_head_dim = 64 (from Kimi config) which is hparams.n_rot
     // Confirmed from tensor shape: wkv_a_mqa [2304, 576] = [n_embd, kv_lora_rank + qk_rope_head_dim]
-    const int64_t n_embd_head_qk_rope = hparams.n_rot;  // config.qk_rope_head_dim
+    const int64_t n_embd_head_qk_rope = hparams.n_rot();  // config.qk_rope_head_dim
     const int64_t n_embd_head_qk_nope = n_embd_head_k_mla - n_embd_head_qk_rope;  // 192 - 64 = 128
     // Attention scale for MLA
     const float kq_scale_mla = 1.0f / sqrtf((float)n_embd_head_k_mla);
@@ -118,12 +117,7 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
 
         ggml_build_forward_expand(gf, cur);
 
-        // Check layer type by checking which tensors exist
-        // KDA layers have ssm_a_log tensor, MLA layers have wkv_a_mqa tensor
-        bool is_kda = (layer.ssm_a != nullptr);
-        bool is_mla = (layer.wkv_a_mqa != nullptr);
-
-        if (is_kda) {
+        if (hparams.is_recurrent(il)) {
             // === KDA Layer (Kimi Delta Attention) with Recurrent State ===
             // Reference: vLLM kda.py
             const auto * mctx_cur = inp_rs->mctx;
@@ -175,9 +169,7 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
             Kcur = ggml_l2_norm(ctx0, Kcur, eps_norm);
 
             // Choose between build_delta_net_chunking and build_delta_net_recurrent based on n_tokens
-            std::pair<ggml_tensor *, ggml_tensor *> attn_out = n_seq_tokens == 1 ?
-                build_delta_net_autoregressive(Qcur, Kcur, Vcur, g1, beta, state, il) :
-                build_delta_net_chunking(Qcur, Kcur, Vcur, g1, beta, state, il);
+            auto attn_out = build_delta_net(Qcur, Kcur, Vcur, g1, beta, state, il);
 
             ggml_tensor * output = ggml_cont(ctx0, attn_out.first);
             ggml_tensor * new_state = attn_out.second;
@@ -211,7 +203,7 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
             cur = ggml_mul_mat(ctx0, layer.wo, gated);
             cb(cur, "kda_out", il);
 
-        } else if (is_mla) {
+        } else {
             // === MLA Layer (Multi-head Latent Attention) without KV Cache ===
             // Reference: vLLM mla.py
             // Step 1: Q projection and reshape
@@ -310,9 +302,6 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
                 cur = build_attn(inp_attn_kv, layer.wo, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale_mla, il);
                 cb(cur, "mla_out", il);
             }
-        } else {
-            // Unknown layer type - this should not happen
-            GGML_ABORT("Kimi layer is neither KDA nor MLA - missing required tensors");
         }
 
         // On last layer, select only the output tokens
@@ -349,7 +338,7 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
                 hparams.n_expert,
                 hparams.n_expert_used,
                 LLM_FFN_SILU, true,
-                true, hparams.expert_weights_scale,
+                hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il);
             cb(moe_out, "ffn_moe_out", il);
@@ -373,6 +362,7 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
+        // input for next layer
         inpL = cur;
     }
     cur = inpL;

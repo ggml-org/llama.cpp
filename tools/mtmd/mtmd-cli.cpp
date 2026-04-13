@@ -13,6 +13,7 @@
 #include <vector>
 #include <limits.h>
 #include <cinttypes>
+#include <clocale>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -274,15 +275,18 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     ggml_time_init();
 
     common_params params;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MTMD, show_additional_info)) {
         return 1;
     }
 
-    common_init();
     mtmd_helper_log_set(common_log_default_callback, nullptr);
 
     if (params.mmproj.path.empty()) {

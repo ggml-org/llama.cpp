@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { cn, type WithElementRef } from '$lib/components/ui/utils';
-	import { BOX_BORDER } from '$lib/constants/css-classes';
+	import { BOX_BORDER } from '$lib/constants';
 
 	let {
 		ref = $bindable(null),

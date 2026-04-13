@@ -3,7 +3,7 @@
 #include "llama-model.h"
 #include "llama-graph.h"
 
-// note: almost all graphs require atleast sqrtf, so include cmath globally
+// note: almost all graphs require at least sqrtf, so include cmath globally
 #include <cmath>
 
 //
@@ -44,6 +44,26 @@ struct llm_build_delta_net_base : public llm_graph_context {
                 ggml_tensor * b,
                 ggml_tensor * s,
                 int           il);
+
+    // use the ggml_gated_delta_net fused operator
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_fused(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * b,
+                ggml_tensor * s,
+                        int   il);
+
+    // choose one of two implementations above based on the number of tokens
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * b,
+                ggml_tensor * s,
+                        int   il);
 };
 
 struct llm_build_rwkv6_base : public llm_graph_context {
@@ -236,14 +256,28 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
 
     llm_build_gemma3n_iswa(const llama_model & model, const llm_graph_params & params);
     ggml_tensor * calc_magnitude(ggml_tensor * x);
-    ggml_tensor * view_2d_slice(ggml_tensor * x, int idx);
-    ggml_tensor * get_per_layer_inputs();
-    ggml_tensor * project_per_layer_inputs(ggml_tensor * inputs_embeds, ggml_tensor * inp_per_layer);
+
+    // TODO: refactor in common "per-layer" functionality [TAG_PER_LAYER]
+    ggml_tensor * build_inp_per_layer();
+    ggml_tensor * project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer);
+
     ggml_tensor * gaussian_topk(ggml_tensor * x);
     ggml_tensor * altup_compute_router_modalities(ggml_tensor * x, int il);
     ggml_tensor * altup_predict(ggml_tensor * cur, int il);
     ggml_tensor * laurel(ggml_tensor * cur, int il);
     ggml_tensor * altup_correct(ggml_tensor * predictions, ggml_tensor * activated, int il);
+};
+
+struct llm_build_gemma4_iswa : public llm_graph_context {
+    const llama_model & model;
+
+    const int64_t n_embd_per_layer;
+
+    llm_build_gemma4_iswa(const llama_model & model, const llm_graph_params & params);
+
+    // TODO: refactor in common "per-layer" functionality [TAG_PER_LAYER]
+    ggml_tensor * build_inp_per_layer();
+    ggml_tensor * project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer);
 };
 
 struct llm_build_gemma_embedding : public llm_graph_context {

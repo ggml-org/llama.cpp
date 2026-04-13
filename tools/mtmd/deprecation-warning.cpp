@@ -1,7 +1,10 @@
+#include <clocale>
 #include <cstdio>
 #include <string>
 
 int main(int argc, char** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     std::string filename = "main";
     if (argc >= 1) {
         filename = argv[0];

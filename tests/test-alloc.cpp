@@ -285,7 +285,7 @@ static void test_max_size_too_many_tensors() {
     GGML_ASSERT(backend.context->allocated_total() <= 16 + 16);
 }
 
-// Scenario where there is some space left in the first buffer, but not enough to accomodate
+// Scenario where there is some space left in the first buffer, but not enough to accommodate
 // a larger tensor, so a second buffer is required
 static void test_max_size_tensor_too_large() {
     dummy_backend backend      = dummy_backend_init(32);

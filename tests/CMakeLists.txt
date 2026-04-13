@@ -124,6 +124,7 @@ llama_test(test-tokenizer-0 NAME test-tokenizer-0-command-r         ARGS ${PROJE
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-deepseek-coder    ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-deepseek-coder.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-deepseek-llm      ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-deepseek-llm.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-falcon            ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-falcon.gguf)
+llama_test(test-tokenizer-0 NAME test-tokenizer-0-gemma-4           ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gemma-4.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-gpt-2             ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-2.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-llama-bpe         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-llama-spm         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-spm.gguf)
@@ -149,6 +150,7 @@ endif ()
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
     llama_build_and_test(test-sampling.cpp)
+    llama_build_and_test(test-reasoning-budget.cpp)
     llama_build_and_test(test-grammar-parser.cpp)
     llama_build_and_test(test-grammar-integration.cpp)
     llama_build_and_test(test-llama-grammar.cpp)
@@ -185,13 +187,15 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     #llama_test(test-tokenizer-1-spm  NAME test-tokenizer-1-baichuan  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-baichuan.gguf)
 
     # llama_build_and_test(test-double-float.cpp) # SLOW
+
+    llama_build_and_test(test-llama-archs.cpp)
 endif()
 
-llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
-llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-jinja.cpp)
 llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
+llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(
@@ -201,6 +205,7 @@ llama_build_and_test(
     peg-parser/test-gbnf-generation.cpp
     peg-parser/test-json-parser.cpp
     peg-parser/test-json-serialization.cpp
+    peg-parser/test-python-dict-parser.cpp
     peg-parser/test-unicode.cpp
     peg-parser/tests.h
 )
@@ -256,6 +261,7 @@ endif()
 set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
 target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+unset(LLAMA_TEST_NAME)
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)
@@ -269,6 +275,12 @@ if (TARGET cpp-httplib)
         add_executable(test-gguf-model-data test-gguf-model-data.cpp)
         target_link_libraries(test-gguf-model-data PRIVATE gguf-model-data common)
         llama_test(test-gguf-model-data LABEL "model")
+
+        # test-quant-type-selection requires gguf-model-data for remote model metadata
+        llama_build_and_test(test-quant-type-selection.cpp LABEL "model")
+        target_link_libraries(test-quant-type-selection PRIVATE gguf-model-data)
+        target_compile_definitions(test-quant-type-selection PRIVATE
+            SNAPSHOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/snapshots")
     endif()
 endif()
 
@@ -279,3 +291,10 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+
+llama_build(export-graph-ops.cpp)
+target_include_directories(export-graph-ops PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+if (TARGET gguf-model-data)
+    target_link_libraries(export-graph-ops PRIVATE gguf-model-data)
+    target_compile_definitions(export-graph-ops PRIVATE LLAMA_HF_FETCH)
+endif()

@@ -28,6 +28,13 @@ enum patch_merge_type {
     PATCH_MERGE_SPATIAL_UNPAD,
 };
 
+enum resize_algo {
+    RESIZE_ALGO_BILINEAR, // stretch to target resolution
+    RESIZE_ALGO_BICUBIC, // center-crop when aspect ratio doesn't match
+    RESIZE_ALGO_BICUBIC_PILLOW,
+    // RESIZE_ALGO_LANCZOS, // TODO
+};
+
 struct clip_hparams {
     int32_t image_size = 0;
     int32_t patch_size = 0;
@@ -37,16 +44,32 @@ struct clip_hparams {
     int32_t n_head = 0;
     int32_t n_layer = 0;
     // idefics3
+    int32_t n_merge = 0; // number of patch merges **per-side**
+
+    // for preprocessor
     int32_t image_longest_edge = 0;
     int32_t image_min_pixels = -1;
     int32_t image_max_pixels = -1;
-    int32_t n_merge = 0; // number of patch merges **per-side**
+    resize_algo image_resize_algo = RESIZE_ALGO_BICUBIC;
+    bool image_resize_pad = true; // if false, center-crop will be applied when resizing
+    std::array<uint8_t, 3> image_pad_color = {0, 0, 0};
+
+    // (preprocessor) for llava-uhd style models
+    std::vector<clip_image_size> image_res_candidates;
+    int32_t preproc_min_tiles = 0;
+    int32_t preproc_max_tiles = 0;
+    resize_algo image_resize_algo_rf = RESIZE_ALGO_BICUBIC;
+    resize_algo image_resize_algo_ov = RESIZE_ALGO_BILINEAR;
+    bool image_pad_rf = true;  // if true, refined image will be padded (e.g. llava-1.6)
+    bool image_pad_ov = false; // if true, overview image will be padded (e.g. llava-1.6)
+    std::array<uint8_t, 3> image_pad_color_rf = {0, 0, 0}; // padding color for refined image
+    std::array<uint8_t, 3> image_pad_color_ov = {0, 0, 0}; // padding color for overview image
 
     float image_mean[3];
     float image_std[3];
 
     // for models using dynamic image size, we need to have a smaller image size to warmup
-    // otherwise, user will get OOM everytime they load the model
+    // otherwise, user will get OOM every time they load the model
     int32_t warmup_image_size = 0;
     int32_t warmup_audio_size = 3000;
 
@@ -56,13 +79,15 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
-
-    std::vector<clip_image_size> image_res_candidates; // for llava-uhd style models
-    int32_t image_crop_resolution;
     std::unordered_set<int32_t> vision_feature_layer;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
+
+    // deepseek-ocr (sam)
+    int32_t sam_n_layer = 0;
+    int32_t sam_n_head  = 0;
+    int32_t sam_n_embd  = 0;
 
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
@@ -99,9 +124,28 @@ struct clip_hparams {
         warmup_image_size = n_tok_per_side * patch_size * cur_merge;
         // TODO: support warmup size for custom token numbers
     }
+    // sam vit deepseek-ocr
+    std::vector<int32_t> global_attn_indices() const {
+        return {  2,  5,  8, 11 };
+    }
+    bool is_global_attn(int32_t layer) const {
+        const auto indices = global_attn_indices();
+
+        for (const auto & idx : indices) {
+            if (layer == idx) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 };
 
 struct clip_layer {
+    // layernorm 1 (or layer input norm, or pre-attention norm)
+    ggml_tensor * ln_1_w = nullptr;
+    ggml_tensor * ln_1_b = nullptr;
+
     // attention
     ggml_tensor * k_w = nullptr;
     ggml_tensor * k_b = nullptr;
@@ -118,9 +162,7 @@ struct clip_layer {
     ggml_tensor * k_norm = nullptr;
     ggml_tensor * q_norm = nullptr;
 
-    // layernorm 1
-    ggml_tensor * ln_1_w = nullptr;
-    ggml_tensor * ln_1_b = nullptr;
+    ggml_tensor * attn_post_norm_w = nullptr;
 
     ggml_tensor * ff_up_w = nullptr;
     ggml_tensor * ff_up_b = nullptr;
@@ -129,13 +171,16 @@ struct clip_layer {
     ggml_tensor * ff_down_w = nullptr;
     ggml_tensor * ff_down_b = nullptr;
 
-    // layernorm 2
+    // layernorm 2 (or pre-FFN norm)
     ggml_tensor * ln_2_w = nullptr;
     ggml_tensor * ln_2_b = nullptr;
 
+    ggml_tensor * ff_post_norm_w = nullptr;
+
     // layer scale (no bias)
-    ggml_tensor * ls_1_w = nullptr;
-    ggml_tensor * ls_2_w = nullptr;
+    ggml_tensor * ls_1_w   = nullptr;
+    ggml_tensor * ls_2_w   = nullptr;
+    ggml_tensor * ls_out_w = nullptr; // gemma4
 
     // qwen3vl deepstack merger
     ggml_tensor * deepstack_norm_w = nullptr;
@@ -145,6 +190,9 @@ struct clip_layer {
     ggml_tensor * deepstack_fc2_w = nullptr;
     ggml_tensor * deepstack_fc2_b = nullptr;
 
+    // sam rel_pos
+    ggml_tensor * rel_pos_w = nullptr;
+    ggml_tensor * rel_pos_h = nullptr;
     // lfm2
     ggml_tensor * ff_norm_w     = nullptr;
     ggml_tensor * ff_norm_b     = nullptr;
@@ -168,6 +216,13 @@ struct clip_layer {
     ggml_tensor * conv_pw1_b    = nullptr;
     ggml_tensor * conv_pw2_w    = nullptr;
     ggml_tensor * conv_pw2_b    = nullptr;
+
+    // gemma4 audio conformer per-layer
+    ggml_tensor * attn_pre_norm_w   = nullptr;
+    ggml_tensor * attn_k_rel_w      = nullptr;
+    ggml_tensor * per_dim_scale_w   = nullptr;
+    ggml_tensor * per_dim_k_scale_w = nullptr;
+    ggml_tensor * ff_post_norm_1_w  = nullptr;
 
     bool has_deepstack() const {
         return deepstack_fc1_w != nullptr;
@@ -221,7 +276,7 @@ struct clip_model {
     // embeddings
     ggml_tensor * class_embedding = nullptr;
     ggml_tensor * patch_embeddings_0 = nullptr;
-    ggml_tensor * patch_embeddings_1 = nullptr;  // second Conv2D kernel when we decouple Conv3D along temproal dimension (Qwen2VL)
+    ggml_tensor * patch_embeddings_1 = nullptr;  // second Conv2D kernel when we decouple Conv3D along temporal dimension (Qwen2VL)
     ggml_tensor * patch_bias = nullptr;
     ggml_tensor * position_embeddings = nullptr;
     ggml_tensor * norm_embd_w = nullptr;
@@ -237,7 +292,6 @@ struct clip_model {
     ggml_tensor * post_ln_w;
     ggml_tensor * post_ln_b;
 
-    ggml_tensor * projection; // TODO: rename it to fc (fully connected layer)
     ggml_tensor * mm_fc_w;
     ggml_tensor * mm_fc_b;
     ggml_tensor * mm_ffn_up_w = nullptr;
@@ -258,6 +312,8 @@ struct clip_model {
     ggml_tensor * mm_2_b = nullptr;
 
     ggml_tensor * image_newline = nullptr;
+    ggml_tensor * view_seperator = nullptr;
+
 
     // Yi type models with mlp+normalization projection
     ggml_tensor * mm_1_w = nullptr; // Yi type models have 0, 1, 3, 4
@@ -308,7 +364,8 @@ struct clip_model {
     // MINICPMV projection
     ggml_tensor * mm_model_pos_embed_k = nullptr;
     ggml_tensor * mm_model_query = nullptr;
-    ggml_tensor * mm_model_proj = nullptr;
+    ggml_tensor * mm_model_proj   = nullptr;
+    ggml_tensor * mm_model_proj_b = nullptr;
     ggml_tensor * mm_model_kv_proj = nullptr;
     ggml_tensor * mm_model_attn_q_w = nullptr;
     ggml_tensor * mm_model_attn_q_b = nullptr;
@@ -356,9 +413,19 @@ struct clip_model {
     ggml_tensor * conv1d_1_b = nullptr;
     ggml_tensor * conv1d_2_w = nullptr;
     ggml_tensor * conv1d_2_b = nullptr;
+    ggml_tensor * conv_out_w = nullptr;
+    ggml_tensor * conv_out_b = nullptr;
     ggml_tensor * mm_norm_pre_w = nullptr;
     ggml_tensor * mm_norm_pre_b = nullptr;
     ggml_tensor * mm_norm_mid_w = nullptr;
+
+    // qwen3a
+    ggml_tensor * conv2d_1_w = nullptr;
+    ggml_tensor * conv2d_1_b = nullptr;
+    ggml_tensor * conv2d_2_w = nullptr;
+    ggml_tensor * conv2d_2_b = nullptr;
+    ggml_tensor * conv2d_3_w = nullptr;
+    ggml_tensor * conv2d_3_b = nullptr;
 
     // cogvlm
     ggml_tensor * mm_post_fc_norm_w = nullptr;
@@ -369,11 +436,54 @@ struct clip_model {
     ggml_tensor * mm_boi = nullptr;
     ggml_tensor * mm_eoi = nullptr;
 
+    // hunyuanocr perceiver
+    ggml_tensor * mm_pre_norm_w  = nullptr;
+    ggml_tensor * mm_img_begin   = nullptr;
+    ggml_tensor * mm_img_end     = nullptr;
+
+    // deepseek ocr sam
+    ggml_tensor * patch_embed_proj_w = nullptr;
+    ggml_tensor * patch_embed_proj_b = nullptr;
+    ggml_tensor * pos_embed          = nullptr;
+
+    ggml_tensor * neck_0_w;
+    ggml_tensor * neck_1_w;
+    ggml_tensor * neck_1_b;
+    ggml_tensor * neck_2_w;
+    ggml_tensor * neck_3_w;
+    ggml_tensor * neck_3_b;
+    ggml_tensor * net_2;
+    ggml_tensor * net_3;
+
+    int32_t n_sam_layers = 12; // used by deepseek-ocr sam encoder
+
+    std::vector<clip_layer> sam_layers;
     // lfm2 audio
     std::array<ggml_tensor *, 7> pre_encode_conv_X_w = {nullptr};
     std::array<ggml_tensor *, 7> pre_encode_conv_X_b = {nullptr};
     ggml_tensor * pre_encode_out_w = nullptr;
     ggml_tensor * pre_encode_out_b = nullptr;
+
+    // gemma4
+    ggml_tensor * std_bias = nullptr;
+    ggml_tensor * std_scale = nullptr;
+    // Gemma4ClippableLinear
+    struct clamp_info {
+        float inp_max;
+        float inp_min;
+        float out_max;
+        float out_min;
+    };
+    std::map<std::string, clamp_info> clamp_info_map;
+
+    // gemma4 audio conformer
+    std::array<ggml_tensor *, 2> sscp_conv_w = {nullptr};
+    std::array<ggml_tensor *, 2> sscp_conv_b = {nullptr};
+    std::array<ggml_tensor *, 2> sscp_norm_w = {nullptr};
+    ggml_tensor * sscp_inp_proj_w = nullptr;
+    ggml_tensor * sscp_inp_proj_b = nullptr;
+    ggml_tensor * audio_out_proj_w = nullptr;
+    ggml_tensor * audio_out_proj_b = nullptr;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
@@ -383,7 +493,8 @@ struct clip_model {
 
     bool audio_has_stack_frames() const {
         return proj_type == PROJECTOR_TYPE_ULTRAVOX
-            || proj_type == PROJECTOR_TYPE_VOXTRAL;
+            || proj_type == PROJECTOR_TYPE_VOXTRAL
+            || proj_type == PROJECTOR_TYPE_MERALION;
     }
 };
 

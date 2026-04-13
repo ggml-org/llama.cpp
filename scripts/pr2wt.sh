@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# intialize a new worktree from a PR number:
+# initialize a new worktree from a PR number:
 #
 # - creates a new remote using the fork's clone URL
 # - creates a local branch tracking the remote branch
