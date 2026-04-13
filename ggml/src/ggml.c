@@ -6219,6 +6219,8 @@ static struct ggml_tensor * ggml_scatter_impl(
     GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16);
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
     GGML_ASSERT(a->ne[1] == ids->ne[1]);
+    GGML_ASSERT(a->ne[2] == ids->ne[2]);
+    GGML_ASSERT(a->ne[3] == ids->ne[3]);
 
     struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
 
