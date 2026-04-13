@@ -6917,7 +6917,6 @@ static void ggml_build_forward_impl(struct ggml_cgraph * cgraph, struct ggml_ten
     if (n_new > 0) {
         // the last added node should always be starting point
         GGML_ASSERT(cgraph->nodes[cgraph->n_nodes - 1] == tensor);
-        cgraph->version = ggml_graph_next_version();
     }
 }
 
@@ -7132,7 +7131,7 @@ struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph0, int i0, int i1)
         /*.use_counts       =*/ cgraph0->use_counts,
         /*.visited_hash_set =*/ cgraph0->visited_hash_set,
         /*.order            =*/ cgraph0->order,
-        /*.version          =*/ cgraph0->version,
+        /*.version          =*/ 0
     };
 
     return cgraph;
@@ -7244,7 +7243,6 @@ void ggml_graph_clear(struct ggml_cgraph * cgraph) {
     cgraph->n_leafs = 0;
     cgraph->n_nodes = 0;
     ggml_hash_set_reset(&cgraph->visited_hash_set);
-    cgraph->version = ggml_graph_next_version();
 }
 
 int ggml_graph_size(struct ggml_cgraph * cgraph) {

@@ -761,6 +761,11 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #define GGML_SCHED_MAX_COPIES 4
 #endif
 
+#ifndef GGML_SCHED_MAX_SPLIT_BITS
+#define GGML_SCHED_MAX_SPLIT_BITS 12 // log2(4096)
+#endif
+
+
 struct ggml_backend_sched_split {
     int backend_id;
     int i_start;
@@ -863,8 +868,6 @@ static int ggml_backend_sched_backend_from_buffer(ggml_backend_sched_t sched, co
 
     return -1;
 }
-
-#define GGML_SCHED_MAX_SPLITS_BITS 12
 
 #if 0
 #define GGML_SCHED_MAX_SPLITS_DEBUG 4096
@@ -1031,6 +1034,8 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     if (sched->ctx == NULL) {
         GGML_ABORT("%s: failed to initialize context\n", __func__);
     }
+
+    graph->uid = ggml_graph_next_version();
 
     // pass 1: assign backends to ops with pre-allocated inputs
     for (int i = 0; i < graph->n_leafs; i++) {
@@ -1479,6 +1484,12 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         assert(graph_copy->size > graph_copy->n_leafs);
         graph_copy->leafs[graph_copy->n_leafs++] = leaf;
     }
+
+    // set ids for all splits
+    GGML_ASSERT(sched->n_splits < (1 << GGML_SCHED_MAX_SPLIT_BITS));
+    for (int i = 0; i < sched->n_splits; ++i) {
+        sched->splits[i].graph.uid = graph->uid | ((uint64_t)(i + 1) << (64 - GGML_SCHED_MAX_SPLIT_BITS));
+    }
 }
 
 static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
@@ -1891,11 +1902,6 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
         if (!ggml_backend_sched_alloc_graph(sched, graph)) {
             return GGML_STATUS_ALLOC_FAILED;
         }
-    }
-
-    GGML_ASSERT(sched->n_splits < (1 << GGML_SCHED_MAX_SPLITS_BITS));
-    for (int i = 0; i < sched->n_splits; i++) {
-        sched->splits[i].graph.version = graph->version | ((uint64_t)(i + 1) << (64 - GGML_SCHED_MAX_SPLITS_BITS));
     }
 
     return ggml_backend_sched_compute_splits(sched);

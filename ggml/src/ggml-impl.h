@@ -341,7 +341,7 @@ struct ggml_cgraph {
 
     enum ggml_cgraph_eval_order order;
 
-    uint64_t version;
+    uint64_t uid;
 };
 
 // returns a slice of cgraph with nodes [i0, i1)
