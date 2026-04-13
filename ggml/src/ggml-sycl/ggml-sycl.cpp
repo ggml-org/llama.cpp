@@ -228,11 +228,16 @@ static void ggml_check_sycl() try {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
         g_ggml_sycl_enable_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
         if (g_ggml_sycl_enable_level_zero) {
-            // Verify all devices use the Level Zero backend before enabling L0 APIs
+            // Verify all GPU devices use the Level Zero backend before enabling L0 APIs
+            // Only check GPU devices; CPU devices use OpenCL backend and would
+            // incorrectly disable Level Zero for the GPUs that need it.
             for (unsigned int i = 0; i < dpct::dev_mgr::instance().device_count(); i++) {
                 auto & q = dpct::dev_mgr::instance().get_device(i).default_queue();
+                if (!q.get_device().is_gpu()) {
+                    continue;
+                }
                 if (q.get_backend() != sycl::backend::ext_oneapi_level_zero) {
-                    GGML_LOG_WARN("SYCL device %d does not use Level Zero backend, disabling Level Zero memory API\n", i);
+                    GGML_LOG_WARN("SYCL GPU device %d does not use Level Zero backend, disabling Level Zero memory API\n", i);
                     g_ggml_sycl_enable_level_zero = 0;
                     break;
                 }
@@ -530,11 +535,27 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+static bool ggml_sycl_is_l0_discrete_gpu(sycl::queue &q) {
+    if (!q.get_device().is_gpu() || q.get_backend() != sycl::backend::ext_oneapi_level_zero) {
+        return false;
+    }
+
+    ze_device_handle_t ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
+    ze_device_properties_t props = {};
+    props.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
+    ze_result_t r = zeDeviceGetProperties(ze_dev, &props);
+    return r == ZE_RESULT_SUCCESS && !(props.flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
+}
+#endif
+
 static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
     // Use Level Zero direct copy for dGPU-to-dGPU transfers.
-    if (g_ggml_sycl_enable_level_zero) {
+    const bool l0_copy_supported =
+        ggml_sycl_is_l0_discrete_gpu(q_dst) && ggml_sycl_is_l0_discrete_gpu(q_src);
+    if (g_ggml_sycl_enable_level_zero && l0_copy_supported) {
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());
         auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_device());
         ze_command_queue_desc_t cq_desc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC, nullptr, 0, 0,
@@ -542,9 +563,11 @@ static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst
         ze_command_list_handle_t cl;
         ze_result_t r = zeCommandListCreateImmediate(ze_ctx, ze_dev, &cq_desc, &cl);
         if (r == ZE_RESULT_SUCCESS) {
-            zeCommandListAppendMemoryCopy(cl, ptr_dst, ptr_src, size, nullptr, 0, nullptr);
+            r = zeCommandListAppendMemoryCopy(cl, ptr_dst, ptr_src, size, nullptr, 0, nullptr);
             zeCommandListDestroy(cl);
-            return;
+            if (r == ZE_RESULT_SUCCESS) {
+                return;
+            }
         }
     }
 #endif
@@ -3394,7 +3417,7 @@ static inline void * sycl_ext_malloc_device(dpct::queue_ptr stream, size_t size)
     // If async allocation extension is not available, use_async should always be false.
     GGML_ASSERT(!use_async);
 #endif
-    return sycl::malloc(size, *stream, sycl::usm::alloc::device);
+    return ggml_sycl_malloc_device(size, *stream);
 }
 
 static inline void sycl_ext_free(dpct::queue_ptr stream, void * ptr) {
@@ -3408,7 +3431,7 @@ static inline void sycl_ext_free(dpct::queue_ptr stream, void * ptr) {
     // If async allocation extension is not available, use_async should always be false.
     GGML_ASSERT(!use_async);
 #endif
-    sycl::free(ptr, *stream);
+    ggml_sycl_free_device(ptr, *stream);
 }
 
 // RAII wrapper for temporary reorder buffers with optional host memory fallback.

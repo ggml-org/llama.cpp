@@ -71,6 +71,12 @@ jobs:
           wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
           sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
 
+      - name: Install Level Zero SDK
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libze-dev
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
@@ -126,6 +132,15 @@ jobs:
         if: steps.cache-sycl.outputs.cache-hit != 'true'
         run: |
           scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+
+      - name: Install Level Zero SDK
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/oneapi-src/level-zero/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -like "level-zero-win-sdk*.zip" } | Select-Object -First 1
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "level-zero-win-sdk.zip"
+          Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
+          "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21

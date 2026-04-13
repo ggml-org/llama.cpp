@@ -16,6 +16,9 @@
 #include <level_zero/ze_api.h>
 #endif
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 
@@ -75,9 +78,21 @@ int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block
 // sycl::malloc_device creates a 1:1 host memory mirror of every VRAM allocation
 // via xe_gem_prime_export, consuming system RAM equal to VRAM allocated.
 // zeMemAllocDevice uses the SVM/P2P path with no host staging.
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+static bool ggml_sycl_queue_supports_level_zero(sycl::queue &q) {
+    const char * env = std::getenv("GGML_SYCL_ENABLE_LEVEL_ZERO");
+    unsigned int enabled = 1;
+    if (env && sscanf(env, " %u", &enabled) != 1) {
+        enabled = 1;
+    }
+
+    return enabled && q.get_device().is_gpu() && q.get_backend() == sycl::backend::ext_oneapi_level_zero;
+}
+#endif
+
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-    if (g_ggml_sycl_enable_level_zero) {
+    if (ggml_sycl_queue_supports_level_zero(q)) {
         void *ptr = nullptr;
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
         auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
@@ -95,7 +110,7 @@ void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
 void ggml_sycl_free_device(void *ptr, sycl::queue &q) {
     if (!ptr) return;
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-    if (g_ggml_sycl_enable_level_zero) {
+    if (ggml_sycl_queue_supports_level_zero(q)) {
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
         zeMemFree(ze_ctx, ptr);
         return;
