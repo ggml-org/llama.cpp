@@ -162,8 +162,15 @@ struct webgpu_param_arena {
 struct webgpu_encoded_op {
     uint32_t num_kernels = 0;
 #ifdef GGML_WEBGPU_GPU_PROFILE
-    std::string pipeline_name;
+    std::vector<std::string> pipeline_names;
 #endif
+};
+
+struct webgpu_dispatch_desc {
+    webgpu_pipeline                   pipeline;
+    std::vector<uint32_t>             params;
+    std::vector<wgpu::BindGroupEntry> bind_group_entries;
+    std::pair<uint32_t, uint32_t>     workgroups = { 1, 1 };
 };
 
 struct webgpu_capabilities {
@@ -477,26 +484,19 @@ static void ggml_backend_webgpu_debug(webgpu_global_context & ctx) {
 }
 #endif
 
-static webgpu_encoded_op ggml_backend_webgpu_build_multi(
-    webgpu_context &                                       ctx,
-    const std::vector<webgpu_pipeline> &                   pipelines,
-    const std::vector<std::vector<uint32_t>> &             params_list,
-    const std::vector<std::vector<wgpu::BindGroupEntry>> & bind_group_entries_list,
-    const std::vector<std::pair<uint32_t, uint32_t>> &     workgroups_list) {
-    GGML_ASSERT(pipelines.size() == params_list.size());
-    GGML_ASSERT(pipelines.size() == bind_group_entries_list.size());
-    GGML_ASSERT(pipelines.size() == workgroups_list.size());
-
+static webgpu_encoded_op ggml_backend_webgpu_build_multi(webgpu_context &                          ctx,
+                                                         const std::vector<webgpu_dispatch_desc> & dispatches) {
     webgpu_encoded_op            result = {};
     std::vector<wgpu::BindGroup> bind_groups;
     std::vector<size_t>          param_offsets;
-    result.num_kernels = pipelines.size();
+    result.num_kernels = dispatches.size();
 
-    for (size_t i = 0; i < pipelines.size(); i++) {
-        const size_t param_size   = params_list[i].size() * sizeof(uint32_t);
-        const size_t param_offset = ctx->param_arena.alloc_slot(param_size);
+    for (size_t i = 0; i < dispatches.size(); i++) {
+        const webgpu_dispatch_desc & dispatch     = dispatches[i];
+        const size_t                 param_size   = dispatch.params.size() * sizeof(uint32_t);
+        const size_t                 param_offset = ctx->param_arena.alloc_slot(param_size);
 
-        std::vector<wgpu::BindGroupEntry> entries            = bind_group_entries_list[i];
+        std::vector<wgpu::BindGroupEntry> entries            = dispatch.bind_group_entries;
         uint32_t                          params_binding_num = entries.size();
         entries.push_back({ .binding = params_binding_num,
                             .buffer  = ctx->param_arena.buffer,
@@ -504,51 +504,44 @@ static webgpu_encoded_op ggml_backend_webgpu_build_multi(
                             .size    = ctx->param_arena.slot_size });
 
         wgpu::BindGroupDescriptor bind_group_desc;
-        bind_group_desc.layout     = pipelines[i].pipeline.GetBindGroupLayout(0);
+        bind_group_desc.layout     = dispatch.pipeline.pipeline.GetBindGroupLayout(0);
         bind_group_desc.entryCount = entries.size();
         bind_group_desc.entries    = entries.data();
-        bind_group_desc.label      = pipelines[i].name.c_str();
+        bind_group_desc.label      = dispatch.pipeline.name.c_str();
         bind_groups.push_back(ctx->global_ctx->device.CreateBindGroup(&bind_group_desc));
         param_offsets.push_back(param_offset);
     }
 
     for (size_t i = 0; i < param_offsets.size(); i++) {
-        ctx->global_ctx->queue.WriteBuffer(ctx->param_arena.buffer, param_offsets[i], params_list[i].data(),
-                                           params_list[i].size() * sizeof(uint32_t));
+        ctx->global_ctx->queue.WriteBuffer(ctx->param_arena.buffer, param_offsets[i], dispatches[i].params.data(),
+                                           dispatches[i].params.size() * sizeof(uint32_t));
     }
 
-    bool                     own_pass = false;
-    wgpu::ComputePassEncoder pass     = ctx->active_compute_pass;
 #ifdef GGML_WEBGPU_GPU_PROFILE
-    GGML_ASSERT(ctx->profile_timestamp_query_count + 2 <= WEBGPU_MAX_PROFILE_QUERY_COUNT);
-    const uint32_t query_begin = ctx->profile_timestamp_query_count++;
-    const uint32_t query_end   = ctx->profile_timestamp_query_count++;
-#endif
-    if (!pass) {
-        own_pass = true;
-#ifdef GGML_WEBGPU_GPU_PROFILE
-        wgpu::PassTimestampWrites   ts_writes = { .querySet                  = ctx->profile_timestamp_query_set,
-                                                  .beginningOfPassWriteIndex = query_begin,
-                                                  .endOfPassWriteIndex       = query_end };
-        wgpu::ComputePassDescriptor pass_desc = { .timestampWrites = &ts_writes };
-        pass                                  = ctx->active_command_encoder.BeginComputePass(&pass_desc);
-#else
-        pass = ctx->active_command_encoder.BeginComputePass();
-#endif
-    }
+    for (size_t i = 0; i < dispatches.size(); i++) {
+        GGML_ASSERT(ctx->profile_timestamp_query_count + 2 <= WEBGPU_MAX_PROFILE_QUERY_COUNT);
+        const uint32_t              query_begin = ctx->profile_timestamp_query_count++;
+        const uint32_t              query_end   = ctx->profile_timestamp_query_count++;
+        wgpu::PassTimestampWrites   ts_writes   = { .querySet                  = ctx->profile_timestamp_query_set,
+                                                    .beginningOfPassWriteIndex = query_begin,
+                                                    .endOfPassWriteIndex       = query_end };
+        wgpu::ComputePassDescriptor pass_desc   = { .timestampWrites = &ts_writes };
+        wgpu::ComputePassEncoder    pass        = ctx->active_command_encoder.BeginComputePass(&pass_desc);
 
-    for (size_t i = 0; i < pipelines.size(); i++) {
-        pass.SetPipeline(pipelines[i].pipeline);
+        pass.SetPipeline(dispatches[i].pipeline.pipeline);
         pass.SetBindGroup(0, bind_groups[i]);
-        pass.DispatchWorkgroups(workgroups_list[i].first, workgroups_list[i].second, 1);
-    }
-    if (own_pass) {
+        pass.DispatchWorkgroups(dispatches[i].workgroups.first, dispatches[i].workgroups.second, 1);
         pass.End();
+        result.pipeline_names.push_back(dispatches[i].pipeline.name);
     }
-
-#ifdef GGML_WEBGPU_GPU_PROFILE
-    result.pipeline_name = pipelines.front().name;
+#else
+    for (size_t i = 0; i < dispatches.size(); i++) {
+        ctx->active_compute_pass.SetPipeline(dispatches[i].pipeline.pipeline);
+        ctx->active_compute_pass.SetBindGroup(0, bind_groups[i]);
+        ctx->active_compute_pass.DispatchWorkgroups(dispatches[i].workgroups.first, dispatches[i].workgroups.second, 1);
+    }
 #endif
+
     return result;
 }
 
@@ -558,12 +551,10 @@ static webgpu_encoded_op ggml_backend_webgpu_build(webgpu_context &             
                                                    std::vector<wgpu::BindGroupEntry> bind_group_entries,
                                                    uint32_t                          wg_x,
                                                    uint32_t                          wg_y = 1) {
-    return ggml_backend_webgpu_build_multi(ctx,
-                                           {
-                                               pipeline
-    },
-                                           { std::move(params) }, { std::move(bind_group_entries) },
-                                           { { wg_x, wg_y } });
+    return ggml_backend_webgpu_build_multi(
+        ctx, {
+                 { pipeline, std::move(params), std::move(bind_group_entries), { wg_x, wg_y } },
+    });
 }
 
 static void ggml_backend_webgpu_buffer_memset(webgpu_global_context & ctx,
@@ -1371,10 +1362,7 @@ static webgpu_encoded_op ggml_webgpu_mul_mat_id(webgpu_context & ctx,
     // Get or create pipeline
     webgpu_pipeline gather_pipeline, main_pipeline;
 
-    std::vector<webgpu_pipeline>                   pipelines;
-    std::vector<std::vector<uint32_t>>             params_list;
-    std::vector<std::vector<wgpu::BindGroupEntry>> entries_list;
-    std::vector<std::pair<uint32_t, uint32_t>>     workgroups_list;
+    std::vector<webgpu_dispatch_desc> dispatches;
 
     gather_pipeline = ctx->shader_lib->get_mul_mat_id_gather_pipeline(shader_lib_ctx);
     main_pipeline   = ctx->shader_lib->get_mul_mat_id_pipeline(shader_lib_ctx);
@@ -1434,10 +1422,9 @@ static webgpu_encoded_op ggml_webgpu_mul_mat_id(webgpu_context & ctx,
     const uint32_t gather_wg_x     = std::min(gather_total_wg, max_wg_per_dim);
     const uint32_t gather_wg_y     = CEIL_DIV(gather_total_wg, gather_wg_x);
 
-    pipelines.push_back(gather_pipeline);
-    params_list.push_back(std::move(gather_params));
-    entries_list.push_back(std::move(gather_entries));
-    workgroups_list.push_back({ gather_wg_x, gather_wg_y });
+    dispatches.push_back({
+        gather_pipeline, std::move(gather_params), std::move(gather_entries), { gather_wg_x, gather_wg_y }
+    });
 
     // params for mul_mat_id.wgsl
     std::vector<uint32_t> main_params = {
@@ -1502,12 +1489,11 @@ static webgpu_encoded_op ggml_webgpu_mul_mat_id(webgpu_context & ctx,
 
     compute_2d_workgroups(total_wg, max_wg_per_dim, wg_x, wg_y);
 
-    pipelines.push_back(main_pipeline);
-    params_list.push_back(std::move(main_params));
-    entries_list.push_back(std::move(main_entries));
-    workgroups_list.push_back({ wg_x, wg_y });
+    dispatches.push_back({
+        main_pipeline, std::move(main_params), std::move(main_entries), { wg_x, wg_y }
+    });
 
-    return ggml_backend_webgpu_build_multi(ctx, pipelines, params_list, entries_list, workgroups_list);
+    return ggml_backend_webgpu_build_multi(ctx, dispatches);
 }
 
 #ifndef __EMSCRIPTEN__
@@ -1809,29 +1795,26 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
 
         const uint64_t split_wg_total = (uint64_t) wg_x * nwg;
         GGML_ASSERT(split_wg_total <= UINT32_MAX);
-        std::vector<webgpu_pipeline>                   pipelines;
-        std::vector<std::vector<uint32_t>>             params_list;
-        std::vector<std::vector<wgpu::BindGroupEntry>> entries_list;
-        std::vector<std::pair<uint32_t, uint32_t>>     workgroups_list;
+        std::vector<webgpu_dispatch_desc> dispatches;
 
         if (use_blk) {
-            pipelines.push_back(blk_pipeline);
-            params_list.push_back(std::move(blk_params));
-            entries_list.push_back(std::move(blk_entries));
-            workgroups_list.push_back({ blk_nblk0, blk_nblk1 * blk_batch_count });
+            dispatches.push_back({
+                blk_pipeline,
+                std::move(blk_params),
+                std::move(blk_entries),
+                { blk_nblk0, blk_nblk1 * blk_batch_count }
+            });
         }
-        pipelines.push_back(pipeline);
-        params_list.push_back(std::move(split_params));
-        entries_list.push_back(std::move(split_entries));
-        workgroups_list.push_back({ (uint32_t) split_wg_total, 1u });
+        dispatches.push_back({
+            pipeline, std::move(split_params), std::move(split_entries), { (uint32_t) split_wg_total, 1u }
+        });
         if (use_vec_reduce) {
-            pipelines.push_back(reduce_pipeline);
-            params_list.push_back(std::move(reduce_params));
-            entries_list.push_back(std::move(reduce_entries));
-            workgroups_list.push_back({ (uint32_t) nrows, 1u });
+            dispatches.push_back({
+                reduce_pipeline, std::move(reduce_params), std::move(reduce_entries), { (uint32_t) nrows, 1u }
+            });
         }
 
-        return ggml_backend_webgpu_build_multi(ctx, pipelines, params_list, entries_list, workgroups_list);
+        return ggml_backend_webgpu_build_multi(ctx, dispatches);
     }
 
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
@@ -2545,10 +2528,7 @@ static webgpu_encoded_op ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor *
     const uint32_t stride_idx2 = out_ne0 * (uint32_t) dst->ne[1];
     const uint32_t stride_idx3 = stride_idx2 * (uint32_t) dst->ne[2];
 
-    std::vector<webgpu_pipeline>                   pipelines;
-    std::vector<std::vector<uint32_t>>             params_list;
-    std::vector<std::vector<wgpu::BindGroupEntry>> entries_list;
-    std::vector<std::pair<uint32_t, uint32_t>>     workgroups_list;
+    std::vector<webgpu_dispatch_desc> dispatches;
 
     const uint32_t init_offset       = start_in_tmp ? offset_tmp : offset_dst;
     const size_t   init_align_offset = start_in_tmp ? tmp_offset : ggml_webgpu_tensor_align_offset(ctx, dst);
@@ -2572,13 +2552,12 @@ static webgpu_encoded_op ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor *
         { .binding = 1, .buffer = ggml_webgpu_tensor_buf(dst), .offset = init_align_offset, .size = init_binding_size }
     };
 
-    pipelines.push_back(argsort_pipeline);
-    params_list.push_back(std::move(init_params));
-    entries_list.push_back(std::move(init_entries));
-    workgroups_list.push_back({ wg_x_init, wg_y_init });
+    dispatches.push_back({
+        argsort_pipeline, std::move(init_params), std::move(init_entries), { wg_x_init, wg_y_init }
+    });
 
     if (merge_passes == 0) {
-        return ggml_backend_webgpu_build_multi(ctx, pipelines, params_list, entries_list, workgroups_list);
+        return ggml_backend_webgpu_build_multi(ctx, dispatches);
     }
 
     bool     in_is_tmp = start_in_tmp;
@@ -2630,16 +2609,15 @@ static webgpu_encoded_op ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor *
         const uint32_t total_wg_merge = nm * nrows;
         const uint32_t wg_x_merge     = std::min(total_wg_merge, max_wg);
         const uint32_t wg_y_merge     = CEIL_DIV(total_wg_merge, wg_x_merge);
-        workgroups_list.push_back({ wg_x_merge, wg_y_merge });
-        pipelines.push_back(argsort_merge_pipeline);
-        params_list.push_back(std::move(merge_params));
-        entries_list.push_back(std::move(merge_entries));
+        dispatches.push_back({
+            argsort_merge_pipeline, std::move(merge_params), std::move(merge_entries), { wg_x_merge, wg_y_merge }
+        });
 
         len <<= 1;
         in_is_tmp = !in_is_tmp;
     }
 
-    return ggml_backend_webgpu_build_multi(ctx, pipelines, params_list, entries_list, workgroups_list);
+    return ggml_backend_webgpu_build_multi(ctx, dispatches);
 }
 
 static webgpu_encoded_op ggml_webgpu_cumsum(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
@@ -2881,7 +2859,8 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
             commands.push_back(*cmd);
             num_batched_kernels += cmd.value().num_kernels;
 #ifdef GGML_WEBGPU_GPU_PROFILE
-            profile_pipeline_names.push_back(cmd->pipeline_name);
+            profile_pipeline_names.insert(profile_pipeline_names.end(), cmd->pipeline_names.begin(),
+                                          cmd->pipeline_names.end());
 #endif
         }
 
