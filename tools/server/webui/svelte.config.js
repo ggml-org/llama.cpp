@@ -21,10 +21,13 @@ const config = {
 			strict: true
 		}),
 		output: {
-			bundleStrategy: 'inline'
+			bundleStrategy: 'single'
 		},
 		alias: {
 			$styles: 'src/styles'
+		},
+		version: {
+			name: 'llama-server-webui'
 		}
 	},
 

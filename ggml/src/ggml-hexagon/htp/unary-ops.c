@@ -16,7 +16,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
 struct htp_unary_context {
@@ -67,34 +67,61 @@ static void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
                                   uint8_t * restrict pad,
                                   const int num_elems,
                                   float     epsilon) {
+    (void)pad;
+
     const HVX_Vector * restrict v_src = (HVX_Vector *) src;
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
 
-    HVX_Vector sum_v     = Q6_V_vsplat_R(0x00000000);
+    const int nvec = num_elems / VLEN_FP32;    // number of full vectors
+    const int nloe = num_elems % VLEN_FP32;    // leftover elements
+
+    // Compute sum of squares for full vectors
+    HVX_Vector sum_v = Q6_V_vsplat_R(0x00000000);
     HVX_Vector epsilon_v = hvx_vec_splat_f32(epsilon);
 
-    int step_of_1 = num_elems >> 5;
     #pragma unroll(4)
-    for (int i = 0; i < step_of_1; i++) {
+    for (int i = 0; i < nvec; i++) {
         HVX_Vector v1 = v_src[i];
         HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, v1);
-        sum_v         = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
     }
 
-    sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v)); // replicated over all lanes
+    // Handle tail elements using vectorized ops with masking
+    if (nloe > 0) {
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
+        HVX_Vector v1 = Q6_V_vand_QV(bmask, v_src[nvec]);
+        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, v1);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
+    }
+
+    // Reduce HVX sum
+    sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
 
     HVX_Vector t_v            = hvx_vec_splat_f32((float) num_elems);
     HVX_Vector denom_v        = hvx_vec_inverse_f32(t_v);
     HVX_Vector mean_v         = Q6_Vqf32_vmpy_VsfVsf(sum_v, denom_v);
     HVX_Vector mean_epsilon_v = Q6_Vqf32_vadd_Vqf32Vsf(mean_v, epsilon_v);
 
+    // Scale full vectors
     HVX_Vector scale_v = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
 
     #pragma unroll(4)
-    for (int i = 0; i < step_of_1; i++) {
+    for (int i = 0; i < nvec; i++) {
         HVX_Vector v1 = v_src[i];
         HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_v);
-        v_dst[i]      = Q6_Vsf_equals_Vqf32(v2);
+        v_dst[i] = Q6_Vsf_equals_Vqf32(v2);
+    }
+
+    // Handle tail elements using vectorized ops with masking
+    if (nloe > 0) {
+
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
+        HVX_Vector v1 = Q6_V_vand_QV(bmask, v_src[nvec]);
+        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_v);
+        HVX_Vector result = Q6_Vsf_equals_Vqf32(v2);
+
+        // Store with masking to avoid overwriting memory beyond the tensor
+        hvx_vec_store_a(&v_dst[nvec], nloe * 4, result);
     }
 }
 
@@ -240,8 +267,8 @@ static void softplus_f32(const float * restrict src,
 static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
     struct htp_ops_context * octx = uctx->octx;
-    const struct htp_tensor * src = &octx->src0;
-    const struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * src = octx->src[0];
+    const struct htp_tensor * dst = octx->dst;
 
     htp_unary_preamble;
 
@@ -360,8 +387,8 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
 static int execute_op_unary_f32(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    const struct htp_tensor * src0 = &octx->src0;
-    struct htp_tensor *       dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
 
     const char * op_type = NULL;
 
@@ -463,7 +490,7 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
 int op_unary(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
-    switch (octx->src0.type) {
+    switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
             err = execute_op_unary_f32(octx);
             break;

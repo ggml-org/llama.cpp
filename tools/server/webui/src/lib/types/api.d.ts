@@ -45,6 +45,7 @@ export interface ApiErrorResponse {
 export interface ApiChatMessageData {
 	role: ChatRole;
 	content: string | ApiChatMessageContentPart[];
+	reasoning_content?: string;
 	tool_calls?: ApiChatCompletionToolCall[];
 	tool_call_id?: string;
 	timestamp?: number;
@@ -201,6 +202,9 @@ export interface ApiChatCompletionRequest {
 	messages: Array<{
 		role: ChatRole;
 		content: string | ApiChatMessageContentPart[];
+		reasoning_content?: string;
+		tool_calls?: ApiChatCompletionToolCall[];
+		tool_call_id?: string;
 	}>;
 	stream?: boolean;
 	model?: string;

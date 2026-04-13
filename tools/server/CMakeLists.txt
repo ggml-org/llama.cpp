@@ -13,6 +13,8 @@ add_library(${TARGET} STATIC
     server-common.h
     server-context.cpp
     server-context.h
+    server-tools.cpp
+    server-tools.h
 )
 
 if (BUILD_SHARED_LIBS)
@@ -35,22 +37,31 @@ set(TARGET_SRCS
     server-models.cpp
     server-models.h
 )
-set(PUBLIC_ASSETS
-    index.html.gz
-    loading.html
-)
 
-foreach(asset ${PUBLIC_ASSETS})
-    set(input "${CMAKE_CURRENT_SOURCE_DIR}/public/${asset}")
-    set(output "${CMAKE_CURRENT_BINARY_DIR}/${asset}.hpp")
-    list(APPEND TARGET_SRCS ${output})
-    add_custom_command(
-        DEPENDS "${input}"
-        OUTPUT "${output}"
-        COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
+option(LLAMA_BUILD_WEBUI "Build the embedded Web UI" ON)
+
+if (LLAMA_BUILD_WEBUI)
+    set(PUBLIC_ASSETS
+        index.html
+        bundle.js
+        bundle.css
+        loading.html
     )
-    set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
-endforeach()
+
+    foreach(asset ${PUBLIC_ASSETS})
+        set(input "${CMAKE_CURRENT_SOURCE_DIR}/public/${asset}")
+        set(output "${CMAKE_CURRENT_BINARY_DIR}/${asset}.hpp")
+        list(APPEND TARGET_SRCS ${output})
+        add_custom_command(
+            DEPENDS "${input}"
+            OUTPUT "${output}"
+            COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
+        )
+        set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
+    endforeach()
+    add_definitions(-DLLAMA_BUILD_WEBUI)
+else()
+endif()
 
 add_executable(${TARGET} ${TARGET_SRCS})
 install(TARGETS ${TARGET} RUNTIME)

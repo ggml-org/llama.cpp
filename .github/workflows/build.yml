@@ -150,16 +150,15 @@ jobs:
       - name: Dawn Dependency
         id: dawn-depends
         run: |
-          DAWN_VERSION="v2.0.0"
-          DAWN_OWNER="reeselevine"
+          DAWN_VERSION="v20260317.182325"
+          DAWN_OWNER="google"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
-          curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+          DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-macos-latest-Release"
+          echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
           mkdir dawn
-          unzip artifact.zip
-          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -181,7 +180,7 @@ jobs:
           - build: 'x64'
             os: ubuntu-22.04
           - build: 'arm64'
-            os: ubuntu-22.04-arm
+            os: ubuntu-24.04-arm
           - build: 's390x'
             os: ubuntu-24.04-s390x
           - build: 'ppc64le'
@@ -207,14 +206,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            python3 python3-pip python3-dev \
+            python3 python3-pip python3-dev python3-wheel \
             libjpeg-dev build-essential libssl-dev \
             git-lfs
+
+      - name: Toolchain workaround (GCC 14)
+        if: ${{ contains(matrix.os, 'ubuntu-24.04') }}
+        run: |
+          sudo apt-get install -y gcc-14 g++-14
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: Python Dependencies
         id: python_depends
         run: |
-          python3 -m pip install --upgrade pip
+          export PIP_BREAK_SYSTEM_PACKAGES="1"
+          python3 -m pip install --upgrade pip setuptools
           pip3 install ./gguf-py
 
       - name: Swap Endianness
@@ -292,7 +299,15 @@ jobs:
           ctest -L main --verbose
 
   ubuntu-24-vulkan:
-    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    strategy:
+      matrix:
+        include:
+          - build: 'x64'
+            os: ubuntu-24.04
+          - build: 'arm64'
+            os: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Clone
@@ -302,7 +317,10 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          sudo apt-get install -y glslc libvulkan-dev libssl-dev ninja-build
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14 build-essential glslc libvulkan-dev libssl-dev ninja-build
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: Configure
         id: cmake_configure
@@ -365,16 +383,15 @@ jobs:
         id: dawn-depends
         run: |
           sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
-          DAWN_VERSION="v2.0.0"
-          DAWN_OWNER="reeselevine"
+          DAWN_VERSION="v20260317.182325"
+          DAWN_OWNER="google"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
-          curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+          DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release"
+          echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
           mkdir dawn
-          unzip artifact.zip
-          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -408,7 +425,7 @@ jobs:
 
       - name: Fetch emdawnwebgpu
         run: |
-          DAWN_TAG="v20251027.212519"
+          DAWN_TAG="v20260317.182325"
           EMDAWN_PKG="emdawnwebgpu_pkg-${DAWN_TAG}.zip"
           echo "Downloading ${EMDAWN_PKG}"
           curl -L -o emdawn.zip \
@@ -455,6 +472,7 @@ jobs:
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
+            -DGPU_TARGETS="gfx1030" \
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
 
@@ -924,7 +942,7 @@ jobs:
       - name: Grab rocWMMA package
         id: grab_rocwmma
         run: |
-          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70200-43~24.04_amd64.deb"
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2.1/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70201-81~24.04_amd64.deb"
           7z x rocwmma.deb
           7z x data.tar
 
@@ -967,17 +985,18 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.0/include/" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.1/include/" `
             -DCMAKE_BUILD_TYPE=Release `
             -DLLAMA_BUILD_BORINGSSL=ON `
             -DROCM_DIR="${env:HIP_PATH}" `
             -DGGML_HIP=ON `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
+            -DGPU_TARGETS="gfx1100"  `
             -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 
   ubuntu-cpu-riscv64-native:
-    runs-on: RISCV64
+    runs-on: ubuntu-24.04-riscv
 
     steps:
       - name: Install dependencies
@@ -985,23 +1004,20 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 cmake build-essential libssl-dev wget git-lfs
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
-          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
 
-          # Install Rust stable version
-          rustup install stable
-          rustup default stable
+          if ! which rustc; then
+            # Install Rust stable version
+            sudo apt-get install -y rustup
+            rustup install stable
+            rustup default stable
+          fi
 
           git lfs install
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
 
       - name: Check environment
         run: |
@@ -1012,25 +1028,17 @@ jobs:
           cmake --version
           rustc --version
 
-      - name: Setup ccache
-        run: |
-          # Set unique cache directory for this job
-          export CCACHE_DIR="$HOME/.ccache/cpu-cmake-rv64-native"
-          mkdir -p "$CCACHE_DIR"
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-          # Configure ccache for optimal performance
-          ccache --set-config=max_size=5G
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache --set-config=cache_dir="$CCACHE_DIR"
-
-          # Enable more aggressive caching
-          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
-          ccache --set-config=hash_dir=false
-
-          # Export for subsequent steps
-          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
-          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+      # FIXME: Enable when ggml-org/ccache-action works on riscv64
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.21
+      #   with:
+      #     key: ubuntu-cpu-riscv64-native
+      #     evict-old-files: 1d
+      #     save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build

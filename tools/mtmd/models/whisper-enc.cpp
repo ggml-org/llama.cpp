@@ -95,6 +95,28 @@ ggml_cgraph * clip_graph_whisper_enc::build() {
             FFN_GELU_ERF,
             -1);
 
+    } else if (proj_type == PROJECTOR_TYPE_MERALION) {
+        // stack (above) -> ln -> linear0+silu -> GLU -> out
+        cur = ggml_norm(ctx0, cur, hparams.eps);
+        cur = ggml_mul(ctx0, cur, model.mm_norm_pre_w);
+        cur = ggml_add(ctx0, cur, model.mm_norm_pre_b);
+
+        cur = ggml_mul_mat(ctx0, model.mm_0_w, cur);
+        cur = ggml_add(ctx0, cur, model.mm_0_b);
+        cur = ggml_silu(ctx0, cur);
+
+        ggml_tensor * gate = ggml_mul_mat(ctx0, model.mm_1_w, cur);
+        gate = ggml_add(ctx0, gate, model.mm_1_b);
+        gate = ggml_silu(ctx0, gate);
+
+        ggml_tensor * pool = ggml_mul_mat(ctx0, model.mm_2_w, cur);
+        pool = ggml_add(ctx0, pool, model.mm_2_b);
+
+        cur = ggml_mul(ctx0, gate, pool);
+
+        cur = ggml_mul_mat(ctx0, model.mm_3_w, cur);
+        cur = ggml_add(ctx0, cur, model.mm_3_b);
+
     } else if (proj_type == PROJECTOR_TYPE_GLMA) {
             cur = ggml_norm(ctx0, cur, hparams.eps);
             cur = ggml_mul(ctx0, cur, model.mm_norm_pre_w);

@@ -263,6 +263,14 @@ struct comment_statement : public statement {
 
 // Expressions
 
+// Represents an omitted expression in a computed member, e.g. `a[]`.
+struct blank_expression : public expression {
+    std::string type() const override { return "BlankExpression"; }
+    value execute_impl(context &) override {
+        return mk_val<value_undefined>();
+    }
+};
+
 struct member_expression : public expression {
     statement_ptr object;
     statement_ptr property;
