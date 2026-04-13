@@ -386,16 +386,24 @@ static __device__ __forceinline__ void vec_dot_q4_0_q8_1_dp4a(
 #pragma unroll
             for (int i0 = 0; i0 < mmq_y; i0 += warp_size) {
                 const int i = i0 + threadIdx.x;
-
                 const int kyqs = QI8_1 * ((k01/2) / (QI8_1/2)) + (k01/2) % (QI8_1/2);
 
                 int u[2*VDR_Q4_0_Q8_1_MMQ];
 
-#pragma unroll
-                for (int l = 0; l < VDR_Q4_0_Q8_1_MMQ; ++l) {
-                    u[2*l+0] = y_qs[j*MMQ_TILE_Y_K + kyqs +  l];
-                    u[2*l+1] = y_qs[j*MMQ_TILE_Y_K + kyqs + (l + QI4_0)];
+                constexpr int max_cpy = ggml_cuda_get_max_cpy_bytes();
+                constexpr int mcpy_int = max_cpy / sizeof(int);
+                static_assert(VDR_Q4_0_Q8_1_MMQ == 4, "bad VDR_Q4_0_Q8_1_MMQ");
+
+                int tmp0[4], tmp1[4];
+
+                #pragma unroll
+                for (int l0 = 0; l0 < 4 / mcpy_int; ++l0) {
+                    ggml_cuda_memcpy_1<max_cpy>(tmp0 + l0 * mcpy_int, &y_qs[j*MMQ_TILE_Y_K + kyqs + l0 * mcpy_int]  );
+                    ggml_cuda_memcpy_1<max_cpy>(tmp1 + l0 * mcpy_int, &y_qs[j*MMQ_TILE_Y_K + kyqs + QI4_0 + l0 * mcpy_int]);
                 }
+
+                u[0]=tmp0[0]; u[2]=tmp0[1]; u[4]=tmp0[2]; u[6]=tmp0[3];
+                u[1]=tmp1[0]; u[3]=tmp1[1]; u[5]=tmp1[2]; u[7]=tmp1[3];
 
                 sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMQ>
                     (&x_qs[i*(MMQ_TILE_NE_K + 1) + k0/QR4_0], u,
@@ -489,16 +497,24 @@ static __device__ __forceinline__ void vec_dot_q4_1_q8_1_dp4a(
 #pragma unroll
             for (int i0 = 0; i0 < mmq_y; i0 += warp_size) {
                 const int i = i0 + threadIdx.x;
-
                 const int kyqs = QI8_1 * ((k01/2) / (QI8_1/2)) + (k01/2) % (QI8_1/2);
 
                 int u[2*VDR_Q4_1_Q8_1_MMQ];
 
-#pragma unroll
-                for (int l = 0; l < VDR_Q4_1_Q8_1_MMQ; ++l) {
-                    u[2*l+0] = y_qs[j*MMQ_TILE_Y_K + kyqs +  l];
-                    u[2*l+1] = y_qs[j*MMQ_TILE_Y_K + kyqs + (l + QI4_1)];
+                constexpr int max_cpy = ggml_cuda_get_max_cpy_bytes();
+                constexpr int mcpy_int = max_cpy / sizeof(int);
+                static_assert(VDR_Q4_0_Q8_1_MMQ == 4, "bad VDR_Q4_0_Q8_1_MMQ");
+
+                int tmp0[4], tmp1[4];
+
+                #pragma unroll
+                for (int l0 = 0; l0 < 4 / mcpy_int; ++l0) {
+                    ggml_cuda_memcpy_1<max_cpy>(tmp0 + l0 * mcpy_int, &y_qs[j*MMQ_TILE_Y_K + kyqs + l0 * mcpy_int]  );
+                    ggml_cuda_memcpy_1<max_cpy>(tmp1 + l0 * mcpy_int, &y_qs[j*MMQ_TILE_Y_K + kyqs + QI4_1 + l0 * mcpy_int]);
                 }
+
+                u[0]=tmp0[0]; u[2]=tmp0[1]; u[4]=tmp0[2]; u[6]=tmp0[3];
+                u[1]=tmp1[0]; u[3]=tmp1[1]; u[5]=tmp1[2]; u[7]=tmp1[3];
 
                 sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += vec_dot_q4_1_q8_1_impl<VDR_Q4_1_Q8_1_MMQ>
                     (&x_qs[i*(MMQ_TILE_NE_K + 1) + k0/QR4_1], u,
@@ -3629,7 +3645,7 @@ static __global__ void mul_mat_q(
              tile_x_max_i, tile_y_max_j, 0, ncols_x/qk);
         return;
     }
-#endif // (defined(GGML_USE_HIP) && !defined(CDNA3)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
+#endif // (defined(GGML_USE_HIP) && !defined(CDNA4) && !defined(CDNA3)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
 
     constexpr int ITER_K = get_iter_k(type);
 
@@ -4170,3 +4186,4 @@ void ggml_cuda_op_mul_mat_q(
     const int64_t src1_padded_row_size, cudaStream_t stream);
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts);
+

@@ -589,6 +589,51 @@ static common_chat_tool amount_tool{
     })",
 };
 
+static common_chat_tool toggle_tool{
+    /* .name = */ "toggle",
+    /* .description = */ "Toggle a feature",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "enabled": {
+                "type": "boolean",
+                "description": "Whether to enable the feature"
+            }
+        },
+        "required": ["enabled"]
+    })",
+};
+
+static common_chat_tool nullable_tool{
+    /* .name = */ "set_nullable",
+    /* .description = */ "Set a nullable value",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "null",
+                "description": "A null value"
+            }
+        },
+        "required": ["value"]
+    })",
+};
+
+static common_chat_tool config_tool{
+    /* .name = */ "set_config",
+    /* .description = */ "Set configuration",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "config": {
+                "type": "object",
+                "description": "Configuration dict"
+            }
+        },
+        "required": ["config"]
+    })",
+};
+
 static common_chat_tool imaginary_number_tool{
     /* .name = */ "imaginary_number",
     /* .description = */ "Imaginary number converter",
@@ -609,6 +654,66 @@ static common_chat_tool imaginary_number_tool{
             }
         },
         "required": ["number"]
+    })",
+};
+
+static common_chat_tool nullable_string_tool{
+    /* .name = */ "set_nullable_str",
+    /* .description = */ "Set a nullable string value",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": ["string", "null"],
+                "description": "A nullable string"
+            }
+        },
+        "required": ["name"]
+    })",
+};
+
+static common_chat_tool nullable_string_null_first_tool{
+    /* .name = */ "set_nullable_str_nf",
+    /* .description = */ "Set a nullable string value with null first in type array",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": ["null", "string"],
+                "description": "A nullable string with null first"
+            }
+        },
+        "required": ["name"]
+    })",
+};
+
+static common_chat_tool nullable_int_tool{
+    /* .name = */ "set_nullable_int",
+    /* .description = */ "Set a nullable integer value",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "count": {
+                "type": ["integer", "null"],
+                "description": "A nullable integer"
+            }
+        },
+        "required": ["count"]
+    })",
+};
+
+static common_chat_tool enum_no_type_tool{
+    /* .name = */ "set_unit",
+    /* .description = */ "Set a temperature unit",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "unit": {
+                "enum": ["celsius", "fahrenheit"],
+                "description": "Temperature unit"
+            }
+        },
+        "required": ["unit"]
     })",
 };
 
@@ -893,6 +998,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     auto parser = make_peg_parser(tmpls, tc.params, detailed_debug);
     if (detailed_debug) {
         LOG_DBG("Using parser: \n%s\n", parser.arena_.dump(parser.arena_.root()).c_str());
+        LOG_DBG("Generation prompt: '%s'\n", parser.params_.generation_prompt.c_str());
     }
 
     common_chat_msg msg_accum;
@@ -1870,6 +1976,151 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
+        // Google Gemma 4 (tool calling with Gemma4 dict format)
+        auto tst = peg_tester("models/templates/google-gemma-4-31B-it.jinja");
+
+        tst.test("Hello, world!").expect(simple_assist_msg("Hello, world!")).run();
+
+        // Reasoning and content
+        tst.test(
+                "<|channel>thought\nI'm\nthinking<channel|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Empty reasoning (budget=0: sampler forces end tag before newline)
+        tst.test(
+                "<|channel>thought<channel|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", ""))
+            .run();
+
+        // Reasoning and content with reasoning_format = none
+        tst.test(
+                "<|channel>thought\nI'm\nthinking<channel|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .expect_content("<|channel>thought\nI'm\nthinking<channel|>Hello, world!\nWhat's up?")
+            .run();
+
+        // Simple tool call with string argument
+        tst.test(
+                "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|>")
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", R"({"city": "London"})"))
+            .run();
+
+        // Tool call with string argument containing special chars
+        tst.test(
+                "<|tool_call>call:get_time{city:<|\"|>San Francisco<|\"|>}<tool_call|>")
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", R"({"city": "San Francisco"})"))
+            .run();
+
+        // Tool call with empty args
+        tst.test(
+                "<|tool_call>call:empty_args{}<tool_call|>")
+            .tools({ empty_args_tool })
+            .expect(message_with_tool_calls("empty_args", "{}"))
+            .run();
+
+        // Tool call with string and content
+        tst.test(
+                "Hello, world!\nWhat's up?<|tool_call>call:get_time{city:<|\"|>Paris<|\"|>}<tool_call|>")
+            .tools({ get_time_tool })
+            .expect(message_with_content_and_tool_call("Hello, world!\nWhat's up?", "get_time", R"({"city": "Paris"})"))
+            .run();
+
+        // Parallel tool calls
+        tst.test(
+                "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|>"
+                "<|tool_call>call:get_weather{city:<|\"|>Paris<|\"|>}<tool_call|>")
+            .tools({ get_time_tool, get_weather_tool })
+            .parallel_tool_calls(true)
+            .expect_tool_calls({
+                { "get_time", R"({"city": "London"})", "" },
+                { "get_weather", R"({"city": "Paris"})", "" },
+            })
+            .run();
+
+        // Tool call with integer argument (number type)
+        tst.test(
+                "<|tool_call>call:special_function{arg1:42}<tool_call|>")
+            .tools({ special_function_tool })
+            .expect(message_with_tool_calls("special_function", R"({"arg1": 42})"))
+            .run();
+
+        // Tool call with negative number argument
+        tst.test(
+                "<|tool_call>call:special_function{arg1:-7}<tool_call|>")
+            .tools({ special_function_tool })
+            .expect(message_with_tool_calls("special_function", R"({"arg1": -7})"))
+            .run();
+
+        // Tool call with decimal number argument
+        tst.test(
+                "<|tool_call>call:amount{orig:3.14}<tool_call|>")
+            .tools({ amount_tool })
+            .expect(message_with_tool_calls("amount", R"({"orig": 3.14})"))
+            .run();
+
+        // Tool call with boolean argument (true)
+        tst.test(
+                "<|tool_call>call:toggle{enabled:true}<tool_call|>")
+            .tools({ toggle_tool })
+            .expect(message_with_tool_calls("toggle", R"({"enabled": true})"))
+            .run();
+
+        // Tool call with boolean argument (false)
+        tst.test(
+                "<|tool_call>call:toggle{enabled:false}<tool_call|>")
+            .tools({ toggle_tool })
+            .expect(message_with_tool_calls("toggle", R"({"enabled": false})"))
+            .run();
+
+        // Tool call with null argument
+        tst.test(
+                "<|tool_call>call:set_nullable{value:null}<tool_call|>")
+            .tools({ nullable_tool })
+            .expect(message_with_tool_calls("set_nullable", R"({"value": null})"))
+            .run();
+
+        // Tool call with array argument (todo list)
+        tst.test(
+                "<|tool_call>call:todo_list{todos:[<|\"|>buy milk<|\"|>,<|\"|>walk dog<|\"|>]}<tool_call|>")
+            .tools({ todo_list })
+            .expect(message_with_tool_calls("todo_list", R"({"todos":["buy milk","walk dog"]})"))
+            .run();
+
+        // Tool call with object/dict argument
+        tst.test(
+                "<|tool_call>call:set_config{config:{theme:<|\"|>dark<|\"|>,count:3}}<tool_call|>")
+            .tools({ config_tool })
+            .expect(message_with_tool_calls("set_config", R"({"config":{"theme":"dark","count":3}})"))
+            .run();
+
+        // Tool call with empty array
+        tst.test(
+                "<|tool_call>call:todo_list{todos:[]}<tool_call|>")
+            .tools({ todo_list })
+            .expect(message_with_tool_calls("todo_list", R"({"todos":[]})"))
+            .run();
+
+        // Tool call with empty dict
+        tst.test(
+                "<|tool_call>call:set_config{config:{}}<tool_call|>")
+            .tools({ config_tool })
+            .expect(message_with_tool_calls("set_config", R"({"config":{}})"))
+            .run();
+
+        // Tool call with scientific notation number
+        tst.test(
+                "<|tool_call>call:amount{orig:1.5e10}<tool_call|>")
+            .tools({ amount_tool })
+            .expect(message_with_tool_calls("amount", R"({"orig": 1.5e10})"))
+            .run();
+    }
+
+    {
         // Qwen-QwQ-32B (reasoning model)
         auto tst = peg_tester("models/templates/Qwen-QwQ-32B.jinja");
 
@@ -1927,6 +2178,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         //     .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
         //     .expect(message_assist_thoughts)
         //     .run();
+    }
+
+    {
+        // IBM Granite 4.0 (production template shared by h-tiny, h-small, micro)
+        // Uses <tool_call> XML tags for tool calls, tools in system message
+        auto tst = peg_tester("models/templates/ibm-granite-granite-4.0.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        tst.test(
+               "<tool_call>\n"
+               "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n"
+               "</tool_call>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
     }
 
     {
@@ -2015,6 +2282,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 }
             })
             .run();
+
     }
 
     {
@@ -2198,6 +2466,58 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .expect_reconstruction()
             .run();
+
+        // nullable string type ["string", "null"]
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_str>\n"
+               "<parameter=name>\nhello world\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ nullable_string_tool })
+            .expect_tool_calls({
+                { "set_nullable_str", R"({"name": "hello world"})", {} },
+            })
+            .run();
+
+        // nullable string with null first in type array ["null", "string"]
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_str_nf>\n"
+               "<parameter=name>\nhello world\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ nullable_string_null_first_tool })
+            .expect_tool_calls({
+                { "set_nullable_str_nf", R"({"name": "hello world"})", {} },
+            })
+            .run();
+
+        // nullable integer type ["integer", "null"] - should use JSON value path, not string
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_int>\n"
+               "<parameter=count>\n42\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ nullable_int_tool })
+            .expect_tool_calls({
+                { "set_nullable_int", R"({"count": 42})", {} },
+            })
+            .run();
+
+        // enum without explicit type key - should infer string from enum values
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_unit>\n"
+               "<parameter=unit>\ncelsius\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ enum_no_type_tool })
+            .expect_tool_calls({
+                { "set_unit", R"({"unit": "celsius"})", {} },
+            })
+            .run();
     }
     {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
@@ -2356,55 +2676,57 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // #20424 introduced effective_input = generation_prompt + input, but the throw
     // uses input.substr(result.end) where result.end is in effective_input space.
     {
-        auto tmpls = common_chat_templates_ptr(
-            common_chat_templates_init(nullptr, read_file("models/templates/GLM-4.7-Flash.jinja")));
+        if (!g_template_filter.empty() && std::string("models/templates/GLM-4.7-Flash.jinja").find(g_template_filter) != std::string::npos) {
+            auto tmpls = common_chat_templates_ptr(
+                common_chat_templates_init(nullptr, read_file("models/templates/GLM-4.7-Flash.jinja")));
 
-        static common_chat_tool weather_tool{
-            "get_weather", "Get weather",
-            R"({"type":"object","properties":{"city":{"type":"string"}},"required":["city"]})",
-        };
+            static common_chat_tool weather_tool{
+                "get_weather", "Get weather",
+                R"({"type":"object","properties":{"city":{"type":"string"}},"required":["city"]})",
+            };
 
-        common_chat_templates_inputs inputs;
-        inputs.tools = { weather_tool };
-        inputs.enable_thinking = true;
-        inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-        inputs.add_generation_prompt = true;
-        inputs.use_jinja = true;
-        common_chat_msg msg;
-        msg.role = "user";
-        msg.content = "get_weather";
-        inputs.messages = { msg };
+            common_chat_templates_inputs inputs;
+            inputs.tools = { weather_tool };
+            inputs.enable_thinking = true;
+            inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            inputs.add_generation_prompt = true;
+            inputs.use_jinja = true;
+            common_chat_msg msg;
+            msg.role = "user";
+            msg.content = "get_weather";
+            inputs.messages = { msg };
 
-        auto params = common_chat_templates_apply(tmpls.get(), inputs);
-        common_peg_arena arena;
-        arena.load(params.parser);
-        common_chat_parser_params pp(params);
+            auto params = common_chat_templates_apply(tmpls.get(), inputs);
+            common_peg_arena arena;
+            arena.load(params.parser);
+            common_chat_parser_params pp(params);
 
-        // generation_prompt is non-empty for thinking models, so result.end
-        // will be offset by generation_prompt.size() into effective_input space.
-        assert(!pp.generation_prompt.empty());
+            // generation_prompt is non-empty for thinking models, so result.end
+            // will be offset by generation_prompt.size() into effective_input space.
+            assert(!pp.generation_prompt.empty());
 
-        std::string bad_input =
-            "Thinking.\n"
-            "</think>"
-            "<tool_call>get_weather"
-            "<arg_key>city</arg_key><arg_value>Tokyo</arg_value>"
-            "</tool_call>\n";
+            std::string bad_input =
+                "Thinking.\n"
+                "</think>"
+                "<tool_call>get_weather"
+                "<arg_key>city</arg_key><arg_value>Tokyo</arg_value>"
+                "</tool_call>\n";
 
-        bool got_runtime_error = false;
-        bool got_out_of_range = false;
-        std::string error_msg;
-        try {
-            common_chat_peg_parse(arena, bad_input, /*is_partial=*/false, pp);
-        } catch (const std::out_of_range & e) {
-            got_out_of_range = true;
-            error_msg = e.what();
-        } catch (const std::runtime_error & e) {
-            got_runtime_error = true;
-            error_msg = e.what();
+            bool got_runtime_error = false;
+            bool got_out_of_range = false;
+            std::string error_msg;
+            try {
+                common_chat_peg_parse(arena, bad_input, /*is_partial=*/false, pp);
+            } catch (const std::out_of_range & e) {
+                got_out_of_range = true;
+                error_msg = e.what();
+            } catch (const std::runtime_error & e) {
+                got_runtime_error = true;
+                error_msg = e.what();
+            }
+            GGML_ASSERT(!got_out_of_range && "throw path crashed with out_of_range (input.substr in effective_input space)");
+            GGML_ASSERT(got_runtime_error  && "throw path should produce std::runtime_error with parse position");
         }
-        GGML_ASSERT(!got_out_of_range && "throw path crashed with out_of_range (input.substr in effective_input space)");
-        GGML_ASSERT(got_runtime_error  && "throw path should produce std::runtime_error with parse position");
     }
 
     // Kimi-K2-Thinking tests - custom parser
@@ -2788,8 +3110,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // Format: <minimax:tool_call><invoke name="func"><parameter name="key">value</parameter></invoke></minimax:tool_call>
     {
         auto tst = peg_tester("models/templates/MiniMax-M2.jinja", detailed_debug);
+        tst.test("</think>Hello, world!\nWhat's up?").enable_thinking(true).reasoning_format(COMMON_REASONING_FORMAT_AUTO).expect(message_assist).run();
+
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?").enable_thinking(true).reasoning_format(COMMON_REASONING_FORMAT_AUTO).expect(message_assist_thoughts).run();
+
+        tst.test("Let's call a tool:</think><minimax:tool_call>\n<invoke name=\"empty_args\">\n</invoke>\n</minimax:tool_call>").
+            enable_thinking(true).
+            reasoning_format(COMMON_REASONING_FORMAT_AUTO).
+            tools({ empty_args_tool }).
+            expect(message_with_reasoning_and_tool_call("Let's call a tool:", "empty_args", "{}")).
+            run();
+
         tst.test(
-               "<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter "
+               "</think><minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter "
                "name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>")
             .tools({ special_function_tool })
             .expect(message_assist_call)
@@ -2984,6 +3317,21 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_id)
             .expect_reconstruction()
             .run();
+
+        tst.test("[TOOL_CALLS]special_function[CALL_ID]000000001[ARGS]{\"arg1\": 1}"
+            "[TOOL_CALLS]special_function_with_opt[CALL_ID]000000002[ARGS]{\"arg1\": 1, \"arg2\": 2}")
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, special_function_tool_with_optional_param
+            })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", "000000001" },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", "000000002" },
+            })
+            .expect_reconstruction()
+            .run();
+
+
     }
     // Devstral
     {
@@ -3113,7 +3461,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                             },
                             "replaceAll": {
                                 "type": "boolean",
-                                "description": "Whether to replace all occurences."
+                                "description": "Whether to replace all occurrences."
                             }
                         },
                         "required": ["oldString", "newString"]
@@ -3158,6 +3506,24 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect_reasoning("I will execute python to say hello")
             .expect_content("")
+            .run();
+
+        // Edge cases
+
+        // "<|channel|>commentary to=assistant" before reasoning
+        tst.test(
+               "<|channel|>commentary to=assistant<|channel|>analysis<|message|>I'm\nthinking<|end|><|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's "
+               "up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // "<|channel|>commentary to=assistant" before final message
+        tst.test(
+               "<|channel|>analysis<|message|>I'm\nthinking<|end|><|start|>assistant<|channel|>commentary to=assistant<|channel|>final<|message|>Hello, world!\nWhat's "
+               "up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
             .run();
     }
 

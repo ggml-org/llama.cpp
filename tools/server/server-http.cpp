@@ -397,8 +397,9 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             std::string chunk;
             bool has_next = response->next(chunk);
             if (!chunk.empty()) {
-                // TODO: maybe handle sink.write unsuccessful? for now, we rely on is_connection_closed()
-                sink.write(chunk.data(), chunk.size());
+                if (!sink.write(chunk.data(), chunk.size())) {
+                    return false;
+                }
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
             }
             if (!has_next) {

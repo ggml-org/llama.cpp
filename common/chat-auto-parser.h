@@ -4,6 +4,7 @@
 #include "common.h"
 #include "jinja/caps.h"
 #include "peg-parser.h"
+#include "nlohmann/json.hpp"
 
 #include <chrono>
 #include <optional>
@@ -212,12 +213,14 @@ struct tool_id_analysis {
 // ============================================================================
 
 struct analyze_content;
+struct analyze_reasoning;
 
 struct parser_build_context {
     common_chat_peg_builder & p;
-    const generation_params &          inputs;
+    const generation_params &         inputs;
     common_peg_parser                 reasoning_parser;
     bool                              extracting_reasoning = false;
+    const analyze_reasoning *         reasoning            = nullptr;
     const analyze_content *           content              = nullptr;
 
     parser_build_context(common_chat_peg_builder & p, const generation_params & inputs);
@@ -350,6 +353,13 @@ struct analyze_tools : analyze_base {
     common_peg_parser build_tool_parser_json_native(parser_build_context & ctx) const;
     common_peg_parser build_tool_parser_tag_json(parser_build_context & ctx) const;
     common_peg_parser build_tool_parser_tag_tagged(parser_build_context & ctx) const;
+
+    // Shared helper: builds func_parser from open+call_id+args, handling atomic wrapping and close.
+    // atomic_peek: if present, used as the peek expression in the third atomicity branch.
+    common_peg_parser build_func_parser(common_chat_peg_builder & p, const std::string & name,
+                                        const common_peg_parser & call_id_section, bool have_call_id,
+                                        const common_peg_parser & args,
+                                        std::optional<common_peg_parser> atomic_peek) const;
 };
 
 // ============================================================================

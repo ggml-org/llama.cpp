@@ -67,6 +67,12 @@ static constexpr uint32_t ggml_sycl_fattn_tile_get_config_fp16(const int DKQ, co
     GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256, 16, 256, 2,  64,  64)
     GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256, 32, 256, 2,  64,  64)
 
+    GGML_SYCL_FATTN_TILE_CONFIG_CASE(512, 512,  2,  64, 2,  64,  64)
+    GGML_SYCL_FATTN_TILE_CONFIG_CASE(512, 512,  4, 128, 2,  64,  64)
+    GGML_SYCL_FATTN_TILE_CONFIG_CASE(512, 512,  8, 256, 2,  64,  64)
+    GGML_SYCL_FATTN_TILE_CONFIG_CASE(512, 512, 16, 256, 2,  64,  64)
+    GGML_SYCL_FATTN_TILE_CONFIG_CASE(512, 512, 32, 256, 2,  64,  64)
+
     GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512,  4, 128, 2,  64,  64)
     GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512,  8, 256, 2,  64,  64)
     GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512, 16, 256, 2,  64,  64)
@@ -124,137 +130,15 @@ static constexpr uint32_t ggml_sycl_fattn_tile_get_config_fp32(const int DKQ, co
     GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256, 16, 256, 2,  32, 128)
     GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256, 32, 256, 2,  32,  64)
 
+    GGML_SYCL_FATTN_TILE_CONFIG_CASE(512, 512,  2, 128, 2,  64,  64)
+    GGML_SYCL_FATTN_TILE_CONFIG_CASE(512, 512,  4, 128, 2,  64,  64)
+    GGML_SYCL_FATTN_TILE_CONFIG_CASE(512, 512,  8, 256, 2,  64,  64)
+    GGML_SYCL_FATTN_TILE_CONFIG_CASE(512, 512, 16, 256, 2,  64,  64)
+    GGML_SYCL_FATTN_TILE_CONFIG_CASE(512, 512, 32, 256, 2,  64,  64)
+
     GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512,  4, 128, 2,  32,  64)
     GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512,  8, 256, 2,  32,  64)
     GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512, 16, 256, 2,  32,  64)
-
-    return 0;
-}
-
-static constexpr uint32_t ggml_sycl_fattn_tile_get_config_amd(const int DKQ, const int DV, const int ncols) {
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40,  2,  64, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40,  4, 128, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40,  8, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40, 16, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40, 32, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40, 64, 256, 2,  32,  40)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64,  2,  64, 3,  32,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64,  4, 128, 3,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64,  8, 128, 2,  32,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64, 16, 256, 2, 128,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64, 32, 256, 2,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64, 64, 256, 2,  64,  64)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72,  2,  64, 2,  32,  72)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72,  4, 128, 2,  32,  72)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72,  8, 256, 2,  32,  72)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72, 16, 256, 2,  32,  72)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72, 32, 256, 2,  32,  72)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72, 64, 256, 2,  32,  72)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80,  2,  64, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80,  4, 128, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80,  8, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80, 16, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80, 32, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80, 64, 256, 2,  32,  40)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96,  2,  64, 2,  32,  48)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96,  4, 128, 2,  32,  48)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96,  8, 256, 2,  32,  48)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96, 16, 256, 2,  32,  48)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96, 32, 256, 2,  32,  48)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96, 64, 256, 2,  32,  48)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112,  2,  64, 2,  32,  56)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112,  4, 128, 2,  32,  56)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112,  8, 256, 2,  32,  56)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112, 16, 256, 2,  32,  56)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112, 32, 256, 2,  32,  56)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112, 64, 256, 2,  32,  56)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128,  2, 256, 2, 128,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128,  4, 128, 2,  64, 128)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128,  8, 256, 2,  64, 128)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128, 16, 256, 2,  64, 128)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128, 32, 256, 2,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128, 64, 256, 2,  64,  32)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256,  2, 256, 2, 128,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256,  4, 256, 2,  64, 128)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256,  8, 256, 2,  64, 128)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256, 16, 256, 2,  32, 128)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256, 32, 256, 2,  32, 128)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512,  4, 128, 2,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512,  8, 256, 2,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512, 16, 256, 2,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512, 32, 512, 1, 128,  64)
-
-    return 0;
-}
-
-static constexpr uint32_t ggml_sycl_fattn_tile_get_config_amd_rdna(const int DKQ, const int DV, const int ncols) {
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40,  2,  64, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40,  4, 128, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40,  8, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40, 16, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40, 32, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 40,  40, 64, 256, 2,  32,  40)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64,  2,  64, 8,  32,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64,  4,  64, 8,  32,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64,  8, 128, 5, 128,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64, 16, 128, 5, 128,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64, 32, 128, 4,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 64,  64, 64, 128, 5,  64,  64)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72,  2,  64, 2,  32,  72)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72,  4, 128, 2,  32,  72)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72,  8, 256, 2,  32,  72)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72, 16, 256, 2,  32,  72)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72, 32, 256, 2,  32,  72)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 72,  72, 64, 256, 2,  32,  72)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80,  2,  64, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80,  4, 128, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80,  8, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80, 16, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80, 32, 256, 2,  32,  40)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 80,  80, 64, 256, 2,  32,  40)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96,  2,  64, 2,  32,  48)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96,  4, 128, 2,  32,  48)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96,  8, 256, 2,  32,  48)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96, 16, 256, 2,  32,  48)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96, 32, 256, 2,  32,  48)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE( 96,  96, 64, 256, 2,  32,  48)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112,  2,  64, 2,  32,  56)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112,  4, 128, 2,  32,  56)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112,  8, 256, 2,  32,  56)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112, 16, 256, 2,  32,  56)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112, 32, 256, 2,  32,  56)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(112, 112, 64, 256, 2,  32,  56)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128,  2,  64, 8,  32,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128,  4, 128, 8,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128,  8, 128, 8,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128, 16, 256, 3, 128, 128)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128, 32, 256, 3, 128,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(128, 128, 64, 256, 3,  64,  64)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256,  2,  64, 8,  32,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256,  4, 128, 6,  32, 256)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256,  8, 128, 6,  32, 256)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256, 16, 256, 5,  32, 256)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(256, 256, 32, 256, 3,  64, 128)
-
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512,  4, 128, 2,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512,  8, 256, 2,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512, 16, 256, 4,  64,  64)
-    GGML_SYCL_FATTN_TILE_CONFIG_CASE(576, 512, 32, 256, 2, 128,  64)
 
     return 0;
 }
@@ -1252,6 +1136,16 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
         return;
     }
 
+    {
+        constexpr int cols_per_block = ncols2*2;
+        const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
+        const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+        launch_fattn<DV, cols_per_block/ncols2, ncols2,
+            flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
+            (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+        return;
+    }
+
     GGML_ABORT("fatal error");
 }
 
@@ -1281,6 +1175,16 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_sycl_context & ctx, ggm
         }
         if (use_gqa_opt && gqa_ratio % 4 == 0) {
             launch_fattn_tile_switch_ncols1<DKQ, DV, 4, use_logit_softcap>(ctx, dst);
+            return;
+        }
+        // ncols2=2 and ncols2=1 fallbacks only for cases where ncols=2 config exists (DKQ == DV).
+        // For DKQ == 576, DV == 512 only GQA-optimized variants are implemented.
+        if constexpr (DKQ == DV) {
+            if (use_gqa_opt && gqa_ratio % 2 == 0) {
+                launch_fattn_tile_switch_ncols1<DKQ, DV, 2, use_logit_softcap>(ctx, dst);
+                return;
+            }
+            launch_fattn_tile_switch_ncols1<DKQ, DV, 1, use_logit_softcap>(ctx, dst);
             return;
         }
     }
@@ -1337,5 +1241,6 @@ extern DECL_FATTN_TILE_CASE( 96,  96);
 extern DECL_FATTN_TILE_CASE(112, 112);
 extern DECL_FATTN_TILE_CASE(128, 128);
 extern DECL_FATTN_TILE_CASE(256, 256);
+extern DECL_FATTN_TILE_CASE(512, 512);
 extern DECL_FATTN_TILE_CASE(576, 512);
 

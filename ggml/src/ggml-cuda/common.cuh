@@ -65,8 +65,9 @@
 #define GGML_CUDA_CC_VEGA       (GGML_CUDA_CC_OFFSET_AMD + 0x900)  // Vega56/64, minimum for fp16 dual issue
 #define GGML_CUDA_CC_VEGA20     (GGML_CUDA_CC_OFFSET_AMD + 0x906)  // MI50/Radeon VII, minimum for dp4a
 #define GGML_CUDA_CC_CDNA1      (GGML_CUDA_CC_OFFSET_AMD + 0x908)  // MI100, minimum for MFMA, acc registers
-#define GGML_CUDA_CC_CDNA2      (GGML_CUDA_CC_OFFSET_AMD + 0x910)  // MI210, minimum acc register renameing
+#define GGML_CUDA_CC_CDNA2      (GGML_CUDA_CC_OFFSET_AMD + 0x90a)  // MI210 (gfx90a), minimum acc register renaming
 #define GGML_CUDA_CC_CDNA3      (GGML_CUDA_CC_OFFSET_AMD + 0x942)  // MI300
+#define GGML_CUDA_CC_CDNA4      (GGML_CUDA_CC_OFFSET_AMD + 0x950)  // MI350X/MI355X
 
 // RDNA removes MFMA, dp4a, xnack, acc registers, wave size is 32
 #define GGML_CUDA_CC_RDNA1      (GGML_CUDA_CC_OFFSET_AMD + 0x1010) // RX 5000
@@ -87,7 +88,8 @@
 #define GGML_CUDA_CC_IS_CDNA(cc)    (cc >= GGML_CUDA_CC_CDNA1 && cc < GGML_CUDA_CC_RDNA1)
 #define GGML_CUDA_CC_IS_CDNA1(cc)   (cc >= GGML_CUDA_CC_CDNA1 && cc < GGML_CUDA_CC_CDNA2)
 #define GGML_CUDA_CC_IS_CDNA2(cc)   (cc >= GGML_CUDA_CC_CDNA2 && cc < GGML_CUDA_CC_CDNA3)
-#define GGML_CUDA_CC_IS_CDNA3(cc)   (cc >= GGML_CUDA_CC_CDNA3 && cc < GGML_CUDA_CC_RDNA1)
+#define GGML_CUDA_CC_IS_CDNA3(cc)   (cc >= GGML_CUDA_CC_CDNA3 && cc < GGML_CUDA_CC_CDNA4)
+#define GGML_CUDA_CC_IS_CDNA4(cc)   (cc >= GGML_CUDA_CC_CDNA4 && cc < GGML_CUDA_CC_RDNA1)
 
 // Moore Threads
 #define MUSART_HMASK 40300 // MUSA rc4.3, min. ver. for half2 -> uint mask comparisons
@@ -185,6 +187,10 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
 #endif // CUDART_VERSION >= 12000
 
 #define CUBLAS_CHECK(err) CUDA_CHECK_GEN(err, CUBLAS_STATUS_SUCCESS, cublas_get_error_str)
+
+#ifdef GGML_USE_NCCL
+#define NCCL_CHECK(err) CUDA_CHECK_GEN(err, ncclSuccess, ncclGetErrorString)
+#endif // GGML_USE_NCCL
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_CUDA_NO_VMM)
 static const char * cu_get_error_str(CUresult err) {
@@ -1086,6 +1092,10 @@ struct ggml_cuda_device_info {
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
 
     std::array<float, GGML_CUDA_MAX_DEVICES> default_tensor_split = {};
+
+#ifdef GGML_USE_NCCL
+    ncclComm_t comms[GGML_CUDA_MAX_DEVICES];
+#endif // GGML_USE_NCCL
 };
 
 const ggml_cuda_device_info & ggml_cuda_info();
@@ -1157,19 +1167,6 @@ struct ggml_tensor_extra_gpu {
 #define USE_CUDA_GRAPH
 #endif
 
-struct ggml_cuda_graph_node_properties {
-    void * node_data;
-    ggml_op node_op;
-    enum ggml_type node_type;
-    int32_t flags;
-    int64_t ne[GGML_MAX_DIMS];
-    size_t nb[GGML_MAX_DIMS];
-    void * src_data[GGML_MAX_SRC];
-    int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
-};
-
-static_assert(std::is_trivial<ggml_cuda_graph_node_properties>::value, "ggml_cuda_graph_node_properties must be trivial");
-
 struct ggml_cuda_graph {
 #ifdef USE_CUDA_GRAPH
     ~ggml_cuda_graph() {
@@ -1186,13 +1183,13 @@ struct ggml_cuda_graph {
     std::vector<cudaGraphNode_t> nodes;
     bool disable_due_to_gpu_arch = false;
     bool warmup_complete = false;
-    std::vector<ggml_cuda_graph_node_properties> props;
-
-    // these are extra tensors (inputs) that participate in the ggml graph but are not nodes
-    // they properties also have to match in order to be able to safely reuse a CUDA graph
-    // ref: https://github.com/ggml-org/llama.cpp/pull/18583
-    // ref: https://github.com/ggml-org/llama.cpp/pull/19165
-    std::vector<ggml_cuda_graph_node_properties> extra;
+    struct node_properties {
+        ggml_tensor node;
+        void *   node_src_data_ptrs[GGML_MAX_SRC];
+        int64_t  node_src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+        size_t   node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+    };
+    std::vector<node_properties> node_props;
 
     bool is_enabled() const {
         static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);

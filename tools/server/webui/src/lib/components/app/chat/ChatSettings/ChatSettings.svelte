@@ -65,6 +65,11 @@
 					type: SettingsFieldType.INPUT
 				},
 				{
+					key: SETTINGS_KEYS.SEND_ON_ENTER,
+					label: 'Send message on Enter',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
 					label: 'Copy text attachments as plain text',
 					type: SettingsFieldType.CHECKBOX
@@ -83,6 +88,11 @@
 				{
 					key: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
 					label: 'Ask for confirmation before changing conversation title',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
+					label: 'Use first non-empty line for conversation title',
 					type: SettingsFieldType.CHECKBOX
 				}
 			]
@@ -292,13 +302,18 @@
 			icon: Code,
 			fields: [
 				{
+					key: SETTINGS_KEYS.PRE_ENCODE_CONVERSATION,
+					label: 'Pre-fill KV cache after response',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
-					label: 'Disable reasoning content parsing',
+					label: 'Disable server-side thinking extraction',
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
 					key: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
-					label: 'Exclude reasoning from context',
+					label: 'Strip thinking from message history',
 					type: SettingsFieldType.CHECKBOX
 				},
 				{

@@ -1,15 +1,26 @@
 #include "arg.h"
 #include "common.h"
 #include "log.h"
-#include "llama.h"
+#include "llama-cpp.h"
 #include "../src/llama-ext.h"
 #include "ggml.h"
+#include "gguf-model-data.h"
+#include "gguf.h"
+#include "ggml-backend.h"
+#include "download.h"
 
 #include <array>
 #include <vector>
 #include <set>
 #include <fstream>
 #include <iostream>
+#include <random>
+
+// Noop because weights are not needed
+static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
+    GGML_UNUSED(tensor);
+    GGML_UNUSED(userdata);
+}
 
 struct input_tensor {
     ggml_type type;
@@ -132,9 +143,52 @@ int main(int argc, char ** argv) {
 
     params.warmup = false;
 
-    auto init_result = common_init_from_params(params);
+    llama_context * ctx;
+    common_init_result_ptr init_result;
+    llama_context_ptr ctx2;
+    llama_model_ptr model;
 
-    llama_context * ctx = init_result->context();
+    if (params.model.hf_repo.empty()) {
+        init_result = common_init_from_params(params);
+
+        ctx = init_result->context();
+    } else {
+#ifdef LLAMA_HF_FETCH
+        auto [hf_repo, hf_quant] = common_download_split_repo_tag(params.model.hf_repo);
+        if (hf_quant.empty() || hf_quant == "latest") {
+            hf_quant = "Q4_K_M";
+        }
+
+        gguf_context_ptr gguf_ctx = gguf_fetch_gguf_ctx(hf_repo, hf_quant);
+        if (!gguf_ctx) {
+            LOG_ERR("failed to fetch GGUF metadata from %s\n", hf_repo.c_str());
+            return 1;
+        }
+
+        llama_model_params model_params = llama_model_default_params();
+        model_params.devices = params.devices.data();
+        model_params.no_alloc = true;
+
+        model.reset(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, nullptr, model_params));
+
+        if (!model) {
+            LOG_ERR("failed to create llama_model from %s\n", hf_repo.c_str());
+            return 1;
+        }
+
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx2.reset(llama_init_from_model(model.get(), ctx_params));
+        ctx = ctx2.get();
+
+        if (!ctx) {
+            LOG_ERR("failed to create llama_context\n");
+            return 1;
+        }
+#else
+        LOG_ERR("export-graph-ops compiled without HF fetch support\n");
+        return 1;
+#endif
+    }
 
     const uint32_t n_seqs  = llama_n_seq_max(ctx);
     const uint32_t n_tokens = std::min(llama_n_ctx(ctx), llama_n_ubatch(ctx));
@@ -143,13 +197,15 @@ int main(int argc, char ** argv) {
 
     auto * gf_pp = llama_graph_reserve(ctx, n_tokens, n_seqs, n_tokens);
     if (!gf_pp) {
-        throw std::runtime_error("failed to reserve prompt processing graph");
+        LOG_ERR("failed to reserve prompt processing graph\n");
+        return 1;
     }
     extract_graph_ops(gf_pp, "pp", tests);
 
     auto * gf_tg = llama_graph_reserve(ctx, n_seqs, n_seqs, n_seqs);
     if (!gf_tg) {
-        throw std::runtime_error("failed to reserve token generation graph");
+        LOG_ERR("failed to reserve token generation graph\n");
+        return 1;
     }
     extract_graph_ops(gf_tg, "tg", tests);
 
@@ -158,7 +214,8 @@ int main(int argc, char ** argv) {
     std::ofstream f(params.out_file);
 
     if (!f.is_open()) {
-        throw std::runtime_error("Unable to open output file");
+        LOG_ERR("unable to open output file: %s\n", params.out_file.c_str());
+        return 1;
     }
 
     for (const auto& test : tests) {

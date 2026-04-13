@@ -45,7 +45,8 @@ struct mtmd_audio_cache {
                                     float fmin             = 0.0f,   // e.g. 0.0
                                     float fmax             = -1.0f,  // e.g. sr/2; pass -1 for auto
                                     bool  slaney_area_norm = true,
-                                    float scale = 1.0f  // optional extra scaling
+                                    float scale            = 1.0f,
+                                    bool  use_htk          = false
     );
 };
 
@@ -70,6 +71,15 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
 
 struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    void initialize() override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+
+  private:
+    mtmd_audio_cache cache;
+};
+
+struct mtmd_audio_preprocessor_gemma4a : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_gemma4a(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
 

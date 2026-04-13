@@ -108,10 +108,8 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    LOG_INF("system info: n_threads = %d, n_threads_batch = %d, total_threads = %d\n", params.cpuparams.n_threads, params.cpuparams_batch.n_threads, std::thread::hardware_concurrency());
-    LOG_INF("\n");
+    LOG_INF("build_info: %s\n", build_info.c_str());
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());
-    LOG_INF("\n");
 
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {

@@ -16,14 +16,14 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "hex-dma.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 #include "hvx-utils.h"
 
-#define htp_ssm_conv_tensors_preamble                        \
-    struct htp_tensor * restrict src0    = &octx->src0;      \
-    struct htp_tensor * restrict src1    = &octx->src1;      \
-    struct htp_tensor * restrict dst     = &octx->dst;       \
+#define htp_ssm_conv_tensors_preamble                          \
+    const struct htp_tensor * restrict src0    = octx->src[0]; \
+    const struct htp_tensor * restrict src1    = octx->src[1]; \
+    const struct htp_tensor * restrict dst     = octx->dst;    \
     struct htp_spad * restrict src0_spad = &octx->src0_spad; \
     struct htp_spad * restrict src1_spad = &octx->src1_spad; \
     struct htp_spad * restrict dst_spad  = &octx->dst_spad;  \
@@ -289,9 +289,9 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
             // Compute gather scratchpad size for src0 and src1
             const size_t gather_spad_size = n_threads * VLEN * 2;
 
-            octx->src0_spad.data = octx->ctx->vtcm_base + gather_spad_size;
-            octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-            octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+            octx->src0_spad.data = octx->ctx->vtcm_base + gather_spad_size;     octx->src0_spad.src = NULL;
+            octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size; octx->src1_spad.src = NULL;
+            octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size; octx->dst_spad.src  = NULL;
 
             FARF(HIGH, "ssm_conv-f32: gather-spad:%zu spad-per-thread:(%u:%u:%u) spad-sizes:(%u:%u:%u) spad-data:(%p:%p:%p)\n",
                 gather_spad_size, octx->src0_spad.size_per_thread, octx->src1_spad.size_per_thread,
@@ -323,8 +323,9 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
 }
 
 int op_ssm_conv(struct htp_ops_context * octx) {
-    int                 err = HTP_STATUS_OK;
-    struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * dst = octx->dst;
+
+    int err = HTP_STATUS_OK;
 
     switch (dst->type) {
         case HTP_TYPE_F32:
