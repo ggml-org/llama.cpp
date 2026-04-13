@@ -17,6 +17,7 @@
 #   define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 #define JSON_ASSERT GGML_ASSERT
@@ -54,6 +55,36 @@ extern const char * LICENSES[];
 
 using json = nlohmann::ordered_json;
 using namespace common_arg_utils;
+
+#ifdef _WIN32
+// On Windows, argv from main() is encoded in the system ANSI code page,
+// but llama.cpp expects UTF-8 paths. Re-parse the command line as wide
+// chars and convert to UTF-8 so that non-ASCII paths work correctly.
+static std::vector<std::string> win32_utf8_argv() {
+    int wargc = 0;
+    LPWSTR * wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (!wargv) {
+        return {};
+    }
+
+    std::vector<std::string> argv_utf8;
+    argv_utf8.reserve(wargc);
+
+    for (int i = 0; i < wargc; ++i) {
+        int len = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, nullptr, 0, nullptr, nullptr);
+        if (len <= 0) {
+            argv_utf8.emplace_back();
+            continue;
+        }
+        std::string arg(len - 1, '\0');  // len includes null terminator
+        WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, &arg[0], len, nullptr, nullptr);
+        argv_utf8.push_back(std::move(arg));
+    }
+
+    LocalFree(wargv);
+    return argv_utf8;
+}
+#endif
 
 static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_MTMD,
@@ -821,6 +852,18 @@ static void add_rpc_devices(const std::string & servers) {
 }
 
 bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map) {
+#ifdef _WIN32
+    auto argv_utf8 = win32_utf8_argv();
+    std::vector<char *> argv_ptrs;
+    if (!argv_utf8.empty()) {
+        argv_ptrs.reserve(argv_utf8.size());
+        for (auto & s : argv_utf8) {
+            argv_ptrs.push_back(s.data());
+        }
+        argc = (int) argv_utf8.size();
+        argv = argv_ptrs.data();
+    }
+#endif
     common_params dummy_params;
     common_params_context ctx_arg = common_params_parser_init(dummy_params, ex, nullptr);
 
@@ -881,6 +924,18 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
 }
 
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
+#ifdef _WIN32
+    auto argv_utf8 = win32_utf8_argv();
+    std::vector<char *> argv_ptrs;
+    if (!argv_utf8.empty()) {
+        argv_ptrs.reserve(argv_utf8.size());
+        for (auto & s : argv_utf8) {
+            argv_ptrs.push_back(s.data());
+        }
+        argc = (int) argv_utf8.size();
+        argv = argv_ptrs.data();
+    }
+#endif
     auto ctx_arg = common_params_parser_init(params, ex, print_usage);
     const common_params params_org = ctx_arg.params; // the example can modify the default params
 
