@@ -865,9 +865,10 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
         adjusted_messages.push_back(adjusted);
     }
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = true;
+    auto has_tools            = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format  = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto extract_reasoning    = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar      = true;
 
     data.supports_thinking  = true;
     data.thinking_start_tag = "[THINK]";
@@ -887,7 +888,7 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
             extract_reasoning ? p.optional("[THINK]" + p.reasoning(p.until("[/THINK]")) + "[/THINK]") : p.eps();
 
         // Response format parser
-        if (inputs.json_schema.is_object() && !inputs.json_schema.empty()) {
+        if (has_response_format) {
             // Ministral wants to emit json surrounded by code fences
             return generation_prompt + (reasoning << "```json" << p.content(p.schema(p.json(), "response-format", inputs.json_schema)) << "```");
         }
@@ -928,6 +929,10 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1063,6 +1068,10 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1193,6 +1202,10 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -1916,7 +1929,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
 
     // Gemma4 format detection
     if (src.find("'<|tool_call>call:'") != std::string::npos) {
-        workaround::convert_tool_responses_gemma4(params.messages);
+        if (src.find("{#- OpenAI Chat Completions:") == std::string::npos) {
+            // apply workarounds if using the older gemma4 templates
+            LOG_WRN("%s: detected an outdated gemma4 chat template, applying compatibility workarounds. "
+                    "Consider updating to the official template.\n", __func__);
+            workaround::convert_tool_responses_gemma4(params.messages);
+        }
         return common_chat_params_init_gemma4(tmpl, params);
     }
 

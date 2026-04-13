@@ -1014,7 +1014,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 model.hf_file = params.hf_file[i];
             }
 
-            auto download_result = common_download_model(model, params.hf_token);
+            common_download_opts opts;
+            opts.bearer_token = params.hf_token;
+            auto download_result = common_download_model(model, opts);
             if (download_result.model_path.empty()) {
                 fprintf(stderr, "error: failed to download model from HuggingFace\n");
                 exit(1);

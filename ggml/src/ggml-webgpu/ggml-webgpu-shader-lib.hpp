@@ -1115,6 +1115,32 @@ class ggml_webgpu_shader_lib {
                     std::string type_upper = type_str;
                     std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(), ::toupper);
 
+                    switch (key.src_type)
+                    {
+                        case GGML_TYPE_Q4_0:
+                        case GGML_TYPE_Q5_0:
+                        case GGML_TYPE_Q8_0:
+                        case GGML_TYPE_Q3_K:
+                        case GGML_TYPE_Q6_K:
+                        case GGML_TYPE_IQ2_XXS:
+                        case GGML_TYPE_IQ2_XS:
+                        case GGML_TYPE_IQ2_S:
+                        case GGML_TYPE_IQ3_XXS:
+                        case GGML_TYPE_IQ3_S:
+                        case GGML_TYPE_IQ1_S:
+                        case GGML_TYPE_IQ4_NL:
+                            {
+                                // Quantized types using u32 buffers for portability.
+                                defines.push_back("SRC_TYPE=u32");
+                                defines.push_back("U32_DEQUANT_HELPERS");
+                                break;
+                            }
+                        default:
+                        {
+                            defines.push_back(std::string("SRC_TYPE=") + type_str);
+                        }
+                    }
+
                     defines.push_back("BYTE_HELPERS");
                     defines.push_back(type_upper + "_T");
                     defines.push_back(type_upper);
@@ -1125,7 +1151,6 @@ class ggml_webgpu_shader_lib {
                     variant += "_";
                     variant += type_str;
 
-                    defines.push_back(std::string("SRC_TYPE=") + type_str);
                     defines.push_back("DST_TYPE=f32");
 
                     if ((key.src_type >= GGML_TYPE_Q4_0 && key.src_type <= GGML_TYPE_Q8_1) ||
@@ -1593,11 +1618,35 @@ class ggml_webgpu_shader_lib {
                 break;
             default:
                 {
-                    // quantized types
                     std::string type_upper = src0_name;
                     std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(), ::toupper);
 
-                    defines.push_back(std::string("SRC0_TYPE=") + src0_name);
+                    switch (context.src0->type)
+                    {
+                        case GGML_TYPE_Q4_0:
+                        case GGML_TYPE_Q5_0:
+                        case GGML_TYPE_Q8_0:
+                        case GGML_TYPE_Q3_K:
+                        case GGML_TYPE_Q6_K:
+                        case GGML_TYPE_IQ2_XXS:
+                        case GGML_TYPE_IQ2_XS:
+                        case GGML_TYPE_IQ2_S:
+                        case GGML_TYPE_IQ3_XXS:
+                        case GGML_TYPE_IQ3_S:
+                        case GGML_TYPE_IQ1_S:
+                        case GGML_TYPE_IQ4_NL:
+                            {
+                                // Quantized types using u32 buffers for portability.
+                                defines.push_back("SRC0_TYPE=u32");
+                                defines.push_back("U32_DEQUANT_HELPERS");
+                                break;
+                            }
+                        default:
+                        {
+                            defines.push_back(std::string("SRC0_TYPE=") + src0_name);
+                        }
+                    }
+
                     defines.push_back("BYTE_HELPERS");
                     defines.push_back(type_upper + "_T");
                     defines.push_back(type_upper);
