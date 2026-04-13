@@ -24,6 +24,7 @@ include(aifoundry-utils/ProjectFunctions)
 message("Using ET Platform at ${ET_PLATFORM_PATH}")
 
 find_package(runtime REQUIRED)
+find_package(Python3 REQUIRED)
 
 # --- Kernel list (single source of truth, shared with et-kernels) ---
 set(KERNELS
@@ -69,14 +70,44 @@ set(KERNELS
     ssm_conv_f32
     ssm_scan_f32
     memops
+    uberkernel
+)
+
+set(UBERKERNEL_SUPPORTED_KERNELS
+    el_map_f32
+    unary_f32
+)
+
+set(UBERKERNEL_MAP_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/et-kernels/scripts/generate_uberkernel_mapping.py)
+set(UBERKERNEL_MAP_HPP ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-uberkernel-kernel-map.h)
+set(UBERKERNEL_MAP_CPP ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-uberkernel-kernel-map.cpp)
+
+set(UBERKERNEL_SUPPORTED_KERNELS_FILE ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/uberkernel-supported-kernels.txt)
+set(UBERKERNEL_SUPPORTED_KERNELS_LINES "")
+foreach(KERNEL ${UBERKERNEL_SUPPORTED_KERNELS})
+    string(APPEND UBERKERNEL_SUPPORTED_KERNELS_LINES "${KERNEL}\n")
+endforeach()
+file(CONFIGURE OUTPUT ${UBERKERNEL_SUPPORTED_KERNELS_FILE} CONTENT "${UBERKERNEL_SUPPORTED_KERNELS_LINES}" @ONLY)
+
+add_custom_command(
+    OUTPUT ${UBERKERNEL_MAP_HPP} ${UBERKERNEL_MAP_CPP}
+    COMMAND ${Python3_EXECUTABLE} ${UBERKERNEL_MAP_SCRIPT}
+        --output-h ${UBERKERNEL_MAP_HPP}
+        --output-cpp ${UBERKERNEL_MAP_CPP}
+        --kernels ${UBERKERNEL_SUPPORTED_KERNELS}
+    DEPENDS ${UBERKERNEL_MAP_SCRIPT} ${UBERKERNEL_SUPPORTED_KERNELS_FILE}
+    COMMENT "Generating ET uberkernel mapping"
+    VERBATIM
+)
+
+add_custom_target(et-uberkernel-map
+    DEPENDS ${UBERKERNEL_MAP_HPP} ${UBERKERNEL_MAP_CPP}
 )
 
 # Build ET kernels (cross-compiled in subdirectory scope)
 add_subdirectory(et-kernels)
 
 # --- Embed kernels into C++ source for the host library ---
-find_package(Python3 REQUIRED)
-
 set(EMBED_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/et-kernels/scripts/embed_kernels.py)
 set(EMBED_HPP ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.hpp)
 set(EMBED_CPP ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.cpp)
@@ -99,7 +130,7 @@ add_custom_command(
 )
 
 add_custom_target(et-kernels-embed ALL
-    DEPENDS ${EMBED_HPP} ${EMBED_CPP}
+    DEPENDS ${EMBED_HPP} ${EMBED_CPP} et-uberkernel-map
 )
 
 # --- Host backend library ---
@@ -115,6 +146,8 @@ ggml_add_backend_library(ggml-et
 set_source_files_properties(
     ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.hpp
+    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-uberkernel-kernel-map.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-uberkernel-kernel-map.h
     PROPERTIES GENERATED TRUE
 )
 
@@ -122,12 +155,15 @@ set_source_files_properties(
 target_sources(ggml-et PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-kernels-embed.hpp
+    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-uberkernel-kernel-map.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-uberkernel-kernel-map.h
 )
 
 # Include directory for embedded headers
 target_include_directories(ggml-et PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/et-kernels)
 
 target_link_libraries(ggml-et PRIVATE runtime::etrt_static deviceLayer::deviceLayer)
+target_compile_definitions(ggml-et PRIVATE GGML_ET_UBERKERNEL_HOST_LOOKUP)
 
 # Ensure kernels are built and embedded before the backend library
-add_dependencies(ggml-et et-kernels-embed)
+add_dependencies(ggml-et et-kernels-embed et-uberkernel-map)

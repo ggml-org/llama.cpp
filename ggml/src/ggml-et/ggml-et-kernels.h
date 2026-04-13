@@ -32,6 +32,11 @@ bool ggml_et_launch_kernel(ggml_backend_et_device_context* dev_ctx,
                            bool enable_print = false,
                            bool sync_error_check = false);
 
+void ggml_et_uberkernel_begin_graph(ggml_backend_et_uberkernel_context * uk_ctx);
+bool ggml_et_uberkernel_end_graph(ggml_backend_et_device_context * dev_ctx);
+void ggml_et_uberkernel_abort_graph(ggml_backend_et_uberkernel_context * uk_ctx);
+bool ggml_et_uberkernel_failed(const ggml_backend_et_uberkernel_context * uk_ctx);
+
 // Unload kernel from device and free resources
 // Safe to call even if kernel not loaded
 void ggml_et_unload_kernel(ggml_backend_et_device_context* dev_ctx,
