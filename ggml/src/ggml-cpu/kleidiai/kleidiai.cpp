@@ -1461,7 +1461,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
                 return false;
             }
             if ((op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_I32) &&
-                ggml_ne(op->src[1], 2) == 1 && ggml_ne(op->src[1], 3) == 1) {
+                ggml_ne(op->src[1], 3) == 1) {
                 return true;
             }
         }
@@ -1473,10 +1473,12 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             if (op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type()) {
                 return (ggml::cpu::tensor_traits *) op->src[0]->extra;
             } else {
+                if (op->src[0]->type != GGML_TYPE_F16) {
+                    return nullptr;
+                }
                 std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
                 const int slot_total = kleidiai_collect_kernel_chain(op, kernel_chain);
-                const bool has_kernel = slot_total > 0;
-                if (has_kernel && op->src[1]->ne[1] > 1) {
+                if (slot_total > 0 && op->src[1]->ne[1] > 1) {
                     if ((op->src[0]->nb[1] * op->src[0]->ne[1] != op->src[0]->nb[2]) ||
                         (op->src[1]->nb[1] * op->src[1]->ne[1] != op->src[1]->nb[2])) {
                         return nullptr;

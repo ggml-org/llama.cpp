@@ -143,9 +143,18 @@ static void compute_statistics(std::vector<tensor_statistics> & tstats, const st
     activations.reserve(e.values.size());
 
     for (int i = 0; i < n_mat; ++i) {
+        if (e.counts[i] == 0) {
+            LOG_DBG("%s: skipping tensor %s due to zero count at index %d\n", __func__, name.c_str(), i);
+            continue;
+        }
         for (int j = 0; j < row_size; ++j) {
             activations.push_back(e.values[i*row_size + j] / e.counts[i]);
         }
+    }
+
+    if (activations.empty()) {
+        LOG_ERR("%s: all counts are zero for tensor %s, skipping statistics computation\n", __func__, name.c_str());
+        return;
     }
 
     const float act_total     = std::accumulate(activations.begin(), activations.end(), 0.0f);
@@ -1142,10 +1151,12 @@ static bool show_statistics(const common_params & params) {
             blk = -1;  // not a block layer
         }
 
+        const float entropy_norm = (tstat.elements > 0) ? 100.0f * (tstat.entropy / std::log2(tstat.elements)) : 0.0f;
+
         LOG_INF("%5s\t%-20s\t%10.2f\t%8.4f\t%11.4f\t%6.2f\t%6.2f\t%8.2f%%\t%6d\t%10.4f\t%6.2f%%\t%10.2f%%\t%8.4f\n",
                 layer.c_str(), name.c_str(), tstat.total_sqract, tstat.min_sqract, tstat.max_sqract, tstat.mean_sqract,
                 tstat.stddev, tstat.active * 100.0f, tstat.elements, tstat.entropy,
-                100.0f * (tstat.entropy / std::log2(tstat.elements)), 100.0f * tstat.zd, tstat.cossim);
+                entropy_norm, 100.0f * tstat.zd, tstat.cossim);
 
         const float weighted_bias   = tstat.elements * tstat.total_sqract;
         const float weighted_zd     = tstat.elements * tstat.zd;
@@ -1201,6 +1212,8 @@ int main(int argc, char ** argv) {
     params.n_ctx = 512;
     params.escape = false;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_IMATRIX, print_usage)) {
         return 1;
     }
@@ -1211,8 +1224,6 @@ int main(int argc, char ** argv) {
         }
         return 0;
     }
-
-    common_init();
 
     const int32_t n_ctx = params.n_ctx;
 

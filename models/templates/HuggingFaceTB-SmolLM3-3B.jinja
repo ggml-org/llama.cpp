@@ -1,0 +1,61 @@
+{#- Copyright 2025-present the Unsloth team. All rights reserved. #}
+{#- Licensed under the Apache License, Version 2.0 (the "License") #}
+{#- Edits made by Unsloth to make it work for most inference engines #}
+{# ───── defaults ───── #}
+{%- if enable_thinking is not defined -%}
+    {%- set enable_thinking = true -%}
+{%- endif -%}
+{# ───── reasoning mode ───── #}
+{%- if enable_thinking -%}
+    {%- set reasoning_mode = "/think" -%}
+{%- else -%}
+    {%- set reasoning_mode = "/no_think" -%}
+{%- endif -%}
+{# ───── header (system message) ───── #}
+{{- "<|im_start|>system\n" -}}
+{%- if messages[0].role == "system" -%}
+    {%- set system_message = messages[0].content -%}
+    {%- if "/no_think" in system_message -%}
+        {%- set reasoning_mode = "/no_think" -%}
+    {%- elif "/think" in system_message -%}
+        {%- set reasoning_mode = "/think" -%}
+    {%- endif -%}
+    {%- set custom_instructions = system_message.replace("/no_think", "") -%}
+    {%- set custom_instructions = custom_instructions.replace("/think", "") -%}
+    {%- set custom_instructions = custom_instructions.rstrip() -%}
+{%- endif -%}
+{{- "## Metadata\n\n" -}}
+{{- "Knowledge Cutoff Date: June 2025\n" -}}
+{{- "Reasoning Mode: " + reasoning_mode + "\n\n" -}}
+{{- "## Custom Instructions\n\n" -}}
+{%- if custom_instructions -%}
+    {{- custom_instructions + "\n\n" -}}
+{%- elif reasoning_mode == "/think" -%}
+    {{- "You are a helpful AI assistant named SmolLM, trained by Hugging Face. Your role as an assistant involves thoroughly exploring questions through a systematic thinking process before providing the final precise and accurate solutions. This requires engaging in a comprehensive cycle of analysis, summarizing, exploration, reassessment, reflection, backtracking, and iteration to develop well-considered thinking process. Please structure your response into two main sections: Thought and Solution using the specified format: <think> Thought section </think> Solution section. In the Thought section, detail your reasoning process in steps. Each step should include detailed considerations such as analysing questions, summarizing relevant findings, brainstorming new ideas, verifying the accuracy of the current steps, refining any errors, and revisiting previous steps. In the Solution section, based on various attempts, explorations, and reflections from the Thought section, systematically present the final solution that you deem correct. The Solution section should be logical, accurate, and concise and detail necessary steps needed to reach the conclusion.\n\n" -}}
+{%- else -%}
+    {{- "You are a helpful AI assistant named SmolLM, trained by Hugging Face.\n\n" -}}
+{%- endif -%}
+{{- "<|im_end|>\n" -}}
+{# ───── main loop ───── #}
+{%- for message in messages -%}
+    {%- set content = message.content if message.content is string else "" -%}
+    {%- if message.role == "user" -%}
+        {{ "<|im_start|>" + message.role + "\n" + content + "<|im_end|>\n" }}
+    {%- elif message.role == "assistant" -%}
+        {%- if reasoning_mode == "/think" -%}
+            {{ "<|im_start|>assistant\n" + content.lstrip("\n") + "<|im_end|>\n" }}
+        {%- else -%}
+            {{ "<|im_start|>assistant\n" + "<think>\n\n</think>\n" + content.lstrip("\n") + "<|im_end|>\n" }}
+        {%- endif -%}
+    {%- elif message.role == "tool" -%}
+        {{ "<|im_start|>" + "user\n" + content + "<|im_end|>\n" }}
+    {%- endif -%}
+{%- endfor -%}
+{# ───── generation prompt ───── #}
+{%- if add_generation_prompt -%}
+    {%- if reasoning_mode == "/think" -%}
+        {{ "<|im_start|>assistant\n" }}
+    {%- else -%}
+        {{ "<|im_start|>assistant\n" + "<think>\n\n</think>\n" }}
+    {%- endif -%}
+{%- endif -%}

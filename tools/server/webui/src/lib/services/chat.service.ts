@@ -1,9 +1,11 @@
-import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
+import { getJsonHeaders } from '$lib/utils/api-headers';
+import { formatAttachmentText } from '$lib/utils/formatters';
+import { isAbortError } from '$lib/utils/abort';
 import {
-	AGENTIC_REGEX,
 	ATTACHMENT_LABEL_PDF_FILE,
 	ATTACHMENT_LABEL_MCP_PROMPT,
-	ATTACHMENT_LABEL_MCP_RESOURCE
+	ATTACHMENT_LABEL_MCP_RESOURCE,
+	LEGACY_AGENTIC_REGEX
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -17,38 +19,6 @@ import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } f
 import { modelsStore } from '$lib/stores/models.svelte';
 
 export class ChatService {
-	private static stripReasoningContent(
-		content: ApiChatMessageData['content'] | null | undefined
-	): ApiChatMessageData['content'] | null | undefined {
-		if (!content) {
-			return content;
-		}
-
-		if (typeof content === 'string') {
-			return content
-				.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
-				.replace(AGENTIC_REGEX.REASONING_OPEN, '')
-				.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_BLOCK, '')
-				.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '');
-		}
-
-		if (!Array.isArray(content)) {
-			return content;
-		}
-
-		return content.map((part: ApiChatMessageContentPart) => {
-			if (part.type !== ContentPartType.TEXT || !part.text) return part;
-			return {
-				...part,
-				text: part.text
-					.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
-					.replace(AGENTIC_REGEX.REASONING_OPEN, '')
-					.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_BLOCK, '')
-					.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '')
-			};
-		});
-	}
-
 	/**
 	 *
 	 *
@@ -111,7 +81,8 @@ export class ChatService {
 			custom,
 			timings_per_token,
 			// Config options
-			disableReasoningParsing
+			disableReasoningParsing,
+			excludeReasoningFromContext
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -159,14 +130,19 @@ export class ChatService {
 		}
 
 		const requestBody: ApiChatCompletionRequest = {
-			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
-				role: msg.role,
-				// Strip reasoning tags/content from the prompt to avoid polluting KV cache.
-				// TODO: investigate backend expectations for reasoning tags and add a toggle if needed.
-				content: ChatService.stripReasoningContent(msg.content),
-				tool_calls: msg.tool_calls,
-				tool_call_id: msg.tool_call_id
-			})),
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
+				const mapped: ApiChatCompletionRequest['messages'][0] = {
+					role: msg.role,
+					content: msg.content,
+					tool_calls: msg.tool_calls,
+					tool_call_id: msg.tool_call_id
+				};
+				// Include reasoning_content from the dedicated field
+				if (!excludeReasoningFromContext && msg.reasoning_content) {
+					mapped.reasoning_content = msg.reasoning_content;
+				}
+				return mapped;
+			}),
 			stream,
 			return_progress: stream ? true : undefined,
 			tools: tools && tools.length > 0 ? tools : undefined
@@ -301,6 +277,107 @@ export class ChatService {
 			}
 
 			throw userFriendlyError;
+		}
+	}
+
+	/**
+	 * Checks whether all server slots are currently idle (not processing any requests).
+	 * Queries the /slots endpoint (requires --slots flag on the server).
+	 * Returns true if all slots are idle, false if any is processing.
+	 * If the endpoint is unavailable or errors out, returns true (best-effort fallback).
+	 *
+	 * @param signal - Optional AbortSignal to cancel the request if needed
+	 * @param model - Optional model name to check slots for (required in ROUTER mode)
+	 * @returns {Promise<boolean>} Promise that resolves to true if all slots are idle, false if any is processing
+	 */
+	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
+		try {
+			const url = model ? `./slots?model=${encodeURIComponent(model)}` : './slots';
+			const res = await fetch(url, { signal });
+			if (!res.ok) return true;
+
+			const slots: { is_processing: boolean }[] = await res.json();
+			return slots.every((s) => !s.is_processing);
+		} catch {
+			return true;
+		}
+	}
+
+	/**
+	 * Sends a fire-and-forget request to pre-encode the conversation in the server's KV cache.
+	 * After a response completes, this re-submits the full conversation
+	 * using n_predict=0 and stream=false so the server processes the prompt without generating tokens.
+	 * This warms the cache for the next turn, making it faster.
+	 *
+	 * When excludeReasoningFromContext is true, reasoning content is stripped from the messages
+	 * to match what sendMessage would send on the next turn (avoiding cache misses).
+	 * When false, reasoning_content is preserved so the cached prompt matches the next request.
+	 *
+	 * @param messages - The full conversation including the latest assistant response
+	 * @param model - Optional model name (required in ROUTER mode)
+	 * @param excludeReasoning - Whether to strip reasoning content (should match excludeReasoningFromContext setting)
+	 * @param signal - Optional AbortSignal to cancel the pre-encode request
+	 */
+	static async preEncode(
+		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
+		model?: string | null,
+		excludeReasoning?: boolean,
+		signal?: AbortSignal
+	): Promise<void> {
+		const normalizedMessages: ApiChatMessageData[] = messages
+			.map((msg) => {
+				if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
+					return ChatService.convertDbMessageToApiChatMessageData(
+						msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
+					);
+				}
+
+				return msg as ApiChatMessageData;
+			})
+			.filter((msg) => {
+				if (msg.role === MessageRole.SYSTEM) {
+					const content = typeof msg.content === 'string' ? msg.content : '';
+
+					return content.trim().length > 0;
+				}
+
+				return true;
+			});
+
+		const requestBody: Record<string, unknown> = {
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
+				const mapped: Record<string, unknown> = {
+					role: msg.role,
+					content: excludeReasoning ? ChatService.stripReasoningContent(msg.content) : msg.content,
+					tool_calls: msg.tool_calls,
+					tool_call_id: msg.tool_call_id
+				};
+
+				if (!excludeReasoning && msg.reasoning_content) {
+					mapped.reasoning_content = msg.reasoning_content;
+				}
+
+				return mapped;
+			}),
+			stream: false,
+			n_predict: 0
+		};
+
+		if (model) {
+			requestBody.model = model;
+		}
+
+		try {
+			await fetch(`./v1/chat/completions`, {
+				method: 'POST',
+				headers: getJsonHeaders(),
+				body: JSON.stringify(requestBody),
+				signal
+			});
+		} catch (error) {
+			if (!isAbortError(error)) {
+				console.warn('[ChatService] Pre-encode request failed:', error);
+			}
 		}
 	}
 
@@ -675,6 +752,10 @@ export class ChatService {
 				content: message.content
 			};
 
+			if (message.reasoningContent) {
+				result.reasoning_content = message.reasoningContent;
+			}
+
 			if (toolCalls && toolCalls.length > 0) {
 				result.tool_calls = toolCalls;
 			}
@@ -803,6 +884,9 @@ export class ChatService {
 			role: message.role as MessageRole,
 			content: contentParts
 		};
+		if (message.reasoningContent) {
+			result.reasoning_content = message.reasoningContent;
+		}
 		if (toolCalls && toolCalls.length > 0) {
 			result.tool_calls = toolCalls;
 		}
@@ -816,6 +900,28 @@ export class ChatService {
 	 *
 	 *
 	 */
+
+	/**
+	 * Strips legacy inline reasoning content tags from message content.
+	 * Handles both plain string content and multipart content arrays.
+	 */
+	private static stripReasoningContent(
+		content: string | ApiChatMessageContentPart[]
+	): string | ApiChatMessageContentPart[] {
+		const stripFromString = (text: string): string =>
+			text.replace(LEGACY_AGENTIC_REGEX.REASONING_BLOCK, '').trim();
+
+		if (typeof content === 'string') {
+			return stripFromString(content);
+		}
+
+		return content.map((part) => {
+			if (part.type === ContentPartType.TEXT && part.text) {
+				return { ...part, text: stripFromString(part.text) };
+			}
+			return part;
+		});
+	}
 
 	/**
 	 * Parses error response and creates appropriate error with context information

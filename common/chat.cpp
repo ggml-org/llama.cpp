@@ -1,5 +1,6 @@
 #include "chat.h"
 
+#include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
 #include "common.h"
@@ -12,6 +13,8 @@
 #include "jinja/caps.h"
 #include "peg-parser.h"
 
+#include "nlohmann/json.hpp"
+
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -22,6 +25,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using json = nlohmann::ordered_json;
@@ -219,7 +223,7 @@ using chat_template_caps = jinja::caps;
 struct common_chat_templates {
     bool add_bos;
     bool add_eos;
-    bool has_explicit_template;  // Model had builtin template or template overridde was specified.
+    bool has_explicit_template;  // Model had builtin template or template overridden was specified.
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
 };
@@ -692,6 +696,8 @@ const char * common_chat_format_name(common_chat_format format) {
             return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE:
             return "peg-native";
+        case COMMON_CHAT_FORMAT_PEG_GEMMA4:
+            return "peg-gemma4";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -758,12 +764,12 @@ static void foreach_parameter(const json &                                      
     }
 }
 
-std::string common_chat_template_direct_apply(
+static std::string common_chat_template_direct_apply_impl(
     const common_chat_template & tmpl,
-    const autoparser::templates_params & inputs,
-    const std::optional<json> & messages_override,
-    const std::optional<json> & tools_override,
-    const std::optional<json> & additional_context) {
+    const autoparser::generation_params & inputs,
+    const std::optional<json> & messages_override = std::nullopt,
+    const std::optional<json> & tools_override = std::nullopt,
+    const std::optional<json> & additional_context = std::nullopt) {
     jinja::context ctx(tmpl.source());
 
     nlohmann::ordered_json inp = nlohmann::ordered_json{
@@ -810,8 +816,14 @@ std::string common_chat_template_direct_apply(
     return result;
 }
 
+std::string common_chat_template_direct_apply(
+    const common_chat_template & tmpl,
+    const autoparser::generation_params & inputs) {
+    return common_chat_template_direct_apply_impl(tmpl, inputs, std::nullopt, std::nullopt, std::nullopt);
+}
+
 static common_chat_params common_chat_params_init_ministral_3(const common_chat_template &    tmpl,
-                                                              const autoparser::templates_params & inputs) {
+                                                              const autoparser::generation_params & inputs) {
     common_chat_params data;
 
     // Build up messages to follow the format: https://huggingface.co/mistralai/Ministral-3-14B-Reasoning-2512/blob/main/chat_template.jinja
@@ -853,14 +865,15 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
         adjusted_messages.push_back(adjusted);
     }
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = true;
+    auto has_tools            = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format  = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto extract_reasoning    = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar      = true;
 
     data.supports_thinking  = true;
     data.thinking_start_tag = "[THINK]";
     data.thinking_end_tag   = "[/THINK]";
-    data.prompt            = common_chat_template_direct_apply(tmpl, inputs, /* messages_override = */ adjusted_messages);
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens  = {
         "[THINK]",
@@ -870,14 +883,14 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
     };
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto generation_prompt = p.prefix(inputs.generation_prompt, "[THINK]");
         auto reasoning =
             extract_reasoning ? p.optional("[THINK]" + p.reasoning(p.until("[/THINK]")) + "[/THINK]") : p.eps();
 
         // Response format parser
-        if (inputs.json_schema.is_object() && !inputs.json_schema.empty()) {
+        if (has_response_format) {
             // Ministral wants to emit json surrounded by code fences
-            return reasoning << "```json" << p.content(p.schema(p.json(), "response-format", inputs.json_schema))
-                             << "```";
+            return generation_prompt + (reasoning << "```json" << p.content(p.schema(p.json(), "response-format", inputs.json_schema)) << "```");
         }
 
         // Tool call parser
@@ -897,12 +910,12 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
             auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
             auto tool_calls = p.trigger_rule("tool-call", p.repeat("[TOOL_CALLS]" + tool_choice, min_calls, max_calls));
 
-            return reasoning << p.content(p.until("[TOOL_CALLS]")) << tool_calls;
+            return generation_prompt + (reasoning << p.content(p.until("[TOOL_CALLS]")) << tool_calls);
         }
 
         // Content only parser
         include_grammar = false;
-        return reasoning << p.content(p.rest());
+        return generation_prompt + (reasoning << p.content(p.rest()));
     });
 
     data.parser = parser.save();
@@ -916,6 +929,10 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -928,25 +945,22 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
 }
 
 static common_chat_params common_chat_params_init_gpt_oss(const common_chat_template &    tmpl,
-                                                          const autoparser::templates_params & inputs) {
+                                                          const autoparser::generation_params & inputs) {
     common_chat_params data;
 
     // Copy reasoning to the "thinking" field as expected by the gpt-oss template
     auto adjusted_messages = json::array();
-    for (const auto & msg : inputs.messages) {
-        auto has_reasoning_content = msg.contains("reasoning_content") && msg.at("reasoning_content").is_string();
-        auto has_tool_calls        = msg.contains("tool_calls") && msg.at("tool_calls").is_array();
-
-        if (has_reasoning_content && has_tool_calls) {
-            auto adjusted_message        = msg;
-            adjusted_message["thinking"] = msg.at("reasoning_content");
-            adjusted_messages.push_back(adjusted_message);
-        } else {
-            adjusted_messages.push_back(msg);
+    for (auto msg : inputs.messages) {
+        if (msg.contains("reasoning_content") && msg.at("reasoning_content").is_string()) {
+            msg["thinking"] = msg.at("reasoning_content");
+            if (msg.contains("tool_calls") && msg.at("tool_calls").is_array() && !msg.at("tool_calls").empty()) {
+                msg.erase("content");
+            }
         }
+        adjusted_messages.push_back(msg);
     }
 
-    auto prompt = common_chat_template_direct_apply(tmpl, inputs, /* messages_override= */ adjusted_messages);
+    auto prompt = common_chat_template_direct_apply_impl(tmpl, inputs, /* messages_override= */ adjusted_messages);
 
     // Check if we need to replace the return token with end token during
     // inference and without generation prompt. For more details see:
@@ -969,45 +983,46 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         "<|channel|>", "<|constrain|>", "<|message|>", "<|start|>", "<|end|>",
     };
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && has_tools;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        const std::string END                = "<|end|>";
-        const std::string START              = "<|start|>";
-        const std::string MESSAGE            = "<|message|>";
-        const std::string CHANNEL            = "<|channel|>";
-        const std::string CONSTRAIN          = "<|constrain|>";
-        const std::string START_ASSISTANT    = START + "assistant";
-        const std::string CHANNEL_ANALYSIS   = CHANNEL + "analysis";
-        const std::string CHANNEL_COMMENTARY = CHANNEL + "commentary";
-        const std::string CHANNEL_FINAL      = CHANNEL + "final";
+        auto start           = p.rule("start", p.literal("<|start|>assistant"));
+        auto end             = p.rule("end", p.literal("<|end|>"));
+        auto content         = p.rule("message-content", p.until("<|end|>"));
+        auto channel         = p.literal("<|channel|>") + (p.literal("commentary") | p.literal("analysis"));
+        auto constrain_type  = p.chars("[A-Za-z0-9_-]", 1, -1);
 
-        auto the_end = END | p.end();
+        // Occasionally, gpt-oss-20b will prefix channels with this commentary
+        auto stray_commentary = p.optional(p.literal("<|channel|>commentary") + p.optional(p.literal(" to=assistant")));
+        auto start_analysis = stray_commentary + p.literal("<|channel|>analysis<|message|>");
 
-        const std::string analysis_header  = CHANNEL_ANALYSIS + MESSAGE;
-        auto              segment_content  = p.until(END);
-        auto              analysis_segment = extract_reasoning ?
-                                                 p.literal(analysis_header) + p.reasoning(segment_content) + p.until(END) + the_end :
-                                                 p.content(analysis_header + p.until(END) + the_end);
-
-        auto channel_header_content = p.until_one_of({ " to=functions.", MESSAGE });
-        auto content_header         = p.choice({ p.literal(CHANNEL_COMMENTARY), p.literal(CHANNEL_FINAL) });
-        auto content_segment        = p.rule("content-segment", content_header + channel_header_content + MESSAGE +
-                                                                    p.content(segment_content) + the_end);
-
-        if (!inputs.json_schema.is_null()) {
-            auto final_header = p.literal(CHANNEL_FINAL);
-            auto constraint   = p.optional(p.space() + p.literal(CONSTRAIN) + channel_header_content);
-            return p.optional(analysis_segment) + final_header + constraint + MESSAGE +
-                   p.content(p.schema(p.json(), "response-format", inputs.json_schema));
+        if (extract_reasoning) {
+            p.rule("analysis", start_analysis + p.reasoning(content) + end);
+        } else {
+            p.rule("analysis", p.content(start_analysis + content + end));
         }
 
-        auto segment  = p.optional(START_ASSISTANT + p.space()) + p.choice({ content_segment, analysis_segment });
-        auto contents = p.optional(segment + p.repeat(p.optional(p.space()) + segment, 0, -1)) + p.end();
+        auto analysis = p.ref("analysis");
+        auto preamble = p.rule("preamble", p.literal("<|channel|>commentary<|message|>") + p.content(content) + end);
+        auto final_msg = p.rule("final", stray_commentary + p.literal("<|channel|>final<|message|>") + p.content(content));
 
-        // Tool call parser
+        // Consume any unsolicited tool calls, e.g. builtin functions
+        auto unsolicited = p.rule("unsolicited", p.atomic(p.optional(channel) + p.literal(" to=") + content + end));
+
+        auto any = p.rule("any", preamble | analysis);
+
+        if (has_response_format) {
+            auto constraint = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);
+            auto response_format = p.rule("response-format",
+                p.literal("<|channel|>final") + constraint + p.literal("<|message|>") +
+                p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
+
+            return p.zero_or_more(start + analysis) + start + response_format;
+        }
+
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto tool_choice = p.choice();
 
@@ -1016,56 +1031,186 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 std::string  name     = function.at("name");
                 const auto & params   = function.at("parameters");
 
-                // Tool call can appear as:
-                // 1. In role header: " to=functions.NAME<|channel|>..."
-                // 2. In channel: "<|channel|>(analysis|commentary) to=functions.NAME..."
-                auto func_name = p.literal(" to=functions.") + p.tool_name(p.literal(name));
-
-                auto channel    = p.literal(CHANNEL_COMMENTARY) | p.literal(CHANNEL_ANALYSIS);
-                auto constraint = p.space() + p.optional(p.literal(CONSTRAIN) + channel_header_content);
+                auto func_name  = p.literal(" to=functions.") + p.tool_name(p.literal(name));
+                auto constraint = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);
                 auto args       = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
 
-                // Pattern 1: recipient in role header
-                // " to=functions.NAME<|channel|>(analysis|commentary)[constraint]<|message|>ARGS"
-                auto tool_in_role = p.tool(p.tool_open(func_name + channel) + constraint + MESSAGE + args);
+                // recipient in role header
+                //   <|start|>assistant to=functions.NAME<|channel|>(commentary|analysis)[constraint]<|message|>ARGS
+                auto tool_in_role = p.tool(p.tool_open(func_name + channel + constraint + p.literal("<|message|>")) + args);
 
-                // Pattern 2: recipient in channel header
-                // "<|channel|>(analysis|commentary) to=functions.NAME[constraint]<|message|>ARGS"
-                auto tool_in_channel = p.tool(channel + p.tool_open(func_name + constraint + MESSAGE) + args);
+                // recipient in channel header
+                //   <|channel|>(commentary|analysis) to=functions.NAME[constraint]<|message|>ARGS
+                auto tool_in_channel = p.tool(p.tool_open(channel + func_name + constraint + p.literal("<|message|>")) + args);
 
-                tool_choice |= tool_in_role | tool_in_channel;
+                tool_choice |= p.rule("tool-" + name, tool_in_role | tool_in_channel);
             });
 
-            auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
-            auto max_calls = inputs.parallel_tool_calls ? -1 : 1;
+            auto tool_call  = p.trigger_rule("tool-call", tool_choice);
 
-            auto role_start = p.optional(p.space() + p.literal(START_ASSISTANT));
-            auto tool_call  = p.rule("tool-call", p.repeat(role_start + tool_choice, min_calls, max_calls) + p.end());
+            if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
+                return p.zero_or_more(start + any) + start + tool_call;
+            }
 
-            return p.choice({ p.trigger_rule("single-tool", tool_call), p.trigger_rule("tools", p.one_or_more(segment) + tool_call) });
+            return p.zero_or_more(start + any) + start + (tool_call | final_msg);
         }
 
-        return contents;
+        return p.zero_or_more(start + any) + start + (final_msg | unsolicited);
     });
 
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
         data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^(?:<\\|start\\|>assistant\\s*)?(\\s+to=functions)"               },
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "(?:<\\|end\\|>)(?:<\\|start\\|>assistant\\s*)?(\\s+to=functions)" },
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-             "(?:<\\|start\\|>assistant\\s*)?(<\\|channel\\|>(?:commentary|analysis)\\s+to=functions)"                }
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^\\s+to$" },
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^<\\|channel\\|>(?:commentary|analysis)\\s+to=functions$" },
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|start\\|>assistant(\\s+to)" },
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|start\\|>assistant(<\\|channel\\|>(?:commentary|analysis)\\s+to)" }
+        };
+    }
+
+    return data;
+}
+
+static common_chat_params common_chat_params_init_gemma4(const common_chat_template &    tmpl,
+                                                         const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
+    data.supports_thinking  = true;
+    data.thinking_start_tag = "<|channel>thought";
+    data.thinking_end_tag   = "<channel|>";
+
+    data.preserved_tokens = {
+        "<|channel>",
+        "<channel|>",
+        "<|tool_call>",
+        "<tool_call|>",
+        "<|turn>",
+    };
+
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto start = p.rule("start", p.prefix(inputs.generation_prompt, "<|channel>"));
+
+        if (extract_reasoning) {
+            p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
+        } else {
+            p.rule("thought", p.content(p.literal("<|channel>thought") + p.space() + p.until("<channel|>") + p.literal("<channel|>")));
+        }
+
+        auto thought = (p.peek(p.literal("<|channel>")) + p.ref("thought")) | p.negate(p.literal("<|channel>"));
+
+        if (has_response_format) {
+            auto response_format = p.literal("```json") <<
+                p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)) <<
+                p.literal("```");
+            return start + p.optional(thought) + response_format;
+        }
+
+        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+            // Gemma4 tool calling syntax
+            // Rules should match traversal logic in gemma4_to_json()
+            p.rule("gemma4-string-content", p.until("<|\"|>"));
+            p.rule("gemma4-string", p.literal("<|\"|>") + p.ref("gemma4-string-content") + p.literal("<|\"|>"));
+            p.rule("gemma4-bool", p.json_bool());
+            p.rule("gemma4-null", p.json_null());
+            p.rule("gemma4-number", p.json_number());
+            p.rule("gemma4-dict-key", p.rule("gemma4-dict-key-name", p.chars("[^:}]", 1, -1)) + p.literal(":"));
+            p.rule("gemma4-dict-kv", p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value"));
+            p.rule("gemma4-dict", [&]() {
+                auto ws = p.space();
+                auto member = p.ref("gemma4-dict-kv");
+                auto members = p.sequence({member, p.zero_or_more(p.sequence({p.literal(","), ws, member}))});
+                return p.sequence({
+                    p.literal("{"), ws,
+                    p.choice({p.literal("}"), p.sequence({members, ws, p.literal("}")})})
+                });
+            });
+            p.rule("gemma4-array", [&]() {
+                auto ws = p.space();
+                auto value = p.ref("gemma4-value");
+                auto elements = p.sequence({value, p.zero_or_more(p.sequence({p.literal(","), ws, value}))});
+                return p.sequence({
+                    p.literal("["), ws,
+                    p.choice({p.literal("]"), p.sequence({elements, ws, p.literal("]")})})
+                });
+            });
+            p.rule("gemma4-value", [&]() {
+                return p.choice({
+                    p.ref("gemma4-string"), p.ref("gemma4-dict"), p.ref("gemma4-array"),
+                    p.ref("gemma4-number"), p.ref("gemma4-bool"), p.ref("gemma4-null")
+                });
+            });
+
+            auto tool_choice = p.choice();
+
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string  name     = function.at("name");
+                // TODO @aldehir : need to extend json-schema-to-grammar to produce more than JSON rules
+                // const auto & params   = function.at("parameters");
+
+                tool_choice |= p.rule("tool-" + name, p.tool(p.sequence({
+                    p.tool_open(p.tool_name(p.literal(name)) + p.peek(p.literal("{"))),
+                    p.tool_args(p.ref("gemma4-dict")),
+                })));
+            });
+
+            auto tool_call = p.trigger_rule("tool-call", p.repeat(
+                "<|tool_call>call:" + tool_choice + "<tool_call|>",
+                /* min = */ inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0,
+                /* max = */ inputs.parallel_tool_calls ? -1 : 1
+            ));
+
+            auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<|tool_call>"})));
+            auto message = p.rule("message", thought + content);
+            return start + p.zero_or_more(message) + tool_call;
+        }
+
+        auto content = p.rule("content", p.content(p.until("<|channel>")));
+        auto message = p.rule("message", thought + content);
+        return start + p.one_or_more(message);
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call>" },
         };
     }
 
@@ -1074,10 +1219,10 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
 // Functionary v3.2 - uses recipient-based format: >>>recipient\n{content}
 static common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_template &    tmpl,
-                                                                   const autoparser::templates_params & inputs) {
+                                                                   const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    data.prompt           = common_chat_template_direct_apply(tmpl, inputs);
+    data.prompt           = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens = {
         ">>>all",
@@ -1095,13 +1240,14 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         // Build content parser for >>>all\n{content}
         // When tools are present, content stops before the next ">>>" (tool call)
         // When no tools, content goes until end
-        auto content_until_tool = p.literal(">>>all\n") + p.content(p.until(">>>"));
-        auto content_until_end  = p.literal(">>>all\n") + p.content(p.rest());
+        auto content_until_tool = p.literal("all\n") + p.content(p.until(">>>"));
+        auto content_until_end  = p.literal("all\n") + p.content(p.rest());
+        auto generation_prompt  = p.literal(inputs.generation_prompt);
 
         // If no tools or tool_choice is NONE, just parse content
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
             // When no tools, just match the prefix and capture everything after
-            return content_until_end + p.end();
+            return generation_prompt + content_until_end + p.end();
         }
 
         // Build tool call parsers for each available function
@@ -1113,7 +1259,7 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
 
             // Tool format: >>>function_name\n{json_args}
             auto tool_parser = p.tool(
-                p.tool_open(p.literal(">>>") + p.tool_name(p.literal(name)) + p.literal("\n")) +
+                p.tool_open(p.tool_name(p.literal(name)) + p.literal("\n")) +
                 p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema))
             );
 
@@ -1124,17 +1270,20 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         auto tools_only = p.trigger_rule("tools", p.one_or_more(tool_choice));
         auto content_and_tools = content_until_tool + tools_only;
 
+        auto ret = p.eps();
         if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
             if (inputs.parallel_tool_calls) {
-                return p.choice({ content_and_tools, tools_only }) + p.end();
+                ret = p.choice({ content_and_tools, tools_only }) + p.end();
+            } else {
+                ret = p.choice({ content_until_tool + tool_choice, tools_only }) + p.end();
             }
-            return p.choice({ content_until_tool + tool_choice, tools_only }) + p.end();
+        } else if (inputs.parallel_tool_calls) {
+            ret = p.choice({ content_and_tools, content_only, tools_only }) + p.end();
+        } else {
+            auto content_and_tool = content_until_tool + tool_choice;
+            ret = p.choice({ content_and_tool, content_only, tool_choice }) + p.end();
         }
-        if (inputs.parallel_tool_calls) {
-            return p.choice({ content_and_tools, content_only, tools_only }) + p.end();
-        }
-        auto content_and_tool = content_until_tool + tool_choice;
-        return p.choice({ content_and_tool, content_only, tool_choice }) + p.end();
+        return generation_prompt + ret;
     });
 
     data.parser = parser.save();
@@ -1164,14 +1313,12 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
 // Kimi K2 Thinking - uses unique tool call ID format: functions.<name>:<index>
 // The ID contains both the function name and an incrementing counter
 static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template &    tmpl,
-                                                          const autoparser::templates_params & inputs) {
+                                                          const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    data.prompt             = common_chat_template_direct_apply(tmpl, inputs);
+    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking  = true;
-    data.thinking_start_tag = "<think>";
-    data.thinking_end_tag   = "</think>";
     data.preserved_tokens  = {
         "<|tool_calls_section_begin|>",
         "<|tool_calls_section_end|>",
@@ -1186,6 +1333,18 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
+    const std::string SECTION_BEGIN = "<|tool_calls_section_begin|>";
+    const std::string SECTION_END   = "<|tool_calls_section_end|>";
+    const std::string CALL_BEGIN    = "<|tool_call_begin|>";
+    const std::string ARGS_BEGIN    = "<|tool_call_argument_begin|>";
+    const std::string CALL_END      = "<|tool_call_end|>";
+
+    const std::string THINK_START = "<think>";
+    const std::string THINK_END   = "</think>";
+
+    data.thinking_start_tag = THINK_START;
+    data.thinking_end_tag   = THINK_END;
+
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         // Kimi K2 Thinking format:
         // - Reasoning: <think>{reasoning}</think>
@@ -1197,16 +1356,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
         //   <|tool_calls_section_end|>
         // The ID format is: functions.<function_name>:<counter> where counter is 0, 1, 2, ...
 
-                // Tool call markers
-        const std::string SECTION_BEGIN = "<|tool_calls_section_begin|>";
-        const std::string SECTION_END   = "<|tool_calls_section_end|>";
-        const std::string CALL_BEGIN    = "<|tool_call_begin|>";
-        const std::string ARGS_BEGIN    = "<|tool_call_argument_begin|>";
-        const std::string CALL_END      = "<|tool_call_end|>";
-
-        const std::string THINK_START   = "<think>";
-        const std::string THINK_END     = "</think>";
-
+        // Tool call markers
         auto end = p.end();
 
         // Note: this model is CRAZY. It can diverge from its supposed tool calling pattern in so many ways it's not funny.
@@ -1214,11 +1364,12 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
         auto reasoning = extract_reasoning ? p.optional(THINK_START + p.reasoning(
             p.until_one_of({ THINK_END, "<|tool_calls_section_begin|>", "<|tool_call_begin|>" })) +
             p.optional(p.literal(THINK_END))) : p.eps();
+        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
 
 
         // Content only parser (no tools)
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
-            return reasoning + p.content(p.rest()) + end;
+            return generation_prompt + reasoning + p.content(p.rest()) + end;
         }
 
         // Build tool call parsers for each available function
@@ -1254,7 +1405,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
 
         auto content_before_tools = p.content(p.until_one_of({ SECTION_BEGIN, CALL_BEGIN }));
 
-        return reasoning + content_before_tools + tool_calls + end;
+        return generation_prompt + reasoning + content_before_tools + tool_calls + end;
     });
 
     data.parser = parser.save();
@@ -1278,16 +1429,17 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
     return data;
 }
 
-// LFM2 format:
-// - Reasoning: <think>{reasoning}</think> (optional, only if enable_thinking is true)
-// - Content: text after reasoning (optional)
-// - Tool calls: <|tool_call_start|>[function_name(arg1="value1", arg2="value2")]<|tool_call_end|>
-// Tool calls can appear multiple times (parallel tool calls)
+// LFM2 format: uses <|tool_list_start|>[...]<|tool_list_end|> in system prompt
+// and <|tool_call_start|>[name(arg="val")]<|tool_call_end|> for tool calls.
+// - Reasoning: <think>{reasoning}</think> (optional)
+// - Content: text before a tool call (optional)
+// - Tool calls: Python-style, e.g. [function_name(arg1="value1", arg2="value2")]
+//   Tool calls can appear multiple times (parallel tool calls supported)
 static common_chat_params common_chat_params_init_lfm2(const common_chat_template &    tmpl,
-                                                       const autoparser::templates_params & inputs) {
+                                                       const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    data.prompt            = common_chat_template_direct_apply(tmpl, inputs);
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
     data.preserved_tokens  = {
@@ -1303,13 +1455,16 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
-
     const std::string TOOL_CALL_START = "<|tool_call_start|>";
     const std::string TOOL_CALL_END   = "<|tool_call_end|>";
     const std::string THINK_START     = "<think>";
     const std::string THINK_END       = "</think>";
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
 
+    data.thinking_start_tag = THINK_START;
+    data.thinking_end_tag   = THINK_END;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
         auto end = p.end();
 
         auto reasoning = p.eps();
@@ -1318,11 +1473,11 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
         }
 
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
-            return reasoning + p.content(p.rest()) + end;
+            return generation_prompt + reasoning + p.content(p.rest()) + end;
         }
-
         auto tool_calls = p.rule("tool-calls",
-            p.trigger_rule("tool-call", p.literal(TOOL_CALL_START) +
+            p.trigger_rule("tool-call",
+                p.literal(TOOL_CALL_START) +
                 p.python_style_tool_calls(inputs.tools, inputs.parallel_tool_calls) +
                 p.literal(TOOL_CALL_END)
             )
@@ -1330,7 +1485,7 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
 
         auto content = p.content(p.until(TOOL_CALL_START));
 
-        return reasoning + content + tool_calls + end;
+        return generation_prompt + reasoning + content + tool_calls + end;
     });
 
     data.parser = parser.save();
@@ -1350,17 +1505,91 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
             { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, TOOL_CALL_START }
         };
     }
+    return data;
+}
+
+// LFM2.5 format: uses plain "List of tools: [...]" in system prompt, no wrapper tokens.
+// Tool calls are bare [name(arg="val")], though model may optionally emit <|tool_call_start|>.
+// - Reasoning: <think>{reasoning}</think> (optional)
+// - Content: text before a tool call (optional)
+// - Tool calls: Python-style, e.g. [function_name(arg1="value1", arg2="value2")]
+//   Tool calls can appear multiple times (parallel tool calls supported)
+static common_chat_params common_chat_params_init_lfm2_5(const common_chat_template &    tmpl,
+                                                         const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking = true;
+    data.preserved_tokens  = {
+        "<|tool_call_start|>",
+        "<|tool_call_end|>",
+        "<think>",
+        "</think>",
+    };
+
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    const std::string THINK_START     = "<think>";
+    const std::string THINK_END       = "</think>";
+
+    data.thinking_start_tag = THINK_START;
+    data.thinking_end_tag   = THINK_END;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
+        auto end = p.end();
+
+        auto reasoning = p.eps();
+        if (extract_reasoning && inputs.enable_thinking) {
+            reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
+        }
+
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            return generation_prompt + reasoning + p.content(p.rest()) + end;
+        }
+
+        auto tool_calls = p.rule("tool-calls",
+            p.trigger_rule("tool-call",
+                p.python_style_tool_calls(inputs.tools, inputs.parallel_tool_calls)
+            )
+        );
+
+        auto content = p.content(p.until_one_of({"<|tool_call_start|>", "["}));
+        auto maybe_start = p.optional(p.literal("<|tool_call_start|>"));
+        return generation_prompt + reasoning + content + maybe_start + tool_calls + end;
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const std::string name = tool.at("function").at("name");
+            data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "[" + name + "(" });
+        });
+    }
 
     return data;
 }
 
 static common_chat_params common_chat_params_init_gigachat_v3(
         const common_chat_template & tmpl,
-        const autoparser::templates_params & inputs) {
+        const autoparser::generation_params & inputs) {
 
     common_chat_params data;
 
-    data.prompt            = common_chat_template_direct_apply(tmpl, inputs);
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = false;
     data.preserved_tokens  = {
@@ -1370,9 +1599,10 @@ static common_chat_params common_chat_params_init_gigachat_v3(
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
-    auto tool_call_start_prefix = "<|message_sep|>\n\nfunction call<|role_sep|>\n";
+    const auto *tool_call_start_prefix = "<|message_sep|>\n\nfunction call<|role_sep|>\n";
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto ret = p.eps();
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             // Build a choice of all available tools
             auto tool_choice = p.choice();
@@ -1395,13 +1625,14 @@ static common_chat_params common_chat_params_init_gigachat_v3(
             auto tool_call = p.rule("tool-call", p.literal(tool_call_start_prefix) + tool_choice);
             auto tool_calls = p.trigger_rule("tool-call-root", p.repeat(tool_call, /* min = */ min_calls, /* max = */ max_calls));
 
-            return p.content(p.until("<|message_sep|>\n\n")) << tool_calls;
+            ret = p.content(p.until("<|message_sep|>\n\n")) << tool_calls;
+        } else {
+            // Content only parser
+            include_grammar = false;
+            ret = p.content(p.rest());
         }
 
-        // Content only parser
-        include_grammar = false;
-        return p.content(p.rest());
-
+        return p.literal(inputs.generation_prompt) + ret;
     });
 
     data.parser = parser.save();
@@ -1464,6 +1695,150 @@ static void requires_non_null_content(json & messages) {
     }
 }
 
+// Gemma4 uses a custom tool_responses field instead of role:tool messages.
+//
+// This will transform a sequence of messages:
+//   assistant(tool_call+) -> tool+ -> assistant(content)
+//
+// Into a single assistant message containing a tool_responses field:
+//   assistant(content + tool_call + tool_responses)
+//
+// This is necessary for the Gemma4 chat template to properly format the prompt.
+// See https://ai.google.dev/gemma/docs/core/prompt-formatting-gemma4
+struct gemma4_model_turn_builder {
+    json & messages;
+    size_t pos;
+    json tool_calls = json::array();
+    json tool_responses = json::array();
+    json content;
+    json reasoning_content;
+
+    gemma4_model_turn_builder(json & msgs, size_t pos) : messages(msgs), pos(pos) {}
+
+    void collect() {
+        // Collect the first assistant message
+        auto & msg = messages[pos];
+        if (msg.contains("reasoning_content") && msg.at("reasoning_content").is_string()) {
+            // According to the prompt formatting guide, we need to preserve reasoning_content
+            // between function calls. The current chat templates do not support this, but we will do it anyway.
+            reasoning_content = msg.at("reasoning_content");
+        }
+        for (auto & tc : msg.at("tool_calls")) {
+            tool_calls.push_back(tc);
+        }
+        pos++;
+
+        // Collect tool call results
+        while (pos < messages.size() && messages[pos].value("role", "") == "tool") {
+            collect_result(messages[pos]);
+            pos++;
+        }
+
+        // Check if the next assistant message is the final message
+        if (pos < messages.size() && messages[pos].value("role", "") == "assistant") {
+            auto & next = messages[pos];
+            if (!has_tool_calls(next) && has_content(next)) {
+                content = next.at("content");
+                pos++;
+            }
+        }
+    }
+
+    void collect_result(const json & curr) {
+        json response;
+        if (curr.contains("content")) {
+            const auto & content = curr.at("content");
+            if (content.is_string()) {
+                // Try to parse the content as JSON; fall back to raw string
+                try {
+                    response = json::parse(content.get<std::string>());
+                } catch (...) {
+                    response = content;
+                }
+            } else {
+                response = content;
+            }
+        }
+
+        std::string name;
+
+        // Match name with corresponding tool call
+        size_t idx = tool_responses.size();
+        if (idx < tool_calls.size()) {
+            auto & tc = tool_calls[idx];
+            if (tc.contains("function")) {
+                name = tc.at("function").value("name", "");
+            }
+        }
+
+        // Fallback to the tool call id
+        if (name.empty()) {
+            name = curr.value("tool_call_id", "");
+        }
+
+        tool_responses.push_back({{"name", name}, {"response", response}});
+    }
+
+    json build() {
+        collect();
+
+        json msg = {
+            {"role", "assistant"},
+            {"tool_calls", tool_calls},
+        };
+        if (!tool_responses.empty()) {
+            msg["tool_responses"] = tool_responses;
+        }
+        if (!content.is_null()) {
+            msg["content"] = content;
+        }
+        if (!reasoning_content.is_null()) {
+            msg["reasoning_content"] = reasoning_content;
+        }
+        return msg;
+    }
+
+    static bool has_content(const json & msg) {
+        if (!msg.contains("content") || msg.at("content").is_null()) {
+            return false;
+        }
+        const auto & content = msg.at("content");
+        if (content.is_string() && !content.get<std::string>().empty()) {
+            return true;
+        }
+        if (content.is_array() && !content.empty()) {
+            return true;
+        }
+        return false;
+    }
+
+    static bool has_tool_calls(const json & msg) {
+        return msg.contains("tool_calls") && msg.at("tool_calls").is_array() && !msg.at("tool_calls").empty();
+    }
+};
+
+static void convert_tool_responses_gemma4(json & messages) {
+    json result = json::array();
+    size_t i = 0;
+
+    while (i < messages.size()) {
+        auto & msg = messages[i];
+
+        if (msg.value("role", "") != "assistant" || !msg.contains("tool_calls") ||
+            !msg.at("tool_calls").is_array() || msg.at("tool_calls").empty()) {
+            result.push_back(msg);
+            i++;
+            continue;
+        }
+
+        gemma4_model_turn_builder builder(messages, i);
+        result.push_back(builder.build());
+        i = builder.pos;
+    }
+
+    messages = result;
+}
+
 static void func_args_not_string(json & messages) {
     GGML_ASSERT(messages.is_array());
     for (auto & message : messages) {
@@ -1496,69 +1871,10 @@ static json common_chat_extra_context() {
     return ctx;
 }
 
-static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
-                                                            const struct common_chat_templates_inputs & inputs) {
-    autoparser::templates_params params;
-    params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
-    const auto & tmpl = params.tools.is_array() && tmpls->template_tool_use
-        ? *tmpls->template_tool_use
-        : *tmpls->template_default;
-    const auto & src = tmpl.source();
-    const auto & caps = tmpl.original_caps();
-    params.messages = render_message_to_json(inputs.messages, tmpl.original_caps());
-    params.add_generation_prompt = inputs.add_generation_prompt;
-    params.tool_choice = inputs.tool_choice;
-    params.reasoning_format = inputs.reasoning_format;
-    params.enable_thinking = inputs.enable_thinking;
-    params.grammar = inputs.grammar;
-    params.now = inputs.now;
-    params.add_bos = tmpls->add_bos;
-    params.add_eos = tmpls->add_eos;
-
-    if (src.find("<|channel|>") == std::string::npos) {
-        // map developer to system for all models except for GPT-OSS
-        workaround::map_developer_role_to_system(params.messages);
-    }
-    workaround::func_args_not_string(params.messages);
-
-    if (!tmpl.original_caps().supports_system_role) {
-        workaround::system_message_not_supported(params.messages);
-    }
-
-    if (tmpl.original_caps().supports_tool_calls) {
-        // some templates will require the content field in tool call messages
-        // to still be non-null, this puts an empty string everywhere where the
-        // content field is null
-        workaround::requires_non_null_content(params.messages);
-    }
-
-    params.extra_context = common_chat_extra_context();
-    for (auto el : inputs.chat_template_kwargs) {
-        params.extra_context[el.first] = json::parse(el.second);
-    }
-
-    if (!inputs.json_schema.empty()) {
-        params.json_schema = json::parse(inputs.json_schema);
-    }
-
-    // if (inputs.parallel_tool_calls && !tmpl.original_caps().supports_parallel_tool_calls) {
-    //     LOG_DBG("Disabling parallel_tool_calls because the template does not support it\n");
-    //     params.parallel_tool_calls = false;
-    // } else {
-    params.parallel_tool_calls = inputs.parallel_tool_calls;
-    //}
-
-    if (params.tools.is_array()) {
-        if (params.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && !params.grammar.empty()) {
-            throw std::runtime_error("Cannot specify grammar with tools");
-        }
-        if (caps.supports_tool_calls && !caps.supports_tools) {
-            LOG_WRN(
-                "Template supports tool calls but does not natively describe tools. The fallback behaviour used may "
-                "produce bad results, inspect prompt w/ --verbose & consider overriding the template.\n");
-        }
-    }
-
+std::optional<common_chat_params> common_chat_try_specialized_template(
+        const common_chat_template &          tmpl,
+        const std::string &                   src,
+        autoparser::generation_params & params) {
     // Ministral/Mistral Large 3 - uses special reasoning structure fixes, can't use autoparser
     // Note: Mistral Small 3.2 uses [CALL_ID] which Ministral doesn't have, so we can distinguish them
     if (src.find("[SYSTEM_PROMPT]") != std::string::npos && src.find("[TOOL_CALLS]") != std::string::npos &&
@@ -1588,25 +1904,134 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         return common_chat_params_init_kimi_k2(tmpl, params);
     }
 
-    // LFM2 - uses <|tool_list_start|>/<|tool_list_end|> markers and <|tool_call_start|>[name(args)]<|tool_call_end|> format
-    // Detection: template has "<|tool_list_start|>" and "<|tool_list_end|>" markers
+    // LFM2 format detection: template uses <|tool_list_start|>[...]<|tool_list_end|> around the tool list
+    // and <|tool_call_start|>[...]<|tool_call_end|> around each tool call
     if (src.find("<|tool_list_start|>") != std::string::npos &&
         src.find("<|tool_list_end|>") != std::string::npos) {
         LOG_DBG("Using specialized template: LFM2\n");
         return common_chat_params_init_lfm2(tmpl, params);
     }
 
+    // LFM2.5 format detection: template uses plain "List of tools: [...]" with no special tokens
+    if (src.find("List of tools: [") != std::string::npos &&
+        src.find("<|tool_list_start|>") == std::string::npos) {
+        LOG_DBG("Using specialized template: LFM2.5\n");
+        return common_chat_params_init_lfm2_5(tmpl, params);
+    }
+
     // GigaChatV3 format detection
     if (src.find("<|role_sep|>") != std::string::npos &&
         src.find("<|message_sep|>") != std::string::npos &&
-        src.find("<|function_call|>") == std::string::npos
-    ) {
+        src.find("<|function_call|>") == std::string::npos) {
         LOG_DBG("Using specialized template: GigaChatV3\n");
         return common_chat_params_init_gigachat_v3(tmpl, params);
     }
 
+    // Gemma4 format detection
+    if (src.find("'<|tool_call>call:'") != std::string::npos) {
+        if (src.find("{#- OpenAI Chat Completions:") == std::string::npos) {
+            // apply workarounds if using the older gemma4 templates
+            LOG_WRN("%s: detected an outdated gemma4 chat template, applying compatibility workarounds. "
+                    "Consider updating to the official template.\n", __func__);
+            workaround::convert_tool_responses_gemma4(params.messages);
+        }
+        return common_chat_params_init_gemma4(tmpl, params);
+    }
+
+    return std::nullopt;
+}
+
+static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
+                                                            const struct common_chat_templates_inputs & inputs) {
+    autoparser::generation_params params;
+    params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
+    const auto & tmpl =
+        params.tools.is_array() && tmpls->template_tool_use ? *tmpls->template_tool_use : *tmpls->template_default;
+    const auto & src        = tmpl.source();
+    const auto & caps       = tmpl.original_caps();
+    params.messages         = render_message_to_json(inputs.messages, tmpl.original_caps());
+    params.tool_choice      = inputs.tool_choice;
+    params.reasoning_format = inputs.reasoning_format;
+    params.enable_thinking  = inputs.enable_thinking;
+    params.grammar          = inputs.grammar;
+    params.now              = inputs.now;
+    params.add_bos          = tmpls->add_bos;
+    params.add_eos          = tmpls->add_eos;
+
+    if (src.find("<|channel|>") == std::string::npos) {
+        // map developer to system for all models except for GPT-OSS
+        workaround::map_developer_role_to_system(params.messages);
+    }
+
+    if (!tmpl.original_caps().supports_system_role) {
+        workaround::system_message_not_supported(params.messages);
+    }
+
+    if (tmpl.original_caps().supports_tool_calls) {
+        // some templates will require the content field in tool call messages
+        // to still be non-null, this puts an empty string everywhere where the
+        // content field is null
+        workaround::requires_non_null_content(params.messages);
+    }
+
+    if (tmpl.original_caps().supports_object_arguments) {
+        workaround::func_args_not_string(params.messages);
+    }
+
+    params.add_generation_prompt = false;
+    std::string no_gen_prompt    = common_chat_template_direct_apply_impl(tmpl, params);
+    params.add_generation_prompt = true;
+    std::string gen_prompt       = common_chat_template_direct_apply_impl(tmpl, params);
+    auto        diff             = calculate_diff_split(no_gen_prompt, gen_prompt);
+    params.generation_prompt     = diff.right + diff.suffix;
+
+    params.add_generation_prompt = inputs.add_generation_prompt;
+
+    params.extra_context = common_chat_extra_context();
+    for (auto el : inputs.chat_template_kwargs) {
+        params.extra_context[el.first] = json::parse(el.second);
+    }
+
+    if (!inputs.json_schema.empty()) {
+        params.json_schema = json::parse(inputs.json_schema);
+    }
+
+    params.parallel_tool_calls = inputs.parallel_tool_calls;
+
+    if (params.tools.is_array()) {
+        if (params.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && !params.grammar.empty()) {
+            throw std::runtime_error("Cannot specify grammar with tools");
+        }
+        if (caps.supports_tool_calls && !caps.supports_tools) {
+            LOG_WRN(
+                "Template supports tool calls but does not natively describe tools. The fallback behaviour used may "
+                "produce bad results, inspect prompt w/ --verbose & consider overriding the template.\n");
+        }
+    }
+
+    if (inputs.force_pure_content) {
+        LOG_WRN("Forcing pure content template, will not render reasoning or tools separately.");
+        // Create the result structure
+        common_chat_params data;
+        auto params_copy               = params;
+        params_copy.reasoning_format   = COMMON_REASONING_FORMAT_NONE;
+        data.prompt                    = common_chat_template_direct_apply_impl(tmpl, params_copy);
+        data.format                    = COMMON_CHAT_FORMAT_PEG_NATIVE;
+        data.generation_prompt         = params.generation_prompt;
+        auto parser                    = build_chat_peg_parser([&params](common_chat_peg_builder &p) {
+            return p.prefix(params.generation_prompt) << p.content(p.rest());
+        });
+        data.parser                    = parser.save();
+        return data;
+    }
+
+    if (auto result = common_chat_try_specialized_template(tmpl, src, params)) {
+        result->generation_prompt = params.generation_prompt;
+        return *result;
+    }
+
     try {
-        LOG_DBG("Using differential autoparser\n");
+        LOG_DBG("%s: using differential autoparser\n", __func__);
         struct autoparser::autoparser autoparser;
         autoparser.analyze_template(tmpl);
         auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, autoparser);
@@ -1614,13 +2039,11 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         if (auto_params.supports_thinking) {
             auto_params.thinking_start_tag = autoparser.reasoning.start;
             auto_params.thinking_end_tag   = autoparser.reasoning.end;
-            // FORCED_OPEN and FORCED_CLOSED both put <think> in the generation prompt
-            // (FORCED_CLOSED forces empty <think></think> when thinking is disabled,
-            //  but forces <think> open when thinking is enabled)
-            auto_params.thinking_forced_open =
-                autoparser.reasoning.mode == autoparser::reasoning_mode::FORCED_OPEN ||
-                autoparser.reasoning.mode == autoparser::reasoning_mode::FORCED_CLOSED;
         }
+        auto_params.generation_prompt = params.generation_prompt;
+        common_peg_arena arena;
+        arena.load(auto_params.parser);
+        LOG_DBG("%s: generated parser:\n%s\n\nparser generation prompt: %s\n", __func__, arena.dump(arena.root()).c_str(), auto_params.generation_prompt.c_str());
         return auto_params;
     } catch (const std::exception & e) {
         throw std::invalid_argument(std::string("Unable to generate parser for this template. Automatic parser generation failed: ") + e.what());
@@ -1718,14 +2141,18 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         LOG_DBG("No parser definition detected, assuming pure content parser.");
     }
 
-    LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), input.c_str());
+    const std::string effective_input = params.generation_prompt.empty()
+        ? input
+        : params.generation_prompt + input;
+
+    LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.c_str());
 
     common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_LENIENT;
     if (params.debug) {
         flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
     }
 
-    common_peg_parse_context ctx(input, flags);
+    common_peg_parse_context ctx(effective_input, flags);
     auto result = parser.parse(ctx);
 
     if (result.fail()) {
@@ -1735,8 +2162,13 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             // Try to extract any partial results from what was successfully parsed
             common_chat_msg msg;
             msg.role = "assistant";
-            auto mapper = common_chat_peg_mapper(msg);
-            mapper.from_ast(ctx.ast, result);
+            std::unique_ptr<common_chat_peg_mapper> mapper;
+            if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
+                mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+            } else {
+                mapper = std::make_unique<common_chat_peg_mapper>(msg);
+            }
+            mapper->from_ast(ctx.ast, result);
 
             if (ctx.is_debug()) {
                 fprintf(stderr, "\nAST for partial parse (fail):\n%s\n", ctx.ast.dump().c_str());
@@ -1745,14 +2177,19 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             return msg;
         }
         throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end) + ": " +
-                                 input.substr(result.end));
+                                 effective_input.substr(result.end));
     }
 
     common_chat_msg msg;
     msg.role = "assistant";
 
-    auto mapper = common_chat_peg_mapper(msg);
-    mapper.from_ast(ctx.ast, result);
+    std::unique_ptr<common_chat_peg_mapper> mapper;
+    if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
+        mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+    } else {
+        mapper = std::make_unique<common_chat_peg_mapper>(msg);
+    }
+    mapper->from_ast(ctx.ast, result);
 
     if (ctx.is_debug()) {
         fprintf(stderr, "\nAST for %s parse:\n%s\n", is_partial ? "partial" : "full", ctx.ast.dump().c_str());
