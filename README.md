@@ -23,6 +23,29 @@ Notes:
 - `EXL3 3.0bpw` is from a local `145 x 2048` eval, not `llama-perplexity`.
 - The public runtime path here is the clean base `TQ3_1S` / `TQ3_4S` support.
 
+## Current Runtime Speed
+
+Measured on:
+
+- GPU: `RTX 5060 Ti 16GB`
+- build: public runtime branch
+- command family: `llama-bench`
+
+### Qwen3.5-27B-TQ3_4S
+
+| Metric | Result |
+|--------|--------|
+| `pp2048` | `~708 tok/s` |
+| `tg128` | `23.2 tok/s` |
+| size | `12.99 GiB` |
+
+Notes:
+
+- these are the current public runtime numbers for the 27B `TQ3_4S` path
+- the prompt-path headline is the important public speed claim: `~708 tok/s` at `pp2048`
+- `pp` and `tg` should be compared separately
+- if you benchmark with custom KV-cache settings, keep that separate from the base weight-format numbers
+
 ## Build From Source
 
 ```bash
@@ -90,6 +113,20 @@ Notes:
 ## Benchmark
 
 ```bash
+./build/bin/llama-bench \
+  -m ./models/tq3_4s/Qwen_Qwen3.5-27B-TQ3_4S.gguf \
+  -ngl 99 \
+  -p 2048 \
+  -n 0 \
+  -r 3
+
+./build/bin/llama-bench \
+  -m ./models/tq3_4s/Qwen_Qwen3.5-27B-TQ3_4S.gguf \
+  -ngl 99 \
+  -p 0 \
+  -n 128 \
+  -r 3
+
 ./build/bin/llama-perplexity \
   -m ./models/tq3_4s/Qwen_Qwen3.5-27B-TQ3_4S.gguf \
   -f /path/to/wiki.test.raw \
