@@ -2118,6 +2118,31 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ amount_tool })
             .expect(message_with_tool_calls("amount", R"({"orig": 1.5e10})"))
             .run();
+
+        // Edge cases
+        tst.test(
+                "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<channel|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+                "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<|channel>thought\n<channel|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+                "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<|channel>thought\n<channel|><channel|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+                "<|channel><|channel>thought\n<channel|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
     }
 
     {
