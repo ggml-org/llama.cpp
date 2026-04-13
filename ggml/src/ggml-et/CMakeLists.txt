@@ -75,8 +75,15 @@ set(KERNELS
 
 set(UBERKERNEL_SUPPORTED_KERNELS
     el_map_f32
+    glu_f32
+    mul_mat_f16
+    mul_mat_f16_matrix_engine
+    mul_mat_f32
+    mul_mat_f32_matrix_engine
+    mul_mat_Q8_0
     rms_norm_f32
     rms_norm_mul_f32
+    rope_f32
     unary_f32
 )
 
