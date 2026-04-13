@@ -25,7 +25,7 @@ static __global__ void lightning_indexer_kernel(
     // each block processes WARPS_PER_BLOCK * KVS_PER_WARP KV elements
     int start_kv_block = blockIdx.x * (WARPS_PER_BLOCK * KVS_PER_WARP);
     int start_kv = start_kv_block + i_warp * KVS_PER_WARP;
- 
+
     const char * q_base = (const char *) src0 + i_batch*nb02 + i_stream*nb03;
     const float * w_base = (const float *) ((const char *) src2 + i_batch*nb21 + i_stream*nb23);
 
@@ -49,7 +49,7 @@ static __global__ void lightning_indexer_kernel(
     for (int h = 0; h < n_head; ++h) {
         const float4 q_vec = *(const float4 *) (q_base + h*nb01 + i_lane*4*sizeof(float));
         const float w_val  = w_base[h];
-        
+
         float qk[KVS_PER_WARP] = {0.0f};
 
         #pragma unroll
@@ -64,11 +64,11 @@ static __global__ void lightning_indexer_kernel(
         #pragma unroll
         for (int k = 0; k < KVS_PER_WARP; ++k) {
             float sum = warp_reduce_sum(qk[k]);
-            
+
             // scale_embd, ReLU, weight
             if (i_lane == 0) {
                 sum *= scale_embd;
-                sum = (sum > 0.0f) ? sum : 0.0f; 
+                sum = (sum > 0.0f) ? sum : 0.0f;
                 score_k[k] += sum * w_val;
             }
         }

@@ -75,19 +75,19 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 // split into {n_embd_indexer_head_rope, n_indexer_head, n_tokens}
                 ggml_tensor * indexer_q_pe =
                     ggml_view_3d(ctx0, indexer_q, n_embd_indexer_head_rope, n_indexer_head, n_tokens,
-                                 ggml_row_size(indexer_q->type, n_embd_indexer_head), 
-                                 ggml_row_size(indexer_q->type, n_embd_indexer_head) * n_indexer_head, 0); 
+                                 ggml_row_size(indexer_q->type, n_embd_indexer_head),
+                                 ggml_row_size(indexer_q->type, n_embd_indexer_head) * n_indexer_head, 0);
                 cb(indexer_q_pe, "indexer_q_pe", il);
 
                 // and {n_embd_indexer_head_nope, n_indexer_head, n_tokens}
                 ggml_tensor * indexer_q_nope =
                     ggml_view_3d(ctx0, indexer_q, n_embd_indexer_head_nope, n_indexer_head, n_tokens,
-                                 ggml_row_size(indexer_q->type, n_embd_indexer_head), 
+                                 ggml_row_size(indexer_q->type, n_embd_indexer_head),
                                  ggml_row_size(indexer_q->type, n_embd_indexer_head) * n_indexer_head,
                                  ggml_row_size(indexer_q->type, n_embd_indexer_head_nope));
                 cb(indexer_q_nope, "indexer_q_nope", il);
 
-                indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_rot, 
+                indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_rot,
                                      LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
                                      ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(indexer_q_pe, "indexer_q_pe", il);
@@ -105,19 +105,19 @@ llm_build_deepseek32::llm_build_deepseek32(const llama_model & model, const llm_
                 // split into {n_embd_indexer_head_rope, 1, n_tokens}
                 ggml_tensor * indexer_k_pe =
                     ggml_view_3d(ctx0, indexer_k, n_embd_indexer_head_rope, 1, n_tokens,
-                                 ggml_row_size(indexer_k->type, n_embd_indexer_head), 
-                                 ggml_row_size(indexer_k->type, n_embd_indexer_head) * 1, 0); 
+                                 ggml_row_size(indexer_k->type, n_embd_indexer_head),
+                                 ggml_row_size(indexer_k->type, n_embd_indexer_head) * 1, 0);
                 cb(indexer_k_pe, "indexer_k_pe", il);
 
                 // and {n_embd_indexer_head_nope, 1, n_tokens}
                 ggml_tensor * indexer_k_nope =
                     ggml_view_3d(ctx0, indexer_k, n_embd_indexer_head_nope, 1, n_tokens,
-                                 ggml_row_size(indexer_k->type, n_embd_indexer_head), 
+                                 ggml_row_size(indexer_k->type, n_embd_indexer_head),
                                  ggml_row_size(indexer_k->type, n_embd_indexer_head) * 1,
                                  ggml_row_size(indexer_k->type, n_embd_indexer_head_nope));
                 cb(indexer_k_nope, "indexer_k_nope", il);
 
-                indexer_k_pe = ggml_rope_ext(ctx0, indexer_k_pe, inp_pos, nullptr, n_rot, 
+                indexer_k_pe = ggml_rope_ext(ctx0, indexer_k_pe, inp_pos, nullptr, n_rot,
                                      LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
                                      ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(indexer_k_pe, "indexer_k_pe", il);
