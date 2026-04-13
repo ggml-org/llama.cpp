@@ -48,6 +48,26 @@ export const EXPECTED_THEMED_ICON_PAIR_COUNT = 2;
 /** CORS proxy URL query parameter name */
 export const CORS_PROXY_URL_PARAM = 'url';
 
+/** Number of trailing characters to keep visible when partially redacting mcp-session-id */
+export const MCP_SESSION_ID_VISIBLE_CHARS = 5;
+
+/** Partial-redaction rules for MCP headers: header name -> visible trailing chars */
+export const MCP_PARTIAL_REDACT_HEADERS = new Map<string, number>([
+	['mcp-session-id', MCP_SESSION_ID_VISIBLE_CHARS]
+]);
+
+/** Header names whose values should be redacted in diagnostic logs */
+export const REDACTED_HEADERS = new Set([
+	'authorization',
+	'api-key',
+	'cookie',
+	'mcp-session-id',
+	'proxy-authorization',
+	'set-cookie',
+	'x-auth-token',
+	'x-api-key'
+]);
+
 /** Human-readable labels for MCP transport types */
 export const MCP_TRANSPORT_LABELS: Record<MCPTransportType, string> = {
 	[MCPTransportType.WEBSOCKET]: 'WebSocket',
