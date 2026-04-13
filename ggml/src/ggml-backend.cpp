@@ -761,11 +761,6 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #define GGML_SCHED_MAX_COPIES 4
 #endif
 
-#ifndef GGML_SCHED_MAX_SPLIT_BITS
-#define GGML_SCHED_MAX_SPLIT_BITS 12 // log2(4096)
-#endif
-
-
 struct ggml_backend_sched_split {
     int backend_id;
     int i_start;
@@ -1035,7 +1030,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         GGML_ABORT("%s: failed to initialize context\n", __func__);
     }
 
-    graph->uid = ggml_graph_next_version();
+    graph->uid = ggml_graph_next_uid();
 
     // pass 1: assign backends to ops with pre-allocated inputs
     for (int i = 0; i < graph->n_leafs; i++) {
