@@ -1988,6 +1988,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_thoughts)
             .run();
 
+        // Empty reasoning (budget=0: sampler forces end tag before newline)
+        tst.test(
+                "<|channel>thought<channel|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", ""))
+            .run();
+
         // Reasoning and content with reasoning_format = none
         tst.test(
                 "<|channel>thought\nI'm\nthinking<channel|>Hello, world!\nWhat's up?")

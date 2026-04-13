@@ -1,5 +1,5 @@
 {
-	"name": "webui",
+	"name": "llama-server-webui",
 	"private": true,
 	"version": "1.0.0",
 	"type": "module",

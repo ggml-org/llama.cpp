@@ -411,11 +411,22 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         assert(tensor->view_src->buffer->buft == buffer->buft);
         return GGML_STATUS_SUCCESS;
     }
-    if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0 || tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K) &&
-        !g_ggml_sycl_disable_optimize) {
-        ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
-        tensor->extra                 = extra;
-        ctx->tensor_extras.push_back(extra);  //used to release it when destroy ctx.
+
+    if (!g_ggml_sycl_disable_optimize) {
+        // set reorder extra buffer based on supported type
+        switch (tensor->type) {
+            case GGML_TYPE_Q4_0:
+            case GGML_TYPE_Q8_0:
+            case GGML_TYPE_Q4_K:
+            case GGML_TYPE_Q6_K:{
+                ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
+                tensor->extra                 = extra;
+                ctx->tensor_extras.push_back(extra);
+                break;
+            }
+            default:
+                break;
+        }
     }
 
     if (ggml_is_quantized(tensor->type)) {
@@ -627,6 +638,8 @@ static const ggml_backend_buffer_i ggml_backend_sycl_buffer_interface = {
     /* .memset_tensor   = */ ggml_backend_sycl_buffer_memset_tensor,
     /* .set_tensor      = */ ggml_backend_sycl_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_sycl_buffer_get_tensor,
+    /* .set_tensor_2d   = */ NULL,
+    /* .get_tensor_2d   = */ NULL,
     /* .cpy_tensor      = */ ggml_backend_sycl_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_sycl_buffer_clear,
     /* .reset           = */ ggml_backend_sycl_buffer_reset,
@@ -1073,6 +1086,8 @@ static struct ggml_backend_buffer_i ggml_backend_sycl_split_buffer_interface = {
     /* .memset_tensor   = */ NULL,
     /* .set_tensor      = */ ggml_backend_sycl_split_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_sycl_split_buffer_get_tensor,
+    /* .set_tensor_2d   = */ NULL,
+    /* .get_tensor_2d   = */ NULL,
     /* .cpy_tensor      = */ NULL,
     /* .clear           = */ ggml_backend_sycl_split_buffer_clear,
     /* .reset           = */ NULL,
@@ -4542,6 +4557,8 @@ static ggml_backend_i ggml_backend_sycl_interface = {
     /* .free                    = */ ggml_backend_sycl_free,
     /* .set_tensor_async        = */ ggml_backend_sycl_set_tensor_async,
     /* .get_tensor_async        = */ ggml_backend_sycl_get_tensor_async,
+    /* .get_tensor_2d_async     = */ NULL,
+    /* .set_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL, // ggml_backend_sycl_cpy_tensor_async,
                                            // // TODO: update for the new
                                            // interface
@@ -4710,11 +4727,18 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = op->src[1];
 
+                // disable Q1_0 until implementation
+                if (a->type == GGML_TYPE_Q1_0 || b->type == GGML_TYPE_Q1_0) {
+                    return false;
+                }
+
                 if (a->ne[3] != b->ne[3]) {
                     return false;
                 }
 
                 ggml_type src0_type = op->src[0]->type;
+
+
 
                 // TODO: The configuration below needs more work to be supported with oneDNN
                 if (ggml_is_permuted(a) && !ggml_is_contiguous(a) &&
