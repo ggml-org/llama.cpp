@@ -1,3 +1,5 @@
+import { NEWLINE_SEPARATOR } from '$lib/constants';
+
 /**
  * Returns a shortened preview of the provided content capped at the given length.
  * Appends an ellipsis when the content exceeds the maximum.
