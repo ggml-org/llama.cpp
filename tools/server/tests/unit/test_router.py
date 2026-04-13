@@ -9,6 +9,19 @@ def create_server():
     server = ServerPreset.router()
 
 
+def test_router_props():
+    global server
+    server.models_max = 2
+    server.no_models_autoload = True
+    server.start()
+    res = server.make_request("GET", "/props")
+    assert res.status_code == 200
+    assert res.body["role"] == "router"
+    assert res.body["max_instances"] == 2
+    assert res.body["models_autoload"] is False
+    assert res.body["build_info"].startswith("b")
+
+
 @pytest.mark.parametrize(
     "model,success",
     [
