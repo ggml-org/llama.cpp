@@ -11,7 +11,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 #include "hvx-utils.h"
 
@@ -32,10 +32,10 @@ struct htp_copy_context {
     void (*copy)(struct htp_copy_context * ct, struct htp_ops_context * octx, int nth, int ith);
 };
 
-#define cpy_preamble                       \
-    struct htp_tensor *src0 = &octx->src0; \
-    struct htp_tensor *dst  = &octx->dst;  \
-                                           \
+#define cpy_preamble                              \
+    const struct htp_tensor *src0 = octx->src[0]; \
+    const struct htp_tensor *dst  = octx->dst;    \
+                                                  \
     const uint32_t ne00 = src0->ne[0];     \
     const uint32_t ne01 = src0->ne[1];     \
     const uint32_t ne02 = src0->ne[2];     \

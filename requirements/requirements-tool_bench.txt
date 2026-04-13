@@ -8,5 +8,5 @@ pandas~=2.2.3
 prometheus-client~=0.20.0
 requests~=2.32.3
 wget~=3.2
-typer~=0.15.1
+typer~=0.24.1
 seaborn~=0.13.2

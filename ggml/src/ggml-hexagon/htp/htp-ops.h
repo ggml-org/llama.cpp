@@ -1,65 +1,154 @@
 #ifndef HTP_OPS_H
 #define HTP_OPS_H
 
-#include "htp-ctx.h"
-#include "htp-msg.h"
-#include "worker-pool.h"
-
 #include <assert.h>
-#include <stdint.h>
 
-#include <hex-fastdiv.h>
+// ggml-common.h must be included prio to this header
 
-// ggml-common.h must be included prior to this header
-
-struct htp_spad {
-    uint8_t * data;
-    size_t    stride;
-    size_t    size;
-    size_t    size_per_thread;
+enum htp_status {
+    HTP_STATUS_OK             = 1,
+    HTP_STATUS_INTERNAL_ERR   = 2,
+    HTP_STATUS_NO_SUPPORT     = 3,
+    HTP_STATUS_INVAL_PARAMS   = 4,
+    HTP_STATUS_VTCM_TOO_SMALL = 5,
 };
 
-struct htp_ops_context {
-    struct htp_context * ctx;
+// First set of values must match the ggml_type.
+// Duplicated here because we can't include full ggml.h in the htp build.
+// We have some static_asserts in the cpp code to ensure things are in sync.
+enum htp_data_type {
+    HTP_TYPE_F32    = 0,
+    HTP_TYPE_F16    = 1,
+    HTP_TYPE_Q4_0   = 2,
+    HTP_TYPE_Q8_0   = 8,
+    HTP_TYPE_IQ4_NL = 20,
+    HTP_TYPE_I32    = 26,
+    HTP_TYPE_I64    = 27,
+    HTP_TYPE_MXFP4  = 39,
 
-    enum htp_op op;
-    int32_t     op_params[HTP_MAX_OP_PARAMS / sizeof(int32_t)];
+    // types used internally for repack, dyn.quant, etc
+    HTP_TYPE_Q4_0x4x2 = 200,
+    HTP_TYPE_Q8_0x4x2,
+    HTP_TYPE_MXFP4x4x2,
 
-    struct htp_tensor src0;
-    struct htp_tensor src1;
-    struct htp_tensor src2;
-    struct htp_tensor src3;
-    struct htp_tensor src4;
-    struct htp_tensor dst;
-
-    struct htp_spad src0_spad;
-    struct htp_spad src1_spad;
-    struct htp_spad src2_spad;
-    struct htp_spad src3_spad;
-    struct htp_spad dst_spad;
-
-    worker_pool_context_t * wpool;      // worker pool
-    uint32_t                n_threads;  // num threads
-
-    uint32_t flags;
+    HTP_TYPE_INVALID
 };
 
-int op_matmul(struct htp_ops_context * octx);
-int op_matmul_id(struct htp_ops_context * octx);
-int op_binary(struct htp_ops_context * octx);
-int op_unary(struct htp_ops_context * octx);
-int op_sum_rows(struct htp_ops_context * octx);
-int op_activations(struct htp_ops_context * octx);
-int op_softmax(struct htp_ops_context * octx);
-int op_add_id(struct htp_ops_context * octx);
-int op_rope(struct htp_ops_context * octx);
-int op_flash_attn_ext(struct htp_ops_context * octx);
-int op_set_rows(struct htp_ops_context * octx);
-int op_get_rows(struct htp_ops_context * octx);
-int op_cpy(struct htp_ops_context * octx);
-int op_repeat(struct htp_ops_context * octx);
-int op_argsort(struct htp_ops_context * octx);
-int op_ssm_conv(struct htp_ops_context * octx);
-int op_cumsum(struct htp_ops_context * octx);
+// Constats for internal types
+#define QK_Q4_0x4x2  256  // 4x Q4_0  blocks packed with next 4x Q4_0 blocks (size in bytes 128)
+#define QK_Q8_0x4x2  256  // 4x Q8_0  blocks concat with next 4x Q8_0 blocks
+#define QK_MXFP4x4x2 256  // 4x MXFP4 blocks concat with next 4x MXFP4 blocks
+
+
+// Mask to enable various stages of the Ops.
+// Used for debugging and profiling.
+enum htp_op_mask {
+    HTP_OPMASK_QUEUE    = (1 << 0),  // Enable Queueing (ie calls into the DSP)
+    HTP_OPMASK_COMPUTE  = (1 << 1),  // Enable Compute
+};
+
+// Do not reorder first 4 (used as an index)
+enum htp_op_code {
+    HTP_OP_MUL = 0,
+    HTP_OP_ADD = 1,
+    HTP_OP_SUB = 2,
+    HTP_OP_DIV = 3,
+    HTP_OP_MUL_MAT,
+    HTP_OP_MUL_MAT_ID,
+    HTP_OP_RMS_NORM,
+    HTP_OP_UNARY_SILU,
+    HTP_OP_UNARY_GELU,
+    HTP_OP_UNARY_SIGMOID,
+    HTP_OP_UNARY_EXP,
+    HTP_OP_UNARY_NEG,
+    HTP_OP_UNARY_SOFTPLUS,
+    HTP_OP_GLU_SWIGLU,
+    HTP_OP_GLU_SWIGLU_OAI,
+    HTP_OP_GLU_GEGLU,
+    HTP_OP_SOFTMAX,
+    HTP_OP_ADD_ID,
+    HTP_OP_ROPE,
+    HTP_OP_FLASH_ATTN_EXT,
+    HTP_OP_SET_ROWS,
+    HTP_OP_GET_ROWS,
+    HTP_OP_SCALE,
+    HTP_OP_CPY,
+    HTP_OP_ARGSORT,
+    HTP_OP_SQR,
+    HTP_OP_SQRT,
+    HTP_OP_SUM_ROWS,
+    HTP_OP_SSM_CONV,
+    HTP_OP_REPEAT,
+    HTP_OP_CUMSUM,
+
+    HTP_OP_INVALID
+};
+
+#define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
+#define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
+#define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
+
+#define HTP_OP_MAX_BUFS    8
+#define HTP_OP_MAX_REQS    256
+#define HTP_OP_MAX_TENSORS (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
+#define HTP_OP_MAX_VMEM    (3221225472u)
+
+enum htp_tensor_flags {
+    HTP_TENSOR_COMPUTE = (1U << 0), // Tensor buffer temporal compute data (not weights)
+    HTP_TENSOR_FLUSHED = (1U << 1)  // Tensor buffer has been flushed (set by the NPU)
+};
+
+// Tensor descriptor
+struct htp_tensor {
+    uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
+    uint32_t size;                 // Data size in bytes
+    uint32_t flags;                // Buffer / tensor flags
+    uint16_t type;                 // Data type
+    uint16_t bi;                   // Buffer index
+    uint32_t ne[HTP_OP_MAX_DIMS];  // Number of elements
+    uint32_t nb[HTP_OP_MAX_DIMS];  // Stride in bytes (see ggml.h ggml_tensor)
+};
+
+// Buffer descriptor
+struct htp_buf_desc {
+    uint64_t base;     // base address
+    uint64_t size;     // total size
+    uint32_t flags;    // buffer flags (unused)
+    uint32_t fd;       // file descriptor
+};
+
+enum htp_op_flags {
+    HTP_OPFLAGS_SKIP_COMPUTE  = (1U << 0), // Skip actual computation (used for profiling)
+};
+
+// Op descriptor
+struct htp_op_desc {
+    uint32_t opcode;                    // GGML/HTP Op
+    uint32_t flags;                     // Op flags
+    int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
+    uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
+    uint16_t dst;                       // Output tensor index
+
+    // the rest is filled in-place by the NPU
+    uint32_t prof_usecs;                // Number of usec per request
+    uint32_t prof_cycles;               // Number of cycles per request
+    uint32_t prof_pkts;                 // Number of instruction packets per request
+    uint32_t unused;
+};
+
+struct htp_opbatch_req {
+    uint32_t n_bufs;      // Number of buffers
+    uint32_t n_tensors;   // Number of tensors
+    uint32_t n_ops;       // Number of ops
+    uint32_t flags;       // unused
+    // struct htp_buf_desc  bufs[];    -- dspqueue buf 0
+    // struct htp_tensor    tensors[]; -- dspqueue buf 0
+    // struct htp_op_desc   ops[];     -- dspqueue buf 0
+};
+
+struct htp_opbatch_rsp {
+    uint32_t status;     // HTP_STATUS_...
+    // struct htp_op_req ops[];     -- dspqueue buf 0
+};
 
 #endif /* HTP_OPS_H */
