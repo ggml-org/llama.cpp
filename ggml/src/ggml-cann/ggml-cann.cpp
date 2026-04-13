@@ -1768,6 +1768,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
         case GGML_OP_DUP:
             ggml_cann_dup(ctx, dst);
             break;
+        case GGML_OP_SET:
+            ggml_cann_set(ctx, dst);
+            break;
         case GGML_OP_ADD:
         case GGML_OP_ADD1:
             ggml_cann_binary_op<aclnn_add>(ctx, dst);
@@ -2363,6 +2366,10 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
  * @return bool Returns true if the operation is supported by the backend,
  *              otherwise false.
  */
+static bool ggml_backend_cann_has_acl_dtype(const ggml_tensor * tensor) {
+    return ggml_cann_type_mapping(tensor->type) != ACL_DT_UNDEFINED;
+}
+
 static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     switch (op->op) {
         case GGML_OP_UNARY:
@@ -2574,6 +2581,12 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_ACC:
         case GGML_OP_GROUP_NORM:
             return true;
+        case GGML_OP_SET:
+            return ggml_backend_cann_has_acl_dtype(op) &&
+                   ggml_backend_cann_has_acl_dtype(op->src[0]) &&
+                   ggml_backend_cann_has_acl_dtype(op->src[1]) &&
+                   op->type == op->src[0]->type &&
+                   op->type == op->src[1]->type;
         case GGML_OP_PAD:
             // TODO: add circular padding support for cann, see https://github.com/ggml-org/llama.cpp/pull/16985
             return ggml_get_op_params_i32(op, 8) == 0;

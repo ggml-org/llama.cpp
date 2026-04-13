@@ -1647,6 +1647,50 @@ void ggml_cann_cpy(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     ggml_cann_dup(ctx, dst);
 }
 
+void ggml_cann_set(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(ggml_is_contiguous(src0));
+
+    const size_t nb1    = ((int32_t *) dst->op_params)[0];
+    const size_t nb2    = ((int32_t *) dst->op_params)[1];
+    const size_t nb3    = ((int32_t *) dst->op_params)[2];
+    const size_t offset = ((int32_t *) dst->op_params)[3];
+    const bool   inplace= (bool)     ((int32_t *) dst->op_params)[4];
+
+    if (!inplace) {
+        ggml_cann_dup(ctx, dst);
+    }
+
+    // Build a view of dst with offset and custom strides matching src1's shape
+    int64_t view_ne[GGML_MAX_DIMS];
+    view_ne[0] = src1->ne[0];
+    view_ne[1] = src1->ne[1];
+    view_ne[2] = src1->ne[2];
+    view_ne[3] = src1->ne[3];
+
+    size_t view_nb[GGML_MAX_DIMS];
+    view_nb[0] = (size_t)ggml_element_size(dst);
+    view_nb[1] = nb1;
+    view_nb[2] = nb2;
+    view_nb[3] = nb3;
+
+    void * view_data = (char *)dst->data + offset;
+
+    acl_tensor_ptr acl_dst_view = ggml_cann_create_tensor(
+        view_data,
+        ggml_cann_type_mapping(dst->type),
+        (size_t)ggml_type_size(dst->type),
+        view_ne, view_nb, GGML_MAX_DIMS);
+
+    acl_tensor_ptr acl_src1 = ggml_cann_create_tensor(src1);
+
+    // Cop src1 into the dst view
+    cann_copy(ctx, acl_src1.get(), acl_dst_view.get());
+}
+
 /**
  * @brief Applies the softmax function to a tensor along a specified dimension.
  *

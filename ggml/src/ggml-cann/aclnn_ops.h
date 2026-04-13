@@ -1132,3 +1132,16 @@ void ggml_cann_op_unary_gated(std::function<void(ggml_backend_cann_context &, ac
  * @see GGML_CANN_CALL_ACLNN_OP for CANN operator invocation
  */
 void ggml_cann_out_prod(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief   Copies a sub-tensor into a specific region of a destination tensor.
+ *
+ * @details This function implements the GGML_OP_SET operation on the CANN backend.
+ *          If not inplace, it first copies src0 to dst (like DUP), then copies src1
+ *          into a view of dst at the specified offset and strides.
+ *
+ * @param ctx The CANN backend context for operation execution and memory management.
+ * @param dst The destination tensor. dst->src[0] is the base tensor, dst->src[1]
+ *            is the sub-tensor to set. op_params encode the strides and offset.
+ */
+void ggml_cann_set(ggml_backend_cann_context & ctx, ggml_tensor * dst);
