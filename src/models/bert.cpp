@@ -14,15 +14,13 @@ llm_build_bert::llm_build_bert(const llama_model & model, const llm_graph_params
         inp_pos = build_inp_pos();
     }
 
-    if (model.type_embd) {
-        res->remove_token_offset = true;
-        res->token_offset = llama_vocab_n_tokens(&model.vocab);
-    }
     // construct input embeddings (token, type, position)
     inpL = build_inp_embd(model.tok_embd);
 
+    // token types are hardcoded to zero ("Sentence A")
     if (model.type_embd) {
-        inpL = ggml_add(ctx0, inpL, ggml_get_rows(ctx0, model.type_embd, res->t_token_types));
+        ggml_tensor * type_row0 = ggml_view_1d(ctx0, model.type_embd, n_embd, 0);
+        inpL                    = ggml_add(ctx0, inpL, type_row0);
     }
     if (model.arch == LLM_ARCH_BERT) {
         inpL = ggml_add(ctx0, ggml_get_rows(ctx0, model.pos_embd, inp_pos), inpL);
