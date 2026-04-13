@@ -543,6 +543,27 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan(ggml_me
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gla(ggml_metal_library_t lib, const ggml_tensor * op) {
+    char base[256];
+    char name[256];
+
+    const int64_t C = op->ne[0];
+    const int64_t H = op->src[0]->ne[1];
+    GGML_ASSERT(op->src[4]->type == GGML_TYPE_F32);
+    GGML_ASSERT(C % H == 0);
+    GGML_ASSERT(C / H == 64);
+
+    snprintf(base, 256, "kernel_gated_linear_attn_%s", ggml_type_name(op->src[0]->type));
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rwkv(ggml_metal_library_t lib, const ggml_tensor * op) {
     char base[256];
     char name[256];
