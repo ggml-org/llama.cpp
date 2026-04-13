@@ -8823,6 +8823,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     }
 
 
+
+    // qwen3.5-122b-a10b (256 experts, 8 active, FFN=1024, hidden=3072, IQ2_S/IQ3_XXS/Q6_K)
+    for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
+        for (ggml_type type_a : {GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS, GGML_TYPE_Q6_K}) {
+            for (ggml_type type_b : {GGML_TYPE_F32}) {
+                // gate/up: 3072 -> 1024
+                test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 256, 8, false, 1024, bs, 3072));
+                // down: 1024 -> 3072
+                test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 256, 8, false, 3072, bs, 1024));
+            }
+        }
+    }
     // gpt-oss-20b
     for (int bs : {1, 4, 8, 512}) {
         for (ggml_type type_a : {GGML_TYPE_MXFP4}) {
