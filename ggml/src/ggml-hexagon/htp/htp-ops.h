@@ -157,6 +157,9 @@ struct htp_opbatch_req {
 
 struct htp_opbatch_rsp {
     uint32_t status;     // HTP_STATUS_...
+    uint32_t n_bufs;
+    uint32_t n_tensors;
+    uint32_t n_ops;
     // struct htp_op_req ops[];     -- dspqueue buf 0
 };
 

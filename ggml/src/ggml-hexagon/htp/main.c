@@ -773,7 +773,10 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
 
         struct htp_opbatch_rsp rsp;
-        rsp.status = HTP_STATUS_OK; // FIXME
+        rsp.status    = HTP_STATUS_OK;
+        rsp.n_bufs    = n_bufs;
+        rsp.n_tensors = n_tens;
+        rsp.n_ops     = n_ops;
 
         dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
         err = dspqueue_write(queue, 0, 1, &dbuf, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
