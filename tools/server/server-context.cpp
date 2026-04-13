@@ -1097,6 +1097,11 @@ private:
     std::vector<common_adapter_lora_info> construct_lora_list(const std::map<int, float> & config) const {
         std::vector<common_adapter_lora_info> output = params_base.lora_adapters; // copy
         for (size_t i = 0; i < output.size(); ++i) {
+            // unloaded adapters (null ptr) must stay at scale 0
+            if (output[i].ptr == nullptr) {
+                output[i].scale = 0.0f;
+                continue;
+            }
             auto it = config.find(i);
             if (it != config.end()) {
                 output[i].scale = it->second;
@@ -1983,6 +1988,116 @@ private:
                     params_base.lora_adapters = new_loras;
                     auto res = std::make_unique<server_task_result_apply_lora>();
                     res->id = task.id;
+                    queue_results.send(std::move(res));
+                } break;
+            case SERVER_TASK_TYPE_LOAD_LORA:
+                {
+                    const std::string & path = task.load_lora.path;
+
+                    SRV_INF("loading lora adapter '%s'\n", path.c_str());
+
+                    llama_adapter_lora * adapter = llama_adapter_lora_init(model, path.c_str());
+                    if (!adapter) {
+                        send_error(task, "failed to load lora adapter: " + path);
+                        break;
+                    }
+
+                    // extract metadata
+                    char buf[1024] = {0};
+                    common_adapter_lora_info info;
+                    info.path  = path;
+                    info.scale = task.load_lora.scale;
+                    info.ptr   = adapter;
+
+                    if (llama_adapter_meta_val_str(adapter, "adapter.lora.task_name", buf, sizeof(buf)) >= 0) {
+                        info.task_name = buf;
+                    }
+                    buf[0] = '\0';
+                    if (llama_adapter_meta_val_str(adapter, "adapter.lora.prompt_prefix", buf, sizeof(buf)) >= 0) {
+                        info.prompt_prefix = buf;
+                    }
+
+                    // transfer ownership to keep adapter alive
+                    llama_adapter_lora_ptr ptr(adapter);
+
+                    // reuse first null slot, or append
+                    int32_t id_new = -1;
+                    for (int32_t i = 0; i < (int32_t) params_base.lora_adapters.size(); ++i) {
+                        if (params_base.lora_adapters[i].ptr == nullptr) {
+                            id_new = i;
+                            break;
+                        }
+                    }
+
+                    if (id_new >= 0) {
+                        params_base.lora_adapters[id_new] = info;
+
+                        // find and replace the null ownership entry
+                        auto & lora_ptrs = llama_init->lora();
+                        bool replaced = false;
+                        for (auto & lp : lora_ptrs) {
+                            if (lp == nullptr) {
+                                lp = std::move(ptr);
+                                replaced = true;
+                                break;
+                            }
+                        }
+                        if (!replaced) {
+                            lora_ptrs.emplace_back(std::move(ptr));
+                        }
+                    } else {
+                        id_new = (int32_t) params_base.lora_adapters.size();
+                        params_base.lora_adapters.push_back(info);
+                        llama_init->lora().emplace_back(std::move(ptr));
+                    }
+
+                    SRV_INF("loaded lora adapter idx=%d path='%s' scale=%f\n", id_new, path.c_str(), info.scale);
+
+                    auto res = std::make_unique<server_task_result_load_lora>();
+                    res->id      = task.id;
+                    res->id_lora = id_new;
+                    res->path    = path;
+                    res->scale   = info.scale;
+                    queue_results.send(std::move(res));
+                } break;
+            case SERVER_TASK_TYPE_UNLOAD_LORA:
+                {
+                    int32_t id_lora = task.unload_lora_id;
+                    auto & loras = params_base.lora_adapters;
+
+                    if (id_lora < 0 || id_lora >= (int32_t) loras.size() || loras[id_lora].ptr == nullptr) {
+                        send_error(task, "invalid or already unloaded lora adapter id: " + std::to_string(id_lora), ERROR_TYPE_NOT_FOUND);
+                        break;
+                    }
+
+                    llama_adapter_lora * adapter = loras[id_lora].ptr;
+
+                    SRV_INF("unloading lora adapter idx=%d path='%s'\n", id_lora, loras[id_lora].path.c_str());
+
+                    // deactivate on all slots
+                    for (auto & slot : slots) {
+                        if (id_lora < (int32_t) slot.lora.size()) {
+                            slot.lora[id_lora].ptr   = nullptr;
+                            slot.lora[id_lora].scale = 0.0f;
+                        }
+                    }
+
+                    // null out the registry entry (don't erase, keeps IDs stable)
+                    loras[id_lora].ptr   = nullptr;
+                    loras[id_lora].scale = 0.0f;
+
+                    // release ownership, which calls llama_adapter_lora_free
+                    auto & lora_ptrs = llama_init->lora();
+                    for (auto & lp : lora_ptrs) {
+                        if (lp.get() == adapter) {
+                            lp.reset();
+                            break;
+                        }
+                    }
+
+                    auto res = std::make_unique<server_task_result_unload_lora>();
+                    res->id      = task.id;
+                    res->id_lora = id_lora;
                     queue_results.send(std::move(res));
                 } break;
         }
@@ -4066,6 +4181,73 @@ void server_routes::init_routes() {
         }
 
         GGML_ASSERT(dynamic_cast<server_task_result_apply_lora*>(result.get()) != nullptr);
+        res->ok(result->to_json());
+        return res;
+    };
+
+    this->post_lora_adapters_load = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        if (!body.contains("path") || !body.at("path").is_string()) {
+            res->error(format_error_response("\"path\" is required and must be a string", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_LOAD_LORA);
+            task.id              = rd.get_new_id();
+            task.load_lora.path  = body.at("path").get<std::string>();
+            task.load_lora.scale = json_value(body, "scale", 1.0f);
+            rd.post_task(std::move(task));
+        }
+
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_load_lora*>(result.get()) != nullptr);
+        res->ok(result->to_json());
+        return res;
+    };
+
+    this->post_lora_adapters_unload = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        if (!body.contains("id") || !body.at("id").is_number_integer()) {
+            res->error(format_error_response("\"id\" is required and must be an integer", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_UNLOAD_LORA);
+            task.id              = rd.get_new_id();
+            task.unload_lora_id  = body.at("id").get<int32_t>();
+            rd.post_task(std::move(task));
+        }
+
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_unload_lora*>(result.get()) != nullptr);
         res->ok(result->to_json());
         return res;
     };

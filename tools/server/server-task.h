@@ -26,6 +26,8 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
+    SERVER_TASK_TYPE_LOAD_LORA,
+    SERVER_TASK_TYPE_UNLOAD_LORA,
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -167,6 +169,16 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
+
+    // used by SERVER_TASK_TYPE_LOAD_LORA
+    struct load_lora {
+        std::string path;
+        float       scale = 1.0f;
+    };
+    load_lora load_lora;
+
+    // used by SERVER_TASK_TYPE_UNLOAD_LORA
+    int32_t unload_lora_id = -1;
 
     server_task() = default;
 
@@ -562,6 +574,20 @@ struct server_task_result_get_lora : server_task_result {
 };
 
 struct server_task_result_apply_lora : server_task_result {
+    virtual json to_json() override;
+};
+
+struct server_task_result_load_lora : server_task_result {
+    int32_t     id_lora;
+    std::string path;
+    float       scale;
+
+    virtual json to_json() override;
+};
+
+struct server_task_result_unload_lora : server_task_result {
+    int32_t id_lora;
+
     virtual json to_json() override;
 };
 

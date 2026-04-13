@@ -201,9 +201,13 @@ int main(int argc, char ** argv) {
     ctx_http.post("/tokenize",                 ex_wrapper(routes.post_tokenize));
     ctx_http.post("/detokenize",               ex_wrapper(routes.post_detokenize));
     ctx_http.post("/apply-template",           ex_wrapper(routes.post_apply_template));
+ 
     // LoRA adapters hotswap
-    ctx_http.get ("/lora-adapters",            ex_wrapper(routes.get_lora_adapters));
-    ctx_http.post("/lora-adapters",            ex_wrapper(routes.post_lora_adapters));
+    ctx_http.get ("/lora-adapters",        ex_wrapper(routes.get_lora_adapters));
+    ctx_http.post("/lora-adapters",        ex_wrapper(routes.post_lora_adapters));
+    ctx_http.post("/lora-adapters/load",   ex_wrapper(routes.post_lora_adapters_load));
+    ctx_http.post("/lora-adapters/unload", ex_wrapper(routes.post_lora_adapters_unload));
+
     // Save & load slots
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
