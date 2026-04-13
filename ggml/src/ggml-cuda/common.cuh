@@ -1091,6 +1091,9 @@ struct ggml_cuda_device_info {
 
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
 
+    // peer_access[i][j] = true if GPU i can directly access GPU j's memory (P2P enabled)
+    bool peer_access[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_DEVICES] = {};
+
     std::array<float, GGML_CUDA_MAX_DEVICES> default_tensor_split = {};
 
 #ifdef GGML_USE_NCCL

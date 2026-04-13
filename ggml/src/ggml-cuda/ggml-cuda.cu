@@ -334,6 +334,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
             CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, id, id_other));
             if (can_access_peer) {
                 CUDA_CHECK(cudaDeviceEnablePeerAccess(id_other, 0));
+                info.peer_access[id][id_other] = true;
             }
         }
     }
@@ -2978,6 +2979,13 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
 #ifdef GGML_CUDA_NO_PEER_COPY
             return false;
 #else
+            // Use peer copy only if P2P access was actually enabled at init time.
+            // Without P2P, cudaMemcpyPeerAsync stages through host memory and the
+            // CUDA event records only after the source-side DMA, not after the
+            // destination-side write — so the destination GPU can read stale data.
+            if (!ggml_cuda_info().peer_access[cuda_ctx_src->device][cuda_ctx_dst->device]) {
+                return false;
+            }
             CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
 #endif // GGML_CUDA_NO_PEER_COPY
         }
