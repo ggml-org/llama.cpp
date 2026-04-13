@@ -4258,9 +4258,7 @@ class Qwen2VLVisionModel(MmprojModel):
                 yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen2_5OmniModel")
-class Qwen25OmniModel(Qwen2VLVisionModel):
-    has_vision_encoder = True
+class Qwen25AudioModel(MmprojModel):
     has_audio_encoder = True
 
     def __init__(self, *args, **kwargs):
@@ -4275,12 +4273,6 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
         assert self.hparams_audio is not None
         self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["num_mel_bins"])
         self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("layer_norm_eps", 1e-5))
-
-    def get_vision_config(self) -> dict[str, Any] | None:
-        return self.global_config["thinker_config"].get("vision_config")
-
-    def get_audio_config(self) -> dict[str, Any] | None:
-        return self.global_config["thinker_config"].get("audio_config")
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # SinusoidsPositionEmbedding
@@ -4312,7 +4304,32 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
                 # this tensor is left unused in transformers code
                 # https://github.com/huggingface/transformers/blob/6e3063422c4b1c014aa60c32b9254fd2902f0f28/src/transformers/models/qwen2_5_omni/modular_qwen2_5_omni.py#L1809
                 return
-        yield from super().modify_tensors(data_torch, name, bid)
+            yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
+
+        return  # skip other tensors
+
+
+@ModelBase.register("Qwen2_5OmniModel")
+class Qwen25OmniModel(Qwen2VLVisionModel, Qwen25AudioModel):
+    has_audio_encoder = True
+    has_vision_encoder = True
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        return self.global_config["thinker_config"].get("vision_config")
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return self.global_config["thinker_config"].get("audio_config")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN25O)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "visual." in name:
+            yield from Qwen2VLVisionModel.modify_tensors(self, data_torch, name, bid)
+        elif "audio_tower." in name:
+            yield from Qwen25AudioModel.modify_tensors(self, data_torch, name, bid)
+        return  # skip other tensors
 
 
 @ModelBase.register("InternVisionModel")
@@ -4816,7 +4833,10 @@ class RND1Model(Qwen2MoeModel):
 class Qwen3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        assert self.hparams_vision is not None
+        if self.hparams_vision is None:
+            logger.info("No vision config found, skipping vision tensor processing")
+            return
+
         # Compute image_size if not present
         if "image_size" not in self.hparams_vision:
             # For Qwen3VL/Qwen3VLMoe, compute from num_position_embeddings
@@ -4837,7 +4857,9 @@ class Qwen3VLVisionModel(MmprojModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN3VL)
+        # in case mixed modalities, the arch will be handled by subclass
+        if not self.has_audio_encoder:
+            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN3VL)
         self.gguf_writer.add_vision_use_gelu(True)
 
         if self.hparams_vision is not None:
@@ -4925,11 +4947,64 @@ class Qwen3VLVisionModel(MmprojModel):
             return
 
         if name.startswith("visual."):
-            yield from super().modify_tensors(data_torch, name, bid)
-            return
+            yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
+        return  # skip other tensors
 
-        # Fall back to parent class for other tensors
-        yield from super().modify_tensors(data_torch, name, bid)
+
+@ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
+    has_audio_encoder = True
+    has_vision_encoder = True
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        if self.has_vision_encoder:
+            return self.global_config["thinker_config"].get("vision_config")
+        else:
+            return None
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        if self.has_audio_encoder:
+            return self.global_config["thinker_config"].get("audio_config")
+        else:
+            return None
+
+    def set_gguf_parameters(self):
+        if self.has_vision_encoder:
+            Qwen3VLVisionModel.set_gguf_parameters(self)
+            self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.QWEN3VL)
+        if self.has_audio_encoder:
+            Qwen25AudioModel.set_gguf_parameters(self)
+            self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.QWEN3A)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "visual." in name:
+            if not self.has_vision_encoder:
+                raise ValueError(f"Model does not have vision encoder, but found tensor {name}")
+            # need to transform vision tensor naming, so that modify_tensors() logic can be used correctly
+            name = name.replace("thinker.visual.", "model.visual.")
+            if ".merger_list." in name:
+                name = name.replace(".merger_list.", ".deepstack_merger_list.")
+                name = name.replace(".ln_q", ".norm")
+                name = name.replace(".mlp.0", ".linear_fc1")
+                name = name.replace(".mlp.2", ".linear_fc2")
+            elif ".merger." in name:
+                name = name.replace(".ln_q", ".norm")
+                name = name.replace(".mlp.0", ".linear_fc1")
+                name = name.replace(".mlp.2", ".linear_fc2")
+            yield from Qwen3VLVisionModel.modify_tensors(self, data_torch, name, bid)
+        elif "audio_tower." in name:
+            if not self.has_audio_encoder:
+                raise ValueError(f"Model does not have audio encoder, but found tensor {name}")
+            if "conv2d" in name and name.endswith(".bias"):
+                # transform conv2d bias [n_embd] --> [1, 1, n_embd]
+                data_torch = data_torch.unsqueeze(-1).unsqueeze(-1)
+            yield from Qwen25AudioModel.modify_tensors(self, data_torch, name, bid)
+
+
+@ModelBase.register("Qwen3ASRForConditionalGeneration")
+class Qwen3ASRMmprojModel(Qwen3OmniMmprojModel):
+    has_audio_encoder = True
+    has_vision_encoder = False
 
 
 @ModelBase.register("Glm4vForConditionalGeneration", "Glm4vMoeForConditionalGeneration", "GlmOcrForConditionalGeneration")
@@ -4992,6 +5067,8 @@ class Step3VLVisionModel(MmprojModel):
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
+        if ("mm.0." in new_name or "mm.1." in new_name) and new_name.endswith(".weight"):
+            return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -5030,9 +5107,10 @@ class Qwen3VLTextModel(Qwen3Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-
-        # Handle MRoPE (Multi-axis Rotary Position Embedding) for Qwen3-VL
-        vision_config = self.hparams.get("vision_config", {})
+        if "thinker_config" in self.hparams:
+            vision_config = self.hparams["thinker_config"].get("vision_config", {})
+        else:
+            vision_config = self.hparams.get("vision_config", {})
         deepstack_layer_num = len(vision_config.get("deepstack_visual_indexes", []))
         self.gguf_writer.add_num_deepstack_layers(deepstack_layer_num)
 
@@ -5096,6 +5174,70 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
             perm_up = up.permute(0, 2, 1).contiguous()
             yield from ModelBase.modify_tensors(self, perm_gate, mapped_gate, bid)
             yield from ModelBase.modify_tensors(self, perm_up, mapped_up, bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+class Qwen3OmniMoeTextModel(Qwen3VLMoeTextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3VLMOE
+
+    def set_vocab(self):
+        super().set_vocab()
+        # correct BOS/EOS tokens
+        with open(self.dir_model / "tokenizer_config.json", "r", encoding="utf-8") as f:
+            tokenizer_config = json.load(f)
+            added_tokens = tokenizer_config.get("added_tokens_decoder", {})
+            for token_id, data in added_tokens.items():
+                if data.get("content") == "<|im_end|>":
+                    self.gguf_writer.add_bos_token_id(int(token_id))
+                    self.gguf_writer.add_eos_token_id(int(token_id))
+                    break
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_num_deepstack_layers(0)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip vision and audio tensors - they go in the mmproj file
+        if "visual." in name or "audio_tower." in name \
+                or "talker." in name or "code2wav." in name:
+            return
+
+        name = name.replace("thinker.", "")
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Qwen3ASRForConditionalGeneration")
+class Qwen3ASRTextModel(Qwen3VLTextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3VL
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_num_deepstack_layers(0)
+
+    def set_vocab(self):
+        super().set_vocab()
+        # fix chat template, use correct chatml format
+        self.gguf_writer.add_chat_template("{% for message in messages %}{{'<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>' + '\\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}")
+        # correct BOS/EOS tokens
+        with open(self.dir_model / "tokenizer_config.json", "r", encoding="utf-8") as f:
+            tokenizer_config = json.load(f)
+            added_tokens = tokenizer_config.get("added_tokens_decoder", {})
+            for token_id, data in added_tokens.items():
+                if data.get("content") == "<|im_end|>":
+                    self.gguf_writer.add_bos_token_id(int(token_id))
+                    self.gguf_writer.add_eos_token_id(int(token_id))
+                    break
+
+    def modify_tensors(self, data_torch, name, bid):
+        # qwen3-omni
+        name = name.replace("thinker.", "")
+
+        # Skip vision and audio tensors - they go in the mmproj file
+        if "visual." in name or "audio_tower." in name \
+                or "talker." in name or "code2wav." in name:
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
