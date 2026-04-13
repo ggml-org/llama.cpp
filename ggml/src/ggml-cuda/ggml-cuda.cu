@@ -3572,58 +3572,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 }
             }
 
-            if (should_launch_concurrent_events) {
-                // Restore original node order within each concurrent region to enable fusion within streams
-
-                std::unordered_map<const ggml_tensor *, int> node_to_idx;
-                node_to_idx.reserve(cgraph->n_nodes);
-                for (int i = 0; i < cgraph->n_nodes; ++i) {
-                    node_to_idx[cgraph->nodes[i]] = i;
-                }
-
-                for (auto & [fork_node, event] : stream_ctx.concurrent_events) {
-                    // Find positions of all nodes from this event in the current graph
-                    std::vector<int> positions;
-                    positions.reserve(event.original_order.size());
-
-                    bool all_found = true;
-                    for (const ggml_tensor * orig_node : event.original_order) {
-                        auto it = node_to_idx.find(orig_node);
-                        if (it != node_to_idx.end()) {
-                            positions.push_back(it->second);
-                        } else {
-                            all_found = false;
-                            break;
-                        }
-                    }
-
-                    if (!all_found || positions.size() != event.original_order.size()) {
-                        continue;
-                    }
-
-                    // Sort positions to get contiguous range
-                    std::vector<int> sorted_positions = positions;
-                    std::sort(sorted_positions.begin(), sorted_positions.end());
-
-                    bool is_contiguous = true;
-                    for (size_t i = 1; i < sorted_positions.size(); ++i) {
-                        if (sorted_positions[i] != sorted_positions[i-1] + 1) {
-                            is_contiguous = false;
-                            break;
-                        }
-                    }
-
-                    if (!is_contiguous) {
-                        continue;
-                    }
-
-                    // Restore original order at the sorted positions
-                    int start_pos = sorted_positions[0];
-                    for (size_t i = 0; i < event.original_order.size(); ++i) {
-                        cgraph->nodes[start_pos + i] = const_cast<ggml_tensor *>(event.original_order[i]);
-                    }
-                }
-            } else {
+            if (!should_launch_concurrent_events) {
                 stream_ctx.concurrent_events.clear();
             }
 
@@ -4244,8 +4193,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
         }
         for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
             const ggml_tensor * src = cgraph->nodes[node_idx]->src[src_idx];
-            //TODO: check why nrows > 1 fails
-            if (node && !is_noop(node) && ggml_nrows(node) <= 1) {
+            if (node && !is_noop(node) && ggml_nrows(node) <= 8) {
                 fan_out[src] += 1;
             }
         }
@@ -4261,7 +4209,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     // See discussion: https://github.com/ggml-org/llama.cpp/pull/16991#issuecomment-3522620030
 
     const int min_fan_out = 3;
-    const int max_fan_out = 3;
+    const int max_fan_out = 4;
 
     // store {fork_idx, join_idx}
     std::vector<std::pair<int, int>> concurrent_node_ranges;
@@ -4337,90 +4285,71 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                     }
                 }
 
-                if (!found_branch && is_noop(curr_node)) {
-                    // we can put it in any branch because it will be ignored
-                    nodes_per_branch[0].push_back({ curr_node });
+                if (!found_branch) {
+                    // Assign non-branch nodes to first branch's stream.
+                    // Note: this is not correct but the most likely. is_valid() validates
+                    // this assumption and returns false is this node would be used elsewhere.
+                    nodes_per_branch[0].push_back(curr_node);
                 }
             }
 
             if (join_node) {
+                int fork_node_idx = node_indices[root_node];
+                int join_node_idx = node_indices[join_node];
+
+                // remove branches if they start beyond join_node
+                nodes_per_branch.erase(
+                    std::remove_if(nodes_per_branch.begin(), nodes_per_branch.end(),
+                        [&](const std::vector<const ggml_tensor *> & branch) {
+                            const ggml_tensor * seed = branch.front();
+                            int seed_idx = node_indices[seed];
+                            return seed_idx < fork_node_idx + 1 || seed_idx >= join_node_idx;
+                        }),
+                    nodes_per_branch.end());
+
+                if (nodes_per_branch.size() < 2) {
+                    continue; // not enough branches for concurrency
+                }
+
                 //Create ggml_cuda_concurrent_event
                 ggml_cuda_concurrent_event concurrent_event(nodes_per_branch.size());
                 concurrent_event.join_node = join_node;
 
-                for (size_t branch_idx = 0; branch_idx < nodes_per_branch.size(); branch_idx++) {
-                    for (const ggml_tensor * n : nodes_per_branch[branch_idx]) {
-                        concurrent_event.stream_mapping[n] = branch_idx + 1;
-                    }
-                }
-
-                int fork_node_idx = node_indices[root_node];
-                int join_node_idx = node_indices[join_node];
-
-                int       current_branch_idx = 0;
-                int       current_node_idx   = fork_node_idx + 1;
-                const int n_branches         = nodes_per_branch.size();
-
                 int total_branch_nodes = 0;
-                for (std::vector<const ggml_tensor *> branch_nodes : nodes_per_branch) {
+                for (std::vector<const ggml_tensor *> & branch_nodes : nodes_per_branch) {
                     total_branch_nodes += branch_nodes.size();
                 }
 
                 // there are other nodes in the middle which are unaccounted for
                 // usually (cpy) nodes, then ignore this fork
                 if (join_node_idx - fork_node_idx - 1 != total_branch_nodes) {
-                    GGML_LOG_DEBUG(
-                        "Skipping %s because the number of nodes in the middle is not equal to the total number of "
-                        "branch nodes %d != %d\n",
-                        root_node->name, join_node_idx - fork_node_idx - 1, total_branch_nodes);
                     continue;
                 }
 
-                // Save the original order of nodes in this region before interleaving
-                // This is used later to restore grouping for fusion within streams
-                concurrent_event.original_order.reserve(total_branch_nodes);
-                for (int i = fork_node_idx + 1; i < join_node_idx; ++i) {
-                    concurrent_event.original_order.push_back(cgraph->nodes[i]);
+                for (size_t branch_idx = 0; branch_idx < nodes_per_branch.size(); branch_idx++) {
+                    for (const ggml_tensor * n : nodes_per_branch[branch_idx]) {
+                        concurrent_event.stream_mapping[n] = branch_idx + 1;
+                        // tag branch node and its sources so the allocator doesn't recycle
+                        // their memory while concurrent streams still read/write it
+                        const_cast<ggml_tensor *>(n)->flags |= GGML_TENSOR_FLAG_NO_ALLOC_FREE;
+                        for (int si = 0; si < GGML_MAX_SRC; ++si) {
+                            const ggml_tensor * s = n->src[si];
+                            if (!s) continue;
+                            const_cast<ggml_tensor *>(s)->flags |= GGML_TENSOR_FLAG_NO_ALLOC_FREE;
+                            if (s->view_src) {
+                                const_cast<ggml_tensor *>(s->view_src)->flags |= GGML_TENSOR_FLAG_NO_ALLOC_FREE;
+                            }
+                        }
+                    }
                 }
 
                 std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event> & concurrent_events = cuda_ctx->stream_context().concurrent_events;
                 GGML_ASSERT(concurrent_events.find(root_node) == concurrent_events.end());
+
                 concurrent_events.emplace(root_node, std::move(concurrent_event));
-                GGML_LOG_DEBUG("Adding stream at node %s %p\n", root_node->name, root_node);
+                GGML_LOG_DEBUG("GRAPH_OPT: created event for %s: %zu branches, %d total nodes\n",
+                        root_node->name, nodes_per_branch.size(), total_branch_nodes);
                 concurrent_node_ranges.emplace_back(fork_node_idx, join_node_idx);
-
-                // interleave tensors to extend lifetimes so that ggml graph doesn't recycle them
-                // example transformation:
-                // [attn-norm, QMul, QNorm, QRope, KMul, KNorm, KRope, VMul, attn] ->
-                // [attn-norm, QMul, KMul, VMul, QNorm, VNorm, QRope, KRope, attn]
-                while (current_node_idx < join_node_idx) {
-                    std::vector<const ggml_tensor *> & branch_nodes = nodes_per_branch[current_branch_idx];
-
-                    bool has_node = false;
-                    for (std::vector<const ggml_tensor *> branch_node : nodes_per_branch) {
-                        has_node |= branch_node.size() > 0;
-                    }
-
-                    GGML_ASSERT(has_node);
-
-                    if (branch_nodes.empty()) {
-                        current_branch_idx = (current_branch_idx + 1) % n_branches;
-                        continue;
-                    }
-
-                    cgraph->nodes[current_node_idx] = const_cast<ggml_tensor *>(branch_nodes.front());
-                    current_node_idx++;
-                    branch_nodes.erase(branch_nodes.begin());
-
-                    // append all empty nodes
-                    while (!branch_nodes.empty() && is_noop(branch_nodes.front())) {
-                        cgraph->nodes[current_node_idx] = const_cast<ggml_tensor *>(branch_nodes.front());
-                        current_node_idx++;
-                        branch_nodes.erase(branch_nodes.begin());
-                    }
-
-                    current_branch_idx = (current_branch_idx + 1) % n_branches;
-                }
             }
         }
     }

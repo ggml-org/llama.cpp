@@ -1205,10 +1205,6 @@ struct ggml_cuda_concurrent_event {
     int                                          n_streams = 0;
     std::unordered_map<const ggml_tensor *, int> stream_mapping;
 
-    // Original order of nodes in this concurrent region (before interleaving)
-    // Used to restore grouping for fusion within streams
-    std::vector<const ggml_tensor *> original_order;
-
     const ggml_tensor * join_node;
 
     ggml_cuda_concurrent_event() = default;
@@ -1231,7 +1227,6 @@ struct ggml_cuda_concurrent_event {
     , fork_event(other.fork_event)
     , n_streams(other.n_streams)
     , stream_mapping(std::move(other.stream_mapping))
-    , original_order(std::move(other.original_order))
     , join_node(other.join_node) {
         other.fork_event = nullptr;
     }
@@ -1254,6 +1249,11 @@ struct ggml_cuda_concurrent_event {
             const int64_t       t_start = (int64_t) t->data;
             const int64_t       t_end   = t_start + ggml_nbytes(t);
 
+            // skip empty tensors
+            if (t_end == t_start) {
+                continue;
+            }
+
             // skip tensors that overlap with join_node's buffer.
             if ((t_start <= join_start && join_start < t_end) || (join_start <= t_start && t_start < join_end)) {
                 continue;
@@ -1274,6 +1274,11 @@ struct ggml_cuda_concurrent_event {
             const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
             const int64_t       t_start = (int64_t) t->data;
             const int64_t       t_end   = t_start + ggml_nbytes(t);
+
+            // skip empty tensors
+            if (t_end == t_start) {
+                continue;
+            }
 
             // skip tensors that overlap with join_node's buffer
             if ((t_start <= join_start && join_start < t_end) || (join_start <= t_start && t_start < join_end)) {
