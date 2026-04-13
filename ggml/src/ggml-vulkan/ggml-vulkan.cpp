@@ -2858,11 +2858,10 @@ struct vk_fa_tuning_params {
     }
 };
 
-static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc);
+static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc, ggml_type kv_type);
 static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc);
 
 static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type kv_type, bool f32acc) {
-    GGML_UNUSED(kv_type);
 
     vk_fa_tuning_params result{};
     result.path = FA_SCALAR;
@@ -2914,7 +2913,7 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     result.shmem_staging = (device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 && hsv < 256) ? 1 : 0;
 
-    if (!reduce_block_rows && !ggml_vk_flash_attn_scalar_shmem_support(device, result, hsk, hsv, f32acc)) {
+    if (!reduce_block_rows && !ggml_vk_flash_attn_scalar_shmem_support(device, result, hsk, hsv, f32acc, kv_type)) {
         result.block_rows /= 2;
     }
 
@@ -3445,21 +3444,47 @@ static void ggml_vk_load_shaders(vk_device& device) {
     if (device->fp16) {
         CREATE_FA(GGML_TYPE_F32, f32, FA_SCALAR, )
         CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_Q8_0, q8_0, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_Q4_1, q4_1, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_Q5_0, q5_0, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_Q5_1, q5_1, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_IQ4_NL, iq4_nl, FA_SCALAR, )
+
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+        if (device->integer_dot_product && device->subgroup_clustered) {
+            CREATE_FA(GGML_TYPE_Q4_0,     q4_0, FA_SCALAR, _int8)
+            CREATE_FA(GGML_TYPE_Q8_0,     q8_0, FA_SCALAR, _int8)
+            CREATE_FA(GGML_TYPE_Q4_1,     q4_1, FA_SCALAR, _int8)
+            CREATE_FA(GGML_TYPE_Q5_0,     q5_0, FA_SCALAR, _int8)
+            CREATE_FA(GGML_TYPE_Q5_1,     q5_1, FA_SCALAR, _int8)
+            CREATE_FA(GGML_TYPE_IQ4_NL, iq4_nl, FA_SCALAR, _int8)
+        } else
+#endif
+        {
+            CREATE_FA(GGML_TYPE_Q4_0,     q4_0, FA_SCALAR, )
+            CREATE_FA(GGML_TYPE_Q8_0,     q8_0, FA_SCALAR, )
+            CREATE_FA(GGML_TYPE_Q4_1,     q4_1, FA_SCALAR, )
+            CREATE_FA(GGML_TYPE_Q5_0,     q5_0, FA_SCALAR, )
+            CREATE_FA(GGML_TYPE_Q5_1,     q5_1, FA_SCALAR, )
+            CREATE_FA(GGML_TYPE_IQ4_NL, iq4_nl, FA_SCALAR, )
+        }
     } else {
         CREATE_FA(GGML_TYPE_F32, f32, FA_SCALAR, _fp32)
         CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, _fp32)
-        CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, _fp32)
-        CREATE_FA(GGML_TYPE_Q8_0, q8_0, FA_SCALAR, _fp32)
-        CREATE_FA(GGML_TYPE_Q4_1, q4_1, FA_SCALAR, _fp32)
-        CREATE_FA(GGML_TYPE_Q5_0, q5_0, FA_SCALAR, _fp32)
-        CREATE_FA(GGML_TYPE_Q5_1, q5_1, FA_SCALAR, _fp32)
-        CREATE_FA(GGML_TYPE_IQ4_NL, iq4_nl, FA_SCALAR, _fp32)
+
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+        if (device->integer_dot_product && device->subgroup_clustered) {
+            CREATE_FA(GGML_TYPE_Q4_0,     q4_0, FA_SCALAR, _fp32_int8)
+            CREATE_FA(GGML_TYPE_Q8_0,     q8_0, FA_SCALAR, _fp32_int8)
+            CREATE_FA(GGML_TYPE_Q4_1,     q4_1, FA_SCALAR, _fp32_int8)
+            CREATE_FA(GGML_TYPE_Q5_0,     q5_0, FA_SCALAR, _fp32_int8)
+            CREATE_FA(GGML_TYPE_Q5_1,     q5_1, FA_SCALAR, _fp32_int8)
+            CREATE_FA(GGML_TYPE_IQ4_NL, iq4_nl, FA_SCALAR, _fp32_int8)
+        } else
+#endif
+        {
+            CREATE_FA(GGML_TYPE_Q4_0,     q4_0, FA_SCALAR, _fp32)
+            CREATE_FA(GGML_TYPE_Q8_0,     q8_0, FA_SCALAR, _fp32)
+            CREATE_FA(GGML_TYPE_Q4_1,     q4_1, FA_SCALAR, _fp32)
+            CREATE_FA(GGML_TYPE_Q5_0,     q5_0, FA_SCALAR, _fp32)
+            CREATE_FA(GGML_TYPE_Q5_1,     q5_1, FA_SCALAR, _fp32)
+            CREATE_FA(GGML_TYPE_IQ4_NL, iq4_nl, FA_SCALAR, _fp32)
+        }
     }
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     if (device->coopmat1_fa_support) {
@@ -8780,7 +8805,7 @@ static void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx
     }
 }
 
-static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc) {
+static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc, ggml_type kv_type) {
     GGML_UNUSED(f32acc);
     // Needs to be kept up to date on shader changes
     const uint32_t wg_size = params.workgroup_size;
@@ -8789,21 +8814,51 @@ static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, con
 
     const uint32_t float_type_size = device->fp16 ? sizeof(ggml_fp16_t) : sizeof(float);
 
+    const bool mmq = device->integer_dot_product && device->subgroup_clustered &&
+                     (kv_type == GGML_TYPE_Q4_0 || kv_type == GGML_TYPE_Q4_1 ||
+                      kv_type == GGML_TYPE_Q5_0 || kv_type == GGML_TYPE_Q5_1 ||
+                      kv_type == GGML_TYPE_Q8_0 || kv_type == GGML_TYPE_IQ4_NL);
+
     // tmpsh is overestimated slightly
     const uint32_t tmpsh = wg_size * sizeof(float);
     const uint32_t tmpshv4 = wg_size * 4 * float_type_size;
 
     const uint32_t masksh = Bc * (Br + 1) * float_type_size;
 
-    const uint32_t Qf = Br * (hsk / 4 + 1) * 4 * float_type_size;
+    uint32_t Qf, kvsh, kblocksh_size;
+    if (mmq) {
+        // block_b_cache: int32_t qs[8] + FLOAT_TYPEV2 ds
+        const uint32_t block_b_size = 8 * sizeof(int32_t) + 2 * float_type_size;
+        Qf = Br * (hsk / 32) * block_b_size;
 
-    const uint32_t D = std::max(hsk, hsv);
-    const uint32_t kvsh = params.shmem_staging ? Bc * (D / 4 + 1) * 4 * float_type_size : 4 * float_type_size;
+        // kvsh uses D = HSV (K goes through kblocksh instead)
+        kvsh = params.shmem_staging ? Bc * (hsv / 4 + 1) * 4 * float_type_size : 4 * float_type_size;
 
-    const uint32_t total_size = tmpsh + tmpshv4 + masksh + Qf + kvsh;
+        // block_a_cache size depends on quant type
+        uint32_t block_a_size;
+        switch (kv_type) {
+            case GGML_TYPE_Q4_0:  block_a_size = 4 * sizeof(uint32_t) + float_type_size; break;
+            case GGML_TYPE_Q4_1:  block_a_size = 4 * sizeof(uint32_t) + 2 * float_type_size; break;
+            case GGML_TYPE_Q5_0:  block_a_size = 4 * sizeof(uint32_t) + sizeof(uint32_t) + float_type_size; break;
+            case GGML_TYPE_Q5_1:  block_a_size = 4 * sizeof(uint32_t) + sizeof(uint32_t) + 2 * float_type_size; break;
+            case GGML_TYPE_Q8_0:
+            case GGML_TYPE_IQ4_NL: block_a_size = 8 * sizeof(int32_t) + float_type_size; break;
+            default: block_a_size = 0; break;
+        }
+        kblocksh_size = params.shmem_staging ? Bc * (hsk / 32) * block_a_size : block_a_size;
+    } else {
+        Qf = Br * (hsk / 4 + 1) * 4 * float_type_size;
+
+        const uint32_t D = std::max(hsk, hsv);
+        kvsh = params.shmem_staging ? Bc * (D / 4 + 1) * 4 * float_type_size : 4 * float_type_size;
+
+        kblocksh_size = 0;
+    }
+
+    const uint32_t total_size = tmpsh + tmpshv4 + masksh + Qf + kvsh + kblocksh_size;
     const bool supported = total_size <= device->properties.limits.maxComputeSharedMemorySize;
 
-    VK_LOG_DEBUG("ggml_vk_flash_attn_scalar_shmem_support(HSK=" << hsk << ", HSV=" << hsv << ", total_size=" << total_size << ", supported=" << supported);
+    VK_LOG_DEBUG("ggml_vk_flash_attn_scalar_shmem_support(HSK=" << hsk << ", HSV=" << hsv << ", mmq=" << mmq << ", total_size=" << total_size << ", supported=" << supported);
 
     return supported;
 }
