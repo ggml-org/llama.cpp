@@ -37,6 +37,7 @@ import {
 	SETTING_CONFIG_DEFAULT,
 	USER_OVERRIDES_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { serverStore } from '$lib/stores/server.svelte';
 import {
@@ -121,6 +122,13 @@ class SettingsStore {
 				...SETTING_CONFIG_DEFAULT,
 				...savedVal
 			};
+
+			// Default sendOnEnter to false on mobile when the user has no saved preference
+			if (!('sendOnEnter' in savedVal)) {
+				if (new IsMobile().current) {
+					this.config.sendOnEnter = false;
+				}
+			}
 
 			// Load user overrides
 			const savedOverrides = JSON.parse(

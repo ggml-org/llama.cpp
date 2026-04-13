@@ -69,6 +69,10 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
                 auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -332,58 +336,36 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     const auto & inputs      = ctx.inputs;
     bool         force_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
+    auto until_suffix = p.rule("until-suffix", p.until(arguments.value_suffix));
+
     common_peg_parser tool_choice = p.choice();
 
     foreach_function(inputs.tools, [&](const json & tool) {
         const auto &          func       = tool.at("function");
         std::string           name       = func.at("name");
-        const auto &          params     = func.contains("parameters") ? func.at("parameters") : json::object();
+        auto                  params     = func.contains("parameters") ? func.at("parameters") : json::object();
         const auto &          properties = params.contains("properties") ? params.at("properties") : json::object();
+
         std::set<std::string> required;
+        if (params.contains("required")) {
+            params.at("required").get_to(required);
+        }
+
+        auto schema_info = common_schema_info();
+        schema_info.resolve_refs(params);
 
         // Build parser for each argument, separating required and optional
         std::vector<common_peg_parser> required_parsers;
         std::vector<common_peg_parser> optional_parsers;
         for (const auto & [param_name, param_schema] : properties.items()) {
-            bool        is_required = required.find(param_name) != required.end();
-            std::string type        = "object";
-            if (param_schema.contains("type")) {
-                const auto & type_obj = param_schema.at("type");
-                if (type_obj.is_string()) {
-                    type_obj.get_to(type);
-                } else if (type_obj.is_array()) {
-                    // Handle nullable types like ["string", "null"]
-                    for (const auto & t : type_obj) {
-                        if (t.is_string() && t.get<std::string>() != "null") {
-                            type = t.get<std::string>();
-                            break;
-                        }
-                    }
-                } else if (type_obj.is_object()) {
-                    if (type_obj.contains("type") && type_obj.at("type").is_string()) {
-                        type_obj.at("type").get_to(type);
-                    }
-                }
-            }
-            // Infer string type from enum values when type is unspecified
-            if (type == "object" && param_schema.contains("enum")) {
-                const auto & enum_vals = param_schema.at("enum");
-                if (enum_vals.is_array()) {
-                    for (const auto & v : enum_vals) {
-                        if (v.is_string()) {
-                            type = "string";
-                            break;
-                        }
-                    }
-                }
-            }
+            bool is_required = required.find(param_name) != required.end();
 
             auto arg =
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
                                            arguments.name_suffix) +
                            arguments.value_prefix +
-                           (type == "string" ?
-                                p.tool_arg_string_value(p.schema(p.until(arguments.value_suffix),
+                           (schema_info.resolves_to_string(param_schema) ?
+                                p.tool_arg_string_value(p.schema(until_suffix,
                                                                  "tool-" + name + "-arg-" + param_name + "-schema",
                                                                  param_schema, true)) :
                                 p.tool_arg_json_value(p.schema(
@@ -414,7 +396,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
             for (const auto & opt : optional_parsers) {
                 any_opt |= opt;
             }
-            args_seq = args_seq + p.repeat(p.space() + any_opt, 0, (int) optional_parsers.size());
+            args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
         }
 
         if (!arguments.start.empty()) {

@@ -198,35 +198,38 @@ struct img_tool {
 private:
     // Bilinear resize function
     static void resize_bilinear(const clip_image_u8 & src, clip_image_u8 & dst, int target_width, int target_height) {
-        GGML_ASSERT(src.nx >= 2 && src.ny >= 2);
+        if (src.nx == 0 || src.ny == 0) { dst.nx = dst.ny = 0; dst.buf.clear(); return; }
+        if (target_width  <= 0) target_width  = 1;
+        if (target_height <= 0) target_height = 1;
+
         dst.nx = target_width;
         dst.ny = target_height;
         dst.buf.resize(3 * target_width * target_height);
 
-        float x_ratio = static_cast<float>(src.nx - 1) / target_width;
-        float y_ratio = static_cast<float>(src.ny - 1) / target_height;
+        float x_ratio = target_width  > 1 ? static_cast<float>(src.nx - 1) / (target_width  - 1) : 0.0f;
+        float y_ratio = target_height > 1 ? static_cast<float>(src.ny - 1) / (target_height - 1) : 0.0f;
 
-        for (int y = 0; y < target_height; y++) {
-            for (int x = 0; x < target_width; x++) {
-                float px = x_ratio * x;
-                float py = y_ratio * y;
-                int x_floor = std::min(static_cast<int>(px), src.nx - 2);
-                int y_floor = std::min(static_cast<int>(py), src.ny - 2);
-                float x_lerp = px - x_floor;
-                float y_lerp = py - y_floor;
+        for (int y = 0; y < target_height; ++y) {
+            for (int x = 0; x < target_width; ++x) {
+                float px = x * x_ratio;
+                float py = y * y_ratio;
 
-                for (int c = 0; c < 3; c++) {
-                    float top = lerp(
-                        static_cast<float>(src.buf[3 * (y_floor * src.nx + x_floor) + c]),
-                        static_cast<float>(src.buf[3 * (y_floor * src.nx + (x_floor + 1)) + c]),
-                        x_lerp
-                    );
-                    float bottom = lerp(
-                        static_cast<float>(src.buf[3 * ((y_floor + 1) * src.nx + x_floor) + c]),
-                        static_cast<float>(src.buf[3 * ((y_floor + 1) * src.nx + (x_floor + 1)) + c]),
-                        x_lerp
-                    );
-                    dst.buf[3 * (y * target_width + x) + c] = static_cast<uint8_t>(lerp(top, bottom, y_lerp));
+                int x0 = std::min(static_cast<int>(px), src.nx - 1);
+                int y0 = std::min(static_cast<int>(py), src.ny - 1);
+                int x1 = std::min(x0 + 1, src.nx - 1);
+                int y1 = std::min(y0 + 1, src.ny - 1);
+
+                float xf = px - x0;
+                float yf = py - y0;
+
+                for (int c = 0; c < 3; ++c) {
+                    float top    = lerp(static_cast<float>(src.buf[3 * (y0 * src.nx + x0) + c]),
+                                        static_cast<float>(src.buf[3 * (y0 * src.nx + x1) + c]),
+                                        xf);
+                    float bottom = lerp(static_cast<float>(src.buf[3 * (y1 * src.nx + x0) + c]),
+                                        static_cast<float>(src.buf[3 * (y1 * src.nx + x1) + c]),
+                                        xf);
+                    dst.buf[3 * (y * target_width + x) + c] = static_cast<uint8_t>(lerp(top, bottom, yf));
                 }
             }
         }
