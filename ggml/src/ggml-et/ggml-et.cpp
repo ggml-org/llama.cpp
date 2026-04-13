@@ -454,6 +454,7 @@ static const char * ggml_backend_et_get_name(ggml_backend_t backend) {
 
 static void ggml_backend_et_free(ggml_backend_t backend) {
     ggml_backend_et_context * et_ctx = (ggml_backend_et_context *)backend->context;
+    std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
 
     // Clean up kernels on this device before freeing backend
     ggml_backend_dev_t dev = ggml_backend_et_reg_get_device(ggml_backend_et_reg(), et_ctx->devidx);
@@ -466,6 +467,21 @@ static void ggml_backend_et_free(ggml_backend_t backend) {
         }
 
         ggml_et_unload_all_kernels(dev_ctx);
+
+        if (runtime) {
+            if (dev_ctx->trace_buffer) {
+                runtime->freeDevice(dev_ctx->rtid, dev_ctx->trace_buffer);
+                dev_ctx->trace_buffer = nullptr;
+            }
+            if (dev_ctx->uberkernel.device_insts) {
+                runtime->freeDevice(dev_ctx->rtid, dev_ctx->uberkernel.device_insts);
+                dev_ctx->uberkernel.device_insts = nullptr;
+            }
+            if (dev_ctx->uberkernel.device_params) {
+                runtime->freeDevice(dev_ctx->rtid, dev_ctx->uberkernel.device_params);
+                dev_ctx->uberkernel.device_params = nullptr;
+            }
+        }
     }
 
     delete et_ctx;
@@ -584,6 +600,7 @@ static bool ggml_et_can_fuse(const struct ggml_cgraph * cgraph, int node_idx,
 
 static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)backend->device->context;
+    ggml_et_uberkernel_begin_graph(&dev_ctx->uberkernel);
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
@@ -761,9 +778,20 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 break;
 
             default:
+                ggml_et_uberkernel_abort_graph(&dev_ctx->uberkernel);
                 GGML_LOG_ERROR("ET: Unsupported operation in graph: %s", ggml_op_name(node->op));
                 return GGML_STATUS_FAILED;
         }
+
+        if (ggml_et_uberkernel_failed(&dev_ctx->uberkernel)) {
+            ggml_et_uberkernel_abort_graph(&dev_ctx->uberkernel);
+            return GGML_STATUS_FAILED;
+        }
+    }
+
+    if (!ggml_et_uberkernel_end_graph(dev_ctx)) {
+        ggml_et_uberkernel_abort_graph(&dev_ctx->uberkernel);
+        return GGML_STATUS_FAILED;
     }
 
     return GGML_STATUS_SUCCESS;
@@ -1678,6 +1706,10 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 	    dev_ctx->name = GGML_ET_NAME + std::to_string(i);
 	    dev_ctx->desc = "ET device " + std::to_string(i);
 	    dev_ctx->total_mem = static_cast<size_t>(prop.memorySize_);
+        {
+            const char * env = getenv("GGML_ET_UBERKERNEL");
+            dev_ctx->uberkernel_enabled = env && env[0] != '\0' && strcmp(env, "0") != 0;
+        }
 	    // Add buffer type for device to device context.
 	    ggml_backend_et_buffer_type_context * bufty_ctx = new ggml_backend_et_buffer_type_context;
 	    bufty_ctx->devidx = i;
@@ -1692,6 +1724,18 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 	    dev_ctx->default_stream = ggml_et_runtime()->createStream(rtid);
 
 		dev_ctx->trace_buffer = ggml_et_runtime()->mallocDevice(rtid, ET_TRACE_BUFFER_SIZE);
+        dev_ctx->uberkernel.insts.reserve(256);
+        dev_ctx->uberkernel.params_blob.reserve(1 << 20);
+        dev_ctx->uberkernel.device_insts_capacity = 256 * sizeof(ggml_et_uberkernel_inst);
+        dev_ctx->uberkernel.device_params_capacity = 1 << 20;
+        dev_ctx->uberkernel.device_insts = ggml_et_runtime()->mallocDevice(rtid, dev_ctx->uberkernel.device_insts_capacity);
+        dev_ctx->uberkernel.device_params = ggml_et_runtime()->mallocDevice(rtid, dev_ctx->uberkernel.device_params_capacity);
+        if (dev_ctx->uberkernel.device_insts == nullptr) {
+            dev_ctx->uberkernel.device_insts_capacity = 0;
+        }
+        if (dev_ctx->uberkernel.device_params == nullptr) {
+            dev_ctx->uberkernel.device_params_capacity = 0;
+        }
 
 	    dev->context = dev_ctx;
 

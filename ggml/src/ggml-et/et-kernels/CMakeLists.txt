@@ -45,6 +45,8 @@ foreach(KERNEL ${KERNELS})
     )
     target_include_directories(${KERNEL}.elf PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_BINARY_DIR}
     )
     target_link_libraries(${KERNEL}.elf PRIVATE et-common-libs::cm-umode)
     # C-only flags — must not apply to .S files
@@ -81,6 +83,8 @@ foreach(KERNEL ${KERNELS})
         VERBATIM
     )
 endforeach()
+
+add_dependencies(uberkernel.elf et-uberkernel-map)
 
 # Print summary
 message(STATUS "GGML ET Kernels configured:")
