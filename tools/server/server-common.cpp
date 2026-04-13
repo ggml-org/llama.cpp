@@ -7,6 +7,8 @@
 #include "chat.h"
 #include "base64.hpp"
 
+#include <src/llama-arch.h>
+#include <src/llama-model.h>
 #include "server-common.h"
 
 #include <random>
@@ -503,7 +505,8 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
                 return false;
             }
         } else if (t < 0 || t >= n_vocab) {
-            return false;
+            // t = t + token_type_id*n_vocab , if arch == bert
+            return model->arch==LLM_ARCH_BERT;
         }
     }
     return true;
@@ -2037,17 +2040,33 @@ server_tokens format_prompt_rerank(
     server_tokens result = {};
 
     const char * rerank_prompt = llama_model_chat_template(model, "rerank");
-
+    auto vocab_size = llama_vocab_n_tokens(vocab);
     if (rerank_prompt != nullptr) {
         std::string prompt = rerank_prompt;
-        string_replace_all(prompt, "{query}"   , query);
-        string_replace_all(prompt, "{document}", doc  );
-        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
-        result.push_back(tokens);
+        size_t pos = prompt.find("{document}");
+        std::string query_prompt = prompt.substr(0, pos);
+        std::string doc_prompt = prompt.substr(pos);
+        string_replace_all(query_prompt, "{query}"   , query);
+        string_replace_all(doc_prompt, "{document}", doc  );
+        auto query_tokens= tokenize_input_subprompt(vocab, mctx,query_prompt, false, true);
+        auto doc_tokens= tokenize_input_subprompt(vocab, mctx,doc_prompt, false, true);
+        if (model->arch == LLM_ARCH_BERT){
+            // token_id = token_id + token_type_ids*vocab_size
+            for (int32_t i = 0; i < doc_tokens.size(); i++) {
+                doc_tokens.set_token(i,doc_tokens[i] + vocab_size);
+            }
+        }
+        result.push_back(query_tokens);
+        result.push_back(doc_tokens);
     } else {
         // Get EOS token - use SEP token as fallback if EOS is not available
         server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false);
         server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false);
+        if (model->arch == LLM_ARCH_BERT) {
+            for (int32_t i = 0; i < doc_tokens.size(); i++) {
+                doc_tokens.set_token(i,doc_tokens[i] + vocab_size);
+            }
+        }
         llama_token eos_token = llama_vocab_eos(vocab);
         if (eos_token == LLAMA_TOKEN_NULL) {
             eos_token = llama_vocab_sep(vocab);
@@ -2065,7 +2084,7 @@ server_tokens format_prompt_rerank(
         }
         result.push_back(doc_tokens);
         if (llama_vocab_get_add_eos(vocab)) {
-            result.push_back(eos_token);
+            result.push_back(model->arch == LLM_ARCH_BERT ? eos_token+ vocab_size : eos_token);
         }
     }
 

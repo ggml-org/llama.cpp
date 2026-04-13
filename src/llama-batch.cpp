@@ -46,11 +46,12 @@ bool llama_batch_allocr::init(
         return false;
     }
 
+    int32_t vocab_size = vocab.n_tokens();
     if (batch.token) {
         for (int32_t i = 0; i < batch.n_tokens; ++i) {
-            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= vocab.n_tokens()) {
-                LLAMA_LOG_ERROR("%s: invalid token[%d] = %d\n", __func__, i, batch.token[i]);
-                return false;
+            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= vocab_size) {
+                LLAMA_LOG_WARN("%s: invalid token[%d] = %d\n", __func__, i, batch.token[i]);
+                break;
             }
         }
     }
@@ -69,6 +70,12 @@ bool llama_batch_allocr::init(
     //
     // auto-generate missing fields
     //
+    token_type_ids.resize(batch.n_tokens);
+    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        int32_t token_type =  batch.token[i] / vocab_size;
+        batch.token[i] = batch.token[i] - token_type * vocab_size;
+        token_type_ids[i] = token_type;
+    }
 
     if (!batch.n_seq_id) {
         n_seq_id.resize(batch.n_tokens);
@@ -219,6 +226,7 @@ bool llama_batch_allocr::init(
             /*.token        =*/ batch.token,
             /*.embd         =*/ batch.embd,
             /*.pos          =*/ batch.pos,
+            /*.token_type   =*/ token_type_ids.data(),
             /*.n_seq_id     =*/ batch.n_seq_id,
             /*.seq_id       =*/ batch.seq_id,
             /*.seq_id_unq   =*/ this->seq_id_unq.data(),
@@ -401,6 +409,7 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
     udata->token     .resize(n_tokens);
     udata->embd      .clear();
     udata->pos       .resize(n_pos_all);
+    udata->token_type.resize(n_tokens);
     udata->n_seq_id  .resize(n_tokens);
     udata->seq_id    .resize(n_tokens);
     udata->seq_id_unq.resize(0);
@@ -423,6 +432,7 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
         /*.token        =*/ udata->token.data(),
         /*.embd         =*/ nullptr,
         /*.pos          =*/ udata->pos.data(),
+        /*.token_type   =*/ udata->token_type.data(),
         /*.n_seq_id     =*/ udata->n_seq_id.data(),
         /*.seq_id       =*/ udata->seq_id.data(),
         /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
@@ -658,6 +668,7 @@ void llama_batch_allocr::clear() {
     batch = {};
 
     pos       .clear();
+    token_type_ids.clear();
     n_seq_id  .clear();
     seq_id    .clear();
     seq_id_unq.clear();
@@ -691,6 +702,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     udata->token     .resize(n_tokens);
     udata->embd      .resize(n_embd_all);
     udata->pos       .resize(n_pos_all);
+    udata->token_type.resize(n_tokens);
     udata->n_seq_id  .resize(n_tokens);
     udata->seq_id    .resize(n_tokens);
     udata->seq_id_unq.resize(0);
@@ -719,6 +731,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
             udata->pos[j*n_tokens + i] = batch.pos[src_off + idxs[i]];
         }
 
+        udata->token_type[i] = token_type_ids[idxs[i]];
         udata->n_seq_id[i] = batch.n_seq_id[idxs[i]];
         udata->output[i]   = batch.logits[idxs[i]];
 
@@ -758,6 +771,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         /*.token        =*/ batch.token ? udata->token.data() : nullptr,
         /*.embd         =*/ batch.embd ? udata->embd.data() : nullptr,
         /*.pos          =*/ udata->pos.data(),
+        /*token_type    =*/ udata->token_type.data(),
         /*.n_seq_id     =*/ udata->n_seq_id.data(),
         /*.seq_id       =*/ udata->seq_id.data(),
         /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
@@ -807,6 +821,7 @@ void llama_batch_allocr::ubatch_print(const llama_ubatch & ubatch, int debug) {
         LLAMA_LOG_DEBUG("%s:   token      = %p\n", __func__, (void *) ubatch.token);
         LLAMA_LOG_DEBUG("%s:   embd       = %p\n", __func__, (void *) ubatch.embd);
         LLAMA_LOG_DEBUG("%s:   pos        = %p\n", __func__, (void *) ubatch.pos);
+        LLAMA_LOG_DEBUG("%s:   token_type = %p\n", __func__, (void *) ubatch.token_type);
         LLAMA_LOG_DEBUG("%s:   n_seq_id   = %p\n", __func__, (void *) ubatch.n_seq_id);
         LLAMA_LOG_DEBUG("%s:   seq_id     = %p\n", __func__, (void *) ubatch.seq_id);
         LLAMA_LOG_DEBUG("%s:   seq_id_unq = %s\n", __func__, ss_seq_id_unq.str().c_str());
@@ -843,9 +858,9 @@ void llama_batch_allocr::ubatch_print(const llama_ubatch & ubatch, int debug) {
                 }
 
                 if (ubatch.token) {
-                    LLAMA_LOG_DEBUG("%s:  %4d: id = %6d (%16s), pos = %4d, n_seq_id = %2d, seq_id = [%s], output = %d\n",
+                    LLAMA_LOG_DEBUG("%s:  %4d: id = %6d (%16s), pos = %4d, token_type = %4d, n_seq_id = %2d, seq_id = [%s], output = %d\n",
                             __func__, i, ubatch.token[i], vocab->token_to_piece(ubatch.token[i]).c_str(),
-                            ubatch.pos[i], ubatch.n_seq_id[i], ss.str().c_str(), ubatch.output[i]);
+                            ubatch.pos[i], ubatch.token_type[i], ubatch.n_seq_id[i], ss.str().c_str(), ubatch.output[i]);
                 } else {
                     LLAMA_LOG_DEBUG("%s:  %4d: [embd], pos = %4d, n_seq_id = %2d, seq_id = [%s], output = %d\n",
                             __func__, i, ubatch.pos[i], ubatch.n_seq_id[i], ss.str().c_str(), ubatch.output[i]);
