@@ -520,14 +520,14 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let scale_base = block_byte_base + 4u;
 
         if (is < 4u) {
-            let sc_byte = get_byte(load_src0_u32_at(scale_base), is % 4u);
-            let min_byte = get_byte(load_src0_u32_at(scale_base + 4), is % 4u);
+            let sc_byte = get_byte(load_u32_at(&src0, scale_base), is % 4u);
+            let min_byte = get_byte(load_u32_at(&src0, scale_base + 4), is % 4u);
             sc = sc_byte & 63u;
             mn = min_byte & 63u;
         } else {
-            let sc_min_lo = get_byte(load_src0_u32_at(scale_base + 8), (is + 4u) % 4u);
-            let sc_hi = get_byte(load_src0_u32_at(scale_base), (is - 4u) % 4u);
-            let min_hi = get_byte(load_src0_u32_at(scale_base + 4), is % 4u);
+            let sc_min_lo = get_byte(load_u32_at(&src0, scale_base + 8), (is + 4u) % 4u);
+            let sc_hi = get_byte(load_u32_at(&src0, scale_base), (is - 4u) % 4u);
+            let min_hi = get_byte(load_u32_at(&src0, scale_base + 4), is % 4u);
 
             sc = (sc_min_lo & 0xFu) | ((sc_hi >> 6u) << 4u);
             mn = (sc_min_lo >> 4u) | ((min_hi >> 6u) << 4u);
@@ -597,14 +597,14 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let scale_base = block_byte_base + 4u;
 
         if (is < 4u) {
-            let sc_byte = get_byte(load_src0_u32_at(scale_base), is % 4u);
-            let min_byte = get_byte(load_src0_u32_at(scale_base + 4), is % 4u);
+            let sc_byte = get_byte(load_u32_at(&src0, scale_base), is % 4u);
+            let min_byte = get_byte(load_u32_at(&src0, scale_base + 4), is % 4u);
             sc = sc_byte & 63u;
             mn = min_byte & 63u;
         } else {
-            let sc_min_lo = get_byte(load_src0_u32_at(scale_base + 8), (is + 4u) % 4u);
-            let sc_hi = get_byte(load_src0_u32_at(scale_base), (is - 4u) % 4u);
-            let min_hi = get_byte(load_src0_u32_at(scale_base + 4), is % 4u);
+            let sc_min_lo = get_byte(load_u32_at(&src0, scale_base + 8), (is + 4u) % 4u);
+            let sc_hi = get_byte(load_u32_at(&src0, scale_base), (is - 4u) % 4u);
+            let min_hi = get_byte(load_u32_at(&src0, scale_base + 4), is % 4u);
 
             sc = (sc_min_lo & 0xFu) | ((sc_hi >> 6u) << 4u);
             mn = (sc_min_lo >> 4u) | ((min_hi >> 6u) << 4u);
