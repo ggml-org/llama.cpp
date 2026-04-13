@@ -2615,10 +2615,6 @@ static bool ggml_hexagon_supported_diag(const struct ggml_hexagon_session * sess
         return false;
     }
 
-    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
-        return false;
-    }
-
     GGML_UNUSED(sess);
     return true;
 }
