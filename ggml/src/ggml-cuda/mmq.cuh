@@ -693,7 +693,14 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 
     // MMQ_ITER_K / (4 * QR8_0) == 64 required. but NV has only 32 threads per warp
+#if defined(GGML_USE_HIP) && defined(RDNA2)
+    constexpr int threads_per_row = 2;
+#elif defined(GGML_USE_HIP) && defined(GCN5)
+    constexpr int threads_per_row = 16;
+#else
     constexpr int threads_per_row = 32;
+#endif
+
     constexpr int nrows = warp_size / threads_per_row;
     const int txi = warp_size > threads_per_row ? threadIdx.x % threads_per_row : threadIdx.x;
     const int kbx  = txi / QI8_0;
