@@ -488,7 +488,7 @@ static void dequantize_row_nvfp4_sycl(const void * vx, dst_t * y, const int64_t 
     const int nb = k / QK_NVFP4;
     stream->parallel_for(
         sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 32), sycl::range<3>(1, 1, 32)),
-        [=](sycl::nd_item<3> item_ct1) {
+        [=](sycl::nd_item<3> /*item_ct1*/) {
             dequantize_block_nvfp4(vx, y, k);
         });
 }
