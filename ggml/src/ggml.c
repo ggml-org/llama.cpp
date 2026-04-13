@@ -54,8 +54,13 @@
 #define UNUSED GGML_UNUSED
 
 uint64_t ggml_graph_next_version(void) {
+#ifdef _MSC_VER
+    static volatile long long counter = 1;
+    return (uint64_t) _InterlockedIncrement64(&counter) - 1;
+#else
     static uint64_t counter = 1;
-    return __atomic_fetch_add(&counter, 1, __ATOMIC_RELAXED); // TODO: make portable
+    return __atomic_fetch_add(&counter, 1, __ATOMIC_RELAXED);
+#endif
 }
 
 // Needed for ggml_fp32_to_bf16_row()
