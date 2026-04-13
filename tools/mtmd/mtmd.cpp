@@ -1017,8 +1017,12 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
     return ctx->image_embd_v.data();
 }
 
-bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
-    switch (ctx->proj_type_v()) {
+bool mtmd_decode_use_non_causal(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
+    auto proj_type = ctx->proj_type_v();
+    if (chunk && chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+        proj_type = ctx->proj_type_a();
+    }
+    switch (proj_type) {
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA4V:
             return true;
