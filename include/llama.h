@@ -156,6 +156,16 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
+        // experimental per-tensor-levels file types, parked at 100+ so that upstream
+        // can keep appending file types below without colliding
+        LLAMA_FTYPE_MOSTLY_Q3_PT         = 100, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q3_KPT        = 101, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q4_DPT        = 102, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q2_KPT        = 103, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_TQ        = 104, // except 1d tensors, trellis quantized with RNG codebook
+        LLAMA_FTYPE_MOSTLY_IQ3_TQ        = 105, // except 1d tensors, 3-bit with per-tensor trained grid
+        LLAMA_FTYPE_MOSTLY_IQ1_BN        = 106, // except 1d tensors, 8D vector quantized with trained codebook
+
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };

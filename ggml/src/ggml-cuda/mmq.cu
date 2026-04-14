@@ -2,6 +2,8 @@
 #include "mmq.cuh"
 #include "quantize.cuh"
 #include "mmid.cuh"
+#include "convert.cuh"
+#include "ggml-quants.h"
 
 #include <cstdint>
 
@@ -76,6 +78,9 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_NVFP4:
             mul_mat_q_case<GGML_TYPE_NVFP4>(ctx, args, stream);
             break;
+        case GGML_TYPE_Q4_DPT:
+            mul_mat_q_case<GGML_TYPE_Q4_DPT>(ctx, args, stream);
+            break;
         default:
             GGML_ABORT("fatal error");
             break;
@@ -92,6 +97,14 @@ void ggml_cuda_mul_mat_q(
 
     cudaStream_t stream = ctx.stream();
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+
+    // Set Q4_DPT lookup table from tensor's quant_levels
+    if (src0->type == GGML_TYPE_Q4_DPT) {
+        GGML_ASSERT(src0->quant_levels && "Q4_DPT MUL_MAT requires levels (set tensor->quant_levels)");
+        int8_t * d_q4dpt_levels;
+        CUDA_CHECK(cudaGetSymbolAddress((void **)&d_q4dpt_levels, q4dpt_levels_cuda));
+        CUDA_CHECK(cudaMemcpyAsync(d_q4dpt_levels, src0->quant_levels, Q4DPT_N_LEVELS * sizeof(int8_t), cudaMemcpyHostToDevice, stream));
+    }
 
     const size_t ts_src0 = ggml_type_size(src0->type);
     const size_t ts_src1 = ggml_type_size(src1->type);
@@ -289,6 +302,11 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
 // -------------------------------------------------
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
+        case GGML_TYPE_Q4_DPT:
+            // NOTE: Q2_DPT is deliberately absent. Its MMQ tile loader reinterpreted the
+            // 10-byte block_q2_dpt as an 18-byte block_q4_dpt, so it read the data with the
+            // wrong stride and bit width. Falling through to MMVQ uses vec_dot_q2_dpt_q8_1,
+            // which decodes the 2-bit indices correctly.
             mmq_supported = true;
             break;
         default:
@@ -382,3 +400,8 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
 
     return (!GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
 }
+
+// Q4_DPT must be instantiated in this TU (not a separate template-instance file)
+// because it accesses the TU-local __device__ variable q4dpt_levels_cuda,
+// which is initialized by the code above.
+DECL_MMQ_CASE(GGML_TYPE_Q4_DPT);

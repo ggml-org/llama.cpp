@@ -157,8 +157,8 @@ int main(int argc, char** argv) {
 
         t1 = std::chrono::high_resolution_clock::now();
         float fs;
-        if (type == 0) funcs->vec_dot(kVecSize * QK4_1, &fs, 0, x40.data(), 0, y.data(), 0, 1);
-        else funcs->vec_dot(kVecSize * QK4_1, &fs, 0, x41.data(), 0, y.data(), 0, 1);
+        if (type == 0) funcs->vec_dot(kVecSize * QK4_1, &fs, 0, x40.data(), 0, y.data(), 0, 1, nullptr);
+        else funcs->vec_dot(kVecSize * QK4_1, &fs, 0, x41.data(), 0, y.data(), 0, 1, nullptr);
         t2 = std::chrono::high_resolution_clock::now();
         t = 1e-3*std::chrono::duration_cast<std::chrono::nanoseconds>(t2-t1).count();
         if (iloop > 3) ggml.addResult(fs, t);
