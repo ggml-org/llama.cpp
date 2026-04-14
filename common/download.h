@@ -8,6 +8,22 @@ struct common_params_model;
 using common_header      = std::pair<std::string, std::string>;
 using common_header_list = std::vector<common_header>;
 
+struct common_download_progress {
+    std::string url;
+    size_t downloaded = 0;
+    size_t total      = 0;
+    bool cached       = false;
+};
+
+class common_download_callback {
+public:
+    virtual ~common_download_callback() = default;
+    virtual void on_start(const common_download_progress & p) = 0;
+    virtual void on_update(const common_download_progress & p) = 0;
+    virtual void on_done(const common_download_progress & p, bool ok) = 0;
+    virtual bool is_cancelled() const { return false; }
+};
+
 struct common_remote_params {
     common_header_list headers;
     long timeout  = 0;           // in seconds, 0 means no timeout
@@ -31,10 +47,12 @@ struct common_cached_model_info {
     }
 };
 
-// Options for common_download_model
-struct common_download_model_opts {
-    bool download_mmproj = false;
-    bool offline         = false;
+// Options for common_download_model and common_download_file_single
+struct common_download_opts {
+    std::string bearer_token;
+    common_header_list headers;
+    bool offline = false;
+    common_download_callback * callback = nullptr;
 };
 
 // Result of common_download_model
@@ -69,9 +87,8 @@ struct common_download_model_result {
 // returns result with model_path and mmproj_path (empty on failure)
 common_download_model_result common_download_model(
     const common_params_model & model,
-    const std::string & bearer_token,
-    const common_download_model_opts & opts = {},
-    const common_header_list & headers = {}
+    const common_download_opts & opts = {},
+    bool download_mmproj = false
 );
 
 // returns list of cached models
@@ -82,9 +99,7 @@ std::vector<common_cached_model_info> common_list_cached_models();
 // skip_etag: if true, don't read/write .etag files (for HF cache where filename is the hash)
 int common_download_file_single(const std::string & url,
                                 const std::string & path,
-                                const std::string & bearer_token,
-                                bool offline,
-                                const common_header_list & headers = {},
+                                const common_download_opts & opts = {},
                                 bool skip_etag = false);
 
 // resolve and download model from Docker registry

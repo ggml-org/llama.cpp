@@ -256,6 +256,38 @@ static std::pair<std::vector<common_peg_chars_parser::char_range>, bool> parse_c
     return {ranges, negated};
 }
 
+common_peg_ast_id common_peg_ast_arena::find_by_tag(const common_peg_ast_node & parent, const std::string & tag, int max_depth) const {
+    for (auto child_id : parent.children) {
+        const auto & child = get(child_id);
+        if (child.tag == tag) {
+            return child_id;
+        }
+        if (max_depth > 1) {
+            auto result = find_by_tag(child, tag, max_depth - 1);
+            if (result != COMMON_PEG_INVALID_AST_ID) {
+                return result;
+            }
+        }
+    }
+    return COMMON_PEG_INVALID_AST_ID;
+}
+
+common_peg_ast_id common_peg_ast_arena::find_by_rule(const common_peg_ast_node & parent, const std::string & rule, int max_depth) const {
+    for (auto child_id : parent.children) {
+        const auto & child = get(child_id);
+        if (child.rule == rule) {
+            return child_id;
+        }
+        if (max_depth > 1) {
+            auto result = find_by_rule(child, rule, max_depth - 1);
+            if (result != COMMON_PEG_INVALID_AST_ID) {
+                return result;
+            }
+        }
+    }
+    return COMMON_PEG_INVALID_AST_ID;
+}
+
 void common_peg_ast_arena::visit(common_peg_ast_id id, const common_peg_ast_visitor & visitor) const {
     if (id == COMMON_PEG_INVALID_AST_ID) {
         return;
@@ -858,6 +890,10 @@ struct parser_executor {
         }
         return result;
     }
+
+    common_peg_parse_result operator()(const common_peg_gbnf_parser & p) {
+        return arena.parse(p.child, ctx, start_pos);
+    }
 };
 
 common_peg_parse_result common_peg_arena::parse(common_peg_parse_context & ctx, size_t start) const {
@@ -925,7 +961,8 @@ void common_peg_arena::resolve_refs() {
                                  std::is_same_v<T, common_peg_and_parser> ||
                                  std::is_same_v<T, common_peg_not_parser> ||
                                  std::is_same_v<T, common_peg_tag_parser> ||
-                                 std::is_same_v<T, common_peg_atomic_parser>) {
+                                 std::is_same_v<T, common_peg_atomic_parser> ||
+                                 std::is_same_v<T, common_peg_gbnf_parser>) {
                 p.child = resolve_ref(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 p.child = resolve_ref(p.child);
@@ -1004,6 +1041,8 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
             return "Not(" + dump_impl(p.child, visited) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_atomic_parser>) {
             return "Atomic(" + dump_impl(p.child, visited) + ")";
+        } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
+            return "Gbnf(" + p.grammar + ", " + dump_impl(p.child, visited) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_any_parser>) {
             return "Any";
         } else if constexpr (std::is_same_v<T, common_peg_space_parser>) {
@@ -1533,6 +1572,7 @@ static std::unordered_set<std::string> collect_reachable_rules(
                                  std::is_same_v<T, common_peg_not_parser> ||
                                  std::is_same_v<T, common_peg_tag_parser> ||
                                  std::is_same_v<T, common_peg_atomic_parser> ||
+                                 std::is_same_v<T, common_peg_gbnf_parser> ||
                                  std::is_same_v<T, common_peg_schema_parser>) {
                 visit(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
@@ -1561,7 +1601,23 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
         if (!s.schema) {
             return true;
         }
-        if (s.raw && s.schema->contains("type") && s.schema->at("type").is_string() && s.schema->at("type") == "string") {
+        if (s.raw && s.schema->contains("type")) {
+            const auto & type_val = s.schema->at("type");
+            if (type_val.is_string() && type_val == "string") {
+                return true;
+            }
+            // Handle nullable types like ["string", "null"] - delegate when the
+            // non-null type is string, since the tagged format uses raw text
+            if (type_val.is_array()) {
+                for (const auto & t : type_val) {
+                    if (t.is_string() && t.get<std::string>() != "null") {
+                        return t.get<std::string>() == "string";
+                    }
+                }
+            }
+        }
+        // Delegate for enum schemas in raw mode - enum values are literal strings
+        if (s.raw && !s.schema->contains("type") && s.schema->contains("enum")) {
             return true;
         }
         return false;
@@ -1603,10 +1659,13 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
             } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 std::string s;
                 for (const auto & child : p.children) {
+                    auto child_gbnf = to_gbnf(child);
+                    if (child_gbnf.empty()) {
+                        continue;
+                    }
                     if (!s.empty()) {
                         s += " ";
                     }
-                    auto child_gbnf = to_gbnf(child);
                     const auto & child_parser = effective_parser(child);
                     if (std::holds_alternative<common_peg_choice_parser>(child_parser) ||
                         std::holds_alternative<common_peg_sequence_parser>(child_parser)) {
@@ -1706,6 +1765,8 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return to_gbnf(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_atomic_parser>) {
                 return to_gbnf(p.child);
+            } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
+                return p.grammar;
             } else {
                 static_assert(is_always_false_v<T>);
             }
@@ -1840,6 +1901,8 @@ static nlohmann::json serialize_parser_variant(const common_peg_parser_variant &
                 {"child", p.child},
                 {"tag", p.tag}
             };
+        } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
+            return json{{"type", "gbnf"}, {"child", p.child}, {"grammar", p.grammar}};
         }
     }, variant);
 }
@@ -1999,6 +2062,16 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
         return common_peg_tag_parser{
             j["child"].get<common_peg_parser_id>(),
             j["tag"].get<std::string>(),
+        };
+    }
+
+    if (type == "gbnf") {
+        if (!j.contains("child") || !j.contains("grammar")) {
+            throw std::runtime_error("gbnf parser missing required fields");
+        }
+        return common_peg_gbnf_parser{
+            j["child"].get<common_peg_parser_id>(),
+            j["grammar"].get<std::string>(),
         };
     }
 

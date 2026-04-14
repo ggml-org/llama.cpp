@@ -9,35 +9,43 @@ fn get_byte_i32(value: u32, index: u32) -> i32 {
 #endif
 
 #ifdef U32_DEQUANT_HELPERS
-fn load_src0_u16_at(byte_offset: u32) -> u32 {
-    let word = src0[byte_offset / 4u];
-    let shift = (byte_offset & 2u) * 8u;
-    return (word >> shift) & 0xFFFFu;
+fn load_u16_at(
+        buf: ptr<storage, array<u32>, read_write>,
+        byte_offset: u32) -> u32 {
+    let word = buf[byte_offset / 4];
+    let shift = (byte_offset & 0x2) * 8;
+    return (word >> shift) & 0xFFFF;
 }
 
-fn load_src0_u32_at(byte_offset: u32) -> u32 {
-    let word_idx = byte_offset / 4u;
-    let shift = (byte_offset & 3u) * 8u;
-    let lo = src0[word_idx];
-    if (shift == 0u) {
-        return lo;
-    }
-    let hi = src0[word_idx + 1u];
-    return (lo >> shift) | (hi << (32u - shift));
+fn load_u32_at(
+        buf: ptr<storage, array<u32>, read_write>,
+        byte_offset: u32) -> u32 {
+    let word_idx = byte_offset / 4;
+    let shift = (byte_offset & 0x3) * 8;
+    let lo = buf[word_idx];
+    let hi = buf[word_idx + 1];
+    let shifted = (lo >> shift) | (hi << (32 - shift));
+    return select(shifted, lo, shift == 0);
 }
 
-fn load_src0_f16_at(byte_offset: u32) -> f16 {
-    let packed = unpack2x16float(load_src0_u16_at(byte_offset));
+fn load_f16_at(
+        buf: ptr<storage, array<u32>, read_write>,
+        byte_offset: u32) -> f16 {
+    let packed = unpack2x16float(load_u16_at(buf, byte_offset));
     return f16(packed[0]);
 }
+
+fn load_f16_as_f32_at(
+        buf: ptr<storage, array<u32>, read_write>,
+        byte_offset: u32) -> f32 {
+    let word = buf[byte_offset / 4];
+    let shift = (byte_offset & 0x2) * 8;
+    let d_bits = (word >> shift) & 0xFFFF;
+    return unpack2x16float(d_bits)[0];
+}
 #endif
 
-#ifdef Q4_0_T
-struct q4_0 {
-    d: f16,
-    qs: array<f16, 8>
-};
-#endif
+
 
 #ifdef Q4_1_T
 struct q4_1 {
@@ -47,13 +55,6 @@ struct q4_1 {
 };
 #endif
 
-#ifdef Q5_0_T
-struct q5_0 {
-    d: f16,
-    qh: array<f16, 2>,
-    qs: array<f16, 8>
-};
-#endif
 
 #ifdef Q5_1_T
 struct q5_1 {
@@ -64,12 +65,6 @@ struct q5_1 {
 };
 #endif
 
-#ifdef Q8_0_T
-struct q8_0 {
-    d: f16,
-    qs: array<f16, 16>
-};
-#endif
 
 #ifdef Q8_1_T
 struct q8_1 {
@@ -88,14 +83,6 @@ struct q2_K {
 };
 #endif
 
-#ifdef Q3_K_T
-struct q3_K {
-    hmask: array<f16, 16>,
-    qs: array<f16, 32>,
-    scales: array<f16, 6>,
-    d: f16
-};
-#endif
 
 #if defined(Q4_K_SCALE_MIN) || defined(Q5_K_SCALE_MIN)
 fn get_scale_min(is: u32, scales: array<u32, 3>) -> vec2<f32> {
@@ -132,64 +119,6 @@ struct q5_K {
 };
 #endif
 
-#ifdef Q6_K_T
-struct q6_K {
-    ql: array<f16, 64>,
-    qh: array<f16, 32>,
-    scales: array<f16, 8>,
-    d: f16
-};
-#endif
-
-#ifdef IQ2_XXS_T
-struct iq2_xxs {
-    d: f16,
-    qs: array<f16, 32>
-};
-#endif
-
-#ifdef IQ2_XS_T
-struct iq2_xs {
-    d: f16,
-    qs: array<f16, 32>,
-    scales: array<f16, 4>
-};
-#endif
-
-#ifdef IQ2_S_T
-struct iq2_s {
-    d: f16,
-    qs: array<f16, 32>,
-    qh: array<f16, 4>,
-    scales: array<f16, 4>
-};
-#endif
-
-#ifdef IQ3_XXS_T
-struct iq3_xxs {
-    d: f16,
-    qs: array<f16, 48>
-};
-#endif
-
-#ifdef IQ3_S_T
-struct iq3_s {
-    d: f16,
-    qs: array<f16, 32>,
-    qh: array<f16, 4>,
-    signs: array<f16, 16>,
-    scales: array<f16, 2>
-};
-#endif
-
-#ifdef IQ1_S_T
-struct iq1_s {
-    d: f16,
-    qs: array<f16, 16>,
-    qh: array<f16, 8>
-};
-#endif
-
 #ifdef IQ1_M_T
 struct iq1_m {
     qs: array<u32, 8>,
@@ -198,17 +127,9 @@ struct iq1_m {
 };
 #endif
 
-#ifdef IQ4_NL_T
-struct iq4_nl {
-    d: f16,
-    qs: array<f16, 8>,
-};
-#endif
-
 #ifdef IQ4_XS_T
 struct iq4_xs {
-    d: f16,
-    scales_h: f16,
+    d_scales_h: u32,
     scales_l: u32,
     qs: array<u32, 32>
 };

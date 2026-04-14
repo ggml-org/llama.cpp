@@ -14,6 +14,7 @@
 #define GGML_SYCL_DEQUANTIZE_HPP
 
 #include "common.hpp"
+#include "convert.hpp"
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
 typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
@@ -140,6 +141,22 @@ static __dpct_inline__ void dequantize_q5_1(const void *vx, const int64_t ib,
 #else
     v.x() = sycl::fma(v.x(), d, m);
     v.y() = sycl::fma(v.y(), d, m);
+#endif // GGML_SYCL_F16
+}
+
+static __dpct_inline__ void dequantize_q8_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
+                                            const int iqs, dfloat2 &v) {
+    const dfloat d = (const dfloat)*((const sycl::half*)d_ptr + ib);
+
+    v.x() = ((const int8_t *)qs)[iqs + 0];
+    v.y() = ((const int8_t *)qs)[iqs + 1];
+
+#ifdef GGML_SYCL_F16
+    v.s0() *= d;
+    v.s1() *= d;
+#else
+    v.x() *= d;
+    v.y() *= d;
 #endif // GGML_SYCL_F16
 }
 

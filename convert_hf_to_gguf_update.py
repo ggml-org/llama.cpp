@@ -296,7 +296,7 @@ for model in [*pre_computed_hashes, *all_models]:
         except Exception as e:
             raise OSError(f"Error loading tokenizer for model {name}.") from e
 
-        chktok = tokenizer.encode(CHK_TXT)
+        chktok = tokenizer.encode(CHK_TXT)  # ty: ignore[unresolved-attribute]
         chkhsh = sha256(str(chktok).encode()).hexdigest()
 
         logger.info(f"model: {name}")
@@ -468,7 +468,7 @@ for model in models:
 
     with open(f"models/ggml-vocab-{name}.gguf.out", "w") as f:
         for text in tests:
-            res = tokenizer.encode(text, add_special_tokens=False)
+            res = tokenizer.encode(text, add_special_tokens=False)  # ty: ignore[unresolved-attribute]
             for r in res:
                 f.write(f" {r}")
             f.write("\n")

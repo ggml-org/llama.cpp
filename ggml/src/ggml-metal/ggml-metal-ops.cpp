@@ -787,6 +787,13 @@ int ggml_metal_op_unary(ggml_metal_op_t ctx, int idx) {
         args.max = ggml_get_op_params_f32(op, 1);
     }
 
+    if (op->op == GGML_OP_UNARY && ggml_get_unary_op(op) == GGML_UNARY_OP_XIELU) {
+        args.slope = ggml_get_op_params_f32(op, 1); // alpha_n
+        args.scale = ggml_get_op_params_f32(op, 2); // alpha_p
+        args.bias  = ggml_get_op_params_f32(op, 3); // beta
+        args.val   = ggml_get_op_params_f32(op, 4); // eps
+    }
+
     auto pipeline = ggml_metal_library_get_pipeline_unary(lib, op);
 
     if (pipeline.c4) {
@@ -2047,6 +2054,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_F32  || // TODO: helper function
            op->src[0]->type == GGML_TYPE_F16  ||
            op->src[0]->type == GGML_TYPE_BF16 ||
+           op->src[0]->type == GGML_TYPE_Q1_0 ||
            op->src[0]->type == GGML_TYPE_Q4_0 ||
            op->src[0]->type == GGML_TYPE_Q4_1 ||
            op->src[0]->type == GGML_TYPE_Q5_0 ||

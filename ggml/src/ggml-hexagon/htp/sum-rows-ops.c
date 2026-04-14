@@ -14,13 +14,13 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
-#define sum_rows_preamble                       \
-    struct htp_tensor *src0 =  &octx->src0;\
-    struct htp_tensor *dst  = &octx->dst;  \
-                                           \
+#define sum_rows_preamble                         \
+    const struct htp_tensor *src0 = octx->src[0]; \
+    const struct htp_tensor *dst  = octx->dst;    \
+                                                  \
     const uint32_t ne00 = src0->ne[0];     \
     const uint32_t ne01 = src0->ne[1];     \
     const uint32_t ne02 = src0->ne[2];     \
@@ -94,7 +94,7 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
 int op_sum_rows(struct htp_ops_context * octx) {
     sum_rows_preamble;
 
-    if (octx->src0.type != HTP_TYPE_F32) {
+    if (octx->src[0]->type != HTP_TYPE_F32) {
         return HTP_STATUS_NO_SUPPORT;
     }
 

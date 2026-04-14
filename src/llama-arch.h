@@ -585,8 +585,6 @@ struct LLM_TN_IMPL {
     const int bid;
     const int xid;
 
-    const std::set<llm_tensor> model_tensors;
-
     LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid);
 
     std::string str() const;
@@ -632,6 +630,7 @@ llm_arch llm_arch_from_string(const std::string & name);
 
 const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
 
-bool llm_arch_is_recurrent(const llm_arch & arch);
-bool llm_arch_is_hybrid   (const llm_arch & arch);
-bool llm_arch_is_diffusion(const llm_arch & arch);
+bool llm_arch_is_recurrent      (const llm_arch & arch);
+bool llm_arch_is_hybrid         (const llm_arch & arch);
+bool llm_arch_is_diffusion      (const llm_arch & arch);
+bool llm_arch_supports_sm_tensor(const llm_arch & arch);

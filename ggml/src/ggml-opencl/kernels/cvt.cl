@@ -67,6 +67,17 @@ struct block_q4_K {
 };
 
 //------------------------------------------------------------------------------
+// block_q5_k
+//------------------------------------------------------------------------------
+struct block_q5_K {
+    half d; // delta
+    half dm; // min
+    uchar s[K_SCALE_SIZE];
+    uchar qh[QK_K / 8];
+    uchar qs[QK_K / 2]; // nibbles / quants
+};
+
+//------------------------------------------------------------------------------
 // block_q6_K
 //------------------------------------------------------------------------------
 struct block_q6_K {
@@ -541,6 +552,71 @@ kernel void kernel_restore_block_q4_K_noshuffle(
         }
     }
 
+    for (int i = 0; i < K_SCALE_SIZE; ++i) {
+        b->s[i] = s[i];
+    }
+}
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_q5_K
+// Convert the block_q5_K format to 5 separate arrays (AOS -> SOA).
+// Each thread processes a super block.
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_q5_K(
+    global struct block_q5_K * src0,
+    global uchar * dst_q,
+    global uchar * dst_qh,
+    global uchar * dst_s,
+    global half  * dst_d,
+    global half  * dst_dm
+) {
+    global struct block_q5_K * b  = (global struct block_q5_K *) src0 + get_global_id(0);
+    global uchar * q  = (global uchar *) dst_q  + QK_K/2*get_global_id(0);
+    global uchar * qh = (global uchar *) dst_qh + QK_K/8*get_global_id(0);
+    global uchar * s  = (global uchar *) dst_s  + K_SCALE_SIZE*get_global_id(0);
+    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+    global half  * dm = (global half  *) dst_dm + get_global_id(0);
+
+    *d  = b->d;
+    *dm = b->dm;
+
+    for (int i = 0; i < QK_K/2; ++i) {
+        q[i] = b->qs[i];
+    }
+    for (int i = 0; i < QK_K/8; ++i) {
+        qh[i] = b->qh[i];
+    }
+    for (int i = 0; i < K_SCALE_SIZE; ++i) {
+        s[i] = b->s[i];
+    }
+}
+
+// Restore block_q5_K from flattened arrays.
+// Each thread processes a super block.
+kernel void kernel_restore_block_q5_K(
+    global uchar * src_q,
+    global uchar * src_qh,
+    global uchar * src_s,
+    global half  * src_d,
+    global half  * src_dm,
+    global struct block_q5_K * dst
+) {
+    global struct block_q5_K * b  = (global struct block_q5_K *) dst + get_global_id(0);
+    global uchar * q  = (global uchar *) src_q  + QK_K/2*get_global_id(0);
+    global uchar * qh = (global uchar *) src_qh + QK_K/8*get_global_id(0);
+    global uchar * s  = (global uchar *) src_s  + K_SCALE_SIZE*get_global_id(0);
+    global half  * d  = (global half  *) src_d  + get_global_id(0);
+    global half  * dm = (global half  *) src_dm + get_global_id(0);
+
+    b->d    = *d;
+    b->dm = *dm;
+
+    for (int i = 0; i < QK_K/2; ++i) {
+        b->qs[i] = q[i];
+    }
+    for (int i = 0; i < QK_K/8; ++i) {
+        b->qh[i] = qh[i];
+    }
     for (int i = 0; i < K_SCALE_SIZE; ++i) {
         b->s[i] = s[i];
     }

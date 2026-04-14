@@ -270,3 +270,8 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
 std::string common_chat_template_direct_apply(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs);
+
+std::optional<common_chat_params> common_chat_try_specialized_template(
+        const common_chat_template &          tmpl,
+        const std::string &                   src,
+        autoparser::generation_params & params);
