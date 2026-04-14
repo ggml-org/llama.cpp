@@ -12,6 +12,7 @@ using namespace ggml_cuda_mma;
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
 #define MMQ_ITER_K 256
 #define MMQ_ITER_K_MXFP4_FP4    512
+#define MMQ_ITER_K_NVFP4_FP4    512
 #define MMQ_NWARPS 8
 
 typedef void (*load_tiles_mmq_t)(const char * __restrict__ x, int * x_tile, const int kbx0, const int i_max, const int stride);
@@ -51,9 +52,15 @@ struct block_fp4_mmq {
     int8_t   qs[4 * 32];  // 256 FP4 values packed as 4-bit pairs (2 per byte), 8 blocks of 32 values
 };
 
+struct block_nvfp4_mmq {  // Same byte size as block_q8_1_mmq and block_fp4_mmq
+    uint32_t sc4_u32[4];  // 16 UE4M3 scales (1 per 1 values), packed into 4 unint32
+    uint32_t qs_u32[32];  // 256 NVFP4 values packed as 4-bit pairs (128 payload bytes)
+};
+
 static_assert(sizeof(block_q8_1_mmq) == 4*QK8_1 + 4*sizeof(half2), "Unexpected block_q8_1_mmq size");
 static_assert(sizeof(block_q8_1_mmq) == 4*sizeof(block_q8_1),      "Unexpected block_q8_1_mmq size");
 static_assert(sizeof(block_fp4_mmq)  == sizeof(block_q8_1_mmq),    "Unexpected block_fp4_mmq size");
+static_assert(sizeof(block_nvfp4_mmq) == sizeof(block_q8_1_mmq),   "Unexpected block_nvfp4_mmq size");
 
 static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
     switch (type_x) {
@@ -143,7 +150,8 @@ static int get_mmq_y_host(const int cc) {
 
 static constexpr __device__ int get_iter_k([[maybe_unused]] const ggml_type type) {
 #if defined(BLACKWELL_MMA_AVAILABLE)
-    return type == GGML_TYPE_MXFP4 ? MMQ_ITER_K_MXFP4_FP4 : MMQ_ITER_K;
+    return type == GGML_TYPE_MXFP4 ? MMQ_ITER_K_MXFP4_FP4 :
+           type == GGML_TYPE_NVFP4 ? MMQ_ITER_K_NVFP4_FP4 : MMQ_ITER_K;
 #else
     return MMQ_ITER_K;
 #endif // defined(BLACKWELL_MMA_AVAILABLE)
@@ -933,6 +941,140 @@ static __device__ __forceinline__ void load_tiles_mxfp4_fp4(const char * __restr
         }
     }
 }
+
+#ifdef BLACKWELL_MMA_AVAILABLE
+template <int mmq_y, bool need_check>
+static __device__ __forceinline__ void load_tiles_nvfp4_nvfp4(const char * __restrict__ x,
+                                                            int * __restrict__ x_tile,
+                                                            const int kbx0,
+                                                            const int i_max,
+                                                            const int stride) {
+    constexpr int nwarps = mmq_get_nwarps_device();
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int iter_k = get_iter_k(GGML_TYPE_NVFP4);
+    constexpr int threads_per_row = iter_k / QK_NVFP4; // each thread processes 1 block
+    constexpr int rows_per_warp = warp_size / threads_per_row;
+
+    uint32_t * x_u32 = (uint32_t *) x_tile;
+
+    const int txi = threadIdx.x;
+    const int kbx = txi % threads_per_row;
+    const int row_in_warp = txi / threads_per_row;
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += rows_per_warp * nwarps) {
+        int i = i0 + threadIdx.y * rows_per_warp + row_in_warp;
+
+        if constexpr (need_check) {
+            i = min(i, i_max);
+        }
+
+        const block_nvfp4 * bxi = (const block_nvfp4 *) x + kbx0 + i * stride + kbx;
+        const int row_base = i * MMQ_MMA_TILE_X_K_NVFP4;
+        const int q_base = row_base + 8 * kbx;
+
+#pragma unroll
+        for (int sub = 0; sub < QK_NVFP4 / QK_NVFP4_SUB; ++sub) {
+            const uint8_t * p = bxi->qs + 8 * sub;
+
+            x_u32[q_base + 2 * sub + 0] =
+                (((uint32_t) (p[0] & 0x0F)) <<  0) |
+                (((uint32_t) (p[1] & 0x0F)) <<  4) |
+                (((uint32_t) (p[2] & 0x0F)) <<  8) |
+                (((uint32_t) (p[3] & 0x0F)) << 12) |
+                (((uint32_t) (p[4] & 0x0F)) << 16) |
+                (((uint32_t) (p[5] & 0x0F)) << 20) |
+                (((uint32_t) (p[6] & 0x0F)) << 24) |
+                (((uint32_t) (p[7] & 0x0F)) << 28);
+
+            x_u32[q_base + 2 * sub + 1] =
+                (((uint32_t) (p[0] >> 4)) <<  0) |
+                (((uint32_t) (p[1] >> 4)) <<  4) |
+                (((uint32_t) (p[2] >> 4)) <<  8) |
+                (((uint32_t) (p[3] >> 4)) << 12) |
+                (((uint32_t) (p[4] >> 4)) << 16) |
+                (((uint32_t) (p[5] >> 4)) << 20) |
+                (((uint32_t) (p[6] >> 4)) << 24) |
+                (((uint32_t) (p[7] >> 4)) << 28);
+        }
+
+        x_u32[i * MMQ_MMA_TILE_X_K_NVFP4 + 64 + kbx] = get_int_b1(bxi->d, 0);
+    }
+}
+
+template <int mmq_x, int mmq_y>
+static __device__ __forceinline__ void vec_dot_nvfp4_nvfp4_mma(const int * __restrict__ x,
+                                                               const int * __restrict__ y,
+                                                               float * __restrict__ sum,
+                                                               const int k00) {
+    typedef tile<16, 8, int>   tile_A;
+    typedef tile<8, 8, int>    tile_B;
+    typedef tile<16, 8, float> tile_C;
+
+    constexpr int granularity = mmq_get_granularity_device(mmq_x);
+    constexpr int rows_per_warp = 2 * granularity;
+    constexpr int ntx = rows_per_warp / tile_C::I;
+    constexpr int nfrags = MMQ_TILE_NE_K / tile_A::J;
+    constexpr int rows_per_slab = mmq_get_nwarps_device() * tile_C::I;
+    constexpr int groups_per_slab = mmq_x / tile_C::J;
+
+    const int *      x_qs = (const int *) x;
+    const uint32_t * x_sc = (const uint32_t *) (x_qs + 2 * MMQ_TILE_NE_K);
+    const int *      y_qs = (const int *) y + 4;
+    const uint32_t * y_sc = (const uint32_t *) y;
+    const int ty = threadIdx.y;
+    const int ty_ntx_mod = ty % ntx;
+    const int ty_ntx_div = ty / ntx;
+    const int tidx = threadIdx.x / 4 + (threadIdx.x % 2) * 8;
+
+#pragma unroll
+    for (int slab_row0 = 0; slab_row0 < mmq_y; slab_row0 += rows_per_slab) {
+        tile_A   A[ntx][nfrags];
+        uint32_t scaleA[ntx][nfrags];
+        const int i0 = slab_row0 + ty_ntx_div * rows_per_warp;
+
+#pragma unroll
+        for (int n = 0; n < ntx; ++n) {
+#pragma unroll
+            for (int frag = 0; frag < nfrags; ++frag) {
+                const int k0 = k00 + frag * tile_A::J;
+                load_ldmatrix(A[n][frag], x_qs + (i0 + n * tile_A::I) * MMQ_MMA_TILE_X_K_NVFP4 + k0, MMQ_MMA_TILE_X_K_NVFP4);
+                scaleA[n][frag] = x_sc[(i0 + n * tile_A::I + tidx) * MMQ_MMA_TILE_X_K_NVFP4 + k0 / tile_A::J];
+            }
+        }
+
+#pragma unroll
+        for (int j0 = 0; j0 < mmq_x; j0 += ntx * tile_C::J) {
+            tile_B   B[nfrags];
+            uint32_t scaleB[nfrags];
+            const int sum_j = slab_row0 / rows_per_slab * groups_per_slab + j0 / tile_C::J;
+
+#pragma unroll
+            for (int frag = 0; frag < nfrags; ++frag) {
+                const int k0 = frag * tile_B::J;
+                load_generic(B[frag], y_qs + (ty_ntx_mod * tile_C::J + j0) * MMQ_TILE_Y_K + k0, MMQ_TILE_Y_K);
+                scaleB[frag] = y_sc[(ty_ntx_mod * tile_C::J + j0 + tidx) * MMQ_TILE_Y_K + frag];
+            }
+
+#pragma unroll
+            for (int n = 0; n < ntx; ++n) {
+                float * sum_n = sum + (sum_j + n) * tile_C::ne;
+
+#pragma unroll
+                for (int frag = 0; frag < nfrags; ++frag) {
+                    tile_C C = {};
+                    mma_nvfp4_blackwell(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
+
+#pragma unroll
+                    for (int l = 0; l < tile_C::ne; ++l) {
+                        sum_n[l] += C.x[l];
+                    }
+                }
+            }
+        }
+    }
+}
+#endif // BLACKWELL_MMA_AVAILABLE
 
 
 template <int mmq_y, bool need_check>
@@ -3270,8 +3412,13 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_MXFP4> {
 template <int mmq_x, int mmq_y, bool need_check>
 struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_NVFP4> {
     static constexpr int              vdr          = VDR_NVFP4_Q8_1_MMQ;
+#ifdef BLACKWELL_MMA_AVAILABLE
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_nvfp4_nvfp4<mmq_y, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_nvfp4_nvfp4_mma<mmq_x, mmq_y>;
+#else
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_nvfp4<mmq_y, need_check>;
     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
+#endif // BLACKWELL_MMA_AVAILABLE
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
@@ -3406,7 +3553,8 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 #if defined(BLACKWELL_MMA_AVAILABLE)
     // FP4 tile stores 8 blocks
-    constexpr int ne_block = (type == GGML_TYPE_MXFP4) ? 8 * QK_MXFP4 : 4 * QK8_1;
+    constexpr int ne_block = (type == GGML_TYPE_MXFP4) ? 8 * QK_MXFP4 :
+                             (type == GGML_TYPE_NVFP4) ? QK_K : 4 * QK8_1;
 #else
     constexpr int ne_block = 4 * QK8_1;
 #endif  // defined(BLACKWELL_MMA_AVAILABLE)

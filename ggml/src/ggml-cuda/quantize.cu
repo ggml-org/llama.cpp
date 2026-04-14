@@ -70,6 +70,92 @@ __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
     return static_cast<uint8_t>(biased);
 }
 
+template <bool has_ids>
+static __global__ void quantize_mmq_nvfp4(
+        const float * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2) {
+    const int lane_id = threadIdx.x & 31;
+
+    const int64_t i0_base = ((int64_t) blockDim.x * blockIdx.y + threadIdx.x) * 8;
+    if (i0_base >= ne0) {
+        return;
+    }
+
+    const int64_t i1 = blockIdx.x;
+    const int64_t i2 = blockIdx.z % ne2;
+    const int64_t i3 = blockIdx.z / ne2;
+    const int64_t i01 = has_ids ? ids[i1] : i1;
+    const int64_t k_block = i0_base / QK_K;
+    const int64_t blocks_per_col = (ne0 + QK_K - 1) / QK_K;
+    if (k_block >= blocks_per_col) {
+        return;
+    }
+
+    const int64_t ib = blockIdx.z * ((int64_t) blocks_per_col * ne1) + k_block * ne1 + blockIdx.x;
+    block_nvfp4_mmq * y = (block_nvfp4_mmq *) vy;
+    block_nvfp4_mmq * yb = y + ib;
+
+    float vals_raw[8];
+    float amax_raw = 0.0f;
+    const int64_t base_idx = i3 * s03 + i2 * s02 + i01 * s01;
+#pragma unroll
+    for (int k = 0; k < 8; k++) {
+        const int64_t i00 = i0_base + k;
+        if (i00 < ne00) {
+            const float v = x[base_idx + i00];
+            vals_raw[k] = v;
+            amax_raw = fmaxf(amax_raw, fabsf(v));
+        } else {
+            vals_raw[k] = 0.0f;
+        }
+    }
+
+    const float sub_max = fmaxf(amax_raw, __shfl_xor_sync(0xFFFFFFFFu, amax_raw, 1));
+    static constexpr int test_offsets[5] = { 0, -1, 1, -2, 2};
+    const int first_fp8_code = (int) ggml_cuda_fp32_to_ue4m3(sub_max * (1.0f / 6.0f));
+
+    float best_err = FLT_MAX;
+    uint8_t fp8_code = 0;
+    float subblock_scale = 0.0f;
+
+#pragma unroll // Check +/- 2 to find best code to reduce NVFP4 activation loss. Negligible overhead on Blackwell.
+    for (int i = 0; i < 5; i++) {  
+        const int test_code = first_fp8_code + test_offsets[i];
+        const uint8_t code = (uint8_t) test_code;
+        const float test_scale = ggml_cuda_ue4m3_to_fp32(code);
+        const float test_inv_scale = test_scale > 0.0f ? 0.5f / test_scale : 0.0f;
+        float cur_err = 0.0f;
+#pragma unroll
+        for (int k = 0; k < 8; ++k) {
+            const float v = vals_raw[k];
+            const uint8_t q = ggml_cuda_float_to_fp4_e2m1(v, test_inv_scale);
+            const float err_diff = fabsf(v) - fabsf(kvalues_mxfp4[q & 0x7]) * test_scale;
+            cur_err = fmaf(err_diff, err_diff, cur_err);
+        }
+
+        cur_err = cur_err + __shfl_xor_sync(__activemask(), cur_err, 1);
+
+        if (cur_err < best_err) { 
+            best_err = cur_err;
+            fp8_code = test_code;
+            subblock_scale = test_scale;
+        }
+    }
+
+    const float inv_scale = subblock_scale > 0.0f ? 0.5f / subblock_scale : 0.0f;
+    uint32_t q_word = 0;
+#pragma unroll // this is faster than the previous __nv_fp4x4_e2m1
+    for (int k = 0; k < 8; ++k) {
+        q_word |= (uint32_t) ggml_cuda_float_to_fp4_e2m1(vals_raw[k], inv_scale) << (4 * k);
+    }
+    yb->qs_u32[lane_id] = q_word;
+
+    if ((lane_id & 1) == 0) {
+        reinterpret_cast<uint8_t *>(yb->sc4_u32)[lane_id >> 1] = fp8_code;
+    }
+}
+
 // quantize values in the format mxfp4 is stored which is interleaved nibbles
 // i.e. a block a0-a31 is represented as a0a16,a1a17 ...a15a31
 static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
@@ -340,4 +426,25 @@ void quantize_mmq_mxfp4_cuda(const float *                    x,
     const dim3    block_size(WARP_SIZE, nwarps, 1);
 
     quantize_mmq_mxfp4<<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
+}
+
+void quantize_mmq_nvfp4_cuda(
+        const float * x, const int32_t * ids, void * vy, const ggml_type type_src0,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    GGML_ASSERT(type_src0 == GGML_TYPE_NVFP4);
+    GGML_ASSERT(ne00 % 8 == 0);
+    GGML_ASSERT(ne0 > 0);
+
+    constexpr int nvfp4_block_size = 128;
+    const int64_t block_num_y = (ne0 + 8 * nvfp4_block_size - 1) / (8 * nvfp4_block_size);
+    const dim3 num_blocks(ne1, block_num_y, ne2 * ne3);
+    const dim3 block_size(nvfp4_block_size, 1, 1);
+    if (ids) {
+        quantize_mmq_nvfp4<true><<<num_blocks, block_size, 0, stream>>>(
+            x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
+    } else {
+        quantize_mmq_nvfp4<false><<<num_blocks, block_size, 0, stream>>>(
+            x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
+    }
 }
