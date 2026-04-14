@@ -1492,15 +1492,18 @@ static void test_split_by_role() {
 
         assert_equals<std::string>("user", splits[0].role);
         assert_equals<size_t>(0, splits[0].pos);
-        assert_equals<size_t>(8, splits[0].len);
+        assert_equals<size_t>(10, splits[0].len);
+        assert_equals<std::string>("<|user|>Hi", prompt.substr(splits[0].pos, splits[0].len));
 
         assert_equals<std::string>("assistant", splits[1].role);
         assert_equals<size_t>(10, splits[1].pos);
-        assert_equals<size_t>(13, splits[1].len);
+        assert_equals<size_t>(18, splits[1].len);
+        assert_equals<std::string>("<|assistant|>Hello", prompt.substr(splits[1].pos, splits[1].len));
 
         assert_equals<std::string>("user", splits[2].role);
         assert_equals<size_t>(28, splits[2].pos);
-        assert_equals<size_t>(8, splits[2].len);
+        assert_equals<size_t>(11, splits[2].len);
+        assert_equals<std::string>("<|user|>Bye", prompt.substr(splits[2].pos, splits[2].len));
     }
 }
 

@@ -77,17 +77,20 @@ std::vector<common_chat_msg_span> common_chat_split_by_role(const std::string & 
 
     auto parser = build_peg_parser([&](common_peg_parser_builder & p) {
         std::vector<std::string>       all_delims;
-        std::vector<common_peg_parser> tagged_delims;
+        std::vector<common_peg_parser> tagged_messages;
 
         all_delims.reserve(delims.size());
-        tagged_delims.reserve(delims.size());
+        tagged_messages.reserve(delims.size());
         for (const auto & d : delims) {
             all_delims.push_back(d.delimiter);
-            tagged_delims.push_back(p.tag(d.role, p.literal(d.delimiter)));
         }
 
         auto any_delim = p.until_one_of(all_delims);
-        return any_delim + p.zero_or_more(p.choice(tagged_delims) + any_delim) + p.end();
+        for (const auto & d : delims) {
+            tagged_messages.push_back(p.tag(d.role, p.literal(d.delimiter) + any_delim));
+        }
+
+        return any_delim + p.zero_or_more(p.choice(tagged_messages)) + p.end();
     });
 
     common_peg_parse_context ctx(prompt);
