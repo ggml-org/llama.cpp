@@ -7,7 +7,7 @@ RUN apt update && apt install -y git build-essential cmake wget xz-utils
 
 # Install SSL and Vulkan SDK dependencies
 RUN apt install -y libssl-dev curl \
-    libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc
+    libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc spirv-headers
 
 # Build it
 WORKDIR /app
