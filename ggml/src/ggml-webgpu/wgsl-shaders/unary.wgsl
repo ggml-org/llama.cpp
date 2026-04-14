@@ -147,15 +147,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                                -9.010913, 9.010913)));
 #endif
 #ifdef XIELU
+    let val = f32(src[params.offset_src + src_idx]);
     let res =
-        select(((exp(min(src[params.offset_src + src_idx], TYPE(params.eps))) - 1.0) -
-                src[params.offset_src + src_idx]) *
-                   TYPE(params.alpha_n) +
-               TYPE(params.beta) * src[params.offset_src + src_idx],
-               TYPE(params.alpha_p) * src[params.offset_src + src_idx] *
-                   src[params.offset_src + src_idx] +
-                   TYPE(params.beta) * src[params.offset_src + src_idx],
-               src[params.offset_src + src_idx] > 0.0);
+        TYPE(select(
+            ((exp(min(val, params.eps)) - 1.0) - val) * params.alpha_n + params.beta * val,
+            params.alpha_p * val * val + params.beta * val,
+            val > 0.0));
 #endif
 #ifdef SOFTPLUS
     let src_f32 = f32(src[params.offset_src + src_idx]);
