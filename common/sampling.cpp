@@ -289,12 +289,21 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
 
     // reasoning budget sampler
     if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty()) {
+        // Tokenize the budget message separately so it can be injected before the
+        // conclusion phase (two-phase graceful termination). The forced_tokens
+        // sequence (message + end tag) is retained as the hard-cutoff safety net.
+        std::vector<llama_token> message_tokens;
+        if (!params.reasoning_budget_message.empty() && params.reasoning_budget_conclusion > 0) {
+            message_tokens = common_tokenize(vocab, params.reasoning_budget_message, false, true);
+        }
         rbudget = common_reasoning_budget_init(
             vocab,
             params.reasoning_budget_start,
             params.reasoning_budget_end,
             params.reasoning_budget_forced,
+            message_tokens,
             params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens,
+            params.reasoning_budget_conclusion,
             prefill_tokens);
     }
 

@@ -3115,8 +3115,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)",
         [](common_params & params, const std::string & value) {
             params.reasoning_budget_message = value;
+            params.sampling.reasoning_budget_message = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_MESSAGE"));
+    add_opt(common_arg(
+        {"--reasoning-budget-conclusion"}, "N",
+        "token budget for conclusion phase after message injection (0 = disabled, default: 0).\n"
+        "When set, the model is given N tokens to conclude naturally after the budget message\n"
+        "is injected, instead of immediately forcing the end-of-thinking tag.",
+        [](common_params & params, int value) {
+            if (value < 0) { throw std::invalid_argument("invalid value for --reasoning-budget-conclusion: must be >= 0"); }
+            params.sampling.reasoning_budget_conclusion = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_CONCLUSION"));
     add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
