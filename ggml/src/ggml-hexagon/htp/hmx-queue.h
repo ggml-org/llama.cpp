@@ -72,7 +72,6 @@ static inline bool hmx_queue_push(struct hmx_queue * q, struct hmx_queue_desc d)
 
     q->desc[iw] = d;
     atomic_store(&q->idx_write, (iw + 1) & q->idx_mask);
- 
     // wake up our thread
     atomic_fetch_add(&q->seqn, 1);
     qurt_futex_wake(&q->seqn, 1);
