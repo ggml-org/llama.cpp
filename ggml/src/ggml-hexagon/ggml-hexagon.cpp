@@ -44,6 +44,7 @@
 #include "htp_iface.h"
 #include "htp-drv.h"
 
+<<<<<<< HEAD
 using intvec  = std::vector<int>;
 using uintvec = std::vector<unsigned int>;
 using u32vec  = std::vector<uint32_t>;
@@ -66,6 +67,22 @@ static u32vec opt_pmu_evt { 0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C }
 static int opt_opstage  = HTP_OPSTAGE_QUEUE | HTP_OPSTAGE_COMPUTE;
 static int opt_opbatch  = 1024; // max number of ops in a batch
 static int opt_opqueue  = 16;   // max number of pending batches
+=======
+static size_t opt_ndev    = 1;
+static size_t opt_nhvx    = 0; // use all
+static size_t opt_vmem    = HTP_OP_MAX_VMEM_DEFAULT; // max available va space for buffer mappings
+static int    opt_arch    = 0; // autodetect
+static int    opt_etm     = 0;
+static int    opt_verbose = 0;
+static int    opt_profile = 0;
+static int    opt_hostbuf = 1; // hostbuf ON by default
+static int    opt_use_hmx = 1; // when set, enable HMX; when 0, use HVX only
+static int    opt_opmask  = HTP_OPMASK_QUEUE | HTP_OPMASK_COMPUTE; // Enable all stages by default
+static int    opt_opsync  = 0;  // synchronous ops
+static int    opt_opbatch = 1024; // max number of ops in a batch
+static int    opt_opqueue = 16;   // max number of pending batches
+
+>>>>>>> 6ee78ca87 (hexagon: allow host to set max vmem size)
 static std::regex* opt_opfilter = NULL; // regex of ops to not claim
 
 #define HEX_VERBOSE(...) \
@@ -1580,7 +1597,7 @@ struct ggml_hexagon_opbatch {
         n_ops_max  = batch_size;
         n_tens_max = n_ops_max + n_ops_max * HTP_OP_MAX_INPUTS;
 
-        b_vmem_max = HTP_OP_MAX_VMEM;
+        b_vmem_max = opt_vmem;
 
         ops.resize(n_ops_max);
 
@@ -2095,7 +2112,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     this->op_queue = new ggml_hexagon_opqueue(this, opt_opbatch, opt_opqueue);
 
     // Start processing op batch requests
-    err = htp_iface_start(this->handle, dev_id, this->queue_id, opt_nhvx, opt_use_hmx);
+    err = htp_iface_start(this->handle, dev_id, this->queue_id, opt_nhvx, opt_use_hmx, opt_vmem);
     if (err != 0) {
         GGML_LOG_ERROR("ggml-hex: failed to start session: 0x%08x\n", (unsigned) err);
         throw std::runtime_error("ggml-hex: iface start failed (see log for details)");
@@ -3492,20 +3509,35 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_use_hmx = getenv("GGML_HEXAGON_USE_HMX");
     const char * str_ndev    = getenv("GGML_HEXAGON_NDEV");
     const char * str_arch    = getenv("GGML_HEXAGON_ARCH");
+    const char * str_vmem    = getenv("GGML_HEXAGON_VMEM");
 
     auto RE_ICASE = std::regex_constants::icase;
 
     opt_opfilter     = str_opfilter ? new std::regex(str_opfilter, RE_ICASE) : NULL;
-    opt_verbose      = str_verbose  ? atoi(str_verbose)             : 0;
-    opt_hostbuf      = str_hostbuf  ? atoi(str_hostbuf)             : opt_hostbuf;
-    opt_opstage      = str_opstage  ? strtoul(str_opstage, NULL, 0) : opt_opstage;
-    opt_opbatch      = str_opbatch  ? strtoul(str_opbatch, NULL, 0) : opt_opbatch;
-    opt_opqueue      = str_opqueue  ? strtoul(str_opqueue, NULL, 0) : opt_opqueue;
-    opt_etm          = str_etm      ? atoi(str_etm)                 : 0;
-    opt_nhvx         = str_nhvx     ? strtoul(str_nhvx, NULL, 0)    : opt_nhvx;
-    opt_use_hmx      = str_use_hmx  ? atoi(str_use_hmx)             : opt_use_hmx;
-    opt_ndev         = str_ndev     ? strtoul(str_ndev, NULL, 0)    : opt_ndev;
-    opt_hostbuf      = str_hostbuf  ? atoi(str_hostbuf)             : opt_hostbuf;
+    opt_verbose      = str_verbose  ? atoi(str_verbose)                      : 0;
+    opt_hostbuf      = str_hostbuf  ? atoi(str_hostbuf)                      : opt_hostbuf;
+    opt_opmask       = str_opmask   ? strtoul(str_opmask, NULL, 0)           : opt_opmask;
+    opt_opsync       = str_opsync   ? atoi(str_opsync)                       : opt_opsync;
+    opt_opbatch      = str_opbatch  ? strtoul(str_opbatch, NULL, 0)          : opt_opbatch;
+    opt_opqueue      = str_opqueue  ? strtoul(str_opqueue, NULL, 0)          : opt_opqueue;
+    opt_profile      = str_profile  ? atoi(str_profile)                      : 0;
+    opt_etm          = str_etm      ? atoi(str_etm)                          : 0;
+    opt_nhvx         = str_nhvx     ? strtoul(str_nhvx, NULL, 0)             : opt_nhvx;
+    opt_use_hmx      = str_use_hmx  ? atoi(str_use_hmx)                      : opt_use_hmx;
+    opt_ndev         = str_ndev     ? strtoul(str_ndev, NULL, 0)             : opt_ndev;
+    opt_hostbuf      = str_hostbuf  ? atoi(str_hostbuf)                      : opt_hostbuf;
+    opt_vmem         = str_vmem     ? strtoul(str_vmem, NULL, 0)             : opt_vmem;
+
+    if (opt_ndev > GGML_HEXAGON_MAX_SESSIONS) {
+        opt_ndev = GGML_HEXAGON_MAX_SESSIONS;
+    }
+
+    if (str_arch) {
+        if (str_arch[0] == 'v') {
+            str_arch++;
+        }
+        opt_arch = strtoul(str_arch, NULL, 0);
+    }
 
     if (str_profile) {
         opt_pmu_evt = [&]() -> std::vector<uint32_t> {
@@ -3519,18 +3551,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
         GGML_LOG_INFO("ggml-hex: Profiling mode %u : pmu-evt [ %s ]\n", opt_profile,
                 vec_to_str<uint32_t, 16>(opt_pmu_evt).c_str());
     }
-
-    if (opt_ndev > GGML_HEXAGON_MAX_SESSIONS) {
-        opt_ndev = GGML_HEXAGON_MAX_SESSIONS;
-    }
-
-    if (str_arch) {
-        if (str_arch[0] == 'v') {
-            str_arch++;
-        }
-        opt_arch = strtoul(str_arch, NULL, 0);
-    }
-
+ 
     reg->context = new ggml_hexagon_registry(reg);
 }
 

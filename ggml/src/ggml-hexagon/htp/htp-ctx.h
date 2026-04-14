@@ -77,6 +77,8 @@ struct htp_context {
     atomic_bool            vtcm_valid;
     atomic_bool            vtcm_needs_release;
 
+    uint64_t               max_vmem;
+
     struct htp_ops_context octx;
 
 #ifdef HTP_HAS_HMX

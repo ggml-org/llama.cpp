@@ -358,7 +358,7 @@ static void vtcm_free(struct htp_context * ctx) {
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
-AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx, uint32 use_hmx) {
+AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx, uint32 use_hmx, uint64_t max_vmem) {
     struct htp_context * ctx = (struct htp_context *) handle;
 
     if (!ctx) {
@@ -376,12 +376,12 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
                               htp_error_callback,   // Error callback; no errors expected on the DSP
                               (void *) ctx,         // Callback context
                               &ctx->queue);
-
     if (err) {
         FARF(ERROR, "Queue import failed with 0x%08x", (unsigned) err);
         return err;
     }
 
+    ctx->max_vmem    = max_vmem;
     ctx->thread_id   = qurt_thread_get_id();
     ctx->thread_prio = qurt_thread_get_priority(ctx->thread_id);
 
@@ -689,7 +689,7 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
 
     FARF(HIGH, "prep-bufs : pass1 mmap-vmem %zu extra-vmem %zu n-bufs %u b-reuse %u", m_vmem, e_vmem, n_bufs, b_reuse);
 
-    if ((m_vmem + e_vmem) > HTP_OP_MAX_VMEM) {
+    if ((m_vmem + e_vmem) > ctx->max_vmem) {
         // Drop unused mappings
         for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
             bool used = m_reuse & (1<<i);
