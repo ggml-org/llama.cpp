@@ -8,9 +8,9 @@
 // llama_kv_cache_dsa
 //
 
-// utilizes two KV cache instances: llama_kv_cache and llama_kv_cache
-//   the first instance is for caching key tensors of the model,
-//   the second instance is for caching lightning indexer key tensors
+// utilizes two instances of llama_kv_cache:
+// - the first instance is for caching key tensors of the model,
+// - the second instance is for caching lightning indexer key tensors
 
 class llama_kv_cache_dsa : public llama_memory_i {
 public:

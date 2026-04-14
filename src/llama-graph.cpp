@@ -2332,7 +2332,6 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
-
 ggml_tensor * llm_graph_context::build_attn(
         llm_graph_input_attn_kv_iswa * inp,
         ggml_tensor * wo,

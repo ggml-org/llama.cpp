@@ -5064,6 +5064,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_SCATTER:
         case GGML_OP_LIGHTNING_INDEXER:
             return true;
+
         default:
             return false;
     }

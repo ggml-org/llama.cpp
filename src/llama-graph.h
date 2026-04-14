@@ -393,7 +393,6 @@ public:
     const llama_kv_cache_dsa_context * mctx;
 };
 
-
 class llm_graph_input_attn_kv_iswa : public llm_graph_input_i {
 public:
     llm_graph_input_attn_kv_iswa(
