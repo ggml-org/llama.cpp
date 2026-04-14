@@ -3472,27 +3472,20 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 
     // For subgroup matrix code to be the most efficient, we would like the subgroup size to be consistent and accurate.
     // Unfortunately, that is not possible, so we use the maximum subgroup size reported by the adapter.
-    ctx->webgpu_global_ctx->capabilities.max_subgroup_size =
-        ctx->webgpu_global_ctx->capabilities.supports_subgroups ? info.subgroupMaxSize : 1u;
+    ctx->webgpu_global_ctx->capabilities.max_subgroup_size = info.subgroupMaxSize;
     // Initialize device
     std::vector<wgpu::FeatureName> required_features       = { wgpu::FeatureName::ShaderF16 };
 
 #ifndef __EMSCRIPTEN__
-    // required_features.push_back(wgpu::FeatureName::ImplicitDeviceSynchronization);
-    // if (ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix) {
-    //     required_features.push_back(wgpu::FeatureName::Subgroups);
-    //     required_features.push_back(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix);
-    // }
-
     required_features.push_back(wgpu::FeatureName::ImplicitDeviceSynchronization);
-    if (ctx->webgpu_global_ctx->capabilities.supports_subgroups) {
-        required_features.push_back(wgpu::FeatureName::Subgroups);
-    }
-
     if (ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix) {
         required_features.push_back(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix);
     }
 #endif
+
+    if (ctx->webgpu_global_ctx->capabilities.supports_subgroups) {
+        required_features.push_back(wgpu::FeatureName::Subgroups);
+    }
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
     required_features.push_back(wgpu::FeatureName::TimestampQuery);

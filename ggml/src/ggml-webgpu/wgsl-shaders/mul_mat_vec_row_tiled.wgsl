@@ -5,6 +5,26 @@ enable f16;
 
 #include "common_decls.tmpl"
 
+#ifdef VEC
+#define VEC_SIZE 4u
+#define SRC0_TYPE vec4<SRC0_INNER_TYPE>
+#define SRC1_TYPE vec4<SRC1_INNER_TYPE>
+
+fn inner_dot(src0_val: SRC0_TYPE, src1_val: SRC1_TYPE) -> f32 {
+    return f32(dot(SRC1_TYPE(src0_val), src1_val));
+}
+#endif
+
+#ifdef SCALAR
+#define VEC_SIZE 1u
+#define SRC0_TYPE SRC0_INNER_TYPE
+#define SRC1_TYPE SRC1_INNER_TYPE
+
+fn inner_dot(src0_val: SRC0_TYPE, src1_val: SRC1_TYPE) -> f32 {
+    return f32(src0_val) * f32(src1_val);
+}
+#endif
+
 struct MulMatParams {
     offset_src0: u32,
     offset_src1: u32,
@@ -24,8 +44,8 @@ struct MulMatParams {
     broadcast3: u32
 };
 
-@group(0) @binding(0) var<storage, read_write> src0: array<SRC0_INNER_TYPE>;
-@group(0) @binding(1) var<storage, read_write> src1: array<SRC1_INNER_TYPE>;
+@group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>;
+@group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>;
 @group(0) @binding(2) var<storage, read_write> dst: array<f32>;
 
 @group(0) @binding(3) var<uniform> params: MulMatParams;
@@ -45,7 +65,8 @@ fn main(
 #ifdef USE_SUBGROUP_REDUCTION
   , @builtin(subgroup_id) subgroup_id: u32,
     @builtin(subgroup_invocation_id) subgroup_invocation_id: u32,
-    @builtin(num_subgroups) num_subgroups: u32
+    @builtin(num_subgroups) num_subgroups: u32,
+    @builtin(subgroup_size) subgroup_size: u32
 #endif
 ) {
     let thread_id = local_id.x;
@@ -74,19 +95,19 @@ fn main(
     let dst_idx_base = params.offset_dst + dst3_idx * dst3_stride + dst2_idx * dst2_stride + row_base;
 
     var acc: array<f32, OUTPUTS_PER_WG>;
-    for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
-        acc[row] = 0.0;
-    }
 
-    // Each thread walks K with unit-stride loads from the vector and updates
+    let k_vec = params.k / VEC_SIZE;
+    let src1_idx_base_vec = src1_idx_base / VEC_SIZE;
+
+    // Each thread walks K, loads from the vector, and updates
     // a small block of output rows held in registers.
-    for (var k = thread_id; k < params.k; k += WG_SIZE) {
-        let x = f32(src1[src1_idx_base + k]);
+    for (var k = thread_id; k < k_vec; k += WG_SIZE) {
+        let x = src1[src1_idx_base_vec + k];
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
             let output_row = row_base + row;
             if (output_row < params.m) {
-                let src0_idx = src0_batch_offset + output_row * params.stride_01 + k;
-                acc[row] += f32(src0[src0_idx]) * x;
+                let src0_idx = (src0_batch_offset + output_row * params.stride_01) / VEC_SIZE + k;
+                acc[row] += inner_dot(src0[src0_idx], x);
             }
         }
     }
@@ -101,15 +122,14 @@ fn main(
 
     workgroupBarrier();
 
-    if (thread_id < OUTPUTS_PER_WG) {
-        let output_row = row_base + thread_id;
-        if (output_row < params.m) {
-            var row_total = 0.0;
-            for (var s = 0u; s < num_subgroups; s++) {
-                row_total += partial_sums[partial_index(thread_id, s)];
-            }
-            dst[dst_idx_base + thread_id] = row_total;
+    for (var row = subgroup_id; (row < OUTPUTS_PER_WG) && (row_base + row < params.m); row += num_subgroups) {
+        let output_row = row_base + row;
+        var row_acc = 0.0f;
+        for (var k = subgroup_invocation_id; k < num_subgroups; k += subgroup_size) {
+            row_acc += partial_sums[partial_index(row, k)];
         }
+        let row_total = subgroupAdd(row_acc);
+        dst[dst_idx_base + row] = row_total;
     }
 #endif
 
@@ -121,11 +141,8 @@ fn main(
     workgroupBarrier();
 
     var stride = WG_SIZE / 2u;
-    loop {
-        if (stride == 0u) {
-            break;
-        }
 
+    while (stride > 0) {
         if (thread_id < stride) {
             for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
                 partial_sums[partial_index(row, thread_id)] += partial_sums[partial_index(row, thread_id + stride)];
@@ -133,13 +150,13 @@ fn main(
         }
 
         workgroupBarrier();
-        stride = stride / 2u;
+        stride = stride / 2;
     }
 
     if (thread_id < OUTPUTS_PER_WG) {
         let output_row = row_base + thread_id;
         if (output_row < params.m) {
-            dst[dst_idx_base + thread_id] = partial_sums[partial_index(thread_id, 0u)];
+            dst[dst_idx_base + thread_id] = partial_sums[partial_index(thread_id, 0)];
         }
     }
 #endif
