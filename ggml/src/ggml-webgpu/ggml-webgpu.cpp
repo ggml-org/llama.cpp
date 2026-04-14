@@ -233,6 +233,7 @@ struct webgpu_encoded_op {
 
 struct webgpu_capabilities {
     wgpu::Limits limits;
+    bool         supports_subgroups = false;
     bool         supports_subgroup_matrix = false;
 
     uint32_t sg_mat_m = 0;
@@ -1322,6 +1323,8 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context &       ctx,
             switch (src0->type) {
                 case GGML_TYPE_F32:
                 case GGML_TYPE_F16:
+                    use_fast = true;
+                    break;
                 case GGML_TYPE_Q4_0:
                 case GGML_TYPE_Q4_1:
                 case GGML_TYPE_Q5_0:
@@ -1329,7 +1332,7 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context &       ctx,
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q8_1:
                 case GGML_TYPE_Q6_K:
-                    use_fast = true;
+                    use_fast = !is_vec || ctx->global_ctx->capabilities.supports_subgroups;
                     break;
                 case GGML_TYPE_Q2_K:
                 case GGML_TYPE_Q3_K:
@@ -1351,6 +1354,7 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context &       ctx,
         .src1                     = src1,
         .dst                      = dst,
         .max_wg_size              = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
+        .supports_subgroups       = ctx->global_ctx->capabilities.supports_subgroups,
         .supports_subgroup_matrix = ctx->global_ctx->capabilities.supports_subgroup_matrix,
         .sg_mat_m                 = ctx->global_ctx->capabilities.sg_mat_m,
         .sg_mat_n                 = ctx->global_ctx->capabilities.sg_mat_n,
@@ -3443,6 +3447,8 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     ctx->webgpu_global_ctx->adapter.GetFeatures(&features);
     // we require f16 support
     GGML_ASSERT(ctx->webgpu_global_ctx->adapter.HasFeature(wgpu::FeatureName::ShaderF16));
+    ctx->webgpu_global_ctx->capabilities.supports_subgroups =
+        ctx->webgpu_global_ctx->adapter.HasFeature(wgpu::FeatureName::Subgroups);
 
 #ifndef __EMSCRIPTEN__
     // Only support square f16 matrices of size 8 or 16 for now
@@ -3466,7 +3472,8 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 
     // For subgroup matrix code to be the most efficient, we would like the subgroup size to be consistent and accurate.
     // Unfortunately, that is not possible, so we use the maximum subgroup size reported by the adapter.
-    ctx->webgpu_global_ctx->capabilities.max_subgroup_size = info.subgroupMaxSize;
+    ctx->webgpu_global_ctx->capabilities.max_subgroup_size =
+        ctx->webgpu_global_ctx->capabilities.supports_subgroups ? info.subgroupMaxSize : 1u;
     // Initialize device
     std::vector<wgpu::FeatureName> required_features       = { wgpu::FeatureName::ShaderF16 };
 
@@ -3478,7 +3485,9 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     // }
 
     required_features.push_back(wgpu::FeatureName::ImplicitDeviceSynchronization);
-    required_features.push_back(wgpu::FeatureName::Subgroups);
+    if (ctx->webgpu_global_ctx->capabilities.supports_subgroups) {
+        required_features.push_back(wgpu::FeatureName::Subgroups);
+    }
 
     if (ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix) {
         required_features.push_back(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix);

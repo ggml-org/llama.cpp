@@ -46,7 +46,7 @@
 
 // Must be multiple of 4 to work with vectorized paths, and must divide
 // mul_mat_vec wg size
-#define WEBGPU_MUL_MAT_VEC_FLOAT_OUTPUTS_PER_WG 8
+#define WEBGPU_MUL_MAT_VEC_FLOAT_OUTPUTS_PER_WG 4
 #define WEBGPU_MUL_MAT_VEC_FLOAT_TILE_K         1024
 
 #define WEBGPU_MUL_MAT_VEC_LEGACY_Q_OUTPUTS_PER_WG 8
@@ -78,6 +78,7 @@ struct ggml_webgpu_shader_lib_context {
     bool     inplace                  = false;
     bool     overlap                  = false;
     bool     src_overlap              = false;
+    bool     supports_subgroups       = false;
     bool     supports_subgroup_matrix = false;
     uint32_t sg_mat_m                 = 0;
     uint32_t sg_mat_n                 = 0;
@@ -592,9 +593,13 @@ struct ggml_webgpu_mul_mat_vec_pipeline_key {
     ggml_type src0_type;
     ggml_type src1_type;
     int       vectorized;
+    int       use_subgroup_reduction;
 
     bool operator==(const ggml_webgpu_mul_mat_vec_pipeline_key & other) const {
-        return src0_type == other.src0_type && src1_type == other.src1_type && vectorized == other.vectorized;
+        return src0_type == other.src0_type &&
+               src1_type == other.src1_type &&
+               vectorized == other.vectorized &&
+               use_subgroup_reduction == other.use_subgroup_reduction;
     }
 };
 
@@ -604,6 +609,7 @@ struct ggml_webgpu_mul_mat_vec_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.src0_type);
         ggml_webgpu_hash_combine(seed, key.src1_type);
         ggml_webgpu_hash_combine(seed, key.vectorized);
+        ggml_webgpu_hash_combine(seed, key.use_subgroup_reduction);
         return seed;
     }
 };
@@ -613,6 +619,7 @@ struct ggml_webgpu_mul_mat_vec_shader_decisions {
     uint32_t tile_k;
     uint32_t outputs_per_wg;
     uint32_t vec_size;
+    bool     use_subgroup_reduction;
 };
 
 struct ggml_webgpu_mul_mat_pipeline_key {
@@ -1332,14 +1339,18 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_mul_mat_vec_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        const bool use_row_tiled_float =
+            context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16;
         ggml_webgpu_mul_mat_vec_pipeline_key key = {
             .src0_type  = context.src0->type,
             .src1_type  = context.src1->type,
             // Quantized mat-vec path currently runs scalar; only allow vectorization when both inputs are float
-            .vectorized = (context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 &&
+            .vectorized = (!use_row_tiled_float &&
+                           context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 &&
                            (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
                               1 :
                               0,
+            .use_subgroup_reduction = use_row_tiled_float && context.supports_subgroups,
         };
 
         auto it = mul_mat_vec_pipelines.find(key);
@@ -1348,19 +1359,24 @@ class ggml_webgpu_shader_lib {
         }
 
         std::vector<std::string> defines;
-        std::string              variant = "mul_mat_vec";
+        std::string              variant = use_row_tiled_float ? "mul_mat_vec_row_tiled" : "mul_mat_vec";
+        const char *             shader_src = use_row_tiled_float ? wgsl_mul_mat_vec_row_tiled : wgsl_mul_mat_vec;
 
         // src0 type (matrix row)
         switch (context.src0->type) {
             case GGML_TYPE_F32:
                 defines.push_back("SRC0_INNER_TYPE=f32");
-                defines.push_back("MUL_ACC_FLOAT");
                 variant += "_f32";
+                if (!use_row_tiled_float) {
+                    defines.push_back("MUL_ACC_FLOAT");
+                }
                 break;
             case GGML_TYPE_F16:
                 defines.push_back("SRC0_INNER_TYPE=f16");
-                defines.push_back("MUL_ACC_FLOAT");
                 variant += "_f16";
+                if (!use_row_tiled_float) {
+                    defines.push_back("MUL_ACC_FLOAT");
+                }
                 break;
             default:
                 {
@@ -1394,7 +1410,9 @@ class ggml_webgpu_shader_lib {
         }
 
         // VEC/SCALAR controls
-        defines.push_back(key.vectorized ? "VEC" : "SCALAR");
+        if (!use_row_tiled_float) {
+            defines.push_back(key.vectorized ? "VEC" : "SCALAR");
+        }
 
         uint32_t wg_size        = WEBGPU_MUL_MAT_VEC_WG_SIZE;
         uint32_t tile_k         = WEBGPU_MUL_MAT_VEC_FLOAT_TILE_K;
@@ -1409,15 +1427,21 @@ class ggml_webgpu_shader_lib {
         }
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
-        defines.push_back(std::string("TILE_K=") + std::to_string(tile_k));
         defines.push_back(std::string("OUTPUTS_PER_WG=") + std::to_string(outputs_per_wg));
+        if (use_row_tiled_float) {
+            defines.push_back(key.use_subgroup_reduction ? "USE_SUBGROUP_REDUCTION" : "USE_WORKGROUP_REDUCTION");
+            variant += key.use_subgroup_reduction ? "_subgroup_reduce" : "_workgroup_reduce";
+        } else {
+            defines.push_back(std::string("TILE_K=") + std::to_string(tile_k));
+        }
 
-        auto processed            = preprocessor.preprocess(wgsl_mul_mat_vec, defines);
+        auto processed            = preprocessor.preprocess(shader_src, defines);
         auto decisions            = std::make_shared<ggml_webgpu_mul_mat_vec_shader_decisions>();
         decisions->wg_size        = wg_size;
         decisions->tile_k         = tile_k;
         decisions->outputs_per_wg = outputs_per_wg;
         decisions->vec_size       = key.vectorized ? 4 : 1;
+        decisions->use_subgroup_reduction = key.use_subgroup_reduction;
 
         webgpu_pipeline pipeline   = ggml_webgpu_create_pipeline(device, processed, variant);
         pipeline.context           = decisions;
