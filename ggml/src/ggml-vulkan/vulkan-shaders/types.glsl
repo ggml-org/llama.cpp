@@ -1692,6 +1692,7 @@ struct block_iq4_nl_packed16
 #if defined(DATA_A_IQ4_NL)
 #define QUANT_K QUANT_K_IQ4_NL
 #define QUANT_R QUANT_R_IQ4_NL
+#define QUANT_AUXF 1
 #define A_TYPE block_iq4_nl
 #define A_TYPE_PACKED16 block_iq4_nl_packed16
 #endif
