@@ -130,19 +130,22 @@ enum htp_op_flags {
     HTP_OPFLAGS_SKIP_COMPUTE  = (1U << 0), // Skip actual computation (used for profiling)
 };
 
+#define HEX_NUM_PMU_COUNTERS 8
+
 // Op descriptor
 struct htp_op_desc {
-    uint32_t opcode;                    // GGML/HTP Op
-    uint32_t flags;                     // Op flags
-    int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
-    uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
-    uint16_t dst;                       // Output tensor index
+    uint32_t opcode;                             // GGML/HTP Op
+    uint32_t flags;                              // Op flags
+    int32_t  params[HTP_OP_MAX_PARAMS];          // Params for the op, e.g. epsilon of RMS norm
+    uint16_t src[HTP_OP_MAX_INPUTS];             // Input tensors indices
+    uint16_t dst;                                // Output tensor index
 
     // the rest is filled in-place by the NPU
-    uint32_t prof_usecs;                // Number of usec per request
-    uint32_t prof_cycles;               // Number of cycles per request
-    uint32_t prof_pkts;                 // Number of instruction packets per request
-    uint32_t unused;
+    uint32_t prof_usecs;                         // Number of usec per op
+    uint32_t prof_cycles;                        // Number of cycles per op
+    uint32_t prof_pkts;                          // Number of instruction packets per op
+    uint32_t pmu_counters[HEX_NUM_PMU_COUNTERS]; // PMU counters per op
+    uint8_t pad[4];                              // sizeof(htp_op_desc) must be multiple of 8
 };
 
 struct htp_opbatch_req {

@@ -104,13 +104,18 @@ static void ggml_hexagon_dump_op_supp(const std::string &sess_name, const struct
 }
 
 static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const ggml_tensor * op,
-                                      uint32_t op_usec, uint32_t op_cycles, uint32_t op_pkts) {
+                                      uint32_t op_usec, uint32_t op_cycles, uint32_t op_pkts, const uint32_t counters[]) {
     if (!opt_profile) return;
 
     op_desc desc(op);
-    GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : %s : op-usec %u op-cycles %u op-pkts %u (%.2f)\n", sess_name.c_str(),
+    GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : %s : op-usec %u op-cycles %u op-pkts %u (%.2f)", sess_name.c_str(),
                 ggml_op_desc(op), desc.names, desc.dims, desc.types, desc.strides, desc.buffs,
                 op_usec, op_cycles, op_pkts, (float) op_cycles / op_pkts);
+    GGML_LOG_DEBUG(" pmu[");
+    for (int i = 0; i < HEX_NUM_PMU_COUNTERS; i++) {
+        GGML_LOG_DEBUG("%sc%u:%u", i > 0 ? "," : "", i, counters[i]);
+    }
+    GGML_LOG_DEBUG("]\n");
 }
 
 // ** backend sessions
@@ -1854,7 +1859,7 @@ void ggml_hexagon_session::flush_pending(bool all) {
                 const ggml_tensor * t = (i < prof_op_ptr.size()) ? prof_op_ptr[i] : nullptr;
                 if (t) {
                     ggml_hexagon_dump_op_prof(this->name, t,
-                                             ops[i].prof_usecs, ops[i].prof_cycles, ops[i].prof_pkts);
+                                             ops[i].prof_usecs, ops[i].prof_cycles, ops[i].prof_pkts, ops[i].pmu_counters);
                 }
             }
 

@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <qurt_memory.h>
+#include <qurt.h>
 
 #include "hexagon_types.h"
 #include "hexagon_protos.h"
@@ -98,6 +99,47 @@ static inline void hex_l2flush(void * addr, size_t size) {
 
 static inline void hex_pause() {
     asm volatile(" pause(#255)\n");
+}
+
+#ifndef HEX_NUM_PMU_COUNTERS
+#define HEX_NUM_PMU_COUNTERS 8
+#endif
+
+static inline void hex_set_pmu(void) {
+    #if __HVX_ARCH__ >= 79
+        uint32_t events[] = {0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C};
+
+        // Pack 4 event IDs (low 8 bits) into each 32-bit config register
+        uint32_t evtcfg = 0, evtcfg1 = 0, cfg = 0, i = 0;
+        for (; i < HEX_NUM_PMU_COUNTERS/2; i++) {
+            evtcfg |= ((events[i] & 0xFF) << (i * 8));
+            evtcfg1 |= ((events[i + 4] & 0xFF) << (i * 8));
+        }
+
+        // For events >255 pack high 2 bits of all 8 event IDs into cfg register
+        // 2 bits per counter: bits [1:0] for counter 0, [3:2] for counter 1, etc.
+        for (i = 0; i < HEX_NUM_PMU_COUNTERS; i++) {
+            cfg |= (((events[i] >> 8) & 3) << (i * 2));
+        }
+
+        FARF(ALWAYS, "Configuring PMU registers: evtcfg = 0x%x, evtcfg1 = 0x%x, pmucfg = 0x%x", evtcfg, evtcfg1, cfg);
+
+        // Configure PMU registers
+        qurt_pmu_set(QURT_PMUCFG, cfg);
+        qurt_pmu_set(QURT_PMUEVTCFG, evtcfg);
+        qurt_pmu_set(QURT_PMUEVTCFG1, evtcfg1);
+    #endif
+}
+
+static inline void hex_get_pmu(uint32_t counters[]) {
+    asm volatile("%0 = upmucnt0" : "=r"(counters[0]));
+    asm volatile("%0 = upmucnt1" : "=r"(counters[1]));
+    asm volatile("%0 = upmucnt2" : "=r"(counters[2]));
+    asm volatile("%0 = upmucnt3" : "=r"(counters[3]));
+    asm volatile("%0 = upmucnt4" : "=r"(counters[4]));
+    asm volatile("%0 = upmucnt5" : "=r"(counters[5]));
+    asm volatile("%0 = upmucnt6" : "=r"(counters[6]));
+    asm volatile("%0 = upmucnt7" : "=r"(counters[7]));
 }
 
 #endif /* HEX_UTILS_H */

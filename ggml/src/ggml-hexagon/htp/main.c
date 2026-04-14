@@ -100,6 +100,8 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         }
     }
 
+    hex_set_pmu();
+
     return AEE_SUCCESS;
 }
 
@@ -435,18 +437,33 @@ struct profile_data {
     uint64_t usecs;
     uint64_t cycles;
     uint64_t pkts;
+    uint32_t pmu_counters[HEX_NUM_PMU_COUNTERS];
 };
 
 static inline void profile_start(struct profile_data * d) {
     d->usecs  = HAP_perf_get_qtimer_count();
     d->cycles = hex_get_cycles();
-    d->pkts   = hex_get_pktcnt();
+    #if __HVX_ARCH__ >= 79
+        hex_get_pmu(d->pmu_counters);
+        d->pkts = d->pmu_counters[0];
+    #else
+        d->pkts   = hex_get_pktcnt();
+    #endif
 }
 
 static inline void profile_stop(struct profile_data * d) {
     d->usecs  = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - d->usecs);
     d->cycles = hex_get_cycles() - d->cycles;
-    d->pkts   = hex_get_pktcnt() - d->pkts;
+    #if __HVX_ARCH__ >= 79
+        uint32_t pmu_counters_end[HEX_NUM_PMU_COUNTERS];
+        hex_get_pmu(pmu_counters_end);
+        for (int i = 0; i < HEX_NUM_PMU_COUNTERS; i++) {
+            d->pmu_counters[i] = pmu_counters_end[i] - d->pmu_counters[i];
+        }
+        d->pkts = d->pmu_counters[0];
+    #else
+        d->pkts   = hex_get_pktcnt() - d->pkts;
+    #endif
 }
 
 static int execute_op(struct htp_ops_context * octx) {
@@ -768,6 +785,9 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
             ops[i].prof_usecs  = prof.usecs;
             ops[i].prof_cycles = prof.cycles;
             ops[i].prof_pkts   = prof.pkts;
+            for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
+                ops[i].pmu_counters[j] = prof.pmu_counters[j];
+            }
         }
 
         // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
