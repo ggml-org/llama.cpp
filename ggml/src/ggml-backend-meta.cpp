@@ -5,9 +5,6 @@
 #include "ggml-alloc.h"
 #include "ggml-cpp.h"
 
-// TODO: tmp
-#include "ggml-ext.h"
-
 #include <algorithm>
 #include <cassert>
 #include <cmath>
