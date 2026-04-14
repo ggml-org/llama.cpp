@@ -2,6 +2,9 @@
  * IsoQuant 4-bit: quaternion 4D rotation + 4-bit (16 centroids) nibble packed.
  * Same block layout as turbo4_0 but uses quaternion rotation instead of WHT.
  */
+
+#define _USE_MATH_DEFINES
+
 #include "ggml-quants.h"
 #include "ggml-common.h"
 #include "ggml-impl.h"

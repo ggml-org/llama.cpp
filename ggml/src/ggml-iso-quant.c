@@ -7,6 +7,8 @@
  * Better decorrelation than PlanarQuant (2D) but cheaper than WHT (d log d).
  */
 
+#define _USE_MATH_DEFINES
+
 #include "ggml-quants.h"
 #include "ggml-common.h"
 #include "ggml-impl.h"

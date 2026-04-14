@@ -7,6 +7,8 @@
  * Same block layout as turbo3 (2-bit indices + 1-bit signs + norm).
  */
 
+#define _USE_MATH_DEFINES
+
 #include "ggml-quants.h"
 #include "ggml-common.h"
 #include "ggml-impl.h"
