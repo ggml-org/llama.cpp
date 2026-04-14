@@ -1335,13 +1335,13 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_mul_mat_vec_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        const bool use_row_tiled_float =
-            context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16;
+        const bool use_row_tiled =
+            context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16 || context.src0->type == GGML_TYPE_Q4_0;
         ggml_webgpu_mul_mat_vec_pipeline_key key = {
             .src0_type  = context.src0->type,
             .src1_type  = context.src1->type,
             .vectorized = (context.src0->ne[0] % 4 == 0 &&
-                           (use_row_tiled_float || context.dst->ne[0] % 4 == 0) &&
+                           (use_row_tiled || context.dst->ne[0] % 4 == 0) &&
                            (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
                               1 :
                               0
@@ -1353,24 +1353,27 @@ class ggml_webgpu_shader_lib {
         }
 
         std::vector<std::string> defines;
-        std::string              variant = use_row_tiled_float ? "mul_mat_vec_row_tiled" : "mul_mat_vec";
-        const char *             shader_src = use_row_tiled_float ? wgsl_mul_mat_vec_row_tiled : wgsl_mul_mat_vec;
+        std::string              variant = use_row_tiled ? "mul_mat_vec_row_tiled" : "mul_mat_vec";
+        const char *             shader_src = use_row_tiled ? wgsl_mul_mat_vec_row_tiled : wgsl_mul_mat_vec;
 
         // src0 type (matrix row)
         switch (context.src0->type) {
             case GGML_TYPE_F32:
                 defines.push_back("SRC0_INNER_TYPE=f32");
+                defines.push_back("MUL_ACC_FLOAT");
                 variant += "_f32";
-                if (!use_row_tiled_float) {
-                    defines.push_back("MUL_ACC_FLOAT");
-                }
                 break;
             case GGML_TYPE_F16:
                 defines.push_back("SRC0_INNER_TYPE=f16");
+                defines.push_back("MUL_ACC_FLOAT");
                 variant += "_f16";
-                if (!use_row_tiled_float) {
-                    defines.push_back("MUL_ACC_FLOAT");
-                }
+                break;
+            case GGML_TYPE_Q4_0:
+                defines.push_back("BYTE_HELPERS");
+                defines.push_back("MUL_ACC_Q4_0");
+                defines.push_back("U32_DEQUANT_HELPERS");
+                defines.push_back("SRC0_INNER_TYPE=u32");
+                variant += "_q4_0";
                 break;
             default:
                 {
@@ -1420,7 +1423,7 @@ class ggml_webgpu_shader_lib {
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
         defines.push_back(std::string("OUTPUTS_PER_WG=") + std::to_string(outputs_per_wg));
-        if (use_row_tiled_float) {
+        if (use_row_tiled) {
             defines.push_back(context.supports_subgroups ? "USE_SUBGROUP_REDUCTION" : "USE_WORKGROUP_REDUCTION");
             variant += context.supports_subgroups ? "_sg_reduce" : "_wg_reduce";
         } else {

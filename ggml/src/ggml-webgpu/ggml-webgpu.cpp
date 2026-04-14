@@ -1323,9 +1323,9 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context &       ctx,
             switch (src0->type) {
                 case GGML_TYPE_F32:
                 case GGML_TYPE_F16:
+                case GGML_TYPE_Q4_0:
                     use_fast = true;
                     break;
-                case GGML_TYPE_Q4_0:
                 case GGML_TYPE_Q4_1:
                 case GGML_TYPE_Q5_0:
                 case GGML_TYPE_Q5_1:
