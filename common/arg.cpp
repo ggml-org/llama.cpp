@@ -300,6 +300,7 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
     common_download_opts opts;
     opts.bearer_token = params.hf_token;
     opts.offline = params.offline;
+    opts.hf_prune_old_files = params.hf_prune_old_files;
     const int status = common_download_file_single(preset_url, preset_path, opts);
     const bool has_preset = status >= 200 && status < 400;
 
@@ -331,7 +332,8 @@ struct handle_model_result {
 
 static handle_model_result common_params_handle_model(struct common_params_model & model,
                                                       const std::string          & bearer_token,
-                                                      bool                         offline) {
+                                                      bool                         offline,
+                                                      bool                         hf_prune_old_files) {
     handle_model_result result;
 
     if (!model.docker_repo.empty()) {
@@ -346,6 +348,7 @@ static handle_model_result common_params_handle_model(struct common_params_model
         common_download_opts opts;
         opts.bearer_token = bearer_token;
         opts.offline = offline;
+        opts.hf_prune_old_files = hf_prune_old_files;
         auto download_result = common_download_model(model, opts, true);
 
         if (download_result.model_path.empty()) {
@@ -370,6 +373,7 @@ static handle_model_result common_params_handle_model(struct common_params_model
         common_download_opts opts;
         opts.bearer_token = bearer_token;
         opts.offline = offline;
+        opts.hf_prune_old_files = hf_prune_old_files;
         auto download_result = common_download_model(model, opts);
         if (download_result.model_path.empty()) {
             LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
@@ -576,7 +580,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // handle model and download
     if (!skip_model_download) {
-        auto res = common_params_handle_model(params.model, params.hf_token, params.offline);
+        auto res = common_params_handle_model(params.model, params.hf_token, params.offline, params.hf_prune_old_files);
         if (params.no_mmproj) {
             params.mmproj = {};
         } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
@@ -586,12 +590,12 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         // only download mmproj if the current example is using it
         for (const auto & ex : mmproj_examples) {
             if (ctx_arg.ex == ex) {
-                common_params_handle_model(params.mmproj,    params.hf_token, params.offline);
+                common_params_handle_model(params.mmproj,    params.hf_token, params.offline, params.hf_prune_old_files);
                 break;
             }
         }
-        common_params_handle_model(params.speculative.mparams_dft, params.hf_token, params.offline);
-        common_params_handle_model(params.vocoder.model,           params.hf_token, params.offline);
+        common_params_handle_model(params.speculative.mparams_dft, params.hf_token, params.offline, params.hf_prune_old_files);
+        common_params_handle_model(params.vocoder.model,           params.hf_token, params.offline, params.hf_prune_old_files);
     }
 
     // model is required (except for server)
@@ -2634,6 +2638,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.hf_token = value;
         }
     ).set_env("HF_TOKEN"));
+    add_opt(common_arg(
+        {"-hfp", "--hf-prune-old-files"},
+        string_format("Keep only latest version of model files, delete old ones (default: %s)", params.hf_prune_old_files ? "true" : "false"),
+        [](common_params & params) {
+            params.hf_prune_old_files = true;
+        }
+    ).set_env("LLAMA_ARG_HF_PRUNE_OLD_FILES"));
     add_opt(common_arg(
         {"--context-file"}, "FNAME",
         "file to load context from (use comma-separated values to specify multiple files)",

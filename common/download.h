@@ -53,6 +53,7 @@ struct common_download_opts {
     common_header_list headers;
     bool offline = false;
     common_download_callback * callback = nullptr;
+    bool hf_prune_old_files = false;
 };
 
 // Result of common_download_model

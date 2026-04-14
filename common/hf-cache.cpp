@@ -458,6 +458,57 @@ hf_files get_cached_files(const std::string & repo_id) {
     return files;
 }
 
+hf_files get_all_snapshot_files(const std::string & repo_id) {
+    fs::path cache_dir = get_cache_directory();
+    if (!fs::exists(cache_dir)) {
+        return {};
+    }
+
+    if (!repo_id.empty() && !is_valid_repo_id(repo_id)) {
+        LOG_WRN("%s: invalid repository: %s\n", __func__, repo_id.c_str());
+        return {};
+    }
+
+    hf_files files;
+
+    for (const auto & repo : fs::directory_iterator(cache_dir)) {
+        if (!repo.is_directory()) {
+            continue;
+        }
+        fs::path snapshots_path = repo.path() / "snapshots";
+
+        if (!fs::exists(snapshots_path)) {
+            continue;
+        }
+        std::string _repo_id = folder_name_to_repo(repo.path().filename().string());
+
+        if (!is_valid_repo_id(_repo_id)) {
+            continue;
+        }
+        if (!repo_id.empty() && _repo_id != repo_id) {
+            continue;
+        }
+
+        for (const auto & entry : fs::recursive_directory_iterator(snapshots_path)) {
+            if (!entry.is_regular_file() && !fs::is_directory(entry.path())) {
+                continue;
+            }
+            fs::path path = entry.path();
+
+            if (!path.empty()) {
+                hf_file file;
+                file.repo_id = _repo_id;
+                file.path = path.generic_string();
+                file.local_path = entry.path().string();
+                file.final_path = file.local_path;
+                files.push_back(std::move(file));
+            }
+        }
+    }
+
+    return files;
+}
+
 std::string finalize_file(const hf_file & file) {
     static std::atomic<bool> symlinks_disabled{false};
 
@@ -499,6 +550,84 @@ std::string finalize_file(const hf_file & file) {
         }
     }
     return file.final_path;
+}
+
+void prune_old_files(const std::string & hf_repo, const hf_cache::hf_files & current_model_files, const hf_cache::hf_file & current_mmproj) {
+    std::vector<std::string> filenames_to_delete;
+    std::vector<std::string> files_to_keep;
+
+    const auto get_symlink_target = [&](const std::string & file) {
+        std::error_code ec;
+
+        const auto & parent = fs::path(file).parent_path();
+        const auto & target_relative = fs::read_symlink(file, ec);
+        if (ec) {
+            LOG_DBG("%s: failed to read symlink %s: %s\n", __func__, file.c_str(), ec.message().c_str());
+            return std::string();
+        }
+        const auto & target_unresolved = parent / target_relative;
+        const auto & target = fs::weakly_canonical(target_unresolved, ec);
+        if (ec) {
+            LOG_DBG("%s: failed to resolve symlink target %s: %s\n", __func__, file.c_str(), ec.message().c_str());
+            return std::string();
+        }
+        return std::string(target);
+    };
+
+    for (const auto & file : current_model_files) {
+        files_to_keep.push_back(file.local_path);
+        filenames_to_delete.push_back(fs::path(file.local_path).filename());
+        const auto & target = get_symlink_target(file.local_path);
+        if (!target.empty()) {
+            files_to_keep.push_back(target);
+        }
+    }
+
+    if (!current_mmproj.local_path.empty()) {
+        files_to_keep.push_back(current_mmproj.local_path);
+        filenames_to_delete.push_back(fs::path(current_mmproj.local_path).filename());
+        const auto & target = get_symlink_target(current_mmproj.local_path);
+        if (!target.empty()) {
+            files_to_keep.push_back(target);
+        }
+    }
+
+    const auto cached_snapshot_files = hf_cache::get_all_snapshot_files(hf_repo);
+    for (int i = cached_snapshot_files.size() - 1; i >= 0; --i) {
+        const auto & file_path = cached_snapshot_files[i].local_path;
+        if (std::find(files_to_keep.begin(), files_to_keep.end(), file_path) != files_to_keep.end()) {
+            continue;
+        }
+        std::error_code ec;
+        for (const auto & filename : filenames_to_delete) {
+            if (string_ends_with(file_path, filename) && fs::is_symlink(file_path)) {
+                const auto & commit = fs::path(file_path).parent_path();
+                const auto & blob_file = get_symlink_target(file_path);
+
+                if (!fs::remove(file_path.c_str(), ec)) {
+                    LOG_ERR("%s: error deleting old symlink file from hf cache %s: %s\n", __func__, file_path.c_str(), ec.message().c_str());
+                    return;
+                }
+
+                if (fs::is_empty(commit)) {
+                    if (!fs::remove(commit.c_str(), ec)) {
+                        LOG_ERR("%s: error deleting old commit directory from hf cache %s: %s\n", __func__, commit.c_str(), ec.message().c_str());
+                        return;
+                    }
+                }
+
+                if (!blob_file.empty() && std::find(files_to_keep.begin(), files_to_keep.end(), blob_file) == files_to_keep.end()) {
+                    LOG_INF("deleting old blob file from hf cache: %s -> %s\n", file_path.c_str(), blob_file.c_str());
+                    if (fs::exists(blob_file)) {
+                        if (!fs::remove(blob_file.c_str(), ec)) {
+                            LOG_ERR("%s: error deleting old hf blob file %s: %s\n", __func__, file_path.c_str(), ec.message().c_str());
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // delete everything after this line, one day

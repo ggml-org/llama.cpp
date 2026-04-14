@@ -464,9 +464,10 @@ struct common_params {
 
     struct common_params_model model;
 
-    std::set<std::string> model_alias;     // model aliases                                                 // NOLINT
-    std::set<std::string> model_tags;      // model tags (informational, not used for routing)              // NOLINT
-    std::string hf_token             = ""; // HF token                                                      // NOLINT
+    std::set<std::string> model_alias;        // model aliases                                              // NOLINT
+    std::set<std::string> model_tags;         // model tags (informational, not used for routing)           // NOLINT
+    std::string hf_token             = "";    // HF token                                                   // NOLINT
+    bool        hf_prune_old_files   = false; // whether to keep only latest version of model files         // NOLINT
     std::string prompt               = "";                                                                  // NOLINT
     std::string system_prompt        = "";                                                                  // NOLINT
     std::string prompt_file          = ""; // store the external prompt file name                           // NOLINT
