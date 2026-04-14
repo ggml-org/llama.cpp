@@ -591,6 +591,7 @@ struct common_params {
     bool use_jinja = true;                                                                                  // NOLINT
     bool enable_chat_template = true;
     bool force_pure_content_parser = false;
+    bool parallel_tool_calls = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
     int reasoning_budget = -1;
