@@ -7,7 +7,6 @@
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 #include "ggml-quants.h"
-#include "ggml-tq-adaptive.h"
 #include "quants.h"
 #include "ggml-threading.h"
 #include "unary-ops.h"
@@ -1252,82 +1251,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
-static void ggml_tq3_ap_dequantize_row_f32(
-        const struct ggml_tensor * src0,
-        const struct ggml_tq3_ap_extra * ap,
-        int64_t row,
-        float * dst) {
-    const int64_t nc = src0->ne[0];
-    const int64_t blocks_per_row = ap->blocks_per_row;
-    const block_tq3_1s * row_ptr = (const block_tq3_1s *) ((const char *) src0->data + row * src0->nb[1]);
 
-    dequantize_row_tq3_1s(row_ptr, dst, nc);
-
-    const int64_t row_block0 = row * blocks_per_row;
-    uint32_t promoted_idx = ap->row_offsets[row];
-    for (int64_t b = 0; b < blocks_per_row; ++b) {
-        if (!ggml_tq3_ap_is_promoted(ap, row_block0 + b)) {
-            continue;
-        }
-        const float mean = GGML_FP16_TO_FP32(ap->means[promoted_idx++]);
-        ggml_vec_acc1_f32(QK_TQ3_0, dst + b * QK_TQ3_0, mean);
-    }
-}
-
-static void ggml_compute_forward_mul_mat_tq3_ap_f32(
-        const struct ggml_compute_params * params,
-              struct ggml_tensor * dst,
-        const struct ggml_tq3_ap_extra * ap) {
-
-    const struct ggml_tensor * src0 = dst->src[0];
-    const struct ggml_tensor * src1 = dst->src[1];
-
-    GGML_TENSOR_BINARY_OP_LOCALS
-
-    const int ith = params->ith;
-    const int nth = params->nth;
-
-    GGML_ASSERT(src0->type == GGML_TYPE_TQ3_1S);
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
-    GGML_ASSERT(nb00 == ggml_type_size(src0->type));
-    GGML_ASSERT(nb10 == sizeof(float));
-    GGML_ASSERT(nb0 == sizeof(float));
-    GGML_ASSERT(ne0 == ne01);
-    GGML_ASSERT(ne1 == ne11);
-    GGML_ASSERT(ne2 == ne12);
-    GGML_ASSERT(ne3 == ne13);
-
-    const int64_t r2 = ne12 / ne02;
-    const int64_t r3 = ne13 / ne03;
-    const int64_t nr0 = ne0;
-    const int64_t nr1 = ne1 * ne2 * ne3;
-
-    const int64_t dr1 = (nr1 + nth - 1) / nth;
-    const int64_t ir1_start = dr1 * ith;
-    const int64_t ir1_end = MIN(ir1_start + dr1, nr1);
-
-    float * row_buf = (float *) malloc(sizeof(float) * ne00);
-    GGML_ASSERT(row_buf != NULL);
-
-    for (int64_t ir1 = ir1_start; ir1 < ir1_end; ++ir1) {
-        const int64_t i13 = ir1 / (ne12 * ne1);
-        const int64_t i12 = (ir1 - i13 * ne12 * ne1) / ne1;
-        const int64_t i11 = ir1 - i13 * ne12 * ne1 - i12 * ne1;
-
-        const int64_t i03 = i13 / r3;
-        const int64_t i02 = i12 / r2;
-
-        const float * src1_col = (const float *) ((const char *) src1->data + i11 * nb11 + i12 * nb12 + i13 * nb13);
-        float * dst_col = (float *) ((char *) dst->data + i11 * nb1 + i12 * nb2 + i13 * nb3);
-
-        for (int64_t ir0 = 0; ir0 < nr0; ++ir0) {
-            ggml_tq3_ap_dequantize_row_f32(src0, ap, ir0 + i02 * (src0->ne[1]) + i03 * (src0->ne[1] * src0->ne[2]), row_buf);
-            ggml_vec_dot_f32(ne00, &dst_col[ir0], 0, row_buf, 0, src1_col, 0, 1);
-        }
-    }
-
-    free(row_buf);
-}
 
 static void ggml_tq3_1s_ap1_dequantize_row_f32(
         const struct ggml_tensor * src0,
@@ -1440,11 +1364,6 @@ void ggml_compute_forward_mul_mat(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const struct ggml_tq3_ap_extra * ap = src0->type == GGML_TYPE_TQ3_1S ? (const struct ggml_tq3_ap_extra *) src0->extra : NULL;
-    if (ap && ap->magic == GGML_TQ3_AP_MAGIC && src1->type == GGML_TYPE_F32) {
-        ggml_compute_forward_mul_mat_tq3_ap_f32(params, dst, ap);
-        return;
-    }
     if (src0->type == GGML_TYPE_TQ3_1S_AP1 && src1->type == GGML_TYPE_F32) {
         ggml_compute_forward_mul_mat_tq3_1s_ap1_f32(params, dst);
         return;

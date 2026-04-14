@@ -3,7 +3,6 @@
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
 #include "ggml-quants.h"
-#include "ggml-tq-adaptive.h"
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
@@ -4727,7 +4726,6 @@ static void ggml_compute_forward_get_rows_q(
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
 
-    const ggml_tq3_ap_extra * ap = src0->type == GGML_TYPE_TQ3_1S ? (const ggml_tq3_ap_extra *) src0->extra : nullptr;
 
     for (int64_t i = ir0; i < ir1; ++i) {
         const int64_t i12 = i/(ne11*ne10);
@@ -4741,17 +4739,6 @@ static void ggml_compute_forward_get_rows_q(
         const void * row = (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03);
         dequantize_row_q(row, out, nc);
 
-        if (ap && ap->magic == GGML_TQ3_AP_MAGIC) {
-            const int64_t row_block0 = i01 * ap->blocks_per_row;
-            uint32_t promoted_idx = ap->row_offsets[i01];
-            for (int64_t b = 0; b < ap->blocks_per_row; ++b) {
-                if (!ggml_tq3_ap_is_promoted(ap, row_block0 + b)) {
-                    continue;
-                }
-                const float mean = GGML_FP16_TO_FP32(ap->means[promoted_idx++]);
-                ggml_vec_acc1_f32(QK_TQ3_0, out + b * QK_TQ3_0, mean);
-            }
-        }
     }
 }
 
