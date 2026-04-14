@@ -132,6 +132,17 @@ struct common_chat_msg_diff {
     }
 };
 
+struct common_chat_msg_span {
+    std::string role;
+    std::size_t pos = 0;
+    std::size_t len = 0;
+};
+
+struct common_chat_msg_delimiter {
+    std::string role;
+    std::string delimiter;
+};
+
 struct common_chat_tool {
     std::string name;
     std::string description;
@@ -187,6 +198,7 @@ struct common_chat_params {
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
     std::string                         parser;
+    std::vector<common_chat_msg_span>   message_spans;
 };
 
 // per-message parsing syntax
@@ -275,3 +287,5 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
         autoparser::generation_params & params);
+
+std::vector<common_chat_msg_span> common_chat_split_by_role(const std::string & prompt, const std::vector<common_chat_msg_delimiter> & delims);

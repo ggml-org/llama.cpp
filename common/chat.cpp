@@ -70,6 +70,42 @@ static bool has_content_or_tool_calls(const common_chat_msg & msg) {
     return !msg.content.empty() || !msg.tool_calls.empty();
 }
 
+std::vector<common_chat_msg_span> common_chat_split_by_role(const std::string & prompt, const std::vector<common_chat_msg_delimiter> & delims) {
+    if (delims.empty() || prompt.empty()) {
+        return {};
+    }
+
+    auto parser = build_peg_parser([&](common_peg_parser_builder & p) {
+        std::vector<std::string>       all_delims;
+        std::vector<common_peg_parser> tagged_delims;
+
+        all_delims.reserve(delims.size());
+        tagged_delims.reserve(delims.size());
+        for (const auto & d : delims) {
+            all_delims.push_back(d.delimiter);
+            tagged_delims.push_back(p.tag(d.role, p.literal(d.delimiter)));
+        }
+
+        auto any_delim = p.until_one_of(all_delims);
+        return any_delim + p.zero_or_more(p.choice(tagged_delims) + any_delim) + p.end();
+    });
+
+    common_peg_parse_context ctx(prompt);
+    const auto result = parser.parse(ctx);
+    if (!result.success()) {
+        return {};
+    }
+
+    std::vector<common_chat_msg_span> spans;
+    ctx.ast.visit(result, [&](const common_peg_ast_node & node) {
+        if (!node.tag.empty()) {
+            spans.push_back({ node.tag, node.start, node.end - node.start });
+        }
+    });
+
+    return spans;
+}
+
 json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     if (!content.empty() && !content_parts.empty()) {
         throw std::runtime_error("Cannot specify both content and content_parts");
@@ -973,7 +1009,15 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         }
     }
 
-    data.prompt            = prompt;
+    data.prompt        = prompt;
+    data.message_spans = common_chat_split_by_role(prompt, {
+        { "assistant", "<|start|>assistant" },
+        { "user",      "<|start|>user"      },
+        { "system",    "<|start|>developer" },
+        { "system",    "<|start|>system"    },
+        { "tool",      "<|start|>functions" },
+    });
+
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
 
