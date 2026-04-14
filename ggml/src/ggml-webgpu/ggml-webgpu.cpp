@@ -3485,7 +3485,7 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     dev_desc.requiredFeatureCount = required_features.size();
     dev_desc.SetDeviceLostCallback(
         wgpu::CallbackMode::AllowSpontaneous,
-        [ctx](const wgpu::Device & device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
+        [](const wgpu::Device & device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
             if (reason == wgpu::DeviceLostReason::Destroyed) {
                 return;
             }
