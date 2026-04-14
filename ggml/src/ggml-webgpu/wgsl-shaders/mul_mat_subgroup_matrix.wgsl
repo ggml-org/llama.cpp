@@ -6,6 +6,9 @@ enable chromium_experimental_subgroup_matrix;
 #include "common_decls.tmpl"
 #include "mul_mat_decls.tmpl"
 
+// TODO: this shader path does not work with some models like qwen2.5 on Metal devices, f16 accumulation causes NaNs.
+// See https://github.com/ggml-org/llama.cpp/issues/21602
+
 #ifdef VEC
 fn store_dst(shmem_idx: u32, dst_idx: u32) {
     dst[dst_idx] = vec4<f32>(

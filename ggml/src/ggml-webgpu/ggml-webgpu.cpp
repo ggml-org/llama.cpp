@@ -79,7 +79,7 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 
 /* Constants */
 
-#define WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE 32u
+#define WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE 64u
 #define WEBGPU_NUM_PARAM_SLOT_SAFETY_MARGIN      10u
 #define WEBGPU_RUNTIME_WAIT_TIMEOUT_MS           30000u
 #define WEBGPU_RUNTIME_WAIT_TIMEOUT_NS           (WEBGPU_RUNTIME_WAIT_TIMEOUT_MS * 1e6)
@@ -96,14 +96,6 @@ static inline void compute_2d_workgroups(uint32_t total_wg, uint32_t max_per_dim
 #define WEBGPU_MAX_WG_SIZE 288
 
 /* End Constants */
-
-static inline wgpu::CallbackMode ggml_webgpu_callback_mode() {
-#ifdef __EMSCRIPTEN__
-    return wgpu::CallbackMode::AllowProcessEvents;
-#else
-    return wgpu::CallbackMode::AllowSpontaneous;
-#endif
-}
 
 // This is a "fake" base pointer, since WebGPU buffers do not have pointers to
 // their locations.
@@ -445,34 +437,25 @@ static void ggml_backend_webgpu_check_wait_status(wgpu::WaitStatus wait_status,
 }
 
 #ifdef __EMSCRIPTEN__
-// iOS browsers seem to have very strict limits on the number of in-flight GPU commands, so we need to throttle to avoid failures.
 EM_JS(int, ggml_webgpu_is_ios_browser, (), {
     const ua = navigator.userAgent;
     return (ua.includes('iPhone') || ua.includes('iPad')) ? 1 : 0;
 });
 #endif
 
-static uint32_t ggml_backend_webgpu_get_max_inflight_batches(const wgpu::AdapterInfo & info) {
+// TODO: these next two functions may want tuning across different platforms and workloads,
+static uint32_t ggml_backend_webgpu_get_max_inflight_batches() {
 #ifdef __EMSCRIPTEN__
+    // iOS has very strict limits on the number of in-flight GPU commands,
+    // so we need to throttle to avoid failures.
     if (ggml_webgpu_is_ios_browser()) {
         return 1;
     }
-#else
-    GGML_UNUSED(info);
 #endif
-
     return UINT32_MAX;
 }
 
-static uint32_t ggml_backend_webgpu_get_command_submit_batch_size(const wgpu::AdapterInfo & info) {
-#ifdef __EMSCRIPTEN__
-    if (ggml_webgpu_is_ios_browser()) {
-        return 16;
-    }
-#else
-    GGML_UNUSED(info);
-#endif
-
+static uint32_t ggml_backend_webgpu_get_command_submit_batch_size() {
     return WEBGPU_DEFAULT_COMMAND_SUBMIT_BATCH_SIZE;
 }
 
@@ -482,7 +465,7 @@ static void ggml_backend_webgpu_wait_queue(webgpu_global_context & ctx) {
 
     const wgpu::WaitStatus wait_status = ctx->instance.WaitAny(
         ctx->queue.OnSubmittedWorkDone(
-            ggml_webgpu_callback_mode(),
+            wgpu::CallbackMode::AllowSpontaneous,
             [&callback_status, &callback_message](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
                 callback_status  = status;
                 callback_message = std::string(message);
@@ -502,7 +485,7 @@ static void ggml_backend_webgpu_map_buffer(webgpu_global_context & ctx,
     std::string          callback_message;
 
     const wgpu::WaitStatus wait_status = ctx->instance.WaitAny(
-        buffer.MapAsync(mode, offset, size, ggml_webgpu_callback_mode(),
+        buffer.MapAsync(mode, offset, size, wgpu::CallbackMode::AllowSpontaneous,
                         [&callback_status, &callback_message](wgpu::MapAsyncStatus status, wgpu::StringView message) {
                             callback_status  = status;
                             callback_message = std::string(message);
@@ -542,15 +525,15 @@ static void ggml_backend_webgpu_debug(webgpu_global_context & ctx) {
 #endif
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
-static void ggml_backend_webgpu_collect_profile_futures(webgpu_global_context &             ctx,
-                                                        const std::vector<webgpu_command> & commands,
-                                                        std::vector<wgpu::FutureWaitInfo> & futures) {
+static void ggml_backend_webgpu_collect_profile_futures(webgpu_global_context &                ctx,
+                                                        const std::vector<webgpu_encoded_op> & commands,
+                                                        std::vector<wgpu::FutureWaitInfo> &    futures) {
     for (const auto & command : commands) {
         auto label   = command.pipeline_name;
         auto ts_bufs = command.timestamp_query_bufs;
 
         wgpu::Future f = ts_bufs.host_buf.MapAsync(
-            wgpu::MapMode::Read, 0, ts_bufs.host_buf.GetSize(), ggml_webgpu_callback_mode(),
+            wgpu::MapMode::Read, 0, ts_bufs.host_buf.GetSize(), wgpu::CallbackMode::AllowSpontaneous,
             [ctx, ts_bufs, label](wgpu::MapAsyncStatus status, wgpu::StringView message) {
                 if (status != wgpu::MapAsyncStatus::Success) {
                     GGML_LOG_ERROR("ggml_webgpu: Failed to map timestamp buffer: %s\n", std::string(message).c_str());
@@ -3428,7 +3411,7 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 
     ctx->webgpu_global_ctx->instance.WaitAny(
         ctx->webgpu_global_ctx->instance.RequestAdapter(
-            &options, ggml_webgpu_callback_mode(),
+            &options, wgpu::CallbackMode::AllowSpontaneous,
             [&ctx](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char * message) {
                 if (status != wgpu::RequestAdapterStatus::Success) {
                     GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
@@ -3449,8 +3432,8 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     }
 #endif
     ctx->webgpu_global_ctx->adapter.GetInfo(&info);
-    ctx->webgpu_global_ctx->command_submit_batch_size = ggml_backend_webgpu_get_command_submit_batch_size(info);
-    ctx->webgpu_global_ctx->max_inflight_batches      = ggml_backend_webgpu_get_max_inflight_batches(info);
+    ctx->webgpu_global_ctx->command_submit_batch_size = ggml_backend_webgpu_get_command_submit_batch_size();
+    ctx->webgpu_global_ctx->max_inflight_batches      = ggml_backend_webgpu_get_max_inflight_batches();
     wgpu::SupportedFeatures features;
     ctx->webgpu_global_ctx->adapter.GetFeatures(&features);
     // we require f16 support
@@ -3501,7 +3484,7 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     dev_desc.requiredFeatures     = required_features.data();
     dev_desc.requiredFeatureCount = required_features.size();
     dev_desc.SetDeviceLostCallback(
-        ggml_webgpu_callback_mode(),
+        wgpu::CallbackMode::AllowSpontaneous,
         [ctx](const wgpu::Device & device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
             if (reason == wgpu::DeviceLostReason::Destroyed) {
                 return;
@@ -3535,7 +3518,7 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 
     ctx->webgpu_global_ctx->instance.WaitAny(
         ctx->webgpu_global_ctx->adapter.RequestDevice(
-            &dev_desc, ggml_webgpu_callback_mode(),
+            &dev_desc, wgpu::CallbackMode::AllowSpontaneous,
             [ctx](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
                 if (status != wgpu::RequestDeviceStatus::Success) {
                     GGML_LOG_ERROR("ggml_webgpu: Failed to get a device: %s\n", std::string(message).c_str());
