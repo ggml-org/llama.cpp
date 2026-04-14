@@ -41,8 +41,10 @@ int main(void) {
         } else if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
             const mtmd_image_tokens * image_tokens = mtmd_input_chunk_get_tokens_image(chunk);
             size_t n_tokens = mtmd_image_tokens_get_n_tokens(image_tokens);
-            size_t nx = mtmd_image_tokens_get_nx(image_tokens);
-            size_t ny = mtmd_image_tokens_get_ny(image_tokens);
+            // get position of the last token, which should be (nx - 1, ny - 1)
+            struct mtmd_decoder_pos pos = mtmd_image_tokens_get_decoder_pos(image_tokens, n_tokens - 1);
+            size_t nx = pos.x + 1;
+            size_t ny = pos.y + 1;
             const char * id = mtmd_image_tokens_get_id(image_tokens);
             assert(n_tokens > 0);
             assert(nx > 0);
