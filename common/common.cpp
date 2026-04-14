@@ -165,6 +165,7 @@ static bool is_running_on_efficiency_core(void) {
 
 static int cpu_count_math_cpus(int n_cpu) {
     int result = 0;
+    std::vector<int> core_ids;
     for (int cpu = 0; cpu < n_cpu; ++cpu) {
         if (pin_cpu(cpu)) {
             return -1;
@@ -172,7 +173,24 @@ static int cpu_count_math_cpus(int n_cpu) {
         if (is_running_on_efficiency_core()) {
             continue; // efficiency cores harm lockstep threading
         }
-        ++cpu; // hyperthreading isn't useful for linear algebra
+        // use the thread sibling list to find the HT partner and skip it
+        std::ifstream tf("/sys/devices/system/cpu/cpu" + std::to_string(cpu)
+                       + "/topology/thread_siblings");
+        std::string tid;
+        if (!std::getline(tf, tid)) {
+            continue;
+        }
+        // find the first set bit's partner (HT sibling) and skip it
+        for (int sibling = cpu + 1; sibling < n_cpu; ++sibling) {
+            std::ifstream sf("/sys/devices/system/cpu/cpu" + std::to_string(sibling)
+                           + "/topology/thread_siblings");
+            std::string sid;
+            if (std::getline(sf, sid) && sid == tid && sibling != cpu) {
+                // skip HT sibling by advancing loop past it
+                cpu = sibling - 1; // -1 because for-loop will ++ it
+                break;
+            }
+        }
         ++result;
     }
     return result;
