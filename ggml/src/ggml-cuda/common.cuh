@@ -836,13 +836,13 @@ static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_ue4m3(float x) {
         return 0;
     }
     if (x > 448.0f) {
-        x = 448.0f;
+        x = F;
     }
 
     const __nv_fp8_e4m3 xf(x);
     return xf.__x;
 #else
-     NO_DEVICE_CODE; // Used only for NVFP4 Scales for Activations, only for Blackwell 
+     NO_DEVICE_CODE; // Used only for NVFP4 Scales for Activations, only for Blackwell
 #endif // defined(BLACKWELL_MMA_AVAILABLE)
 }
 
