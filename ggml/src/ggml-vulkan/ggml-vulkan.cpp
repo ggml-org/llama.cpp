@@ -267,6 +267,7 @@ enum vk_device_architecture {
     AMD_RDNA2,
     AMD_RDNA3,
     INTEL_XE2,
+    INTEL_XE3,
     NVIDIA_PRE_TURING,
     NVIDIA_TURING,
 };
@@ -341,11 +342,16 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         device.getProperties2(&props2);
 
         if (subgroup_size_control_props.minSubgroupSize == 16) {
-            // Xe2 architecture uses SIMD16 while previous Xe and Gen architecture uses SIMD8.
+            // Xe2+ architectures uses SIMD16 while previous Xe and Gen architecture uses SIMD8.
             // Minimum subgroup size matches the SIMD width so we distinguish architecture by checking this value.
             // https://www.intel.com/content/www/us/en/content-details/824434/2024-intel-tech-tour-xe2-and-lunar-lake-s-gpu.html
             // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
-            return vk_device_architecture::INTEL_XE2;
+            // Xe3 increased the maximum compute subgroups from 64 to 80, so we use that to detect Xe3.
+            if (subgroup_size_control_props.maxComputeWorkgroupSubgroups == 80) {
+                return vk_device_architecture::INTEL_XE3;
+            } else if (subgroup_size_control_props.maxComputeWorkgroupSubgroups == 64) {
+                return vk_device_architecture::INTEL_XE2;
+            }
         }
     } else if (props.vendorID == VK_VENDOR_ID_NVIDIA) {
         const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
@@ -3297,7 +3303,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
             l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq_int_k = { 256, 128, 128, 32, subgroup_size_16, 64, 1, 4, 2, 1, subgroup_size_16 };
         } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support && device->architecture == INTEL_XE2) {
-            // Xe2/Xe3 with coopmat enabled - warptile performance tuning
+            // Xe2 with coopmat enabled - warptile performance tuning
+            l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+            l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+        } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support && device->architecture == INTEL_XE3) {
+            // Xe3 with coopmat enabled - warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         }
@@ -3981,7 +3991,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         m_wg_denoms = { 64,  64, 1 };
         s_wg_denoms = { 32,  32, 1 };
 
-        if (device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == INTEL_XE2) {
+        if (device->architecture == INTEL_XE2 || device->architecture == INTEL_XE3) {
             // Xe2/Xe3 - bf16 warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, 4, 4, 1, subgroup_size_8 };
         }
@@ -5436,6 +5446,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         // Shaders
         // Disable matmul tile sizes early if performance low or not supported
         for (uint32_t i = 0; i < GGML_TYPE_COUNT; ++i) {
+            bool intel_xe2_or_later = device->architecture == INTEL_XE2 || device->architecture == INTEL_XE3;
             switch (device->vendor_id) {
 #ifndef GGML_VULKAN_RUN_TESTS
             case VK_VENDOR_ID_AMD:
@@ -5446,8 +5457,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->mul_mat_id_m[i] = true;
                 device->mul_mat_id_s[i] = true;
                 break;
-            case VK_VENDOR_ID_INTEL:
-                if (!device->coopmat_support || device->architecture != INTEL_XE2) {
+            case VK_VENDOR_ID_INTEL: {
+                if (!device->coopmat_support || !intel_xe2_or_later) {
                     device->mul_mat_l[i] = false;
                     device->mul_mat_id_l[i] = false;
                 } else {
@@ -5459,6 +5470,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->mul_mat_id_m[i] = true;
                 device->mul_mat_id_s[i] = true;
                 break;
+            }
             case VK_VENDOR_ID_APPLE:
                 device->mul_mat_l[i] = false;
                 device->mul_mat_m[i] = true;
@@ -8949,7 +8961,8 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t split_k = 1;
 
     // Intel Alchemist prefers more workgroups
-    const uint32_t shader_core_count_multiplier = (ctx->device->vendor_id == VK_VENDOR_ID_INTEL && ctx->device->architecture != INTEL_XE2) ? 2 : 1;
+    bool intel_xe2_or_later = ctx->device->architecture == INTEL_XE2 || ctx->device->architecture == INTEL_XE3;
+    const uint32_t shader_core_count_multiplier = (!intel_xe2_or_later) ? 2 : 1;
 
     // Use a placeholder core count if one isn't available. split_k is a big help for perf.
     const uint32_t shader_core_count = ctx->device->shader_core_count ? ctx->device->shader_core_count * shader_core_count_multiplier : 16;
@@ -16015,9 +16028,9 @@ static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
-        // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
+        // Only allowing Xe2+ GPU at the moment since Xe2 GPU can gain significant performance boost,
         // while some older hardware (ex. Arc A770) has performance regressions
-        return arch == vk_device_architecture::INTEL_XE2;
+        return arch == vk_device_architecture::INTEL_XE2 || arch == vk_device_architecture::INTEL_XE3;
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
