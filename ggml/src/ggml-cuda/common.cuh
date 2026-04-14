@@ -830,13 +830,14 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
 #endif // defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
 }
 
+#define UE4M3_MAX 448.0f // The maximum  representable value for Ue4m3 is 448.0f for NVFP4 FP8 scales
 static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_ue4m3(float x) {
 #if defined(BLACKWELL_MMA_AVAILABLE) // This is used for NVFP4 subblock scale quantizations only
     if (!(x > 0.0f)) {
         return 0;
     }
-    if (x > 448.0f) {
-        x = F;
+    if (x > UE4M3_MAX) {
+        x = UE4M3_MAX;
     }
 
     const __nv_fp8_e4m3 xf(x);
