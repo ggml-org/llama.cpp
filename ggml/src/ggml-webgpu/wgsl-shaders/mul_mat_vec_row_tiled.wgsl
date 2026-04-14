@@ -155,6 +155,198 @@ fn main(
     }
 #endif
 
+#ifdef MUL_ACC_Q4_1
+#define BLOCK_SIZE 32
+#define BLOCK_SIZE_BYTES 20
+#define THREADS_PER_BLOCK 4
+#define ELEMS_PER_THREAD (BLOCK_SIZE/THREADS_PER_BLOCK)
+
+    let num_blocks = params.k / BLOCK_SIZE;
+    let thread_within_block = thread_id % THREADS_PER_BLOCK;
+    for (var block = thread_id / THREADS_PER_BLOCK; block < num_blocks; block += WG_SIZE / THREADS_PER_BLOCK) {
+        let x_base = src1_idx_base + block * BLOCK_SIZE + thread_within_block * 4;
+        var x_block: array<f32, ELEMS_PER_THREAD>;
+        for (var i = 0u; i < ELEMS_PER_THREAD / 2; i++) {
+            x_block[i] = f32(src1[x_base + i]);
+            x_block[i + 4] = f32(src1[x_base + i + 16]);
+        }
+
+        for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+            let output_row = row_base + row;
+            if (output_row < params.m) {
+                let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
+                let d = f32(load_src0_f16_at(block_byte_base));
+                let m = f32(load_src0_f16_at(block_byte_base + 2u));
+                var row_sum = 0.0;
+
+                let q_packed = load_src0_u32_at(block_byte_base + 4u + 4u * thread_within_block);
+                for (var byte_idx = 0u; byte_idx < 4u; byte_idx++) {
+                    let q_byte = get_byte(q_packed, byte_idx);
+                    let q_lo = f32(q_byte & 0xFu) * d + m;
+                    let q_hi = f32((q_byte >> 4u) & 0xFu) * d + m;
+                    row_sum += q_lo * x_block[byte_idx];
+                    row_sum += q_hi * x_block[byte_idx + 4u];
+                }
+                acc[row] += row_sum;
+            }
+        }
+    }
+#endif
+
+#ifdef MUL_ACC_Q5_0
+#define BLOCK_SIZE 32
+#define BLOCK_SIZE_BYTES 22
+#define THREADS_PER_BLOCK 4
+#define ELEMS_PER_THREAD (BLOCK_SIZE/THREADS_PER_BLOCK)
+
+    let num_blocks = params.k / BLOCK_SIZE;
+    let thread_within_block = thread_id % THREADS_PER_BLOCK;
+    for (var block = thread_id / THREADS_PER_BLOCK; block < num_blocks; block += WG_SIZE / THREADS_PER_BLOCK) {
+        let x_base = src1_idx_base + block * BLOCK_SIZE + thread_within_block * 4;
+        var x_block: array<f32, ELEMS_PER_THREAD>;
+        for (var i = 0u; i < ELEMS_PER_THREAD / 2; i++) {
+            x_block[i] = f32(src1[x_base + i]);
+            x_block[i + 4] = f32(src1[x_base + i + 16]);
+        }
+
+        for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+            let output_row = row_base + row;
+            if (output_row < params.m) {
+                let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
+                let d = f32(load_src0_f16_at(block_byte_base));
+                let qh_packed = load_src0_u32_at(block_byte_base + 2u);
+                let q_packed = load_src0_u32_at(block_byte_base + 6u + 4u * thread_within_block);
+                let qh_shift = thread_within_block * 4u;
+                var row_sum = 0.0;
+
+                for (var byte_idx = 0u; byte_idx < 4u; byte_idx++) {
+                    let q_byte = get_byte(q_packed, byte_idx);
+                    let qh_lo = ((qh_packed >> (qh_shift + byte_idx)) << 4u) & 0x10u;
+                    let qh_hi = (qh_packed >> (qh_shift + byte_idx + 12u)) & 0x10u;
+                    let q_lo = (f32((q_byte & 0xFu) | qh_lo) - 16.0) * d;
+                    let q_hi = (f32(((q_byte >> 4u) & 0xFu) | qh_hi) - 16.0) * d;
+                    row_sum += q_lo * x_block[byte_idx];
+                    row_sum += q_hi * x_block[byte_idx + 4u];
+                }
+                acc[row] += row_sum;
+            }
+        }
+    }
+#endif
+
+#ifdef MUL_ACC_Q5_1
+#define BLOCK_SIZE 32
+#define BLOCK_SIZE_BYTES 24
+#define THREADS_PER_BLOCK 4
+#define ELEMS_PER_THREAD (BLOCK_SIZE/THREADS_PER_BLOCK)
+
+    let num_blocks = params.k / BLOCK_SIZE;
+    let thread_within_block = thread_id % THREADS_PER_BLOCK;
+    for (var block = thread_id / THREADS_PER_BLOCK; block < num_blocks; block += WG_SIZE / THREADS_PER_BLOCK) {
+        let x_base = src1_idx_base + block * BLOCK_SIZE + thread_within_block * 4;
+        var x_block: array<f32, ELEMS_PER_THREAD>;
+        for (var i = 0u; i < ELEMS_PER_THREAD / 2; i++) {
+            x_block[i] = f32(src1[x_base + i]);
+            x_block[i + 4] = f32(src1[x_base + i + 16]);
+        }
+
+        for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+            let output_row = row_base + row;
+            if (output_row < params.m) {
+                let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
+                let d = f32(load_src0_f16_at(block_byte_base));
+                let m = f32(load_src0_f16_at(block_byte_base + 2u));
+                let qh_packed = load_src0_u32_at(block_byte_base + 4u);
+                let q_packed = load_src0_u32_at(block_byte_base + 8u + 4u * thread_within_block);
+                let qh_shift = thread_within_block * 4u;
+                var row_sum = 0.0;
+
+                for (var byte_idx = 0u; byte_idx < 4u; byte_idx++) {
+                    let q_byte = get_byte(q_packed, byte_idx);
+                    let qh_lo = ((qh_packed >> (qh_shift + byte_idx)) << 4u) & 0x10u;
+                    let qh_hi = (qh_packed >> (qh_shift + byte_idx + 12u)) & 0x10u;
+                    let q_lo = f32((q_byte & 0xFu) | qh_lo) * d + m;
+                    let q_hi = f32(((q_byte >> 4u) & 0xFu) | qh_hi) * d + m;
+                    row_sum += q_lo * x_block[byte_idx];
+                    row_sum += q_hi * x_block[byte_idx + 4u];
+                }
+                acc[row] += row_sum;
+            }
+        }
+    }
+#endif
+
+#ifdef MUL_ACC_Q8_0
+#define BLOCK_SIZE 32
+#define BLOCK_SIZE_BYTES 34
+#define THREADS_PER_BLOCK 4
+#define ELEMS_PER_THREAD (BLOCK_SIZE/THREADS_PER_BLOCK)
+
+    let num_blocks = params.k / BLOCK_SIZE;
+    let thread_within_block = thread_id % THREADS_PER_BLOCK;
+    for (var block = thread_id / THREADS_PER_BLOCK; block < num_blocks; block += WG_SIZE / THREADS_PER_BLOCK) {
+        let x_base = src1_idx_base + block * BLOCK_SIZE + thread_within_block * ELEMS_PER_THREAD;
+        var x_block: array<f32, ELEMS_PER_THREAD>;
+        for (var i = 0u; i < ELEMS_PER_THREAD; i++) {
+            x_block[i] = f32(src1[x_base + i]);
+        }
+
+        for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+            let output_row = row_base + row;
+            if (output_row < params.m) {
+                let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
+                let d = f32(load_src0_f16_at(block_byte_base));
+                var row_sum = 0.0;
+
+                for (var packed_idx = 0u; packed_idx < ELEMS_PER_THREAD / 4u; packed_idx++) {
+                    let q_packed = load_src0_u32_at(block_byte_base + 2u + 4u * (thread_within_block * 2u + packed_idx));
+                    for (var byte_idx = 0u; byte_idx < 4u; byte_idx++) {
+                        let q_val = f32(get_byte_i32(q_packed, byte_idx)) * d;
+                        row_sum += q_val * x_block[packed_idx * 4u + byte_idx];
+                    }
+                }
+                acc[row] += row_sum;
+            }
+        }
+    }
+#endif
+
+#ifdef MUL_ACC_Q8_1
+#define BLOCK_SIZE 32
+#define BLOCK_SIZE_BYTES 36
+#define THREADS_PER_BLOCK 4
+#define ELEMS_PER_THREAD (BLOCK_SIZE/THREADS_PER_BLOCK)
+
+    let num_blocks = params.k / BLOCK_SIZE;
+    let thread_within_block = thread_id % THREADS_PER_BLOCK;
+    for (var block = thread_id / THREADS_PER_BLOCK; block < num_blocks; block += WG_SIZE / THREADS_PER_BLOCK) {
+        let x_base = src1_idx_base + block * BLOCK_SIZE + thread_within_block * ELEMS_PER_THREAD;
+        var x_block: array<f32, ELEMS_PER_THREAD>;
+        for (var i = 0u; i < ELEMS_PER_THREAD; i++) {
+            x_block[i] = f32(src1[x_base + i]);
+        }
+
+        for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+            let output_row = row_base + row;
+            if (output_row < params.m) {
+                let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
+                let d = f32(load_src0_f16_at(block_byte_base));
+                let m = f32(load_src0_f16_at(block_byte_base + 2u));
+                var row_sum = 0.0;
+
+                for (var packed_idx = 0u; packed_idx < ELEMS_PER_THREAD / 4u; packed_idx++) {
+                    let q_packed = load_src0_u32_at(block_byte_base + 4u + 4u * (thread_within_block * 2u + packed_idx));
+                    for (var byte_idx = 0u; byte_idx < 4u; byte_idx++) {
+                        let q_val = f32(get_byte_i32(q_packed, byte_idx)) * d + m;
+                        row_sum += q_val * x_block[packed_idx * 4u + byte_idx];
+                    }
+                }
+                acc[row] += row_sum;
+            }
+        }
+    }
+#endif
+
 #ifdef USE_SUBGROUP_REDUCTION
     for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
         let subgroup_total = subgroupAdd(acc[row]);

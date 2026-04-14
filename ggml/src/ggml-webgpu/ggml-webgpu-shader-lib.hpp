@@ -1336,7 +1336,9 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_mul_mat_vec_pipeline(const ggml_webgpu_shader_lib_context & context) {
         const bool use_row_tiled =
-            context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16 || context.src0->type == GGML_TYPE_Q4_0;
+            context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16 || context.src0->type == GGML_TYPE_Q4_0 ||
+            context.src0->type == GGML_TYPE_Q4_1 || context.src0->type == GGML_TYPE_Q5_0 || context.src0->type == GGML_TYPE_Q5_1 ||
+            context.src0->type == GGML_TYPE_Q8_0 || context.src0->type == GGML_TYPE_Q8_1;
         ggml_webgpu_mul_mat_vec_pipeline_key key = {
             .src0_type  = context.src0->type,
             .src1_type  = context.src1->type,
@@ -1367,13 +1369,6 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("SRC0_INNER_TYPE=f16");
                 defines.push_back("MUL_ACC_FLOAT");
                 variant += "_f16";
-                break;
-            case GGML_TYPE_Q4_0:
-                defines.push_back("BYTE_HELPERS");
-                defines.push_back("MUL_ACC_Q4_0");
-                defines.push_back("U32_DEQUANT_HELPERS");
-                defines.push_back("SRC0_INNER_TYPE=u32");
-                variant += "_q4_0";
                 break;
             default:
                 {

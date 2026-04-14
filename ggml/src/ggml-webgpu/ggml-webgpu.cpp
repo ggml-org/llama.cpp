@@ -1324,13 +1324,13 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context &       ctx,
                 case GGML_TYPE_F32:
                 case GGML_TYPE_F16:
                 case GGML_TYPE_Q4_0:
-                    use_fast = true;
-                    break;
                 case GGML_TYPE_Q4_1:
                 case GGML_TYPE_Q5_0:
                 case GGML_TYPE_Q5_1:
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q8_1:
+                    use_fast = true;
+                    break;
                 case GGML_TYPE_Q6_K:
                     use_fast = !is_vec || ctx->global_ctx->capabilities.supports_subgroups;
                     break;
