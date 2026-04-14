@@ -3732,6 +3732,33 @@ void server_routes::init_routes() {
             TASK_RESPONSE_TYPE_OAI_RESP);
     };
 
+    this->post_transcriptions_oai = [this](const server_http_req & req) {
+        auto res = create_response();
+
+        if (!meta->has_mtmd || !meta->chat_params.allow_audio) {
+            res->error(format_error_response("The current model does not support audio input.", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        std::vector<raw_buffer> files;
+        json body = convert_transcriptions_to_chatcmpl(
+            json::parse(req.body),
+            req.files,
+            files);
+        SRV_DBG("%s\n", "Request converted: OpenAI Transcriptions -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
+        json body_parsed = oaicompat_chat_params_parse(
+            body,
+            meta->chat_params,
+            files);
+        return handle_completions_impl(
+            req,
+            SERVER_TASK_TYPE_COMPLETION,
+            body_parsed,
+            files,
+            TASK_RESPONSE_TYPE_OAI_ASR);
+    };
+
     this->post_anthropic_messages = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
