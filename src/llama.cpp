@@ -15,9 +15,6 @@
 #include "ggml-backend.h"
 #include "gguf.h"
 
-// TODO: tmp until the ggml meta backend matures and becomes public
-#include "../src/ggml-ext.h"
-
 #include <algorithm>
 #include <cassert>
 #include <cinttypes>
