@@ -31,6 +31,14 @@ static inline uint64_t hex_get_pktcnt() {
     return pktcnt;
 }
 
+static inline uint32_t hex_ceil_pow2(uint32_t x) {
+    if (x <= 1) { return 1; }
+    int p = 2;
+    x--;
+    while (x >>= 1) { p <<= 1; }
+    return p;
+}
+
 static inline size_t hmx_ceil_div(size_t num, size_t den) {
     return (num + den - 1) / den;
 }
@@ -73,8 +81,7 @@ static inline void hex_l2fetch(const void * p, uint32_t width, uint32_t stride, 
 #define HEX_L2_LINE_SIZE  64
 #define HEX_L2_FLUSH_SIZE (128 * 1024)
 
-static inline void hex_l2flush(void * addr, size_t size)
-{
+static inline void hex_l2flush(void * addr, size_t size) {
     if (size > HEX_L2_FLUSH_SIZE) {
         qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
     } else {
@@ -87,6 +94,10 @@ static inline void hex_l2flush(void * addr, size_t size)
             Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 3);
         }
     }
+}
+
+static inline void hex_pause() {
+    asm volatile(" pause(#255)\n");
 }
 
 #endif /* HEX_UTILS_H */

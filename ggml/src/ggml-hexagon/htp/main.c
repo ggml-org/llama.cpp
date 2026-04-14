@@ -18,8 +18,9 @@
 #include <remote.h>
 #include <string.h>
 
-#include "hex-dma.h"
 #include "hex-utils.h"
+#include "hex-dma.h"
+#include "hmx-queue.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -324,6 +325,14 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 
 #ifdef HTP_HAS_HMX
     ctx->hmx_enabled = use_hmx;
+    ctx->hmx_queue   = NULL;
+    if (use_hmx) {
+        ctx->hmx_queue = hmx_queue_create(16, ctx->vtcm_rctx);
+        if (!ctx->hmx_queue) {
+            FARF(ERROR, "hmx-queue-create failed");
+            ctx->hmx_enabled = false;
+        }
+    }
     FARF(HIGH, "HMX %s (use_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", use_hmx);
 #endif
 
@@ -389,7 +398,11 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     }
 
 #ifdef HTP_HAS_HMX
-    ctx->hmx_enabled = 0;
+    if (ctx->hmx_queue) {
+        hmx_queue_delete(ctx->hmx_queue);
+        ctx->hmx_queue = NULL;
+    }
+    ctx->hmx_enabled = false;
 #endif
 
     vtcm_free(ctx);
