@@ -418,20 +418,21 @@ extern "C" {
         GGML_TYPE_F64     = 28,
         GGML_TYPE_IQ1_M   = 29,
         GGML_TYPE_BF16    = 30,
-        GGML_TYPE_TQ3_1S_AP1 = 31, // private prototype, not for public gguf interchange
-        GGML_TYPE_Q4_0_TQ    = 32, // private prototype, not for public gguf interchange
-        GGML_TYPE_Q4_1_TQ    = 33, // private prototype, not for public gguf interchange
         GGML_TYPE_TQ1_0   = 34,
         GGML_TYPE_TQ2_0   = 35,
-        GGML_TYPE_TQ3_4SE  = 36, // private prototype, not for public gguf interchange
-        GGML_TYPE_TQ3_4SV  = 37, // private prototype, not for public gguf interchange
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_TQ3_0   = 41, // TurboQuant 3-bit (WHT rotation + Lloyd-Max codebook)
         GGML_TYPE_TQ3_1S  = 44, // TurboQuant 3-bit with two half-block scales
         GGML_TYPE_TQ3_4S  = 46, // TurboQuant 3-bit with four u8 per-8 scales (4.0 bpw)
-        GGML_TYPE_COUNT   = 47,
+        // dead prototypes kept at high IDs for compile compat, will be removed
+        GGML_TYPE_TQ3_1S_AP1 = 200,
+        GGML_TYPE_Q4_0_TQ    = 201,
+        GGML_TYPE_Q4_1_TQ    = 202,
+        GGML_TYPE_TQ3_4SE    = 203,
+        GGML_TYPE_TQ3_4SV    = 204,
+        GGML_TYPE_COUNT      = 205,
     };
 
     // precision

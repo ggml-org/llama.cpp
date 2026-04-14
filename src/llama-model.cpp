@@ -13,7 +13,6 @@
 #include "llama-memory-recurrent.h"
 
 #include "ggml-cpp.h"
-#include "ggml-tq-adaptive.h"
 
 #include "models/models.h"
 
@@ -332,14 +331,6 @@ llama_model::~llama_model() {
 
     for (auto & [ctx, _] : pimpl->ctxs_bufs) {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
-            auto * ap = static_cast<ggml_tq3_ap_extra *>(t->extra);
-            if (ap && ap->magic == GGML_TQ3_AP_MAGIC) {
-                delete[] ap->bitmap;
-                delete[] ap->means;
-                delete[] ap->row_offsets;
-                delete ap;
-                t->extra = nullptr;
-            }
         }
     }
 }
