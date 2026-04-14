@@ -20,7 +20,7 @@ struct htp_mmap {
     uint64_t size;
     uint64_t base;
     uint32_t fd;
-    uint32_t pinned;
+    uint32_t reserved;
 };
 
 // Scratchpad state

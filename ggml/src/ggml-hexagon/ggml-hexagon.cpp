@@ -44,19 +44,19 @@
 #include "htp_iface.h"
 #include "htp-drv.h"
 
-<<<<<<< HEAD
 using intvec  = std::vector<int>;
 using uintvec = std::vector<unsigned int>;
 using u32vec  = std::vector<uint32_t>;
 
-static size_t opt_ndev         = 1;
-static size_t opt_nhvx         = 0; // use all
-static int    opt_arch         = 0; // autodetect
-static int    opt_etm          = 0;
-static int    opt_verbose      = 0;
-static int    opt_profile      = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
-static int    opt_hostbuf      = 1; // hostbuf ON by default
-static int    opt_use_hmx      = 1; // when set, enable HMX; when 0, use HVX only
+static size_t opt_ndev    = 1;
+static size_t opt_nhvx    = 0; // use all
+static int    opt_arch    = 0; // autodetect
+static int    opt_etm     = 0;
+static int    opt_verbose = 0;
+static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
+static int    opt_hostbuf = 1; // hostbuf ON by default
+static size_t opt_vmem    = HTP_OP_MAX_VMEM_DEFAULT; // max available va space for buffer mappings
+static int    opt_use_hmx = 1; // when set, enable HMX; when 0, use HVX only
 
 // Default PMU events, if profiling with PMU (mode=2) is enabled
 // See https://docs.qualcomm.com/doc/80-N2040-60/topic/pmu-events.html
@@ -67,22 +67,7 @@ static u32vec opt_pmu_evt { 0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C }
 static int opt_opstage  = HTP_OPSTAGE_QUEUE | HTP_OPSTAGE_COMPUTE;
 static int opt_opbatch  = 1024; // max number of ops in a batch
 static int opt_opqueue  = 16;   // max number of pending batches
-=======
-static size_t opt_ndev    = 1;
-static size_t opt_nhvx    = 0; // use all
-static size_t opt_vmem    = HTP_OP_MAX_VMEM_DEFAULT; // max available va space for buffer mappings
-static int    opt_arch    = 0; // autodetect
-static int    opt_etm     = 0;
-static int    opt_verbose = 0;
-static int    opt_profile = 0;
-static int    opt_hostbuf = 1; // hostbuf ON by default
-static int    opt_use_hmx = 1; // when set, enable HMX; when 0, use HVX only
-static int    opt_opmask  = HTP_OPMASK_QUEUE | HTP_OPMASK_COMPUTE; // Enable all stages by default
-static int    opt_opsync  = 0;  // synchronous ops
-static int    opt_opbatch = 1024; // max number of ops in a batch
-static int    opt_opqueue = 16;   // max number of pending batches
-
->>>>>>> 6ee78ca87 (hexagon: allow host to set max vmem size)
+				//
 static std::regex* opt_opfilter = NULL; // regex of ops to not claim
 
 #define HEX_VERBOSE(...) \
@@ -208,33 +193,30 @@ struct ggml_hexagon_shared_buffer {
     bool                   mapped;
     bool                   pinned;
 
-    void mmap(bool pinned = false) {
-        int err = fastrpc_mmap(sess->domain_id, this->fd, (void *) this->base, 0, this->size, FASTRPC_MAP_FD_DELAYED);
+    void mmap() {
+        fastrpc_map_flags flags = this->pinned ? FASTRPC_MAP_FD : FASTRPC_MAP_FD_DELAYED;
+
+        int err = fastrpc_mmap(sess->domain_id, this->fd, (void *) this->base, 0, this->size, flags);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: %s buffer mapping failed : domain_id %d size %zu fd %d error 0x%08x\n", sess->c_name(),
                     sess->domain_id, this->size, this->fd, (unsigned) err);
             throw std::runtime_error("ggml-hex: fastrpc_mmap failed (see log for details)");
         }
 
-        if (pinned) {
-            err = htp_iface_mmap(sess->handle, this->fd, this->size, pinned);
-            if (err != 0) {
-                GGML_LOG_ERROR("ggml-hex: %s buffer pinning failed : domain_id %d size %zu fd %d error 0x%08x\n", sess->c_name(),
-                        sess->domain_id, this->size, this->fd, (unsigned) err);
-                throw std::runtime_error("ggml-hex: htp_iface_mmap failed (see log for details)");
-            }
-        }
-
-        this->mapped = true;
-        this->pinned = pinned;
         HEX_VERBOSE("ggml-hex: %s mapped buffer: base %p size %zu fd %d pinned %u\n",
                 sess->c_name(), (void *) this->base, this->size, this->fd, pinned);
+
+        this->mapped = true;
     }
 
     void unmap() {
         if (!this->mapped) return;
 
-        htp_iface_munmap(sess->handle, this->fd);
+        if (!this->pinned) {
+            // HTP might still hold a reference, tell it drop it
+            htp_iface_munmap(sess->handle, this->fd);
+        }
+
         fastrpc_munmap(sess->domain_id, this->fd, (void *) this->base, this->size);
 
         HEX_VERBOSE("ggml-hex: %s unmapped buffer: base %p size %zu fd %d\n", sess->c_name(),
@@ -244,7 +226,7 @@ struct ggml_hexagon_shared_buffer {
         this->fd     = -1;
     }
 
-    void alloc(size_t size, bool pinned = false) {
+    void alloc(size_t size) {
         if (this->base) return;
 
         this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, size);
@@ -262,8 +244,7 @@ struct ggml_hexagon_shared_buffer {
 
         HEX_VERBOSE("ggml-hex: %s allocated buffer: base %p size %zu fd %d pinned %d\n", sess->c_name(),
                     (void *) this->base, this->size, this->fd, (int) pinned);
-
-        mmap(pinned);
+        mmap();
     }
 
     void free() {
@@ -279,15 +260,14 @@ struct ggml_hexagon_shared_buffer {
     }
 
     ggml_hexagon_shared_buffer(ggml_hexagon_session * sess, size_t size, bool pinned = false) {
-        size += 4 * 1024;  // extra page for padding
-
         this->sess   = sess;
         this->size   = 0;
         this->base   = nullptr;
         this->fd     = -1;
         this->mapped = false;
+        this->pinned = pinned;
 
-        alloc(size, pinned);
+        alloc(size);
     }
 
     ~ggml_hexagon_shared_buffer() {
@@ -1492,6 +1472,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
+        size += 4 * 1024;  // guard page
         ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
@@ -1504,6 +1485,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_repack_buffer_type_alloc_buffe
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
+        size += 4 * 1024;  // guard page
         ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
@@ -1961,6 +1943,27 @@ void ggml_hexagon_session::flush(bool all) {
     flush_pending(all);
 }
 
+static size_t ggml_hexagon_measure_max_vmem(ggml_hexagon_session *sess) {
+    // This is very expensive but handy for figuring out exactly how much we can mmap on a specific device.
+    // Allocate a bunch of 128MB pinned buffers till failure.
+
+    std::vector<ggml_hexagon_shared_buffer *> sbufs;
+
+    size_t step = 128u * 1024 * 1024;
+    size_t vmem = 0;
+
+    try {
+        while (1) {
+            sbufs.push_back(new ggml_hexagon_shared_buffer(sess, step, true));
+            vmem += step;
+        }
+    } catch (...) { }
+
+    for (auto b : sbufs) { delete b; }
+
+    return vmem;
+}
+
 void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     this->valid_session = false;
     this->valid_handle  = false;
@@ -2050,9 +2053,6 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
     this->valid_handle = true;
 
-    GGML_LOG_INFO("ggml-hex: new session: %s : session-id %d domain-id %d uri %s handle 0x%lx\n", this->name.c_str(),
-                  this->session_id, this->domain_id, session_uri, (unsigned long) this->handle);
-
     // Enable FastRPC QoS mode
     {
         struct remote_rpc_control_latency l;
@@ -2063,6 +2063,9 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
             GGML_LOG_WARN("ggml-hex: failed to enable fastrpc QOS mode: 0x%08x\n", (unsigned) err);
         }
     }
+
+    GGML_LOG_INFO("ggml-hex: new session: %s : session-id %d domain-id %d uri %s handle 0x%lx\n", this->name.c_str(),
+                  this->session_id, this->domain_id, session_uri, (unsigned long) this->handle);
 
     const size_t req_q_size = (sizeof(htp_opbatch_req) * opt_opqueue * 2) + 1024;
     const size_t rsp_q_size = (sizeof(htp_opbatch_rsp) * opt_opqueue * 2) + 1024;
@@ -2111,7 +2114,12 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     this->op_batch = new ggml_hexagon_opbatch(this, opt_opbatch);
     this->op_queue = new ggml_hexagon_opqueue(this, opt_opbatch, opt_opqueue);
 
-    // Start processing op batch requests
+    if (!opt_vmem) {
+        opt_vmem = ggml_hexagon_measure_max_vmem(this);
+        GGML_LOG_INFO("ggml-hex: measured max vmem %zu\n", opt_vmem);
+    }
+
+    // Start dspqueue/opbatch processing
     err = htp_iface_start(this->handle, dev_id, this->queue_id, opt_nhvx, opt_use_hmx, opt_vmem);
     if (err != 0) {
         GGML_LOG_ERROR("ggml-hex: failed to start session: 0x%08x\n", (unsigned) err);
@@ -2125,16 +2133,16 @@ void ggml_hexagon_session::release() noexcept(true) {
 
     int err;
 
-    delete this->op_batch;
-    delete this->op_queue;
-
-    // Stop the DSP-side service and close the queue
     if (this->valid_iface) {
+        // Stop dspqueue/opbatch processing
         err = htp_iface_stop(this->handle);
         if (err != 0) {
             GGML_ABORT("ggml-hex: htp_iface_stop failed: 0x%08x\n", (unsigned) err);
         }
     }
+
+    delete this->op_batch;
+    delete this->op_queue;
 
     if (opt_etm) {
         err = htp_iface_etm(this->handle, 0);
