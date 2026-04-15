@@ -9,40 +9,63 @@ fn get_byte_i32(value: u32, index: u32) -> i32 {
 #endif
 
 #ifdef U32_DEQUANT_HELPERS
-fn load_u16_at(
-        buf: ptr<storage, array<u32>, read_write>,
-        byte_offset: u32) -> u32 {
-    let word = buf[byte_offset / 4];
-    let shift = (byte_offset & 0x2) * 8;
-    return (word >> shift) & 0xFFFF;
+#ifdef DECLARE_BYTE_LOADERS_SRC
+fn load_u16_at_src(byte_offset: u32) -> u32 {
+    let word = src[byte_offset / 4u];
+    let shift = (byte_offset & 0x2u) * 8u;
+    return (word >> shift) & 0xFFFFu;
 }
 
-fn load_u32_at(
-        buf: ptr<storage, array<u32>, read_write>,
-        byte_offset: u32) -> u32 {
-    let word_idx = byte_offset / 4;
-    let shift = (byte_offset & 0x3) * 8;
-    let lo = buf[word_idx];
-    let hi = buf[word_idx + 1];
-    let shifted = (lo >> shift) | (hi << (32 - shift));
-    return select(shifted, lo, shift == 0);
+fn load_u32_at_src(byte_offset: u32) -> u32 {
+    let word_idx = byte_offset / 4u;
+    let shift = (byte_offset & 0x3u) * 8u;
+    let lo = src[word_idx];
+    let hi = src[word_idx + 1u];
+    let shifted = (lo >> shift) | (hi << (32u - shift));
+    return select(shifted, lo, shift == 0u);
 }
 
-fn load_f16_at(
-        buf: ptr<storage, array<u32>, read_write>,
-        byte_offset: u32) -> f16 {
-    let packed = unpack2x16float(load_u16_at(buf, byte_offset));
+fn load_f16_at_src(byte_offset: u32) -> f16 {
+    let packed = unpack2x16float(load_u16_at_src(byte_offset));
     return f16(packed[0]);
 }
 
-fn load_f16_as_f32_at(
-        buf: ptr<storage, array<u32>, read_write>,
-        byte_offset: u32) -> f32 {
-    let word = buf[byte_offset / 4];
-    let shift = (byte_offset & 0x2) * 8;
-    let d_bits = (word >> shift) & 0xFFFF;
+fn load_f16_as_f32_at_src(byte_offset: u32) -> f32 {
+    let word = src[byte_offset / 4u];
+    let shift = (byte_offset & 0x2u) * 8u;
+    let d_bits = (word >> shift) & 0xFFFFu;
     return unpack2x16float(d_bits)[0];
 }
+#endif
+
+#ifdef DECLARE_BYTE_LOADERS_SRC0
+fn load_u16_at_src0(byte_offset: u32) -> u32 {
+    let word = src0[byte_offset / 4u];
+    let shift = (byte_offset & 0x2u) * 8u;
+    return (word >> shift) & 0xFFFFu;
+}
+
+fn load_u32_at_src0(byte_offset: u32) -> u32 {
+    let word_idx = byte_offset / 4u;
+    let shift = (byte_offset & 0x3u) * 8u;
+    let lo = src0[word_idx];
+    let hi = src0[word_idx + 1u];
+    let shifted = (lo >> shift) | (hi << (32u - shift));
+    return select(shifted, lo, shift == 0u);
+}
+
+fn load_f16_at_src0(byte_offset: u32) -> f16 {
+    let packed = unpack2x16float(load_u16_at_src0(byte_offset));
+    return f16(packed[0]);
+}
+
+fn load_f16_as_f32_at_src0(byte_offset: u32) -> f32 {
+    let word = src0[byte_offset / 4u];
+    let shift = (byte_offset & 0x2u) * 8u;
+    let d_bits = (word >> shift) & 0xFFFFu;
+    return unpack2x16float(d_bits)[0];
+}
+#endif
 #endif
 
 

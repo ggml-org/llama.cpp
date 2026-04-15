@@ -3,7 +3,9 @@ enable f16;
 enable subgroups;
 enable chromium_experimental_subgroup_matrix;
 
+#define DECLARE_BYTE_LOADERS_SRC0
 #include "common_decls.tmpl"
+
 #include "mul_mat_decls.tmpl"
 
 // TODO: this shader path does not work with some models like qwen2.5 on Metal devices, f16 accumulation causes NaNs.
@@ -196,4 +198,3 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
     }
 }
-

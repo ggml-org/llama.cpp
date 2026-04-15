@@ -1419,22 +1419,48 @@ struct ggml_backend_meta_context {
     size_t                      max_tmp_size  = 0;
     size_t                      max_subgraphs = 0;
 
+    void *                               comm_ctx       = nullptr;
+    ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
+
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
         name = "Meta(";
+        std::vector<ggml_backend_t> simple_backends;
         backend_configs.reserve(n_devs);
+        simple_backends.reserve(n_devs);
         for (size_t i = 0; i < n_devs; i++) {
             ggml_backend_dev_t simple_dev = ggml_backend_meta_dev_simple_dev(meta_dev, i);
             if (i > 0) {
                 name += ",";
             }
             name += ggml_backend_dev_name(simple_dev);
-            backend_configs.emplace_back(ggml_backend_dev_init(simple_dev, params));
+            simple_backends.push_back(ggml_backend_dev_init(simple_dev, params));
+            backend_configs.emplace_back(simple_backends.back());
         }
         name += ")";
+
+        if (n_devs > 1) {
+            ggml_backend_comm_init_t comm_init = (ggml_backend_comm_init_t) ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_init");
+            if (comm_init != nullptr) {
+                comm_ctx = comm_init(simple_backends.data(), simple_backends.size());
+            }
+        }
+        if (comm_ctx != nullptr) {
+            comm_allreduce = (ggml_backend_comm_allreduce_tensor_t)
+                ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
+                    ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_tensor");
+            GGML_ASSERT(comm_allreduce != nullptr);
+        }
     }
 
     ~ggml_backend_meta_context() {
+        if (comm_ctx != nullptr) {
+            ggml_backend_comm_free_t comm_free = (ggml_backend_comm_free_t) ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_configs[0].backend)), "ggml_backend_comm_free");
+            GGML_ASSERT(comm_free != nullptr);
+            comm_free(comm_ctx);
+        }
         for (auto & bc : backend_configs) {
             ggml_backend_free(bc.backend);
         }
@@ -1845,20 +1871,15 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 
         if (n_backends > 1 && i < n_subgraphs - 1) {
             bool backend_allreduce_success = false;
-            ggml_backend_allreduce_tensor_t allreduce_tensor = (ggml_backend_allreduce_tensor_t) ggml_backend_reg_get_proc_address(
-                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_ctx->backend_configs[0].backend)), "ggml_backend_allreduce_tensor");
-            if (allreduce_tensor) {
-                std::vector<ggml_backend_t> backends;
-                backends.reserve(n_backends);
+            if (backend_ctx->comm_ctx) {
                 std::vector<ggml_tensor *> nodes;
                 nodes.reserve(n_backends);
                 for (size_t j = 0; j < n_backends; j++) {
                     auto & bcj = backend_ctx->backend_configs[j];
-                    backends.push_back(bcj.backend);
                     ggml_cgraph * cgraph_ij = bcj.cgraphs[i].cgraph_main;
                     nodes.push_back(cgraph_ij->nodes[cgraph_ij->n_nodes-1]);
                 }
-                backend_allreduce_success = allreduce_tensor(backends.data(), nodes.data(), n_backends);
+                backend_allreduce_success = backend_ctx->comm_allreduce(backend_ctx->comm_ctx, nodes.data());
             }
 
             if (!backend_allreduce_success) {
