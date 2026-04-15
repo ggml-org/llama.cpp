@@ -1002,73 +1002,78 @@ static __device__ __forceinline__ void load_tiles_nvfp4_nvfp4(const char * __res
     }
 }
 
-template <int mmq_x, int mmq_y>
-static __device__ __forceinline__ void vec_dot_nvfp4_nvfp4_mma(const int * __restrict__ x,
-                                                               const int * __restrict__ y,
-                                                               float * __restrict__ sum,
-                                                               const int k00) {
+// Shared MMA kernel for MXFP4 and NVFP4 on Blackwell.
+// Both quantizations encode values as e2m1 (FP4) and produce one uint32 scale per
+// m16n8k64 MMA call; only the PTX kind (scale_vec::2X ue8m0 vs scale_vec::4X ue4m3)
+// and the per-type stride constant differ.
+template <int mmq_x, int mmq_y, ggml_type type>
+static __device__ __forceinline__ void vec_dot_fp4_fp4_mma(const int * __restrict__ x,
+                                                           const int * __restrict__ y,
+                                                           float * __restrict__ sum,
+                                                           const int k00) {
+    static_assert(type == GGML_TYPE_MXFP4 || type == GGML_TYPE_NVFP4,
+                  "vec_dot_fp4_fp4_mma: type must be MXFP4 or NVFP4");
+
     typedef tile<16, 8, int>   tile_A;
     typedef tile<8, 8, int>    tile_B;
     typedef tile<16, 8, float> tile_C;
 
-    constexpr int granularity = mmq_get_granularity_device(mmq_x);
+    constexpr int stride        = mmq_get_mma_tile_x_k(type);
+    constexpr int granularity   = mmq_get_granularity_device(mmq_x);
     constexpr int rows_per_warp = 2 * granularity;
-    constexpr int ntx = rows_per_warp / tile_C::I;
-    constexpr int nfrags = MMQ_TILE_NE_K / tile_A::J;
-    constexpr int rows_per_slab = mmq_get_nwarps_device() * tile_C::I;
-    constexpr int groups_per_slab = mmq_x / tile_C::J;
+    constexpr int ntx           = rows_per_warp / tile_C::I;
+    constexpr int nfrags        = MMQ_TILE_NE_K / tile_A::J;
+
+    y += (threadIdx.y % ntx) * (tile_C::J * MMQ_TILE_Y_K);
 
     const int *      x_qs = (const int *) x;
     const uint32_t * x_sc = (const uint32_t *) (x_qs + 2 * MMQ_TILE_NE_K);
     const int *      y_qs = (const int *) y + 4;
     const uint32_t * y_sc = (const uint32_t *) y;
-    const int ty = threadIdx.y;
-    const int ty_ntx_mod = ty % ntx;
-    const int ty_ntx_div = ty / ntx;
+
+    // 2 threads per quad supply the packed scale register to the block_scale MMA,
+    // see https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-block-scaling
     const int tidx = threadIdx.x / 4 + (threadIdx.x % 2) * 8;
+    const int i0   = (threadIdx.y / ntx) * rows_per_warp;
+
+    tile_A   A[ntx][nfrags];
+    uint32_t scaleA[ntx][nfrags];
 
 #pragma unroll
-    for (int slab_row0 = 0; slab_row0 < mmq_y; slab_row0 += rows_per_slab) {
-        tile_A   A[ntx][nfrags];
-        uint32_t scaleA[ntx][nfrags];
-        const int i0 = slab_row0 + ty_ntx_div * rows_per_warp;
+    for (int n = 0; n < ntx; ++n) {
+#pragma unroll
+        for (int frag = 0; frag < nfrags; ++frag) {
+            const int k0 = k00 + frag * tile_A::J;
+            load_ldmatrix(A[n][frag], x_qs + (i0 + n * tile_A::I) * stride + k0, stride);
+            scaleA[n][frag] = x_sc[(i0 + n * tile_A::I + tidx) * stride + k0 / tile_A::J];
+        }
+    }
+
+#pragma unroll
+    for (int j0 = 0; j0 < mmq_x; j0 += ntx * tile_C::J) {
+        tile_B   B[nfrags];
+        uint32_t scaleB[nfrags];
+
+#pragma unroll
+        for (int frag = 0; frag < nfrags; ++frag) {
+            const int k0 = frag * tile_B::J;
+            load_generic(B[frag], y_qs + j0 * MMQ_TILE_Y_K + k0, MMQ_TILE_Y_K);
+            scaleB[frag] = y_sc[(j0 + tidx) * MMQ_TILE_Y_K + frag];
+        }
 
 #pragma unroll
         for (int n = 0; n < ntx; ++n) {
 #pragma unroll
             for (int frag = 0; frag < nfrags; ++frag) {
-                const int k0 = k00 + frag * tile_A::J;
-                load_ldmatrix(A[n][frag], x_qs + (i0 + n * tile_A::I) * MMQ_MMA_TILE_X_K_NVFP4 + k0, MMQ_MMA_TILE_X_K_NVFP4);
-                scaleA[n][frag] = x_sc[(i0 + n * tile_A::I + tidx) * MMQ_MMA_TILE_X_K_NVFP4 + k0 / tile_A::J];
-            }
-        }
-
-#pragma unroll
-        for (int j0 = 0; j0 < mmq_x; j0 += ntx * tile_C::J) {
-            tile_B   B[nfrags];
-            uint32_t scaleB[nfrags];
-            const int sum_j = slab_row0 / rows_per_slab * groups_per_slab + j0 / tile_C::J;
-
-#pragma unroll
-            for (int frag = 0; frag < nfrags; ++frag) {
-                const int k0 = frag * tile_B::J;
-                load_generic(B[frag], y_qs + (ty_ntx_mod * tile_C::J + j0) * MMQ_TILE_Y_K + k0, MMQ_TILE_Y_K);
-                scaleB[frag] = y_sc[(ty_ntx_mod * tile_C::J + j0 + tidx) * MMQ_TILE_Y_K + frag];
-            }
-
-#pragma unroll
-            for (int n = 0; n < ntx; ++n) {
-                float * sum_n = sum + (sum_j + n) * tile_C::ne;
-
-#pragma unroll
-                for (int frag = 0; frag < nfrags; ++frag) {
-                    tile_C C = {};
+                tile_C C = {};
+                if constexpr (type == GGML_TYPE_MXFP4) {
+                    mma_block_scaled   (C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
+                } else {
                     mma_nvfp4_blackwell(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
-
+                }
 #pragma unroll
-                    for (int l = 0; l < tile_C::ne; ++l) {
-                        sum_n[l] += C.x[l];
-                    }
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    sum[(j0 / tile_C::J + n) * tile_C::ne + l] += C.x[l];
                 }
             }
         }
@@ -1305,77 +1310,6 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 }
 
-template <int mmq_x, int mmq_y>
-static __device__ __forceinline__ void vec_dot_mxfp4_mxfp4_mma(const int * __restrict__ x,
-                                                               const int * __restrict__ y,
-                                                               float * __restrict__ sum,
-                                                               const int k00) {
-    typedef tile<16, 8, int>   tile_A;
-    typedef tile<8, 8, int>    tile_B;
-    typedef tile<16, 8, float> tile_C;  // Output is float for native scaled MMA
-
-    constexpr int granularity   = mmq_get_granularity_device(mmq_x);
-    constexpr int rows_per_warp = 2 * granularity;
-    constexpr int ntx           = rows_per_warp / tile_C::I;  // Number of x minitiles per warp.
-
-    y += (threadIdx.y % ntx) * (tile_C::J * MMQ_TILE_Y_FP4_K);
-
-    // Match layout from load_tiles_mxfp4_fp4
-    const int *      x_qs = (const int *) x;
-    const uint32_t * x_sc = (const uint32_t *) (x_qs + 2 * MMQ_TILE_NE_K);
-    const int *      y_qs = (const int *) y + 4;
-    const uint32_t * y_sc = (const uint32_t *) y;
-
-    // tile_A has a length of 64 logical values vs. 32 values in block_mxfp4
-    tile_A   A[ntx][MMQ_TILE_NE_K / (2 * QI_MXFP4)];
-    uint32_t scaleA[ntx][MMQ_TILE_NE_K / (2 * QI_MXFP4)];
-
-    // Block scale
-    // Each thread has to point to a 4 byte scale value
-    // https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-block-scaling
-
-    const int i0 = (threadIdx.y / ntx) * rows_per_warp;
-
-#pragma unroll
-    for (int n = 0; n < ntx; ++n) {
-#pragma unroll
-        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 2 * QI_MXFP4) {
-            const int k0 = k00 + k01;
-
-            load_ldmatrix(A[n][k01 / (2 * QI_MXFP4)], x_qs + (i0 + n * tile_A::I) * MMQ_MMA_TILE_X_K_FP4 + k0,
-                          MMQ_MMA_TILE_X_K_FP4);
-
-            // based on block-scaling document, 2 threads in each quad need to supply to the scale value
-            const int tidx         = threadIdx.x / 4 + (threadIdx.x % 2) * 8;
-            scaleA[n][k01 / (2 * QI_MXFP4)] =
-                *(x_sc + (i0 + n * tile_A::I + tidx) * MMQ_MMA_TILE_X_K_FP4 + k0 / (2 * QI_MXFP4));
-        }
-    }
-
-#pragma unroll
-    for (int j0 = 0; j0 < mmq_x; j0 += ntx * tile_C::J) {
-#pragma unroll
-        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 2 * QI_MXFP4) {
-            tile_B   B;
-            uint32_t scaleB;  // 2xN scales
-
-            load_generic(B, y_qs + j0 * MMQ_TILE_Y_FP4_K + k01, MMQ_TILE_Y_FP4_K);
-
-            scaleB = y_sc[(j0 + threadIdx.x / 4) * MMQ_TILE_Y_FP4_K + k01 / (2 * QI_MXFP4)];
-
-#pragma unroll
-            for (int n = 0; n < ntx; ++n) {
-                tile_C C;
-
-                mma_block_scaled(C, A[n][k01 / (2 * QI_MXFP4)], B, scaleA[n][k01 / (2 * QI_MXFP4)], scaleB);
-#pragma unroll
-                for (int l = 0; l < tile_C::ne; ++l) {
-                    sum[(j0 / tile_C::J + n) * tile_C::ne + l] += C.x[l];
-                }
-            }
-        }
-    }
-}
 
 template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q8_1_q8_1_dp4a(
@@ -3401,7 +3335,7 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_MXFP4> {
     static constexpr int              vdr          = VDR_MXFP4_Q8_1_MMQ;
 #ifdef BLACKWELL_MMA_AVAILABLE
     static constexpr load_tiles_mmq_t load_tiles  = load_tiles_mxfp4_fp4<mmq_y, need_check>;
-    static constexpr vec_dot_mmq_t    vec_dot_mma = vec_dot_mxfp4_mxfp4_mma<mmq_x, mmq_y>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma = vec_dot_fp4_fp4_mma<mmq_x, mmq_y, GGML_TYPE_MXFP4>;
 #else
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_mxfp4<mmq_y, need_check>;
     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, MMQ_Q8_1_DS_LAYOUT_D4>;
@@ -3414,7 +3348,7 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_NVFP4> {
     static constexpr int              vdr          = VDR_NVFP4_Q8_1_MMQ;
 #ifdef BLACKWELL_MMA_AVAILABLE
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_nvfp4_nvfp4<mmq_y, need_check>;
-    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_nvfp4_nvfp4_mma<mmq_x, mmq_y>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_fp4_fp4_mma<mmq_x, mmq_y, GGML_TYPE_NVFP4>;
 #else
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_nvfp4<mmq_y, need_check>;
     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y>;
