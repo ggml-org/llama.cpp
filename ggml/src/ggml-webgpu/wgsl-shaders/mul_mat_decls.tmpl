@@ -502,12 +502,6 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let d = load_f16_at(&src0, block_byte_base);
         let dmin = load_f16_at(&src0, block_byte_base + 2u);
 
-        // Load packed scales
-        var scale_vals: array<u32, 3>;
-        for (var i: u32 = 0u; i < 3u; i++) {
-            scale_vals[i] = load_u32_at(&src0, block_byte_base + 4u + 4u * i);
-        }
-
         // Map k_in_block to loop structure:
         // Outer loop over 64-element groups (alternating q_b_idx)
         // Inner loop over 2 shifts per group
@@ -523,15 +517,17 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         var sc: u32;
         var mn: u32;
 
+        let scale_base = block_byte_base + 4u;
+
         if (is < 4u) {
-            let sc_byte = get_byte(scale_vals[is / 4u], is % 4u);
-            let min_byte = get_byte(scale_vals[(is + 4u) / 4u], is % 4u);
+            let sc_byte = get_byte(load_u32_at(&src0, scale_base), is % 4u);
+            let min_byte = get_byte(load_u32_at(&src0, scale_base + 4), is % 4u);
             sc = sc_byte & 63u;
             mn = min_byte & 63u;
         } else {
-            let sc_min_lo = get_byte(scale_vals[(is + 4u) / 4u], (is + 4u) % 4u);
-            let sc_hi = get_byte(scale_vals[(is - 4u) / 4u], (is - 4u) % 4u);
-            let min_hi = get_byte(scale_vals[is / 4u], is % 4u);
+            let sc_min_lo = get_byte(load_u32_at(&src0, scale_base + 8), (is + 4u) % 4u);
+            let sc_hi = get_byte(load_u32_at(&src0, scale_base), (is - 4u) % 4u);
+            let min_hi = get_byte(load_u32_at(&src0, scale_base + 4), is % 4u);
 
             sc = (sc_min_lo & 0xFu) | ((sc_hi >> 6u) << 4u);
             mn = (sc_min_lo >> 4u) | ((min_hi >> 6u) << 4u);
@@ -578,11 +574,6 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let d = load_f16_at(&src0, block_byte_base);
         let dmin = load_f16_at(&src0, block_byte_base + 2u);
 
-        // Load packed scales
-        var scale_vals: array<u32, 3>;
-        for (var i: u32 = 0u; i < 3u; i++) {
-            scale_vals[i] = load_u32_at(&src0, block_byte_base + 4u + 4u * i);
-        }
 
         // The original loop processes elements in groups of 64
         // Each group of 64: q_b_idx cycles through [0,32,64,96], shift cycles [0,4]
@@ -603,15 +594,17 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         var sc: u32;
         var mn: u32;
 
+        let scale_base = block_byte_base + 4u;
+
         if (is < 4u) {
-            let sc_byte = get_byte(scale_vals[is / 4u], is % 4u);
-            let min_byte = get_byte(scale_vals[(is + 4u) / 4u], is % 4u);
+            let sc_byte = get_byte(load_u32_at(&src0, scale_base), is % 4u);
+            let min_byte = get_byte(load_u32_at(&src0, scale_base + 4), is % 4u);
             sc = sc_byte & 63u;
             mn = min_byte & 63u;
         } else {
-            let sc_min_lo = get_byte(scale_vals[(is + 4u) / 4u], (is + 4u) % 4u);
-            let sc_hi = get_byte(scale_vals[(is - 4u) / 4u], (is - 4u) % 4u);
-            let min_hi = get_byte(scale_vals[is / 4u], is % 4u);
+            let sc_min_lo = get_byte(load_u32_at(&src0, scale_base + 8), (is + 4u) % 4u);
+            let sc_hi = get_byte(load_u32_at(&src0, scale_base), (is - 4u) % 4u);
+            let min_hi = get_byte(load_u32_at(&src0, scale_base + 4), is % 4u);
 
             sc = (sc_min_lo & 0xFu) | ((sc_hi >> 6u) << 4u);
             mn = (sc_min_lo >> 4u) | ((min_hi >> 6u) << 4u);

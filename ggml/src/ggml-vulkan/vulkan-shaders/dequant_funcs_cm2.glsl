@@ -697,6 +697,24 @@ float16_t dequantFuncMXFP4(const in decodeBufMXFP4 bl, const in uint blockCoords
 }
 #endif
 
+#if defined(DATA_A_NVFP4)
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer decodeBufNVFP4 {
+   block_nvfp4 block;
+};
+
+float16_t dequantFuncNVFP4(const in decodeBufNVFP4 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const uint idx = coordInBlock[1];
+    const uint sub = (idx & 0x30) >> 4;
+    const uint iqs = ((idx & 0x30) >> 1) + (idx & 0x7);
+    const uint shift = (idx & 0x8) >> 1;
+    const float d = ue4m3_to_fp32(bl.block.d[sub]);
+    uint qs = uint(bl.block.qs[iqs]);
+    qs = (qs >> shift) & 0xF;
+    return float16_t(kvalues_mxfp4[qs] * d * 0.5);
+}
+#endif
+
 #if defined(DATA_A_Q1_0)
 #define dequantFuncA dequantFuncQ1_0
 #elif defined(DATA_A_Q4_0)
@@ -743,6 +761,8 @@ float16_t dequantFuncMXFP4(const in decodeBufMXFP4 bl, const in uint blockCoords
 #define dequantFuncA dequantFuncIQ4_NL
 #elif defined(DATA_A_MXFP4)
 #define dequantFuncA dequantFuncMXFP4
+#elif defined(DATA_A_NVFP4)
+#define dequantFuncA dequantFuncNVFP4
 #elif defined(DATA_A_F32)
 #define dequantFuncA dequantFuncF32
 #endif

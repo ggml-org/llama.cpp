@@ -676,7 +676,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
         ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
-                          literal("\"") + tool_name(literal(name)) + literal("\"");
+                          atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
         auto nested_args = literal("\"" + nested_args_field + "\"") + space() + literal(":") + space() +
                           tool_args(schema(json(), "tool-" + name + "-schema", params));
 
@@ -744,7 +744,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
         ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         auto tool_name_ = name_key_parser + space() + literal(":") + space() +
-                         literal("\"") + tool_name(literal(name)) + literal("\"");
+                         atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
         auto tool_args_ = args_key_parser + space() + literal(":") + space() +
                          tool_args(schema(json(), "tool-" + name + "-schema", params));
 

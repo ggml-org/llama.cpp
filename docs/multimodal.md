@@ -94,6 +94,11 @@ NOTE: some models may require large context window, for example: `-c 8192`
 # Moondream2 20250414 version
 (tool_name) -hf ggml-org/moondream2-20250414-GGUF
 
+# Gemma 4
+(tool_name) -hf ggml-org/gemma-4-E2B-it-GGUF
+(tool_name) -hf ggml-org/gemma-4-E4B-it-GGUF
+(tool_name) -hf ggml-org/gemma-4-26B-A4B-it-GGUF
+(tool_name) -hf ggml-org/gemma-4-31B-it-GGUF
 ```
 
 **Audio models**:
@@ -109,6 +114,10 @@ NOTE: some models may require large context window, for example: `-c 8192`
 
 # Mistral's Voxtral
 (tool_name) -hf ggml-org/Voxtral-Mini-3B-2507-GGUF
+
+# Qwen3-ASR
+(tool_name) -hf ggml-org/Qwen3-ASR-0.6B-GGUF
+(tool_name) -hf ggml-org/Qwen3-ASR-1.7B-GGUF
 ```
 
 **Mixed modalities**:
@@ -118,6 +127,16 @@ NOTE: some models may require large context window, for example: `-c 8192`
 # Capabilities: audio input, vision input
 (tool_name) -hf ggml-org/Qwen2.5-Omni-3B-GGUF
 (tool_name) -hf ggml-org/Qwen2.5-Omni-7B-GGUF
+
+# Qwen3 Omni
+# Capabilities: audio input, vision input
+(tool_name) -hf ggml-org/Qwen3-Omni-30B-A3B-Instruct-GGUF
+(tool_name) -hf ggml-org/Qwen3-Omni-30B-A3B-Thinking-GGUF
+
+# Gemma 4
+# Capabilities: audio input, vision input
+(tool_name) -hf ggml-org/gemma-4-E2B-it-GGUF
+(tool_name) -hf ggml-org/gemma-4-E4B-it-GGUF
 ```
 
 ## Finding more models:

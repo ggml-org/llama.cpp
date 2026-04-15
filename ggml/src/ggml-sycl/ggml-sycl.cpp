@@ -4727,11 +4727,18 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = op->src[1];
 
+                // disable Q1_0 until implementation
+                if (a->type == GGML_TYPE_Q1_0 || b->type == GGML_TYPE_Q1_0) {
+                    return false;
+                }
+
                 if (a->ne[3] != b->ne[3]) {
                     return false;
                 }
 
                 ggml_type src0_type = op->src[0]->type;
+
+
 
                 // TODO: The configuration below needs more work to be supported with oneDNN
                 if (ggml_is_permuted(a) && !ggml_is_contiguous(a) &&
