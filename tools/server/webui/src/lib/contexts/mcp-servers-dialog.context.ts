@@ -6,12 +6,10 @@ export interface McpServersDialogContext {
 	isActive: () => boolean;
 }
 
-const MCP_SERVERS_DIALOG_KEY = Symbol.for(CONTEXT_KEY_MCP_SERVERS_DIALOG);
-
 export function setMcpServersDialogContext(ctx: McpServersDialogContext): McpServersDialogContext {
-	return setContext(MCP_SERVERS_DIALOG_KEY, ctx);
+	return setContext(CONTEXT_KEY_MCP_SERVERS_DIALOG, ctx);
 }
 
 export function getMcpServersDialogContext(): McpServersDialogContext {
-	return getContext(MCP_SERVERS_DIALOG_KEY);
+	return getContext(CONTEXT_KEY_MCP_SERVERS_DIALOG);
 }

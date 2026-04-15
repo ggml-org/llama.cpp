@@ -1,21 +1,21 @@
 <script lang="ts">
 	import type { Component } from 'svelte';
 	import { Download, Upload, Trash2, Database } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { Button, type ButtonVariant } from '$lib/components/ui/button';
 	import { DialogConversationSelection, DialogConfirmation } from '$lib/components/app';
 	import { createMessageCountMap } from '$lib/utils';
-	import { ISO_DATE_TIME_SEPARATOR } from '$lib/constants';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
 	import { fade } from 'svelte/transition';
+	import { ConversationSelectionMode, HtmlInputType, FileExtensionText } from '$lib/enums';
 
-	type SectionOpts = {
+	interface SectionOpts {
 		wrapperClass?: string;
 		titleClass?: string;
-		buttonVariant?: 'outline' | 'destructive';
+		buttonVariant?: ButtonVariant;
 		buttonClass?: string;
 		summary?: { show: boolean; verb: string; items: DatabaseConversation[] };
-	};
+	}
 
 	let exportedConversations = $state<DatabaseConversation[]>([]);
 	let importedConversations = $state<DatabaseConversation[]>([]);
@@ -66,10 +66,7 @@
 				})
 			);
 
-			conversationsStore.downloadConversationFile(
-				allData,
-				`${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations.json`
-			);
+			conversationsStore.downloadConversationFile(allData);
 
 			exportedConversations = selectedConversations;
 			showExportSummary = true;
@@ -85,8 +82,8 @@
 		try {
 			const input = document.createElement('input');
 
-			input.type = 'file';
-			input.accept = '.json';
+			input.type = HtmlInputType.FILE;
+			input.accept = FileExtensionText.JSON;
 
 			input.onchange = async (e) => {
 				const file = (e.target as HTMLInputElement)?.files?.[0];
@@ -281,7 +278,7 @@
 <DialogConversationSelection
 	conversations={availableConversations}
 	{messageCountMap}
-	mode="export"
+	mode={ConversationSelectionMode.EXPORT}
 	bind:open={showExportDialog}
 	onCancel={() => (showExportDialog = false)}
 	onConfirm={handleExportConfirm}
@@ -290,7 +287,7 @@
 <DialogConversationSelection
 	conversations={availableConversations}
 	{messageCountMap}
-	mode="import"
+	mode={ConversationSelectionMode.IMPORT}
 	bind:open={showImportDialog}
 	onCancel={() => (showImportDialog = false)}
 	onConfirm={handleImportConfirm}

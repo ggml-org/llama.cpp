@@ -1,12 +1,10 @@
 <script lang="ts">
 	import { Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
-	import { uuid } from '$lib/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { McpServerCard, McpServerCardSkeleton, McpServerForm } from '$lib/components/app/mcp';
-	import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
+	import { McpServerCard, McpServerCardSkeleton } from '$lib/components/app/mcp';
+	import { DialogMcpServerAddNew } from '$lib/components/app/dialogs';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { fade } from 'svelte/transition';
 	import McpLogo from '../mcp/McpLogo.svelte';
@@ -40,49 +38,6 @@
 	});
 
 	let isAddingServer = $state(false);
-	let newServerUrl = $state('');
-	let newServerHeaders = $state('');
-	let newServerUrlError = $derived.by(() => {
-		if (!newServerUrl.trim()) return 'URL is required';
-		try {
-			new URL(newServerUrl);
-
-			return null;
-		} catch {
-			return 'Invalid URL format';
-		}
-	});
-
-	function showAddServerForm() {
-		isAddingServer = true;
-		newServerUrl = '';
-		newServerHeaders = '';
-	}
-
-	function cancelAddServer() {
-		isAddingServer = false;
-		newServerUrl = '';
-		newServerHeaders = '';
-	}
-
-	function saveNewServer() {
-		if (newServerUrlError) return;
-
-		const newServerId = uuid() ?? `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
-
-		mcpStore.addServer({
-			id: newServerId,
-			enabled: true,
-			url: newServerUrl.trim(),
-			headers: newServerHeaders.trim() || undefined
-		});
-
-		conversationsStore.setMcpServerOverride(newServerId, true);
-
-		isAddingServer = false;
-		newServerUrl = '';
-		newServerHeaders = '';
-	}
 </script>
 
 <div in:fade={{ duration: 150 }} class="max-h-full overflow-auto">
@@ -93,47 +48,16 @@
 	</div>
 
 	<div class="sticky top-0 z-10 mt-4 flex items-start justify-end gap-4 px-8 py-4">
-		{#if !isAddingServer}
-			<Button variant="outline" size="sm" class="shrink-0" onclick={showAddServerForm}>
-				<Plus class="h-4 w-4" />
+		<Button variant="outline" size="sm" class="shrink-0" onclick={() => (isAddingServer = true)}>
+			<Plus class="h-4 w-4" />
 
-				Add New Server
-			</Button>
-		{/if}
+			Add New Server
+		</Button>
 	</div>
 
+	<DialogMcpServerAddNew bind:open={isAddingServer} />
+
 	<div class="grid gap-5 md:space-y-4 {className}">
-		{#if isAddingServer}
-			<Card.Root class="bg-muted/30 p-4">
-				<div class="space-y-4">
-					<p class="font-medium">Add New Server</p>
-
-					<McpServerForm
-						url={newServerUrl}
-						headers={newServerHeaders}
-						onUrlChange={(v) => (newServerUrl = v)}
-						onHeadersChange={(v) => (newServerHeaders = v)}
-						urlError={newServerUrl ? newServerUrlError : null}
-						id="new-server"
-					/>
-
-					<div class="flex items-center justify-end gap-2">
-						<Button variant="secondary" size="sm" onclick={cancelAddServer}>Cancel</Button>
-
-						<Button
-							variant="default"
-							size="sm"
-							onclick={saveNewServer}
-							disabled={!!newServerUrlError}
-							aria-label="Save"
-						>
-							Add
-						</Button>
-					</div>
-				</div>
-			</Card.Root>
-		{/if}
-
 		{#if servers.length === 0 && !isAddingServer}
 			<div class="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
 				No MCP Servers configured yet. Add one to enable agentic features.

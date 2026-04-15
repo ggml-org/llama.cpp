@@ -1,19 +1,20 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button';
+	import { Button, type ButtonVariant, type ButtonSize } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import type { Component } from 'svelte';
+	import { TooltipSide } from '$lib/enums';
 
 	interface Props {
 		icon: Component;
 		tooltip: string;
-		variant?: 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link';
-		size?: 'default' | 'sm' | 'lg' | 'icon';
+		variant?: ButtonVariant;
+		size?: ButtonSize;
 		iconSize?: string;
 		class?: string;
 		disabled?: boolean;
 		onclick: (e?: MouseEvent) => void;
 		'aria-label'?: string;
-		tooltipSide?: 'top' | 'right' | 'bottom' | 'left';
+		tooltipSide?: TooltipSide;
 	}
 
 	let {
@@ -24,7 +25,7 @@
 		class: className = '',
 		disabled = false,
 		iconSize = 'h-3 w-3',
-		tooltipSide = 'top',
+		tooltipSide = TooltipSide.TOP,
 		onclick,
 		'aria-label': ariaLabel
 	}: Props = $props();

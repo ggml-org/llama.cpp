@@ -716,7 +716,11 @@ export { default as ChatSettingsImportExportTab } from '../settings/SettingsImpo
 export { default as ChatSettingsParameterSourceIndicator } from './ChatSettings/ChatSettingsParameterSourceIndicator.svelte';
 
 /**
+ * **ChatSettingsToolsTab** - Tools configuration tab for chat settings
  *
+ * Displays available tools grouped by source (built-in, MCP, custom) with
+ * toggles to enable/disable individual tools and tool groups. Shows MCP
+ * server favicons and permission management controls.
  */
 export { default as ChatSettingsToolsTab } from './ChatSettings/ChatSettingsToolsTab.svelte';
 

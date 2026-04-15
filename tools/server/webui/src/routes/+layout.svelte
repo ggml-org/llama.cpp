@@ -10,8 +10,7 @@
 		ChatSidebar,
 		ChatSettings,
 		DesktopIconStrip,
-		DialogConversationTitleUpdate,
-		DialogChatSettingsImportExport
+		DialogConversationTitleUpdate
 	} from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
@@ -26,7 +25,6 @@
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
-	import { setImportExportDialogContext } from '$lib/contexts';
 
 	let { children } = $props();
 
@@ -49,13 +47,6 @@
 	let activePanel = $state<'chat' | 'settings' | 'mcp'>('chat');
 	let isSettingsRoute = $derived(!!page.route.id?.startsWith('/settings'));
 	let chatSettingsRef: ChatSettings | undefined = $state();
-	let importExportDialogOpen = $state(false);
-
-	setImportExportDialogContext({
-		open: () => {
-			importExportDialogOpen = true;
-		}
-	});
 
 	$effect(() => {
 		if (activePanel === 'settings' && chatSettingsRef) {
@@ -120,7 +111,6 @@
 			sidebarOpen = true;
 			return;
 		}
-		// Don't auto-open or auto-close sidebar during navigation - user controls it manually
 	});
 
 	// Initialize server properties on app load (run once)
@@ -227,11 +217,6 @@
 	<ModeWatcher />
 
 	<Toaster richColors />
-
-	<DialogChatSettingsImportExport
-		open={importExportDialogOpen}
-		onOpenChange={(open) => (importExportDialogOpen = open)}
-	/>
 
 	<DialogConversationTitleUpdate
 		bind:open={titleUpdateDialogOpen}

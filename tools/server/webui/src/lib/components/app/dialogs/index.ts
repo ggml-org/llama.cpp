@@ -11,74 +11,12 @@
  */
 
 /**
+ * **DialogMcpServerAddNew** - Add new MCP server dialog
  *
- * SETTINGS DIALOGS
- *
- * Dialogs for application and server configuration.
- *
+ * Modal dialog for adding a new MCP server with URL and optional headers.
+ * Validates URL format and integrates with mcpStore and conversationsStore.
  */
-
-/**
- * **DialogChatSettings** - Settings dialog wrapper
- *
- * Modal dialog containing ChatSettings component with proper
- * open/close state management and automatic form reset on open.
- *
- * **Architecture:**
- * - Wraps ChatSettings component in ShadCN Dialog
- * - Manages open/close state via bindable `open` prop
- * - Resets form state when dialog opens to discard unsaved changes
- *
- * @example
- * ```svelte
- * <DialogChatSettings bind:open={showSettings} />
- * ```
- */
-export { default as DialogChatSettings } from './DialogChatSettings.svelte';
-
-/**
- * **DialogMcpServersSettings** - MCP servers management dialog
- *
- * Modal dialog for managing MCP servers with dedicated context.
- *
- * **Architecture:**
- * - Uses context-based state management
- * - Provides `open()` method via context
- * - Contains McpServersSettings component
- *
- * @example
- * ```svelte
- * <!-- In parent component -->
- * <DialogMcpServersSettings />
- *
- * <!-- Trigger via context -->
- * {#const mcpDialog = getMcpServersDialogContext()}
- * <Button onclick={() => mcpDialog.open()}>Manage MCP Servers</Button>
- * ```
- */
-export { default as DialogMcpServersSettings } from './DialogMcpServersSettings.svelte';
-
-/**
- * **DialogChatSettingsImportExport** - Import/Export conversations dialog
- *
- * Modal dialog for importing and exporting conversations with dedicated context.
- *
- * **Architecture:**
- * - Uses context-based state management
- * - Provides `open()` method via context
- * - Contains ChatSettingsImportExportTab component
- *
- * @example
- * ```svelte
- * <!-- In parent component -->
- * <DialogChatSettingsImportExport />
- *
- * <!-- Trigger via context -->
- * {#const importExportDialog = getImportExportDialogContext()}
- * <Button onclick={() => importExportDialog.open()}>Import/Export</Button>
- * ```
- */
-export { default as DialogChatSettingsImportExport } from './DialogChatSettingsImportExport.svelte';
+export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
  *

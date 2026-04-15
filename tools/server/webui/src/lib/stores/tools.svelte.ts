@@ -1,25 +1,17 @@
-import type { OpenAIToolDefinition } from '$lib/types';
+import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { HealthCheckStatus, ToolSource } from '$lib/enums';
+import {
+	HealthCheckStatus,
+	JsonSchemaType,
+	ToolCallType,
+	ToolSource,
+	ToolGroupLabel,
+	ToolServerLabel
+} from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 import { DISABLED_TOOLS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { SvelteSet } from 'svelte/reactivity';
-
-export interface ToolEntry {
-	source: ToolSource;
-	/** For MCP tools, the server ID; otherwise undefined */
-	serverName?: string;
-	definition: OpenAIToolDefinition;
-}
-
-export interface ToolGroup {
-	source: ToolSource;
-	label: string;
-	/** For MCP groups, the server ID */
-	serverId?: string;
-	tools: OpenAIToolDefinition[];
-}
 
 class ToolsStore {
 	private _builtinTools = $state<OpenAIToolDefinition[]>([]);
@@ -38,8 +30,8 @@ class ToolsStore {
 					}
 				}
 			}
-		} catch {
-			throw new Error('Failed to load disabled tools from localStorage');
+		} catch (err) {
+			console.error('[ToolsStore] Failed to load disabled tools from localStorage:', err);
 		}
 
 		// Initialize builtin tools on startup
@@ -102,7 +94,7 @@ class ToolsStore {
 				const serverName = mcpStore.getServerDisplayName(serverId);
 				for (const tool of connection.tools) {
 					const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
-						type: 'object',
+						type: JsonSchemaType.OBJECT,
 						properties: {},
 						required: []
 					};
@@ -110,7 +102,7 @@ class ToolsStore {
 						source: ToolSource.MCP,
 						serverName,
 						definition: {
-							type: 'function',
+							type: ToolCallType.FUNCTION,
 							function: {
 								name: tool.name,
 								description: tool.description,
@@ -127,11 +119,11 @@ class ToolsStore {
 						source: ToolSource.MCP,
 						serverName,
 						definition: {
-							type: 'function',
+							type: ToolCallType.FUNCTION,
 							function: {
 								name: tool.name,
 								description: tool.description,
-								parameters: { type: 'object', properties: {}, required: [] }
+								parameters: { type: JsonSchemaType.OBJECT, properties: {}, required: [] }
 							}
 						}
 					});
@@ -153,7 +145,7 @@ class ToolsStore {
 		if (this._builtinTools.length > 0) {
 			groups.push({
 				source: ToolSource.BUILTIN,
-				label: 'Built-in',
+				label: ToolGroupLabel.BUILTIN,
 				tools: this._builtinTools
 			});
 		}
@@ -166,12 +158,12 @@ class ToolsStore {
 				const label = mcpStore.getServerDisplayName(serverId);
 				const tools: OpenAIToolDefinition[] = connection.tools.map((tool) => {
 					const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
-						type: 'object',
+						type: JsonSchemaType.OBJECT,
 						properties: {},
 						required: []
 					};
 					return {
-						type: 'function' as const,
+						type: ToolCallType.FUNCTION,
 						function: {
 							name: tool.name,
 							description: tool.description,
@@ -185,11 +177,11 @@ class ToolsStore {
 			for (const { serverId, serverName, tools } of this.getMcpToolsFromHealthChecks()) {
 				if (tools.length === 0) continue;
 				const defs: OpenAIToolDefinition[] = tools.map((tool) => ({
-					type: 'function' as const,
+					type: ToolCallType.FUNCTION,
 					function: {
 						name: tool.name,
 						description: tool.description,
-						parameters: { type: 'object', properties: {}, required: [] }
+						parameters: { type: JsonSchemaType.OBJECT, properties: {}, required: [] }
 					}
 				}));
 				groups.push({ source: ToolSource.MCP, label: serverName, serverId, tools: defs });
@@ -200,7 +192,7 @@ class ToolsStore {
 		if (custom.length > 0) {
 			groups.push({
 				source: ToolSource.CUSTOM,
-				label: 'JSON Schema',
+				label: ToolGroupLabel.CUSTOM,
 				tools: custom
 			});
 		}
@@ -344,10 +336,10 @@ class ToolsStore {
 					return mcpStore.getServerDisplayName(entry.serverName);
 				}
 				if (entry.source === ToolSource.BUILTIN) {
-					return 'Built-in Tools';
+					return ToolServerLabel.BUILTIN;
 				}
 				if (entry.source === ToolSource.CUSTOM) {
-					return 'Custom Tools';
+					return ToolServerLabel.CUSTOM;
 				}
 			}
 		}

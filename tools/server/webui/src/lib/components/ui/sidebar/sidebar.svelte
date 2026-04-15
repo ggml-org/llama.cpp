@@ -3,6 +3,7 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from './constants.js';
 	import { useSidebar } from './context.svelte.js';
+	import { remToPx } from '$lib/utils';
 
 	let {
 		ref = $bindable(null),
@@ -19,12 +20,6 @@
 	} = $props();
 
 	const sidebar = useSidebar();
-
-	function remToPx(rem: string): number {
-		const val = parseFloat(rem);
-		const fontSize = parseFloat(getComputedStyle(document.documentElement).fontSize);
-		return val * fontSize;
-	}
 
 	function handleResizePointerDown(e: PointerEvent) {
 		if (sidebar.isMobile) return;

@@ -19,6 +19,12 @@ export {
 } from './chat-settings-dialog.context';
 
 export {
+	getChatSettingsConfigContext,
+	setChatSettingsConfigContext,
+	type ChatSettingsConfigContext
+} from './chat-settings-config.context';
+
+export {
 	getMcpServersDialogContext,
 	setMcpServersDialogContext,
 	type McpServersDialogContext

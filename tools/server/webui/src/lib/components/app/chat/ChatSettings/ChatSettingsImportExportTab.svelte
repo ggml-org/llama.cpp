@@ -4,6 +4,7 @@
 	import { DialogConversationSelection, DialogConfirmation } from '$lib/components/app';
 	import { createMessageCountMap } from '$lib/utils';
 	import { ISO_DATE_TIME_SEPARATOR } from '$lib/constants';
+	import { HtmlInputType, FileExtensionText } from '$lib/enums';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
 	import { fade } from 'svelte/transition';
@@ -76,8 +77,8 @@
 		try {
 			const input = document.createElement('input');
 
-			input.type = 'file';
-			input.accept = '.json';
+			input.type = HtmlInputType.FILE;
+			input.accept = FileExtensionText.JSON;
 
 			input.onchange = async (e) => {
 				const file = (e.target as HTMLInputElement)?.files?.[0];

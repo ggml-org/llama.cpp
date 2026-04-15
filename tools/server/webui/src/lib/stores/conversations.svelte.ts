@@ -30,7 +30,7 @@ import {
 	generateConversationTitle
 } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
-import { MessageRole } from '$lib/enums';
+import { MessageRole, HtmlInputType, FileExtensionText } from '$lib/enums';
 import {
 	ISO_DATE_TIME_SEPARATOR,
 	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
@@ -797,7 +797,15 @@ class ConversationsStore {
 			return;
 		}
 
-		const downloadFilename = filename ?? this.generateConversationFilename(conversation, msgs);
+		let downloadFilename: string;
+
+		if (filename) {
+			downloadFilename = filename;
+		} else if (Array.isArray(data) && data.length > 1) {
+			downloadFilename = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations.json`;
+		} else {
+			downloadFilename = this.generateConversationFilename(conversation, msgs);
+		}
 
 		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
 		const url = URL.createObjectURL(blob);
@@ -838,8 +846,8 @@ class ConversationsStore {
 	async importConversations(): Promise<DatabaseConversation[]> {
 		return new Promise((resolve, reject) => {
 			const input = document.createElement('input');
-			input.type = 'file';
-			input.accept = '.json';
+			input.type = HtmlInputType.FILE;
+			input.accept = FileExtensionText.JSON;
 
 			input.onchange = async (e) => {
 				const file = (e.target as HTMLInputElement)?.files?.[0];

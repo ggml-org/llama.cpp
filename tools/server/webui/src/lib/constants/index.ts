@@ -4,6 +4,7 @@
 export * from './agentic';
 export * from './api-endpoints';
 export * from './attachment-labels';
+export * from './attachment-menu';
 export * from './auto-scroll';
 export * from './binary-detection';
 export * from './cache';

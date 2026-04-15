@@ -1,8 +1,6 @@
 import { ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { SvelteSet } from 'svelte/reactivity';
 
-export type ToolPermissionDecision = 'always' | 'always_server' | 'once' | 'deny';
-
 class PermissionsStore {
 	private _alwaysAllowedTools = $state(new SvelteSet<string>());
 

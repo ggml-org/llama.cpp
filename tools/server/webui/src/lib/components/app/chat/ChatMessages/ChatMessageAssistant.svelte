@@ -308,7 +308,7 @@
 				{message}
 				{toolMessages}
 				isStreaming={isChatStreaming()}
-				isLatestMessage={isLastAssistantMessage}
+				{isLastAssistantMessage}
 				highlightTurns={highlightAgenticTurns}
 			/>
 		{/if}

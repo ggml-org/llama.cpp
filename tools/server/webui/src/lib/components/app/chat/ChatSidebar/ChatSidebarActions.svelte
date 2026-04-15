@@ -21,7 +21,7 @@
 
 	let searchInputRef = $state<HTMLInputElement | null>(null);
 	let isMcpActive = $derived(page.route.id === '/settings/mcp');
-	let isSettingsActive = $derived(page.route.id === '/settings/chat');
+	let isSettingsActive = $derived(!!page.route.id?.startsWith('/settings/chat'));
 	let isImportExportActive = $derived(page.route.id === '/settings/import-export');
 
 	function handleSearchModeDeactivate() {
@@ -109,7 +109,7 @@
 			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isSettingsActive
 				? 'bg-accent text-accent-foreground'
 				: ''}"
-			href="#/settings/chat"
+			href="#/settings/chat/general"
 			onclick={handleMobileSidebarItemClick}
 			variant="ghost"
 		>

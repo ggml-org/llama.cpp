@@ -1,16 +1,19 @@
 <script lang="ts">
-	import { ChevronDown, Wrench, Loader2, Brain, ShieldQuestion } from '@lucide/svelte';
+	import { Wrench, Loader2, Brain } from '@lucide/svelte';
 	import {
 		ChatMessageStatistics,
 		CollapsibleContentBlock,
 		MarkdownContent,
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import * as ButtonGroup from '$lib/components/ui/button-group';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import ChatMessagePermissionRequest from './ChatMessagePermissionRequest.svelte';
 
-	import { AgenticSectionType, ChatMessageStatsView, FileTypeText, ToolSource } from '$lib/enums';
+	import {
+		AgenticSectionType,
+		ChatMessageStatsView,
+		FileTypeText,
+		ToolPermissionDecision
+	} from '$lib/enums';
 	import type {
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
@@ -28,13 +31,12 @@
 		agenticResolvePermission
 	} from '$lib/stores/agentic.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
 
 	interface Props {
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
 		isStreaming?: boolean;
-		isLatestMessage?: boolean;
+		isLastAssistantMessage?: boolean;
 		highlightTurns?: boolean;
 	}
 
@@ -42,7 +44,7 @@
 		message,
 		toolMessages = [],
 		isStreaming = false,
-		isLatestMessage = false,
+		isLastAssistantMessage = false,
 		highlightTurns = false
 	}: Props = $props();
 
@@ -54,7 +56,7 @@
 	let permissionDismissed = $state(false);
 
 	const pendingPermission = $derived(
-		isStreaming && isLatestMessage ? agenticPendingPermissionRequest(message.convId) : null
+		isStreaming && isLastAssistantMessage ? agenticPendingPermissionRequest(message.convId) : null
 	);
 
 	// Reset dismissed when pendingPermission changes (new request or cleared)
@@ -68,7 +70,7 @@
 		}
 	});
 
-	function handlePermission(decision: 'once' | 'always' | 'deny' | 'always_server') {
+	function handlePermission(decision: ToolPermissionDecision) {
 		permissionDismissed = true;
 		agenticResolvePermission(message.convId, decision);
 	}
@@ -331,74 +333,11 @@
 	{/if}
 
 	{#if pendingPermission && !permissionDismissed}
-		<div class="permission-request my-2 rounded-lg border border-border bg-card p-3">
-			<div class="mb-3 flex items-center gap-2 text-sm">
-				<ShieldQuestion class="h-4 w-4 shrink-0 text-muted-foreground" />
-				<span>
-					Allow use of
-					<span class="font-semibold">{pendingPermission.toolName}</span>
-					{#if pendingPermission.serverLabel}
-						from <span class="font-semibold">{pendingPermission.serverLabel}</span>
-					{/if}
-					?
-				</span>
-			</div>
-			<div class="flex flex-wrap items-center gap-2">
-				<DropdownMenu.Root>
-					<ButtonGroup.Root
-						class="overflow-hidden rounded-md bg-foreground text-white shadow-sm dark:bg-secondary dark:text-foreground"
-					>
-						<Button
-							class="rounded-none! shadow-none!"
-							size="sm"
-							onclick={() => handlePermission('once')}
-						>
-							Allow once
-						</Button>
-
-						<ButtonGroup.Separator />
-
-						<DropdownMenu.Trigger>
-							<Button size="sm" class="rounded-none! !ps-2 shadow-none!">
-								<ChevronDown class="h-3.5 w-3.5" />
-							</Button>
-						</DropdownMenu.Trigger>
-					</ButtonGroup.Root>
-
-					<DropdownMenu.Content align="start" class="min-w-[8rem]">
-						<DropdownMenu.Item onclick={() => handlePermission('always')}>
-							Always allow <pre>{pendingPermission.toolName}</pre>
-							tool
-						</DropdownMenu.Item>
-						{#if pendingPermission?.serverLabel}
-							<DropdownMenu.Item onclick={() => handlePermission('always_server')}>
-								Always allow all tools from {pendingPermission.serverLabel}
-							</DropdownMenu.Item>
-						{:else}
-							{@const source = toolsStore.getToolSource(pendingPermission.toolName)}
-							{@const providerName =
-								source === ToolSource.BUILTIN
-									? 'Built-in Tools'
-									: source === ToolSource.CUSTOM
-										? 'Custom Tools'
-										: 'MCP Tools'}
-							<DropdownMenu.Item onclick={() => handlePermission('always_server')}>
-								Approve all tools from {providerName}
-							</DropdownMenu.Item>
-						{/if}
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
-
-				<Button
-					variant="destructive"
-					size="sm"
-					class="text-destructive hover:text-destructive"
-					onclick={() => handlePermission('deny')}
-				>
-					Deny
-				</Button>
-			</div>
-		</div>
+		<ChatMessagePermissionRequest
+			toolName={pendingPermission.toolName}
+			serverLabel={pendingPermission.serverLabel}
+			onDecision={handlePermission}
+		/>
 	{/if}
 </div>
 

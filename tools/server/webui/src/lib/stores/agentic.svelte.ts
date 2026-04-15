@@ -25,8 +25,9 @@ import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
-import { permissionsStore, type ToolPermissionDecision } from '$lib/stores/permissions.svelte';
-import { ToolSource } from '$lib/enums';
+import { permissionsStore } from '$lib/stores/permissions.svelte';
+import { ToolSource, ToolPermissionDecision } from '$lib/enums';
+import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
 import { isAbortError } from '$lib/utils';
 import {
@@ -125,11 +126,12 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 }
 
 class AgenticStore {
-	private _sessions = $state<Map<string, AgenticSession>>(new Map());
+	private _sessions = new SvelteMap<string, AgenticSession>();
 	/** Dedicated reactive state for pending permission requests (ensures immediate UI updates) */
-	private _pendingPermissions = $state<
-		Map<string, { toolName: string; serverLabel: string } | null>
-	>(new Map());
+	private _pendingPermissions = new SvelteMap<
+		string,
+		{ toolName: string; serverLabel: string } | null
+	>();
 	/** Non-reactive: stores resolve functions for pending permission Promises */
 	private _permissionResolvers = new Map<string, (decision: ToolPermissionDecision) => void>();
 
@@ -236,7 +238,7 @@ class AgenticStore {
 		signal?: AbortSignal
 	): Promise<ToolPermissionDecision> {
 		if (permissionsStore.isAlwaysAllowed(toolName)) {
-			return 'once';
+			return ToolPermissionDecision.ONCE;
 		}
 
 		this._pendingPermissions.set(conversationId, { toolName, serverLabel });
@@ -244,17 +246,21 @@ class AgenticStore {
 		return new Promise<ToolPermissionDecision>((resolve) => {
 			if (signal?.aborted) {
 				this._pendingPermissions.set(conversationId, null);
-				resolve('deny');
+				resolve(ToolPermissionDecision.DENY);
 				return;
 			}
 
 			this._permissionResolvers.set(conversationId, (decision) => {
 				this._pendingPermissions.set(conversationId, null);
-				if (decision === 'always') {
+				if (decision === ToolPermissionDecision.ALWAYS) {
 					permissionsStore.alwaysAllow(toolName);
-				} else if (decision === 'always_server') {
+				} else if (decision === ToolPermissionDecision.ALWAYS_SERVER) {
 					const serverTools = toolsStore.allTools
-						.filter((t) => t.serverName === serverLabel)
+						.filter((t) =>
+							t.serverName
+								? t.serverName === serverLabel
+								: toolsStore.getToolServerLabel(t.definition.function.name) === serverLabel
+						)
 						.map((t) => t.definition.function.name);
 					permissionsStore.alwaysAllowServer(serverTools);
 				}
@@ -268,7 +274,7 @@ class AgenticStore {
 					if (resolver) {
 						this._permissionResolvers.delete(conversationId);
 						this._pendingPermissions.set(conversationId, null);
-						resolve('deny');
+						resolve(ToolPermissionDecision.DENY);
 					}
 				},
 				{ once: true }
@@ -610,7 +616,7 @@ class AgenticStore {
 				let result: string;
 				let toolSuccess = true;
 
-				if (permission === 'deny') {
+				if (permission === ToolPermissionDecision.DENY) {
 					result = 'Tool execution was denied by the user.';
 					toolSuccess = false;
 				} else {

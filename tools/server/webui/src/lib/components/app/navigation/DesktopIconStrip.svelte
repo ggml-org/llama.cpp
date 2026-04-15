@@ -4,6 +4,11 @@
 	import { ActionIcon } from '$lib/components/app/actions';
 	import { McpLogo } from '$lib/components/app/mcp';
 	import { Database, Settings, Search, SquarePen } from '@lucide/svelte';
+	import {
+		ICON_STRIP_TRANSITION_DURATION,
+		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
+	} from '$lib/constants';
+	import { TooltipSide } from '$lib/enums';
 	import { fade } from 'svelte/transition';
 	import { circIn } from 'svelte/easing';
 	import { onMount, type Component } from 'svelte';
@@ -15,13 +20,13 @@
 
 	let { sidebarOpen, onSearchClick }: Props = $props();
 
-	const TRANSITION_DURATION = 150;
-	const TRANSITION_DELAY_MULTIPLIER = 50;
-	const TRANSITION_EASING = circIn;
+	let mounted = $state(false);
+	onMount(() => (mounted = true));
 
 	let isMcpActive = $derived(page.route.id === '/settings/mcp');
 	let isImportExportActive = $derived(page.route.id === '/settings/import-export');
-	let isSettingsActive = $derived(page.route.id === '/settings/chat');
+	let isSettingsActive = $derived(!!page.route.id?.startsWith('/settings/chat'));
+	let showIcons = $derived(mounted && !sidebarOpen);
 
 	interface IconItem {
 		icon: Component;
@@ -56,14 +61,10 @@
 		{
 			icon: Settings,
 			tooltip: 'Settings',
-			onclick: () => goto('#/settings/chat'),
+			onclick: () => goto('#/settings/chat/general'),
 			activeClass: isSettingsActive ? 'bg-accent text-accent-foreground' : ''
 		}
 	]);
-
-	let mounted = $state(false);
-	onMount(() => (mounted = true));
-	let showIcons = $derived(mounted && !sidebarOpen);
 </script>
 
 <div
@@ -82,15 +83,16 @@
 			{#if showIcons}
 				<div
 					in:fade={{
-						duration: TRANSITION_DURATION,
-						delay: TRANSITION_DELAY_MULTIPLIER + i * TRANSITION_DELAY_MULTIPLIER,
-						easing: TRANSITION_EASING
+						duration: ICON_STRIP_TRANSITION_DURATION,
+						delay:
+							ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
+						easing: circIn
 					}}
 				>
 					<ActionIcon
 						icon={item.icon}
 						tooltip={item.tooltip}
-						tooltipSide="right"
+						tooltipSide={TooltipSide.RIGHT}
 						size="lg"
 						iconSize="h-4 w-4"
 						class="h-9 w-9 rounded-full hover:bg-accent! {item.activeClass ?? ''}"

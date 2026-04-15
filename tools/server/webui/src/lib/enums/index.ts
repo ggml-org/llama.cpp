@@ -5,6 +5,7 @@ export { AgenticSectionType, ToolCallType } from './agentic';
 export {
 	ChatMessageStatsView,
 	ContentPartType,
+	ConversationSelectionMode,
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
@@ -47,8 +48,14 @@ export { ServerRole, ServerModelStatus } from './server';
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings';
 
-export { ColorMode, McpPromptVariant, UrlProtocol } from './ui';
+export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } from './ui';
 
 export { KeyboardKey } from './keyboard';
 
-export { ToolSource, ToolResponseField } from './tools';
+export {
+	ToolSource,
+	ToolGroupLabel,
+	ToolServerLabel,
+	ToolPermissionDecision,
+	ToolResponseField
+} from './tools';
