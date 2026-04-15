@@ -46,9 +46,12 @@ struct block_q8_1_mmq {
     int8_t qs[4*QK8_1]; // 128 values quantized to 8 bit each
 };
 
-struct block_fp4_mmq {  // Used for both MXFP4[8 E8M0 scales (1 per 32)) and NVFP4 (16 UE4M3 scales (1 per 16))
-    uint32_t d4[4];       // 2 packed per uint32: d4[0]={s0,s1}, d4[1]={s2,s3}, etc.
-    int8_t   qs[4 * 32];  // 256 FP4 values packed as 4-bit pairs (2 per byte), 8 blocks of 32 values
+// this struct is used for fp4 data types (currently only used in Blackwell)
+// mxfp4 has block size 32, each int32 of d4 contains 2 e8m0 scales in the lower 16 bits
+// nvfp4 has block size 16, each int32 of d4 contains 4 ue4m3 scales
+struct block_fp4_mmq { 
+    uint32_t d4[4];
+    int8_t   qs[4 * 32];  // 256 FP4 values packed as 4-bit pairs (2 per byte)
 };
 
 static_assert(sizeof(block_q8_1_mmq) == 4*QK8_1 + 4*sizeof(half2), "Unexpected block_q8_1_mmq size");
