@@ -9815,7 +9815,7 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         size_t wavesize = backend_ctx->adreno_wave_size;
         size_t local_work_size[]  = { wavesize, 4, 1 };
         size_t global_work_size[] = { CEIL_DIV(M, wavesize)*wavesize, 4, 1 };
-        
+
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 
         CL_CHECK(clReleaseMemObject(q_img));
