@@ -203,7 +203,7 @@ void ggml_cuda_mul_mat_q(
             quantize_mmq_q8_1_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
                                    ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
         }
-        CUDA_CHECK(cudaGetLastError())  ;
+        CUDA_CHECK(cudaGetLastError());
     }
 
     GGML_ASSERT(QK_K == 8 * QK_MXFP4);
