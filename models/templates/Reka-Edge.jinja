@@ -1,0 +1,161 @@
+{%- macro render_content(content, num_img_tokens, num_video_frames) -%}
+    {%- if content is string -%}
+        {{- content -}}
+    {%- elif content is sequence -%}
+        {%- set ns = namespace(out="", prev_was_text=false) -%}
+        {%- for item in content -%}
+            {%- set item_type = item.get("type") -%}
+            {%- if item_type == "text" or item.get("text") is not none -%}
+                {%- set text = item.get("text", "") -%}
+                {%- if text -%}
+                    {%- if ns.prev_was_text -%}
+                        {%- set ns.out = ns.out ~ " " -%}
+                    {%- endif -%}
+                    {%- set ns.out = ns.out ~ text -%}
+                {%- endif -%}
+                {%- set ns.prev_was_text = text != "" -%}
+            {%- elif item_type in ["image", "image_url"] or item.get("image") is not none or item.get("image_url") is not none -%}
+                {%- set ns.out = ns.out ~ "<image>" ~ ("<REKA_IMG_TOKEN>" * num_img_tokens) ~ "</image>" -%}
+                {%- set ns.prev_was_text = false -%}
+            {%- elif item_type in ["video", "video_url"] or item.get("video") is not none or item.get("video_url") is not none -%}
+                {%- set repeat_tokens = num_img_tokens * num_video_frames -%}
+                {%- set ns.out = ns.out ~ "<video>" ~ ("<REKA_IMG_TOKEN>" * repeat_tokens) ~ "</video>" -%}
+                {%- set ns.prev_was_text = false -%}
+            {%- endif -%}
+        {%- endfor -%}
+        {{- ns.out -}}
+    {%- endif -%}
+{%- endmacro -%}
+{%- set ns = namespace(out="", last_query_index=messages|length - 1) -%}
+{%- for msg in messages[::-1] -%}
+    {%- set idx = messages|length - 1 - loop.index0 -%}
+    {%- if msg.get("role") == "user" -%}
+        {%- set content = msg.get("content", "") -%}
+        {%- if not (content is string and content.startswith("<tool_response>") and content.endswith("</tool_response>")) -%}
+            {%- set ns.last_query_index = idx -%}
+            {%- break -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+{%- set last_query_index = ns.last_query_index -%}
+{%- set num_img_tokens = num_img_tokens | default(64, true) | int -%}
+{%- set num_video_frames = num_video_frames | default(6, true) | int -%}
+{%- set start_idx = 0 -%}
+{%- set system_text = "" -%}
+{%- if messages|length > 0 and messages[0].get("role") in ["system", "developer"] -%}
+    {%- set system_text = render_content(messages[0].get("content", ""), num_img_tokens, num_video_frames) -%}
+    {%- set start_idx = 1 -%}
+{%- endif -%}
+{%- if tools or system_text -%}
+    {%- set preamble_ns = namespace(text="") -%}
+    {%- if system_text -%}
+        {%- set preamble_ns.text = "system: " ~ system_text -%}
+    {%- endif -%}
+    {%- if tools -%}
+        {%- if preamble_ns.text -%}
+            {%- set preamble_ns.text = preamble_ns.text ~ "\n\n" -%}
+        {%- else -%}
+            {%- set preamble_ns.text = "system: " -%}
+        {%- endif -%}
+        {%- set preamble_ns.text = preamble_ns.text
+            ~ "# Tools\n\n"
+            ~ "You may call one or more functions to assist with the user query.\n\n"
+            ~ "You are provided with function signatures within <tools></tools> XML tags:\n"
+            ~ "<tools>" -%}
+        {%- for tool in tools -%}
+            {%- set preamble_ns.text = preamble_ns.text ~ "\n" ~ (tool | tojson(ensure_ascii=True)) -%}
+        {%- endfor -%}
+        {%- set preamble_ns.text = preamble_ns.text
+            ~ "\n</tools>\n\n"
+            ~ "For each function call, return a json object with function name and arguments "
+            ~ "within <tool_call></tool_call> XML tags:\n"
+            ~ "<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>" -%}
+    {%- endif -%}
+    {%- set ns.out = ns.out ~ preamble_ns.text ~ "\n\n<sep>" -%}
+{%- endif -%}
+{%- for idx in range(start_idx, messages|length) -%}
+    {%- set message = messages[idx] -%}
+    {%- set role = message.get("role") -%}
+    {%- set content = message.get("content") -%}
+    {%- if role == "user" -%}
+        {%- set prefix_ns = namespace(value="human: ") -%}
+        {%- if content is sequence and content is not string -%}
+            {%- for item in content -%}
+                {%- if item.get("type") == "text" or item.get("text") is not none -%}
+                    {%- set text = item.get("text", "") -%}
+                    {%- if text -%}
+                        {%- break -%}
+                    {%- endif -%}
+                {%- elif item.get("type") in ["image", "image_url", "video", "video_url"] -%}
+                    {%- set prefix_ns.value = "human:" -%}
+                    {%- break -%}
+                {%- endif -%}
+            {%- endfor -%}
+        {%- endif -%}
+        {%- set ns.out = ns.out ~ prefix_ns.value ~ render_content(content, num_img_tokens, num_video_frames) ~ "<sep>" -%}
+    {%- elif role == "assistant" -%}
+        {%- set tool_calls = message.get("tool_calls") -%}
+        {%- set content_text = render_content(content, num_img_tokens, num_video_frames) -%}
+        {%- set reasoning_text = "" -%}
+        {%- if message.get("reasoning_content") is string -%}
+            {%- set reasoning_text = message.get("reasoning_content") -%}
+        {%- elif "</think>" in content_text -%}
+            {%- set reasoning_text = content_text.split("</think>", 1)[0].rstrip("\n").split("<think>")[-1].lstrip("\n") -%}
+            {%- set content_text = content_text.split("</think>", 1)[1].lstrip("\n") -%}
+        {%- endif -%}
+        {%- set ns.out = ns.out ~ "assistant: " -%}
+        {%- set include_thinking = enable_thinking is true
+            and idx > last_query_index
+            and (idx == messages|length - 1 or reasoning_text)
+        -%}
+        {%- if include_thinking -%}
+            {%- set ns.out = ns.out ~ "<think>\n" ~ (reasoning_text.strip() ) ~ "\n</think>\n\n" -%}
+        {%- endif -%}
+        {%- set ns.out = ns.out ~ content_text -%}
+        {%- if tool_calls -%}
+            {%- if content_text and not ns.out.endswith("\n") -%}
+                {%- set ns.out = ns.out ~ "\n" -%}
+            {%- endif -%}
+            {%- for tool_call in tool_calls -%}
+                {%- if tool_call.get("function") is not none -%}
+                    {%- set tool_call = tool_call.get("function") -%}
+                {%- endif -%}
+                {%- set arguments = tool_call.get("arguments", {}) -%}
+                {%- if arguments is string -%}
+                    {%- set arguments_json = arguments -%}
+                {%- elif arguments is mapping -%}
+                    {%- set arguments_json = arguments | tojson(ensure_ascii=True) -%}
+                {%- else -%}
+                    {%- set arguments_json = arguments | tojson(ensure_ascii=True) -%}
+                {%- endif -%}
+                {%- set ns.out = ns.out
+                    ~ "<tool_call>\n"
+                    ~ "{\"name\": \"" ~ tool_call.get("name", "") ~ "\", \"arguments\": "
+                    ~ arguments_json
+                    ~ "}\n</tool_call>" -%}
+            {%- endfor -%}
+        {%- endif -%}
+        {%- if not (continue_final_message and idx == messages|length - 1) -%}
+            {%- set ns.out = ns.out ~ "\n\n<sep>" -%}
+        {%- endif -%}
+    {%- elif role == "tool" -%}
+        {%- if idx == start_idx or messages[idx - 1].get("role") != "tool" -%}
+            {%- set ns.out = ns.out ~ "human: " -%}
+        {%- endif -%}
+        {%- set response_text = render_content(content, num_img_tokens, num_video_frames) -%}
+        {%- set ns.out = ns.out ~ "<tool_response>\n" ~ response_text ~ "\n</tool_response>" -%}
+        {%- if idx == messages|length - 1 or messages[idx + 1].get("role") != "tool" -%}
+            {%- set ns.out = ns.out ~ "<sep>" -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt
+    and (messages|length == 0 or messages[-1].get("role") != "assistant")
+-%}
+    {%- if enable_thinking is true -%}
+        {%- set ns.out = ns.out ~ "assistant: <think>\n" -%}
+    {%- else -%}
+        {%- set ns.out = ns.out ~ "assistant:" -%}
+    {%- endif -%}
+{%- endif -%}
+{{- ns.out -}}

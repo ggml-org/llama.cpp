@@ -198,10 +198,19 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         args_field = format.function_field + "." + args_field;
     }
 
-    auto tools_parser = p.standard_json_tools(
-        format.section_start, format.section_end, inputs.tools, inputs.parallel_tool_calls,
-        inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
-        format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order);
+    auto tools_parser = p.eps();
+    if (format.section_start.empty() && !format.per_call_start.empty()) {
+        auto single_tool_parser = p.standard_json_tools(
+            format.per_call_start, format.per_call_end, inputs.tools, inputs.parallel_tool_calls,
+            inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
+            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order);
+        tools_parser = p.trigger_rule("tool-calls", p.one_or_more(single_tool_parser + p.space()));
+    } else {
+        tools_parser = p.standard_json_tools(
+            format.section_start, format.section_end, inputs.tools, inputs.parallel_tool_calls,
+            inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
+            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order);
+    }
 
     // Handle content wrappers if present
     if (ctx.content && ctx.content->is_always_wrapped()) {
