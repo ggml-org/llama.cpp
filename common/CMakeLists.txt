@@ -1,4 +1,4 @@
-# common
+# llama-common
 
 find_package(Threads REQUIRED)
 
@@ -41,7 +41,7 @@ if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
-set(TARGET common)
+set(TARGET llama-common)
 
 add_library(${TARGET}
     arg.cpp
@@ -105,6 +105,12 @@ add_library(${TARGET}
     jinja/caps.cpp
     jinja/caps.h
     )
+
+set_target_properties(${TARGET} PROPERTIES
+    VERSION ${LLAMA_INSTALL_VERSION}
+    SOVERSION 0
+    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
+)
 
 target_include_directories(${TARGET} PUBLIC . ../vendor)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
