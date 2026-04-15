@@ -559,7 +559,7 @@ static void ensure_tsi_runtime_initialized() {
     multi_thread_enable = cfg.has_mt ? cfg.mt_enable : false;
 
     // Just to Test
-    printf("\nANOOP TSI deploy yaml=%s txe_count=%u multi_thread_enable=%d\n",
+    printf("\n TSI deploy yaml=%s txe_count=%u multi_thread_enable=%d\n",
              yaml_path.c_str(), (unsigned)num_of_txes, (int)multi_thread_enable);
 
     if (txe <= 0) txe = 1;
