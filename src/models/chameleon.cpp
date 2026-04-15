@@ -94,7 +94,7 @@ llm_build_chameleon::llm_build_chameleon(const llama_model & model, const llm_gr
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr,
+                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
 

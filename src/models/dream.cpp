@@ -1,7 +1,5 @@
 #include "models.h"
 
-
-
 llm_build_dream::llm_build_dream(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
     //copied from qwen2
@@ -59,7 +57,7 @@ llm_build_dream::llm_build_dream(const llama_model & model, const llm_graph_para
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].bo,
+                    model.layers[il].wo, model.layers[il].bo, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1 && inp_out_ids) {

@@ -95,7 +95,7 @@ llm_build_llama_iswa::llm_build_llama_iswa(const llama_model & model, const llm_
                 cb(Kcur, "Kcur_normed", il);
             }
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].bo,
+                    model.layers[il].wo, model.layers[il].bo, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }

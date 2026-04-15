@@ -100,12 +100,12 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
             cb(Kcur, "Kcur_pos", il);
 
             cur = build_attn(inp_attn, model.layers[il].wo,
-                    nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
+                    nullptr, model.layers[il].wo_s, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
                     hparams.f_attention_scale, il);
         } else {
             // reuse KV cache of earlier layers
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr,
+                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
 
