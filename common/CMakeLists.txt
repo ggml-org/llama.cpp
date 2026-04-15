@@ -39,6 +39,7 @@ set(TARGET build_info)
 add_library(${TARGET} OBJECT ${OUTPUT_FILE})
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 set(TARGET llama-common)
@@ -122,10 +123,8 @@ if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
-target_link_libraries(${TARGET} PRIVATE
-    build_info
-    cpp-httplib
-)
+target_link_libraries(${TARGET} PUBLIC  build_info)
+target_link_libraries(${TARGET} PRIVATE cpp-httplib)
 
 if (LLAMA_LLGUIDANCE)
     include(ExternalProject)
