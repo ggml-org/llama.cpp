@@ -53,11 +53,10 @@ RUN apt-get update \
     && apt-get install -y \
     build-essential \
     git \
-    python3.13 \
-    python3.13-dev \
+    python3 \
+    python3-dev \
     python3-pip \
     python3-wheel \
-    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.13 100 \
     && pip install --break-system-packages --upgrade setuptools \
     && pip install --break-system-packages -r requirements.txt \
     && apt autoremove -y \

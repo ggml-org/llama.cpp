@@ -2,46 +2,6 @@ name: CI (self-hosted)
 
 on:
   workflow_dispatch: # allows manual triggering
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/build.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal',
-      '**/*.comp',
-      '**/*.glsl',
-      '**/*.wgsl'
-    ]
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/build-self-hosted.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal',
-      '**/*.comp',
-      '**/*.glsl',
-      '**/*.wgsl'
-    ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}

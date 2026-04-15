@@ -596,9 +596,6 @@ jobs:
             - variant: cpu
               runner: '"ubuntu-24.04"'
               openvino_device: "CPU"
-            - variant: gpu
-              runner: '["self-hosted","Linux","X64","Intel"]'
-              openvino_device: "GPU"
 
       runs-on: ${{ fromJSON(matrix.runner) }}
 

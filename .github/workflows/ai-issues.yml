@@ -1,8 +1,8 @@
 name: AI review (issues)
 
 on:
-  issues:
-    types: [opened]
+  workflow_dispatch: # allows manual triggering
+
 
 jobs:
   find-related:
