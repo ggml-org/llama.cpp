@@ -70,7 +70,7 @@ __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
     return static_cast<uint8_t>(biased);
 }
 
-template <bool has_ids>
+
 static __global__ void quantize_mmq_nvfp4(
         const float * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
@@ -85,7 +85,7 @@ static __global__ void quantize_mmq_nvfp4(
     const int64_t i1 = blockIdx.x;
     const int64_t i2 = blockIdx.z % ne2;
     const int64_t i3 = blockIdx.z / ne2;
-    const int64_t i01 = has_ids ? ids[i1] : i1;
+    const int64_t i01 = ids ? ids[i1] : i1;
     const int64_t k_block = i0_base / QK_K;
     const int64_t blocks_per_col = (ne0 + QK_K - 1) / QK_K;
     if (k_block >= blocks_per_col) {
@@ -422,13 +422,8 @@ void quantize_mmq_fp4_cuda(
         const int64_t block_num_y = (ne0 + QK_NVFP4_SUB * nvfp4_block_size - 1) / (QK_NVFP4_SUB * nvfp4_block_size);
         const dim3 block_size(nvfp4_block_size, 1, 1);
         const dim3 num_blocks(ne1, block_num_y, ne2 * ne3);
-        if (ids) {
-            quantize_mmq_nvfp4<true><<<num_blocks, block_size, 0, stream>>>(
-                x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
-        } else {
-            quantize_mmq_nvfp4<false><<<num_blocks, block_size, 0, stream>>>(
-                x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
-        }
+        quantize_mmq_nvfp4<<<num_blocks, block_size, 0, stream>>>(
+            x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
     } else {
         GGML_ASSERT(ne0 % (2 * QK_MXFP4) == 0);
 
