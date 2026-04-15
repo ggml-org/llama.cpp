@@ -36,6 +36,11 @@ env:
 jobs:
   ubuntu-24-openvino:
     name: ubuntu-24-openvino-${{ matrix.openvino_device }}
+    
+    concurrency:
+      group: openvino-${{ matrix.variant }}-${{ github.head_ref || github.ref }}
+      cancel-in-progress: false
+
     strategy:
       matrix:
         include:
