@@ -91,6 +91,9 @@ json format_error_response(const std::string & message, const enum error_type ty
 std::string random_string();
 std::string gen_chatcmplid();
 std::string gen_tool_call_id();
+// Returns a unique per-request media marker suitable for use with
+// oaicompat_chat_params_parse() and convert_transcriptions_to_chatcmpl().
+std::string random_media_marker();
 
 //
 // lora utils
@@ -301,14 +304,17 @@ struct server_chat_params {
 json oaicompat_completion_params_parse(const json & body);
 
 // used by /chat/completions endpoint
-// media_marker_override: if non-empty, use this as the unique per-request media marker
-//   instead of generating a fresh random one. pass this when the caller has already
-//   embedded the marker in the prompt (e.g. convert_transcriptions_to_chatcmpl).
+// media_marker: specify the media_marker to avoid collide with user's input.
+//   for example, user said "What does <__media__> means?", in this case,
+//   the media_marker parameter should NOT be "<__media__>".
+//   it's recommended to generate one with random_media_marker().
+//   this parameter will also be added to added to the result value with key "media_marker".
+//   or pass in mtmd_default_marker() for default marker.
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files,
-    const std::string & media_marker_override = "");
+    const std::string & media_marker);
 
 // convert OpenAI Responses API format to OpenAI Chat Completions API format
 json convert_responses_to_chatcmpl(const json & body);

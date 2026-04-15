@@ -84,6 +84,10 @@ std::string gen_tool_call_id() {
     return random_string();
 }
 
+std::string random_media_marker() {
+    return "<__media_" + random_string() + "__>";
+}
+
 //
 // lora utils
 //
@@ -891,7 +895,7 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files,
-    const std::string & media_marker_override)
+    const std::string & media_marker)
 {
     json llama_params;
 
@@ -944,15 +948,6 @@ json oaicompat_chat_params_parse(
     if (!messages.is_array()) {
         throw std::invalid_argument("Expected 'messages' to be an array");
     }
-
-    // Determine the unique per-request media marker. Real media placeholders are
-    // embedded using this marker so that any literal "<__media__>" or "<__image__>"
-    // in user text is never mistaken for an actual media slot by mtmd_tokenize().
-    // Callers that have already embedded the marker in the prompt (e.g. the
-    // transcription handler) supply it explicitly; all others get a fresh one.
-    const std::string media_marker = media_marker_override.empty()
-        ? "<__media_" + random_string() + "__>"
-        : media_marker_override;
 
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
