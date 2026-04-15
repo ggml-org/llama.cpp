@@ -257,6 +257,7 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_attn_linear(
     cb(conv_states, "conv_states_reshaped", il);
 
     qkv_mixed = ggml_transpose(ctx0, qkv_mixed);
+    qkv_mixed = ggml_cont(ctx0, qkv_mixed);
     cb(qkv_mixed, "qkv_mixed_transposed", il);
 
     ggml_tensor * conv_input = ggml_concat(ctx0, conv_states, qkv_mixed, 0);

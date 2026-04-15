@@ -33,7 +33,7 @@ static ggml_tensor * causal_conv1d(ggml_cgraph * gf, ggml_context * ctx0, ggml_t
     ggml_tensor * x_3d = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
 
     // Concat Q conv state and current input: {d_conv-1 + n_seq_tokens, d_inner, n_seqs}
-    ggml_tensor * conv_x = ggml_concat(ctx0, conv_state_x, ggml_transpose(ctx0, x_3d), 0);
+    ggml_tensor * conv_x = ggml_concat(ctx0, conv_state_x, ggml_cont(ctx0, ggml_transpose(ctx0, x_3d)), 0);
 
     // Save last (d_conv-1) columns back to Q conv state
     ggml_tensor * last_conv_x = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,

@@ -207,7 +207,7 @@ ggml_tensor * llm_build_plamo2::build_plamo2_mamba_layer(llm_graph_input_rs * in
     // conv1d
     {
         // => {d_conv - 1 + n_seq_tokens, d_inner, n_seqs}
-        ggml_tensor * conv_x = ggml_concat(ctx0, conv, ggml_transpose(ctx0, x), 0);
+        ggml_tensor * conv_x = ggml_concat(ctx0, conv, ggml_cont(ctx0, ggml_transpose(ctx0, x)), 0);
         cb(conv_x, "mamba_conv1d_input", il);
 
         // copy last (d_conv - 1) columns back into the state cache
