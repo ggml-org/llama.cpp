@@ -49,11 +49,11 @@
 #define WEBGPU_MUL_MAT_VEC_FLOAT_OUTPUTS_PER_WG 4
 #define WEBGPU_MUL_MAT_VEC_FLOAT_TILE_K         1024
 
-#define WEBGPU_MUL_MAT_VEC_LEGACY_Q_OUTPUTS_PER_WG 8
+#define WEBGPU_MUL_MAT_VEC_LEGACY_Q_OUTPUTS_PER_WG 4
 #define WEBGPU_MUL_MAT_VEC_LEGACY_Q_TILE_K         1024
 
 // Requires 32 threads per output (wg_size/outputs_per_wg == 32)
-#define WEBGPU_MUL_MAT_VEC_K_Q_OUTPUTS_PER_WG 8
+#define WEBGPU_MUL_MAT_VEC_K_Q_OUTPUTS_PER_WG 4
 // Requires at least two (and multiple of 2) k-quant blocks per tile
 #define WEBGPU_MUL_MAT_VEC_K_Q_TILE_K         2048
 
@@ -613,7 +613,6 @@ struct ggml_webgpu_mul_mat_vec_pipeline_key_hash {
 
 struct ggml_webgpu_mul_mat_vec_shader_decisions {
     uint32_t wg_size;
-    uint32_t tile_k;
     uint32_t outputs_per_wg;
     uint32_t vec_size;
 };
@@ -1335,17 +1334,10 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_mul_mat_vec_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        const bool use_row_tiled =
-            context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16 || context.src0->type == GGML_TYPE_Q4_0 ||
-            context.src0->type == GGML_TYPE_Q4_1 || context.src0->type == GGML_TYPE_Q5_0 || context.src0->type == GGML_TYPE_Q5_1 ||
-            context.src0->type == GGML_TYPE_Q8_0 || context.src0->type == GGML_TYPE_Q8_1 || context.src0->type == GGML_TYPE_Q6_K ||
-            context.src0->type == GGML_TYPE_Q4_K || context.src0->type == GGML_TYPE_Q5_K || context.src0->type == GGML_TYPE_Q3_K ||
-            context.src0->type == GGML_TYPE_Q2_K;
         ggml_webgpu_mul_mat_vec_pipeline_key key = {
             .src0_type  = context.src0->type,
             .src1_type  = context.src1->type,
             .vectorized = (context.src0->ne[0] % 4 == 0 &&
-                           (use_row_tiled || context.dst->ne[0] % 4 == 0) &&
                            (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
                               1 :
                               0
@@ -1357,8 +1349,8 @@ class ggml_webgpu_shader_lib {
         }
 
         std::vector<std::string> defines;
-        std::string              variant = use_row_tiled ? "mul_mat_vec_row_tiled" : "mul_mat_vec";
-        const char *             shader_src = use_row_tiled ? wgsl_mul_mat_vec_row_tiled : wgsl_mul_mat_vec;
+        std::string              variant = "mul_mat_vec";
+        const char *             shader_src = wgsl_mul_mat_vec;
 
         // src0 type (matrix row)
         switch (context.src0->type) {
@@ -1407,25 +1399,18 @@ class ggml_webgpu_shader_lib {
         defines.push_back(key.vectorized ? "VEC" : "SCALAR");
 
         uint32_t wg_size        = WEBGPU_MUL_MAT_VEC_WG_SIZE;
-        uint32_t tile_k         = WEBGPU_MUL_MAT_VEC_FLOAT_TILE_K;
         uint32_t outputs_per_wg = WEBGPU_MUL_MAT_VEC_FLOAT_OUTPUTS_PER_WG;
 
         if (key.src0_type >= GGML_TYPE_Q2_K) {
-            tile_k         = WEBGPU_MUL_MAT_VEC_K_Q_TILE_K;
             outputs_per_wg = WEBGPU_MUL_MAT_VEC_K_Q_OUTPUTS_PER_WG;
         } else if (key.src0_type >= GGML_TYPE_Q4_0) {
-            tile_k         = WEBGPU_MUL_MAT_VEC_LEGACY_Q_TILE_K;
             outputs_per_wg = WEBGPU_MUL_MAT_VEC_LEGACY_Q_OUTPUTS_PER_WG;
         }
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
         defines.push_back(std::string("OUTPUTS_PER_WG=") + std::to_string(outputs_per_wg));
-        if (use_row_tiled) {
-            defines.push_back(context.supports_subgroups ? "USE_SUBGROUP_REDUCTION" : "USE_WORKGROUP_REDUCTION");
-            variant += context.supports_subgroups ? "_sg_reduce" : "_wg_reduce";
-        } else {
-            defines.push_back(std::string("TILE_K=") + std::to_string(tile_k));
-        }
+        defines.push_back(context.supports_subgroups ? "USE_SUBGROUP_REDUCTION" : "USE_WORKGROUP_REDUCTION");
+        variant += context.supports_subgroups ? "_sg_reduce" : "_wg_reduce";
         if (key.vectorized) {
             variant += "_vectorized";
         }
@@ -1433,7 +1418,6 @@ class ggml_webgpu_shader_lib {
         auto processed            = preprocessor.preprocess(shader_src, defines);
         auto decisions            = std::make_shared<ggml_webgpu_mul_mat_vec_shader_decisions>();
         decisions->wg_size        = wg_size;
-        decisions->tile_k         = tile_k;
         decisions->outputs_per_wg = outputs_per_wg;
         decisions->vec_size       = key.vectorized ? 4 : 1;
 
