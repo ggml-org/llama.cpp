@@ -1,0 +1,3 @@
+# Tsavorite deployment config
+txe_count: 2
+multi_thread_enable: true
