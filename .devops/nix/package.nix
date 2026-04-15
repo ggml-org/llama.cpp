@@ -12,7 +12,6 @@
   blas,
   cudaPackages,
   autoAddDriverRunpath,
-  darwin,
   rocmPackages,
   vulkan-headers,
   vulkan-loader,
@@ -74,17 +73,6 @@ let
     mkdir -p $out/bin
     ln -s /usr/bin/xcrun $out/bin
   '';
-
-  # apple_sdk is supposed to choose sane defaults, no need to handle isAarch64
-  # separately
-  darwinBuildInputs =
-    with darwin.apple_sdk.frameworks;
-    [
-      Accelerate
-      CoreVideo
-      CoreGraphics
-    ]
-    ++ optionals useMetalKit [ MetalKit ];
 
   cudaBuildInputs = with cudaPackages; [
     cuda_cudart
@@ -155,8 +143,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ++ optionals (effectiveStdenv.isDarwin && useMetalKit && precompileMetalShaders) [ xcrunHost ];
 
   buildInputs =
-    optionals effectiveStdenv.isDarwin darwinBuildInputs
-    ++ optionals useCuda cudaBuildInputs
+    optionals useCuda cudaBuildInputs
     ++ optionals useMpi [ mpi ]
     ++ optionals useRocm rocmBuildInputs
     ++ optionals useBlas [ blas ]
