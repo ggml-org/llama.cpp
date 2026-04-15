@@ -123,6 +123,9 @@ static __global__ void quantize_mmq_nvfp4(
 #pragma unroll // Check +/- 2 to find best code to reduce NVFP4 activation loss. Negligible overhead on Blackwell.
     for (int i = 0; i < 5; i++) {
         const int test_code = first_fp8_code + test_offsets[i];
+        if (test_code < 0 || test_code > 0x7e) {
+            continue;
+        }
         const uint8_t code = (uint8_t) test_code;
         const float test_scale = ggml_cuda_ue4m3_to_fp32(code);
         const float test_inv_scale = test_scale > 0.0f ? 0.5f / test_scale : 0.0f;
