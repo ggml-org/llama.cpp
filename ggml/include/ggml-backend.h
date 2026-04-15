@@ -202,8 +202,11 @@ extern "C" {
 
     // Common functions that may be obtained using ggml_backend_reg_get_proc_address
 
-    // AllReduce operation for tensor parallelism (meta backend)
-    typedef bool                         (*ggml_backend_allreduce_tensor_t)(ggml_backend_t * backends, struct ggml_tensor ** tensors, size_t n_backends);
+    // Context management and operations for faster communication between backends, used for tensor parallelism (meta backend)
+    typedef void * (*ggml_backend_comm_init_t)(ggml_backend_t * backends, size_t n_backends);
+    typedef void   (*ggml_backend_comm_free_t)(void * comm_ctx);
+    typedef bool   (*ggml_backend_comm_allreduce_tensor_t)(void * comm_ctx, struct ggml_tensor ** tensors);
+
     // Split buffer type for tensor parallelism (old)
     typedef ggml_backend_buffer_type_t   (*ggml_backend_split_buffer_type_t)(int main_device, const float * tensor_split);
     // Set the number of threads for the backend

@@ -1092,10 +1092,6 @@ struct ggml_cuda_device_info {
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
 
     std::array<float, GGML_CUDA_MAX_DEVICES> default_tensor_split = {};
-
-#ifdef GGML_USE_NCCL
-    ncclComm_t comms[GGML_CUDA_MAX_DEVICES];
-#endif // GGML_USE_NCCL
 };
 
 const ggml_cuda_device_info & ggml_cuda_info();
