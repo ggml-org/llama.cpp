@@ -68,6 +68,16 @@ struct TsavoriteRuntimeState {
     void **loadResult_add = nullptr;
     void **loadResult_mult = nullptr;
     void **loadResult_rms_norm = nullptr;
+
+    // blob lifetime state machine
+    enum BlobState : uint8_t {
+        BLOB_UNINITIALIZED = 0,   // no tables, no blobs
+        BLOB_TABLES_ALLOCATED,    // tables allocated, blobs may be null
+        BLOB_BLOBS_LOADED         // all blobs loaded successfully
+    };
+
+    BlobState blob_state = BLOB_UNINITIALIZED;
+    uint32_t blob_tables_txes = 0;   // tracks num_of_txes used to size the tables
 };
 
 static TsavoriteRuntimeState g_rt;
@@ -89,18 +99,8 @@ auto &blobDescriptor_rms_norm = g_rt.blobDescriptor_rms_norm;
 auto &loadResult_add          = g_rt.loadResult_add;
 auto &loadResult_mult         = g_rt.loadResult_mult;
 auto &loadResult_rms_norm     = g_rt.loadResult_rms_norm;
-
-// blob lifetime state machine
-enum BlobState : uint8_t {
-    BLOB_UNINITIALIZED = 0,   // no tables, no blobs
-    BLOB_TABLES_ALLOCATED,    // tables allocated, blobs may be null
-    BLOB_BLOBS_LOADED         // all blobs loaded successfully
-};
-
-BlobState blob_state = BLOB_UNINITIALIZED;
-uint32_t blob_tables_txes = 0;   // tracks num_of_txes used to size the tables
-
 } // anonymous namespace
+
 
 // =============================================================================
 // YAML deployment parsing (no external yaml lib)
