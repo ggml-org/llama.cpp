@@ -606,6 +606,7 @@ jobs:
             -DGGML_SYCL_F16=ON
           time cmake --build build --config Release -j $(nproc)
 
+# TODO: use build-openvino.yml and remove the following job once PR is merged.
   ubuntu-24-openvino:
       name: ubuntu-24-openvino-${{ matrix.openvino_device }}
       strategy:
@@ -615,7 +616,7 @@ jobs:
               runner: '"ubuntu-24.04"'
               openvino_device: "CPU"
             - variant: gpu
-              runner: '["self-hosted","Linux","X64","Intel"]'
+              runner: '["self-hosted","Linux","Intel","OpenVINO"]'
               openvino_device: "GPU"
 
       runs-on: ${{ fromJSON(matrix.runner) }}
