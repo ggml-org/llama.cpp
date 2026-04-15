@@ -362,6 +362,7 @@ jobs:
 
       - name: Create release
         id: create_release
+        if: steps.check_tag.outputs.exists == 'false'
         uses: ggml-org/action-create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -382,6 +383,7 @@ jobs:
 
       - name: Upload release
         id: upload_release
+        if: steps.check_tag.outputs.exists == 'false'
         uses: actions/github-script@v8
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}
