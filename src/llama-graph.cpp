@@ -2304,7 +2304,7 @@ ggml_tensor * llm_graph_context::build_attn(
     // prepare new kq mask - starts filled with -INFINITY
     ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
 
-    // reshape KQ mask into tensor with rows of size 1: 
+    // reshape KQ mask into tensor with rows of size 1:
     // [n_kv, n_batch, 1, n_stream] -> [1, n_kv, n_batch, n_stream]
     kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3], kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
 
