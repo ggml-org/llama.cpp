@@ -1,7 +1,3 @@
-#pragma clang diagnostic ignored "-Wunused-variable"
-#pragma clang diagnostic ignored "-Wunused-function"
-#pragma clang diagnostic ignored "-Wunused-but-set-variable"
-
 #include <HAP_farf.h>
 #include <HAP_perf.h>
 #include <string.h>
@@ -105,9 +101,9 @@ static void solve_tri_thread_f32(unsigned int nth, unsigned int ith, void * data
     struct htp_solve_tri_context * sctx = (struct htp_solve_tri_context *) data;
     struct htp_ops_context *       octx = sctx->octx;
 
-    const struct htp_tensor * src0 = octx->src[0]; // A
-    const struct htp_tensor * src1 = octx->src[1]; // B
-    const struct htp_tensor * dst  = octx->dst;    // X
+    const struct htp_tensor * src0 = octx->src[0];  // A
+    const struct htp_tensor * src1 = octx->src[1];  // B
+    const struct htp_tensor * dst  = octx->dst;     // X
 
     const uint32_t n = src0->ne[0];
     const uint32_t k = src1->ne[0];
@@ -154,9 +150,9 @@ static void solve_tri_thread_f32(unsigned int nth, unsigned int ith, void * data
 }
 
 int op_solve_tri(struct htp_ops_context * octx) {
-    const struct htp_tensor * src0 = octx->src[0]; // A
-    const struct htp_tensor * src1 = octx->src[1]; // B
-    const struct htp_tensor * dst  = octx->dst;    // X
+    const struct htp_tensor * src0 = octx->src[0];  // A
+    const struct htp_tensor * src1 = octx->src[1];  // B
+    const struct htp_tensor * dst  = octx->dst;     // X
 
     if (src0->type != HTP_TYPE_F32 || src1->type != HTP_TYPE_F32 || dst->type != HTP_TYPE_F32) {
         return HTP_STATUS_NO_SUPPORT;
