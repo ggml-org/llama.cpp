@@ -1453,6 +1453,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     const size_t output_area_size = hex_align_up(
         m_chunk_n_rows * n_chunk_n_cols * sizeof(__fp16), HMX_FP16_TILE_SIZE);
 
+    const size_t weight_scale_size = hex_align_up(m_chunk_n_rows / 32 * n_chunk_n_cols * sizeof(__fp16), HMX_FP16_TILE_SIZE);
     size_t scratch0_size, scratch1_size, scratch2_size;
     if (use_pipeline) {
         scratch0_size = hex_align_up(n_chunk_n_cols * vec_dot_size, HMX_FP16_TILE_SIZE);  // dequant buf 0
@@ -1471,7 +1472,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch0_size);
     void    *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch1_size);
     void    *vtcm_scratch2   = scratch2_size ? vtcm_seq_alloc(&vtcm_ptr, scratch2_size) : NULL;
-    __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
+    __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_scale_size);
     if ((size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base) > vtcm_budget) {
         FARF(ERROR, "%s: vtcm overflow: used=%zu limit=%zu", __func__,
              (size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base), vtcm_budget);
