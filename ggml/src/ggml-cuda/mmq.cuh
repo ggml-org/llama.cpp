@@ -980,7 +980,7 @@ static __device__ __forceinline__ void load_tiles_nvfp4_nvfp4(const char * __res
             x_u32[q_base + 2 * sub + 1] = src_qs[2 * sub + 1];
         }
 
-        x_u32[row_base + 64 + kbx] = get_int_b1(bxi->d, 0);
+        x_u32[row_base + 64 + kbx] = get_int_b4(bxi->d, 0);
     }
 }
 

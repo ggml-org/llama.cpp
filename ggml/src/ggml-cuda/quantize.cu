@@ -121,7 +121,7 @@ static __global__ void quantize_mmq_nvfp4(
     float subblock_scale = 0.0f;
 
 #pragma unroll // Check +/- 2 to find best code to reduce NVFP4 activation loss. Negligible overhead on Blackwell.
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < 5; i++) {
         const int test_code = first_fp8_code + test_offsets[i];
         const uint8_t code = (uint8_t) test_code;
         const float test_scale = ggml_cuda_ue4m3_to_fp32(code);
@@ -414,10 +414,10 @@ void quantize_mmq_fp4_cuda(
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
     GGML_ASSERT(type_src0 == GGML_TYPE_MXFP4 || type_src0 == GGML_TYPE_NVFP4);
-    GGML_ASSERT(ne00 % 8 == 0);
     GGML_ASSERT(ne0 > 0);
 
     if (type_src0 == GGML_TYPE_NVFP4) {
+        GGML_ASSERT(ne00 % QK_NVFP4 == 0);
         constexpr int nvfp4_block_size = 128;
         const int64_t block_num_y = (ne0 + QK_NVFP4_SUB * nvfp4_block_size - 1) / (QK_NVFP4_SUB * nvfp4_block_size);
         const dim3 block_size(nvfp4_block_size, 1, 1);
