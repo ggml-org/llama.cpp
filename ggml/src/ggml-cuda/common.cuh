@@ -546,7 +546,20 @@ template<block_reduce_method method_t, typename T>
 struct block_reduce_policy;
 
 template <typename T, typename... Ts>
-inline constexpr bool is_any = (std::is_same_v<T, Ts> || ...);
+struct is_any_impl;
+
+template <typename T>
+struct is_any_impl<T> {
+    static constexpr bool value = false;
+};
+
+template <typename T, typename First, typename... Rest>
+struct is_any_impl<T, First, Rest...> {
+    static constexpr bool value = std::is_same<T, First>::value || is_any_impl<T, Rest...>::value;
+};
+
+template <typename T, typename... Ts>
+inline constexpr bool is_any = is_any_impl<T, Ts...>::value;
 
 template<typename...>
 inline constexpr bool ggml_cuda_dependent_false_v = false;
@@ -561,13 +574,13 @@ template <typename T> struct block_reduce_policy<block_reduce_method::SUM, T> {
     }
 
     static __device__ T sentinel() {
-        if constexpr (std::is_same_v<T, float>) {
+        if constexpr (std::is_same<T, float>::value) {
             return 0.0f;
-        } else if constexpr (std::is_same_v<T, float2>) {
+        } else if constexpr (std::is_same<T, float2>::value) {
             return make_float2(0.0f, 0.0f);
-        } else if constexpr (std::is_same_v<T, half2>) {
+        } else if constexpr (std::is_same<T, half2>::value) {
             return make_half2(0.0f, 0.0f);
-        } else if constexpr (std::is_same_v<T, int>) {
+        } else if constexpr (std::is_same<T, int>::value) {
             return 0;
         } else {
             static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce sum");
@@ -585,9 +598,9 @@ template <typename T> struct block_reduce_policy<block_reduce_method::MAX, T> {
     }
 
     static __device__ T sentinel() {
-        if constexpr (std::is_same_v<T, float>) {
+        if constexpr (std::is_same<T, float>::value) {
             return -INFINITY;
-        } else if constexpr (std::is_same_v<T, half2>) {
+        } else if constexpr (std::is_same<T, half2>::value) {
             return make_half2(-INFINITY, -INFINITY);
         } else {
             static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce max");
@@ -1252,7 +1265,9 @@ struct ggml_cuda_concurrent_event {
         const int64_t       join_start = (int64_t) join_t->data;
         const int64_t       join_end   = join_start + ggml_nbytes(join_t);
 
-        for (const auto & [tensor, stream] : stream_mapping) {
+        for (const auto & _kv : stream_mapping) {
+            const auto & tensor = _kv.first;
+            const auto & stream = _kv.second;
             const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
             const int64_t       t_start = (int64_t) t->data;
             const int64_t       t_end   = t_start + ggml_nbytes(t);
@@ -1273,7 +1288,9 @@ struct ggml_cuda_concurrent_event {
 
         bool writes_overlap = false;
         bool dependent_srcs = false;
-        for (const auto & [tensor, stream] : stream_mapping) {
+        for (const auto & _kv : stream_mapping) {
+            const auto & tensor = _kv.first;
+            const auto & stream = _kv.second;
             const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
             const int64_t       t_start = (int64_t) t->data;
             const int64_t       t_end   = t_start + ggml_nbytes(t);
@@ -1379,7 +1396,9 @@ struct ggml_backend_cuda_context {
     // Check if any CUDA graph is enabled for this context (used by kernels that need to know
     // if graphs are in use without having access to the specific graph key)
     bool any_cuda_graph_enabled() const {
-        for (const auto & [key, graph] : cuda_graphs) {
+        for (const auto & _kv : cuda_graphs) {
+            const auto & key = _kv.first;
+            const auto & graph = _kv.second;
             if (graph && graph->is_enabled()) {
                 return true;
             }
@@ -1389,7 +1408,9 @@ struct ggml_backend_cuda_context {
 
     // Check if any CUDA graph has an instance for this context
     bool any_cuda_graph_has_instance() const {
-        for (const auto & [key, graph] : cuda_graphs) {
+        for (const auto & _kv : cuda_graphs) {
+            const auto & key = _kv.first;
+            const auto & graph = _kv.second;
             if (graph && graph->instance != nullptr) {
                 return true;
             }

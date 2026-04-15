@@ -207,7 +207,7 @@ namespace ggml_cuda_mma {
         static __device__ __forceinline__ int get_j(const int l) {
             if constexpr (I == 16 && J == 16) {
 #if defined(RDNA3)
-                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, int>) {
+                if constexpr (std::is_same<T, float>::value || std::is_same<T, int>::value) {
                     // matrix C
                     return 2 * l + (threadIdx.x / 16);
                 } else {

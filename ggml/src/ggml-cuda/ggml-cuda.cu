@@ -1967,40 +1967,40 @@ struct batched_mul_mat_traits;
 template<>
 struct batched_mul_mat_traits<GGML_TYPE_F32> {
     using cuda_type = float;
-    static inline const cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
-    static inline const cudaDataType_t data_type = CUDA_R_32F;
-    static inline const ggml_type ggml_type_val = GGML_TYPE_F32;
-    static inline const float alpha = 1.0f;
-    static inline const float beta = 0.0f;
-    static inline const void* get_alpha() { static const float val = alpha; return &val; }
-    static inline const void* get_beta() { static const float val = beta; return &val; }
-    static inline auto get_nc_converter(ggml_type src_type) { return ggml_get_to_fp32_nc_cuda(src_type); }
+    static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
+    static constexpr cudaDataType_t data_type = CUDA_R_32F;
+    static constexpr ggml_type ggml_type_val = GGML_TYPE_F32;
+    static constexpr float alpha = 1.0f;
+    static constexpr float beta = 0.0f;
+    static const void* get_alpha() { static const float val = alpha; return &val; }
+    static const void* get_beta() { static const float val = beta; return &val; }
+    static to_fp32_nc_cuda_t get_nc_converter(ggml_type src_type) { return ggml_get_to_fp32_nc_cuda(src_type); }
 };
 
 template<>
 struct batched_mul_mat_traits<GGML_TYPE_BF16> {
     using cuda_type = nv_bfloat16;
-    static inline const cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
-    static inline const cudaDataType_t data_type = CUDA_R_16BF;
-    static inline const ggml_type ggml_type_val = GGML_TYPE_BF16;
-    static inline const float alpha = 1.0f;
-    static inline const float beta = 0.0f;
-    static inline const void* get_alpha() { static const float val = alpha; return &val; }
-    static inline const void* get_beta() { static const float val = beta; return &val; }
-    static inline auto get_nc_converter(ggml_type src_type) { return ggml_get_to_bf16_nc_cuda(src_type); }
+    static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
+    static constexpr cudaDataType_t data_type = CUDA_R_16BF;
+    static constexpr ggml_type ggml_type_val = GGML_TYPE_BF16;
+    static constexpr float alpha = 1.0f;
+    static constexpr float beta = 0.0f;
+    static const void* get_alpha() { static const float val = alpha; return &val; }
+    static const void* get_beta() { static const float val = beta; return &val; }
+    static to_bf16_nc_cuda_t get_nc_converter(ggml_type src_type) { return ggml_get_to_bf16_nc_cuda(src_type); }
 };
 
 template<>
 struct batched_mul_mat_traits<GGML_TYPE_F16> {
     using cuda_type = half;
-    static inline const cublasComputeType_t compute_type = CUBLAS_COMPUTE_16F;
-    static inline const cudaDataType_t data_type = CUDA_R_16F;
-    static inline const ggml_type ggml_type_val = GGML_TYPE_F16;
-    static inline const half alpha = 1.0;
-    static inline const half beta = 0.0;
-    static inline const void* get_alpha() { static const half val = alpha; return &val; }
-    static inline const void* get_beta() { static const half val = beta; return &val; }
-    static inline auto get_nc_converter(ggml_type src_type) { return ggml_get_to_fp16_nc_cuda(src_type); }
+    static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_16F;
+    static constexpr cudaDataType_t data_type = CUDA_R_16F;
+    static constexpr ggml_type ggml_type_val = GGML_TYPE_F16;
+    static constexpr float alpha_f = 1.0f; // half not constexpr in C++14
+    static constexpr float beta_f = 0.0f;  // half not constexpr in C++14
+    static const void* get_alpha() { static const half val = alpha_f; return &val; }
+    static const void* get_beta() { static const half val = beta_f; return &val; }
+    static to_fp16_nc_cuda_t get_nc_converter(ggml_type src_type) { return ggml_get_to_fp16_nc_cuda(src_type); }
 };
 
 template<ggml_type src0_type>
@@ -2264,8 +2264,11 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
         return false;
     }
 
-    if (const bool swapped = ggml_get_op_params_i32(glu, 1); swapped) {
-        return false;
+    {
+        const bool swapped = ggml_get_op_params_i32(glu, 1);
+        if (swapped) {
+            return false;
+        }
     }
 
     const bool split = ggml_backend_buft_is_cuda_split(ffn_up->src[0]->buffer->buft) ||
@@ -3596,13 +3599,13 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
             GGML_LOG_DEBUG("Launching %d streams at %s\n", concurrent_event->n_streams, node->name);
 
-            cudaStream_t main_stream = cuda_ctx->stream();  // this should be stream 0
+            cudaStream_t main_stream = cuda_ctx->stream(cuda_ctx->device, cuda_ctx->curr_stream_no);  // this should be stream 0
             GGML_ASSERT(cuda_ctx->curr_stream_no == 0);
             CUDA_CHECK(cudaEventRecord(concurrent_event->fork_event, main_stream));
 
             for (int i = 1; i <= concurrent_event->n_streams; ++i) {
                 cudaStream_t stream = cuda_ctx->stream(cuda_ctx->device, i);
-                CUDA_CHECK(cudaStreamWaitEvent(stream, concurrent_event->fork_event));
+                CUDA_CHECK(cudaStreamWaitEvent(stream, concurrent_event->fork_event, 0));
             }
         }
     };
@@ -3615,7 +3618,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
             if (stream_ctx.concurrent_events.size() > 0) {
                 should_launch_concurrent_events = true;
-                for (const auto & [tensor, event] : stream_ctx.concurrent_events) {
+                for (const auto & _kv : stream_ctx.concurrent_events) {
+                    const auto & tensor = _kv.first;
+                    const auto & event = _kv.second;
                     should_launch_concurrent_events = should_launch_concurrent_events && event.is_valid();
                 }
             }
@@ -3629,7 +3634,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     node_to_idx[cgraph->nodes[i]] = i;
                 }
 
-                for (auto & [fork_node, event] : stream_ctx.concurrent_events) {
+                for (auto & _kv : stream_ctx.concurrent_events) {
+                    auto & fork_node = _kv.first;
+                    auto & event = _kv.second;
                     // Find positions of all nodes from this event in the current graph
                     std::vector<int> positions;
                     positions.reserve(event.original_order.size());
@@ -3686,7 +3693,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                             // Wait on join events of forked streams in the main stream
                             CUDA_CHECK(cudaEventRecord(concurrent_event->join_events[i - 1],
                                                        cuda_ctx->stream(cuda_ctx->device, i)));
-                            CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), concurrent_event->join_events[i - 1]));
+                            CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(cuda_ctx->device, cuda_ctx->curr_stream_no), concurrent_event->join_events[i - 1], 0));
                         }
 
                         is_concurrent_event_active = false;
@@ -4215,7 +4222,7 @@ static void ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_ev
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
     if (ggml_backend_is_cuda(backend)) {
-        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), (cudaEvent_t)event->context, 0));
+        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(cuda_ctx->device, cuda_ctx->curr_stream_no), (cudaEvent_t)event->context, 0));
     } else {
 #if 0
         // untested
@@ -4314,7 +4321,9 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     // store {fork_idx, join_idx}
     std::vector<std::pair<int, int>> concurrent_node_ranges;
 
-    for (const auto & [root_node, count] : fan_out) {
+    for (const auto & _kv : fan_out) {
+        const auto & root_node = _kv.first;
+        const auto & count = _kv.second;
         if (count >= min_fan_out && count <= max_fan_out) {
             const int root_node_idx = node_indices[root_node];
 
@@ -4325,7 +4334,9 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             }
 
             bool is_part_of_event = false;
-            for (const auto & [start, end] : concurrent_node_ranges) {
+            for (const auto & _kv : concurrent_node_ranges) {
+                const auto & start = _kv.first;
+                const auto & end = _kv.second;
                 if (root_node_idx >= start && root_node_idx <= end) {
                     is_part_of_event = true;
                 }

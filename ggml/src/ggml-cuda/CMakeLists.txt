@@ -23,7 +23,10 @@ if (CUDAToolkit_FOUND)
         #
         # The default behavior for a non-native is to build virtual architectures as needed to cover all features needed
         #     for best performance and to also build real architectures for the most commonly used GPUs.
-        if (GGML_NATIVE AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.6" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+        if (CUDAToolkit_VERSION VERSION_LESS "11.0")
+            # CUDA 10.2: only compute 6.2 (Jetson TX2 / Pascal)
+            set(CMAKE_CUDA_ARCHITECTURES "62")
+        elseif (GGML_NATIVE AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.6" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
             set(CMAKE_CUDA_ARCHITECTURES "native")
         else()
             if (CUDAToolkit_VERSION VERSION_LESS "13")
@@ -56,6 +59,12 @@ if (CUDAToolkit_FOUND)
     endif()
 
     enable_language(CUDA)
+
+    # CUDA 10.2 compat: force C++14 standard and enable if constexpr support
+    if (CUDAToolkit_VERSION VERSION_LESS "11.0")
+        set(CMAKE_CUDA_STANDARD 14)
+        set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    endif()
 
     # TODO: Remove once CCCL 3.2 has been released and bundled with CUDA Toolkit
     if (GGML_CUDA_CUB_3DOT2)
@@ -194,6 +203,10 @@ if (CUDAToolkit_FOUND)
     set(CUDA_CXX_FLAGS "")
 
     set(CUDA_FLAGS -use_fast_math -extended-lambda)
+
+    if (CUDAToolkit_VERSION VERSION_LESS "11.0")
+        list(APPEND CUDA_FLAGS --expt-relaxed-constexpr)
+    endif()
 
     if (GGML_CUDA_DEBUG)
         list(APPEND CUDA_FLAGS -lineinfo)

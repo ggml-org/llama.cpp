@@ -3,7 +3,11 @@
 #include <cuda_runtime.h>
 #include <cuda.h>
 #include <cublas_v2.h>
+#if CUDART_VERSION >= 11000
 #include <cuda_bf16.h>
+#else
+#include "../compat-cuda10.cuh"
+#endif // CUDART_VERSION >= 11000
 #include <cuda_fp16.h>
 
 #ifdef GGML_USE_NCCL

@@ -77,7 +77,8 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
 
         float result = src0_row ? (float) src0_row[i0*s00] : 0.0f;
         if constexpr (sizeof...(src1_ptrs) > 0) {
-            result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10*s10])));
+            int _dummy[] = { (result = bin_op(result, (float)src1s[i_src1 + i10*s10]), 0)... };
+            (void)_dummy;
         } else {
             result = bin_op(result, (float)src1[i_src1 + i10*s10]);
         }
@@ -143,7 +144,8 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
 
     float result = src0_row ? (float) src0_row[i0*s00] : 0.0f;
     if constexpr (sizeof...(src1_ptrs) > 0) {
-        result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10*s10])));
+        int _dummy[] = { (result = bin_op(result, (float)src1s[i_src1 + i10*s10]), 0)... };
+            (void)_dummy;
     } else {
         result = bin_op(result, (float)src1[i_src1 + i10*s10]);
     }
