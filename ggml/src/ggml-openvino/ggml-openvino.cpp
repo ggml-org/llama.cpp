@@ -147,7 +147,7 @@ static void * ggml_backend_openvino_buffer_get_base(ggml_backend_buffer_t buffer
 
 static bool is_stateful_enabled() {
     static const auto * stateful = getenv("GGML_OPENVINO_STATEFUL_EXECUTION");
-    return stateful && strcmp(stateful, "1") == 0;
+    return stateful && *stateful != '\0' && strcmp(stateful, "0") != 0;
 }
 
 static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
