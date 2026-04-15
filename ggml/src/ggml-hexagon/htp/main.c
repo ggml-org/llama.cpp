@@ -210,7 +210,7 @@ AEEResult htp_iface_close(remote_handle64 handle) {
     return AEE_SUCCESS;
 }
 
-AEEResult htp_iface_mmap(remote_handle64 handle, int fd, uint32_t size) {
+AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint32_t size) {
     struct htp_context * ctx = (struct htp_context *) handle;
     if (!ctx) {
         return AEE_EBADPARM;
