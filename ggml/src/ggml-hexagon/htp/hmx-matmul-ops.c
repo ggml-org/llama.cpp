@@ -43,16 +43,6 @@ static const __fp16 iq4_nl_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
     1,    0, 13,   0, 25,  0, 38,  0, 53,  0, 69,  0, 89,  0, 113, 0,
 };
 
-// vscatter offsets for fused dequant+transpose: write K-values directly to [K][N] tile.
-// word[i] = i*128 maps K-row-pair i to byte offset i*128 in the tile.
-// Column offset (n*4) is added at runtime.  Only entries 0..15 are used (masked by predicate).
-static const int32_t weight_transpose_scatter_offsets[32] __attribute__((aligned(VLEN))) = {
-    0*128,  1*128,  2*128,  3*128,  4*128,  5*128,  6*128,  7*128,
-    8*128,  9*128, 10*128, 11*128, 12*128, 13*128, 14*128, 15*128,
-    16*128, 17*128, 18*128, 19*128, 20*128, 21*128, 22*128, 23*128,
-    24*128, 25*128, 26*128, 27*128, 28*128, 29*128, 30*128, 31*128
-};
-
 // Scales per x4x2 logical block: 8 × sizeof(__fp16) = 16 bytes
 #define HMX_X4X2_SCALES_PER_BLK  8
 #define HMX_X4X2_DBLK_SIZE       16  // 8 * 2 bytes (fp16 scales for Q4_0/Q8_0/IQ4_NL)
@@ -198,43 +188,6 @@ next_nc:
 
 // forward declaration – defined after transfer_activation_chunk_fp32_to_fp16
 void transfer_activation_chunk_threaded(struct htp_context *ctx, __fp16 *dst, const float *src, int n_rows, int k_block, int k_stride);
-
-// Scatter row-major FP16 weight (already in VTCM scratch) directly into transposed [K][N] tiles.
-// vtcm_src: [n_cols][k] row-major fp16 in VTCM scratch buffer
-// vtcm_dst: [n_col_tiles][n_k_tiles][HMX_FP16_TILE_N_ELMS] tile-major interleaved fp16
-static void interleave_fp16_weight_chunk_to_tiles(__fp16 *restrict vtcm_dst,
-                                                   const __fp16 *restrict vtcm_src,
-                                                   int n_cols, int k) {
-    assert(n_cols % HMX_FP16_TILE_N_COLS == 0);
-    assert(k % HMX_FP16_TILE_N_COLS == 0);
-
-    const int n_k_tiles = k / HMX_FP16_TILE_N_COLS;
-    const HVX_Vector v_scat_base = hvx_vmem(weight_transpose_scatter_offsets);
-    const HVX_Vector v_scat_step = Q6_V_vsplat_R(4);
-    const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);
-
-    for (int r = 0; r < n_cols; r += 2) {
-        int ct = r / HMX_FP16_TILE_N_ROWS;       // N-dimension tile index
-        int local_r = r % HMX_FP16_TILE_N_ROWS;  // intra-tile row index
-        const bool next_row_valid = (r + 1) < n_cols;
-
-        // Offset vectors for N-columns local_r and local_r+1, reused across K-tiles.
-        HVX_Vector v_off0 = Q6_Vw_vadd_VwVw(v_scat_base, Q6_V_vsplat_R(local_r * 4));
-        HVX_Vector v_off1 = Q6_Vw_vadd_VwVw(v_off0, v_scat_step);
-
-        for (int c = 0; c < k; c += HMX_FP16_TILE_N_COLS) {
-            int kt       = c / HMX_FP16_TILE_N_COLS;
-            int tile_idx = ct * n_k_tiles + kt;
-            __fp16 *tile_base = vtcm_dst + tile_idx * HMX_FP16_TILE_N_ELMS;
-
-            HVX_Vector v0 = hvx_vmemu(vtcm_src + r * k + c);
-            HVX_Vector v1 = next_row_valid ? hvx_vmemu(vtcm_src + (r + 1) * k + c) : Q6_V_vzero();
-
-            Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off0, v0);
-            Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off1, v1);
-        }
-    }
-}
 
 // --- x4x2 format dequantizers ---
 
@@ -408,7 +361,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
     // vscatter setup: write dequantized K-values directly to transposed [K][N] tile positions.
     // Each int32 element holds a K-row-pair (2 adjacent fp16 values).  word[i] at offset i*128
     // maps to K-rows 2i and 2i+1.  Column offset (n*4) added per row.
-    const HVX_Vector v_scat_base = hvx_vmem(weight_transpose_scatter_offsets);
+    const HVX_Vector v_scat_base = hvx_vmem(hmx_transpose_scatter_offsets);
     const HVX_Vector v_scat_step = Q6_V_vsplat_R(4);  // 4 bytes = 1 column step
     const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);  // first 16 words (64 bytes)
 
@@ -1000,7 +953,8 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
                                               fp16_row_bytes, weight_row_bytes, fp16_row_bytes, n_cols_next);
                         }
 
-                        interleave_fp16_weight_chunk_to_tiles(vtcm_weight, (const __fp16 *) buf_curr, n_cols, params->k);
+                        interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr,
+                                                 n_cols, params->k, params->k, 0, n_cols);
                         swap_ptr(&buf_curr, &buf_next);
                     }
                     TIMER_STOP(weight_load);
@@ -1171,7 +1125,8 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
                 }
 
                 // interleave row-major fp16 from scratch into tile-major in vtcm_weight
-                interleave_fp16_weight_chunk_to_tiles(vtcm_weight, (const __fp16 *)buf_curr, n_cols, k);
+                interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr,
+                                         n_cols, k, k, 0, n_cols);
 
                 swap_ptr(&buf_curr, &buf_next);
             }
