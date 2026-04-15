@@ -342,7 +342,6 @@
 <svelte:window onkeydown={handleKeydown} />
 
 {#if isServerLoading}
-	<!-- Server Loading State -->
 	<ServerLoadingSplash />
 {:else}
 	<div
@@ -427,68 +426,6 @@
 			</div>
 		</div>
 	</div>
-	<!-- {:else}
-	<div
-		aria-label="Welcome screen with file drop zone"
-		class="flex h-full items-center justify-center"
-		ondragenter={handleDragEnter}
-		ondragleave={handleDragLeave}
-		ondragover={handleDragOver}
-		ondrop={handleDrop}
-		role="main"
-	>
-		{#key introKey}
-			<div class="w-full max-w-[48rem]">
-				<div class="mb-10 px-4 text-center" use:fadeInView={{ duration: 300 }}>
-					<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
-
-					<p class="text-muted-foreground md:text-lg">
-						{serverStore.props?.modalities?.audio
-							? 'Record audio, type a message '
-							: 'Type a message'} or upload files to get started
-					</p>
-				</div>
-
-				{#if hasPropsError}
-					<div class="mb-4" use:fadeInView={{ duration: 250, y: 10 }}>
-						<Alert.Root variant="destructive">
-							<AlertTriangle class="h-4 w-4" />
-
-							<Alert.Title class="flex items-center justify-between">
-								<span>Server unavailable</span>
-
-								<button
-									onclick={() => serverStore.fetch()}
-									disabled={isServerLoading}
-									class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
-								>
-									<RefreshCw class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}" />
-									{isServerLoading ? 'Retrying...' : 'Retry'}
-								</button>
-							</Alert.Title>
-
-							<Alert.Description>{serverError()}</Alert.Description>
-						</Alert.Root>
-					</div>
-				{/if}
-
-				<div>
-					<ChatScreenForm
-						disabled={hasPropsError}
-						{initialMessage}
-						isLoading={isCurrentConversationLoading}
-						onFileRemove={handleFileRemove}
-						onFileUpload={handleFileUpload}
-						onSend={handleSendMessage}
-						onStop={() => chatStore.stopGeneration()}
-						onSystemPromptAdd={handleSystemPromptAdd}
-						showHelperText
-						bind:uploadedFiles
-					/>
-				</div>
-			</div>
-		{/key}
-	</div> -->
 {/if}
 
 <!-- File Upload Error Alert Dialog -->

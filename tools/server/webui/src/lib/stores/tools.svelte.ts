@@ -336,11 +336,19 @@ class ToolsStore {
 		return null;
 	}
 
-	/** Get the display label for the server that owns a given tool (empty string for built-in/custom). */
+	/** Get the display label for the server that owns a given tool. */
 	getToolServerLabel(toolName: string): string {
 		for (const entry of this.allTools) {
-			if (entry.definition.function.name === toolName && entry.serverName) {
-				return mcpStore.getServerDisplayName(entry.serverName);
+			if (entry.definition.function.name === toolName) {
+				if (entry.serverName) {
+					return mcpStore.getServerDisplayName(entry.serverName);
+				}
+				if (entry.source === ToolSource.BUILTIN) {
+					return 'Built-in Tools';
+				}
+				if (entry.source === ToolSource.CUSTOM) {
+					return 'Custom Tools';
+				}
 			}
 		}
 		return '';

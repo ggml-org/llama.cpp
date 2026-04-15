@@ -252,6 +252,11 @@ class AgenticStore {
 				this._pendingPermissions.set(conversationId, null);
 				if (decision === 'always') {
 					permissionsStore.alwaysAllow(toolName);
+				} else if (decision === 'always_server') {
+					const serverTools = toolsStore.allTools
+						.filter((t) => t.serverName === serverLabel)
+						.map((t) => t.definition.function.name);
+					permissionsStore.alwaysAllowServer(serverTools);
 				}
 				resolve(decision);
 			});
@@ -273,6 +278,10 @@ class AgenticStore {
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
 		const { conversationId, messages, options = {}, callbacks, signal, perChatOverrides } = params;
+
+		// Clear any pending permissions for this conversation when starting a new flow
+		this._pendingPermissions.set(conversationId, null);
+		this._permissionResolvers.delete(conversationId);
 
 		// Ensure built-in tools are fetched before checking if agentic is enabled
 		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {

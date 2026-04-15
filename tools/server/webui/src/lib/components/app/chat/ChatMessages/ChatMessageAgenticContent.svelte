@@ -1,31 +1,34 @@
 <script lang="ts">
+	import { ChevronDown, Wrench, Loader2, Brain, ShieldQuestion } from '@lucide/svelte';
 	import {
 		ChatMessageStatistics,
 		CollapsibleContentBlock,
 		MarkdownContent,
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
-	import { config } from '$lib/stores/settings.svelte';
-	import { Wrench, Loader2, Brain, ShieldQuestion } from '@lucide/svelte';
-	import { AgenticSectionType, FileTypeText } from '$lib/enums';
-	import { formatJsonPretty } from '$lib/utils';
+	import { Button } from '$lib/components/ui/button';
+	import * as ButtonGroup from '$lib/components/ui/button-group';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+
+	import { AgenticSectionType, ChatMessageStatsView, FileTypeText, ToolSource } from '$lib/enums';
+	import type {
+		ChatMessageAgenticTimings,
+		ChatMessageAgenticTurnStats,
+		DatabaseMessage
+	} from '$lib/types';
 	import {
 		deriveAgenticSections,
+		formatJsonPretty,
 		parseToolResultWithImages,
 		type AgenticSection,
 		type ToolResultLine
 	} from '$lib/utils';
-	import type { DatabaseMessage } from '$lib/types/database';
-	import type { ChatMessageAgenticTimings, ChatMessageAgenticTurnStats } from '$lib/types/chat';
-	import { ChatMessageStatsView } from '$lib/enums';
 	import {
 		agenticPendingPermissionRequest,
 		agenticResolvePermission
 	} from '$lib/stores/agentic.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import * as ButtonGroup from '$lib/components/ui/button-group/index.js';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
-	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import { config } from '$lib/stores/settings.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -65,7 +68,7 @@
 		}
 	});
 
-	function handlePermission(decision: 'once' | 'always' | 'deny') {
+	function handlePermission(decision: 'once' | 'always' | 'deny' | 'always_server') {
 		permissionDismissed = true;
 		agenticResolvePermission(message.convId, decision);
 	}
@@ -363,12 +366,26 @@
 					</ButtonGroup.Root>
 
 					<DropdownMenu.Content align="start" class="min-w-[8rem]">
-						<DropdownMenu.Item onclick={() => handlePermission('once')}>
-							Allow once
-						</DropdownMenu.Item>
 						<DropdownMenu.Item onclick={() => handlePermission('always')}>
-							Always allow
+							Always allow <pre>{pendingPermission.toolName}</pre>
+							tool
 						</DropdownMenu.Item>
+						{#if pendingPermission?.serverLabel}
+							<DropdownMenu.Item onclick={() => handlePermission('always_server')}>
+								Always allow all tools from {pendingPermission.serverLabel}
+							</DropdownMenu.Item>
+						{:else}
+							{@const source = toolsStore.getToolSource(pendingPermission.toolName)}
+							{@const providerName =
+								source === ToolSource.BUILTIN
+									? 'Built-in Tools'
+									: source === ToolSource.CUSTOM
+										? 'Custom Tools'
+										: 'MCP Tools'}
+							<DropdownMenu.Item onclick={() => handlePermission('always_server')}>
+								Approve all tools from {providerName}
+							</DropdownMenu.Item>
+						{/if}
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
 
