@@ -90,6 +90,16 @@ auto &loadResult_add          = g_rt.loadResult_add;
 auto &loadResult_mult         = g_rt.loadResult_mult;
 auto &loadResult_rms_norm     = g_rt.loadResult_rms_norm;
 
+// blob lifetime state machine
+enum BlobState : uint8_t {
+    BLOB_UNINITIALIZED = 0,   // no tables, no blobs
+    BLOB_TABLES_ALLOCATED,    // tables allocated, blobs may be null
+    BLOB_BLOBS_LOADED         // all blobs loaded successfully
+};
+
+BlobState blob_state = BLOB_UNINITIALIZED;
+uint32_t blob_tables_txes = 0;   // tracks num_of_txes used to size the tables
+
 } // anonymous namespace
 
 // =============================================================================
@@ -342,69 +352,132 @@ static std::string blob_prefix(const char *rel) {
     return tsavorite_llama_root() + rel;
 }
 
-static TsavoriteRuntimeState &rt = g_rt;
+static inline void tsi_blob_free_tables() {
+    // free pointer tables only (does NOT unload blobs)
+    free(loadResult_add);      loadResult_add = nullptr;
+    free(loadResult_mult);     loadResult_mult = nullptr;
+    free(loadResult_rms_norm); loadResult_rms_norm = nullptr;
 
-static void tsi_load_all_blobs() {
-    int i;
-    char blob_name[64];
+    free(blobDescriptor_add);      blobDescriptor_add = nullptr;
+    free(blobDescriptor_mult);     blobDescriptor_mult = nullptr;
+    free(blobDescriptor_rms_norm); blobDescriptor_rms_norm = nullptr;
 
-    
-    // already loaded
-    if (blobDescriptor_add || blobDescriptor_mult || blobDescriptor_rms_norm) {
-        return;
+    g_rt.blob_tables_txes = 0;
+    g_rt.blob_state = TsavoriteRuntimeState::BLOB_UNINITIALIZED;
+}
+
+static inline void tsi_blob_unload_only() {
+    // unload blobs if present, keep tables allocated
+    if (blobDescriptor_add) {
+        for (uint32_t i = 0; i < num_of_txes; ++i) {
+            if (blobDescriptor_add[i]) {
+                tsi_unload_blob(blobDescriptor_add[i]);
+                blobDescriptor_add[i] = nullptr;
+            }
+        }
+    }
+    if (blobDescriptor_mult) {
+        for (uint32_t i = 0; i < num_of_txes; ++i) {
+            if (blobDescriptor_mult[i]) {
+                tsi_unload_blob(blobDescriptor_mult[i]);
+                blobDescriptor_mult[i] = nullptr;
+            }
+        }
+    }
+    if (blobDescriptor_rms_norm) {
+        for (uint32_t i = 0; i < num_of_txes; ++i) {
+            if (blobDescriptor_rms_norm[i]) {
+                tsi_unload_blob(blobDescriptor_rms_norm[i]);
+                blobDescriptor_rms_norm[i] = nullptr;
+            }
+        }
     }
 
-    // allocate pointer tables (size = num_of_txes)
-    loadResult_add = (void **)calloc(num_of_txes, sizeof(void *));
-    loadResult_mult = (void **)calloc(num_of_txes, sizeof(void *));
+    // best-effort: clear loadResult_* entries too
+    if (loadResult_add)      memset(loadResult_add,      0, num_of_txes * sizeof(void *));
+    if (loadResult_mult)     memset(loadResult_mult,     0, num_of_txes * sizeof(void *));
+    if (loadResult_rms_norm) memset(loadResult_rms_norm, 0, num_of_txes * sizeof(void *));
+
+    g_rt.blob_state = TsavoriteRuntimeState::BLOB_TABLES_ALLOCATED;
+}
+
+static inline void tsi_blob_ensure_tables_allocated() {
+    if (g_rt.blob_state != TsavoriteRuntimeState::BLOB_UNINITIALIZED) {
+        // if sized for a different txe count, reset hard (future-proof)
+        if (g_rt.blob_tables_txes != num_of_txes) {
+            tsi_blob_unload_only();
+            tsi_blob_free_tables();
+        } else {
+            return;
+        }
+    }
+
+    loadResult_add      = (void **)calloc(num_of_txes, sizeof(void *));
+    loadResult_mult     = (void **)calloc(num_of_txes, sizeof(void *));
     loadResult_rms_norm = (void **)calloc(num_of_txes, sizeof(void *));
 
-    blobDescriptor_add = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
-    blobDescriptor_mult = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
+    blobDescriptor_add      = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
+    blobDescriptor_mult     = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
     blobDescriptor_rms_norm = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
 
     if (!loadResult_add || !loadResult_mult || !loadResult_rms_norm ||
         !blobDescriptor_add || !blobDescriptor_mult || !blobDescriptor_rms_norm) {
+        // free any partial allocations before abort
+        tsi_blob_free_tables();
         fprintf(stderr, "Failed to allocate blob tables (num_of_txes=%u)\n", (unsigned)num_of_txes);
         abort();
     }
 
+    g_rt.blob_tables_txes = num_of_txes;
+    g_rt.blob_state = TsavoriteRuntimeState::BLOB_TABLES_ALLOCATED;
+}
 
-    for (int i = 0; i < num_of_txes; ++i) {
+static void tsi_load_all_blobs() {
+    char blob_name[64];
+    uint32_t failed_txe = 0;
+
+    // already loaded
+    if (g_rt.blob_state == TsavoriteRuntimeState::BLOB_BLOBS_LOADED) {
+        return;
+    }
+
+    // ensure tables exist (allocates if needed)
+    tsi_blob_ensure_tables_allocated();
+
+    for (uint32_t i = 0; i < num_of_txes; ++i) {
         char name_add[64];
         char name_mult[64];
         char name_rms[64];
 
-        snprintf(name_add,  sizeof(name_add),  "txe_add_dev%d", i);
-        snprintf(name_mult, sizeof(name_mult), "txe_mult_dev%d", i);
-        snprintf(name_rms,  sizeof(name_rms),  "txe_rms_norm_dev%d", i);
+        snprintf(name_add,  sizeof(name_add),  "txe_add_dev%u",  i);
+        snprintf(name_mult, sizeof(name_mult), "txe_mult_dev%u", i);
+        snprintf(name_rms,  sizeof(name_rms),  "txe_rms_norm_dev%u", i);
 
-        // MUST end in ".../blobs/txe_add"
+        failed_txe = i;
+
+        // ADD
         loadResult_add[i] = tsi_load_blob(
-            i,
+            (int)i,
             name_add,
             blob_prefix(
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"
             ).c_str()
         );
-
         if (!loadResult_add[i]) {
             strcpy(blob_name, name_add);
             goto error;
-       }
-
-       blobDescriptor_add[i] =
+        }
+        blobDescriptor_add[i] =
             static_cast<BlobDescriptor *>(loadResult_add[i]);
 
-        // MUST end in ".../blobs/txe_mult"
-       loadResult_mult[i] = tsi_load_blob(
-            i,
+        // MULT
+        loadResult_mult[i] = tsi_load_blob(
+            (int)i,
             name_mult,
             blob_prefix(
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"
             ).c_str()
         );
-
         if (!loadResult_mult[i]) {
             strcpy(blob_name, name_mult);
             goto error;
@@ -412,15 +485,14 @@ static void tsi_load_all_blobs() {
         blobDescriptor_mult[i] =
             static_cast<BlobDescriptor *>(loadResult_mult[i]);
 
-        // MUST end in ".../blobs/txe_rms_norm"
-       loadResult_rms_norm[i] = tsi_load_blob(
-            i,
+        // RMS NORM
+        loadResult_rms_norm[i] = tsi_load_blob(
+            (int)i,
             name_rms,
             blob_prefix(
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"
             ).c_str()
         );
-
         if (!loadResult_rms_norm[i]) {
             strcpy(blob_name, name_rms);
             goto error;
@@ -428,40 +500,41 @@ static void tsi_load_all_blobs() {
         blobDescriptor_rms_norm[i] =
             static_cast<BlobDescriptor *>(loadResult_rms_norm[i]);
     }
+
+    // success
+    g_rt.blob_state = TsavoriteRuntimeState::BLOB_BLOBS_LOADED;
     return;
+
 error:
     fprintf(stderr,
-            "Failed to load blob (txe=%u, name=%s)\n", i, blob_name);
+        "Failed to load blob (txe=%u, name=%s)\n",
+        failed_txe, blob_name
+    );
+
+    // Cleanup: unload any blobs that did load + free tables before abort
+    tsi_blob_unload_only();   // unload any blobs that succeeded
+    tsi_blob_free_tables();   // free calloc’d tables
+
+    // preserve existing hard‑fail behavior
     tsi_cleanup();
     abort();
 }
 
-
 static void tsi_unload_all_blobs() {
-    for (uint32_t i = 0; i < num_of_txes; ++i) {
-        if (blobDescriptor_add && blobDescriptor_add[i]) {
-            tsi_unload_blob(blobDescriptor_add[i]);
-            blobDescriptor_add[i] = nullptr;
-        }
-        if (blobDescriptor_mult && blobDescriptor_mult[i]) {
-            tsi_unload_blob(blobDescriptor_mult[i]);
-            blobDescriptor_mult[i] = nullptr;
-        }
-        if (blobDescriptor_rms_norm && blobDescriptor_rms_norm[i]) {
-            tsi_unload_blob(blobDescriptor_rms_norm[i]);
-            blobDescriptor_rms_norm[i] = nullptr;
-        }
+    if (g_rt.blob_state == TsavoriteRuntimeState::BLOB_UNINITIALIZED) {
+        return;
     }
 
-    free(loadResult_add);        loadResult_add = nullptr;
-    free(loadResult_mult);       loadResult_mult = nullptr;
-    free(loadResult_rms_norm);   loadResult_rms_norm = nullptr;
+    // if blobs were loaded (or partially loaded), unload them
+    if (g_rt.blob_state == TsavoriteRuntimeState::BLOB_BLOBS_LOADED ||
+        g_rt.blob_state == TsavoriteRuntimeState::BLOB_TABLES_ALLOCATED) {
+        tsi_blob_unload_only();
+    }
 
-    free(blobDescriptor_add);    blobDescriptor_add = nullptr;
-    free(blobDescriptor_mult);   blobDescriptor_mult = nullptr;
-    free(blobDescriptor_rms_norm); blobDescriptor_rms_norm = nullptr;
-    return;
+    // always free tables after unload
+    tsi_blob_free_tables();
 }
+
 
 // Centralized TSI runtime initialization - called once globally
 //
