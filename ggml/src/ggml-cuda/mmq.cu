@@ -147,7 +147,7 @@ void ggml_cuda_mul_mat_q(
 
         // Stride depends on quantization format
         const int64_t s12 = use_native_fp4 ?
-                                ne11 * ne10_padded * sizeof(block_fp4_mmq) / (QK_K * sizeof(int)) :  // block_fp4_mmq holds 256 values (8 blocks of 32)
+                                ne11 * ne10_padded * sizeof(block_fp4_mmq) / (QK_K * sizeof(int)) :  // block_fp4_mmq holds 256 values
                                 ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
         const int64_t s13 = ne12*s12;
 
