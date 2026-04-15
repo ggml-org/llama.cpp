@@ -203,9 +203,10 @@ void ggml_cuda_mul_mat_q(
             quantize_mmq_q8_1_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
                                    ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
         }
-        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaGetLastError())  ;
     }
 
+    GGML_ASSERT(QK_K == 8 * QK_MXFP4);
     const int64_t s12 = use_native_fp4 ? ne11 * ne10_padded * sizeof(block_fp4_mmq) / (QK_K * sizeof(int)) :
                                          ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
     const int64_t s13 = ne12*s12;
