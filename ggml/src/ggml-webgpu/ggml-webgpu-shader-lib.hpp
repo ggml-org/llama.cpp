@@ -1338,7 +1338,9 @@ class ggml_webgpu_shader_lib {
         const bool use_row_tiled =
             context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16 || context.src0->type == GGML_TYPE_Q4_0 ||
             context.src0->type == GGML_TYPE_Q4_1 || context.src0->type == GGML_TYPE_Q5_0 || context.src0->type == GGML_TYPE_Q5_1 ||
-            context.src0->type == GGML_TYPE_Q8_0 || context.src0->type == GGML_TYPE_Q8_1;
+            context.src0->type == GGML_TYPE_Q8_0 || context.src0->type == GGML_TYPE_Q8_1 || context.src0->type == GGML_TYPE_Q6_K ||
+            context.src0->type == GGML_TYPE_Q4_K || context.src0->type == GGML_TYPE_Q5_K || context.src0->type == GGML_TYPE_Q3_K ||
+            context.src0->type == GGML_TYPE_Q2_K;
         ggml_webgpu_mul_mat_vec_pipeline_key key = {
             .src0_type  = context.src0->type,
             .src1_type  = context.src1->type,
