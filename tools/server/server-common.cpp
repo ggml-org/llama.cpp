@@ -691,7 +691,7 @@ static std::string fnv_hash(const uint8_t * data, size_t len) {
     return std::to_string(hash);
 }
 
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
+server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files, const std::string & media_marker_override) {
     mtmd::bitmaps bitmaps;
     for (auto & file : files) {
         mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
@@ -708,8 +708,9 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::
     // multimodal
     mtmd_input_text inp_txt = {
         prompt.c_str(),
-        /* add_special */   true,
-        /* parse_special */ true,
+        /* add_special */           true,
+        /* parse_special */         true,
+        /* media_marker_override */ media_marker_override.empty() ? nullptr : media_marker_override.c_str(),
     };
     mtmd::input_chunks chunks(mtmd_input_chunks_init());
     auto bitmaps_c_ptr = bitmaps.c_ptr();
@@ -942,6 +943,14 @@ json oaicompat_chat_params_parse(
     if (!messages.is_array()) {
         throw std::invalid_argument("Expected 'messages' to be an array");
     }
+
+    // Generate a unique per-request media marker. This is used in place of the
+    // canonical "<__media__>" when inserting real media placeholders into content
+    // parts. Because this marker is unique per request, any literal "<__media__>"
+    // or "<__image__>" that appears in user text will never be mistaken for a real
+    // media slot by mtmd_tokenize() (which is told to split on this unique marker).
+    const std::string media_marker_override = "<__media_" + random_string() + "__>";
+
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
         if (role != "assistant" && !msg.contains("content")) {
@@ -975,7 +984,7 @@ json oaicompat_chat_params_parse(
                 handle_media(out_files, image_url, opt.media_path);
 
                 p["type"] = "media_marker";
-                p["text"] = mtmd_default_marker();
+                p["text"] = media_marker_override;
                 p.erase("image_url");
 
             } else if (type == "input_audio") {
@@ -996,7 +1005,7 @@ json oaicompat_chat_params_parse(
                 // TODO: add audio_url support by reusing handle_media()
 
                 p["type"] = "media_marker";
-                p["text"] = mtmd_default_marker();
+                p["text"] = media_marker_override;
                 p.erase("input_audio");
 
             } else if (type != "text") {
@@ -1081,8 +1090,9 @@ json oaicompat_chat_params_parse(
         }
     }
 
-    llama_params["chat_format"] = static_cast<int>(chat_params.format);
-    llama_params["prompt"]      = chat_params.prompt;
+    llama_params["chat_format"]          = static_cast<int>(chat_params.format);
+    llama_params["prompt"]               = chat_params.prompt;
+    llama_params["media_marker"]         = media_marker_override;
     if (!chat_params.grammar.empty()) {
         llama_params["grammar"]      = chat_params.grammar;
         llama_params["grammar_type"] = std::string("tool_calls");

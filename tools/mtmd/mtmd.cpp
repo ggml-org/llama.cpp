@@ -573,6 +573,7 @@ struct mtmd_tokenizer {
     bool add_special;
     bool parse_special;
     const llama_vocab * vocab;
+    std::string effective_media_marker;
 
     mtmd_input_chunks cur;
 
@@ -585,16 +586,24 @@ struct mtmd_tokenizer {
         input_text    = text->text;
         vocab         = llama_model_get_vocab(ctx->text_model);
 
-        // for compatibility, we convert image marker to media marker
-        string_replace_all(input_text, MTMD_DEFAULT_IMAGE_MARKER, ctx->media_marker);
+        const bool use_override = text->media_marker_override && text->media_marker_override[0];
+        effective_media_marker  = use_override ? text->media_marker_override : ctx->media_marker;
+
+        // for compatibility, convert the legacy image marker to the effective media marker,
+        // but only when NOT using an override. when an override is active, real media slots
+        // are already marked with the unique override string; blindly converting <__image__>
+        // in user text would create false media slots.
+        if (!use_override) {
+            string_replace_all(input_text, MTMD_DEFAULT_IMAGE_MARKER, ctx->media_marker);
+        }
     }
 
     int32_t tokenize(mtmd_input_chunks * output) {
         cur.entries.clear();
-        std::vector<std::string> parts = split_text(input_text, ctx->media_marker);
+        std::vector<std::string> parts = split_text(input_text, effective_media_marker);
         size_t i_bm = 0; // index of the current bitmap
         for (auto & part : parts) {
-            if (part == ctx->media_marker) {
+            if (part == effective_media_marker) {
                 // this is a marker, we should add the next bitmap
                 if (i_bm >= bitmaps.size()) {
                     LOG_ERR("%s: error: number of bitmaps (%zu) does not match number of markers (%zu)\n",

@@ -251,7 +251,11 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 size_t validate_utf8(const std::string& text);
 
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files);
+// media_marker_override: if non-empty, use this as the split marker instead of the default
+//   "<__media__>". callers should pass the per-request unique marker generated when building
+//   the prompt so that literal occurrences of the default marker in user text are not mistaken
+//   for media placeholders.
+server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files, const std::string & media_marker_override = "");
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them

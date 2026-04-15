@@ -228,15 +228,16 @@ static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg &
     return formatted;
 }
 
-static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
+static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, const std::string & media_marker_override = "") {
     bool add_bos = ctx.chat_history.empty();
     auto formatted_chat = chat_add_and_format(ctx, msg);
     LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
 
     mtmd_input_text text;
-    text.text          = formatted_chat.c_str();
-    text.add_special   = add_bos;
-    text.parse_special = true;
+    text.text                  = formatted_chat.c_str();
+    text.add_special           = add_bos;
+    text.parse_special         = true;
+    text.media_marker_override = media_marker_override.empty() ? nullptr : media_marker_override.c_str();
 
     if (g_is_interrupted) return 0;
 
@@ -376,6 +377,11 @@ int main(int argc, char ** argv) {
         LOG("\n");
 
         std::string content;
+        // unique marker for real media slots in the current interactive turn;
+        // empty until the first /image or /audio is loaded in a turn.
+        // using a unique marker ensures that literal "<__media__>" typed by the
+        // user as free-form text is never confused with an actual media slot.
+        std::string turn_media_marker_override;
 
         while (!g_is_interrupted) {
             g_is_generating = false;
@@ -413,7 +419,12 @@ int main(int argc, char ** argv) {
                 std::string media_path = line.substr(7);
                 if (ctx.load_media(media_path)) {
                     LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
-                    content += mtmd_default_marker();
+                    // generate a unique marker for this turn on first media load
+                    if (turn_media_marker_override.empty()) {
+                        static uint64_t s_turn_counter = 0;
+                        turn_media_marker_override = "<__media_turn_" + std::to_string(++s_turn_counter) + "__>";
+                    }
+                    content += turn_media_marker_override;
                 }
                 // else, error is already printed by libmtmd
                 continue;
@@ -423,7 +434,7 @@ int main(int argc, char ** argv) {
             common_chat_msg msg;
             msg.role = "user";
             msg.content = content;
-            int ret = eval_message(ctx, msg);
+            int ret = eval_message(ctx, msg, turn_media_marker_override);
             if (ret) {
                 return 1;
             }
@@ -432,6 +443,7 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             content.clear();
+            turn_media_marker_override.clear();
         }
     }
     if (g_is_interrupted) LOG("\nInterrupted by user\n");

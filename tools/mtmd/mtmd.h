@@ -70,6 +70,12 @@ struct mtmd_input_text {
     const char * text;
     bool add_special;
     bool parse_special;
+    // if non-NULL, use this marker instead of ctx->media_marker when splitting
+    // the prompt into text and media chunks; set to NULL to use the default.
+    // this allows callers to use a unique per-request marker for real media
+    // slots so that literal occurrences of the default marker in user text are
+    // never mistaken for media placeholders.
+    const char * media_marker_override;
 };
 
 //
