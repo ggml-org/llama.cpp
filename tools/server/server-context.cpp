@@ -4,6 +4,7 @@
 #include "server-task.h"
 #include "server-queue.h"
 
+#include "build-info.h"
 #include "common.h"
 #include "llama.h"
 #include "log.h"
@@ -3010,7 +3011,7 @@ server_context_meta server_context::get_meta() const {
     auto eos_token_str = eos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx, eos_id, true) : "";
 
     return server_context_meta {
-        /* build_info             */ build_info,
+        /* build_info             */ std::string(llama_build_info()),
         /* model_name             */ impl->model_name,
         /* model_aliases          */ impl->model_aliases,
         /* model_tags             */ impl->model_tags,

@@ -1,5 +1,6 @@
 #include "arg.h"
 
+#include "build-info.h"
 #include "chat.h"
 #include "common.h"
 #include "download.h"
@@ -1044,8 +1045,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--version"},
         "show version and build info",
         [](common_params &) {
-            fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
-            fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+            fprintf(stderr, "version: %d (%s)\n", llama_build_number(), llama_commit());
+            fprintf(stderr, "built with %s for %s\n", llama_compiler(), llama_build_target());
             exit(0);
         }
     ));

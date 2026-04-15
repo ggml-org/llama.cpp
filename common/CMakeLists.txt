@@ -1,8 +1,10 @@
-# llama-common
-
 find_package(Threads REQUIRED)
 
 llama_add_compile_flags()
+
+#
+# llama-common-base
+#
 
 # Build info header
 
@@ -33,14 +35,21 @@ endif()
 
 set(TEMPLATE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/build-info.cpp.in")
 set(OUTPUT_FILE   "${CMAKE_CURRENT_BINARY_DIR}/build-info.cpp")
+
 configure_file(${TEMPLATE_FILE} ${OUTPUT_FILE})
 
-set(TARGET build_info)
-add_library(${TARGET} OBJECT ${OUTPUT_FILE})
+set(TARGET llama-common-base)
+add_library(${TARGET} STATIC ${OUTPUT_FILE})
+
+target_include_directories(${TARGET} PUBLIC .)
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
+
+#
+# llama-common
+#
 
 set(TARGET llama-common)
 
@@ -123,7 +132,7 @@ if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
-target_link_libraries(${TARGET} PUBLIC  build_info)
+target_link_libraries(${TARGET} PUBLIC  llama-common-base)
 target_link_libraries(${TARGET} PRIVATE cpp-httplib)
 
 if (LLAMA_LLGUIDANCE)
