@@ -274,11 +274,66 @@ class GGUFWriter:
             fout.flush()
         self.state = WriterState.TI_DATA
 
+    _expected_python_types: dict[GGUFValueType, tuple[type, ...]] = {
+        GGUFValueType.UINT8:   (int, np.integer),
+        GGUFValueType.INT8:    (int, np.integer),
+        GGUFValueType.UINT16:  (int, np.integer),
+        GGUFValueType.INT16:   (int, np.integer),
+        GGUFValueType.UINT32:  (int, np.integer),
+        GGUFValueType.INT32:   (int, np.integer),
+        GGUFValueType.FLOAT32: (float, int, np.floating, np.integer),
+        GGUFValueType.UINT64:  (int, np.integer),
+        GGUFValueType.INT64:   (int, np.integer),
+        GGUFValueType.FLOAT64: (float, int, np.floating, np.integer),
+        GGUFValueType.BOOL:    (bool, np.bool_),
+        GGUFValueType.STRING:  (str, bytes, bytearray),
+        GGUFValueType.ARRAY:   (list, tuple, bytes, bytearray, np.ndarray),
+    }
+
+    _int_ranges: dict[GGUFValueType, tuple[int, int]] = {
+        GGUFValueType.UINT8:   (0, (1 << 8) - 1),
+        GGUFValueType.INT8:    (-(1 << 7), (1 << 7) - 1),
+        GGUFValueType.UINT16:  (0, (1 << 16) - 1),
+        GGUFValueType.INT16:   (-(1 << 15), (1 << 15) - 1),
+        GGUFValueType.UINT32:  (0, (1 << 32) - 1),
+        GGUFValueType.INT32:   (-(1 << 31), (1 << 31) - 1),
+        GGUFValueType.UINT64:  (0, (1 << 64) - 1),
+        GGUFValueType.INT64:   (-(1 << 63), (1 << 63) - 1),
+    }
+
     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:
         if any(key in kv_data for kv_data in self.kv_data):
             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')
 
+        self._validate_key_value(key, val, vtype)
+
         self.kv_data[0][key] = GGUFValue(value=val, type=vtype, sub_type=sub_type)
+
+    def _validate_key_value(self, key: str, val: Any, vtype: GGUFValueType) -> None:
+        # bool must be checked before int since bool is a subclass of int in Python
+        if vtype != GGUFValueType.BOOL and isinstance(val, bool):
+            raise TypeError(
+                f"Expected numeric value for key {key!r} (GGUF type {vtype.name}), "
+                f"but got bool. Use add_bool() for boolean values."
+            )
+
+        expected = self._expected_python_types.get(vtype)
+        if expected is not None and not isinstance(val, expected):
+            type_names = " or ".join(t.__name__ for t in expected if t.__module__ == "builtins") or vtype.name
+            raise TypeError(
+                f"Invalid type for key {key!r}: expected {type_names} for GGUF type "
+                f"{vtype.name}, but got {type(val).__name__}: {val!r}"
+            )
+
+        int_range = self._int_ranges.get(vtype)
+        if int_range is not None and isinstance(val, (int, np.integer)):
+            lo, hi = int_range
+            int_val = int(val)
+            if not (lo <= int_val <= hi):
+                raise ValueError(
+                    f"Value {int_val} out of range for key {key!r} "
+                    f"(GGUF type {vtype.name}): valid range is [{lo}, {hi}]"
+                )
 
     def add_uint8(self, key: str, val: int) -> None:
         self.add_key_value(key,val, GGUFValueType.UINT8)
