@@ -737,14 +737,31 @@ typedef struct {
 
 static void hmx_fa_qk_dot_worker(void * data) {
     hmx_fa_qk_job_t * job = (hmx_fa_qk_job_t *) data;
-    hmx_set_output_scales(job->hmx_scales);
-    for (size_t r = 0; r < job->n_row_tiles; ++r) {
-        for (size_t c = 0; c < job->n_col_tiles; ++c) {
-            const __fp16 * row_tiles = job->q_tiles + r * HMX_FP16_TILE_N_ROWS * job->n_dot_tiles * HMX_FP16_TILE_N_COLS;
-            const __fp16 * col_tiles = job->k_tiles + c * HMX_FP16_TILE_N_COLS * job->n_dot_tiles * HMX_FP16_TILE_N_COLS;
-            __fp16 *       out_tile  = job->s_tiles + (r * job->n_tiles_per_bc + c) * HMX_FP16_TILE_N_ELMS;
+    const size_t n_row_tiles   = job->n_row_tiles;
+    const size_t n_col_tiles   = job->n_col_tiles;
+    const size_t n_dot_tiles   = job->n_dot_tiles;
+    const size_t n_tiles_per_bc = job->n_tiles_per_bc;
+    const __fp16 * restrict q_tiles = job->q_tiles;
+    const __fp16 * restrict k_tiles = job->k_tiles;
+    __fp16 * restrict       s_tiles = job->s_tiles;
+    __builtin_assume(n_row_tiles > 0);
+    __builtin_assume(n_col_tiles > 0);
+    __builtin_assume(n_dot_tiles > 0);
 
-            hmx_dot_fp16(out_tile, row_tiles, col_tiles, job->n_dot_tiles);
+    Q6_bias_mxmem2_A((void *) job->hmx_scales);
+    for (size_t r = 0; r < n_row_tiles; ++r) {
+        for (size_t c = 0; c < n_col_tiles; ++c) {
+            const __fp16 * row_tiles = q_tiles + r * HMX_FP16_TILE_N_ROWS * n_dot_tiles * HMX_FP16_TILE_N_COLS;
+            const __fp16 * col_tiles = k_tiles + c * HMX_FP16_TILE_N_COLS * n_dot_tiles * HMX_FP16_TILE_N_COLS;
+            __fp16 *       out_tile  = s_tiles + (r * n_tiles_per_bc + c) * HMX_FP16_TILE_N_ELMS;
+
+            for (size_t k = 0; k < n_dot_tiles; ++k) {
+                Q6_activation_hf_mxmem_RR((unsigned int) row_tiles, 2047);
+                Q6_weight_hf_mxmem_RR((unsigned int) col_tiles, 2047);
+                row_tiles += HMX_FP16_TILE_N_ELMS;
+                col_tiles += HMX_FP16_TILE_N_ELMS;
+            }
+            Q6_mxmem_AR_after_hf(out_tile, 0);
         }
     }
 }
@@ -765,28 +782,41 @@ typedef struct {
 
 static void hmx_fa_o_update_worker(void * data) {
     hmx_fa_o_update_job_t * job = (hmx_fa_o_update_job_t *) data;
-    hmx_set_output_scales(job->hmx_scales);
-    for (size_t r = 0; r < job->n_row_tiles; ++r) {
-        for (size_t c = 0; c < job->DV / 32; ++c) {
+    const size_t n_row_tiles      = job->n_row_tiles;
+    const size_t n_col_tiles      = job->n_col_tiles;
+    const size_t n_row_tiles_g_br = job->n_row_tiles_g_br;
+    const size_t n_tiles_per_bc   = job->n_tiles_per_bc;
+    const size_t DV_tiles         = job->DV / 32;
+    const __fp16 * restrict d_tiles = job->d_tiles;
+    const __fp16 * restrict p_tiles = job->p_tiles;
+    const __fp16 * restrict v_tiles = job->v_tiles;
+    const __fp16 * restrict o_prev  = job->o_prev;
+    __fp16 * restrict       o_curr  = job->o_curr;
+    __builtin_assume(n_row_tiles > 0);
+    __builtin_assume(n_col_tiles > 0);
+    __builtin_assume(DV_tiles > 0);
+
+    Q6_bias_mxmem2_A((void *) job->hmx_scales);
+    for (size_t r = 0; r < n_row_tiles; ++r) {
+        for (size_t c = 0; c < DV_tiles; ++c) {
             // D[r,r] @ O_prev[r,c] — only the diagonal tile
-            const __fp16 * d_diag =
-                job->d_tiles + r * (job->n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-            const __fp16 * o_rc = job->o_prev + (c * job->n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
-            hmx_load_tile_pair_fp16(d_diag, o_rc);
+            const __fp16 * d_diag = d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+            const __fp16 * o_rc   = o_prev + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
+            Q6_activation_hf_mxmem_RR((unsigned int) d_diag, 2047);
+            Q6_weight_hf_mxmem_RR((unsigned int) o_rc, 2047);
 
             // P @ V (accumulate on same accumulator)
-            const __fp16 * p_tile_in =
-                job->p_tiles + (r * job->n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
-            const __fp16 * v_tile_in =
-                job->v_tiles + (c * job->n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
-            for (size_t kk = 0; kk < job->n_col_tiles; kk += 32) {
-                size_t offset = kk * HMX_FP16_TILE_N_ELMS;
-                size_t nt     = hex_smin(job->n_col_tiles - kk, 32);
-                hmx_load_tiles_fp16(p_tile_in + offset, v_tile_in + offset, nt);
+            const __fp16 * p_tile_in = p_tiles + (r * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
+            const __fp16 * v_tile_in = v_tiles + (c * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
+            for (size_t k = 0; k < n_col_tiles; ++k) {
+                Q6_activation_hf_mxmem_RR((unsigned int) p_tile_in, 2047);
+                Q6_weight_hf_mxmem_RR((unsigned int) v_tile_in, 2047);
+                p_tile_in += HMX_FP16_TILE_N_ELMS;
+                v_tile_in += HMX_FP16_TILE_N_ELMS;
             }
 
-            __fp16 * o_tile_out = job->o_curr + (c * job->n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
-            hmx_consume_accumulator_fp16(o_tile_out);
+            __fp16 * o_tile_out = o_curr + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
+            Q6_mxmem_AR_after_hf(o_tile_out, 0);
         }
     }
 }
@@ -803,17 +833,25 @@ typedef struct {
 
 static void hmx_fa_o_norm_worker(void * data) {
     hmx_fa_o_norm_job_t * job = (hmx_fa_o_norm_job_t *) data;
-    hmx_set_output_scales(job->hmx_scales);
-    for (size_t r = 0; r < job->n_row_tiles; ++r) {
-        for (size_t c = 0; c < job->DV / 32; ++c) {
-            const __fp16 * d_diag =
-                job->d_tiles + r * (job->n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-            const __fp16 * o_rc = job->o_prev + (c * job->n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
+    const size_t n_row_tiles      = job->n_row_tiles;
+    const size_t n_row_tiles_g_br = job->n_row_tiles_g_br;
+    const size_t DV_tiles         = job->DV / 32;
+    const __fp16 * restrict d_tiles = job->d_tiles;
+    const __fp16 * restrict o_prev  = job->o_prev;
+    __fp16 * restrict       o_curr  = job->o_curr;
+    __builtin_assume(n_row_tiles > 0);
+    __builtin_assume(DV_tiles > 0);
 
-            __fp16 * o_out = job->o_curr + (r * job->DV / 32 + c) * HMX_FP16_TILE_N_ELMS;
+    Q6_bias_mxmem2_A((void *) job->hmx_scales);
+    for (size_t r = 0; r < n_row_tiles; ++r) {
+        for (size_t c = 0; c < DV_tiles; ++c) {
+            const __fp16 * d_diag = d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+            const __fp16 * o_rc   = o_prev + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
+            __fp16 *       o_out  = o_curr + (r * DV_tiles + c) * HMX_FP16_TILE_N_ELMS;
 
-            hmx_load_tile_pair_fp16(d_diag, o_rc);
-            hmx_consume_accumulator_fp16(o_out);
+            Q6_activation_hf_mxmem_RR((unsigned int) d_diag, 2047);
+            Q6_weight_hf_mxmem_RR((unsigned int) o_rc, 2047);
+            Q6_mxmem_AR_after_hf(o_out, 0);
         }
     }
 }
@@ -1352,14 +1390,27 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         // QK dot (inline HMX on main thread)
                         TIMER_START(qk_dot);
                         {
-                            hmx_set_output_scales(factx.vtcm_hmx_scales_qk);
+                            const size_t n_dot_tiles = (size_t) (DK / 32);
+                            const __fp16 * restrict q_base = factx.vtcm_q_tiles;
+                            const __fp16 * restrict k_base = factx.vtcm_k_tiles;
+                            __fp16 * restrict       s_base = factx.vtcm_s_tiles;
+                            __builtin_assume(n_row_tiles > 0);
+                            __builtin_assume(n_col_tiles > 0);
+                            __builtin_assume(n_dot_tiles > 0);
+
+                            Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_qk);
                             for (size_t r = 0; r < n_row_tiles; ++r) {
                                 for (size_t c = 0; c < n_col_tiles; ++c) {
-                                    const __fp16 * row_tiles = factx.vtcm_q_tiles + r * HMX_FP16_TILE_N_ROWS * DK;
-                                    const __fp16 * col_tiles = factx.vtcm_k_tiles + c * HMX_FP16_TILE_N_COLS * DK;
-                                    __fp16 *       out_tile =
-                                        factx.vtcm_s_tiles + (r * n_tiles_per_bc + c) * HMX_FP16_TILE_N_ELMS;
-                                    hmx_dot_fp16(out_tile, row_tiles, col_tiles, DK / 32);
+                                    const __fp16 * row_tiles = q_base + r * HMX_FP16_TILE_N_ROWS * DK;
+                                    const __fp16 * col_tiles = k_base + c * HMX_FP16_TILE_N_COLS * DK;
+                                    __fp16 *       out_tile  = s_base + (r * n_tiles_per_bc + c) * HMX_FP16_TILE_N_ELMS;
+                                    for (size_t k = 0; k < n_dot_tiles; ++k) {
+                                        Q6_activation_hf_mxmem_RR((unsigned int) row_tiles, 2047);
+                                        Q6_weight_hf_mxmem_RR((unsigned int) col_tiles, 2047);
+                                        row_tiles += HMX_FP16_TILE_N_ELMS;
+                                        col_tiles += HMX_FP16_TILE_N_ELMS;
+                                    }
+                                    Q6_mxmem_AR_after_hf(out_tile, 0);
                                 }
                             }
                         }
@@ -1402,28 +1453,35 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         // O update (inline HMX on main thread)
                         TIMER_START(o_update);
                         {
-                            hmx_set_output_scales(factx.vtcm_hmx_scales_id);
-                            for (size_t r = 0; r < n_row_tiles; ++r) {
-                                for (size_t c = 0; c < (size_t) (DV / 32); ++c) {
-                                    const __fp16 * d_diag =
-                                        factx.vtcm_d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-                                    const __fp16 * o_rc =
-                                        o_tile_prev + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
-                                    hmx_load_tile_pair_fp16(d_diag, o_rc);
+                            const size_t DV_tiles = (size_t) (DV / 32);
+                            const __fp16 * restrict d_base = factx.vtcm_d_tiles;
+                            const __fp16 * restrict p_base = factx.vtcm_p_tiles;
+                            const __fp16 * restrict v_base = factx.vtcm_v_tiles;
+                            const __fp16 * restrict op_base = o_tile_prev;
+                            __fp16 * restrict       oc_base = o_tile_curr;
+                            __builtin_assume(n_row_tiles > 0);
+                            __builtin_assume(n_col_tiles > 0);
+                            __builtin_assume(DV_tiles > 0);
 
-                                    const __fp16 * p_tile_in =
-                                        factx.vtcm_p_tiles + (r * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
-                                    const __fp16 * v_tile_in =
-                                        factx.vtcm_v_tiles + (c * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
-                                    for (size_t kk = 0; kk < n_col_tiles; kk += 32) {
-                                        size_t offset = kk * HMX_FP16_TILE_N_ELMS;
-                                        size_t nt     = hex_smin(n_col_tiles - kk, 32);
-                                        hmx_load_tiles_fp16(p_tile_in + offset, v_tile_in + offset, nt);
+                            Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_id);
+                            for (size_t r = 0; r < n_row_tiles; ++r) {
+                                for (size_t c = 0; c < DV_tiles; ++c) {
+                                    const __fp16 * d_diag = d_base + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+                                    const __fp16 * o_rc   = op_base + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
+                                    Q6_activation_hf_mxmem_RR((unsigned int) d_diag, 2047);
+                                    Q6_weight_hf_mxmem_RR((unsigned int) o_rc, 2047);
+
+                                    const __fp16 * p_tile_in = p_base + (r * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
+                                    const __fp16 * v_tile_in = v_base + (c * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
+                                    for (size_t k = 0; k < n_col_tiles; ++k) {
+                                        Q6_activation_hf_mxmem_RR((unsigned int) p_tile_in, 2047);
+                                        Q6_weight_hf_mxmem_RR((unsigned int) v_tile_in, 2047);
+                                        p_tile_in += HMX_FP16_TILE_N_ELMS;
+                                        v_tile_in += HMX_FP16_TILE_N_ELMS;
                                     }
 
-                                    __fp16 * o_tile_out =
-                                        o_tile_curr + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
-                                    hmx_consume_accumulator_fp16(o_tile_out);
+                                    __fp16 * o_tile_out = oc_base + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
+                                    Q6_mxmem_AR_after_hf(o_tile_out, 0);
                                 }
                             }
                             swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
@@ -1472,17 +1530,23 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_fa_o_norm_worker, &on_job));
                         hmx_queue_pop(ctx->hmx_queue);
                     } else {
-                        hmx_set_output_scales(factx.vtcm_hmx_scales_id);
-                        for (size_t r = 0; r < n_row_tiles; ++r) {
-                            for (size_t c = 0; c < (size_t) (DV / 32); ++c) {
-                                const __fp16 * d_diag =
-                                    factx.vtcm_d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-                                const __fp16 * o_rc =
-                                    o_tile_prev + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
-                                __fp16 * o_out = o_tile_curr + (r * DV / 32 + c) * HMX_FP16_TILE_N_ELMS;
+                        const size_t DV_tiles = (size_t) (DV / 32);
+                        const __fp16 * restrict d_base  = factx.vtcm_d_tiles;
+                        const __fp16 * restrict op_base = o_tile_prev;
+                        __fp16 * restrict       oc_base = o_tile_curr;
+                        __builtin_assume(n_row_tiles > 0);
+                        __builtin_assume(DV_tiles > 0);
 
-                                hmx_load_tile_pair_fp16(d_diag, o_rc);
-                                hmx_consume_accumulator_fp16(o_out);
+                        Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_id);
+                        for (size_t r = 0; r < n_row_tiles; ++r) {
+                            for (size_t c = 0; c < DV_tiles; ++c) {
+                                const __fp16 * d_diag = d_base + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+                                const __fp16 * o_rc   = op_base + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
+                                __fp16 *       o_out  = oc_base + (r * DV_tiles + c) * HMX_FP16_TILE_N_ELMS;
+
+                                Q6_activation_hf_mxmem_RR((unsigned int) d_diag, 2047);
+                                Q6_weight_hf_mxmem_RR((unsigned int) o_rc, 2047);
+                                Q6_mxmem_AR_after_hf(o_out, 0);
                             }
                         }
                     }
