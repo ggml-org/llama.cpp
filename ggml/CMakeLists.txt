@@ -6,7 +6,12 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 if (POLICY CMP0194)
     cmake_policy(SET CMP0194 NEW)
 endif()
-project("ggml" C CXX ASM)
+#("ggml" C CXX ASM) forces generic ASM, which MSVC cannot satisfy under CMP0194 NEW
+if (MSVC)
+    project("ggml" C CXX ASM_MASM)
+else()
+    project("ggml" C CXX ASM)
+endif()
 
 ### GGML Version
 set(GGML_VERSION_MAJOR 0)
