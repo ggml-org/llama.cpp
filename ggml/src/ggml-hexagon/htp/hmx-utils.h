@@ -18,7 +18,7 @@
 #define HMX_INLINE_ALWAYS inline __attribute__((unused, always_inline))
 
 static HMX_INLINE_ALWAYS void hmx_set_output_scales(const void *scales) {
-    asm volatile("bias = mxmem2(%0)" :: "r"(scales));
+    Q6_bias_mxmem2_A((void *) scales);
 }
 
 // Initialise aligned 256-byte area with scale vector + zero padding.
@@ -36,6 +36,10 @@ static HMX_INLINE_ALWAYS void hmx_init_column_scales(void *out_scales, HVX_Vecto
 static HMX_INLINE_ALWAYS void hmx_load_tiles_fp16(const __fp16 *row_tiles,
                                                    const __fp16 *col_tiles,
                                                    size_t n_tiles) {
+    // Activation ":deep" streams through a region; weight has no :deep variant.
+    // Keep as a single inline-asm packet — the Q6 intrinsic mix of
+    // Q6_activation_hf_mxmem_RR_deep + Q6_weight_hf_mxmem_RR trips the HMX
+    // backend's "activate weight pair exceeds limit" constraint checker.
     size_t limit = n_tiles * HMX_FP16_TILE_SIZE - 1;
     asm volatile(
         "{ activation.hf = mxmem(%0, %1):deep\n"
@@ -45,30 +49,17 @@ static HMX_INLINE_ALWAYS void hmx_load_tiles_fp16(const __fp16 *row_tiles,
 }
 
 // Load a single activation+weight tile pair (no :deep streaming).
-// Rt defines the accessible region [Rs, Rs+Rt].  Following the reference formula
-// (limit = n_tiles * HMX_FP16_TILE_SIZE - 1), for a single tile Rt = 2047.
-// The original code used Rt=0x7FFF (32 KB region); when dynamic VTCM allocation
-// places a tile near a 4 MB bank boundary, the oversized region crosses it and
-// triggers a precise bus error (0x2601).  Rt=2047 confines accesses to exactly
-// one 2048-byte tile while covering all 16 HVX vectors (offsets 0..2047).
+// Rt defines the accessible region [Rs, Rs+Rt]. For a single tile Rt = 2047
+// (covers all 16 HVX vectors at offsets 0..2047). An oversized Rt that would
+// cross a VTCM 4 MB bank boundary triggers a precise bus error (0x2601).
 static HMX_INLINE_ALWAYS void hmx_load_tile_pair_fp16(const __fp16 *act_tile,
                                                        const __fp16 *wt_tile) {
-    asm volatile(
-        "{ activation.hf = mxmem(%0, %1)\n"
-        "weight.hf = mxmem(%2, %3) }\n"
-        :: "r"(act_tile), "r"(2047),
-           "r"(wt_tile),  "r"(2047)
-        : "memory");
+    Q6_activation_hf_mxmem_RR((unsigned int) act_tile, 2047);
+    Q6_weight_hf_mxmem_RR((unsigned int) wt_tile, 2047);
 }
 
 static HMX_INLINE_ALWAYS void hmx_consume_accumulator_fp16(__fp16 *out) {
-    // Use the combined convert-and-store instruction (matches the reference
-    // Q6_mxmem_AR_after_hf intrinsic).  The previous two-instruction sequence
-    // "cvt.hf = acc(2); mxmem = cvt" used an undocumented Rs=2 parameter.
-    asm volatile(
-        "mxmem(%0, %1):after.hf = acc\n"
-        :: "r"(out), "r"(0)
-        : "memory");
+    Q6_mxmem_AR_after_hf(out, 0);
 }
 
 // Compute inner product of two vectors of tiles and store result.
