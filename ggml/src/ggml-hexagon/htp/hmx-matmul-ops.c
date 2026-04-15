@@ -1697,7 +1697,6 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
             v = Q6_V_vror_VR(v, VLEN - 8);
         }
     }
-
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
 
     TIMER_DEFINE(fetch);
@@ -1739,7 +1738,6 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
                     const int blk_start = kk / QK_Q4_0x4x2;
                     const int nb_sub = (k_blk_sz + QK_Q4_0x4x2 - 1) / QK_Q4_0x4x2;
                     const int    full_qrow      = (weight_type == HTP_TYPE_Q8_0) ? k : (k / 2);
-                    const size_t sub_row_stride = get_x4x2_row_stride(weight_type, k_blk_sz);
                     const int    scale_blk_size =
                         (weight_type == HTP_TYPE_MXFP4) ? HMX_X4X2_MXFP4_EBLK_SIZE : HMX_X4X2_DBLK_SIZE;
 
