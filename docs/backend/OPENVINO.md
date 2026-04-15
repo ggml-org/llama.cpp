@@ -244,7 +244,6 @@ build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf"
 - `-fa 1` is required when running llama-bench with the OpenVINO backend.
   - `GGML_OPENVINO_STATEFUL_EXECUTION=1 GGML_OPENVINO_DEVICE=GPU ./llama-bench -fa 1`
 - `llama-server` with OpenVINO backend supports only one chat session/thread, when `GGML_OPENVINO_STATEFUL_EXECUTION=1` is enabled.
-- For Intel GPU, NPU detection in containers, GPU, NPU user-space drivers/libraries must be present inside the image. We will include in a future PR. Until then, you can use this reference Dockerfile: [openvino.Dockerfile](https://github.com/ravi9/llama.cpp/blob/ov-docker-update/.devops/openvino.Dockerfile)
 
 > [!NOTE]
 > The OpenVINO backend is actively under development. Fixes are underway, and this document will continue to be updated as issues are resolved.
@@ -274,8 +273,6 @@ docker build --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_p
 Run llama.cpp with OpenVINO backend Docker container.
 Save sample models in `~/models` as [shown above](#3-download-sample-model). It will be mounted to the container in the examples below.
 
-> [!NOTE]
-> Intel GPU, NPU detection in containers will be included in a future PR. Until then, you can use this reference Dockerfile: [openvino.Dockerfile](https://github.com/ravi9/llama.cpp/blob/ov-docker-update/.devops/openvino.Dockerfile).
 
 ```bash
 #  Run Docker container
