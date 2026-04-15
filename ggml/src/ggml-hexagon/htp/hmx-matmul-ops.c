@@ -1520,13 +1520,14 @@ void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, const __f
 
     Q6_bias_mxmem2_A((void *)col_scales);
 
+    const size_t dot_tile_stride = n_dot_tiles * HMX_FP16_TILE_N_ELMS;
     for (size_t i = 0; i < n_row_tiles; ++i) {
-        const __fp16 *row_base = a + i * n_dot_tiles * HMX_FP16_TILE_N_ELMS;
+        const __fp16 *row_base = a + i * dot_tile_stride;
         __fp16 *res_base = c + i * n_col_tiles * HMX_FP16_TILE_N_ELMS;
         for (size_t j = 0; j < n_col_tiles; ++j) {
             Q6_mxclracc_hf();
 
-            const __fp16 *col_tiles = b + j * n_dot_tiles * HMX_FP16_TILE_N_ELMS;
+            const __fp16 *col_tiles = b + j * dot_tile_stride;
             const __fp16 *row_tiles = row_base;
             __fp16 *accum_tile = res_base + j * HMX_FP16_TILE_N_ELMS;
             if (!zero_init) {
