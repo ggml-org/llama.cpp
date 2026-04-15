@@ -2304,8 +2304,25 @@ ggml_tensor * llm_graph_context::build_attn(
     // prepare new kq mask - starts filled with -INFINITY
     ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
 
-    // modify it by unmasking tokens that are in top_k indices
-    ggml_tensor * kq_mask_top_k = ggml_scatter(ctx0, kq_mask_all, top_k, 0);
+    // reshape KQ mask into tensor with rows of size 1: 
+    // [n_kv, n_batch, 1, n_stream] -> [1, n_kv, n_batch, n_stream]
+    kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3], kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
+
+    // reshape top_k indices: [n_top_k, n_batch, 1, n_stream] -> [n_top_k, n_batch, n_stream, 1]
+    top_k = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], top_k->ne[3], 1, top_k->nb[1], top_k->nb[2], top_k->ne[3]*top_k->nb[3], 0);
+
+    // prepare zero-filled tensor with rows of size 1: [1, n_top_k, n_batch, n_stream]
+    // this will be our source of zero values for unmasking top k mask elements
+    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k->ne[0], top_k->ne[1], top_k->ne[2]);
+    zeros = ggml_fill(ctx0, zeros, 0.0f);
+
+    // modify KQ mask by unmasking elements that are in top_k indices
+    // ggml_set_rows([1, n_kv, n_batch, n_stream], [1, n_top_k, n_batch, n_stream], [n_top_k, n_batch, n_stream, 1])
+    ggml_tensor * kq_mask_top_k = ggml_set_rows(ctx0, kq_mask_all, zeros, top_k);
+
+    // reshape to restore the original shape of KQ mask:
+    // [1, n_kv, n_batch, n_stream] -> [n_kv, n_batch, 1, n_stream]
+    kq_mask_top_k = ggml_view_4d(ctx0, kq_mask_top_k, kq_mask_top_k->ne[1], kq_mask_top_k->ne[2], 1, kq_mask_top_k->ne[3], kq_mask_top_k->nb[2], kq_mask_top_k->nb[3], kq_mask_top_k->nb[3], 0);
 
     // combine with the original kq mask
     kq_mask_top_k = ggml_add(ctx0, kq_mask_top_k, kq_mask);

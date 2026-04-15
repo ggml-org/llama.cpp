@@ -1048,7 +1048,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "RWKV_WKV7",
     "SOLVE_TRI",
     "GATED_DELTA_NET",
-    "SCATTER",
     "LIGHTNING_INDEXER",
 
     "UNARY",
@@ -1067,7 +1066,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1160,7 +1159,6 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "rwkv_wkv7(r, w, k, v, a, b, s)",
     "A X = B, A triangular, solve X",
     "gated_delta_net(q, k, v, g, beta, s)",
-    "scatter(x,ids,c)",
     "lightning_indexer(q, k, weights, scale_embd, scale_heads)",
 
     "unary(x)",
@@ -1179,7 +1177,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6205,49 +6203,6 @@ struct ggml_tensor * ggml_gated_delta_net(
     result->src[5] = state;
 
     return result;
-}
-
-// ggml_scatter
-
-static struct ggml_tensor * ggml_scatter_impl(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        struct ggml_tensor  * ids,
-        float                 c,
-        bool                  inplace) {
-
-    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16);
-    GGML_ASSERT(ids->type == GGML_TYPE_I32);
-    GGML_ASSERT(a->ne[1] == ids->ne[1]);
-    GGML_ASSERT(a->ne[2] == ids->ne[2]);
-    GGML_ASSERT(a->ne[3] == ids->ne[3]);
-
-    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
-
-    ggml_set_op_params_f32(result, 0, c);
-    ggml_set_op_params_i32(result, 1, inplace ? 1 : 0);
-
-    result->op   = GGML_OP_SCATTER;
-    result->src[0] = a;
-    result->src[1] = ids;
-
-    return result;
-}
-
-struct ggml_tensor * ggml_scatter(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        struct ggml_tensor  * ids,
-        float                 c) {
-    return ggml_scatter_impl(ctx, a, ids, c, false);
-}
-
-struct ggml_tensor * ggml_scatter_inplace(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        struct ggml_tensor  * ids,
-        float                 c) {
-    return ggml_scatter_impl(ctx, a, ids, c, true);
 }
 
 // ggml_lightning_indexer
