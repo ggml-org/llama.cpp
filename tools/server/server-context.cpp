@@ -3744,16 +3744,22 @@ void server_routes::init_routes() {
         }
 
         std::vector<raw_buffer> files;
+        // Generate the unique marker here so both the converter (which embeds it in
+        // the prompt string) and oaicompat_chat_params_parse (which tells mtmd_tokenize
+        // to split on it) use the exact same marker for this request.
+        const std::string media_marker_override = "<__media_" + random_string() + "__>";
         json body = convert_transcriptions_to_chatcmpl(
             json::parse(req.body),
             req.files,
-            files);
+            files,
+            media_marker_override);
         SRV_DBG("%s\n", "Request converted: OpenAI Transcriptions -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            media_marker_override);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,

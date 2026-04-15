@@ -890,7 +890,8 @@ static void handle_media(
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files)
+    std::vector<raw_buffer> & out_files,
+    const std::string & media_marker_override)
 {
     json llama_params;
 
@@ -944,12 +945,14 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("Expected 'messages' to be an array");
     }
 
-    // Generate a unique per-request media marker. This is used in place of the
-    // canonical "<__media__>" when inserting real media placeholders into content
-    // parts. Because this marker is unique per request, any literal "<__media__>"
-    // or "<__image__>" that appears in user text will never be mistaken for a real
-    // media slot by mtmd_tokenize() (which is told to split on this unique marker).
-    const std::string media_marker_override = "<__media_" + random_string() + "__>";
+    // Determine the unique per-request media marker. Real media placeholders are
+    // embedded using this marker so that any literal "<__media__>" or "<__image__>"
+    // in user text is never mistaken for an actual media slot by mtmd_tokenize().
+    // Callers that have already embedded the marker in the prompt (e.g. the
+    // transcription handler) supply it explicitly; all others get a fresh one.
+    const std::string media_marker = media_marker_override.empty()
+        ? "<__media_" + random_string() + "__>"
+        : media_marker_override;
 
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
@@ -984,7 +987,7 @@ json oaicompat_chat_params_parse(
                 handle_media(out_files, image_url, opt.media_path);
 
                 p["type"] = "media_marker";
-                p["text"] = media_marker_override;
+                p["text"] = media_marker;
                 p.erase("image_url");
 
             } else if (type == "input_audio") {
@@ -1005,7 +1008,7 @@ json oaicompat_chat_params_parse(
                 // TODO: add audio_url support by reusing handle_media()
 
                 p["type"] = "media_marker";
-                p["text"] = media_marker_override;
+                p["text"] = media_marker;
                 p.erase("input_audio");
 
             } else if (type != "text") {
@@ -1092,7 +1095,7 @@ json oaicompat_chat_params_parse(
 
     llama_params["chat_format"]          = static_cast<int>(chat_params.format);
     llama_params["prompt"]               = chat_params.prompt;
-    llama_params["media_marker"]         = media_marker_override;
+    llama_params["media_marker"]         = media_marker;
     if (!chat_params.grammar.empty()) {
         llama_params["grammar"]      = chat_params.grammar;
         llama_params["grammar_type"] = std::string("tool_calls");
@@ -1446,7 +1449,8 @@ json convert_responses_to_chatcmpl(const json & response_body) {
 json convert_transcriptions_to_chatcmpl(
         const json & inp_body,
         const std::map<std::string, raw_buffer> & in_files,
-        std::vector<raw_buffer> & out_files) {
+        std::vector<raw_buffer> & out_files,
+        const std::string & media_marker_override) {
     // TODO @ngxson : this function may need to be improved in the future
     // handle input files
     out_files.clear();
@@ -1470,7 +1474,7 @@ json convert_transcriptions_to_chatcmpl(
     if (!language.empty()) {
         prompt += string_format(" (language: %s)", language.c_str());
     }
-    prompt += mtmd_default_marker();
+    prompt += media_marker_override;
 
     json chatcmpl_body = inp_body; // copy all fields
     chatcmpl_body["messages"] = json::array({

@@ -301,19 +301,26 @@ struct server_chat_params {
 json oaicompat_completion_params_parse(const json & body);
 
 // used by /chat/completions endpoint
+// media_marker_override: if non-empty, use this as the unique per-request media marker
+//   instead of generating a fresh random one. pass this when the caller has already
+//   embedded the marker in the prompt (e.g. convert_transcriptions_to_chatcmpl).
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files);
+    std::vector<raw_buffer> & out_files,
+    const std::string & media_marker_override = "");
 
 // convert OpenAI Responses API format to OpenAI Chat Completions API format
 json convert_responses_to_chatcmpl(const json & body);
 
 // convert OpenAI transcriptions API format to OpenAI Chat Completions API format
+// media_marker_override: the unique marker to embed in the prompt for the audio slot;
+//   must match the marker passed to oaicompat_chat_params_parse for the same request.
 json convert_transcriptions_to_chatcmpl(
     const json & body,
     const std::map<std::string, raw_buffer> & in_files,
-    std::vector<raw_buffer> & out_files);
+    std::vector<raw_buffer> & out_files,
+    const std::string & media_marker_override);
 
 // convert Anthropic Messages API format to OpenAI Chat Completions API format
 json convert_anthropic_to_oai(const json & body);
