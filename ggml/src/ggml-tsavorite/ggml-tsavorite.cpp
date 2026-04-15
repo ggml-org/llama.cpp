@@ -64,6 +64,7 @@ struct TsavoriteRuntimeState {
     BlobDescriptor **blobDescriptor_add = nullptr;
     BlobDescriptor **blobDescriptor_mult = nullptr;
     BlobDescriptor **blobDescriptor_rms_norm = nullptr;
+
     void **loadResult_add = nullptr;
     void **loadResult_mult = nullptr;
     void **loadResult_rms_norm = nullptr;
@@ -346,60 +347,28 @@ static TsavoriteRuntimeState &rt = g_rt;
 static void tsi_load_all_blobs() {
     int i;
     char blob_name[64];
-    TsavoriteRuntimeState &rt = g_rt;
 
-    /* loadResult_* */
-    if (!rt.loadResult_add) {
-        rt.loadResult_add = (void **)calloc(rt.num_of_txes, sizeof(void *));
-        if (!rt.loadResult_add) {
-            fprintf(stderr, "Failed to allocate loadResult_add\n");
-            abort();
-        }
+    
+    // already loaded
+    if (blobDescriptor_add || blobDescriptor_mult || blobDescriptor_rms_norm) {
+        return;
     }
 
-    if (!rt.loadResult_mult) {
-        rt.loadResult_mult = (void **)calloc(rt.num_of_txes, sizeof(void *));
-        if (!rt.loadResult_mult) {
-            fprintf(stderr, "Failed to allocate loadResult_mult\n");
-            abort();
-        }
+    // allocate pointer tables (size = num_of_txes)
+    loadResult_add = (void **)calloc(num_of_txes, sizeof(void *));
+    loadResult_mult = (void **)calloc(num_of_txes, sizeof(void *));
+    loadResult_rms_norm = (void **)calloc(num_of_txes, sizeof(void *));
+
+    blobDescriptor_add = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
+    blobDescriptor_mult = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
+    blobDescriptor_rms_norm = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
+
+    if (!loadResult_add || !loadResult_mult || !loadResult_rms_norm ||
+        !blobDescriptor_add || !blobDescriptor_mult || !blobDescriptor_rms_norm) {
+        fprintf(stderr, "Failed to allocate blob tables (num_of_txes=%u)\n", (unsigned)num_of_txes);
+        abort();
     }
 
-    if (!rt.loadResult_rms_norm) {
-        rt.loadResult_rms_norm = (void **)calloc(rt.num_of_txes, sizeof(void *));
-        if (!rt.loadResult_rms_norm) {
-            fprintf(stderr, "Failed to allocate loadResult_rms_norm\n");
-            abort();
-        }
-    }
-
-    /* blobDescriptor_* */
-    if (!rt.blobDescriptor_add) {
-        rt.blobDescriptor_add =
-            (BlobDescriptor **)calloc(rt.num_of_txes, sizeof(BlobDescriptor *));
-        if (!rt.blobDescriptor_add) {
-            fprintf(stderr, "Failed to allocate blobDescriptor_add\n");
-            abort();
-        }
-    }
-
-    if (!rt.blobDescriptor_mult) {
-        rt.blobDescriptor_mult =
-            (BlobDescriptor **)calloc(rt.num_of_txes, sizeof(BlobDescriptor *));
-        if (!rt.blobDescriptor_mult) {
-            fprintf(stderr, "Failed to allocate blobDescriptor_mult\n");
-            abort();
-        }
-    }
-
-    if (!rt.blobDescriptor_rms_norm) {
-        rt.blobDescriptor_rms_norm =
-            (BlobDescriptor **)calloc(rt.num_of_txes, sizeof(BlobDescriptor *));
-        if (!rt.blobDescriptor_rms_norm) {
-            fprintf(stderr, "Failed to allocate blobDescriptor_rms_norm\n");
-            abort();
-        }
-    }
 
     for (int i = 0; i < num_of_txes; ++i) {
         char name_add[64];
@@ -469,12 +438,29 @@ error:
 
 
 static void tsi_unload_all_blobs() {
-for (int i=0; i < num_of_txes; ++i) {
-  tsi_unload_blob(blobDescriptor_add[i]);
-  tsi_unload_blob(blobDescriptor_mult[i]);
-  tsi_unload_blob(blobDescriptor_rms_norm[i]);
-}
-  return;
+    for (uint32_t i = 0; i < num_of_txes; ++i) {
+        if (blobDescriptor_add && blobDescriptor_add[i]) {
+            tsi_unload_blob(blobDescriptor_add[i]);
+            blobDescriptor_add[i] = nullptr;
+        }
+        if (blobDescriptor_mult && blobDescriptor_mult[i]) {
+            tsi_unload_blob(blobDescriptor_mult[i]);
+            blobDescriptor_mult[i] = nullptr;
+        }
+        if (blobDescriptor_rms_norm && blobDescriptor_rms_norm[i]) {
+            tsi_unload_blob(blobDescriptor_rms_norm[i]);
+            blobDescriptor_rms_norm[i] = nullptr;
+        }
+    }
+
+    free(loadResult_add);        loadResult_add = nullptr;
+    free(loadResult_mult);       loadResult_mult = nullptr;
+    free(loadResult_rms_norm);   loadResult_rms_norm = nullptr;
+
+    free(blobDescriptor_add);    blobDescriptor_add = nullptr;
+    free(blobDescriptor_mult);   blobDescriptor_mult = nullptr;
+    free(blobDescriptor_rms_norm); blobDescriptor_rms_norm = nullptr;
+    return;
 }
 
 // Centralized TSI runtime initialization - called once globally
