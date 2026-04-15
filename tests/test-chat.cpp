@@ -2118,6 +2118,31 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ amount_tool })
             .expect(message_with_tool_calls("amount", R"({"orig": 1.5e10})"))
             .run();
+
+        // Edge cases
+        tst.test(
+                "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<channel|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+                "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<|channel>thought\n<channel|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+                "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<|channel>thought\n<channel|><channel|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+                "<|channel><|channel>thought\n<channel|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
     }
 
     {
@@ -2574,6 +2599,215 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
         tst.test("CONTENT").enable_thinking(false).reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK).
             expect(simple_assist_msg("CONTENT", "")).run();
+    }
+
+    // DeepSeek V3.2 tests - format uses DSML markup:
+    //   <｜DSML｜function_calls>
+    //   <｜DSML｜invoke name="foo">
+    //   <｜DSML｜parameter name="bar" string="true|false">value</｜DSML｜parameter>
+    //   </｜DSML｜invoke>
+    //   </｜DSML｜function_calls>
+    // Reasoning uses <think>...</think>. The generation prompt ends in <think> (thinking mode)
+    // or <think></think> (non-thinking mode).
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.2.jinja", detailed_debug);
+
+        // Pure content (non-thinking mode)
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        // Thinking + content
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Thinking + tool call (single, string param)
+        tst.test(
+               "Let me check the time</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check the time"))
+            .run();
+
+        // Tool call without reasoning (non-thinking mode), integer param (string="false")
+        tst.test(
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Multiple parallel tool calls with reasoning
+        tst.test(
+               "Calling both</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "<｜DSML｜invoke name=\"get_weather\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .run();
+
+        // Tool call with content before tool calls
+        tst.test(
+               "Thinking about it</think>"
+               "Let me call the function.\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect_reasoning("Thinking about it")
+            .expect_content("Let me call the function.")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // Tool call with negative number
+        tst.test(
+               "Test negative</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"magic_int\">\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">-14</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Test negative")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": -14})", {} },
+            })
+            .run();
+
+        // Tool call with decimal number
+        tst.test(
+               "Test decimal</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"amount\">\n"
+               "<｜DSML｜parameter name=\"orig\" string=\"false\">3.14</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ amount_tool })
+            .expect_reasoning("Test decimal")
+            .expect_tool_calls({
+                { "amount", R"({"orig": 3.14})", {} },
+            })
+            .run();
+
+        // Tool call with boolean
+        tst.test(
+               "Test boolean</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"toggle\">\n"
+               "<｜DSML｜parameter name=\"enabled\" string=\"false\">true</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ toggle_tool })
+            .expect_reasoning("Test boolean")
+            .expect_tool_calls({
+                { "toggle", R"({"enabled": true})", {} },
+            })
+            .run();
+
+        // Tool call with array parameter (JSON-formatted)
+        tst.test(
+               "Test array</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"todo_list\">\n"
+               "<｜DSML｜parameter name=\"todos\" string=\"false\">[\"buy milk\",\"walk dog\"]</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ todo_list })
+            .expect_reasoning("Test array")
+            .expect_tool_calls({
+                { "todo_list", R"({"todos": ["buy milk", "walk dog"]})", {} },
+            })
+            .run();
+
+        // Tool call with object parameter (JSON-formatted)
+        tst.test(
+               "Test object</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"set_config\">\n"
+               "<｜DSML｜parameter name=\"config\" string=\"false\">{\"theme\":\"dark\",\"level\":2}</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ config_tool })
+            .expect_reasoning("Test object")
+            .expect_tool_calls({
+                { "set_config", R"({"config": {"theme": "dark", "level": 2}})", {} },
+            })
+            .run();
+
+        // Edge case: empty reasoning
+        tst.test(
+               "</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">XYZCITY</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", R"({"city": "XYZCITY"})"))
+            .run();
+
+        // Edge case: tool call with multiple params (mixed types, string first)
+        tst.test(
+               "Multi-arg call</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"magic_int\">\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">42</｜DSML｜parameter>\n"
+               "<｜DSML｜parameter name=\"name\" string=\"true\">foo bar</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Multi-arg call")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42, "name": "foo bar"})", {} },
+            })
+            .run();
     }
 
     // GLM-4.6 tests - format: <tool_call>function_name\n<arg_key>...</arg_key>\n<arg_value>...</arg_value>\n</tool_call>

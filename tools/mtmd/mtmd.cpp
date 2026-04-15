@@ -1017,8 +1017,12 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
     return ctx->image_embd_v.data();
 }
 
-bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
-    switch (ctx->proj_type_v()) {
+bool mtmd_decode_use_non_causal(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
+    auto proj_type = ctx->proj_type_v();
+    if (chunk && chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+        proj_type = ctx->proj_type_a();
+    }
+    switch (proj_type) {
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA4V:
             return true;
@@ -1243,6 +1247,14 @@ size_t mtmd_image_tokens_get_nx(const mtmd_image_tokens * image_tokens) {
 
 size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
     return image_tokens->ny;
+}
+
+mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, size_t i) {
+    mtmd_decoder_pos pos;
+    pos.t = 0;
+    pos.x = i % image_tokens->nx;
+    pos.y = i / image_tokens->nx;
+    return pos;
 }
 
 const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
