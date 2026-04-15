@@ -117,6 +117,9 @@ target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+    # TODO: make fine-grained exports in the future
+    set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 target_link_libraries(${TARGET} PRIVATE
