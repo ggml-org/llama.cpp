@@ -165,7 +165,6 @@ static bool is_running_on_efficiency_core(void) {
 
 static int cpu_count_math_cpus(int n_cpu) {
     int result = 0;
-    std::vector<int> core_ids;
     for (int cpu = 0; cpu < n_cpu; ++cpu) {
         if (pin_cpu(cpu)) {
             return -1;
@@ -181,6 +180,7 @@ static int cpu_count_math_cpus(int n_cpu) {
             continue;
         }
         // find the first set bit's partner (HT sibling) and skip it
+        bool found_sibling = false;
         for (int sibling = cpu + 1; sibling < n_cpu; ++sibling) {
             std::ifstream sf("/sys/devices/system/cpu/cpu" + std::to_string(sibling)
                            + "/topology/thread_siblings");
@@ -188,10 +188,14 @@ static int cpu_count_math_cpus(int n_cpu) {
             if (std::getline(sf, sid) && sid == tid && sibling != cpu) {
                 // skip HT sibling by advancing loop past it
                 cpu = sibling - 1; // -1 because for-loop will ++ it
+                found_sibling = true;
                 break;
             }
         }
-        ++result;
+        // cpu has no HT sibling among remaining CPUs — count it and continue
+        if (!found_sibling) {
+            ++result;
+        }
     }
     return result;
 }
