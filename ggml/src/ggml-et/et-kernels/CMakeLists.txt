@@ -86,6 +86,45 @@ endforeach()
 
 add_dependencies(uberkernel.elf et-uberkernel-map)
 
+# Each supported kernel is compiled in its own translation unit with
+#   -Dentry_point=<kernel>_entry
+# so symbols and macros don't leak between kernels. The dispatcher
+# (uberkernel.c) calls the renamed entries via extern declarations.
+#
+# HACK: we need to supresse _me kernels from setting up SCP themselves
+set(_UBER_ME_KERNELS mul_mat_f16_matrix_engine mul_mat_f32_matrix_engine)
+
+foreach(UK_KERNEL ${UBERKERNEL_SUPPORTED_KERNELS})
+    set(_obj uber_${UK_KERNEL})
+    add_library(${_obj} OBJECT src/${UK_KERNEL}.c)
+    target_compile_definitions(${_obj} PRIVATE "entry_point=${UK_KERNEL}_entry")
+    target_include_directories(${_obj} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    target_link_libraries(${_obj} PRIVATE et-common-libs::cm-umode)
+    target_compile_options(${_obj} PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-fno-zero-initialized-in-bss>
+        $<$<COMPILE_LANGUAGE:C>:-ffreestanding>
+        $<$<COMPILE_LANGUAGE:C>:-std=gnu99>
+        $<$<COMPILE_LANGUAGE:C>:-ffat-lto-objects>
+        $<$<COMPILE_LANGUAGE:C>:-mcmodel=medany>
+        $<$<COMPILE_LANGUAGE:C>:-mabi=lp64f>
+        $<$<COMPILE_LANGUAGE:C>:-march=rv64imf>
+        $<$<COMPILE_LANGUAGE:C>:-ffunction-sections>
+        $<$<COMPILE_LANGUAGE:C>:-fdata-sections>
+        $<$<COMPILE_LANGUAGE:C>:-O3>
+        $<$<COMPILE_LANGUAGE:C>:-g0>
+        $<$<COMPILE_LANGUAGE:C>:-nostdlib>
+    )
+    # ME kernels: suppress setup_cache_scp() (called once by the dispatcher)
+    if(UK_KERNEL IN_LIST _UBER_ME_KERNELS)
+        target_compile_definitions(${_obj} PRIVATE UBERKERNEL_SUPPRESS_SCP_SETUP)
+    endif()
+    target_sources(uberkernel.elf PRIVATE $<TARGET_OBJECTS:${_obj}>)
+endforeach()
+
 # Print summary
 message(STATUS "GGML ET Kernels configured:")
 foreach(KERNEL ${KERNELS})
