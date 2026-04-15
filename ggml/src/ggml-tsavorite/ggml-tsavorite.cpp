@@ -24,6 +24,9 @@
 #include <inttypes.h>
 #include <math.h>
 #include <iostream>
+#include <fstream>
+#include <cctype>
+#include <cstdlib>
 #include <magic_enum/magic_enum.hpp>
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
@@ -49,7 +52,7 @@ namespace {
 
 struct TsavoriteRuntimeState {
     // device / threading
-    uint32_t num_of_txes = NUM_OF_TXES;
+    uint32_t num_of_txes = 1;
     bool *device_free = nullptr;
     bool multi_thread_enable = false;
 
@@ -58,9 +61,12 @@ struct TsavoriteRuntimeState {
     std::mutex tsi_pack_mutex;
     std::condition_variable device_cv;
     // blobs
-    BlobDescriptor *blobDescriptor_add[NUM_OF_TXES] = {};
-    BlobDescriptor *blobDescriptor_mult[NUM_OF_TXES] = {};
-    BlobDescriptor *blobDescriptor_rms_norm[NUM_OF_TXES] = {};
+    BlobDescriptor **blobDescriptor_add = nullptr;
+    BlobDescriptor **blobDescriptor_mult = nullptr;
+    BlobDescriptor **blobDescriptor_rms_norm = nullptr;
+    void **loadResult_add = nullptr;
+    void **loadResult_mult = nullptr;
+    void **loadResult_rms_norm = nullptr;
 };
 
 static TsavoriteRuntimeState g_rt;
@@ -79,6 +85,150 @@ auto &device_cv = g_rt.device_cv;
 auto &blobDescriptor_add      = g_rt.blobDescriptor_add;
 auto &blobDescriptor_mult     = g_rt.blobDescriptor_mult;
 auto &blobDescriptor_rms_norm = g_rt.blobDescriptor_rms_norm;
+
+// =============================================================================
+// YAML deployment parsing (no external yaml lib)
+// Supports:
+//   txe_count: 2
+//   multi_thread_enable: true|false|1|0|yes|no|on|off
+// Optional env:
+//   TSAVORITE_MODEL_DEPLOYMENT_YAML=/path/to/tsavorite-model-deployment.yaml
+// Notes:
+//   - txe_count is CLAMPED to NUM_OF_TXES (fixed-size arrays in this file)
+// =============================================================================
+static inline std::string tsi_trim_copy(const std::string &s) {
+    size_t b = 0, e = s.size();
+    while (b < e && std::isspace((unsigned char)s[b])) b++;
+   while (e > b && std::isspace((unsigned char)s[e - 1])) e--;
+    return s.substr(b, e - b);
+}
+
+static inline bool tsi_starts_with(const std::string &s, const char *pfx) {
+    return s.rfind(pfx, 0) == 0;
+}
+
+static inline std::string tsi_to_lower(std::string v) {
+    for (char &c : v) c = (char)std::tolower((unsigned char)c);
+    return v;
+}
+
+static int tsi_parse_int_after_colon(const std::string &line) {
+    size_t c = line.find(':');
+    if (c == std::string::npos) return -1;
+    std::string rhs = tsi_trim_copy(line.substr(c + 1));
+    if (rhs.empty()) return -1;
+    // allow quotes
+    if (rhs.front() == '"' || rhs.front() == '\'') rhs.erase(0, 1);
+    // parse leading integer
+    int sign = 1;
+    size_t i = 0;
+    if (i < rhs.size() && rhs[i] == '-') { sign = -1; i++; }
+    long v = 0;
+    bool any = false;
+    for (; i < rhs.size() && std::isdigit((unsigned char)rhs[i]); i++) {
+        any = true;
+        v = v * 10 + (rhs[i] - '0');
+    }
+    return any ? (int)(sign * v) : -1;
+}
+
+static bool tsi_parse_bool_after_colon(const std::string &line, bool *out) {
+    if (!out) return false;
+    size_t c = line.find(':');
+    if (c == std::string::npos) return false;
+    std::string rhs = tsi_trim_copy(line.substr(c + 1));
+    if (rhs.empty()) return false;
+    // allow quotes
+    if (rhs.front() == '"' || rhs.front() == '\'') rhs.erase(0, 1);
+    rhs = tsi_to_lower(tsi_trim_copy(rhs));
+    // accept common yaml-ish bools
+    if (rhs == "true" || rhs == "1" || rhs == "yes" || rhs == "y" || rhs == "on")  { *out = true;  return true; }
+    if (rhs == "false"|| rhs == "0" || rhs == "no"  || rhs == "n" || rhs == "off") { *out = false; return true; }
+    return false;
+}
+
+struct tsi_deploy_cfg_t {
+    int  txe_count = -1;
+    bool mt_enable = false;
+    bool has_mt    = false;
+};
+
+// Heuristics supported for txe_count:
+// (A) explicit scalar: txe_count: 4 OR num_txe: 4 OR txeCount: 4
+// (B) list form: txes: \n - ... \n - ...  => count list items under "txes:"
+static tsi_deploy_cfg_t tsi_read_deploy_yaml(const std::string &path) {
+    tsi_deploy_cfg_t cfg;
+    std::ifstream in(path);
+    if (!in.is_open()) return cfg;
+
+    std::string line;
+    bool in_txes_list = false;
+    int txes_list_indent = -1;
+    int txes_count = 0;
+
+    while (std::getline(in, line)) {
+        // strip comments
+        size_t hash = line.find('#');
+        if (hash != std::string::npos) line = line.substr(0, hash);
+
+        std::string raw = line;
+        std::string t = tsi_trim_copy(line);
+        if (t.empty()) continue;
+
+        // txe_count scalar keys
+        if (t.find("txe_count") != std::string::npos && t.find(':') != std::string::npos) {
+            int v = tsi_parse_int_after_colon(t);
+            if (v > 0) cfg.txe_count = v;
+        } else if (t.find("num_txe") != std::string::npos && t.find(':') != std::string::npos) {
+            int v = tsi_parse_int_after_colon(t);
+            if (v > 0) cfg.txe_count = v;
+        } else if (t.find("txeCount") != std::string::npos && t.find(':') != std::string::npos) {
+            int v = tsi_parse_int_after_colon(t);
+            if (v > 0) cfg.txe_count = v;
+        }
+
+        // multi-thread enable keys (accept a few spellings)
+        if (t.find("multi_thread_enable") != std::string::npos && t.find(':') != std::string::npos) {
+            bool b = false;
+            if (tsi_parse_bool_after_colon(t, &b)) { cfg.mt_enable = b; cfg.has_mt = true; }
+        } else if (t.find("multi_threading_enable") != std::string::npos && t.find(':') != std::string::npos) {
+            bool b = false;
+            if (tsi_parse_bool_after_colon(t, &b)) { cfg.mt_enable = b; cfg.has_mt = true; }
+        } else if (t.find("multithreading_enable") != std::string::npos && t.find(':') != std::string::npos) {
+            bool b = false;
+            if (tsi_parse_bool_after_colon(t, &b)) { cfg.mt_enable = b; cfg.has_mt = true; }
+        } else if (t.find("multiThreadEnable") != std::string::npos && t.find(':') != std::string::npos) {
+            bool b = false;
+            if (tsi_parse_bool_after_colon(t, &b)) { cfg.mt_enable = b; cfg.has_mt = true; }
+        }
+
+        // list counting under "txes:"
+        if (tsi_starts_with(t, "txes:")) {
+            in_txes_list = true;
+            txes_count = 0;
+            int indent = 0;
+            while (indent < (int)raw.size() && std::isspace((unsigned char)raw[indent])) indent++;
+            txes_list_indent = indent;
+            continue;
+        }
+
+        if (in_txes_list) {
+            int indent = 0;
+            while (indent < (int)raw.size() && std::isspace((unsigned char)raw[indent])) indent++;
+            if (txes_list_indent >= 0 && indent <= txes_list_indent) {
+                if (txes_count > 0 && cfg.txe_count <= 0) cfg.txe_count = txes_count;
+                in_txes_list = false;
+                txes_list_indent = -1;
+            } else {
+                std::string tt = tsi_trim_copy(raw);
+                if (tsi_starts_with(tt, "-")) txes_count++;
+            }
+        }
+    }
+
+    if (txes_count > 0 && cfg.txe_count <= 0) cfg.txe_count = txes_count;
+    return cfg;
+}
 
 
 #ifdef TMU_DEBUG_VALIDATE
@@ -186,12 +336,65 @@ static std::string blob_prefix(const char *rel) {
     return tsavorite_llama_root() + rel;
 }
 
+static TsavoriteRuntimeState &rt = g_rt;
+
 static void tsi_load_all_blobs() {
-    static void *loadResult_add[NUM_OF_TXES];
-    static void *loadResult_mult[NUM_OF_TXES];
-    static void *loadResult_rms_norm[NUM_OF_TXES];
     int i;
     char blob_name[64];
+    TsavoriteRuntimeState &rt = g_rt;
+
+    /* loadResult_* */
+    if (!rt.loadResult_add) {
+        rt.loadResult_add = (void **)calloc(rt.num_of_txes, sizeof(void *));
+        if (!rt.loadResult_add) {
+            fprintf(stderr, "Failed to allocate loadResult_add\n");
+            abort();
+        }
+    }
+
+    if (!rt.loadResult_mult) {
+        rt.loadResult_mult = (void **)calloc(rt.num_of_txes, sizeof(void *));
+        if (!rt.loadResult_mult) {
+            fprintf(stderr, "Failed to allocate loadResult_mult\n");
+            abort();
+        }
+    }
+
+    if (!rt.loadResult_rms_norm) {
+        rt.loadResult_rms_norm = (void **)calloc(rt.num_of_txes, sizeof(void *));
+        if (!rt.loadResult_rms_norm) {
+            fprintf(stderr, "Failed to allocate loadResult_rms_norm\n");
+            abort();
+        }
+    }
+
+    /* blobDescriptor_* */
+    if (!rt.blobDescriptor_add) {
+        rt.blobDescriptor_add =
+            (BlobDescriptor **)calloc(rt.num_of_txes, sizeof(BlobDescriptor *));
+        if (!rt.blobDescriptor_add) {
+            fprintf(stderr, "Failed to allocate blobDescriptor_add\n");
+            abort();
+        }
+    }
+
+    if (!rt.blobDescriptor_mult) {
+        rt.blobDescriptor_mult =
+            (BlobDescriptor **)calloc(rt.num_of_txes, sizeof(BlobDescriptor *));
+        if (!rt.blobDescriptor_mult) {
+            fprintf(stderr, "Failed to allocate blobDescriptor_mult\n");
+            abort();
+        }
+    }
+
+    if (!rt.blobDescriptor_rms_norm) {
+        rt.blobDescriptor_rms_norm =
+            (BlobDescriptor **)calloc(rt.num_of_txes, sizeof(BlobDescriptor *));
+        if (!rt.blobDescriptor_rms_norm) {
+            fprintf(stderr, "Failed to allocate blobDescriptor_rms_norm\n");
+            abort();
+        }
+    }
 
     for (int i = 0; i < num_of_txes; ++i) {
         char name_add[64];
@@ -270,19 +473,34 @@ for (int i=0; i < num_of_txes; ++i) {
 }
 
 // Centralized TSI runtime initialization - called once globally
+//
+
 static void ensure_tsi_runtime_initialized() {
   if (!runtime_initialized) {
     std::string mainProfilerName = "OPU ";
     tsirt::utils::TSIProfiler::initialize();
 
+    const char *yaml_path_env = std::getenv("TSAVORITE_MODEL_DEPLOYMENT_YAML");
+        std::string yaml_path = yaml_path_env ? std::string(yaml_path_env)
+                                       : std::string("tsavorite-model-deployment.yaml");
+        tsi_deploy_cfg_t cfg = tsi_read_deploy_yaml(yaml_path);
+
+        int txe = (cfg.txe_count > 0) ? cfg.txe_count : (int)NUM_OF_TXES;
+        if (txe <= 0) txe = 1;
+
+        num_of_txes = (uint32_t)txe;
+        multi_thread_enable = cfg.has_mt ? cfg.mt_enable : false;
+
+        // Just to Test
+         printf("\nANOOP TSI deploy yaml=%s txe_count=%u multi_thread_enable=%d\n",
+                yaml_path.c_str(), (unsigned)num_of_txes, (int)multi_thread_enable);
+
+    // IMPORTANT: fixed-size arrays in this file => clamp
+    if (txe > (int)NUM_OF_TXES) txe = (int)NUM_OF_TXES;
+
     // TSI Run time Initalization
-    #ifdef GGML_TARGET_POSIX
-        num_of_txes = 1;
-        multi_thread_enable = false;
-    #else
-        num_of_txes = NUM_OF_TXES;
-        multi_thread_enable = false;
-    #endif /* GGML_TARGET_POSIX */
+    multi_thread_enable = false;
+    num_of_txes = NUM_OF_TXES;
     tsi_initialize(num_of_txes, NULL);
 
     if (multi_thread_enable) {
