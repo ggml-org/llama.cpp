@@ -71,8 +71,7 @@ struct TsavoriteRuntimeState {
 
 static TsavoriteRuntimeState g_rt;
 
-} // anonymous namespace
-
+// aliases (USE THESE EVERYWHERE)
 auto &num_of_txes = g_rt.num_of_txes;
 auto &device_free = g_rt.device_free;
 auto &multi_thread_enable     = g_rt.multi_thread_enable;
@@ -85,6 +84,12 @@ auto &device_cv = g_rt.device_cv;
 auto &blobDescriptor_add      = g_rt.blobDescriptor_add;
 auto &blobDescriptor_mult     = g_rt.blobDescriptor_mult;
 auto &blobDescriptor_rms_norm = g_rt.blobDescriptor_rms_norm;
+
+auto &loadResult_add          = g_rt.loadResult_add;
+auto &loadResult_mult         = g_rt.loadResult_mult;
+auto &loadResult_rms_norm     = g_rt.loadResult_rms_norm;
+
+} // anonymous namespace
 
 // =============================================================================
 // YAML deployment parsing (no external yaml lib)
@@ -476,31 +481,35 @@ for (int i=0; i < num_of_txes; ++i) {
 //
 
 static void ensure_tsi_runtime_initialized() {
-  if (!runtime_initialized) {
+    if (runtime_initialized) {
+        printf("\n tsavorite backend already initialized \n");
+        return;
+    }
     std::string mainProfilerName = "OPU ";
     tsirt::utils::TSIProfiler::initialize();
 
+    // YAML placeholder (intentionally ignored)
     const char *yaml_path_env = std::getenv("TSAVORITE_MODEL_DEPLOYMENT_YAML");
-        std::string yaml_path = yaml_path_env ? std::string(yaml_path_env)
-                                       : std::string("tsavorite-model-deployment.yaml");
-        tsi_deploy_cfg_t cfg = tsi_read_deploy_yaml(yaml_path);
+    std::string yaml_path = yaml_path_env ? std::string(yaml_path_env)
+                                   : std::string("tsavorite-model-deployment.yaml");
+    tsi_deploy_cfg_t cfg = tsi_read_deploy_yaml(yaml_path);
 
-        int txe = (cfg.txe_count > 0) ? cfg.txe_count : (int)NUM_OF_TXES;
-        if (txe <= 0) txe = 1;
+    int txe = (cfg.txe_count > 0) ? cfg.txe_count : (int)NUM_OF_TXES;
 
-        num_of_txes = (uint32_t)txe;
-        multi_thread_enable = cfg.has_mt ? cfg.mt_enable : false;
+    num_of_txes = (uint32_t)txe;
+    multi_thread_enable = cfg.has_mt ? cfg.mt_enable : false;
 
-        // Just to Test
-         printf("\nANOOP TSI deploy yaml=%s txe_count=%u multi_thread_enable=%d\n",
-                yaml_path.c_str(), (unsigned)num_of_txes, (int)multi_thread_enable);
+    // Just to Test
+    printf("\nANOOP TSI deploy yaml=%s txe_count=%u multi_thread_enable=%d\n",
+             yaml_path.c_str(), (unsigned)num_of_txes, (int)multi_thread_enable);
 
+    if (txe <= 0) txe = 1;
     // IMPORTANT: fixed-size arrays in this file => clamp
     if (txe > (int)NUM_OF_TXES) txe = (int)NUM_OF_TXES;
 
-    // TSI Run time Initalization
+    // INTENTIONAL PLACEHOLDER
     multi_thread_enable = false;
-    num_of_txes = NUM_OF_TXES;
+    num_of_txes = 1;
     tsi_initialize(num_of_txes, NULL);
 
     if (multi_thread_enable) {
@@ -522,7 +531,7 @@ static void ensure_tsi_runtime_initialized() {
     workers.reserve(num_of_txes);
     runtime_initialized = true;
     GGML_TSAVORITE_LOG_INFO("Profiler and TSI runtime initialized early in registration\n");
-  }
+    return;
 }
 #ifdef USE_COMMAND_BUFFERS
 typedef struct _txe_command_queue_t *txe_command_queue_s;
