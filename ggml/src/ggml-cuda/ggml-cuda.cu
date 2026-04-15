@@ -324,16 +324,18 @@ static ggml_cuda_device_info ggml_cuda_init() {
     // configure logging to stdout
     // CUBLAS_CHECK(cublasLoggerConfigure(1, 1, 0, nullptr));
 
-    for (int id = 0; id < info.device_count; ++id) {
-        ggml_cuda_set_device(id);
-        for (int id_other = 0; id_other < info.device_count; ++id_other) {
-            if (id == id_other) {
-                continue;
-            }
-            int can_access_peer;
-            CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, id, id_other));
-            if (can_access_peer) {
-                CUDA_CHECK(cudaDeviceEnablePeerAccess(id_other, 0));
+    if (getenv("GGML_CUDA_P2P") != nullptr) {
+        for (int id = 0; id < info.device_count; ++id) {
+            ggml_cuda_set_device(id);
+            for (int id_other = 0; id_other < info.device_count; ++id_other) {
+                if (id == id_other) {
+                    continue;
+                }
+                int can_access_peer;
+                CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, id, id_other));
+                if (can_access_peer) {
+                    CUDA_CHECK(cudaDeviceEnablePeerAccess(id_other, 0));
+                }
             }
         }
     }
