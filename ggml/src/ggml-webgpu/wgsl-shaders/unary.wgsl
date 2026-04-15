@@ -152,7 +152,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         select(((exp(min(src_f32, params.eps)) - 1.0) - src_f32) *
                params.alpha_n + params.beta * src_f32,
                params.alpha_p * src_f32 * src_f32 + params.beta * src_f32,
-               src[params.offset_src + src_idx] > 0.0);
+               src_f32 > 0.0);
     let res = TYPE(result);
 #endif
 #ifdef SOFTPLUS
