@@ -5,6 +5,8 @@ find_package(Threads REQUIRED)
 
 llama_add_compile_flags()
 
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
 
 # disable warnings in 3rd party code
