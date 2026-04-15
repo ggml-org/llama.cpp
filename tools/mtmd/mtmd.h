@@ -46,9 +46,6 @@
 #    define MTMD_API
 #endif
 
-// deprecated marker, use mtmd_default_marker() instead
-#define MTMD_DEFAULT_IMAGE_MARKER "<__image__>"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
