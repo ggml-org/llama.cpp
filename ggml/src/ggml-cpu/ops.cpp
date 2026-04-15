@@ -11437,8 +11437,6 @@ void ggml_compute_forward_lightning_indexer(
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
 
-    // TODO handle quantized KV cache
-
     for (int i_stream = 0; i_stream < n_stream; ++i_stream) {
         for (int i_batch = 0; i_batch < n_batch; ++i_batch) {
             for (int i_kv = ir0; i_kv < ir1; ++i_kv) {

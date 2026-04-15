@@ -125,7 +125,6 @@ void ggml_cuda_op_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor
     const float scale_embd = ggml_get_op_params_f32(dst, 0);
     const float scale_heads = ggml_get_op_params_f32(dst, 1);
 
-    // TODO handle quantized KV cache
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src2->type == GGML_TYPE_F32);
