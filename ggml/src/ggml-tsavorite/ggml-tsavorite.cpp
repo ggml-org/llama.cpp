@@ -581,14 +581,11 @@ static void ensure_tsi_runtime_initialized() {
     std::string mainProfilerName = "OPU ";
     tsirt::utils::TSIProfiler::initialize();
 
-    // YAML placeholder (intentionally ignored)
-    const char *yaml_path_env = std::getenv("TSAVORITE_MODEL_DEPLOYMENT_YAML");
-    std::string yaml_path = yaml_path_env ? std::string(yaml_path_env)
-                                   : std::string("tsavorite-model-deployment.yaml");
+    // YAML: support env OR packaged YAML next to .so OR current working dir
+    std::string yaml_path = tsi_resolve_deployment_yaml_path();
     tsi_deploy_cfg_t cfg = tsi_read_deploy_yaml(yaml_path);
 
     int txe = (cfg.txe_count > 0) ? cfg.txe_count : (int)NUM_OF_TXES;
-
     num_of_txes = (uint32_t)txe;
     multi_thread_enable = cfg.has_mt ? cfg.mt_enable : false;
 
