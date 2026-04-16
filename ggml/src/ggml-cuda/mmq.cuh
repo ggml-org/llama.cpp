@@ -961,6 +961,9 @@ static __device__ __forceinline__ void load_tiles_nvfp4_nvfp4(const char * __res
     const int kbx = txi % threads_per_row;
     const int row_in_warp = txi / threads_per_row;
 
+    const block_nvfp4 * bxi_base = (const block_nvfp4 *) x + kbx0 + kbx;
+    uint32_t * x_u32_scale = x_u32 + 64 + kbx;
+
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += rows_per_warp * nwarps) {
         int i = i0 + threadIdx.y * rows_per_warp + row_in_warp;
@@ -969,7 +972,7 @@ static __device__ __forceinline__ void load_tiles_nvfp4_nvfp4(const char * __res
             i = min(i, i_max);
         }
 
-        const block_nvfp4 * bxi = (const block_nvfp4 *) x + kbx0 + i * stride + kbx;
+        const block_nvfp4 * bxi = bxi_base + i * stride;
         const int row_base = i * MMQ_MMA_TILE_X_K_FP4;
         const int q_base = row_base + 8 * kbx;
 
@@ -981,7 +984,7 @@ static __device__ __forceinline__ void load_tiles_nvfp4_nvfp4(const char * __res
             x_u32[q_base + 2 * sub + 1] = src_qs[2 * sub + 1];
         }
 
-        x_u32[row_base + 64 + kbx] = get_int_b4(bxi->d, 0);
+        x_u32_scale[row_base] = get_int_b4(bxi->d, 0);
     }
 }
 
