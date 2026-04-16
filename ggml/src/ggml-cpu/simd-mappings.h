@@ -93,6 +93,8 @@ extern "C" {
         return r;
     }
 #elif defined(__riscv) && defined(__riscv_zfhmin)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wpedantic"
     static inline float riscv_compute_fp16_to_fp32(ggml_fp16_t h) {
         _Float16 hf;
         memcpy(&hf, &h, sizeof(ggml_fp16_t));
@@ -105,6 +107,7 @@ extern "C" {
         memcpy(&res, &hf, sizeof(ggml_fp16_t));
         return res;
     }
+    #pragma GCC diagnostic pop
 
     #define GGML_CPU_COMPUTE_FP16_TO_FP32(x) riscv_compute_fp16_to_fp32(x)
     #define GGML_CPU_COMPUTE_FP32_TO_FP16(x) riscv_compute_fp32_to_fp16(x)
