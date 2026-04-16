@@ -256,17 +256,6 @@ json agent_loop::build_oai_request_body(const std::vector<common_chat_tool> & ch
     // Deep copy messages so we don't mutate the canonical messages_.
     json messages = messages_;
 
-    // Strip reasoning_content from all but the last assistant message.
-    // Gemma 4 (and similar models) re-summarize prior reasoning on every turn,
-    // causing repetitive and ever-growing chain-of-thought.  Google recommends:
-    // "Thoughts from previous model turns must not be added before the next
-    //  user turn begins."
-    for (int i = (int)messages.size() - 2; i >= 0; --i) {
-        if (messages[i].value("role", "") == "assistant") {
-            messages[i].erase("reasoning_content");
-        }
-    }
-
     // Strip image_url blocks when the model lacks vision support to avoid
     // oaicompat_chat_params_parse throwing "image input is not supported".
     if (!has_vision) {
