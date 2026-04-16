@@ -240,6 +240,7 @@ class TensorNameMap:
             "layers.{bid}.attention.wq",                                 # llama-pth
             "encoder.layer.{bid}.attention.self.query",                  # bert
             "transformer.layer.{bid}.attention.q_lin",                   # distillbert
+            "encoder.layer.{bid}.attention.attn.q",                      # mpnet
             "transformer.h.{bid}.attn.q_proj",                           # gpt-j
             "model.layers.layers.{bid}.self_attn.q_proj",                # plamo
             "model.layers.{bid}.attention.wq",                           # internlm2
@@ -259,6 +260,7 @@ class TensorNameMap:
             "layers.{bid}.attention.wk",                               # llama-pth
             "encoder.layer.{bid}.attention.self.key",                  # bert
             "transformer.layer.{bid}.attention.k_lin",                 # distillbert
+            "encoder.layer.{bid}.attention.attn.k",                      # mpnet
             "transformer.h.{bid}.attn.k_proj",                         # gpt-j
             "transformer.h.{bid}.attn.k",                              # refact
             "model.layers.layers.{bid}.self_attn.k_proj",              # plamo
@@ -278,6 +280,7 @@ class TensorNameMap:
             "layers.{bid}.attention.wv",                                 # llama-pth
             "encoder.layer.{bid}.attention.self.value",                  # bert
             "transformer.layer.{bid}.attention.v_lin",                   # distillbert
+            "encoder.layer.{bid}.attention.attn.v",                      # mpnet
             "transformer.h.{bid}.attn.v_proj",                           # gpt-j
             "transformer.h.{bid}.attn.v",                                # refact
             "model.layers.layers.{bid}.self_attn.v_proj",                # plamo
@@ -305,6 +308,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.attention.output.dense",                   # bert
             "layers.{bid}.attn.Wo",                                         # modern-bert
             "transformer.layer.{bid}.attention.out_lin",                    # distillbert
+            "encoder.layer.{bid}.attention.attn.o",                      # mpnet
             "transformer.h.{bid}.attn.out_proj",                            # gpt-j
             "language_model.encoder.layers.{bid}.self_attention.dense",     # persimmon
             "model.layers.{bid}.self_attn.dense",                           # persimmon

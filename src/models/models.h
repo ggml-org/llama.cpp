@@ -443,6 +443,10 @@ struct llm_build_mpt : public llm_graph_context {
     llm_build_mpt(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_mpnet : public llm_graph_context {
+    llm_build_mpnet(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_nemotron : public llm_graph_context {
     llm_build_nemotron(const llama_model & model, const llm_graph_params & params);
 };
