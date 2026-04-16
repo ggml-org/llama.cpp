@@ -428,12 +428,7 @@ extern "C" {
         GGML_TYPE_TQ3_4S  = 46, // TurboQuant 3-bit with four u8 per-8 scales (4.0 bpw)
         // internal-only types at high IDs to avoid upstream conflicts
         GGML_TYPE_TQ3_0      = 200, // KV-cache only
-        GGML_TYPE_TQ3_1S_AP1 = 201,
-        GGML_TYPE_Q4_0_TQ    = 202,
-        GGML_TYPE_Q4_1_TQ    = 203,
-        GGML_TYPE_TQ3_4SE    = 204,
-        GGML_TYPE_TQ3_4SV    = 205,
-        GGML_TYPE_COUNT      = 206,
+        GGML_TYPE_COUNT      = 201,
     };
 
     // precision

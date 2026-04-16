@@ -1275,61 +1275,6 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
     const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
     return d * sumi;
 }
-
-#define VDR_Q4_0_TQ_Q8_1_MMVQ 4
-
-static __device__ __forceinline__ float vec_dot_q4_0_tq_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
-    const block_q4_0_tq_v0 * bq = (const block_q4_0_tq_v0 *) vbq + kbx;
-    const int g = iqs / VDR_Q4_0_TQ_Q8_1_MMVQ; // group 0..3
-    const float scale0 = exp2f(((int) bq->s0 - 127) / 16.0f);
-    const float scale1 = scale0 * exp2f((float) bq->ds1 / 16.0f);
-    const float scale = g < 2 ? scale0 : scale1;
-    const float2 ds8 = __half22float2(bq8_1->ds);
-
-    const int8_t levels[8] = { -7, -5, -3, -1, 1, 3, 5, 7 };
-    const uint8_t * qp = bq->qs + g * 3;
-
-    float sum = 0.0f;
-    sum += (float) levels[ qp[0]        & 7] * (float) bq8_1->qs[g*8 + 0];
-    sum += (float) levels[(qp[0] >> 3)  & 7] * (float) bq8_1->qs[g*8 + 1];
-    sum += (float) levels[((qp[0] >> 6) | (qp[1] << 2)) & 7] * (float) bq8_1->qs[g*8 + 2];
-    sum += (float) levels[(qp[1] >> 1)  & 7] * (float) bq8_1->qs[g*8 + 3];
-    sum += (float) levels[(qp[1] >> 4)  & 7] * (float) bq8_1->qs[g*8 + 4];
-    sum += (float) levels[((qp[1] >> 7) | (qp[2] << 1)) & 7] * (float) bq8_1->qs[g*8 + 5];
-    sum += (float) levels[(qp[2] >> 2)  & 7] * (float) bq8_1->qs[g*8 + 6];
-    sum += (float) levels[(qp[2] >> 5)  & 7] * (float) bq8_1->qs[g*8 + 7];
-
-    return sum * scale * ds8.x;
-}
-
-#define VDR_Q4_0_TQ_V1_Q8_1_MMVQ 4
-
-static __device__ __forceinline__ float vec_dot_q4_0_tq_v1_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
-    const block_q4_0_tq_v1 * bq = (const block_q4_0_tq_v1 *) vbq + kbx;
-    const int g = iqs / VDR_Q4_0_TQ_V1_Q8_1_MMVQ; // group 0..3
-    const float scale = exp2f(((int) bq->scales[g] - 127) / 16.0f);
-    const float2 ds8 = __half22float2(bq8_1->ds);
-
-    const int8_t levels[8] = { -7, -5, -3, -1, 1, 3, 5, 7 };
-    const uint8_t * qp = bq->qs + g * 3;
-
-    float sum = 0.0f;
-    sum += (float) levels[ qp[0]        & 7] * (float) bq8_1->qs[g*8 + 0];
-    sum += (float) levels[(qp[0] >> 3)  & 7] * (float) bq8_1->qs[g*8 + 1];
-    sum += (float) levels[((qp[0] >> 6) | (qp[1] << 2)) & 7] * (float) bq8_1->qs[g*8 + 2];
-    sum += (float) levels[(qp[1] >> 1)  & 7] * (float) bq8_1->qs[g*8 + 3];
-    sum += (float) levels[(qp[1] >> 4)  & 7] * (float) bq8_1->qs[g*8 + 4];
-    sum += (float) levels[((qp[1] >> 7) | (qp[2] << 1)) & 7] * (float) bq8_1->qs[g*8 + 5];
-    sum += (float) levels[(qp[2] >> 2)  & 7] * (float) bq8_1->qs[g*8 + 6];
-    sum += (float) levels[(qp[2] >> 5)  & 7] * (float) bq8_1->qs[g*8 + 7];
-
-    return sum * scale * ds8.x;
-}
-
 // TQ3_0: dequant full block via warp-shuffle WHT, then dot with q8_1
 #define VDR_TQ3_0_Q8_1_MMVQ 4
 
