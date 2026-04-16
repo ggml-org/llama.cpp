@@ -654,3 +654,157 @@ void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     */
     l2_norm_f32_sycl<WARP_SIZE>(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream, ctx.device);
 }
+
+static void rms_norm_mul_f32(const float* x, const float* weight, float* dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
+        const int64_t stride_sample, const float eps, const sycl::nd_item<3>& item_ct1, float* s_sum, int block_size) {
+
+    const int nrows = item_ct1.get_group_range(2);
+    const int nchannels = item_ct1.get_group_range(1);
+
+    const int sample  = item_ct1.get_group(0);
+    const int channel = item_ct1.get_group(1);
+    const int row     = item_ct1.get_group(2);
+
+    const int nthreads = item_ct1.get_local_range(2);
+
+    const int tid = item_ct1.get_local_id(2);
+    const int nwarps = nthreads / WARP_SIZE;
+
+    const auto strided_offset = calculate_offset<3>({stride_sample, stride_channel, stride_row}, {sample, channel, row});
+    const auto packed_offset = calculate_offset<3>({nchannels * nrows * ncols, nrows * ncols, ncols}, {sample, channel, row});
+
+    x   += strided_offset;
+    dst += packed_offset;
+
+    float tmp = 0.0f;
+
+    for (int col = tid; col < ncols; col += block_size) {
+        const float xi = x[col];
+        tmp += xi * xi;
+    }
+
+    tmp = warp_reduce_sum(tmp, item_ct1);
+    if (block_size > WARP_SIZE) {
+        const auto sub_group = item_ct1.get_sub_group();
+        const auto sg_id = sub_group.get_group_linear_id();
+        const auto wi_in_sg = sub_group.get_local_linear_id();
+        if (wi_in_sg == 0) {
+            s_sum[sg_id] = tmp;
+        }
+
+        item_ct1.barrier(sycl::access::fence_space::local_space);
+        const size_t nreduce = ceil_div(nwarps, WARP_SIZE);
+        tmp = 0.f;
+        for (size_t i = 0; i < nreduce; i += 1)
+        {
+            tmp += s_sum[wi_in_sg + i * WARP_SIZE];
+        }
+        tmp = warp_reduce_sum(tmp, item_ct1);
+    }
+
+    const float mean = tmp / ncols;
+    const float scale = sycl::rsqrt(mean + eps);
+
+    for (int col = tid; col < ncols; col += block_size) {
+        dst[col] = scale * x[col] * weight[col];
+    }
+}
+
+static void rms_norm_mul_f32_sycl(const float* x, const float* weight, float* dst, const int ncols, const int nrows, const int nchannels, const int nsamples,
+        const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps, queue_ptr stream, int device) {
+    const sycl::range<3> global_dims(nsamples, nchannels, nrows);
+    if (ncols < 1024) {
+        const sycl::range<3> block_dims(1, 1, WARP_SIZE);
+        stream->submit([&](sycl::handler& cgh) {
+            cgh.parallel_for(
+                sycl::nd_range<3>(global_dims * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1)
+                [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                    rms_norm_mul_f32(x, weight, dst, ncols, stride_row, stride_channel, stride_sample, eps, item_ct1, nullptr, WARP_SIZE);
+                });
+            });
+    }
+    else {
+        const int work_group_size = ggml_sycl_info().max_work_group_sizes[device];
+        assert(work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
+        const sycl::range<3> block_dims(1, 1, work_group_size);
+        stream->submit([&](sycl::handler& cgh) {
+            sycl::local_accessor<float, 1> s_sum_acc_ct1(
+                sycl::range<1>(work_group_size / WARP_SIZE), cgh);
+            cgh.parallel_for(
+                sycl::nd_range<3>(global_dims * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1)
+                [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                    rms_norm_mul_f32(x, weight, dst, ncols, stride_row, stride_channel, stride_sample, eps, item_ct1, get_pointer(s_sum_acc_ct1), work_group_size);
+                });
+            });
+    }
+}
+
+bool ggml_sycl_try_fused_rms_norm_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+
+    ggml_tensor * rms_norm_node = nullptr;
+    ggml_tensor * weight_node   = nullptr;
+
+    if (dst->src[0] != nullptr && dst->src[0]->op == GGML_OP_RMS_NORM) {
+        rms_norm_node = dst->src[0];
+        weight_node   = dst->src[1];
+    } else if (dst->src[1] != nullptr && dst->src[1]->op == GGML_OP_RMS_NORM) {
+        rms_norm_node = dst->src[1];
+        weight_node   = dst->src[0];
+    } else {
+        return false;
+    }
+
+    if (weight_node == nullptr) {
+        return false;
+    }
+
+    ggml_tensor * x_node = rms_norm_node->src[0];
+    if (x_node == nullptr) {
+        return false;
+    }
+
+    // Only support F32 for now (RMS_NORM is F32)
+    if (dst->type != GGML_TYPE_F32 || x_node->type != GGML_TYPE_F32 || weight_node->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // Require contiguous dst and weight for simplicity
+    if (!ggml_is_contiguous(dst) || !ggml_is_contiguous(weight_node)) {
+        return false;
+    }
+
+    // Weight must be broadcastable: ne[0] == dst->ne[0], other dims == 1
+    if (weight_node->ne[0] != dst->ne[0]) {
+        return false;
+    }
+    for (int d = 1; d < GGML_MAX_DIMS; ++d) {
+        if (weight_node->ne[d] != 1) {
+            return false;
+        }
+    }
+
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+    const float * x_data      = static_cast<const float *>(x_node->data);
+    const float * weight_data = static_cast<const float *>(weight_node->data);
+    float *       dst_data    = static_cast<float *>(dst->data);
+
+    float eps;
+    memcpy(&eps, rms_norm_node->op_params, sizeof(float));
+
+    const size_t ts0 = ggml_type_size(x_node->type);
+    GGML_ASSERT(x_node->nb[0] == ts0);
+    const int64_t s01 = x_node->nb[1] / ts0;
+    const int64_t s02 = x_node->nb[2] / ts0;
+    const int64_t s03 = x_node->nb[3] / ts0;
+
+    rms_norm_mul_f32_sycl(x_data, weight_data, dst_data,
+        dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+        s01, s02, s03, eps, main_stream, ctx.device);
+
+    return true;
+}

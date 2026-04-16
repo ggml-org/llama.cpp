@@ -91,4 +91,6 @@ void ggml_sycl_trunc(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_arange(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
+bool ggml_sycl_try_fused_silu_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
 #endif // GGML_SYCL_ELEMENTWISE_HPP

@@ -25,4 +25,6 @@ void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst);
 
 void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst);
 
+bool ggml_sycl_try_fused_rms_norm_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
 #endif // GGML_SYCL_NORM_HPP

@@ -330,6 +330,43 @@ static void gated_op_fused_swiglu(const T * x, const T * g, T * dst, const uint6
 }
 
 template<typename T>
+static void fused_silu_mul_contig_kernel(const T * gate, const T * up, T * dst, const int k, const sycl::nd_item<1> & item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = op_silu(gate[i]) * up[i];
+    }
+}
+
+template<typename T>
+static void fused_silu_mul_generic_kernel(
+        const T * gate,
+        const T * up,
+        T * dst,
+        const int k,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3,
+        const size_t nb_gate0, const size_t nb_gate1, const size_t nb_gate2, const size_t nb_gate3,
+        const size_t nb_up0,   const size_t nb_up1,   const size_t nb_up2,   const size_t nb_up3,
+        const size_t nbd0,     const size_t nbd1,     const size_t nbd2,     const size_t nbd3,
+        const sycl::nd_item<1> & item_ct1) {
+    (void) ne3;
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        const int64_t i0 =  i % ne0;
+        const int64_t i1 = (i / ne0)        % ne1;
+        const int64_t i2 = (i / (ne0*ne1))  % ne2;
+        const int64_t i3 =  i / (ne0*ne1*ne2);
+
+        const char * gate_base = (const char *) gate;
+        const char * up_base   = (const char *) up;
+        char       * dst_base  = (char *) dst;
+
+        const T * gatep = (const T *)(gate_base + i0*nb_gate0 + i1*nb_gate1 + i2*nb_gate2 + i3*nb_gate3);
+        const T * upp   = (const T *)(up_base   + i0*nb_up0   + i1*nb_up1   + i2*nb_up2   + i3*nb_up3);
+        T *       dstp  = (T *)(dst_base + i0*nbd0 + i1*nbd1 + i2*nbd2 + i3*nbd3);
+
+        *dstp = op_silu(*gatep) * (*upp);
+    }
+}
+
+template<typename T>
 static void gated_op_fused_geglu_erf(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         const int64_t j0 = (i / n) * o0 + (i % n);
@@ -1121,4 +1158,149 @@ void ggml_sycl_round(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_trunc(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_trunc(ctx, dst);
+}
+
+bool ggml_sycl_try_fused_silu_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+
+    // Identify which input is the output of a SiLU unary op
+    ggml_tensor * silu_node = nullptr;
+    ggml_tensor * up_node   = nullptr;
+
+    if (dst->src[0] != nullptr && dst->src[0]->op == GGML_OP_UNARY && ggml_get_unary_op(dst->src[0]) == GGML_UNARY_OP_SILU) {
+        silu_node = dst->src[0];
+        up_node   = dst->src[1];
+    } else if (dst->src[1] != nullptr && dst->src[1]->op == GGML_OP_UNARY && ggml_get_unary_op(dst->src[1]) == GGML_UNARY_OP_SILU) {
+        silu_node = dst->src[1];
+        up_node   = dst->src[0];
+    } else {
+        return false;
+    }
+
+    ggml_tensor * gate_node = silu_node->src[0];
+    if (gate_node == nullptr || up_node == nullptr) {
+        return false;
+    }
+
+    // Supported types: F32 and F16, all matching
+    if (dst->type != gate_node->type || dst->type != up_node->type) {
+        return false;
+    }
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    // Require exact shape match (no broadcasting) for simplicity
+    for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+        if (dst->ne[d] != gate_node->ne[d] || dst->ne[d] != up_node->ne[d]) {
+            return false;
+        }
+    }
+
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+    const int64_t nelements = ggml_nelements(dst);
+    const int k = (int)nelements;
+
+    // Extract all metadata into locals so the SYCL lambda captures scalars only
+    const void * gate_data = gate_node->data;
+    const void * up_data   = up_node->data;
+    void * dst_data        = dst->data;
+
+    const bool all_contiguous = ggml_is_contiguous(gate_node) && ggml_is_contiguous(up_node) && ggml_is_contiguous(dst);
+
+    if (all_contiguous) {
+        const int num_blocks = ceil_div(k, SYCL_SILU_BLOCK_SIZE);
+        switch (dst->type) {
+            case GGML_TYPE_F16:
+                main_stream->parallel_for(
+                    sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_SILU_BLOCK_SIZE),
+                                      sycl::range<1>(SYCL_SILU_BLOCK_SIZE)),
+                    [=](sycl::nd_item<1> item_ct1) {
+                        fused_silu_mul_contig_kernel(
+                            (const sycl::half *)gate_data,
+                            (const sycl::half *)up_data,
+                            (sycl::half *)dst_data,
+                            k,
+                            item_ct1);
+                    });
+                break;
+            case GGML_TYPE_F32:
+                main_stream->parallel_for(
+                    sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_SILU_BLOCK_SIZE),
+                                      sycl::range<1>(SYCL_SILU_BLOCK_SIZE)),
+                    [=](sycl::nd_item<1> item_ct1) {
+                        fused_silu_mul_contig_kernel(
+                            (const float *)gate_data,
+                            (const float *)up_data,
+                            (float *)dst_data,
+                            k,
+                            item_ct1);
+                    });
+                break;
+            default:
+                return false;
+        }
+    } else {
+        const int num_blocks = ceil_div(k, 256);
+        const int64_t ne0 = dst->ne[0];
+        const int64_t ne1 = dst->ne[1];
+        const int64_t ne2 = dst->ne[2];
+        const int64_t ne3 = dst->ne[3];
+
+        const size_t nb_gate0 = gate_node->nb[0];
+        const size_t nb_gate1 = gate_node->nb[1];
+        const size_t nb_gate2 = gate_node->nb[2];
+        const size_t nb_gate3 = gate_node->nb[3];
+        const size_t nb_up0   = up_node->nb[0];
+        const size_t nb_up1   = up_node->nb[1];
+        const size_t nb_up2   = up_node->nb[2];
+        const size_t nb_up3   = up_node->nb[3];
+        const size_t nbd0     = dst->nb[0];
+        const size_t nbd1     = dst->nb[1];
+        const size_t nbd2     = dst->nb[2];
+        const size_t nbd3     = dst->nb[3];
+
+        switch (dst->type) {
+            case GGML_TYPE_F16:
+                main_stream->parallel_for(
+                    sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                      sycl::range<1>(256)),
+                    [=](sycl::nd_item<1> item_ct1) {
+                        fused_silu_mul_generic_kernel(
+                            (const sycl::half *)gate_data,
+                            (const sycl::half *)up_data,
+                            (sycl::half *)dst_data,
+                            k,
+                            ne0, ne1, ne2, ne3,
+                            nb_gate0, nb_gate1, nb_gate2, nb_gate3,
+                            nb_up0,   nb_up1,   nb_up2,   nb_up3,
+                            nbd0,     nbd1,     nbd2,     nbd3,
+                            item_ct1);
+                    });
+                break;
+            case GGML_TYPE_F32:
+                main_stream->parallel_for(
+                    sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                      sycl::range<1>(256)),
+                    [=](sycl::nd_item<1> item_ct1) {
+                        fused_silu_mul_generic_kernel(
+                            (const float *)gate_data,
+                            (const float *)up_data,
+                            (float *)dst_data,
+                            k,
+                            ne0, ne1, ne2, ne3,
+                            nb_gate0, nb_gate1, nb_gate2, nb_gate3,
+                            nb_up0,   nb_up1,   nb_up2,   nb_up3,
+                            nbd0,     nbd1,     nbd2,     nbd3,
+                            item_ct1);
+                    });
+                break;
+            default:
+                return false;
+        }
+    }
+
+    return true;
 }

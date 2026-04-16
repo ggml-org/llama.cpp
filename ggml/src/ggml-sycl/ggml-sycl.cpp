@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <vector>
+#include <unordered_set>
 #include <cmath>
 #include <iostream>
 #include <fstream>
@@ -4077,7 +4078,12 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             ggml_sycl_acc(ctx, dst);
             break;
         case GGML_OP_MUL:
-            ggml_sycl_mul(ctx, dst);
+            if (ggml_sycl_try_fused_rms_norm_mul(ctx, dst)) {
+                break;
+            }
+            if (!ggml_sycl_try_fused_silu_mul(ctx, dst)) {
+                ggml_sycl_mul(ctx, dst);
+            }
             break;
         case GGML_OP_LOG:
             ggml_sycl_log(ctx, dst);
@@ -4464,8 +4470,95 @@ catch (sycl::exception const &exc) {
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
     ggml_sycl_set_main_device(sycl_ctx->device);
 
+    // Identify SiLU nodes that can be fused into a subsequent MUL.
+    // This saves one kernel launch per FFN block.
+    std::unordered_set<const ggml_tensor *> skip_nodes;
+    skip_nodes.reserve(cgraph->n_nodes / 4);
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_UNARY || ggml_get_unary_op(node) != GGML_UNARY_OP_SILU) {
+            continue;
+        }
+
+        // Find the first MUL consumer
+        ggml_tensor * mul_consumer = nullptr;
+        for (int j = i + 1; j < cgraph->n_nodes; ++j) {
+            ggml_tensor * consumer = cgraph->nodes[j];
+            if (consumer->op == GGML_OP_MUL &&
+                (consumer->src[0] == node || consumer->src[1] == node)) {
+                mul_consumer = consumer;
+                break;
+            }
+        }
+        if (mul_consumer == nullptr) {
+            continue;
+        }
+
+        // Make sure the SiLU output has no other consumers in the graph
+        bool only_consumer = true;
+        for (int j = i + 1; j < cgraph->n_nodes; ++j) {
+            ggml_tensor * consumer = cgraph->nodes[j];
+            if (consumer == mul_consumer) continue;
+            for (int s = 0; s < GGML_MAX_SRC; ++s) {
+                if (consumer->src[s] == node) {
+                    only_consumer = false;
+                    break;
+                }
+            }
+            if (!only_consumer) break;
+        }
+
+        if (only_consumer) {
+            skip_nodes.insert(node);
+        }
+    }
+
+    // Identify RMS_NORM nodes that can be fused into a subsequent MUL.
+    // This saves one kernel launch per attention/FFN block.
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_RMS_NORM) {
+            continue;
+        }
+
+        // Find the first MUL consumer
+        ggml_tensor * mul_consumer = nullptr;
+        for (int j = i + 1; j < cgraph->n_nodes; ++j) {
+            ggml_tensor * consumer = cgraph->nodes[j];
+            if (consumer->op == GGML_OP_MUL &&
+                (consumer->src[0] == node || consumer->src[1] == node)) {
+                mul_consumer = consumer;
+                break;
+            }
+        }
+        if (mul_consumer == nullptr) {
+            continue;
+        }
+
+        // Make sure the RMS_NORM output has no other consumers in the graph
+        bool only_consumer = true;
+        for (int j = i + 1; j < cgraph->n_nodes; ++j) {
+            ggml_tensor * consumer = cgraph->nodes[j];
+            if (consumer == mul_consumer) continue;
+            for (int s = 0; s < GGML_MAX_SRC; ++s) {
+                if (consumer->src[s] == node) {
+                    only_consumer = false;
+                    break;
+                }
+            }
+            if (!only_consumer) break;
+        }
+
+        if (only_consumer) {
+            skip_nodes.insert(node);
+        }
+    }
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
+        if (skip_nodes.count(node)) {
+            continue;
+        }
         if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
             continue;
         }
