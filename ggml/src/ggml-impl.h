@@ -30,6 +30,8 @@ extern "C" {
 
 void ggml_print_backtrace(void);
 
+uint64_t ggml_graph_next_uid(void);
+
 #ifndef MIN
 #    define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
@@ -338,6 +340,10 @@ struct ggml_cgraph {
     struct ggml_hash_set visited_hash_set;
 
     enum ggml_cgraph_eval_order order;
+
+    // an optional identifier that can be utilized to recognize same graphs if two non-zero values match
+    // a value of 0 means it is not set and should be ignored
+    uint64_t uid;
 };
 
 // returns a slice of cgraph with nodes [i0, i1)
