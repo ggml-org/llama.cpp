@@ -3348,9 +3348,55 @@ static inline void sycl_ext_free(dpct::queue_ptr stream, void * ptr) {
     sycl::free(ptr, *stream);
 }
 
-static void reorder_qw_q4_0(uint8_t * data_device, const int ncols, const int nrows, size_t size, size_t offset,
+// RAII wrapper for temporary reorder buffers with optional host memory fallback.
+// When device allocation fails and GGML_SYCL_HOST_MEM_FALLBACK is enabled,
+// falls back to host memory so the reorder kernel can still run (over PCIe).
+// Device access to host memory requires Linux kernel 6.8+ (Ubuntu 26.04+).
+struct sycl_reorder_temp_buffer {
+    void *          ptr  = nullptr;
+    dpct::queue_ptr stream;
+
+    sycl_reorder_temp_buffer(dpct::queue_ptr stream, size_t size) : stream(stream) {
+        ptr = sycl_ext_malloc_device(stream, size);
+#ifdef GGML_SYCL_HOST_MEM_FALLBACK
+        if (!ptr) {
+            ptr = sycl::malloc_host(size, *stream);
+            if (ptr) {
+                host_fallback = true;
+                GGML_LOG_WARN("%s: device alloc of %zu bytes failed, using host memory fallback\n", __func__, size);
+            }
+        }
+#endif
+    }
+
+    ~sycl_reorder_temp_buffer() {
+        if (!ptr) {
+            return;
+        }
+        if (host_fallback) {
+            sycl::free(ptr, *stream);
+        } else {
+            sycl_ext_free(stream, ptr);
+        }
+    }
+
+    explicit operator bool() const { return ptr != nullptr; }
+
+    sycl_reorder_temp_buffer(const sycl_reorder_temp_buffer &)            = delete;
+    sycl_reorder_temp_buffer & operator=(const sycl_reorder_temp_buffer &) = delete;
+
+private:
+    bool host_fallback = false;
+};
+
+static bool reorder_qw_q4_0(uint8_t * data_device, const int ncols, const int nrows, size_t size, size_t offset,
                             dpct::queue_ptr stream) {
-    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
+    sycl_reorder_temp_buffer tmp(stream, size);
+    if (!tmp) {
+        GGML_LOG_WARN("%s: failed to allocate %zu bytes for reorder temp buffer, skipping reorder\n", __func__, size);
+        return false;
+    }
+    uint8_t * tmp_buf = static_cast<uint8_t *>(tmp.ptr);
 
     sycl::event copy_event;
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
@@ -3379,12 +3425,17 @@ static void reorder_qw_q4_0(uint8_t * data_device, const int ncols, const int nr
     if (!g_ggml_sycl_use_async_mem_op) {
         reorder_event.wait_and_throw();
     }
-    sycl_ext_free(stream, tmp_buf);
+    return true;
 }
 
-static void reorder_qw_q8_0(uint8_t * data_device, const int ncols, const int nrows, size_t size, size_t offset,
+static bool reorder_qw_q8_0(uint8_t * data_device, const int ncols, const int nrows, size_t size, size_t offset,
                             dpct::queue_ptr stream) {
-    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
+    sycl_reorder_temp_buffer tmp(stream, size);
+    if (!tmp) {
+        GGML_LOG_WARN("%s: failed to allocate %zu bytes for reorder temp buffer, skipping reorder\n", __func__, size);
+        return false;
+    }
+    uint8_t * tmp_buf = static_cast<uint8_t *>(tmp.ptr);
 
     sycl::event copy_event;
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
@@ -3413,16 +3464,21 @@ static void reorder_qw_q8_0(uint8_t * data_device, const int ncols, const int nr
     if (!g_ggml_sycl_use_async_mem_op) {
         reorder_event.wait_and_throw();
     }
-    sycl_ext_free(stream, tmp_buf);
+    return true;
 }
 
-static void reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
+static bool reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
     GGML_ASSERT(size % sizeof(block_q4_K) == 0);
     GGML_ASSERT(offset % sizeof(block_q4_K) == 0);
 
     const int nblocks = size / sizeof(block_q4_K);
 
-    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
+    sycl_reorder_temp_buffer tmp(stream, size);
+    if (!tmp) {
+        GGML_LOG_WARN("%s: failed to allocate %zu bytes for reorder temp buffer, skipping reorder\n", __func__, size);
+        return false;
+    }
+    uint8_t * tmp_buf = static_cast<uint8_t *>(tmp.ptr);
 
     sycl::event copy_event;
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
@@ -3451,16 +3507,21 @@ static void reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, d
     if (!g_ggml_sycl_use_async_mem_op) {
         reorder_event.wait_and_throw();
     }
-    sycl_ext_free(stream, tmp_buf);
+    return true;
 }
 
-static void reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
+static bool reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
     GGML_ASSERT(size % sizeof(block_q6_K) == 0);
     GGML_ASSERT(offset % sizeof(block_q6_K) == 0);
 
     const int nblocks = size / sizeof(block_q6_K);
 
-    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
+    sycl_reorder_temp_buffer tmp(stream, size);
+    if (!tmp) {
+        GGML_LOG_WARN("%s: failed to allocate %zu bytes for reorder temp buffer, skipping reorder\n", __func__, size);
+        return false;
+    }
+    uint8_t * tmp_buf = static_cast<uint8_t *>(tmp.ptr);
 
     sycl::event copy_event;
     SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
@@ -3499,10 +3560,10 @@ static void reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, d
     if (!g_ggml_sycl_use_async_mem_op) {
         reorder_event.wait_and_throw();
     }
-    sycl_ext_free(stream, tmp_buf);
+    return true;
 }
 
-static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
+static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
     uint8_t * data_device = (uint8_t *) src0->data;
     size_t ncols = src0->ne[0];
     size_t nrows = src0->ne[1];
@@ -3510,20 +3571,16 @@ static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
-            reorder_qw_q4_0(data_device, ncols, nrows, size, 0, stream);
-            break;
+            return reorder_qw_q4_0(data_device, ncols, nrows, size, 0, stream);
         case GGML_TYPE_Q8_0:
-            reorder_qw_q8_0(data_device, ncols, nrows, size, 0, stream);
-            break;
+            return reorder_qw_q8_0(data_device, ncols, nrows, size, 0, stream);
         case GGML_TYPE_Q4_K:
-            reorder_qw_q4_k(data_device, size, 0, stream);
-            break;
+            return reorder_qw_q4_k(data_device, size, 0, stream);
         case GGML_TYPE_Q6_K:
-            reorder_qw_q6_k(data_device, size, 0, stream);
-            break;
+            return reorder_qw_q6_k(data_device, size, 0, stream);
         default:
             GGML_ABORT("reorder_qw() called with unsupported type");
-            break;
+            return false;
     }
 }
 
@@ -3563,8 +3620,9 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
             break;
     }
 
-    reorder_qw(src0, ctx->stream());
-    extra->optimized_feature.reorder = true;  // Used to decode/dequan in next steps and avoid re-reordering
+    if (reorder_qw(src0, ctx->stream())) {
+        extra->optimized_feature.reorder = true;  // Used to decode/dequan in next steps and avoid re-reordering
+    }
 }
 
 
