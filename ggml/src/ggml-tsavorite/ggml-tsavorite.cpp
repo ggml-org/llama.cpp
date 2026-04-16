@@ -24,6 +24,9 @@
 #include <inttypes.h>
 #include <math.h>
 #include <iostream>
+#include <fstream>
+#include <cctype>
+#include <cstdlib>
 #include <magic_enum/magic_enum.hpp>
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
@@ -49,7 +52,7 @@ namespace {
 
 struct TsavoriteRuntimeState {
     // device / threading
-    uint32_t num_of_txes = NUM_OF_TXES;
+    uint32_t num_of_txes = 1;
     bool *device_free = nullptr;
     bool multi_thread_enable = false;
 
@@ -58,15 +61,28 @@ struct TsavoriteRuntimeState {
     std::mutex tsi_pack_mutex;
     std::condition_variable device_cv;
     // blobs
-    BlobDescriptor *blobDescriptor_add[NUM_OF_TXES] = {};
-    BlobDescriptor *blobDescriptor_mult[NUM_OF_TXES] = {};
-    BlobDescriptor *blobDescriptor_rms_norm[NUM_OF_TXES] = {};
+    BlobDescriptor **blobDescriptor_add = nullptr;
+    BlobDescriptor **blobDescriptor_mult = nullptr;
+    BlobDescriptor **blobDescriptor_rms_norm = nullptr;
+
+    void **loadResult_add = nullptr;
+    void **loadResult_mult = nullptr;
+    void **loadResult_rms_norm = nullptr;
+
+    // blob lifetime state machine
+    enum BlobState : uint8_t {
+        BLOB_UNINITIALIZED = 0,   // no tables, no blobs
+        BLOB_TABLES_ALLOCATED,    // tables allocated, blobs may be null
+        BLOB_BLOBS_LOADED         // all blobs loaded successfully
+    };
+
+    BlobState blob_state = BLOB_UNINITIALIZED;
+    uint32_t blob_tables_txes = 0;   // tracks num_of_txes used to size the tables
 };
 
 static TsavoriteRuntimeState g_rt;
 
-} // anonymous namespace
-
+// aliases (USE THESE EVERYWHERE)
 auto &num_of_txes = g_rt.num_of_txes;
 auto &device_free = g_rt.device_free;
 auto &multi_thread_enable     = g_rt.multi_thread_enable;
@@ -79,6 +95,156 @@ auto &device_cv = g_rt.device_cv;
 auto &blobDescriptor_add      = g_rt.blobDescriptor_add;
 auto &blobDescriptor_mult     = g_rt.blobDescriptor_mult;
 auto &blobDescriptor_rms_norm = g_rt.blobDescriptor_rms_norm;
+
+auto &loadResult_add          = g_rt.loadResult_add;
+auto &loadResult_mult         = g_rt.loadResult_mult;
+auto &loadResult_rms_norm     = g_rt.loadResult_rms_norm;
+} // anonymous namespace
+
+
+// =============================================================================
+// YAML deployment parsing (no external yaml lib)
+// Supports:
+//   txe_count: 2
+//   multi_thread_enable: true|false|1|0|yes|no|on|off
+// Optional env:
+//   TSAVORITE_MODEL_DEPLOYMENT_YAML=/path/to/tsavorite-model-deployment.yaml
+// Notes:
+//   - txe_count is CLAMPED to NUM_OF_TXES (fixed-size arrays in this file)
+// =============================================================================
+static inline std::string tsi_trim_copy(const std::string &s) {
+    size_t b = 0, e = s.size();
+    while (b < e && std::isspace((unsigned char)s[b])) b++;
+   while (e > b && std::isspace((unsigned char)s[e - 1])) e--;
+    return s.substr(b, e - b);
+}
+
+static inline bool tsi_starts_with(const std::string &s, const char *pfx) {
+    return s.rfind(pfx, 0) == 0;
+}
+
+static inline std::string tsi_to_lower(std::string v) {
+    for (char &c : v) c = (char)std::tolower((unsigned char)c);
+    return v;
+}
+
+static int tsi_parse_int_after_colon(const std::string &line) {
+    size_t c = line.find(':');
+    if (c == std::string::npos) return -1;
+    std::string rhs = tsi_trim_copy(line.substr(c + 1));
+    if (rhs.empty()) return -1;
+    // allow quotes
+    if (rhs.front() == '"' || rhs.front() == '\'') rhs.erase(0, 1);
+    // parse leading integer
+    int sign = 1;
+    size_t i = 0;
+    if (i < rhs.size() && rhs[i] == '-') { sign = -1; i++; }
+    long v = 0;
+    bool any = false;
+    for (; i < rhs.size() && std::isdigit((unsigned char)rhs[i]); i++) {
+        any = true;
+        v = v * 10 + (rhs[i] - '0');
+    }
+    return any ? (int)(sign * v) : -1;
+}
+
+static bool tsi_parse_bool_after_colon(const std::string &line, bool *out) {
+    if (!out) return false;
+    size_t c = line.find(':');
+    if (c == std::string::npos) return false;
+    std::string rhs = tsi_trim_copy(line.substr(c + 1));
+    if (rhs.empty()) return false;
+    // allow quotes
+    if (rhs.front() == '"' || rhs.front() == '\'') rhs.erase(0, 1);
+    rhs = tsi_to_lower(tsi_trim_copy(rhs));
+    // accept common yaml-ish bools
+    if (rhs == "true" || rhs == "1" || rhs == "yes" || rhs == "y" || rhs == "on")  { *out = true;  return true; }
+    if (rhs == "false"|| rhs == "0" || rhs == "no"  || rhs == "n" || rhs == "off") { *out = false; return true; }
+    return false;
+}
+
+struct tsi_deploy_cfg_t {
+    int  txe_count = -1;
+    bool mt_enable = false;
+    bool has_mt    = false;
+};
+
+// Heuristics supported for txe_count:
+// (A) explicit scalar: txe_count: 4 OR num_txe: 4 OR txeCount: 4
+// (B) list form: txes: \n - ... \n - ...  => count list items under "txes:"
+static tsi_deploy_cfg_t tsi_read_deploy_yaml(const std::string &path) {
+    tsi_deploy_cfg_t cfg;
+    std::ifstream in(path);
+    if (!in.is_open()) return cfg;
+
+    std::string line;
+    bool in_txes_list = false;
+    int txes_list_indent = -1;
+    int txes_count = 0;
+
+    while (std::getline(in, line)) {
+        // strip comments
+        size_t hash = line.find('#');
+        if (hash != std::string::npos) line = line.substr(0, hash);
+
+        std::string raw = line;
+        std::string t = tsi_trim_copy(line);
+        if (t.empty()) continue;
+
+        // txe_count scalar keys
+        if (t.find("txe_count") != std::string::npos && t.find(':') != std::string::npos) {
+            int v = tsi_parse_int_after_colon(t);
+            if (v > 0) cfg.txe_count = v;
+        } else if (t.find("num_txe") != std::string::npos && t.find(':') != std::string::npos) {
+            int v = tsi_parse_int_after_colon(t);
+            if (v > 0) cfg.txe_count = v;
+        } else if (t.find("txeCount") != std::string::npos && t.find(':') != std::string::npos) {
+            int v = tsi_parse_int_after_colon(t);
+            if (v > 0) cfg.txe_count = v;
+        }
+
+        // multi-thread enable keys (accept a few spellings)
+        if (t.find("multi_thread_enable") != std::string::npos && t.find(':') != std::string::npos) {
+            bool b = false;
+            if (tsi_parse_bool_after_colon(t, &b)) { cfg.mt_enable = b; cfg.has_mt = true; }
+        } else if (t.find("multi_threading_enable") != std::string::npos && t.find(':') != std::string::npos) {
+            bool b = false;
+            if (tsi_parse_bool_after_colon(t, &b)) { cfg.mt_enable = b; cfg.has_mt = true; }
+        } else if (t.find("multithreading_enable") != std::string::npos && t.find(':') != std::string::npos) {
+            bool b = false;
+            if (tsi_parse_bool_after_colon(t, &b)) { cfg.mt_enable = b; cfg.has_mt = true; }
+        } else if (t.find("multiThreadEnable") != std::string::npos && t.find(':') != std::string::npos) {
+            bool b = false;
+            if (tsi_parse_bool_after_colon(t, &b)) { cfg.mt_enable = b; cfg.has_mt = true; }
+        }
+
+        // list counting under "txes:"
+        if (tsi_starts_with(t, "txes:")) {
+            in_txes_list = true;
+            txes_count = 0;
+            int indent = 0;
+            while (indent < (int)raw.size() && std::isspace((unsigned char)raw[indent])) indent++;
+            txes_list_indent = indent;
+            continue;
+        }
+
+        if (in_txes_list) {
+            int indent = 0;
+            while (indent < (int)raw.size() && std::isspace((unsigned char)raw[indent])) indent++;
+            if (txes_list_indent >= 0 && indent <= txes_list_indent) {
+                if (txes_count > 0 && cfg.txe_count <= 0) cfg.txe_count = txes_count;
+                in_txes_list = false;
+                txes_list_indent = -1;
+            } else {
+                std::string tt = tsi_trim_copy(raw);
+                if (tsi_starts_with(tt, "-")) txes_count++;
+            }
+        }
+    }
+
+    if (txes_count > 0 && cfg.txe_count <= 0) cfg.txe_count = txes_count;
+    return cfg;
+}
 
 
 #ifdef TMU_DEBUG_VALIDATE
@@ -186,23 +352,110 @@ static std::string blob_prefix(const char *rel) {
     return tsavorite_llama_root() + rel;
 }
 
-static void tsi_load_all_blobs() {
-    static void *loadResult_add[NUM_OF_TXES];
-    static void *loadResult_mult[NUM_OF_TXES];
-    static void *loadResult_rms_norm[NUM_OF_TXES];
-    int i;
-    char blob_name[64];
+static inline void tsi_blob_free_tables() {
+    // free pointer tables only (does NOT unload blobs)
+    free(loadResult_add);      loadResult_add = nullptr;
+    free(loadResult_mult);     loadResult_mult = nullptr;
+    free(loadResult_rms_norm); loadResult_rms_norm = nullptr;
 
-    for (int i = 0; i < num_of_txes; ++i) {
+    free(blobDescriptor_add);      blobDescriptor_add = nullptr;
+    free(blobDescriptor_mult);     blobDescriptor_mult = nullptr;
+    free(blobDescriptor_rms_norm); blobDescriptor_rms_norm = nullptr;
+
+    g_rt.blob_tables_txes = 0;
+    g_rt.blob_state = TsavoriteRuntimeState::BLOB_UNINITIALIZED;
+}
+
+static inline void tsi_blob_unload_only() {
+    // unload blobs if present, keep tables allocated
+    if (blobDescriptor_add) {
+        for (uint32_t i = 0; i < num_of_txes; ++i) {
+            if (blobDescriptor_add[i]) {
+                tsi_unload_blob(blobDescriptor_add[i]);
+                blobDescriptor_add[i] = nullptr;
+            }
+        }
+    }
+    if (blobDescriptor_mult) {
+        for (uint32_t i = 0; i < num_of_txes; ++i) {
+            if (blobDescriptor_mult[i]) {
+                tsi_unload_blob(blobDescriptor_mult[i]);
+                blobDescriptor_mult[i] = nullptr;
+            }
+        }
+    }
+    if (blobDescriptor_rms_norm) {
+        for (uint32_t i = 0; i < num_of_txes; ++i) {
+            if (blobDescriptor_rms_norm[i]) {
+                tsi_unload_blob(blobDescriptor_rms_norm[i]);
+                blobDescriptor_rms_norm[i] = nullptr;
+            }
+        }
+    }
+
+    // best-effort: clear loadResult_* entries too
+    if (loadResult_add)      memset(loadResult_add,      0, num_of_txes * sizeof(void *));
+    if (loadResult_mult)     memset(loadResult_mult,     0, num_of_txes * sizeof(void *));
+    if (loadResult_rms_norm) memset(loadResult_rms_norm, 0, num_of_txes * sizeof(void *));
+
+    g_rt.blob_state = TsavoriteRuntimeState::BLOB_TABLES_ALLOCATED;
+}
+
+static inline void tsi_blob_ensure_tables_allocated() {
+    if (g_rt.blob_state != TsavoriteRuntimeState::BLOB_UNINITIALIZED) {
+        // if sized for a different txe count, reset hard (future-proof)
+        if (g_rt.blob_tables_txes != num_of_txes) {
+            tsi_blob_unload_only();
+            tsi_blob_free_tables();
+        } else {
+            return;
+        }
+    }
+
+    loadResult_add      = (void **)calloc(num_of_txes, sizeof(void *));
+    loadResult_mult     = (void **)calloc(num_of_txes, sizeof(void *));
+    loadResult_rms_norm = (void **)calloc(num_of_txes, sizeof(void *));
+
+    blobDescriptor_add      = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
+    blobDescriptor_mult     = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
+    blobDescriptor_rms_norm = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
+
+    if (!loadResult_add || !loadResult_mult || !loadResult_rms_norm ||
+        !blobDescriptor_add || !blobDescriptor_mult || !blobDescriptor_rms_norm) {
+        // free any partial allocations before abort
+        tsi_blob_free_tables();
+        fprintf(stderr, "Failed to allocate blob tables (num_of_txes=%u)\n", (unsigned)num_of_txes);
+        abort();
+    }
+
+    g_rt.blob_tables_txes = num_of_txes;
+    g_rt.blob_state = TsavoriteRuntimeState::BLOB_TABLES_ALLOCATED;
+}
+
+static void tsi_load_all_blobs() {
+    char blob_name[64];
+    uint32_t failed_txe = 0;
+
+    // already loaded
+    if (g_rt.blob_state == TsavoriteRuntimeState::BLOB_BLOBS_LOADED) {
+        return;
+    }
+
+    // ensure tables exist (allocates if needed)
+    tsi_blob_ensure_tables_allocated();
+
+    for (uint32_t i = 0; i < num_of_txes; ++i) {
         char name_add[64];
         char name_mult[64];
         char name_rms[64];
 
-        snprintf(name_add,  sizeof(name_add),  "txe_add_dev%d", i);
-        snprintf(name_mult, sizeof(name_mult), "txe_mult_dev%d", i);
-        snprintf(name_rms,  sizeof(name_rms),  "txe_rms_norm_dev%d", i);
+        snprintf(name_add,  sizeof(name_add),  "txe_add_dev%u",  i);
+        snprintf(name_mult, sizeof(name_mult), "txe_mult_dev%u", i);
+        snprintf(name_rms,  sizeof(name_rms),  "txe_rms_norm_dev%u", i);
 
-        // MUST end in ".../blobs/txe_add"
+        failed_txe = i;
+
+        // ADD
         loadResult_add[i] = tsi_load_blob(
             i,
             name_add,
@@ -210,24 +463,21 @@ static void tsi_load_all_blobs() {
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"
             ).c_str()
         );
-
         if (!loadResult_add[i]) {
             strcpy(blob_name, name_add);
             goto error;
-       }
-
-       blobDescriptor_add[i] =
+        }
+        blobDescriptor_add[i] =
             static_cast<BlobDescriptor *>(loadResult_add[i]);
 
-        // MUST end in ".../blobs/txe_mult"
-       loadResult_mult[i] = tsi_load_blob(
+        // MULT
+        loadResult_mult[i] = tsi_load_blob(
             i,
             name_mult,
             blob_prefix(
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"
             ).c_str()
         );
-
         if (!loadResult_mult[i]) {
             strcpy(blob_name, name_mult);
             goto error;
@@ -235,15 +485,14 @@ static void tsi_load_all_blobs() {
         blobDescriptor_mult[i] =
             static_cast<BlobDescriptor *>(loadResult_mult[i]);
 
-        // MUST end in ".../blobs/txe_rms_norm"
-       loadResult_rms_norm[i] = tsi_load_blob(
+        // RMS NORM
+        loadResult_rms_norm[i] = tsi_load_blob(
             i,
             name_rms,
             blob_prefix(
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"
             ).c_str()
         );
-
         if (!loadResult_rms_norm[i]) {
             strcpy(blob_name, name_rms);
             goto error;
@@ -251,38 +500,75 @@ static void tsi_load_all_blobs() {
         blobDescriptor_rms_norm[i] =
             static_cast<BlobDescriptor *>(loadResult_rms_norm[i]);
     }
+
+    // success
+    g_rt.blob_state = TsavoriteRuntimeState::BLOB_BLOBS_LOADED;
     return;
+
 error:
     fprintf(stderr,
-            "Failed to load blob (txe=%u, name=%s)\n", i, blob_name);
+        "Failed to load blob (txe=%u, name=%s)\n",
+        failed_txe, blob_name
+    );
+
+    // Cleanup: unload any blobs that did load + free tables before abort
+    tsi_blob_unload_only();   // unload any blobs that succeeded
+    tsi_blob_free_tables();   // free calloc’d tables
+
+    // preserve existing hard‑fail behavior
     tsi_cleanup();
     abort();
 }
 
-
 static void tsi_unload_all_blobs() {
-for (int i=0; i < num_of_txes; ++i) {
-  tsi_unload_blob(blobDescriptor_add[i]);
-  tsi_unload_blob(blobDescriptor_mult[i]);
-  tsi_unload_blob(blobDescriptor_rms_norm[i]);
+    if (g_rt.blob_state == TsavoriteRuntimeState::BLOB_UNINITIALIZED) {
+        return;
+    }
+
+    // if blobs were loaded (or partially loaded), unload them
+    if (g_rt.blob_state == TsavoriteRuntimeState::BLOB_BLOBS_LOADED ||
+        g_rt.blob_state == TsavoriteRuntimeState::BLOB_TABLES_ALLOCATED) {
+        tsi_blob_unload_only();
+    }
+
+    // always free tables after unload
+    tsi_blob_free_tables();
 }
-  return;
-}
+
 
 // Centralized TSI runtime initialization - called once globally
+//
+
 static void ensure_tsi_runtime_initialized() {
-  if (!runtime_initialized) {
+    if (runtime_initialized) {
+        GGML_TSAVORITE_LOG_INFO("\n tsavorite backend already initialized \n");
+        return;
+    }
     std::string mainProfilerName = "OPU ";
     tsirt::utils::TSIProfiler::initialize();
 
-    // TSI Run time Initalization
-    #ifdef GGML_TARGET_POSIX
-        num_of_txes = 1;
-        multi_thread_enable = false;
-    #else
-        num_of_txes = NUM_OF_TXES;
-        multi_thread_enable = false;
-    #endif /* GGML_TARGET_POSIX */
+    // YAML placeholder (intentionally ignored)
+    const char *yaml_path_env = std::getenv("TSAVORITE_MODEL_DEPLOYMENT_YAML");
+    std::string yaml_path = yaml_path_env ? std::string(yaml_path_env)
+                                   : std::string("tsavorite-model-deployment.yaml");
+    tsi_deploy_cfg_t cfg = tsi_read_deploy_yaml(yaml_path);
+
+    int txe = (cfg.txe_count > 0) ? cfg.txe_count : (int)NUM_OF_TXES;
+
+    num_of_txes = (uint32_t)txe;
+    multi_thread_enable = cfg.has_mt ? cfg.mt_enable : false;
+
+    // Just to Test
+    printf("\n TSI deploy yaml=%s txe_count=%u multi_thread_enable=%d\n",
+             yaml_path.c_str(), (unsigned)num_of_txes, (int)multi_thread_enable);
+
+    if (txe <= 0) txe = 1;
+    // IMPORTANT: fixed-size arrays in this file => clamp
+    if (txe > (int)NUM_OF_TXES) txe = (int)NUM_OF_TXES;
+
+    // INTENTIONAL PLACEHOLDER
+    multi_thread_enable = false;
+    num_of_txes = 1;
     tsi_initialize(num_of_txes, NULL);
 
     if (multi_thread_enable) {
@@ -297,14 +583,14 @@ static void ensure_tsi_runtime_initialized() {
         abort();
     }
     
-    for (int i = 0; i < num_of_txes; i++) {
+    for (uint32_t i = 0; i < num_of_txes; i++) {
         device_free[i] = true;
     }
 
     workers.reserve(num_of_txes);
     runtime_initialized = true;
     GGML_TSAVORITE_LOG_INFO("Profiler and TSI runtime initialized early in registration\n");
-  }
+    return;
 }
 #ifdef USE_COMMAND_BUFFERS
 typedef struct _txe_command_queue_t *txe_command_queue_s;
@@ -694,13 +980,13 @@ static inline int acquire_device_blocking() {
     std::unique_lock<std::mutex> lock(device_mutex);
 
     device_cv.wait(lock, [] {
-        for (int i = 0; i < num_of_txes; ++i)
+        for (uint32_t i = 0; i < num_of_txes; ++i)
             if (device_free[i])
                 return true;
         return false;
     });
 
-    for (int i = 0; i < num_of_txes; ++i) {
+    for (uint32_t i = 0; i < num_of_txes; ++i) {
         if (device_free[i]) {
             device_free[i] = false;
             return i;
@@ -729,7 +1015,7 @@ static inline void join_all_workers() {
 
     {
         std::lock_guard<std::mutex> lock(device_mutex);
-        for (int i = 0; i < num_of_txes; ++i)
+        for (uint32_t i = 0; i < num_of_txes; ++i)
             device_free[i] = true;
     }
     device_cv.notify_all();
@@ -789,8 +1075,8 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add[deviceId], packedHandle);
 
     if (!blobExecuteCmd) {
-        printf("tsi_launch_blob failed for device %d and blobDescriptor %s\n",
-                                     deviceId, (char *)blobDescriptor_add[deviceId]);
+        printf("tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
+                                     (unsigned long)deviceId, (char *)blobDescriptor_add[deviceId]);
         tsi_cleanup();
         abort();
     }
@@ -874,8 +1160,8 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
     const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult[deviceId], packedHandle);
     if (!blobExecuteCmd) {
-        printf("tsi_launch_blob failed for device %d and blobDescriptor %s\n",
-                                     deviceId, (char *)blobDescriptor_mult[deviceId]);
+        printf("tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
+                                     (unsigned long)deviceId, (char *)blobDescriptor_mult[deviceId]);
         tsi_cleanup();
         abort();
     }
@@ -962,8 +1248,8 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
     const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm[deviceId], packedHandle);
     if (!blobExecuteCmd) {
-        printf("tsi_launch_blob failed for device %d and blobDescriptor %s\n",
-                                     deviceId, (char *)blobDescriptor_rms_norm[deviceId]);
+        printf("tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
+                                     (unsigned long)deviceId, (char *)blobDescriptor_rms_norm[deviceId]);
         tsi_cleanup();
         abort();
     }
