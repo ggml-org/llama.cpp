@@ -157,7 +157,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
     cur = build_attn(inp,
-                nullptr, nullptr,
+                nullptr, nullptr, nullptr,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "attn_pregate", il);
 
@@ -172,7 +172,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
     cur = ggml_mul(ctx0, cur, gate);
     cb(cur, "attn_gated", il);
 
-    cur = build_lora_mm(model.layers[il].wo, cur);
+    cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
     cb(cur, "attn_output", il);
 
     return cur;

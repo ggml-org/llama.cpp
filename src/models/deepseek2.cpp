@@ -84,7 +84,7 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
             cb(Kcur, "k_pe", il);
 
             cur = build_attn(inp_attn_kv,
-                        model.layers[il].wo, NULL,
+                        model.layers[il].wo, NULL, model.layers[il].wo_s,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
@@ -182,7 +182,7 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
 
                 // note: MLA with the absorption optimization converts into MQA (ie: GQA with 1 group)
                 cur = build_attn(inp_attn_k,
-                        model.layers[il].wo, NULL,
+                        model.layers[il].wo, NULL, model.layers[il].wo_s,
                         Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
             } else {
                 ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cmpr);
@@ -219,7 +219,7 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
 
                 // note: MLA without the absorption optimization converts into MHA (ie: GQA with full n_head groups)
                 cur = build_attn(inp_attn_kv,
-                            model.layers[il].wo, NULL,
+                            model.layers[il].wo, NULL, model.layers[il].wo_s,
                             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             }
         }

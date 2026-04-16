@@ -73,7 +73,7 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    NULL, NULL,
+                    NULL, NULL, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
 
             cur = build_norm(cur,

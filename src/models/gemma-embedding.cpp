@@ -65,7 +65,7 @@ llm_build_gemma_embedding::llm_build_gemma_embedding(const llama_model & model, 
 
             cur =
                 build_attn(inp_attn,
-                    model.layers[il].wo, NULL,
+                    model.layers[il].wo, NULL, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
         }
 

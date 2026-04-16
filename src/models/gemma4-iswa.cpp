@@ -62,7 +62,7 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
         // this is to mirror Gemma4Attention in pytorch code
         ggml_tensor * Qcur;
         {
-            Qcur = build_lora_mm(model.layers[il].wq, cur);
+            Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
             cb(Qcur, "Qcur", il);
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
@@ -77,11 +77,11 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
 
         // self-attention
         if (hparams.has_kv(il)) {
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
             cb(Kcur, "Kcur", il);
 
             ggml_tensor * Vcur = model.layers[il].wv
-                                    ? build_lora_mm(model.layers[il].wv, cur)
+                                    ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
                                     : Kcur; // if v_proj is not present, use Kcur as Vcur
             cb(Vcur, "Vcur", il);
 
@@ -100,12 +100,12 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
             cb(Kcur, "Kcur_pos", il);
 
             cur = build_attn(inp_attn, model.layers[il].wo,
-                    nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
+                    nullptr, model.layers[il].wo_s, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
                     hparams.f_attention_scale, il);
         } else {
             // reuse KV cache of earlier layers
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr,
+                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
 
@@ -132,9 +132,9 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
             cb(cur_mlp, "ffn_norm_1", il);
 
             cur_mlp = build_ffn(cur_mlp,
-                    model.layers[il].ffn_up,   nullptr, nullptr,
-                    model.layers[il].ffn_gate, nullptr, nullptr,
-                    model.layers[il].ffn_down, nullptr, nullptr,
+                    model.layers[il].ffn_up,   nullptr, model.layers[il].ffn_up_s,
+                    model.layers[il].ffn_gate, nullptr, model.layers[il].ffn_gate_s,
+                    model.layers[il].ffn_down, nullptr, model.layers[il].ffn_down_s,
                     nullptr,
                     LLM_FFN_GELU, LLM_FFN_PAR, il);
             cur_mlp = build_norm(cur_mlp,
@@ -184,9 +184,9 @@ llm_build_gemma4_iswa::llm_build_gemma4_iswa(const llama_model & model, const ll
             cb(cur, "ffn_norm", il);
 
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   nullptr, nullptr,
-                    model.layers[il].ffn_gate, nullptr, nullptr,
-                    model.layers[il].ffn_down, nullptr, nullptr,
+                    model.layers[il].ffn_up,   nullptr, model.layers[il].ffn_up_s,
+                    model.layers[il].ffn_gate, nullptr, model.layers[il].ffn_gate_s,
+                    model.layers[il].ffn_down, nullptr, model.layers[il].ffn_down_s,
                     nullptr,
                     LLM_FFN_GELU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);

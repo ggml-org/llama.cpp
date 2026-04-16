@@ -94,7 +94,7 @@ llm_build_glm4_moe::llm_build_glm4_moe(const llama_model & model, const llm_grap
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL,
+                    model.layers[il].wo, NULL, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
         if (il == n_transformer_layers - 1 && inp_out_ids) {

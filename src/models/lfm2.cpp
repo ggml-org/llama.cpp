@@ -66,7 +66,7 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
                           attn_factor, beta_fast, beta_slow);
 
         cur = build_attn(inp_attn,
-                model.layers[il].wo, NULL,
+                model.layers[il].wo, NULL, model.layers[il].wo_s,
                 q, k, v, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
 
         cb(cur, "model.layers.{}.self_attn.out_proj", il);

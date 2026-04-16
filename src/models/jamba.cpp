@@ -42,7 +42,7 @@ llm_build_jamba::llm_build_jamba(const llama_model & model, const llm_graph_para
 
             // No RoPE :)
             cur = build_attn(inp_hybrid->get_attn(),
-                    model.layers[il].wo, NULL,
+                    model.layers[il].wo, NULL, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, NULL, NULL, NULL, 1.0f/sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1 && inp_out_ids) {

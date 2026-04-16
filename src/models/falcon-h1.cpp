@@ -52,7 +52,7 @@ llm_build_falcon_h1::llm_build_falcon_h1(const llama_model & model, const llm_gr
         cb(Vcur, "Vcur-post-rope", il);
 
         ggml_tensor * attn_out = build_attn(inp->get_attn(),
-                                    model.layers[il].wo, NULL,
+                                    model.layers[il].wo, NULL, model.layers[il].wo_s,
                                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
         cb(attn_out, "attn_out", il);
 
