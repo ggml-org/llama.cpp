@@ -58,6 +58,10 @@ json task_params::to_json(bool only_metrics) const {
             {"dry_base",                  sampling.dry_base},
             {"dry_allowed_length",        sampling.dry_allowed_length},
             {"dry_penalty_last_n",        sampling.dry_penalty_last_n},
+            {"repeat_line_window",        sampling.repeat_line_window},
+            {"repeat_line_min_length",    sampling.repeat_line_min_length},
+            {"repeat_line_delimiters",    sampling.repeat_line_delimiters},
+            {"repeat_line_temp_boost",    sampling.repeat_line_temp_boost},
             {"mirostat",                  sampling.mirostat},
             {"mirostat_tau",              sampling.mirostat_tau},
             {"mirostat_eta",              sampling.mirostat_eta},
@@ -115,6 +119,10 @@ json task_params::to_json(bool only_metrics) const {
         {"dry_allowed_length",        sampling.dry_allowed_length},
         {"dry_penalty_last_n",        sampling.dry_penalty_last_n},
         {"dry_sequence_breakers",     sampling.dry_sequence_breakers},
+        {"repeat_line_window",        sampling.repeat_line_window},
+        {"repeat_line_min_length",    sampling.repeat_line_min_length},
+        {"repeat_line_delimiters",    sampling.repeat_line_delimiters},
+        {"repeat_line_temp_boost",    sampling.repeat_line_temp_boost},
         {"mirostat",                  sampling.mirostat},
         {"mirostat_tau",              sampling.mirostat_tau},
         {"mirostat_eta",              sampling.mirostat_eta},
@@ -288,11 +296,15 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.penalty_repeat     = json_value(data, "repeat_penalty",      defaults.sampling.penalty_repeat);
     params.sampling.penalty_freq       = json_value(data, "frequency_penalty",   defaults.sampling.penalty_freq);
     params.sampling.penalty_present    = json_value(data, "presence_penalty",    defaults.sampling.penalty_present);
-    params.sampling.dry_multiplier     = json_value(data, "dry_multiplier",      defaults.sampling.dry_multiplier);
-    params.sampling.dry_base           = json_value(data, "dry_base",            defaults.sampling.dry_base);
-    params.sampling.dry_allowed_length = json_value(data, "dry_allowed_length",  defaults.sampling.dry_allowed_length);
-    params.sampling.dry_penalty_last_n = json_value(data, "dry_penalty_last_n",  defaults.sampling.dry_penalty_last_n);
-    params.sampling.mirostat           = json_value(data, "mirostat",            defaults.sampling.mirostat);
+    params.sampling.dry_multiplier         = json_value(data, "dry_multiplier",         defaults.sampling.dry_multiplier);
+    params.sampling.dry_base               = json_value(data, "dry_base",               defaults.sampling.dry_base);
+    params.sampling.dry_allowed_length     = json_value(data, "dry_allowed_length",     defaults.sampling.dry_allowed_length);
+    params.sampling.dry_penalty_last_n     = json_value(data, "dry_penalty_last_n",     defaults.sampling.dry_penalty_last_n);
+    params.sampling.repeat_line_window     = json_value(data, "repeat_line_window",     defaults.sampling.repeat_line_window);
+    params.sampling.repeat_line_min_length = json_value(data, "repeat_line_min_length", defaults.sampling.repeat_line_min_length);
+    params.sampling.repeat_line_delimiters = json_value(data, "repeat_line_delimiters", defaults.sampling.repeat_line_delimiters);
+    params.sampling.repeat_line_temp_boost = json_value(data, "repeat_line_temp_boost", defaults.sampling.repeat_line_temp_boost);
+    params.sampling.mirostat               = json_value(data, "mirostat",               defaults.sampling.mirostat);
     params.sampling.mirostat_tau       = json_value(data, "mirostat_tau",        defaults.sampling.mirostat_tau);
     params.sampling.mirostat_eta       = json_value(data, "mirostat_eta",        defaults.sampling.mirostat_eta);
     params.sampling.adaptive_target    = json_value(data, "adaptive_target",     defaults.sampling.adaptive_target);

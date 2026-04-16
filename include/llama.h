@@ -1417,6 +1417,24 @@ extern "C" {
                           const char ** seq_breakers,
                               size_t    num_breakers);
 
+    /// repeat-line: segment-level loop detection.
+    ///
+    /// detects when the model repeats the same sentence/segment (which token-level repeat_penalty cannot catch).
+    /// when a repeated segment is detected, temperature is temporarily boosted.
+    ///
+    /// params:
+    ///   vocab       - vocabulary (for token decoding)
+    ///   window      - number of past segments to compare against (0 = disabled)
+    ///   min_length  - ignore segments shorter than this (default 10, avoids false positives like "Ok.")
+    ///   delimiters  - characters that end a segment (default "\n.!?:")
+    ///   temp_boost  - temperature boost applied when a loop is detected (default 0.3)
+    LLAMA_API struct llama_sampler * llama_sampler_init_repeat_line(
+            const struct llama_vocab * vocab,
+                             int32_t   window,
+                             int32_t   min_length,
+                          const char * delimiters,
+                               float   temp_boost);
+
     /// adaptive-p: select tokens near a configurable target probability over time.
     ///
     /// the adaptive-p sampler transforms the token probability distribution to favor tokens
