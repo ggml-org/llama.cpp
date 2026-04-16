@@ -15,7 +15,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
 // Must be multiple of 32
@@ -278,12 +278,12 @@ static inline void hvx_scale_vec_f32_aa(uint8_t * restrict dst, const uint8_t * 
 static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_fa_context * factx = (struct htp_fa_context *) data;
     const struct htp_ops_context * octx = factx->octx;
-    const struct htp_tensor * q = &octx->src0;
-    const struct htp_tensor * k = &octx->src1;
-    const struct htp_tensor * v = &octx->src2;
-    const struct htp_tensor * mask  = (octx->src3.data) ? &octx->src3 : NULL;
-    const struct htp_tensor * sinks = (octx->src4.data) ? &octx->src4 : NULL;
-    const struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * q     = octx->src[0];
+    const struct htp_tensor * k     = octx->src[1];
+    const struct htp_tensor * v     = octx->src[2];
+    const struct htp_tensor * mask  = octx->src[3];
+    const struct htp_tensor * sinks = octx->src[4];
+    const struct htp_tensor * dst   = octx->dst;
 
     const uint32_t neq0 = q->ne[0];
     const uint32_t neq1 = q->ne[1];
@@ -610,11 +610,11 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 }
 
 int op_flash_attn_ext(struct htp_ops_context * octx) {
-    const struct htp_tensor * q = &octx->src0;
-    const struct htp_tensor * k = &octx->src1;
-    const struct htp_tensor * v = &octx->src2;
-    const struct htp_tensor * mask = (octx->src3.data) ? &octx->src3 : NULL;
-    const struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * q    = octx->src[0];
+    const struct htp_tensor * k    = octx->src[1];
+    const struct htp_tensor * v    = octx->src[2];
+    const struct htp_tensor * mask = octx->src[3];
+    const struct htp_tensor * dst  = octx->dst;
 
     // Check support
     if ((q->type != HTP_TYPE_F16 && q->type != HTP_TYPE_F32) || k->type != HTP_TYPE_F16 || v->type != HTP_TYPE_F16) {
@@ -701,13 +701,11 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-    octx->src2_spad.data = octx->src1_spad.data + octx->src1_spad.size;
-    octx->src3_spad.data = octx->src2_spad.data + octx->src2_spad.size;
-    octx->dst_spad.data  = octx->src3_spad.data + octx->src3_spad.size;
-
-    // FARF(ERROR, "fa: qrows-per-thread %u", factx.qrows_per_thread);
+    octx->src0_spad.data = octx->ctx->vtcm_base;                        octx->src0_spad.src = NULL;
+    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size; octx->src1_spad.src = NULL;
+    octx->src2_spad.data = octx->src1_spad.data + octx->src1_spad.size; octx->src2_spad.src = NULL;
+    octx->src3_spad.data = octx->src2_spad.data + octx->src2_spad.size; octx->src3_spad.src = NULL;
+    octx->dst_spad.data  = octx->src3_spad.data + octx->src3_spad.size; octx->dst_spad.src  = NULL;
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         worker_pool_run_func(octx->ctx->worker_pool, flash_attn_ext_f16_thread, &factx, octx->n_threads);

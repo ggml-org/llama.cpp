@@ -130,6 +130,20 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             buf_a[buf_idx    ] = FLOAT_TYPEV2(v.xy);
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(v.zw);
+#elif defined(DATA_A_Q1_0)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint ib = idx / 16;
+            const uint iqs = idx & 0xfu;
+
+            const float d = float(data_a[ib].d);
+            const uint bits = uint(data_a[ib].qs[iqs]);
+
+            buf_a[buf_idx    ] = FLOAT_TYPEV2((bits & 0x01u) != 0u ? d : -d, (bits & 0x02u) != 0u ? d : -d);
+            buf_a[buf_idx + 1] = FLOAT_TYPEV2((bits & 0x04u) != 0u ? d : -d, (bits & 0x08u) != 0u ? d : -d);
+            buf_a[buf_idx + 2] = FLOAT_TYPEV2((bits & 0x10u) != 0u ? d : -d, (bits & 0x20u) != 0u ? d : -d);
+            buf_a[buf_idx + 3] = FLOAT_TYPEV2((bits & 0x40u) != 0u ? d : -d, (bits & 0x80u) != 0u ? d : -d);
 #elif defined(DATA_A_Q2_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
@@ -486,6 +500,23 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             buf_a[buf_idx    ] = FLOAT_TYPEV2(kvalues_mxfp4[vui  & 0xF] * d,
                                               kvalues_mxfp4[vui2 & 0xF] * d);
             buf_a[buf_idx + 8] = FLOAT_TYPEV2(kvalues_mxfp4[vui  >>  4] * d,
+                                              kvalues_mxfp4[vui2 >>  4] * d);
+#elif defined(DATA_A_NVFP4)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            // lo and hi nibbles are 8 elements apart, which doesn't quite line up with
+            // how the thread mapping and buf_idx calculation works for other types.
+            const uint buf_idx = col * SHMEM_STRIDE + (row & 3) + (row & ~3) * 2;
+
+            const uint ib = idx / 16u;
+            const uint sub = (idx & 0xC) >> 2;
+            const uint iqs = (idx & 0xF) * 2;
+            const float d = ue4m3_to_fp32(data_a[ib].d[sub]) * 0.5;
+            const uint vui = uint(data_a[ib].qs[iqs]);
+            const uint vui2 = uint(data_a[ib].qs[iqs+1]);
+
+            buf_a[buf_idx    ] = FLOAT_TYPEV2(kvalues_mxfp4[vui  & 0xF] * d,
+                                              kvalues_mxfp4[vui2 & 0xF] * d);
+            buf_a[buf_idx + 4] = FLOAT_TYPEV2(kvalues_mxfp4[vui  >>  4] * d,
                                               kvalues_mxfp4[vui2 >>  4] * d);
 #endif
 }
