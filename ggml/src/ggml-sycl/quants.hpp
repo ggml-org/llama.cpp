@@ -44,7 +44,7 @@ template <> struct block_q_t<GGML_TYPE_Q4_0> {
         static constexpr uint32_t qk       = QK4_0;
         static constexpr uint32_t qi       = QI4_0;
         static constexpr uint32_t qr       = QR4_0;
-        static constexpr uint32_t vdr_mmvq = 2;
+        static constexpr uint32_t vdr_mmvq = 4; // was 2: more blocks per subgroup reduces dp4a overhead
     };
 
     static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
@@ -63,7 +63,7 @@ template <> struct block_q_t<GGML_TYPE_Q4_K> {
         static constexpr uint32_t qk       = QK_K;
         static constexpr uint32_t qi       = QI4_K;
         static constexpr uint32_t qr       = QR4_K;
-        static constexpr uint32_t vdr_mmvq = 2;
+        static constexpr uint32_t vdr_mmvq = 4; // was 2: more blocks per subgroup reduces dp4a overhead
     };
 
     static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
@@ -84,7 +84,7 @@ template <> struct block_q_t<GGML_TYPE_Q6_K> {
         static constexpr uint32_t qk       = QK_K;
         static constexpr uint32_t qi       = QI6_K;
         static constexpr uint32_t qr       = QR6_K;
-        static constexpr uint32_t vdr_mmvq = 1;
+        static constexpr uint32_t vdr_mmvq = 2; // was 1: doubled for better dp4a utilization
     };
 
     static constexpr std::pair<int, int> get_block_offset(const int block_index, const int n_blocks) {
