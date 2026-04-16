@@ -3008,10 +3008,50 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     return GGML_STATUS_SUCCESS;
 }
 
+
+static void ggml_backend_webgpu_set_tensor_async(
+        ggml_backend_t backend,
+        ggml_tensor * tensor, 
+        const void * data, size_t offset, size_t size) {            
+    GGML_UNUSED(backend);
+    ggml_backend_webgpu_buffer_context * buf_ctx = 
+        (ggml_backend_webgpu_buffer_context * ) tensor->buffer->context;
+    
+
+    size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
+    // CopyBufferToBuffer requires 4 byte alignment on size
+    // Round up size to a multiple of 4
+    size_t aligned_size = (size + 3) & ~3ULL;
+
+    // Create a one-shot staging buffer
+    // TODO(nikhil.jain) worthwhile to use a buffer arena for this?
+    wgpu::BufferDescriptor desc{};
+    desc.size = aligned_size;
+    desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+    // Allow CPU to write immediately upon buffer creation
+    desc.mappedAtCreation = true;
+    desc.label = "set_tensor_async_scratch_buffer";
+    wgpu::Buffer staging = buf_ctx->global_ctx->device.CreateBuffer(&desc);
+
+    void * mapped = staging.GetMappedRang(0, aligned_size);
+    std::memcpy(mapped, data, size);
+    if (size < aligned_size) {
+        // zero out extra padded space on align
+        std::memset(static_cast<uint8_t*>(mapped) + size, 0, aligned_size - size);
+    }
+    staging.Unmap();
+
+    wgpu::CommandEncoder encoder = buf_ctx->global_ctx->device.CreateCommandEncoder();
+    encoder.CopyBufferToBuffer(staging, 0, buf_ctx->buffer, total_offset, aligned_size);
+    wgpu::CommandBuffer cmds = encoder.Finish();
+    buf_ctx->global_ctx->queue.Submit(1, &cmds);
+}
+
+
 static ggml_backend_i ggml_backend_webgpu_i = {
     /* .get_name                = */ ggml_backend_webgpu_name,
     /* .free                    = */ ggml_backend_webgpu_free,
-    /* .set_tensor_async        = */ NULL,
+    /* .set_tensor_async        = */ ggml_backend_webgpu_set_tensor_async,
     /* .get_tensor_async        = */ NULL,
     /* .get_tensor_2d_async     = */ NULL,
     /* .set_tensor_2d_async     = */ NULL,
