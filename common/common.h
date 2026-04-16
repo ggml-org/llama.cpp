@@ -315,7 +315,7 @@ struct common_params_speculative {
     // general-purpose speculative decoding parameters
 
     int32_t n_max   = 16; // maximum number of tokens to draft during speculative decoding
-    int32_t n_min   = 0; // minimum number of draft tokens to use for speculative decoding
+    int32_t n_min   = 0;  // minimum number of draft tokens to use for speculative decoding
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min   = 0.75f; // minimum speculative decoding probability (greedy)
 

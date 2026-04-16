@@ -711,8 +711,8 @@ private:
 
             server_slot * slot = get_slot();
 
-            SLT_DBG(*slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
-                    ckpt.pos_min, ckpt.pos_max, (float) ckpt.data.size() / 1024 / 1024);
+            SLT_DBG(*slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                    ckpt.pos_min, ckpt.pos_max, n_tokens, (float) ckpt.data.size() / 1024 / 1024);
 
             // save sampler (we may want to restore the RNG in the sampler after refusal of a draft)
             smpl.reset(common_sampler_clone(slot->smpl.get()));

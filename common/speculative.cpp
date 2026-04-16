@@ -1299,7 +1299,7 @@ struct common_speculative_session::impl {
                 draft[0], draft[1], draft[2]);
         }
 
-        if (params_spec.n_min > (int) draft.size()) {
+        if (spec_ckpt_n_denials == 0 && params_spec.n_min > (int) draft.size()) {
             LOG_DBG("ignoring small draft: %d < %d\n", (int) draft.size(), params_spec.n_min);
             leave_draft_state();
             return draft;
@@ -1351,7 +1351,7 @@ struct common_speculative_session::impl {
                 spec_has_ckpt = false;
 
                 spec_ckpt_n_denials++;
-                if (ids.size() > 1u + static_cast<std::size_t>(params_spec.n_min) && spec_ckpt_n_denials == 1) {
+                if (ids.size() > 1u && spec_ckpt_n_denials == 1) {
                     // we will do the batch again but with the shortened draft
                     return common_speculative_accept_response(std::move(ids), n_draft, true);
                 }
