@@ -48,15 +48,21 @@ typedef uint16_t et_fp16_t;
 //   [0..2047]       accumulator (FA_DV_MAX * sizeof(float))
 //   [2048..4095]    kpanel buffer 0 (32 × 32 × 2 = 2048 bytes)
 //   [4096..6143]    kpanel buffer 1 (2048 bytes)
-// Sync: ET_BARRIER_MINION per dk_chunk.
+//   [6144..6207]    stats line - (M_p at +0, S_p at +4), own cache line
 // Double-buffering ensures hart 0 finishes buf[N%2] before hart 1
 // overwrites it at chunk N+2.
+//
+// The stats line reserves a cache-line-aligned slot for split-KV softmax
+// partials (M_p, S_p). With k_splits=1 the slot is currently unused; step 2
+// will populate it and use peer minions' slots during the reduction.
 #define SCP_ACC_OFF       0
 #define SCP_ACC_STRIDE    (FA_DV_MAX * sizeof(float))           // 2048
 #define SCP_KPANEL_SIZE   (32 * 32 * sizeof(et_fp16_t))         // 2048
 #define SCP_KP0_OFF       SCP_ACC_STRIDE                        // 2048
 #define SCP_KP1_OFF       (SCP_KP0_OFF + SCP_KPANEL_SIZE)       // 4096
-#define SCP_PER_MINION    (SCP_KP1_OFF + SCP_KPANEL_SIZE)       // 6144
+#define SCP_STATS_OFF     (SCP_KP1_OFF + SCP_KPANEL_SIZE)       // 6144
+#define SCP_STATS_SIZE    64                                    // own cache line
+#define SCP_PER_MINION    (SCP_STATS_OFF + SCP_STATS_SIZE)      // 6208
 
 struct ggml_et_flash_attn_ext_params {
     struct ggml_tensor src0;     // Q (F32)
@@ -318,8 +324,6 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
 
     const int is_hart1 = hart_id & 1;
     uint64_t local_minion = (hart_id >> 1) & 0x1F;
-    uint64_t my_id = shire_id * MINIONS_PER_SHIRE + local_minion;
-    uint64_t total_minions = NUM_COMPUTE_SHIRES * MINIONS_PER_SHIRE;
 
     struct ggml_tensor * q   = &params->src0;
     struct ggml_tensor * k   = &params->src1;
@@ -350,6 +354,35 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     const float scale = params->scale;
     const int use_fast_store = (dv % 16 == 0);
 
+    // Split-KV team layout (mirrors mul_mat_f16_matrix_engine.c)
+    //
+    // When total_rows is small compared to the total minion count
+    // (typical for decode: nq=1, nhq small), we group k_splits minions
+    // within the same shire into a team that cooperates on one row by
+    // splitting the KV dimension. Each team member computes a partial
+    // (M_p, S_p, acc_p) over its KV slab; the k_split==0 member
+    // merges the partials with the softmax combine rule.
+    //
+    // Step 1: k_splits is hard-coded to 1 — behavior identical to the
+    //         pre-refactor kernel. Step 2 will derive k_splits from
+    //         total_rows and flip the merge path on.
+    const int64_t nk_tiles = (nk + TILE_KV - 1) / TILE_KV;
+    const int64_t k_splits = 1;
+
+    const int64_t tiles_per_shire = MINIONS_PER_SHIRE / k_splits;
+    const int64_t k_split         = (int64_t)local_minion % k_splits;
+    const int64_t local_tile_idx  = (int64_t)local_minion / k_splits;
+    const int64_t tiles_stride    = (int64_t)NUM_COMPUTE_SHIRES * tiles_per_shire;
+
+    // KV slab for this k_split. With k_splits=1 this is the full range.
+    const int64_t tiles_per_split_rounded = (nk_tiles + k_splits - 1) / k_splits;
+    const int64_t tile_start = k_split * tiles_per_split_rounded;
+    int64_t tile_end = tile_start + tiles_per_split_rounded;
+    if (tile_end > nk_tiles) tile_end = nk_tiles;
+    const int64_t kv_start = tile_start * TILE_KV;
+    int64_t kv_end = tile_end * TILE_KV;
+    if (kv_end > nk) kv_end = nk;
+
     // L2 SCP pointers for this minion
     uint64_t scp_base = local_minion * SCP_PER_MINION;
     et_fp16_t *scp_kp[2] = {
@@ -357,13 +390,13 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
         (et_fp16_t *)et_shire_l2scp_local(scp_base + SCP_KP1_OFF),
     };
 
-    // ================================================================
-    // Hart 1: K-panel packer (barrier-synced)
-    // ================================================================
+    // Hart 1 does K-panel packing
     if (is_hart1) {
         uint32_t chunk_id = 0;
 
-        for (int64_t row = (int64_t)my_id; row < total_rows; row += (int64_t)total_minions) {
+        for (int64_t row = (int64_t)shire_id + local_tile_idx * NUM_COMPUTE_SHIRES;
+             row < total_rows;
+             row += tiles_stride) {
             const int64_t iq3 = row / (nhq * nq);
             const int64_t rem = row % (nhq * nq);
             const int64_t iq2 = rem / nq;
@@ -371,7 +404,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
 
             const char * k_head = k_data + ik2*k->nb[2] + iq3*k->nb[3];
 
-            for (int64_t kv_base = 0; kv_base < nk; kv_base += TILE_KV) {
+            for (int64_t kv_base = kv_start; kv_base < kv_end; kv_base += TILE_KV) {
                 const int64_t kv_count = (kv_base + TILE_KV <= nk) ? TILE_KV : (nk - kv_base);
 
                 for (int64_t dk_chunk = 0; dk_chunk < dk; dk_chunk += TILE_K) {
@@ -401,9 +434,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
         return 0;
     }
 
-    // ================================================================
-    // Hart 0: tensor engine compute (barrier-synced)
-    // ================================================================
+    // Hart 0: tensor engine compute
     setup_cache_scp();
     CLEAR_TENSOR_ERROR;
 
@@ -421,7 +452,9 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
 
     uint32_t chunk_id = 0;
 
-    for (int64_t row = (int64_t)my_id; row < total_rows; row += (int64_t)total_minions) {
+    for (int64_t row = (int64_t)shire_id + local_tile_idx * NUM_COMPUTE_SHIRES;
+         row < total_rows;
+         row += tiles_stride) {
         const int64_t iq3 = row / (nhq * nq);
         const int64_t rem = row % (nhq * nq);
         const int64_t iq2 = rem / nq;
@@ -448,7 +481,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
         flush_to_l2(q_f16, (dk * 2 + 63) / 64, 64);
         WAIT_CACHEOPS;
 
-        for (int64_t kv_base = 0; kv_base < nk; kv_base += TILE_KV) {
+        for (int64_t kv_base = kv_start; kv_base < kv_end; kv_base += TILE_KV) {
             const int64_t kv_count = (kv_base + TILE_KV <= nk) ? TILE_KV : (nk - kv_base);
 
             // Set tensor_mask for partial tiles
