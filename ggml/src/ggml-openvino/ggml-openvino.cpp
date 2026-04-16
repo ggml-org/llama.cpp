@@ -608,8 +608,7 @@ static void ggml_backend_openvino_free(ggml_backend_t backend) {
 
     if (ctx->runtime_context) {
         auto r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);
-        r_ctx->backend_count--;
-        if (r_ctx->backend_count == 0) {
+        if (--r_ctx->backend_count == 0) {
             r_ctx->clear_caches();
         }
     }
@@ -658,7 +657,12 @@ static ggml_guid_t ggml_backend_openvino_guid(void) {
 }
 
 static std::shared_ptr<ov_runtime_context> get_ov_runtime_context_ptr() {
-    static std::shared_ptr<ov_runtime_context> r_ctx = std::make_shared<ov_runtime_context>();
+    static std::shared_ptr<ov_runtime_context> r_ctx = [] {
+        auto ctx = std::make_shared<ov_runtime_context>();
+        ctx->device = ggml_openvino_get_device_name();
+        ctx->stateful = is_stateful_enabled() && !ggml_openvino_is_npu();
+        return ctx;
+    }();
     return r_ctx;
 }
 
@@ -683,8 +687,6 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_openvino_init(int device) {
     }
 
     std::shared_ptr<ov_runtime_context> r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);
-    r_ctx->device = ggml_openvino_get_device_name();
-    r_ctx->stateful = is_stateful_enabled() && !ggml_openvino_is_npu();
     r_ctx->backend_count++;
 
     ggml_backend_t openvino_backend = new ggml_backend{
