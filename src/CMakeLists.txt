@@ -92,8 +92,8 @@ add_library(llama
             models/lfm2.cpp
             models/llada-moe.cpp
             models/llada.cpp
-            models/llama-iswa.cpp
             models/llama.cpp
+            models/llama4.cpp
             models/maincoder.cpp
             models/mamba-base.cpp
             models/mamba.cpp
@@ -145,8 +145,8 @@ add_library(llama
             models/starcoder.cpp
             models/starcoder2.cpp
             models/step35-iswa.cpp
-            models/t5-dec.cpp
-            models/t5-enc.cpp
+            models/t5.cpp
+            models/t5encoder.cpp
             models/wavtokenizer-dec.cpp
             models/xverse.cpp
             )

@@ -1,6 +1,7 @@
 #include "models.h"
 
-llm_build_llama_iswa::llm_build_llama_iswa(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+template <bool iswa>
+llm_build_llama4<iswa>::llm_build_llama4(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -18,7 +19,14 @@ llm_build_llama_iswa::llm_build_llama_iswa(const llama_model & model, const llm_
     ggml_tensor * inp_attn_scale = nullptr;
     inp_attn_scale = build_inp_attn_scale();
 
-    auto * inp_attn = build_attn_inp_kv_iswa();
+    using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
+    inp_attn_type * inp_attn = nullptr;
+
+    if constexpr (iswa) {
+        inp_attn = build_attn_inp_kv_iswa();
+    } else {
+        inp_attn = build_attn_inp_kv();
+    }
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
@@ -157,3 +165,7 @@ llm_build_llama_iswa::llm_build_llama_iswa(const llama_model & model, const llm_
 
     ggml_build_forward_expand(gf, cur);
 }
+
+// Explicit template instantiations
+template struct llm_build_llama4<false>;
+template struct llm_build_llama4<true>;

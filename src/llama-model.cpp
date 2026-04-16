@@ -1271,8 +1271,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
                 // Set non-causal attention for diffusion models
                 hparams.causal_attn = false;
-            }
-            break;
+            } break;
         case LLM_ARCH_LLADA:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -1286,8 +1285,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
                 // Set non-causal attention for diffusion models
                 hparams.causal_attn = false;
-            }
-            break;
+            } break;
         case LLM_ARCH_LLADA_MOE:
             {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
@@ -8553,9 +8551,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         case LLM_ARCH_LLAMA4:
             {
                 if (hparams.swa_type == LLAMA_SWA_TYPE_NONE) {
-                    llm = std::make_unique<llm_build_llama<false>>(*this, params);
+                    llm = std::make_unique<llm_build_llama4<false>>(*this, params);
                 } else {
-                    llm = std::make_unique<llm_build_llama_iswa>(*this, params);
+                    llm = std::make_unique<llm_build_llama4<true>>(*this, params);
                 }
             } break;
         case LLM_ARCH_LLAMA_EMBED:
@@ -8633,23 +8631,19 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         case LLM_ARCH_DREAM:
             {
                 llm = std::make_unique<llm_build_dream>(*this, params);
-            }
-            break;
+            } break;
         case LLM_ARCH_LLADA:
             {
                 llm = std::make_unique<llm_build_llada>(*this, params);
-            }
-            break;
+            } break;
         case LLM_ARCH_LLADA_MOE:
             {
                 llm = std::make_unique<llm_build_llada_moe>(*this, params);
-            }
-            break;
+            } break;
         case LLM_ARCH_RND1:
             {
                 llm = std::make_unique<llm_build_rnd1>(*this, params);
-            }
-            break;
+            } break;
         case LLM_ARCH_QWEN2VL:
             {
                 llm = std::make_unique<llm_build_qwen2vl>(*this, params);
@@ -8839,11 +8833,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 switch (params.gtype) {
                     case LLM_GRAPH_TYPE_ENCODER:
-                        llm = std::make_unique<llm_build_t5_enc>(*this, params);
+                        llm = std::make_unique<llm_build_t5<true>>(*this, params);
                         break;
                     case LLM_GRAPH_TYPE_DEFAULT:
                     case LLM_GRAPH_TYPE_DECODER:
-                        llm = std::make_unique<llm_build_t5_dec>(*this, params);
+                        llm = std::make_unique<llm_build_t5<false>>(*this, params);
                         break;
                     default:
                         GGML_ABORT("invalid graph type");
@@ -8851,9 +8845,8 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_T5ENCODER:
             {
-                llm = std::make_unique<llm_build_t5_enc>(*this, params);
-            }
-            break;
+                llm = std::make_unique<llm_build_t5encoder>(*this, params);
+            } break;
         case LLM_ARCH_JAIS:
             {
                 llm = std::make_unique<llm_build_jais>(*this, params);
