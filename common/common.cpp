@@ -165,6 +165,7 @@ static bool is_running_on_efficiency_core(void) {
 
 static int cpu_count_math_cpus(int n_cpu) {
     int result = 0;
+    std::unordered_set<std::string> siblings_seen;
     for (int cpu = 0; cpu < n_cpu; ++cpu) {
         if (pin_cpu(cpu)) {
             return -1;
@@ -172,8 +173,17 @@ static int cpu_count_math_cpus(int n_cpu) {
         if (is_running_on_efficiency_core()) {
             continue; // efficiency cores harm lockstep threading
         }
-        ++cpu; // hyperthreading isn't useful for linear algebra
-        ++result;
+        std::ifstream thread_siblings("/sys/devices/system/cpu/cpu"
+            + std::to_string(cpu) + "/topology/thread_siblings");
+        std::string line;
+        if (!std::getline(thread_siblings, line)) {
+            ++cpu; // hyperthreading isn't useful for linear algebra
+            ++result;
+            continue;
+        }
+        if (siblings_seen.insert(line).second) {
+            ++result;
+        }
     }
     return result;
 }
