@@ -39,6 +39,10 @@
 // See TMU MUL_MAT TILE BLOB ABI below for current contract.
 //
 
+#pragma once
+
+
+
 #include "ggml-backend.h"
 #include "ggml.h"
 
@@ -49,6 +53,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifndef TSAVORITE_GGML_ASSERT
 #define TSAVORITE_GGML_ASSERT(x) do { if (!(x)) abort(); } while (0)
@@ -324,7 +332,6 @@ extern void ggml_tsi_log_tensor_data(tensor_log log_data);
 #define TSI_TVU_MEM_ALIGN 128
 
 void tsi_cleanup();
-void tsi_log_profile_info();
 
 //
 // backend API
@@ -345,3 +352,7 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_tsavorite_buffer_type(v
 GGML_BACKEND_API void ggml_backend_tsavorite_capture_next_compute(ggml_backend_t backend);
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_tsavorite_reg(void);
+
+#ifdef __cplusplus
+}
+#endif

@@ -1670,21 +1670,6 @@ tsi_cleanup() {
     return;
 }
 
-void
-tsi_log_profile_info() {
-    GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-    tsi_finalize();
-    tsirt::utils::TSIProfiler::finalize();
-    // Profiling results already printed during first cleanup
-    std::cout << "\nOPU Profiling Results:" << std::endl;
-    std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
-                  /*truncateFuncNames*/ true)
-               << std::endl;
-    GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
-    fflush(stdout);
-    return;
-}
-
 #if 0
 // finds the tSavorite buffer that contains the tensor data on the TXE device unified memory
 // the assumption is that there is 1-to-1 mapping between the host and device memory buffers, so we can find the
@@ -3435,11 +3420,6 @@ static struct ggml_backend_i ggml_backend_tsavorite_i = {
     /* .graph_compute           = */ ggml_backend_tsavorite_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
-    /* .graph_optimize          = */ NULL,
-    /* .graph_reserve           = */ NULL,
-    /* .buffer_size             = */ NULL,
-    /* .reset                   = */ NULL,
-    /* .profile                 = */ tsi_log_profile_info
 };
 
 static ggml_guid_t ggml_backend_tsavorite_guid(void) {
@@ -3849,47 +3829,14 @@ static struct ggml_backend_reg_i ggml_backend_tsavorite_reg_i = {
     /* .get_proc_address = */ NULL,
 };
 
-#define SHM_NAME "/ollama_init_shm"
-
-typedef struct {
-  bool init_done;
-} shared_state_t;
-
-static shared_state_t *state = NULL;
-
-static void init_shared_state() {
-  int fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
-  if (fd == -1) {
-      perror("shm_open");
-      return;
-  }
-  ftruncate(fd, sizeof(shared_state_t));
-
-  state = (shared_state_t *) mmap(NULL, sizeof(shared_state_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  if (state == MAP_FAILED) {
-      perror("mmap");
-      return;
-  }
-}
 
 ggml_backend_reg_t ggml_backend_tsavorite_reg(void) {
   ggml_tsavorite_log_type_val = GGML_TSAVORITE_LOG_NONE;
   ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-
-  init_shared_state();
-
-  if (state->init_done == true) {
-      GGML_LOG_DEBUG("%s: Initialization already done, calling tsi_initialize...\n", __func__);
-      ensure_tsi_runtime_initialized();
-  } else {
-      state->init_done = true;
-      GGML_LOG_DEBUG("%s: Initialization not done, proceeding...\n", __func__);
-  }
-
+  ensure_tsi_runtime_initialized();
   g_ggml_backend_tsavorite_reg.iface = ggml_backend_tsavorite_reg_i;
   g_ggml_backend_tsavorite_reg.context = NULL;
-  g_ggml_backend_tsavorite_reg.api_version = GGML_BACKEND_API_VERSION;
   g_ggml_backend_tsavorite_device.iface = ggml_backend_tsavorite_device_i;
   g_ggml_backend_tsavorite_device.reg = &g_ggml_backend_tsavorite_reg;
   g_ggml_backend_tsavorite_device.context = &g_ggml_ctx_dev_main;
