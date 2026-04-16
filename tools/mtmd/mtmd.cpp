@@ -88,6 +88,7 @@ enum mtmd_slice_tmpl {
     MTMD_SLICE_TMPL_LLAMA4,
     MTMD_SLICE_TMPL_IDEFICS3,
     MTMD_SLICE_TMPL_LFM2,
+    MTMD_SLICE_TMPL_STEP3VL,
 };
 
 const char * mtmd_default_marker() {
@@ -259,7 +260,6 @@ struct mtmd_context {
                         tok_row_end       = {lookup_token("\n")};
                         tok_row_end_trail = false; // no trailing end-of-row token
                         ov_img_first      = true;
-
                     } else if (minicpmv_version == 3 || minicpmv_version == 4 || minicpmv_version == 5 || minicpmv_version == 6 || minicpmv_version == 100045) {
                         // minicpmv 2.6 format:
                         // <image> (overview) </image><slice> (slice) </slice><slice> (slice) </slice>\n ...
@@ -331,6 +331,22 @@ struct mtmd_context {
                             "    https://github.com/ggml-org/llama.cpp/pull/13282\n", __func__);
                     image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_STEP3VL:
+                {
+                    // Step3 format:
+                    //   <patch_start> (patch) <patch_end> [<patch_newline>]
+                    //   ... (all patch rows)
+                    //   <im_start> (overview) <im_end>
+                    slice_tmpl        = MTMD_SLICE_TMPL_STEP3VL;
+                    tok_ov_img_start  = {lookup_token("<im_start>")};
+                    tok_ov_img_end    = {lookup_token("<im_end>")};
+                    tok_sli_img_start = {lookup_token("<patch_start>")};
+                    tok_sli_img_end   = {lookup_token("<patch_end>")};
+                    tok_row_end       = {lookup_token("<patch_newline>")};
+                    tok_row_end_trail = false;
+                    ov_img_first      = false; // patches first, overview last
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_step3vl>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_INTERNVL:
                 {
                     // <img> ... (image embeddings) ... </img>
@@ -358,6 +374,13 @@ struct mtmd_context {
                     img_beg = "<|im_start|>";
                     img_end = "<|im_end|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_longest_edge>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_DOTS_OCR:
+                {
+                    // <|img|> ... (image embeddings) ... <|endofimg|>
+                    img_beg = "<|img|>";
+                    img_end = "<|endofimg|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                 {
@@ -394,10 +417,24 @@ struct mtmd_context {
                     img_end = "<|IMAGE_END|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_GEMMA4V:
+                {
+                    // <|image> ... (image embeddings) ... <image|>
+                    img_beg = "<|image>";
+                    img_end = "<image|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR:
                 {
                     img_end = "\n"; // prevent empty batch on llama-server
                     image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_HUNYUANOCR:
+                {
+                    // note: these use fullwidth ｜ (U+FF5C) and ▁ (U+2581) to match the tokenizer vocabulary
+                    img_beg = "<｜hy_place▁holder▁no▁100｜>";
+                    img_end = "<｜hy_place▁holder▁no▁101｜>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected vision projector type %d\n", __func__, proj));
@@ -668,6 +705,7 @@ struct mtmd_tokenizer {
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_6
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_LLAMA4
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_IDEFICS3
+                || ctx->slice_tmpl == MTMD_SLICE_TMPL_STEP3VL
                 || (ctx->slice_tmpl == MTMD_SLICE_TMPL_LFM2 && has_tiling_grid)
             ) {
                 const int n_col = batch_f32.grid_x;
@@ -974,6 +1012,7 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
     switch (ctx->proj_type_v()) {
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_GEMMA4V:
             return true;
         default:
             return false;

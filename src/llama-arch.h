@@ -60,6 +60,7 @@ enum llm_arch {
     LLM_ARCH_GEMMA2,
     LLM_ARCH_GEMMA3,
     LLM_ARCH_GEMMA3N,
+    LLM_ARCH_GEMMA4,
     LLM_ARCH_GEMMA_EMBEDDING,
     LLM_ARCH_STARCODER2,
     LLM_ARCH_MAMBA,
@@ -169,6 +170,7 @@ enum llm_kv {
     LLM_KV_CONTEXT_LENGTH,
     LLM_KV_EMBEDDING_LENGTH,
     LLM_KV_EMBEDDING_LENGTH_OUT,
+    LLM_KV_EMBEDDING_LENGTH_PER_LAYER,
     LLM_KV_FEATURES_LENGTH,
     LLM_KV_BLOCK_COUNT,
     LLM_KV_LEADING_DENSE_BLOCK_COUNT,
@@ -242,6 +244,7 @@ enum llm_kv {
     LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,
     LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
     LLM_KV_ATTENTION_INDEXER_TOP_K,
+    LLM_KV_ATTENTION_SHARED_KV_LAYERS,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
     LLM_KV_ROPE_DIMENSION_COUNT_SWA,
@@ -369,6 +372,9 @@ enum llm_tensor {
     LLM_TENSOR_FFN_GATE_INP_SHEXP,
     LLM_TENSOR_FFN_NORM,
     LLM_TENSOR_FFN_POST_NORM,
+    LLM_TENSOR_FFN_POST_NORM_1,
+    LLM_TENSOR_FFN_POST_NORM_2,
+    LLM_TENSOR_FFN_PRE_NORM_2,
     LLM_TENSOR_FFN_GATE,
     LLM_TENSOR_FFN_DOWN,
     LLM_TENSOR_FFN_UP,
@@ -393,6 +399,7 @@ enum llm_tensor {
     LLM_TENSOR_ATTN_Q_NORM,
     LLM_TENSOR_ATTN_K_NORM,
     LLM_TENSOR_LAYER_OUT_NORM,
+    LLM_TENSOR_LAYER_OUT_SCALE,
     LLM_TENSOR_POST_ATTN_NORM,
     LLM_TENSOR_POST_MLP_NORM,
     LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
@@ -578,8 +585,6 @@ struct LLM_TN_IMPL {
     const int bid;
     const int xid;
 
-    const std::set<llm_tensor> model_tensors;
-
     LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid);
 
     std::string str() const;
@@ -625,6 +630,7 @@ llm_arch llm_arch_from_string(const std::string & name);
 
 const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
 
-bool llm_arch_is_recurrent(const llm_arch & arch);
-bool llm_arch_is_hybrid   (const llm_arch & arch);
-bool llm_arch_is_diffusion(const llm_arch & arch);
+bool llm_arch_is_recurrent      (const llm_arch & arch);
+bool llm_arch_is_hybrid         (const llm_arch & arch);
+bool llm_arch_is_diffusion      (const llm_arch & arch);
+bool llm_arch_supports_sm_tensor(const llm_arch & arch);

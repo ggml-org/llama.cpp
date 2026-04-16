@@ -1491,6 +1491,8 @@ static ggml_backend_buffer_i ggml_backend_hexagon_buffer_interface = {
     /* .memset_tensor   = */ NULL,
     /* .set_tensor      = */ ggml_backend_hexagon_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_hexagon_buffer_get_tensor,
+    /* .set_tensor_2d   = */ NULL,
+    /* .get_tensor_2d   = */ NULL,
     /* .cpy_tensor      = */ ggml_backend_hexagon_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_hexagon_buffer_clear,
     /* .reset           = */ NULL,
@@ -2231,6 +2233,22 @@ static bool ggml_hexagon_supported_ssm_conv(const struct ggml_hexagon_session * 
     return true;
 }
 
+static bool ggml_hexagon_supported_cumsum(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    GGML_UNUSED(sess);
+    return true;
+}
+
 enum dspqbuf_type {
     DSPQBUF_TYPE_DSP_WRITE_CPU_READ = 0,
     DSPQBUF_TYPE_CPU_WRITE_DSP_READ,
@@ -2391,6 +2409,16 @@ static inline size_t init_cont_req(htp_general_req * req, dspqueue_buffer * bufs
 
 static inline size_t init_repeat_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
     req->op = HTP_OP_REPEAT;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
+static inline size_t init_cumsum_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_CUMSUM;
 
     size_t n_bufs = 0;
     n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
@@ -2780,6 +2808,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_dispatch_op<init_ssm_conv_req>(sess, node, flags);
                 break;
 
+            case GGML_OP_CUMSUM:
+                ggml_hexagon_dispatch_op<init_cumsum_req>(sess, node, flags);
+                break;
+
             default:
                 GGML_ABORT("\nggml-hex: graph-compute %s is not supported\n", ggml_op_desc(node));
         }
@@ -2972,6 +3004,8 @@ static struct ggml_backend_i hexagon_backend_i = {
     /* .free                    = */ ggml_backend_hexagon_free,
     /* .set_tensor_async        = */ NULL,
     /* .get_tensor_async        = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
+    /* .set_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL,
     /* .synchronize             = */ ggml_backend_hexagon_synchronize,
     /* .graph_plan_create       = */ NULL,
@@ -3252,6 +3286,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_SSM_CONV:
             supp = ggml_hexagon_supported_ssm_conv(sess, op);
+            break;
+
+        case GGML_OP_CUMSUM:
+            supp = ggml_hexagon_supported_cumsum(sess, op);
             break;
 
         default:

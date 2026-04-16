@@ -88,8 +88,11 @@
 #define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
 #define TN_LN_1            "%s.blk.%d.ln1.%s" // layer norm
 #define TN_LN_2            "%s.blk.%d.ln2.%s" // layer norm
-#define TN_LS_1            "%s.blk.%d.ls1.%s" // layer scale
-#define TN_LS_2            "%s.blk.%d.ls2.%s" // layer scale
+#define TN_LS_1            "%s.blk.%d.ls1.%s"         // layer scale
+#define TN_LS_2            "%s.blk.%d.ls2.%s"         // layer scale
+#define TN_LS_OUT          "%s.blk.%d.out_scale.%s"      // layer out scale (gemma4)
+#define TN_ATTN_POST_NORM  "%s.blk.%d.attn_post_norm.%s" // post-attn norm (gemma4)
+#define TN_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"  // post-FFN norm (gemma4)
 #define TN_LN_PRE          "%s.pre_ln.%s"
 #define TN_LN_POST         "%s.post_ln.%s"
 #define TN_LLAVA_PROJ      "mm.%d.%s"
@@ -144,6 +147,11 @@
 #define TN_MM_4H_TO_H      "mm.down.%s"
 #define TN_TOK_BOI         "v.boi"
 #define TN_TOK_EOI         "v.eoi"
+
+// hunyuanocr
+#define TN_MM_PRE_NORM     "mm.pre_norm.%s"
+#define TN_TOK_IMG_BEGIN   "mm.image_begin"
+#define TN_TOK_IMG_END     "mm.image_end"
 
 // deepseek-ocr
 #define TN_SAM_POS_EMBD   "v.sam.pos_embd.%s"
@@ -213,6 +221,10 @@
 #define TN_MNV5_MSFA_FFN_PROJ_BN "v.msfa.ffn.pw_proj.bn.weight"
 #define TN_MNV5_MSFA_NORM        "v.msfa.norm.weight"
 
+// gemma4
+#define TN_STD_BIAS              "v.std_bias"
+#define TN_STD_SCALE             "v.std_scale"
+
 
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
@@ -230,9 +242,12 @@ enum projector_type {
     PROJECTOR_TYPE_GLM_EDGE,
     PROJECTOR_TYPE_QWEN2VL,
     PROJECTOR_TYPE_QWEN3VL,
+    PROJECTOR_TYPE_STEP3VL,
     PROJECTOR_TYPE_GEMMA3,
     PROJECTOR_TYPE_GEMMA3NV,
     PROJECTOR_TYPE_GEMMA3NA,
+    PROJECTOR_TYPE_GEMMA4V,
+    PROJECTOR_TYPE_GEMMA4A,
     PROJECTOR_TYPE_PHI4,
     PROJECTOR_TYPE_IDEFICS3,
     PROJECTOR_TYPE_PIXTRAL,
@@ -251,12 +266,14 @@ enum projector_type {
     PROJECTOR_TYPE_LIGHTONOCR,
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
+    PROJECTOR_TYPE_DOTS_OCR,
     PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
     PROJECTOR_TYPE_KIMIK25,
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
+    PROJECTOR_TYPE_HUNYUANOCR,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -269,9 +286,12 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN2VL,   "qwen2vl_merger"},
     { PROJECTOR_TYPE_QWEN25VL,  "qwen2.5vl_merger"},
     { PROJECTOR_TYPE_QWEN3VL,   "qwen3vl_merger"},
+    { PROJECTOR_TYPE_STEP3VL,   "step3vl"},
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
     { PROJECTOR_TYPE_GEMMA3NV,  "gemma3nv"},
     { PROJECTOR_TYPE_GEMMA3NA,  "gemma3na"},
+    { PROJECTOR_TYPE_GEMMA4V,   "gemma4v"},
+    { PROJECTOR_TYPE_GEMMA4A,   "gemma4a"},
     { PROJECTOR_TYPE_PHI4,      "phi4"},
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
     { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},
@@ -289,12 +309,14 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
+    { PROJECTOR_TYPE_DOTS_OCR,  "dots_ocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR,"deepseekocr"},
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
     { PROJECTOR_TYPE_KIMIK25,   "kimik25"},
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
+    { PROJECTOR_TYPE_HUNYUANOCR, "hunyuanocr"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -476,6 +498,18 @@ static std::vector<std::string> string_split_str(std::string s, const std::strin
     return tokens;
 }
 
+// remove when moving to c++20
+inline bool string_starts_with(std::string_view str, std::string_view prefix) {
+    return str.size() >= prefix.size() &&
+           str.compare(0, prefix.size(), prefix) == 0;
+}
+
+// remove when moving to c++20
+inline bool string_ends_with(std::string_view str, std::string_view suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 //
 // gguf utils
 //
@@ -492,7 +526,7 @@ static std::string gguf_data_to_str(enum gguf_type type, const void * data, int 
         case GGUF_TYPE_INT64:   return std::to_string(((const int64_t  *)data)[i]);
         case GGUF_TYPE_FLOAT32: return std::to_string(((const float    *)data)[i]);
         case GGUF_TYPE_FLOAT64: return std::to_string(((const double   *)data)[i]);
-        case GGUF_TYPE_BOOL:    return ((const bool *)data)[i] ? "true" : "false";
+        case GGUF_TYPE_BOOL:    return ((const int8_t *)data)[i] != 0 ? "true" : "false";
         default:                return string_format("unknown type %d", type);
     }
 }
