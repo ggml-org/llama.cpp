@@ -4,6 +4,7 @@
 #include "console.h"
 // #include "log.h"
 
+#include "server-common.h"
 #include "server-context.h"
 #include "server-task.h"
 
@@ -194,7 +195,7 @@ struct cli_context {
             raw_buffer buf;
             buf.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             input_files.push_back(std::move(buf));
-            return mtmd_default_marker();
+            return get_media_marker();
         } else {
             std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             return content;
