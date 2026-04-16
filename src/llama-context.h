@@ -357,3 +357,7 @@ private:
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
 };
+
+void llama_memory_breakdown_print_impl(
+    const struct llama_context * ctx,
+    const std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> & memory_breakdown);

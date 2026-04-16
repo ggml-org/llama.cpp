@@ -3493,11 +3493,11 @@ void llama_perf_context_reset(llama_context * ctx) {
     ctx->perf_reset();
 }
 
-void llama_memory_breakdown_print(const struct llama_context * ctx) {
+
+void llama_memory_breakdown_print_impl(
+        const struct llama_context * ctx,
+        const std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> & memory_breakdown) {
     const auto & devices = ctx->get_model().devices;
-
-    std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown = ctx->memory_breakdown();
-
     std::vector<std::array<std::string, 9>> table_data;
     table_data.reserve(devices.size());
     const std::string template_header = "%s: | %s | %s   %s    %s   %s   %s   %s    %s |\n";
@@ -3627,6 +3627,11 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
             __func__, td[1].c_str(), td[2].c_str(), td[3].c_str(), td[4].c_str(), td[5].c_str(),
             td[6].c_str(), td[7].c_str(), td[8].c_str());
     }
+}
+
+void llama_memory_breakdown_print(const struct llama_context * ctx) {
+    const auto memory_breakdown = ctx->memory_breakdown();
+    llama_memory_breakdown_print_impl(ctx, memory_breakdown);
 }
 
 //
