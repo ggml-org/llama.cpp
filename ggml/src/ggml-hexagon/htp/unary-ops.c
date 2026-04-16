@@ -277,6 +277,95 @@ static void sigmoid_f32(const float * restrict src,
     }
 }
 
+static void tri_f32(const float * restrict src,
+                    float * restrict dst,
+                    uint8_t * restrict spad,
+                    const uint32_t num_rows,
+                    const uint32_t row_elems,
+                    const size_t   row_size,
+                    int32_t *      op_params,
+                    const uint32_t ir,
+                    const uint32_t ne01) {
+
+    const int32_t ttype = op_params[0];
+    const HVX_Vector zero = Q6_V_vsplat_R(0);
+    const uint32_t nvec  = row_elems / VLEN_FP32;
+    const uint32_t nloe  = row_elems % VLEN_FP32;
+
+    for (uint32_t b = 0; b < num_rows; b++) {
+        const uint32_t abs_row = ir + b;
+        const uint32_t i01     = abs_row % ne01;
+
+        const HVX_Vector * restrict v_src =
+            (const HVX_Vector *)((const uint8_t *)src + b * row_size);
+              HVX_Vector * restrict v_dst =
+            (      HVX_Vector *)((      uint8_t *)dst + b * row_size);
+
+        uint32_t boundary;
+        int      keep_left;
+        switch (ttype) {
+            case 0: boundary = i01;     keep_left = 0; break;  // keep col >= row
+            case 1: boundary = i01 + 1; keep_left = 0; break;  // keep col > row
+            case 2: boundary = i01 + 1; keep_left = 1; break;  // keep col <= row
+            case 3: boundary = i01;     keep_left = 1; break;  // keep col < row
+            default: boundary = 0; keep_left = 0; break;
+        }
+        if (boundary > row_elems) boundary = row_elems;
+
+        // Full HVX vectors — each starts at a 128-byte aligned offset
+        for (uint32_t i = 0; i < nvec; i++) {
+            const uint32_t vec_start = i * VLEN_FP32;
+            const uint32_t vec_end   = vec_start + VLEN_FP32;
+            if (keep_left) {
+                if (vec_end <= boundary) {
+                    v_dst[i] = v_src[i];
+                } else if (vec_start >= boundary) {
+                    v_dst[i] = zero;
+                } else {
+                    HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - vec_start) * sizeof(float));
+                    v_dst[i] = Q6_V_vmux_QVV(mask, v_src[i], zero);
+                }
+            } else {
+                if (vec_end <= boundary) {
+                    v_dst[i] = zero;
+                } else if (vec_start >= boundary) {
+                    v_dst[i] = v_src[i];
+                } else {
+                    HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - vec_start) * sizeof(float));
+                    v_dst[i] = Q6_V_vmux_QVV(mask, zero, v_src[i]);
+                }
+            }
+        }
+
+        // Tail elements (row_elems not a multiple of VLEN_FP32)
+        if (nloe > 0) {
+            const uint32_t vec_start = nvec * VLEN_FP32;
+            const uint32_t vec_end   = vec_start + nloe;
+            HVX_Vector tail_val;
+            if (keep_left) {
+                if (vec_end <= boundary) {
+                    tail_val = v_src[nvec];
+                } else if (vec_start >= boundary) {
+                    tail_val = zero;
+                } else {
+                    HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - vec_start) * sizeof(float));
+                    tail_val = Q6_V_vmux_QVV(mask, v_src[nvec], zero);
+                }
+            } else {
+                if (vec_end <= boundary) {
+                    tail_val = zero;
+                } else if (vec_start >= boundary) {
+                    tail_val = v_src[nvec];
+                } else {
+                    HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - vec_start) * sizeof(float));
+                    tail_val = Q6_V_vmux_QVV(mask, zero, v_src[nvec]);
+                }
+            }
+            hvx_vec_store_a(&v_dst[nvec], nloe * sizeof(float), tail_val);
+        }
+    }
+}
+
 static void softplus_f32(const float * restrict src,
                          float * restrict dst,
                          uint8_t * restrict spad,
@@ -498,6 +587,9 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
             case HTP_OP_L2_NORM:
                 l2_norm_f32(src0_spad, dst_spad, NULL, block_size, ne0, src0_row_size_aligned, op_params);
                 break;
+            case HTP_OP_TRI:
+                tri_f32(src0_spad, dst_spad, NULL, block_size, ne00, src0_row_size_aligned, op_params, ir, ne01);
+                break;
             default:
                 break;
         }
@@ -565,12 +657,19 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_SOFTPLUS:
             op_type = "softplus-f32";
             break;
+<<<<<<< HEAD
         case HTP_OP_UNARY_TANH:
             op_type = "tanh-f32";
             break;
         case HTP_OP_L2_NORM:
             op_type = "l2norm-f32";
             break;
+=======
+        case HTP_OP_TRI:
+            op_type = "tri-f32";
+            break;
+
+>>>>>>> 24a31a61f (Hexagon: TRI HVX Kernel addition to ggml hexagon HTP ops and context)
         default:
             FARF(ERROR, "Unsupported unary Op %u\n", octx->op);
             return HTP_STATUS_NO_SUPPORT;
@@ -633,11 +732,15 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
             .block                 = (octx->src0_spad.size_per_thread / 2) / src0_row_size_aligned,
             .nc                    = src0->ne[0],
         };
-
+        
         worker_pool_run_func(octx->ctx->worker_pool, unary_job_f32_per_thread, &uctx, n_threads);
     }
 
     return err;
+}
+
+int op_tri(struct htp_ops_context * octx) {
+    return op_unary(octx);
 }
 
 int op_unary(struct htp_ops_context * octx) {

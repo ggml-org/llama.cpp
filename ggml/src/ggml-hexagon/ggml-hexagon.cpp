@@ -2816,6 +2816,21 @@ static bool ggml_hexagon_supported_solve_tri(const struct ggml_hexagon_session *
     return true;
 }
 
+static bool ggml_hexagon_supported_tri(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32) { return false; }
+    if (dst->type  != GGML_TYPE_F32) { return false; }
+    if (!ggml_are_same_shape(src0, dst)) { return false; }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) { return false; }
+
+    return true;
+
+    GGML_UNUSED(sess);
+}
+
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     return sess->c_name();
@@ -2857,6 +2872,34 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_FILL:            return HTP_OP_FILL;
         case GGML_OP_DIAG:            return HTP_OP_DIAG;
         case GGML_OP_SOLVE_TRI:       return HTP_OP_SOLVE_TRI;
+        case GGML_OP_FLASH_ATTN_EXT: return HTP_OP_FLASH_ATTN_EXT;
+        case GGML_OP_MUL_MAT:        return HTP_OP_MUL_MAT;
+        case GGML_OP_MUL_MAT_ID:     return HTP_OP_MUL_MAT_ID;
+        case GGML_OP_MUL:            return HTP_OP_MUL;
+        case GGML_OP_ADD:            return HTP_OP_ADD;
+        case GGML_OP_ADD_ID:         return HTP_OP_ADD_ID;
+        case GGML_OP_SUB:            return HTP_OP_SUB;
+        case GGML_OP_DIV:            return HTP_OP_DIV;
+        case GGML_OP_CPY:            return HTP_OP_CPY;
+        case GGML_OP_CONT:           return HTP_OP_CPY;
+        case GGML_OP_GET_ROWS:       return HTP_OP_GET_ROWS;
+        case GGML_OP_SET_ROWS:       return HTP_OP_SET_ROWS;
+        case GGML_OP_SUM_ROWS:       return HTP_OP_SUM_ROWS;
+        case GGML_OP_ARGSORT:        return HTP_OP_ARGSORT;
+        case GGML_OP_RMS_NORM:       return HTP_OP_RMS_NORM;
+        case GGML_OP_SCALE:          return HTP_OP_SCALE;
+        case GGML_OP_SQR:            return HTP_OP_SQR;
+        case GGML_OP_SQRT:           return HTP_OP_SQRT;
+        case GGML_OP_SOFT_MAX:       return HTP_OP_SOFTMAX;
+        case GGML_OP_SSM_CONV:       return HTP_OP_SSM_CONV;
+        case GGML_OP_ROPE:           return HTP_OP_ROPE;
+        case GGML_OP_REPEAT:         return HTP_OP_REPEAT;
+        case GGML_OP_CUMSUM:         return HTP_OP_CUMSUM;
+        case GGML_OP_FILL:           return HTP_OP_FILL;
+        case GGML_OP_DIAG:           return HTP_OP_DIAG;
+        case GGML_OP_SOLVE_TRI:      return HTP_OP_SOLVE_TRI;
+        case GGML_OP_TRI:            return HTP_OP_TRI;
+
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
                 case GGML_UNARY_OP_SILU:     return HTP_OP_UNARY_SILU;
@@ -3414,6 +3457,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_SOLVE_TRI:
             supp = ggml_hexagon_supported_solve_tri(sess, op);
+            break;
+            
+        case GGML_OP_TRI:
+            supp = ggml_hexagon_supported_tri(sess, op);
             break;
 
         default:
