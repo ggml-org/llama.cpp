@@ -547,7 +547,7 @@ export { default as ChatMessageEditForm } from './ChatMessages/ChatMessageEditFo
  * and server state. Used as the main content area in chat routes.
  *
  * **Architecture:**
- * - Composes ChatMessages, ChatScreenForm, ChatScreenHeader, and dialogs
+ * - Composes ChatMessages, ChatScreenForm, and dialogs
  * - Manages auto-scroll via `createAutoScrollController()` hook
  * - Handles file upload pipeline (validation → processing → state update)
  * - Integrates with serverStore for loading/error/warning states
@@ -601,13 +601,6 @@ export { default as ChatScreenDragOverlay } from './ChatScreen/ChatScreenDragOve
  * the visual container styling for the input area.
  */
 export { default as ChatScreenForm } from './ChatScreen/ChatScreenForm.svelte';
-
-/**
- * Header bar for chat screen. Displays conversation title (or "New Chat"),
- * model selector (in router mode), and action buttons (delete conversation).
- * Sticky positioned at the top of the chat area.
- */
-export { default as ChatScreenHeader } from './ChatScreen/ChatScreenHeader.svelte';
 
 /**
  * Processing info display during generation. Shows real-time statistics:
