@@ -1083,8 +1083,7 @@ class ggml_webgpu_shader_lib {
                     std::string type_upper = type_str;
                     std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(), ::toupper);
 
-                    switch (key.src_type)
-                    {
+                    switch (key.src_type) {
                         case GGML_TYPE_Q4_0:
                         case GGML_TYPE_Q5_0:
                         case GGML_TYPE_Q8_0:
@@ -1104,9 +1103,9 @@ class ggml_webgpu_shader_lib {
                                 break;
                             }
                         default:
-                        {
-                            defines.push_back(std::string("SRC_TYPE=") + type_str);
-                        }
+                            {
+                                defines.push_back(std::string("SRC_TYPE=") + type_str);
+                            }
                     }
 
                     defines.push_back("BYTE_HELPERS");
@@ -1586,8 +1585,7 @@ class ggml_webgpu_shader_lib {
                     std::string type_upper = src0_name;
                     std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(), ::toupper);
 
-                    switch (context.src0->type)
-                    {
+                    switch (context.src0->type) {
                         case GGML_TYPE_Q4_0:
                         case GGML_TYPE_Q5_0:
                         case GGML_TYPE_Q8_0:
@@ -1607,9 +1605,9 @@ class ggml_webgpu_shader_lib {
                                 break;
                             }
                         default:
-                        {
-                            defines.push_back(std::string("SRC0_TYPE=") + src0_name);
-                        }
+                            {
+                                defines.push_back(std::string("SRC0_TYPE=") + src0_name);
+                            }
                     }
 
                     defines.push_back("BYTE_HELPERS");
