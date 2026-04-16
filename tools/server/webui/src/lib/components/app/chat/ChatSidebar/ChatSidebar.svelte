@@ -199,7 +199,6 @@
 									forkedFromConversationId: conversation.forkedFromConversationId
 								}}
 								{depth}
-								{handleMobileSidebarItemClick}
 								isActive={currentChatId === conversation.id}
 								onSelect={selectConversation}
 								onEdit={handleEditConversation}

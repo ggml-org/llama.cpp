@@ -1,10 +1,16 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Plus, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
+	import { Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { FILE_TYPE_ICONS, TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import {
+		ATTACHMENT_FILE_ITEMS,
+		ATTACHMENT_EXTRA_ITEMS,
+		ATTACHMENT_MCP_ITEMS,
+		ATTACHMENT_TOOLTIP_TEXT
+	} from '$lib/constants/attachment-menu';
 	import ChatFormActionToolsSubmenu from './ChatFormActionToolsSubmenu.svelte';
 
 	interface Props {
@@ -35,25 +41,50 @@
 
 	let isNewChat = $derived(!page.params.id);
 
-	let systemMessageTooltip = $derived(
-		isNewChat
-			? 'Add custom system message for a new conversation'
-			: 'Inject custom system message at the beginning of the conversation'
-	);
-
 	let dropdownOpen = $state(false);
 
-	const fileUploadTooltipText = 'Add files, system prompt or MCP Servers';
+	const callbacks: Record<string, (() => void) | undefined> = {
+		onFileUpload: undefined,
+		onSystemPromptClick: undefined,
+		onMcpPromptClick: undefined,
+		onMcpResourcesClick: undefined
+	};
 
-	function handleMcpPromptClick() {
-		dropdownOpen = false;
-		onMcpPromptClick?.();
+	const modalityFlags = $derived({
+		hasVisionModality,
+		hasAudioModality,
+		hasMcpPromptsSupport,
+		hasMcpResourcesSupport
+	});
+
+	function isItemEnabled(enabledWhen: string | undefined): boolean {
+		if (!enabledWhen || enabledWhen === 'always') return true;
+		return !!modalityFlags[enabledWhen as keyof typeof modalityFlags];
 	}
 
-	function handleMcpResourcesClick() {
-		dropdownOpen = false;
-		onMcpResourcesClick?.();
+	function isItemVisible(visibleWhen: string | undefined): boolean {
+		if (!visibleWhen) return true;
+		return !!modalityFlags[visibleWhen as keyof typeof modalityFlags];
 	}
+
+	function getSystemMessageTooltip(): string {
+		return isNewChat
+			? 'Add custom system message for a new conversation'
+			: 'Inject custom system message at the beginning of the conversation';
+	}
+
+	$effect(() => {
+		callbacks.onFileUpload = onFileUpload;
+		callbacks.onSystemPromptClick = onSystemPromptClick;
+		callbacks.onMcpPromptClick = () => {
+			dropdownOpen = false;
+			onMcpPromptClick?.();
+		};
+		callbacks.onMcpResourcesClick = () => {
+			dropdownOpen = false;
+			onMcpResourcesClick?.();
+		};
+	});
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -67,100 +98,63 @@
 						variant="secondary"
 						type="button"
 					>
-						<span class="sr-only">{fileUploadTooltipText}</span>
+						<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
 
 						<Plus class="h-4 w-4" />
 					</Button>
 				</Tooltip.Trigger>
 
 				<Tooltip.Content>
-					<p>{fileUploadTooltipText}</p>
+					<p>{ATTACHMENT_TOOLTIP_TEXT}</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
 		</DropdownMenu.Trigger>
 
 		<DropdownMenu.Content align="start" class="w-48">
-			{#if hasVisionModality}
-				<DropdownMenu.Item
-					class="images-button flex cursor-pointer items-center gap-2"
-					onclick={() => onFileUpload?.()}
-				>
-					<FILE_TYPE_ICONS.image class="h-4 w-4" />
+			{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
+				{@const enabled = isItemEnabled(item.enabledWhen)}
+				{#if enabled}
+					<DropdownMenu.Item
+						class="{item.class ?? ''} flex cursor-pointer items-center gap-2"
+						onclick={() => callbacks[item.action]?.()}
+					>
+						<item.icon class="h-4 w-4" />
 
-					<span>Images</span>
-				</DropdownMenu.Item>
-			{:else}
-				<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-					<Tooltip.Trigger class="w-full">
-						<DropdownMenu.Item
-							class="images-button flex cursor-pointer items-center gap-2"
-							disabled
-						>
-							<FILE_TYPE_ICONS.image class="h-4 w-4" />
+						<span>{item.label}</span>
+					</DropdownMenu.Item>
+				{:else if item.disabledTooltip}
+					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+						<Tooltip.Trigger class="w-full">
+							<DropdownMenu.Item
+								class="{item.class ?? ''} flex cursor-pointer items-center gap-2"
+								disabled
+							>
+								<item.icon class="h-4 w-4" />
 
-							<span>Images</span>
-						</DropdownMenu.Item>
-					</Tooltip.Trigger>
+								<span>{item.label}</span>
+							</DropdownMenu.Item>
+						</Tooltip.Trigger>
 
-					<Tooltip.Content side="right">
-						<p>Image processing requires a vision model</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
+						<Tooltip.Content side="right">
+							<p>{item.disabledTooltip}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+			{/each}
 
-			{#if hasAudioModality}
-				<DropdownMenu.Item
-					class="audio-button flex cursor-pointer items-center gap-2"
-					onclick={() => onFileUpload?.()}
-				>
-					<FILE_TYPE_ICONS.audio class="h-4 w-4" />
-
-					<span>Audio Files</span>
-				</DropdownMenu.Item>
-			{:else}
-				<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-					<Tooltip.Trigger class="w-full">
-						<DropdownMenu.Item class="audio-button flex cursor-pointer items-center gap-2" disabled>
-							<FILE_TYPE_ICONS.audio class="h-4 w-4" />
-
-							<span>Audio Files</span>
-						</DropdownMenu.Item>
-					</Tooltip.Trigger>
-
-					<Tooltip.Content side="right">
-						<p>Audio files processing requires an audio model</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
-
-			<DropdownMenu.Item
-				class="flex cursor-pointer items-center gap-2"
-				onclick={() => onFileUpload?.()}
-			>
-				<FILE_TYPE_ICONS.text class="h-4 w-4" />
-
-				<span>Text Files</span>
-			</DropdownMenu.Item>
-
-			{#if hasVisionModality}
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={() => onFileUpload?.()}
-				>
-					<FILE_TYPE_ICONS.pdf class="h-4 w-4" />
-
-					<span>PDF Files</span>
-				</DropdownMenu.Item>
-			{:else}
+			{#if !isItemEnabled('hasVisionModality')}
 				<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 					<Tooltip.Trigger class="w-full">
 						<DropdownMenu.Item
 							class="flex cursor-pointer items-center gap-2"
-							onclick={() => onFileUpload?.()}
+							onclick={() => callbacks.onFileUpload?.()}
 						>
-							<FILE_TYPE_ICONS.pdf class="h-4 w-4" />
+							{@const pdfItem = ATTACHMENT_FILE_ITEMS.find((i) => i.id === 'pdf')}
+							{#if pdfItem}
+								<pdfItem.icon class="h-4 w-4" />
 
-							<span>PDF Files</span>
+								<span>{pdfItem.label}</span>
+							{/if}
 						</DropdownMenu.Item>
 					</Tooltip.Trigger>
 
@@ -172,46 +166,41 @@
 
 			<DropdownMenu.Separator />
 
-			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-				<Tooltip.Trigger class="w-full">
-					<DropdownMenu.Item
-						class="flex cursor-pointer items-center gap-2"
-						onclick={() => onSystemPromptClick?.()}
-					>
-						<MessageSquare class="h-4 w-4" />
+			{#each ATTACHMENT_EXTRA_ITEMS as item (item.id)}
+				{#if item.id === 'system-message'}
+					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+						<Tooltip.Trigger class="w-full">
+							<DropdownMenu.Item
+								class="flex cursor-pointer items-center gap-2"
+								onclick={() => callbacks[item.action]?.()}
+							>
+								<item.icon class="h-4 w-4" />
 
-						<span>System Message</span>
-					</DropdownMenu.Item>
-				</Tooltip.Trigger>
+								<span>{item.label}</span>
+							</DropdownMenu.Item>
+						</Tooltip.Trigger>
 
-				<Tooltip.Content side="right">
-					<p>{systemMessageTooltip}</p>
-				</Tooltip.Content>
-			</Tooltip.Root>
+						<Tooltip.Content side="right">
+							<p>{getSystemMessageTooltip()}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+			{/each}
 
 			<ChatFormActionToolsSubmenu />
 
-			{#if hasMcpPromptsSupport}
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={handleMcpPromptClick}
-				>
-					<Zap class="h-4 w-4" />
+			{#each ATTACHMENT_MCP_ITEMS as item (item.id)}
+				{#if isItemVisible(item.visibleWhen)}
+					<DropdownMenu.Item
+						class="flex cursor-pointer items-center gap-2"
+						onclick={() => callbacks[item.action]?.()}
+					>
+						<item.icon class="h-4 w-4" />
 
-					<span>MCP Prompt</span>
-				</DropdownMenu.Item>
-			{/if}
-
-			{#if hasMcpResourcesSupport}
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={handleMcpResourcesClick}
-				>
-					<FolderOpen class="h-4 w-4" />
-
-					<span>MCP Resources</span>
-				</DropdownMenu.Item>
-			{/if}
+						<span>{item.label}</span>
+					</DropdownMenu.Item>
+				{/if}
+			{/each}
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>

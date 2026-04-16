@@ -370,7 +370,7 @@
 			<div
 				class="pointer-events-none {isEmpty
 					? 'absolute bottom-[calc(50dvh-7rem)]'
-					: 'sticky bottom-4'} right-0 left-0 my-auto transition-all duration-200"
+					: 'sticky bottom-4'} right-4 left-4 my-auto transition-all duration-200"
 			>
 				{#if isEmpty}
 					<div class="mb-8 px-4 text-center" use:fadeInView={{ duration: 300 }}>

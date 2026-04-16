@@ -1,30 +1,23 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import {
-		Plus,
-		MessageSquare,
-		Zap,
-		FolderOpen,
-		PencilRuler,
-		ChevronDown,
-		ChevronRight,
-		Loader2
-	} from '@lucide/svelte';
+	import { Plus, PencilRuler, ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Switch } from '$lib/components/ui/switch';
 	import * as Sheet from '$lib/components/ui/sheet';
-	import { FILE_TYPE_ICONS, TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import {
+		ATTACHMENT_FILE_ITEMS,
+		ATTACHMENT_EXTRA_ITEMS,
+		ATTACHMENT_MCP_ITEMS,
+		ATTACHMENT_TOOLTIP_TEXT
+	} from '$lib/constants/attachment-menu';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import type { ToolGroup } from '$lib/types';
-	import { ToolSource } from '$lib/enums';
-
-	import { SvelteSet } from 'svelte/reactivity';
 	import { TruncatedText } from '$lib/components/app';
+	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 
 	interface Props {
 		class?: string;
@@ -53,86 +46,60 @@
 	}: Props = $props();
 
 	let sheetOpen = $state(false);
-
-	let expandedGroups = new SvelteSet<string>();
-	let groups = $derived(toolsStore.toolGroups);
-	let activeGroups = $derived(
-		groups.filter(
-			(g) =>
-				g.source !== ToolSource.MCP ||
-				!g.serverId ||
-				conversationsStore.isMcpServerEnabledForChat(g.serverId)
-		)
-	);
-	let totalToolCount = $derived(activeGroups.reduce((n, g) => n + g.tools.length, 0));
-
-	function isGroupDisabled(group: ToolGroup): boolean {
-		return (
-			group.source === ToolSource.MCP &&
-			!!group.serverId &&
-			!conversationsStore.isMcpServerEnabledForChat(group.serverId)
-		);
-	}
 	let hoveredGroup = $state<string | null>(null);
 
-	function getGroupCheckedState(group: (typeof groups)[number]): {
-		checked: boolean;
-		indeterminate: boolean;
-	} {
-		return {
-			checked: toolsStore.isGroupFullyEnabled(group),
-			indeterminate: toolsStore.isGroupPartiallyEnabled(group)
-		};
+	const {
+		expandedGroups,
+		groups,
+		totalToolCount,
+		getGroupCheckedState,
+		getFavicon,
+		isGroupDisabled,
+		toggleGroupExpanded,
+		handleOpen
+	} = useToolsPanel();
+
+	const callbacks = $derived({
+		onFileUpload: () => closeAndCall(onFileUpload),
+		onSystemPromptClick: () => closeAndCall(onSystemPromptClick),
+		onMcpPromptClick: () => closeAndCall(onMcpPromptClick),
+		onMcpResourcesClick: () => closeAndCall(onMcpResourcesClick)
+	});
+
+	const modalityFlags = $derived({
+		hasVisionModality,
+		hasAudioModality,
+		hasMcpPromptsSupport,
+		hasMcpResourcesSupport
+	});
+
+	const sheetItemClass =
+		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
+
+	function isItemEnabled(enabledWhen: string | undefined): boolean {
+		if (!enabledWhen || enabledWhen === 'always') return true;
+		return !!modalityFlags[enabledWhen as keyof typeof modalityFlags];
 	}
 
-	function getFavicon(group: { source: ToolSource; label: string }): string | null {
-		if (group.source !== ToolSource.MCP) return null;
-
-		for (const server of mcpStore.getServersSorted()) {
-			if (mcpStore.getServerLabel(server) === group.label) {
-				return mcpStore.getServerFavicon(server.id);
-			}
-		}
-
-		return null;
+	function isItemVisible(visibleWhen: string | undefined): boolean {
+		if (!visibleWhen) return true;
+		return !!modalityFlags[visibleWhen as keyof typeof modalityFlags];
 	}
 
-	function handleToolsSubMenuOpen(open: boolean) {
-		if (open) {
-			if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
-				toolsStore.fetchBuiltinTools();
-			}
-			mcpStore.runHealthChecksForServers(mcpStore.getServersSorted().filter((s) => s.enabled));
-		}
+	function getSystemMessageTooltip(): string {
+		return !page.params.id
+			? 'Add custom system message for a new conversation'
+			: 'Inject custom system message at the beginning of the conversation';
 	}
+
 	async function toggleServerForChat(serverId: string) {
 		await conversationsStore.toggleMcpServerForChat(serverId);
 	}
 
-	function handleMcpPromptClick() {
+	function closeAndCall(fn?: () => void) {
 		sheetOpen = false;
-		onMcpPromptClick?.();
+		fn?.();
 	}
-
-	function handleMcpResourcesClick() {
-		sheetOpen = false;
-		onMcpResourcesClick?.();
-	}
-
-	function handleSheetFileUpload() {
-		sheetOpen = false;
-		onFileUpload?.();
-	}
-
-	function handleSheetSystemPromptClick() {
-		sheetOpen = false;
-		onSystemPromptClick?.();
-	}
-
-	const fileUploadTooltipText = 'Add files, system prompt or MCP Servers';
-
-	const sheetItemClass =
-		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -144,7 +111,7 @@
 			type="button"
 			onclick={() => (sheetOpen = true)}
 		>
-			<span class="sr-only">{fileUploadTooltipText}</span>
+			<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
 
 			<Plus class="h-4 w-4" />
 		</Button>
@@ -159,101 +126,79 @@
 			</Sheet.Header>
 
 			<div class="flex flex-col gap-1 px-1.5 pb-2">
-				{#if hasVisionModality}
-					<button type="button" class={sheetItemClass} onclick={handleSheetFileUpload}>
-						<FILE_TYPE_ICONS.image class="h-4 w-4 shrink-0" />
+				{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
+					{@const enabled = isItemEnabled(item.enabledWhen)}
+					{#if enabled}
+						<button type="button" class={sheetItemClass} onclick={() => callbacks[item.action]()}>
+							<item.icon class="h-4 w-4 shrink-0" />
 
-						<span>Images</span>
-					</button>
-				{:else}
-					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-						<Tooltip.Trigger>
-							<button type="button" class={sheetItemClass} disabled>
-								<FILE_TYPE_ICONS.image class="h-4 w-4 shrink-0" />
-
-								<span>Images</span>
-							</button>
-						</Tooltip.Trigger>
-
-						<Tooltip.Content side="right">
-							<p>Image processing requires a vision model</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{/if}
-
-				{#if hasAudioModality}
-					<button type="button" class={sheetItemClass} onclick={handleSheetFileUpload}>
-						<FILE_TYPE_ICONS.audio class="h-4 w-4 shrink-0" />
-
-						<span>Audio Files</span>
-					</button>
-				{:else}
-					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-						<Tooltip.Trigger>
-							<button type="button" class={sheetItemClass} disabled>
-								<FILE_TYPE_ICONS.audio class="h-4 w-4 shrink-0" />
-
-								<span>Audio Files</span>
-							</button>
-						</Tooltip.Trigger>
-
-						<Tooltip.Content side="right">
-							<p>Audio files processing requires an audio model</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{/if}
-
-				<button type="button" class={sheetItemClass} onclick={handleSheetFileUpload}>
-					<FILE_TYPE_ICONS.text class="h-4 w-4 shrink-0" />
-
-					<span>Text Files</span>
-				</button>
-
-				{#if hasVisionModality}
-					<button type="button" class={sheetItemClass} onclick={handleSheetFileUpload}>
-						<FILE_TYPE_ICONS.pdf class="h-4 w-4 shrink-0" />
-
-						<span>PDF Files</span>
-					</button>
-				{:else}
-					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-						<Tooltip.Trigger>
-							<button type="button" class={sheetItemClass} disabled>
-								<FILE_TYPE_ICONS.pdf class="h-4 w-4 shrink-0" />
-
-								<span>PDF Files</span>
-							</button>
-						</Tooltip.Trigger>
-
-						<Tooltip.Content side="right">
-							<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{/if}
-
-				<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-					<Tooltip.Trigger>
-						<button type="button" class={sheetItemClass} onclick={handleSheetSystemPromptClick}>
-							<MessageSquare class="h-4 w-4 shrink-0" />
-
-							<span>System Message</span>
+							<span>{item.label}</span>
 						</button>
-					</Tooltip.Trigger>
+					{:else if item.disabledTooltip}
+						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+							<Tooltip.Trigger>
+								<button type="button" class={sheetItemClass} disabled>
+									<item.icon class="h-4 w-4 shrink-0" />
 
-					<Tooltip.Content side="right">
-						<p>
-							{#if !page.params.id}
-								Add custom system message for a new conversation
-							{:else}
-								Inject custom system message at the beginning of the conversation
-							{/if}
-						</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
+									<span>{item.label}</span>
+								</button>
+							</Tooltip.Trigger>
+
+							<Tooltip.Content side="right">
+								<p>{item.disabledTooltip}</p>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					{/if}
+				{/each}
+
+				{#if !isItemEnabled('hasVisionModality')}
+					{@const pdfItem = ATTACHMENT_FILE_ITEMS.find((i) => i.id === 'pdf')}
+					{#if pdfItem}
+						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+							<Tooltip.Trigger>
+								<button
+									type="button"
+									class={sheetItemClass}
+									onclick={() => callbacks[pdfItem.action]()}
+								>
+									<pdfItem.icon class="h-4 w-4 shrink-0" />
+
+									<span>{pdfItem.label}</span>
+								</button>
+							</Tooltip.Trigger>
+
+							<Tooltip.Content side="right">
+								<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					{/if}
+				{/if}
+
+				{#each ATTACHMENT_EXTRA_ITEMS as item (item.id)}
+					{#if item.id === 'system-message'}
+						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+							<Tooltip.Trigger>
+								<button
+									type="button"
+									class={sheetItemClass}
+									onclick={() => callbacks[item.action]()}
+								>
+									<item.icon class="h-4 w-4 shrink-0" />
+
+									<span>{item.label}</span>
+								</button>
+							</Tooltip.Trigger>
+
+							<Tooltip.Content side="right">
+								<p>{getSystemMessageTooltip()}</p>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					{/if}
+				{/each}
 
 				<div class="my-2 border-t"></div>
 
-				<button type="button" class={sheetItemClass} onclick={() => handleToolsSubMenuOpen(true)}>
+				<button type="button" class={sheetItemClass} onclick={() => handleOpen()}>
 					<PencilRuler class="h-4 w-4 shrink-0" />
 
 					<span>Tools</span>
@@ -282,13 +227,7 @@
 
 							<Collapsible.Root
 								open={isExpanded}
-								onOpenChange={() => {
-									if (expandedGroups.has(group.label)) {
-										expandedGroups.delete(group.label);
-									} else {
-										expandedGroups.add(group.label);
-									}
-								}}
+								onOpenChange={() => toggleGroupExpanded(group.label)}
 							>
 								<!-- svelte-ignore a11y_no_static_element_interactions -->
 								<div
@@ -401,21 +340,15 @@
 					</div>
 				{/if}
 
-				{#if hasMcpPromptsSupport}
-					<button type="button" class={sheetItemClass} onclick={handleMcpPromptClick}>
-						<Zap class="h-4 w-4 shrink-0" />
+				{#each ATTACHMENT_MCP_ITEMS as item (item.id)}
+					{#if isItemVisible(item.visibleWhen)}
+						<button type="button" class={sheetItemClass} onclick={() => callbacks[item.action]()}>
+							<item.icon class="h-4 w-4 shrink-0" />
 
-						<span>MCP Prompt</span>
-					</button>
-				{/if}
-
-				{#if hasMcpResourcesSupport}
-					<button type="button" class={sheetItemClass} onclick={handleMcpResourcesClick}>
-						<FolderOpen class="h-4 w-4 shrink-0" />
-
-						<span>MCP Resources</span>
-					</button>
-				{/if}
+							<span>{item.label}</span>
+						</button>
+					{/if}
+				{/each}
 			</div>
 		</Sheet.Content>
 	</Sheet.Root>

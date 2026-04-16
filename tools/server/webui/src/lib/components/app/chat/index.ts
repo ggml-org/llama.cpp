@@ -124,7 +124,7 @@ export { default as ChatAttachmentsViewAll } from './ChatAttachments/ChatAttachm
  * **Architecture:**
  * - Composes ChatFormTextarea, ChatFormActions, and ChatFormPromptPicker
  * - Manages file upload state via `uploadedFiles` bindable prop
- * - Integrates with ModelsSelector for model selection in router mode
+ * - Integrates with ModelsSelectorDropdown for model selection in router mode
  * - Communicates with parent via callbacks (onSubmit, onFilesAdd, onStop, etc.)
  *
  * **Input Handling:**

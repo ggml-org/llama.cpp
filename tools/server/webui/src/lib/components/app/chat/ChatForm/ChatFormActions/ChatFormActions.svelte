@@ -7,7 +7,7 @@
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
 		McpActiveServersAvatars,
-		ModelsSelector,
+		ModelsSelectorDropdown,
 		ModelsSelectorSheet
 	} from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums';
@@ -164,7 +164,8 @@
 		return '';
 	});
 
-	let selectorModelRef: ModelsSelector | ModelsSelectorSheet | undefined = $state(undefined);
+	let selectorModelRef: ModelsSelectorDropdown | ModelsSelectorSheet | undefined =
+		$state(undefined);
 
 	let isMobile = new IsMobile();
 
@@ -226,7 +227,7 @@
 				useGlobalSelection
 			/>
 		{:else}
-			<ModelsSelector
+			<ModelsSelectorDropdown
 				disabled={disabled || isOffline}
 				bind:this={selectorModelRef}
 				currentModel={conversationModel}

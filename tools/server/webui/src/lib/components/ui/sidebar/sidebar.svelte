@@ -93,6 +93,7 @@
 			data-slot="sidebar-container"
 			class={cn(
 				'fixed inset-y-0 z-[900] flex w-[calc(100dvw-1.5rem)] duration-200 ease-linear md:z-0 md:w-(--sidebar-width)',
+				'group-data-[collapsible=offcanvas]:pointer-events-none md:group-data-[collapsible=offcanvas]:pointer-events-auto',
 				sidebar.isResizing && '!duration-0',
 				variant === 'floating'
 					? [

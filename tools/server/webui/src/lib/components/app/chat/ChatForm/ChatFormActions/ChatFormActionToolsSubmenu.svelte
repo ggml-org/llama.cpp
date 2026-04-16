@@ -4,62 +4,23 @@
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { ToolSource } from '$lib/enums';
-	import type { ToolGroup } from '$lib/types';
-	import { SvelteSet } from 'svelte/reactivity';
+	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 
-	let expandedGroups = new SvelteSet<string>();
-	let groups = $derived(toolsStore.toolGroups);
-	let activeGroups = $derived(
-		groups.filter(
-			(g) =>
-				g.source !== ToolSource.MCP ||
-				!g.serverId ||
-				conversationsStore.isMcpServerEnabledForChat(g.serverId)
-		)
-	);
-	let totalToolCount = $derived(activeGroups.reduce((n, g) => n + g.tools.length, 0));
-
-	function getGroupCheckedState(group: (typeof groups)[number]): {
-		checked: boolean;
-		indeterminate: boolean;
-	} {
-		return {
-			checked: toolsStore.isGroupFullyEnabled(group),
-			indeterminate: toolsStore.isGroupPartiallyEnabled(group)
-		};
-	}
-
-	function getFavicon(group: { source: ToolSource; label: string }): string | null {
-		if (group.source !== ToolSource.MCP) return null;
-
-		for (const server of mcpStore.getServersSorted()) {
-			if (mcpStore.getServerLabel(server) === group.label) {
-				return mcpStore.getServerFavicon(server.id);
-			}
-		}
-
-		return null;
-	}
-
-	function getEnabledToolCount(group: ToolGroup): number {
-		return group.tools.filter((tool) => toolsStore.isToolEnabled(tool.function.name)).length;
-	}
-
-	function handleSubMenuOpen(open: boolean) {
-		if (open) {
-			if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
-				toolsStore.fetchBuiltinTools();
-			}
-			mcpStore.runHealthChecksForServers(mcpStore.getServersSorted().filter((s) => s.enabled));
-		}
-	}
+	const {
+		expandedGroups,
+		groups,
+		activeGroups,
+		totalToolCount,
+		getGroupCheckedState,
+		getEnabledToolCount,
+		getFavicon,
+		toggleGroupExpanded,
+		handleOpen
+	} = useToolsPanel();
 </script>
 
-<DropdownMenu.Sub onOpenChange={handleSubMenuOpen}>
+<DropdownMenu.Sub onOpenChange={(open) => open && handleOpen()}>
 	<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 		<PencilRuler class="h-4 w-4" />
 
@@ -85,16 +46,7 @@
 					{@const { checked, indeterminate } = getGroupCheckedState(group)}
 					{@const favicon = getFavicon(group)}
 
-					<Collapsible.Root
-						open={isExpanded}
-						onOpenChange={() => {
-							if (expandedGroups.has(group.label)) {
-								expandedGroups.delete(group.label);
-							} else {
-								expandedGroups.add(group.label);
-							}
-						}}
-					>
+					<Collapsible.Root open={isExpanded} onOpenChange={() => toggleGroupExpanded(group.label)}>
 						<div class="flex items-center gap-1">
 							<Collapsible.Trigger
 								class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
