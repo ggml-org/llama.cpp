@@ -2225,8 +2225,15 @@ class MmprojModel(ModelBase):
             self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads", "num_heads", "heads", "vt_num_attention_heads"]))
 
             # preprocessor config
-            image_mean = _MISTRAL_COMMON_DATASET_MEAN if self.is_mistral_format else self.preprocessor_config["image_mean"]
-            image_std = _MISTRAL_COMMON_DATASET_STD if self.is_mistral_format else self.preprocessor_config["image_std"]
+            image_mean = _MISTRAL_COMMON_DATASET_MEAN if self.is_mistral_format else self.preprocessor_config.get("image_mean")
+            image_std = _MISTRAL_COMMON_DATASET_STD if self.is_mistral_format else self.preprocessor_config.get("image_std")
+
+            if image_mean is None or image_std is None:
+                logger.warning(
+                    "Missing image_mean/image_std in preprocessor config, falling back to Mistral common defaults"
+                )
+                image_mean = image_mean or _MISTRAL_COMMON_DATASET_MEAN
+                image_std = image_std or _MISTRAL_COMMON_DATASET_STD
 
             self.gguf_writer.add_vision_image_mean(image_mean)
             self.gguf_writer.add_vision_image_std(image_std)
