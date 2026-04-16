@@ -86,6 +86,7 @@ std::string gen_tool_call_id() {
 
 const char * get_media_marker() {
     static const std::string marker = []() {
+        // allow user to pin a reproducible marker via env var
         const char * env = getenv("LLAMA_MEDIA_MARKER");
         if (env && env[0] != '\0') {
             return std::string(env);
