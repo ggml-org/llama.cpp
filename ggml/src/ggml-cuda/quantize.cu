@@ -114,7 +114,7 @@ static __global__ void quantize_mmq_nvfp4(
     }
 
     static constexpr int test_offsets[5] = { 0, -1, 1, -2, 2};
-    const int first_fp8_code = (int) ggml_cuda_fp32_to_ue4m3(amax_raw * (1.0f / 6.0f));
+    const int first_fp8_code = (int) ggml_cuda_fp32_to_ue4m3(amax_raw / 6.0f);
 
     float best_err = FLT_MAX;
     uint8_t fp8_code = 0;
