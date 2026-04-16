@@ -568,7 +568,9 @@ kernel void kernel_convert_block_q5_K(
     global uchar * dst_qh,
     global uchar * dst_s,
     global half  * dst_d,
-    global half  * dst_dm
+    global half  * dst_dm,
+    uchar mask_0F,
+    uchar mask_F0
 ) {
     global struct block_q5_K * b  = (global struct block_q5_K *) src0 + get_global_id(0);
     global uchar * q  = (global uchar *) dst_q  + QK_K/2*get_global_id(0);
@@ -599,7 +601,9 @@ kernel void kernel_restore_block_q5_K(
     global uchar * src_s,
     global half  * src_d,
     global half  * src_dm,
-    global struct block_q5_K * dst
+    global struct block_q5_K * dst,
+    uchar mask_0F,
+    uchar mask_F0
 ) {
     global struct block_q5_K * b  = (global struct block_q5_K *) dst + get_global_id(0);
     global uchar * q  = (global uchar *) src_q  + QK_K/2*get_global_id(0);
@@ -617,6 +621,92 @@ kernel void kernel_restore_block_q5_K(
     for (int i = 0; i < QK_K/8; ++i) {
         b->qh[i] = qh[i];
     }
+    for (int i = 0; i < K_SCALE_SIZE; ++i) {
+        b->s[i] = s[i];
+    }
+}
+
+kernel void kernel_convert_block_q5_K_noshuffle(
+    global struct block_q5_K * src0,
+    global uchar * dst_q,
+    global uchar * dst_qh,
+    global uchar * dst_s,
+    global half  * dst_d,
+    global half  * dst_dm,
+    uchar mask_0F,
+    uchar mask_F0
+) {
+    global struct block_q5_K * b  = (global struct block_q5_K *) src0 + get_global_id(0);
+    global uchar * q  = (global uchar *) dst_q  + QK_K/2       * get_global_id(0);
+    global uchar * qh = (global uchar *) dst_qh + QK_K/8       * get_global_id(0);
+    global uchar * s  = (global uchar *) dst_s  + K_SCALE_SIZE * get_global_id(0);
+    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+    global half  * dm = (global half  *) dst_dm + get_global_id(0);
+
+    *d  = b->d;
+    *dm = b->dm;
+
+    for (int i = 0; i < QK_K / 64; ++i) {
+        for (int j = 0; j < 16; ++j) {
+            uchar x0 = b->qs[i*32 + 2*j];
+            uchar x1 = b->qs[i*32 + 2*j + 1];
+            q[i*32 + j]      = convert_uchar(x0 & mask_0F) | convert_uchar((x1 & mask_0F) << 4);
+            q[i*32 + j + 16] = convert_uchar((x0 & mask_F0) >> 4) | convert_uchar(x1 & mask_F0);
+        }
+    }
+
+    for (int l = 0; l < QK_K/8; ++l) {
+        uchar x0 = 0;
+        for (int i = 0; i < 8; ++i) {
+            x0 |= ((b->qh[(l%4)*8+i] >> (l/4)) & 0x01) << i;
+        }
+        qh[l] = x0;
+    }
+
+    for (int i = 0; i < K_SCALE_SIZE; ++i) {
+        s[i] = b->s[i];
+    }
+}
+
+kernel void kernel_restore_block_q5_K_noshuffle(
+    global uchar * src_q,
+    global uchar * src_qh,
+    global uchar * src_s,
+    global half  * src_d,
+    global half  * src_dm,
+    global struct block_q5_K * dst,
+    uchar mask_0F,
+    uchar mask_F0
+) {
+    global struct block_q5_K * b  = (global struct block_q5_K *) dst + get_global_id(0);
+    global uchar * q  = (global uchar *) src_q  + QK_K/2       * get_global_id(0);
+    global uchar * qh = (global uchar *) src_qh + QK_K/8       * get_global_id(0);
+    global uchar * s  = (global uchar *) src_s  + K_SCALE_SIZE * get_global_id(0);
+    global half  * d  = (global half  *) src_d  + get_global_id(0);
+    global half  * dm = (global half  *) src_dm + get_global_id(0);
+
+    b->d  = *d;
+    b->dm = *dm;
+
+    for (int i = 0; i < QK_K / 64; ++i) {
+        for (int j = 0; j < 16; ++j) {
+            uchar lo = q[i*32 + j];
+            uchar hi = q[i*32 + j + 16];
+            b->qs[i*32 + 2*j]     = convert_uchar((lo & mask_0F) | ((hi & mask_0F) << 4));
+            b->qs[i*32 + 2*j + 1] = convert_uchar(((lo & mask_F0) >> 4) | (hi & mask_F0));
+        }
+    }
+
+    for (int g = 0; g < 4; ++g) {
+        for (int i = 0; i < 8; ++i) {
+            uchar x0 = 0;
+            for (int k = 0; k < 8; ++k) {
+                x0 |= ((qh[4*k+g] >> i) & 0x01) << k;
+            }
+            b->qh[g*8+i] = x0;
+        }
+    }
+
     for (int i = 0; i < K_SCALE_SIZE; ++i) {
         b->s[i] = s[i];
     }
