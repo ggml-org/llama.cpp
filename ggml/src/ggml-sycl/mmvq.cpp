@@ -1077,6 +1077,261 @@ static void mul_mat_vec_iq4_xs_q8_1_sycl(const void *vx, const void *vy,
     }
 }
 
+// Batched MoE mmvq kernels ===================================================
+
+template <int qk, int qi, typename block_q_t, int vdr, vec_dot_q_sycl_t vec_dot_q_sycl>
+static void mul_mat_vec_q_moe(const void * __restrict__ vx, const void * __restrict__ vy,
+                              const int32_t * __restrict__ ids, float * __restrict__ dst,
+                              const int ncols_x, const int nrows_x, const int ncols_dst,
+                              const int stride_channel_x, const int ids_stride,
+                              const sycl::nd_item<3> & item_ct1) {
+    const int channel_dst = item_ct1.get_group(1);
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+
+    if (row >= nrows_x || channel_dst >= ncols_dst) {
+        return;
+    }
+
+    const int32_t channel_x = ids[channel_dst];
+
+    const int blocks_per_row = ncols_x / qk;
+    constexpr int blocks_per_warp = (vdr * WARP_SIZE + qi - 1) / qi;
+
+    assert(blocks_per_warp > 0);
+
+    float tmp = 0.0f;
+    const block_q_t * x = (const block_q_t *) vx;
+    const block_q8_1 * y = (const block_q8_1 *) vy;
+
+    for (int i = item_ct1.get_local_id(2) / (qi / vdr); i < blocks_per_row; i += blocks_per_warp) {
+        const int ibx = channel_x * stride_channel_x + row * blocks_per_row + i;
+        const int iby = i * (qk / QK8_1);
+
+        for (size_t elem = 0; elem < qi / vdr; elem += WARP_SIZE) {
+            const int iqs = elem + vdr * (item_ct1.get_local_id(2) % (qi / vdr));
+            tmp += vec_dot_q_sycl(&x[ibx], &y[iby], iqs);
+        }
+    }
+
+#pragma unroll
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (item_ct1.get_local_id(2) == 0) {
+        dst[channel_dst * nrows_x + row] = tmp;
+    }
+}
+
+static void mul_mat_vec_q_iq3_s_q8_1_moe(const void *__restrict__ vx, const void *__restrict__ vy,
+                                         const int32_t * __restrict__ ids, float *__restrict__ dst,
+                                         const int ncols, const int nrows, const int ncols_dst,
+                                         const int stride_channel_x, const int ids_stride,
+                                         const sycl::nd_item<3> &item_ct1) {
+    const int channel_dst = item_ct1.get_group(1);
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+
+    if (row >= nrows || channel_dst >= ncols_dst) {
+        return;
+    }
+
+    const int32_t channel_x = ids[channel_dst];
+
+    const int blocks_per_row = ncols / QK_K;
+    const int blocks_per_warp = VDR_Q3_K_Q8_1_MMVQ * WARP_SIZE / QI3_K;
+    assert(blocks_per_warp>0);
+
+    float tmp = 0.0f;
+    const block_iq3_s  * x = (const block_iq3_s  *) vx;
+    const block_q8_1 * y = (const block_q8_1 *) vy;
+
+    for (int i = item_ct1.get_local_id(2) / (QI3_K / VDR_Q3_K_Q8_1_MMVQ); i < blocks_per_row;
+         i += blocks_per_warp) {
+        const int ibx = channel_x * stride_channel_x + row*blocks_per_row + i;
+        const int iby = i * (QK_K/QK8_1);
+        const int iqs = VDR_Q3_K_Q8_1_MMVQ * (item_ct1.get_local_id(2) % (QI3_K / VDR_Q3_K_Q8_1_MMVQ));
+        tmp += vec_dot_iq3_s_q8_1(&x[ibx], &y[iby], iqs, iq3s_grid);
+    }
+
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (item_ct1.get_local_id(2) == 0) {
+        dst[channel_dst * nrows + row] = tmp;
+    }
+}
+
+static void mul_mat_vec_q_iq4_nl_q8_1_moe(const void *__restrict__ vx, const void *__restrict__ vy,
+                                          const int32_t * __restrict__ ids, float *__restrict__ dst,
+                                          const int ncols, const int nrows, const int ncols_dst,
+                                          const int stride_channel_x, const int ids_stride,
+                                          const sycl::nd_item<3> &item_ct1) {
+    const int channel_dst = item_ct1.get_group(1);
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+
+    if (row >= nrows || channel_dst >= ncols_dst) {
+        return;
+    }
+
+    const int32_t channel_x = ids[channel_dst];
+
+    const int blocks_per_row = ncols / QK4_NL;
+    const int blocks_per_warp = VDR_Q4_K_Q8_1_MMVQ * WARP_SIZE / QI4_NL;
+    assert(blocks_per_warp>0);
+
+    float tmp = 0.0f;
+    const block_iq4_nl  * x = (const block_iq4_nl  *) vx;
+    const block_q8_1 * y = (const block_q8_1 *) vy;
+
+    for (int i = item_ct1.get_local_id(2) / (QI4_NL / VDR_Q4_K_Q8_1_MMVQ); i < blocks_per_row;
+         i += blocks_per_warp) {
+        const int ibx = channel_x * stride_channel_x + row*blocks_per_row + i;
+        const int iby = i * (QK4_NL/QK8_1);
+        const int iqs = VDR_Q4_K_Q8_1_MMVQ * (item_ct1.get_local_id(2) % (QI4_NL / VDR_Q4_K_Q8_1_MMVQ));
+        tmp += vec_dot_iq4_nl_q8_1(&x[ibx], &y[iby], iqs);
+    }
+
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (item_ct1.get_local_id(2) == 0) {
+        dst[channel_dst * nrows + row] = tmp;
+    }
+}
+
+static void mul_mat_vec_q_iq4_xs_q8_1_moe(const void *__restrict__ vx, const void *__restrict__ vy,
+                                          const int32_t * __restrict__ ids, float *__restrict__ dst,
+                                          const int ncols, const int nrows, const int ncols_dst,
+                                          const int stride_channel_x, const int ids_stride,
+                                          const sycl::nd_item<3> &item_ct1) {
+    const int channel_dst = item_ct1.get_group(1);
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+
+    if (row >= nrows || channel_dst >= ncols_dst) {
+        return;
+    }
+
+    const int32_t channel_x = ids[channel_dst];
+
+    const int blocks_per_row = ncols / QK_K;
+    const int blocks_per_warp = VDR_Q4_K_Q8_1_MMVQ * WARP_SIZE / (QI4_XS/4);
+    assert(blocks_per_warp>0);
+
+    float tmp = 0.0f;
+    const block_iq4_xs  * x = (const block_iq4_xs  *) vx;
+    const block_q8_1 * y = (const block_q8_1 *) vy;
+
+    for (int i = item_ct1.get_local_id(2) / ((QI4_XS/4) / VDR_Q4_K_Q8_1_MMVQ); i < blocks_per_row;
+         i += blocks_per_warp) {
+        const int ibx = channel_x * stride_channel_x + row*blocks_per_row + i;
+        const int iby = i * (QK_K/QK8_1);
+        const int iqs = VDR_Q4_K_Q8_1_MMVQ * (item_ct1.get_local_id(2) % ((QI4_XS/4) / VDR_Q4_K_Q8_1_MMVQ));
+        tmp += vec_dot_iq4_xs_q8_1(&x[ibx], &y[iby], iqs);
+    }
+
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (item_ct1.get_local_id(2) == 0) {
+        dst[channel_dst * nrows + row] = tmp;
+    }
+}
+
+// MoE dispatch wrappers -------------------------------------------------------
+
+#define DISPATCH_MOE_KERNEL(type_label, qk_val, qi_val, block_type, vdr_val, vec_dot_fn) \
+    case type_label: \
+        stream->submit([&](sycl::handler & cgh) { \
+            cgh.parallel_for( \
+                sycl::nd_range<3>(sycl::range<3>(1, ncols_dst, block_num_y) * block_dims, block_dims), \
+                [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] { \
+                    mul_mat_vec_q_moe<qk_val, qi_val, block_type, vdr_val, vec_dot_fn>( \
+                        src0_dd_i, src1_ddq_i, ids_d, dst_dd_i, ne00, row_diff, ncols_dst, \
+                        stride_channel_x, ids_stride, item_ct1); \
+                }); \
+        }); \
+        break;
+
+static void mul_mat_vec_q_moe_sycl(const ggml_type type, const void * src0_dd_i, const void * src1_ddq_i,
+                                   const int32_t * ids_d, float * dst_dd_i, const int ne00, const int row_diff,
+                                   const int ncols_dst, const int stride_channel_x, const int ids_stride,
+                                   dpct::queue_ptr stream) {
+    const int block_num_y = (row_diff + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    switch (type) {
+        DISPATCH_MOE_KERNEL(GGML_TYPE_Q4_0, QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1)
+        DISPATCH_MOE_KERNEL(GGML_TYPE_Q4_1, QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ, vec_dot_q4_1_q8_1)
+        DISPATCH_MOE_KERNEL(GGML_TYPE_Q5_0, QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ, vec_dot_q5_0_q8_1)
+        DISPATCH_MOE_KERNEL(GGML_TYPE_Q5_1, QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ, vec_dot_q5_1_q8_1)
+        DISPATCH_MOE_KERNEL(GGML_TYPE_Q8_0, QK8_0, QI8_0, block_q8_0, VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1)
+        DISPATCH_MOE_KERNEL(GGML_TYPE_Q2_K, QK_K, QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ, vec_dot_q2_K_q8_1)
+        DISPATCH_MOE_KERNEL(GGML_TYPE_Q3_K, QK_K, QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ, vec_dot_q3_K_q8_1)
+        DISPATCH_MOE_KERNEL(GGML_TYPE_Q4_K, QK_K, QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ, vec_dot_q4_K_q8_1)
+        DISPATCH_MOE_KERNEL(GGML_TYPE_Q5_K, QK_K, QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1)
+        DISPATCH_MOE_KERNEL(GGML_TYPE_Q6_K, QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, vec_dot_q6_K_q8_1)
+        case GGML_TYPE_IQ3_S:
+            stream->submit([&](sycl::handler & cgh) {
+                cgh.parallel_for(
+                    sycl::nd_range<3>(sycl::range<3>(1, ncols_dst, block_num_y) * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        mul_mat_vec_q_iq3_s_q8_1_moe(
+                            src0_dd_i, src1_ddq_i, ids_d, dst_dd_i, ne00, row_diff, ncols_dst,
+                            stride_channel_x, ids_stride, item_ct1);
+                    });
+            });
+            break;
+        case GGML_TYPE_IQ4_NL:
+            stream->submit([&](sycl::handler & cgh) {
+                cgh.parallel_for(
+                    sycl::nd_range<3>(sycl::range<3>(1, ncols_dst, block_num_y) * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        mul_mat_vec_q_iq4_nl_q8_1_moe(
+                            src0_dd_i, src1_ddq_i, ids_d, dst_dd_i, ne00, row_diff, ncols_dst,
+                            stride_channel_x, ids_stride, item_ct1);
+                    });
+            });
+            break;
+        case GGML_TYPE_IQ4_XS:
+            stream->submit([&](sycl::handler & cgh) {
+                cgh.parallel_for(
+                    sycl::nd_range<3>(sycl::range<3>(1, ncols_dst, block_num_y) * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        mul_mat_vec_q_iq4_xs_q8_1_moe(
+                            src0_dd_i, src1_ddq_i, ids_d, dst_dd_i, ne00, row_diff, ncols_dst,
+                            stride_channel_x, ids_stride, item_ct1);
+                    });
+            });
+            break;
+        default:
+            GGML_ABORT("Unsupported type for mul_mat_vec_q_moe");
+    }
+}
+
+#undef DISPATCH_MOE_KERNEL
+
+void ggml_sycl_op_mul_mat_vec_q_moe(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+                                    const ggml_tensor * ids, ggml_tensor * dst, const char * src0_dd_i,
+                                    const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low,
+                                    const int64_t row_high, const dpct::queue_ptr & stream) {
+    const int64_t ne10 = src1->ne[0];
+    GGML_ASSERT(ne10 % QK8_1 == 0);
+
+    const int64_t ne00     = src0->ne[0];
+    const int64_t row_diff = row_high - row_low;
+
+    const int32_t * ids_d = (const int32_t *) ids->data;
+    const int stride_channel_x = src0->nb[2] / ggml_type_size(src0->type);
+    const int ids_stride = ids->nb[1] / sizeof(int32_t);
+    const int ncols_dst = ids->ne[0];
+
+    mul_mat_vec_q_moe_sycl(src0->type, src0_dd_i, src1_ddq_i, ids_d, dst_dd_i, ne00, row_diff, ncols_dst,
+                           stride_channel_x, ids_stride, stream);
+}
+
 void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
                                 ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
                                 const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low,

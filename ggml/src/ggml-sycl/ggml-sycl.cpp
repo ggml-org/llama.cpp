@@ -3798,6 +3798,17 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     const int64_t n_as = ne02;
     const int64_t n_ids = ids->ne[0];
 
+    if (ne12 == 1) {
+        // Fast path: batched MMVQ for MoE token generation
+        if (can_use_mul_mat_vec_q(src0, src1, dst)) {
+            const int64_t src1_padded_col_size = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
+            ggml_sycl_pool_alloc<char> src1_ddq(ctx.pool(), src1_padded_col_size * sizeof(block_q8_1) / QK8_1);
+            quantize_row_q8_1_sycl<quantize_q8_1>((const float *) src1->data, src1_ddq.get(), src1->ne[0], 1, src1_padded_col_size, stream);
+            ggml_sycl_op_mul_mat_vec_q_moe(ctx, src0, src1, ids, dst, (const char *) src0->data, src1_ddq.get(), (float *) dst->data, 0, src0->ne[1], stream);
+            return;
+        }
+    }
+
     std::vector<char> ids_host(ggml_nbytes(ids));
     const char * ids_dev = (const char *) ids->data;
 
@@ -3829,6 +3840,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     dst_row.nb[2] = nb1;
     dst_row.nb[3] = nb1;
     if (ne12 == 1) {
+        // Fallback: sequential per-expert matmuls
         for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
             for (int64_t id = 0; id < n_ids; id++) {
                 const int32_t i02 = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
@@ -3840,11 +3852,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                 const int64_t i1 = id;
                 const int64_t i2 = i12;
 
-            src0_row.data = src0_original + i02*nb02;
-            src1_row.data = src1_original + i11*nb11 + i12*nb12;
-            dst_row.data = dst_original + i1*nb1 + i2*nb2;
+                src0_row.data = src0_original + i02*nb02;
+                src1_row.data = src1_original + i11*nb11 + i12*nb12;
+                dst_row.data = dst_original + i1*nb1 + i2*nb2;
 
-            ggml_sycl_mul_mat(ctx, &src0_row, &src1_row, &dst_row);
+                ggml_sycl_mul_mat(ctx, &src0_row, &src1_row, &dst_row);
             }
         }
     } else {
