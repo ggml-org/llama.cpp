@@ -27,6 +27,7 @@
 #include <fstream>
 #include <cctype>
 #include <cstdlib>
+#include <dlfcn.h>
 #include <magic_enum/magic_enum.hpp>
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
@@ -101,16 +102,15 @@ auto &loadResult_mult         = g_rt.loadResult_mult;
 auto &loadResult_rms_norm     = g_rt.loadResult_rms_norm;
 } // anonymous namespace
 
-
 // =============================================================================
 // YAML deployment parsing (no external yaml lib)
 // Supports:
-//   txe_count: 2
-//   multi_thread_enable: true|false|1|0|yes|no|on|off
+// txe_count: 2
+// multi_thread_enable: true\false\1\0\yes\no\on\off
 // Optional env:
-//   TSAVORITE_MODEL_DEPLOYMENT_YAML=/path/to/tsavorite-model-deployment.yaml
+// TSAVORITE_MODEL_DEPLOYMENT_YAML=/path/to/tsavorite-model-deployment.yaml
 // Notes:
-//   - txe_count is CLAMPED to NUM_OF_TXES (fixed-size arrays in this file)
+// - txe_count is CLAMPED to NUM_OF_TXES (fixed-size arrays in this file)
 // =============================================================================
 static inline std::string tsi_trim_copy(const std::string &s) {
     size_t b = 0, e = s.size();
@@ -246,6 +246,40 @@ static tsi_deploy_cfg_t tsi_read_deploy_yaml(const std::string &path) {
     return cfg;
 }
 
+// ============================================================================
+// DEPLOYMENT YAML PATH RESOLUTION
+// Supports both:
+//  - Dev/posix: YAML in current working directory (./tsavorite-model-deployment.yaml)
+//  - FPGA package: YAML next to the loaded .so (same dir as libggml*.so)
+// Priority:
+//   1) TSAVORITE_MODEL_DEPLOYMENT_YAML (explicit override)
+//   2) <dir-of-loaded-so>/tsavorite-model-deployment.yaml
+//   3) ./tsavorite-model-deployment.yaml (current working dir; current behavior)
+// ============================================================================
+static inline std::string tsi_resolve_deployment_yaml_path() {
+    // 1) env override
+    if (const char *p = std::getenv("TSAVORITE_MODEL_DEPLOYMENT_YAML")) {
+        if (access(p, R_OK) == 0) {
+            return std::string(p);
+        }
+    }
+
+    // 2) next to this loaded shared object
+    Dl_info info;
+    if (dladdr((void *)&tsi_resolve_deployment_yaml_path, &info) && info.dli_fname) {
+        std::string so_path(info.dli_fname);
+        size_t pos = so_path.find_last_of('/');
+        if (pos != std::string::npos) {
+            std::string yaml = so_path.substr(0, pos + 1) + "tsavorite-model-deployment.yaml";
+            if (access(yaml.c_str(), R_OK) == 0) {
+                return yaml;
+            }
+        }
+    }
+
+    // 3) dev/posix: current working dir (existing behavior)
+    return std::string("tsavorite-model-deployment.yaml");
+}
 
 #ifdef TMU_DEBUG_VALIDATE
 
