@@ -314,6 +314,67 @@ normalize_store_vec(float * out, float * acc, int64_t dv, float inv, int use_fas
     __asm__ volatile("mova.m.x %0" :: "r"(old_mask));
 }
 
+// Evict a byte range from L1D to L2 SCP, splitting into batches of ≤16
+// cache lines (the hw limit for evict_to_l2). Use before a barrier when
+// another minion in the shire needs to read the region, or after a barrier
+// on the reader side to drop stale L1D copies before reading peer data.
+static inline void __attribute__((always_inline))
+evict_range_to_l2(const void * addr, int64_t bytes) {
+    if (bytes <= 0) return;
+    int64_t lines = (bytes + 63) / 64;
+    const char * p = (const char *) addr;
+    while (lines > 0) {
+        int64_t batch = lines > 16 ? 16 : lines;
+        evict_to_l2((const void *) p, (uint64_t) batch, 64);
+        p     += batch * 64;
+        lines -= batch;
+    }
+}
+
+// Split-KV online merge inner loop:
+//
+//   for d in [0, dv) step 8:
+//       acc[d..d+8] = alpha_own * acc[d..d+8] + alpha_peer * peer_acc[d..d+8]
+//
+// Runs on the reducer (k_split == 0) after all tensor_fma ops for the row are
+// complete, so f0..f31 are dead at entry. We still bracket the loop in inline
+// asm with explicit f2/f3/f4/f5 clobbers to lock register usage down — per the
+// MM register lifetime rule, never let the compiler mingle FP ops into code
+// that sits anywhere near a tensor engine output window.
+static inline void __attribute__((always_inline))
+merge_rescale_add_asm(float * acc,
+                      const float * peer_acc,
+                      int64_t dv,
+                      float alpha_own,
+                      float alpha_peer) {
+    unsigned long old_mask;
+    __asm__ volatile(
+        "mova.x.m  %[ms]              \n\t"
+        "mov.m.x   m0, x0, 0xFF       \n\t"
+        "fbc.ps    f4, 0(%[ao])       \n\t"   // broadcast alpha_own
+        "fbc.ps    f5, 0(%[ap])       \n\t"   // broadcast alpha_peer
+        : [ms] "=&r"(old_mask)
+        : [ao] "r"(&alpha_own), [ap] "r"(&alpha_peer)
+        : "f4", "f5"
+    );
+
+    for (int64_t d = 0; d < dv; d += 8) {
+        __asm__ volatile(
+            "flw.ps    f2, 0(%[a])      \n\t"   // own
+            "flw.ps    f3, 0(%[p])      \n\t"   // peer
+            "fmul.ps   f2, f2, f4       \n\t"   // own *= alpha_own
+            "fmul.ps   f3, f3, f5       \n\t"   // peer *= alpha_peer
+            "fadd.ps   f2, f2, f3       \n\t"
+            "fsw.ps    f2, 0(%[a])      \n\t"
+            :
+            : [a] "r"(acc + d), [p] "r"(peer_acc + d)
+            : "f2", "f3", "memory"
+        );
+    }
+
+    __asm__ volatile("mova.m.x %0" :: "r"(old_mask));
+}
+
 int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     (void) env;
 
@@ -356,18 +417,27 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
 
     // Split-KV team layout (mirrors mul_mat_f16_matrix_engine.c)
     //
-    // When total_rows is small compared to the total minion count
-    // (typical for decode: nq=1, nhq small), we group k_splits minions
-    // within the same shire into a team that cooperates on one row by
-    // splitting the KV dimension. Each team member computes a partial
-    // (M_p, S_p, acc_p) over its KV slab; the k_split==0 member
-    // merges the partials with the softmax combine rule.
+    // When total_rows is small compared to the total minion count (typical
+    // for decode: nq=1, nhq small), we group k_splits minions within the
+    // same shire into a team that cooperates on one row by splitting the
+    // KV dimension. Each team member computes a partial (M_p, S_p, acc_p)
+    // over its KV slab; the k_split==0 member merges the partials with the
+    // softmax combine rule.
     //
-    // Step 1: k_splits is hard-coded to 1 — behavior identical to the
-    //         pre-refactor kernel. Step 2 will derive k_splits from
-    //         total_rows and flip the merge path on.
-    const int64_t nk_tiles = (nk + TILE_KV - 1) / TILE_KV;
-    const int64_t k_splits = 1;
+    // k_splits is a power of two, capped at MINIONS_PER_SHIRE (so a team
+    // never spans shires — L2 SCP is shire-local) and at nk_tiles (so each
+    // team member gets at least one KV tile).
+    const int64_t nk_tiles      = (nk + TILE_KV - 1) / TILE_KV;
+    const int64_t total_minions = NUM_COMPUTE_SHIRES * MINIONS_PER_SHIRE;
+    int64_t k_splits = 1;
+    if (total_rows < total_minions) {
+        int64_t target = total_minions / total_rows;
+        int64_t ks = 1;
+        while (ks * 2 <= target && ks * 2 <= MINIONS_PER_SHIRE && ks * 2 <= nk_tiles) {
+            ks *= 2;
+        }
+        k_splits = ks;
+    }
 
     const int64_t tiles_per_shire = MINIONS_PER_SHIRE / k_splits;
     const int64_t k_split         = (int64_t)local_minion % k_splits;
@@ -391,42 +461,83 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     };
 
     // Hart 1 does K-panel packing
+    //
+    // When k_splits > 1, hart 1 must also participate in the two shire
+    // barriers that bracket the merge phase (one before and one after, so
+    // the reducer can read peer partials safely and the writers know when
+    // their acc/stats slab is free to reuse). Hart 1 has no useful work
+    // between those barriers.
+    //
+    // All teams in a shire must iterate the same number of times so the
+    // per-iter shire barriers stay balanced. Teams whose assigned row is
+    // past total_rows still call the barriers but skip the packing work.
     if (is_hart1) {
         uint32_t chunk_id = 0;
+        const int64_t row_base = (int64_t)shire_id + local_tile_idx * NUM_COMPUTE_SHIRES;
 
-        for (int64_t row = (int64_t)shire_id + local_tile_idx * NUM_COMPUTE_SHIRES;
-             row < total_rows;
-             row += tiles_stride) {
-            const int64_t iq3 = row / (nhq * nq);
-            const int64_t rem = row % (nhq * nq);
-            const int64_t iq2 = rem / nq;
-            const int64_t ik2 = iq2 / gqa_ratio;
+        int64_t max_iters;
+        if (k_splits > 1) {
+            max_iters = (total_rows + tiles_stride - 1) / tiles_stride;
+        } else {
+            max_iters = (row_base >= total_rows) ? 0
+                       : ((total_rows - row_base - 1) / tiles_stride + 1);
+        }
 
-            const char * k_head = k_data + ik2*k->nb[2] + iq3*k->nb[3];
+        for (int64_t iter = 0; iter < max_iters; iter++) {
+            const int64_t row = row_base + iter * tiles_stride;
+            const int has_work = (row < total_rows);
 
-            for (int64_t kv_base = kv_start; kv_base < kv_end; kv_base += TILE_KV) {
-                const int64_t kv_count = (kv_base + TILE_KV <= nk) ? TILE_KV : (nk - kv_base);
+            if (has_work) {
+                const int64_t iq3 = row / (nhq * nq);
+                const int64_t rem = row % (nhq * nq);
+                const int64_t iq2 = rem / nq;
+                const int64_t ik2 = iq2 / gqa_ratio;
 
-                for (int64_t dk_chunk = 0; dk_chunk < dk; dk_chunk += TILE_K) {
-                    int buf = chunk_id & 1;
+                const char * k_head = k_data + ik2*k->nb[2] + iq3*k->nb[3];
 
-                    // Prefetch K data for this chunk
-                    prefetch_kv_to_l2(k_head, kv_base, dk_chunk, kv_count, k->nb[1]);
+                for (int64_t kv_base = kv_start; kv_base < kv_end; kv_base += TILE_KV) {
+                    const int64_t kv_count = (kv_base + TILE_KV <= nk) ? TILE_KV : (nk - kv_base);
 
-                    pack_k_for_transpose16(scp_kp[buf], k_head, kv_base, dk_chunk,
-                                           kv_count, k->nb[1]);
+                    for (int64_t dk_chunk = 0; dk_chunk < dk; dk_chunk += TILE_K) {
+                        int buf = chunk_id & 1;
 
-                    FENCE;
-                    flush_to_l2(scp_kp[buf], 16, 64);
-                    flush_to_l2((et_fp16_t *)((char *)scp_kp[buf] + 1024), 16, 64);
-                    WAIT_CACHEOPS;
+                        // Back-pressure: before overwriting buf[buf] on chunk N
+                        // (which will displace chunk N-2), wait for hart 0 to
+                        // post that it's done with chunk N-2. Gates both
+                        // directions of double-buffering.
+                        //
+                        // NOTE: we use et_sem_* (FCC 0 only) rather than
+                        // et_barrier(ET_BARRIER_MINION) here because the
+                        // minion barrier for minion 0 shares FLB 0 with
+                        // ET_BARRIER_SHIRE. Mixing them deadlocks. See
+                        // feedback_flb_collision.
+                        if (chunk_id >= 2) {
+                            et_sem_wait(ET_BARRIER_MINION);
+                        }
 
-                    // Barrier: signal hart 0 that data is ready
-                    et_barrier(ET_BARRIER_MINION);
+                        // Prefetch K data for this chunk
+                        prefetch_kv_to_l2(k_head, kv_base, dk_chunk, kv_count, k->nb[1]);
 
-                    chunk_id++;
+                        pack_k_for_transpose16(scp_kp[buf], k_head, kv_base, dk_chunk,
+                                               kv_count, k->nb[1]);
+
+                        FENCE;
+                        flush_to_l2(scp_kp[buf], 16, 64);
+                        flush_to_l2((et_fp16_t *)((char *)scp_kp[buf] + 1024), 16, 64);
+                        WAIT_CACHEOPS;
+
+                        // Signal: this buf is ready for hart 0 to consume.
+                        et_sem_post(ET_BARRIER_MINION);
+
+                        chunk_id++;
+                    }
                 }
+            }
 
+            // Shire barriers for split-KV merge (hart 1 is a passive arrival).
+            if (k_splits > 1) {
+                et_barrier(ET_BARRIER_SHIRE);   // A: team has written its partial
+                et_barrier(ET_BARRIER_SHIRE);   // B: reducer has finished merge
             }
         }
 
@@ -452,9 +563,30 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
 
     uint32_t chunk_id = 0;
 
-    for (int64_t row = (int64_t)shire_id + local_tile_idx * NUM_COMPUTE_SHIRES;
-         row < total_rows;
-         row += tiles_stride) {
+    // Iter-based outer loop (matches hart 1). When k_splits > 1 all teams
+    // in a shire iterate the same number of times so the per-row shire
+    // barriers stay balanced; iterations with row >= total_rows skip the
+    // compute but still participate in the barriers.
+    const int64_t hart0_row_base = (int64_t)shire_id + local_tile_idx * NUM_COMPUTE_SHIRES;
+    int64_t hart0_max_iters;
+    if (k_splits > 1) {
+        hart0_max_iters = (total_rows + tiles_stride - 1) / tiles_stride;
+    } else {
+        hart0_max_iters = (hart0_row_base >= total_rows) ? 0
+                         : ((total_rows - hart0_row_base - 1) / tiles_stride + 1);
+    }
+
+    for (int64_t iter = 0; iter < hart0_max_iters; iter++) {
+        const int64_t row = hart0_row_base + iter * tiles_stride;
+        if (row >= total_rows) {
+            // No-work iteration: only participate in barriers (k_splits > 1).
+            if (k_splits > 1) {
+                et_barrier(ET_BARRIER_SHIRE);   // A
+                et_barrier(ET_BARRIER_SHIRE);   // B
+            }
+            continue;
+        }
+
         const int64_t iq3 = row / (nhq * nq);
         const int64_t rem = row % (nhq * nq);
         const int64_t iq2 = rem / nq;
@@ -502,8 +634,9 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                     false, false, A_L1_START, TENSOR_LOAD_PLAIN, 0,
                     (uint64_t)(q_f16 + dk_chunk), 0, 0, 64, 0);
 
-                // Barrier: wait for hart 1 to finish packing this K chunk
-                et_barrier(ET_BARRIER_MINION);
+                // Wait for hart 1 to finish packing this K chunk. See the
+                // paired et_sem_post in the hart-1 pack loop
+                et_sem_wait(ET_BARRIER_MINION);
 
                 tensor_wait(TENSOR_LOAD_WAIT_0);
 
@@ -519,6 +652,9 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                     B_L1_START, A_L1_START,
                     TENSOR_FMA_OP_FP16, (dk_chunk == 0));
                 tensor_wait(TENSOR_FMA_WAIT);
+
+                // Signal hart 1: this buf is consumed and may be reused.
+                et_sem_post(ET_BARRIER_MINION);
 
                 chunk_id++;
             }
@@ -753,9 +889,82 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
             }
         }
 
-        // Write output: acc[d] / S
-        const float S_inv = S == 0.0f ? 0.0f : et_fdiv(1.0f, S);
-        normalize_store_vec(out, acc, dv, S_inv, use_fast_store);
+        // Finalize row
+        //
+        // k_splits == 1: this minion computed the full row. Normalize in
+        //                place and store to DRAM.
+        //
+        // k_splits  > 1: this minion computed a KV slab. Publish the
+        //                partial (M, S, acc) to L2 SCP, sync with the
+        //                team, and let the k_split==0 member do the
+        //                softmax combine and the final store. All tensor
+        //                engine ops are complete before this block, so
+        //                f0..f31 are free to use.
+        if (k_splits > 1) {
+            // Publish our partial.
+            volatile float * my_stats =
+                (volatile float *)et_shire_l2scp_local(scp_base + SCP_STATS_OFF);
+            my_stats[0] = M;
+            my_stats[1] = S;
+            FENCE;
+            evict_range_to_l2(acc, (int64_t)dv * (int64_t)sizeof(float));
+            evict_to_l2((const void *)my_stats, 1, 64);
+            WAIT_CACHEOPS;
+
+            // A: team members have all written their partials.
+            et_barrier(ET_BARRIER_SHIRE);
+
+            if (k_split == 0) {
+                // Online softmax merge: fold peers 1..k_splits-1 into our
+                // own (M_running, S_running, acc). For each peer p:
+                //   M_new    = max(M_running, M_p)
+                //   α_own    = exp2((M_running - M_new) * log2e)
+                //   α_p      = exp2((M_p     - M_new) * log2e)
+                //   acc[d]   = α_own * acc[d] + α_p * peer_acc[d]
+                //   S_running = α_own * S_running + α_p * S_p
+                float M_running = M;
+                float S_running = S;
+                const float log2e = 1.4426950408889634f;
+
+                for (int64_t p = 1; p < k_splits; p++) {
+                    uint64_t peer_scp =
+                        (local_tile_idx * k_splits + p) * SCP_PER_MINION;
+                    volatile float * peer_stats = (volatile float *)
+                        et_shire_l2scp_local(peer_scp + SCP_STATS_OFF);
+                    float * peer_acc = (float *)
+                        et_shire_l2scp_local(peer_scp + SCP_ACC_OFF);
+
+                    // Drop stale L1D copies before reading peer's data.
+                    evict_to_l2((const void *)peer_stats, 1, 64);
+                    evict_range_to_l2(peer_acc, (int64_t)dv * (int64_t)sizeof(float));
+                    WAIT_CACHEOPS;
+
+                    const float M_p = peer_stats[0];
+                    const float S_p = peer_stats[1];
+
+                    const float M_new = (M_p > M_running) ? M_p : M_running;
+                    const float alpha_own = (M_running == ET_NEG_INF_F) ? 0.0f
+                        : et_exp2f((M_running - M_new) * log2e);
+                    const float alpha_p   = (M_p == ET_NEG_INF_F) ? 0.0f
+                        : et_exp2f((M_p - M_new) * log2e);
+
+                    merge_rescale_add_asm(acc, peer_acc, dv, alpha_own, alpha_p);
+
+                    S_running = alpha_own * S_running + alpha_p * S_p;
+                    M_running = M_new;
+                }
+
+                const float S_inv = (S_running == 0.0f) ? 0.0f : et_fdiv(1.0f, S_running);
+                normalize_store_vec(out, acc, dv, S_inv, use_fast_store);
+            }
+
+            // B: reducer is done, team may reuse its acc/stats slabs.
+            et_barrier(ET_BARRIER_SHIRE);
+        } else {
+            // k_splits == 1 fast path — this minion owns the full row.
+            const float S_inv = S == 0.0f ? 0.0f : et_fdiv(1.0f, S);
+            normalize_store_vec(out, acc, dv, S_inv, use_fast_store);
+        }
     }
 
     FENCE;
