@@ -2,9 +2,9 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
-
+#include <src/llama-arch.h>
+#include <src/llama-model.h>
 #include <clocale>
-#include <ctime>
 #include <algorithm>
 
 #if defined(_MSC_VER)
@@ -169,13 +169,12 @@ int main(int argc, char ** argv) {
 
     // split the prompt into lines
     std::vector<std::string> prompts = split_lines(params.prompt, params.embd_sep);
+    int32_t token_type_offset  = llama_vocab_n_tokens(vocab);
 
     // max batch size
     const uint64_t n_batch = params.n_batch;
 
     // get added sep and eos token, if any
-    const std::string added_sep_token = llama_vocab_get_add_sep(vocab) ? llama_vocab_get_text(vocab, llama_vocab_sep(vocab)) : "";
-    const std::string added_eos_token = llama_vocab_get_add_eos(vocab) ? llama_vocab_get_text(vocab, llama_vocab_eos(vocab)) : "";
     const char * rerank_prompt = llama_model_chat_template(model, "rerank");
 
     // tokenize the prompts and trim
@@ -186,27 +185,50 @@ int main(int argc, char ** argv) {
         // split classification pairs and insert expected separator tokens
         if (pooling_type == LLAMA_POOLING_TYPE_RANK && prompt.find(params.cls_sep) != std::string::npos) {
             std::vector<std::string> pairs = split_lines(prompt, params.cls_sep);
+            const std::string query = pairs[0];
+            const std::string doc = pairs[1];
             if (rerank_prompt != nullptr) {
-                const std::string query = pairs[0];
-                const std::string doc = pairs[1];
                 std::string final_prompt = rerank_prompt;
-                string_replace_all(final_prompt, "{query}"   , query);
-                string_replace_all(final_prompt, "{document}", doc  );
-                inp = common_tokenize(vocab, final_prompt, true, true);
-            } else {
-                std::string final_prompt;
-                for (size_t i = 0; i < pairs.size(); i++) {
-                    final_prompt += pairs[i];
-                    if (i != pairs.size() - 1) {
-                        if (!added_eos_token.empty()) {
-                            final_prompt += added_eos_token;
-                        }
-                        if (!added_sep_token.empty()) {
-                            final_prompt += added_sep_token;
-                        }
-                    }
+                size_t pos = final_prompt.find("{document}");
+                std::string query_prompt = final_prompt.substr(0, pos);
+                std::string doc_prompt = final_prompt.substr(pos);
+                string_replace_all(query_prompt, "{query}"   , query);
+                string_replace_all(doc_prompt, "{document}", doc  );
+
+                auto inp_q= common_tokenize(vocab, query_prompt, false, true);
+                auto inp_d= common_tokenize(vocab, doc_prompt, false, true);
+
+                for(auto token: inp_q){
+                    inp.emplace_back(token);
                 }
-                inp = common_tokenize(ctx, final_prompt, true, true);
+                for(auto token: inp_d){
+                    inp.emplace_back(model->arch == LLM_ARCH_BERT ? token + token_type_offset : token );
+                }
+            } else {
+                llama_token eos_token = llama_vocab_eos(vocab);
+                if (eos_token == LLAMA_TOKEN_NULL) {
+                    eos_token = llama_vocab_sep(vocab);
+                }
+
+                auto inp_q= common_tokenize(vocab, query, false, false);
+                auto inp_d= common_tokenize(vocab, doc, false, false);
+                if (llama_vocab_get_add_bos(vocab)) {
+                    inp.emplace_back(llama_vocab_bos(vocab)); //add bos
+                }
+                inp.insert(inp.end(), inp_q.begin(), inp_q.end());//add seq A
+                if (llama_vocab_get_add_eos(vocab)) {
+                    inp.emplace_back(eos_token); //add eos
+                }
+                if (llama_vocab_get_add_sep(vocab)) {
+                    inp.emplace_back(llama_vocab_sep(vocab)); //add sep
+                }
+                for(auto token: inp_d){ //add seq B
+                    inp.emplace_back(model->arch == LLM_ARCH_BERT ? token + token_type_offset : token);
+
+                }
+                if (llama_vocab_get_add_eos(vocab)) {
+                    inp.emplace_back(model->arch == LLM_ARCH_BERT ? eos_token + token_type_offset : eos_token); //add eos
+                }
             }
         } else {
             inp = common_tokenize(ctx, prompt, true, true);
