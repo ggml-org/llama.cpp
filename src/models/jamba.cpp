@@ -24,21 +24,8 @@ llm_build_jamba::llm_build_jamba(const llama_model & model, const llm_graph_para
         } else {
             // Attention
 
-            struct ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            struct ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            struct ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             // No RoPE :)
             cur = build_attn(inp_hybrid->get_attn(),

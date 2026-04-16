@@ -24,17 +24,8 @@ llm_build_eurobert::llm_build_eurobert(const llama_model & model, const llm_grap
                 LLM_NORM_RMS, il);
 
         {
-            ggml_tensor * Qcur;
-            ggml_tensor * Kcur;
-            ggml_tensor * Vcur;
-
-            Qcur = build_lora_mm(model.layers[il].wq, cur);
-            Kcur = build_lora_mm(model.layers[il].wk, cur);
-            Vcur = build_lora_mm(model.layers[il].wv, cur);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
