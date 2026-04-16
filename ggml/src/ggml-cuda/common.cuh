@@ -28,7 +28,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <deque>
+#include <queue>
 
 #if defined(GGML_USE_HIP)
 #include "vendors/hip.h"
@@ -152,7 +152,6 @@ static int ggml_cuda_highest_compiled_arch(const int arch) {
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
 
 #define GGML_CUDA_MAX_STREAMS 8
-#define GGML_CUDA_MAX_GRAPHS  128
 
 [[noreturn]]
 void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg);
@@ -1369,18 +1368,41 @@ struct ggml_backend_cuda_context {
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
     std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
-    std::deque<const void *> graph_roots;
+
+    // pair of timestamp and node ptr
+    std::priority_queue<
+        std::pair<int64_t, const void *>,
+        std::vector<std::pair<int64_t, const void *>>,
+        std::greater<>
+    > graph_roots;
+
+    std::unordered_map<const void *, int64_t> graph_last_used_time;
 
     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
+        int64_t time_now = ggml_time_us();
+
+        // delete all graph elements older than 10 seconds
+        while (!graph_roots.empty() && time_now - graph_roots.top().first >= 10'000'000) {
+            const auto & [ts, node_ptr] = graph_roots.top();
+            graph_roots.pop();
+
+            // lazy delete
+            if (ts == graph_last_used_time.at(node_ptr)) {
+                cuda_graphs.erase(node_ptr);
+                graph_last_used_time.erase(node_ptr);
+            }
+        }
+
         auto it = cuda_graphs.find(first_node_ptr);
         if (it == cuda_graphs.end()) {
-            if (graph_roots.size() >= GGML_CUDA_MAX_GRAPHS) {
-                cuda_graphs.erase(graph_roots.front());
-                graph_roots.pop_front();
-            }
-            cuda_graphs[first_node_ptr] = std::make_unique<ggml_cuda_graph>();
-            graph_roots.push_back(first_node_ptr);
-            return cuda_graphs[first_node_ptr].get();
+            it = cuda_graphs.emplace(first_node_ptr, std::make_unique<ggml_cuda_graph>()).first;
+        }
+
+        // throttle re-pushes into the lru queue by 1s per entry
+        auto last_it = graph_last_used_time.find(first_node_ptr);
+        if (last_it == graph_last_used_time.end() || time_now - last_it->second >= 1'000'000) {
+            graph_last_used_time[first_node_ptr] = time_now;
+            graph_roots.emplace(time_now, first_node_ptr);
         }
         return it->second.get();
     }
