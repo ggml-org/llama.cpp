@@ -152,7 +152,7 @@ static int ggml_cuda_highest_compiled_arch(const int arch) {
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
 
 #define GGML_CUDA_MAX_STREAMS 8
-#define GGML_CUDA_MAX_GRAPHS 64
+#define GGML_CUDA_MAX_GRAPHS  128
 
 [[noreturn]]
 void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg);
