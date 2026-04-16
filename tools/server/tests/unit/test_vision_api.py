@@ -37,6 +37,7 @@ JSON_PROMPT_STRING_KEY = "prompt_string"
 @pytest.fixture(autouse=True)
 def create_server():
     global server
+    os.environ['LLAMA_MEDIA_MARKER'] = '<__media__>'
     server = ServerPreset.tinygemma3()
 
 def test_models_supports_multimodal_capability():
