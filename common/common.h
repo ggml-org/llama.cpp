@@ -573,13 +573,15 @@ struct common_params {
 
     // server params
     int32_t port                = 8080;          // server listens on this network port
+    bool    reuse_port          = false;         // allow multiple sockets to bind to the same port
     int32_t timeout_read        = 600;           // http read timeout in seconds
     int32_t timeout_write       = timeout_read;  // http write timeout in seconds
     int32_t n_threads_http      = -1;    // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
-    int32_t n_ctx_checkpoints   = 32;     // max number of context checkpoints per slot
-    int32_t checkpoint_every_nt = 8192;   // make a checkpoint every n tokens during prefill
+    bool    clear_idle          = true;  // save and clear idle slots upon starting a new task
+    int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
+    int32_t checkpoint_every_nt = 8192;  // make a checkpoint every n tokens during prefill
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
     std::string hostname      = "127.0.0.1";
@@ -612,6 +614,9 @@ struct common_params {
     bool endpoint_slots   = true;
     bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
+
+    // enable built-in tools
+    std::vector<std::string> server_tools;
 
     // router server configs
     std::string models_dir    = ""; // directory containing models for the router server
@@ -675,6 +680,7 @@ struct common_params {
     // return false from callback to abort model loading or true to continue
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
+    bool no_alloc = false; // Don't allocate model buffers
 };
 
 // call once at the start of a program if it uses libcommon
@@ -789,6 +795,8 @@ std::string string_from(bool value);
 std::string string_from(const std::vector<int> & values);
 std::string string_from(const struct llama_context * ctx, const std::vector<llama_token> & tokens);
 std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch);
+
+bool glob_match(const std::string & pattern, const std::string & str);
 
 //
 // Filesystem utils

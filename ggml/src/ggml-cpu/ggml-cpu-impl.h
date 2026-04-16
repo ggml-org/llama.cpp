@@ -306,6 +306,7 @@ inline static uint8x16_t ggml_vqtbl1q_u8(uint8x16_t a, uint8x16_t b) {
 
 #if !defined(__ARM_FEATURE_DOTPROD)
 
+// NOTE: this fallback produces the same total sum as native vdotq_s32 but with different per-lane grouping — do not use when individual lane values matter.
 inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) {
     const int16x8_t p0 = vmull_s8(vget_low_s8 (a), vget_low_s8 (b));
     const int16x8_t p1 = vmull_s8(vget_high_s8(a), vget_high_s8(b));
@@ -318,6 +319,15 @@ inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) 
 #define ggml_vdotq_s32(a, b, c) vdotq_s32(a, b, c)
 
 #endif // !defined(__ARM_FEATURE_DOTPROD)
+
+static inline int32x4_t ggml_nvfp4_dot8(const int8x8_t q4_lo, const int8x8_t q8_lo,
+                                         const int8x8_t q4_hi, const int8x8_t q8_hi) {
+    const int16x8_t p_lo = vmull_s8(q4_lo, q8_lo);
+    const int16x8_t p_hi = vmull_s8(q4_hi, q8_hi);
+    const int32x4_t sum_lo = vpaddlq_s16(p_lo);
+    const int32x4_t sum_hi = vpaddlq_s16(p_hi);
+    return vaddq_s32(sum_lo, sum_hi);
+}
 
 #endif // defined(__ARM_NEON)
 

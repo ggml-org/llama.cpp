@@ -8,7 +8,7 @@
  */
 
 // API utilities
-export { getAuthHeaders, getJsonHeaders } from './api-headers';
+export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
 export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
@@ -22,6 +22,7 @@ export { default as autoResizeTextarea } from './autoresize-textarea';
 // Branching utilities
 export {
 	filterByLeafNodeId,
+	findMessageById,
 	findLeafNode,
 	findDescendantMessages,
 	getMessageSiblings,
@@ -38,7 +39,7 @@ export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } fr
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
 // CORS Proxy
-export { buildProxiedUrl, getProxiedUrlString } from './cors-proxy';
+export { buildProxiedUrl, getProxiedUrlString, buildProxiedHeaders } from './cors-proxy';
 
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';
@@ -54,7 +55,7 @@ export {
 
 // File preview utilities
 export { getFileTypeLabel } from './file-preview';
-export { getPreviewText } from './text';
+export { getPreviewText, generateConversationTitle } from './text';
 
 // File type utilities
 export {
@@ -148,11 +149,34 @@ export { parseHeadersToArray, serializeHeaders } from './headers';
 // Favicon utilities
 export { getFaviconUrl } from './favicon';
 
-// Agentic content parsing utilities
-export { parseAgenticContent, type AgenticSection } from './agentic';
+// Agentic content utilities (structured section derivation)
+export {
+	deriveAgenticSections,
+	parseToolResultWithImages,
+	hasAgenticContent,
+	type AgenticSection,
+	type ToolResultLine
+} from './agentic';
+
+// Legacy migration utilities
+export { runLegacyMigration, isMigrationNeeded } from './legacy-migration';
 
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
+
+// Redaction utilities
+export { redactValue } from './redact';
+
+// Request inspection utilities
+export {
+	getRequestUrl,
+	getRequestMethod,
+	getRequestBody,
+	summarizeRequestBody,
+	formatDiagnosticErrorMessage,
+	extractJsonRpcMethods,
+	type RequestBodySummary
+} from './request-helpers';
 
 // Abort signal utilities
 export {

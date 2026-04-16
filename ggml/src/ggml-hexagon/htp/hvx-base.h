@@ -116,9 +116,14 @@ static inline HVX_VectorPred hvx_vec_is_nan_f16(HVX_Vector v) {
 }
 
 static inline HVX_Vector hvx_vec_f32_to_f16_shuff(HVX_Vector v0, HVX_Vector v1) {
+#if __HVX_ARCH__ >= 81
+    HVX_Vector q0 = Q6_Vqf32_equals_Vsf(v0);
+    HVX_Vector q1 = Q6_Vqf32_equals_Vsf(v1);
+#else
     const HVX_Vector zero = Q6_V_vzero();
     HVX_Vector q0 = Q6_Vqf32_vadd_VsfVsf(v0, zero);
     HVX_Vector q1 = Q6_Vqf32_vadd_VsfVsf(v1, zero);
+#endif
     return Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(q1, q0));
 }
 

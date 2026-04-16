@@ -7,6 +7,10 @@
  * - Session state management
  * - Turn limit enforcement
  *
+ * Each agentic turn produces separate DB messages:
+ * - One assistant message per LLM turn (with tool_calls if any)
+ * - One tool result message per tool call execution
+ *
  * **Architecture & Relationships:**
  * - **ChatService**: Stateless API layer (sendMessage, streaming)
  * - **mcpStore**: MCP connection management and tool execution
@@ -16,7 +20,6 @@
  * @see mcpStore in stores/mcp.svelte.ts for MCP operations
  */
 
-import { SvelteMap } from 'svelte/reactivity';
 import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -24,7 +27,6 @@ import { modelsStore } from '$lib/stores/models.svelte';
 import { isAbortError } from '$lib/utils';
 import {
 	DEFAULT_AGENTIC_CONFIG,
-	AGENTIC_TAGS,
 	NEWLINE_SEPARATOR,
 	TURN_LIMIT_MESSAGE,
 	LLM_ERROR_BLOCK_START,
@@ -193,17 +195,6 @@ class AgenticStore {
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
 		const { conversationId, messages, options = {}, callbacks, signal, perChatOverrides } = params;
-		const {
-			onChunk,
-			onReasoningChunk,
-			onToolCallChunk,
-			onAttachments,
-			onModel,
-			onComplete,
-			onError,
-			onTimings,
-			onTurnComplete
-		} = callbacks;
 
 		const agenticConfig = this.getConfig(config(), perChatOverrides);
 		if (!agenticConfig.enabled) return { handled: false };
@@ -253,24 +244,14 @@ class AgenticStore {
 				options,
 				tools,
 				agenticConfig,
-				callbacks: {
-					onChunk,
-					onReasoningChunk,
-					onToolCallChunk,
-					onAttachments,
-					onModel,
-					onComplete,
-					onError,
-					onTimings,
-					onTurnComplete
-				},
+				callbacks,
 				signal
 			});
 			return { handled: true };
 		} catch (error) {
 			const normalizedError = error instanceof Error ? error : new Error(String(error));
 			this.updateSession(conversationId, { lastError: normalizedError });
-			onError?.(normalizedError);
+			callbacks.onError?.(normalizedError);
 			return { handled: true, error: normalizedError };
 		} finally {
 			this.updateSession(conversationId, { isRunning: false });
@@ -295,17 +276,20 @@ class AgenticStore {
 		const {
 			onChunk,
 			onReasoningChunk,
-			onToolCallChunk,
+			onToolCallsStreaming,
 			onAttachments,
 			onModel,
-			onComplete,
+			onAssistantTurnComplete,
+			createToolResultMessage,
+			createAssistantMessage,
+			onFlowComplete,
 			onTimings,
 			onTurnComplete
 		} = callbacks;
 
 		const sessionMessages: AgenticMessage[] = toAgenticMessages(messages);
-		const allToolCalls: ApiChatCompletionToolCall[] = [];
 		let capturedTimings: ChatMessageTimings | undefined;
+		let totalToolCallCount = 0;
 
 		const agenticTimings: ChatMessageAgenticTimings = {
 			turns: 0,
@@ -316,12 +300,7 @@ class AgenticStore {
 			llm: { predicted_n: 0, predicted_ms: 0, prompt_n: 0, prompt_ms: 0 }
 		};
 		const maxTurns = agenticConfig.maxTurns;
-		const maxToolPreviewLines = agenticConfig.maxToolPreviewLines;
 
-		// Resolve effective model for vision capability checks.
-		// In ROUTER mode, options.model is always set by the caller.
-		// In MODEL mode, options.model is undefined; use the single loaded model
-		// which carries modalities bridged from /props.
 		const effectiveModel = options.model || modelsStore.models[0]?.model || '';
 
 		for (let turn = 0; turn < maxTurns; turn++) {
@@ -329,23 +308,20 @@ class AgenticStore {
 			agenticTimings.turns = turn + 1;
 
 			if (signal?.aborted) {
-				onComplete?.(
-					'',
-					undefined,
-					this.buildFinalTimings(capturedTimings, agenticTimings),
-					undefined
-				);
+				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 				return;
 			}
 
+			// For turns > 0, create a new assistant message via callback
+			if (turn > 0 && createAssistantMessage) {
+				await createAssistantMessage();
+			}
+
 			let turnContent = '';
+			let turnReasoningContent = '';
 			let turnToolCalls: ApiChatCompletionToolCall[] = [];
 			let lastStreamingToolCallName = '';
 			let lastStreamingToolCallArgsLength = 0;
-			const emittedToolCallStates = new SvelteMap<
-				number,
-				{ emittedOnce: boolean; lastArgs: string }
-			>();
 			let turnTimings: ChatMessageTimings | undefined;
 
 			const turnStats: ChatMessageAgenticTurnStats = {
@@ -366,30 +342,15 @@ class AgenticStore {
 							turnContent += chunk;
 							onChunk?.(chunk);
 						},
-						onReasoningChunk,
+						onReasoningChunk: (chunk: string) => {
+							turnReasoningContent += chunk;
+							onReasoningChunk?.(chunk);
+						},
 						onToolCallChunk: (serialized: string) => {
 							try {
 								turnToolCalls = JSON.parse(serialized) as ApiChatCompletionToolCall[];
-								for (let i = 0; i < turnToolCalls.length; i++) {
-									const toolCall = turnToolCalls[i];
-									const toolName = toolCall.function?.name ?? '';
-									const toolArgs = toolCall.function?.arguments ?? '';
-									const state = emittedToolCallStates.get(i) || {
-										emittedOnce: false,
-										lastArgs: ''
-									};
-									if (!state.emittedOnce) {
-										const output = `\n\n${AGENTIC_TAGS.TOOL_CALL_START}\n${AGENTIC_TAGS.TOOL_NAME_PREFIX}${toolName}${AGENTIC_TAGS.TAG_SUFFIX}\n${AGENTIC_TAGS.TOOL_ARGS_START}\n${toolArgs}`;
-										onChunk?.(output);
-										state.emittedOnce = true;
-										state.lastArgs = toolArgs;
-										emittedToolCallStates.set(i, state);
-									} else if (toolArgs.length > state.lastArgs.length) {
-										onChunk?.(toolArgs.slice(state.lastArgs.length));
-										state.lastArgs = toolArgs;
-										emittedToolCallStates.set(i, state);
-									}
-								}
+								onToolCallsStreaming?.(turnToolCalls);
+
 								if (turnToolCalls.length > 0 && turnToolCalls[0]?.function) {
 									const name = turnToolCalls[0].function.name || '';
 									const args = turnToolCalls[0].function.arguments || '';
@@ -442,77 +403,85 @@ class AgenticStore {
 				}
 			} catch (error) {
 				if (signal?.aborted) {
-					onComplete?.(
-						'',
-						undefined,
+					// Save whatever we have for this turn before exiting
+					await onAssistantTurnComplete?.(
+						turnContent,
+						turnReasoningContent || undefined,
 						this.buildFinalTimings(capturedTimings, agenticTimings),
 						undefined
 					);
-
+					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 					return;
 				}
 				const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
+				// Save error as content in the current turn
 				onChunk?.(`${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`);
-				onComplete?.(
-					'',
-					undefined,
+				await onAssistantTurnComplete?.(
+					turnContent + `${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`,
+					turnReasoningContent || undefined,
 					this.buildFinalTimings(capturedTimings, agenticTimings),
 					undefined
 				);
-
+				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 				throw normalizedError;
 			}
 
+			// No tool calls = final turn, save and complete
 			if (turnToolCalls.length === 0) {
 				agenticTimings.perTurn!.push(turnStats);
 
-				onComplete?.(
-					'',
-					undefined,
-					this.buildFinalTimings(capturedTimings, agenticTimings),
+				const finalTimings = this.buildFinalTimings(capturedTimings, agenticTimings);
+
+				await onAssistantTurnComplete?.(
+					turnContent,
+					turnReasoningContent || undefined,
+					finalTimings,
 					undefined
 				);
+
+				if (finalTimings) onTurnComplete?.(finalTimings);
+
+				onFlowComplete?.(finalTimings);
 
 				return;
 			}
 
+			// Normalize and save assistant turn with tool calls
 			const normalizedCalls = this.normalizeToolCalls(turnToolCalls);
 			if (normalizedCalls.length === 0) {
-				onComplete?.(
-					'',
-					undefined,
+				await onAssistantTurnComplete?.(
+					turnContent,
+					turnReasoningContent || undefined,
 					this.buildFinalTimings(capturedTimings, agenticTimings),
 					undefined
 				);
+				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 				return;
 			}
 
-			for (const call of normalizedCalls) {
-				allToolCalls.push({
-					id: call.id,
-					type: call.type,
-					function: call.function ? { ...call.function } : undefined
-				});
-			}
+			totalToolCallCount += normalizedCalls.length;
+			this.updateSession(conversationId, { totalToolCalls: totalToolCallCount });
 
-			this.updateSession(conversationId, { totalToolCalls: allToolCalls.length });
-			onToolCallChunk?.(JSON.stringify(allToolCalls));
+			// Save the assistant message with its tool calls
+			await onAssistantTurnComplete?.(
+				turnContent,
+				turnReasoningContent || undefined,
+				turnTimings,
+				normalizedCalls
+			);
 
+			// Add assistant message to session history
 			sessionMessages.push({
 				role: MessageRole.ASSISTANT,
 				content: turnContent || undefined,
+				reasoning_content: turnReasoningContent || undefined,
 				tool_calls: normalizedCalls
 			});
 
+			// Execute each tool call and create result messages
 			for (const toolCall of normalizedCalls) {
 				if (signal?.aborted) {
-					onComplete?.(
-						'',
-						undefined,
-						this.buildFinalTimings(capturedTimings, agenticTimings),
-						undefined
-					);
-
+					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 					return;
 				}
 
@@ -530,13 +499,7 @@ class AgenticStore {
 					result = executionResult.content;
 				} catch (error) {
 					if (isAbortError(error)) {
-						onComplete?.(
-							'',
-							undefined,
-							this.buildFinalTimings(capturedTimings, agenticTimings),
-							undefined
-						);
-
+						onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 						return;
 					}
 					result = `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -557,21 +520,27 @@ class AgenticStore {
 				turnStats.toolsMs += Math.round(toolDurationMs);
 
 				if (signal?.aborted) {
-					onComplete?.(
-						'',
-						undefined,
-						this.buildFinalTimings(capturedTimings, agenticTimings),
-						undefined
-					);
-
+					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 					return;
 				}
 
 				const { cleanedResult, attachments } = this.extractBase64Attachments(result);
-				if (attachments.length > 0) onAttachments?.(attachments);
 
-				this.emitToolCallResult(cleanedResult, maxToolPreviewLines, onChunk);
+				// Create the tool result message in the DB
+				let toolResultMessage: DatabaseMessage | undefined;
+				if (createToolResultMessage) {
+					toolResultMessage = await createToolResultMessage(
+						toolCall.id,
+						cleanedResult,
+						attachments.length > 0 ? attachments : undefined
+					);
+				}
 
+				if (attachments.length > 0 && toolResultMessage) {
+					onAttachments?.(toolResultMessage.id, attachments);
+				}
+
+				// Build content parts for session history (including images for vision models)
 				const contentParts: ApiChatMessageContentPart[] = [
 					{ type: ContentPartType.TEXT, text: cleanedResult }
 				];
@@ -605,8 +574,15 @@ class AgenticStore {
 			}
 		}
 
+		// Turn limit reached
 		onChunk?.(TURN_LIMIT_MESSAGE);
-		onComplete?.('', undefined, this.buildFinalTimings(capturedTimings, agenticTimings), undefined);
+		await onAssistantTurnComplete?.(
+			TURN_LIMIT_MESSAGE,
+			undefined,
+			this.buildFinalTimings(capturedTimings, agenticTimings),
+			undefined
+		);
+		onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 	}
 
 	private buildFinalTimings(
@@ -631,23 +607,6 @@ class AgenticStore {
 			type: (call?.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION,
 			function: { name: call?.function?.name ?? '', arguments: call?.function?.arguments ?? '' }
 		}));
-	}
-
-	private emitToolCallResult(
-		result: string,
-		maxLines: number,
-		emit?: (chunk: string) => void
-	): void {
-		if (!emit) {
-			return;
-		}
-
-		let output = `${NEWLINE_SEPARATOR}${AGENTIC_TAGS.TOOL_ARGS_END}`;
-		const lines = result.split(NEWLINE_SEPARATOR);
-		const trimmedLines = lines.length > maxLines ? lines.slice(-maxLines) : lines;
-
-		output += `${NEWLINE_SEPARATOR}${trimmedLines.join(NEWLINE_SEPARATOR)}${NEWLINE_SEPARATOR}${AGENTIC_TAGS.TOOL_CALL_END}${NEWLINE_SEPARATOR}`;
-		emit(output);
 	}
 
 	private extractBase64Attachments(result: string): {

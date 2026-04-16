@@ -115,9 +115,11 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
             break;
         }
         case REASONING_BUDGET_FORCING:
-            // force_pos is advanced in apply(), not here.
-            // This ensures the first forced token isn't skipped when the sampler
-            // is initialized directly in FORCING state (e.g. COUNTING + budget=0)
+            ctx->force_pos++;
+            if (ctx->force_pos >= ctx->forced_tokens.size()) {
+                ctx->state = REASONING_BUDGET_DONE;
+                LOG_INF("reasoning-budget: forced sequence complete, done\n");
+            }
             break;
         case REASONING_BUDGET_DONE:
             break;
@@ -143,14 +145,6 @@ static void common_reasoning_budget_apply(struct llama_sampler * smpl, llama_tok
         if (cur_p->data[i].id != forced) {
             cur_p->data[i].logit = -INFINITY;
         }
-    }
-
-    // advance to next forced token (done here rather than in accept so that
-    // the first forced token isn't skipped when starting in FORCING state)
-    ctx->force_pos++;
-    if (ctx->force_pos >= ctx->forced_tokens.size()) {
-        ctx->state = REASONING_BUDGET_DONE;
-        LOG_INF("reasoning-budget: forced sequence complete, done\n");
     }
 }
 
@@ -260,4 +254,11 @@ struct llama_sampler * common_reasoning_budget_init(
         int32_t                          budget,
         common_reasoning_budget_state    initial_state) {
     return common_reasoning_budget_init_state(vocab, start_tokens, end_tokens, forced_tokens, budget, initial_state);
+}
+
+common_reasoning_budget_state common_reasoning_budget_get_state(const struct llama_sampler * smpl) {
+    if (!smpl) {
+        return REASONING_BUDGET_IDLE;
+    }
+    return ((const common_reasoning_budget_ctx *)smpl->ctx)->state;
 }

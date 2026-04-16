@@ -23,7 +23,12 @@ import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { config } from '$lib/stores/settings.svelte';
-import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
+import {
+	filterByLeafNodeId,
+	findLeafNode,
+	runLegacyMigration,
+	generateConversationTitle
+} from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
 import { MessageRole } from '$lib/enums';
 import {
@@ -39,6 +44,12 @@ import {
 	MULTIPLE_UNDERSCORE_REGEX,
 	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+
+export interface ConversationTreeItem {
+	conversation: DatabaseConversation;
+	depth: number;
+}
 
 class ConversationsStore {
 	/**
@@ -122,6 +133,10 @@ class ConversationsStore {
 		if (this.isInitialized) return;
 
 		try {
+			// @deprecated Legacy migration for old marker-based messages.
+			// Remove once all users have migrated to the structured format.
+			await runLegacyMigration();
+
 			await this.loadConversations();
 			this.isInitialized = true;
 		} catch (error) {
@@ -300,15 +315,45 @@ class ConversationsStore {
 	 * Deletes a conversation and all its messages
 	 * @param convId - The conversation ID to delete
 	 */
-	async deleteConversation(convId: string): Promise<void> {
+	async deleteConversation(convId: string, options?: { deleteWithForks?: boolean }): Promise<void> {
 		try {
-			await DatabaseService.deleteConversation(convId);
+			await DatabaseService.deleteConversation(convId, options);
 
-			this.conversations = this.conversations.filter((c) => c.id !== convId);
+			if (options?.deleteWithForks) {
+				// Collect all descendants recursively
+				const idsToRemove = new SvelteSet([convId]);
+				const queue = [convId];
+				while (queue.length > 0) {
+					const parentId = queue.pop()!;
+					for (const c of this.conversations) {
+						if (c.forkedFromConversationId === parentId && !idsToRemove.has(c.id)) {
+							idsToRemove.add(c.id);
+							queue.push(c.id);
+						}
+					}
+				}
+				this.conversations = this.conversations.filter((c) => !idsToRemove.has(c.id));
 
-			if (this.activeConversation?.id === convId) {
-				this.clearActiveConversation();
-				await goto(`?new_chat=true#/`);
+				if (this.activeConversation && idsToRemove.has(this.activeConversation.id)) {
+					this.clearActiveConversation();
+					await goto(`?new_chat=true#/`);
+				}
+			} else {
+				// Reparent direct children to deleted conv's parent (or promote to top-level)
+				const deletedConv = this.conversations.find((c) => c.id === convId);
+				const newParent = deletedConv?.forkedFromConversationId;
+				this.conversations = this.conversations
+					.filter((c) => c.id !== convId)
+					.map((c) =>
+						c.forkedFromConversationId === convId
+							? { ...c, forkedFromConversationId: newParent }
+							: c
+					);
+
+				if (this.activeConversation?.id === convId) {
+					this.clearActiveConversation();
+					await goto(`?new_chat=true#/`);
+				}
 			}
 		} catch (error) {
 			console.error('Failed to delete conversation:', error);
@@ -508,7 +553,10 @@ class ConversationsStore {
 			) {
 				await this.updateConversationTitleWithConfirmation(
 					this.activeConversation.id,
-					newFirstUserMessage.content.trim()
+					generateConversationTitle(
+						newFirstUserMessage.content,
+						Boolean(config().titleGenerationUseFirstLine)
+					)
 				);
 			}
 		}
@@ -656,6 +704,42 @@ class ConversationsStore {
 	clearPendingMcpServerOverrides(): void {
 		this.pendingMcpServerOverrides = [];
 		this.saveMcpDefaults();
+	}
+
+	/**
+	 * Forks a conversation at a specific message, creating a new conversation
+	 * containing messages from root up to the target message, then navigates to it.
+	 *
+	 * @param messageId - The message ID to fork at
+	 * @param options - Fork options (name and whether to include attachments)
+	 * @returns The new conversation ID, or null if fork failed
+	 */
+	async forkConversation(
+		messageId: string,
+		options: { name: string; includeAttachments: boolean }
+	): Promise<string | null> {
+		if (!this.activeConversation) return null;
+
+		try {
+			const newConv = await DatabaseService.forkConversation(
+				this.activeConversation.id,
+				messageId,
+				options
+			);
+
+			this.conversations = [newConv, ...this.conversations];
+
+			await goto(`#/chat/${newConv.id}`);
+
+			toast.success('Conversation forked');
+
+			return newConv.id;
+		} catch (error) {
+			console.error('Failed to fork conversation:', error);
+			toast.error('Failed to fork conversation');
+
+			return null;
+		}
 	}
 
 	/**
@@ -830,3 +914,53 @@ export const conversations = () => conversationsStore.conversations;
 export const activeConversation = () => conversationsStore.activeConversation;
 export const activeMessages = () => conversationsStore.activeMessages;
 export const isConversationsInitialized = () => conversationsStore.isInitialized;
+
+/**
+ * Builds a flat tree of conversations with depth levels for nested forks.
+ * Accepts a pre-filtered list so search filtering stays in the component.
+ */
+export function buildConversationTree(convs: DatabaseConversation[]): ConversationTreeItem[] {
+	const childrenByParent = new SvelteMap<string, DatabaseConversation[]>();
+	const forkIds = new SvelteSet<string>();
+
+	for (const conv of convs) {
+		if (conv.forkedFromConversationId) {
+			forkIds.add(conv.id);
+
+			const siblings = childrenByParent.get(conv.forkedFromConversationId) || [];
+
+			siblings.push(conv);
+			childrenByParent.set(conv.forkedFromConversationId, siblings);
+		}
+	}
+
+	const result: ConversationTreeItem[] = [];
+	const visited = new SvelteSet<string>();
+
+	function walk(conv: DatabaseConversation, depth: number) {
+		visited.add(conv.id);
+		result.push({ conversation: conv, depth });
+
+		const children = childrenByParent.get(conv.id);
+		if (children) {
+			children.sort((a, b) => b.lastModified - a.lastModified);
+
+			for (const child of children) {
+				walk(child, depth + 1);
+			}
+		}
+	}
+
+	const roots = convs.filter((c) => !forkIds.has(c.id));
+	for (const root of roots) {
+		walk(root, 0);
+	}
+
+	for (const conv of convs) {
+		if (!visited.has(conv.id)) {
+			walk(conv, 1);
+		}
+	}
+
+	return result;
+}

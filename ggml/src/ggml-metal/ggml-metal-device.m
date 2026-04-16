@@ -690,7 +690,7 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
                     "    auto tB = B.slice((int)tgid.x, 0); \n"
                     " \n"
                     "    matmul2d< \n"
-                    "        matmul2d_descriptor(8, 8, dynamic_extent), \n"
+                    "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
                     "        execution_simdgroups<4>> mm; \n"
                     " \n"
                     "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
@@ -740,7 +740,7 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
                     "    auto tB = B.slice((int)tgid.x, 0); \n"
                     " \n"
                     "    matmul2d< \n"
-                    "        matmul2d_descriptor(8, 8, dynamic_extent), \n"
+                    "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
                     "        execution_simdgroups<4>> mm; \n"
                     " \n"
                     "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
@@ -1043,6 +1043,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 case GGML_UNARY_OP_CEIL:
                 case GGML_UNARY_OP_ROUND:
                 case GGML_UNARY_OP_TRUNC:
+                case GGML_UNARY_OP_XIELU:
                     return ggml_is_contiguous_rows(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
                 default:
                     return false;
@@ -1137,6 +1138,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ARGSORT:
         case GGML_OP_TOP_K:
         case GGML_OP_ARANGE:
+        case GGML_OP_ROLL:
             return true;
         case GGML_OP_FLASH_ATTN_EXT:
             // for new head sizes, add checks here
@@ -1158,6 +1160,23 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             }
             if (op->src[1]->type != op->src[2]->type) {
                 return false;
+            }
+            switch (op->src[1]->type) {
+                case GGML_TYPE_F32:
+                case GGML_TYPE_F16:
+                case GGML_TYPE_Q8_0:
+                case GGML_TYPE_Q4_0:
+                case GGML_TYPE_Q4_1:
+                case GGML_TYPE_Q5_0:
+                case GGML_TYPE_Q5_1:
+                    break;
+                case GGML_TYPE_BF16:
+                    if (!has_bfloat) {
+                        return false;
+                    }
+                    break;
+                default:
+                    return false;
             }
             return has_simdgroup_mm; // TODO: over-restricted for vec-kernels
         case GGML_OP_SSM_CONV:
@@ -1184,6 +1203,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                            case GGML_TYPE_F16:
                            case GGML_TYPE_BF16:
                            case GGML_TYPE_Q8_0:
+                           case GGML_TYPE_Q1_0:
                            case GGML_TYPE_Q4_0:
                            case GGML_TYPE_Q4_1:
                            case GGML_TYPE_Q5_0:
@@ -1210,6 +1230,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                             default:
                                 return false;
                         }
+                    case GGML_TYPE_Q1_0:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q5_0:

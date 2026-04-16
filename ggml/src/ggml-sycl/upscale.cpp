@@ -272,7 +272,7 @@ static void upscale_f32_sycl(const float *   x,
         sycl::nd_range<3>(
             sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE),
              sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
+        [=](sycl::nd_item<3> /*item_ct1*/) {
             upscale_f32(x, dst, nb00, nb01, nb02, nb03, ne10, ne11, ne12, ne13, sf0, sf1, sf2, sf3);
         });
 }
@@ -304,7 +304,7 @@ static void upscale_f32_bilinear_sycl(const float *   x,
             sycl::nd_range<3>(
                 sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE),
                 sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE)),
-            [=](sycl::nd_item<3> item_ct1) {
+            [=](sycl::nd_item<3> /*item_ct1*/) {
                 upscale_f32_bilinear_antialias(
                     x, dst, nb00, nb01, nb02, nb03, ne00_src, ne01_src, ne10_dst, ne11_dst,
                     ne12_dst, ne13_dst, sf0, sf1, sf2, sf3, pixel_offset);
@@ -314,7 +314,7 @@ static void upscale_f32_bilinear_sycl(const float *   x,
             sycl::nd_range<3>(
                 sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE),
                 sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE)),
-            [=](sycl::nd_item<3> item_ct1) {
+            [=](sycl::nd_item<3> /*item_ct1*/) {
                 upscale_f32_bilinear(
                     x, dst, nb00, nb01, nb02, nb03, ne00_src, ne01_src, ne10_dst, ne11_dst, ne12_dst,
                     ne13_dst, sf0, sf1, sf2, sf3, pixel_offset);
@@ -349,7 +349,7 @@ static void upscale_f32_bicubic_sycl(const float *   x,
                 sycl::nd_range<3>(
                     sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE),
                     sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE)),
-                [=](sycl::nd_item<3> item_ct1) {
+                [=](sycl::nd_item<3> /*item_ct1*/) {
                     upscale_f32_bicubic(
                         x, dst, nb00, nb01, nb02, nb03, ne00_src, ne01_src, ne10_dst, ne11_dst,
                         ne12_dst, ne13_dst, sf0, sf1, sf2, sf3, pixel_offset);

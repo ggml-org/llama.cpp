@@ -29,7 +29,7 @@ struct clip_graph {
     const int n_layer;
     const int n_mmproj_embd;
     const float eps;
-    const float kq_scale;
+    float kq_scale; // TODO: maybe move this to hparams
     const clip_flash_attn_type flash_attn_type;
 
     ggml_context_ptr ctx0_ptr;

@@ -98,6 +98,7 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");
+        preset.unset_option("LLAMA_ARG_ALIAS");
         preset.unset_option("LLAMA_ARG_HF_REPO");
     }
 }
@@ -925,7 +926,8 @@ void server_models_routes::init_routes() {
             res_ok(res, {
                 // TODO: add support for this on web UI
                 {"role",          "router"},
-                {"max_instances", 4}, // dummy value for testing
+                {"max_instances", params.models_max},
+                {"models_autoload", params.models_autoload},
                 // this is a dummy response to make sure webui doesn't break
                 {"model_alias", "llama-server"},
                 {"model_path",  "none"},
@@ -934,6 +936,7 @@ void server_models_routes::init_routes() {
                     {"n_ctx",  0},
                 }},
                 {"webui_settings", webui_settings},
+                {"build_info",     build_info},
             });
             return res;
         }
@@ -1194,6 +1197,10 @@ server_http_proxy::server_http_proxy(
         for (const auto & [key, value] : headers) {
             if (key == "Accept-Encoding") {
                 // disable Accept-Encoding to avoid compressed responses
+                continue;
+            }
+            if (key == "Transfer-Encoding") {
+                // the body is already decoded
                 continue;
             }
             if (key == "Host" || key == "host") {
