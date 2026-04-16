@@ -16,6 +16,7 @@
 #
 # Now both come from the environment variable SDK_VERSION (default: 0.4.0).
 #
+# You asked to run it like:
 #   source tsi-pkg-build.sh SDK_VERSION=0.4.0
 #
 # NOTE: "source script.sh SDK_VERSION=..." passes SDK_VERSION as an argument,
@@ -33,6 +34,8 @@
 #   2) ./tsavorite-model-deployment.yaml
 #   3) <script-dir>/tsavorite-model-deployment.yaml
 #
+# (You said ggml-tsavorite.cpp changes to load this from the same dir will be
+# handled later.)
 #
 # Build modes (optional):
 # release
@@ -335,7 +338,7 @@ parse_args() {
 
   local a
   for a in "$@"; do
-    # support "source tsi-pkg-build.sh SDK_VERSION=0.4.0"
+    # REQUIRED by your ask: support "source tsi-pkg-build.sh SDK_VERSION=0.4.0"
     case "$a" in
       SDK_VERSION=*)
         SDK_VERSION="${a#SDK_VERSION=}"
