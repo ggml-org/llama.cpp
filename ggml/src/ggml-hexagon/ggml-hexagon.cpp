@@ -2254,8 +2254,11 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
         return false;
     }
 
-    if (dst->ne[2] != 1 || dst->ne[3] != 1) {
-        // FA during prompt still needs work
+    if (dst->ne[3] != 1) {
+        // Multi-sequence FA not yet supported on HTP.
+        // ne[2] (n_heads) restriction removed so prefill FA reaches the HTP
+        // dispatcher: op_hmx_flash_attn_ext handles GQA via n_heads/n_kv_heads
+        // internally, and the HVX fallback in op_flash_attn_ext iterates per-head.
         return false;
     }
 

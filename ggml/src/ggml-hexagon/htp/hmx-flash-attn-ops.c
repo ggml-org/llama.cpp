@@ -392,6 +392,199 @@ static void fa_phase_v_interleave(struct hmx_fa_context * factx, int kv_rows,
 }
 
 // ============================================================================
+// Multi-thread Q load phase: read Q[G × neq1, DK] from DDR, convert F32→F16
+// (or deal F16 pairs), and write interleaved into vtcm_q_tiles.
+// Each thread owns a disjoint range of row pairs; writes target distinct tile
+// slots (r0 selects tile row, r1 selects intra-tile slot), so there is no
+// write conflict.  Padding fill (when n_rows_g < g_br) is done single-threaded
+// by the caller before dispatching.
+// ============================================================================
+
+typedef struct {
+    struct hmx_fa_context *   factx;
+    const struct htp_tensor * q;
+    uint32_t                  q_start;
+    uint32_t                  kv_head;
+    uint32_t                  ib3;
+    size_t                    n_rows_g;
+} fa_q_load_args_t;
+
+static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
+    fa_q_load_args_t *      args  = (fa_q_load_args_t *) data;
+    struct hmx_fa_context * factx = args->factx;
+
+    const size_t n_rows_g = args->n_rows_g;
+    const size_t G        = factx->G;
+    const size_t DK       = factx->DK;
+
+    // Partition row pairs across threads.  Keep each thread's start even so r/r+1
+    // are always in the same thread's range.
+    const size_t rows_per_t = hex_align_up(hmx_ceil_div(n_rows_g, n), 2);
+    const size_t start      = (size_t) i * rows_per_t;
+    const size_t end        = hex_smin(start + rows_per_t, n_rows_g);
+
+    if (start >= n_rows_g) return;
+
+    const struct htp_tensor * q       = args->q;
+    const uint32_t            q_start = args->q_start;
+    const uint32_t            kv_head = args->kv_head;
+    const uint32_t            ib3     = args->ib3;
+
+    for (size_t r = start; r < end; r += 2) {
+        const bool next_row_valid = (r + 1) < n_rows_g;
+
+        const size_t q_idx0 = (r + 0) / G;
+        const size_t h_idx0 = (r + 0) % G;
+        const size_t q_idx1 = (r + 1) / G;
+        const size_t h_idx1 = (r + 1) % G;
+
+        const uint8_t * q_ptr0 = (const uint8_t *) q->data + (q_start + q_idx0) * q->nb[1] +
+                                 (kv_head * G + h_idx0) * q->nb[2] + ib3 * q->nb[3];
+        const uint8_t * q_ptr1 = next_row_valid ?
+                                     ((const uint8_t *) q->data + (q_start + q_idx1) * q->nb[1] +
+                                      (kv_head * G + h_idx1) * q->nb[2] + ib3 * q->nb[3]) :
+                                     NULL;
+
+        size_t   r0       = r / HMX_FP16_TILE_N_ROWS;
+        size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
+        __fp16 * out_base = factx->vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * DK;
+
+        if (factx->is_q_fp32) {
+            const HVX_Vector * pv_in0 = (const HVX_Vector *) q_ptr0;
+            const HVX_Vector * pv_in1 = q_ptr1 ? (const HVX_Vector *) q_ptr1 : NULL;
+
+            for (uint32_t d = 0; d < DK / 32; ++d) {
+                HVX_Vector v0 = pv_in0[d];
+                HVX_Vector v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
+                HVX_Vector v_hf = hvx_vec_f32_to_f16_shuff(v0, v1);
+
+                HVX_Vector * out_tile = (HVX_Vector *) (out_base + d * HMX_FP16_TILE_N_ELMS);
+                out_tile[r1 / 2]      = v_hf;
+            }
+        } else {
+            const HVX_Vector * pv_in0 = (const HVX_Vector *) q_ptr0;
+            const HVX_Vector * pv_in1 = q_ptr1 ? (const HVX_Vector *) q_ptr1 : NULL;
+
+            for (uint32_t d = 0; d < DK / 64; ++d) {
+                HVX_Vector     v0 = pv_in0[d];
+                HVX_Vector     v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
+                HVX_VectorPair vp = Q6_W_vshuff_VVR(v1, v0, -2);
+
+                __fp16 *     out_dual_tile = out_base + d * HMX_FP16_TILE_N_ELMS * 2;
+                HVX_Vector * pv_out0       = ((HVX_Vector *) out_dual_tile) + r1 / 2;
+                HVX_Vector * pv_out1       = pv_out0 + 16;
+
+                *pv_out0 = Q6_V_lo_W(vp);
+                *pv_out1 = Q6_V_hi_W(vp);
+            }
+        }
+    }
+}
+
+static void fa_phase_q_load(struct hmx_fa_context *   factx,
+                             const struct htp_tensor * q,
+                             uint32_t q_start, uint32_t kv_head, uint32_t ib3,
+                             size_t n_rows_g) {
+    fa_q_load_args_t args = { factx, q, q_start, kv_head, ib3, n_rows_g };
+    // Require >= 2 row pairs per thread so partitioning is worthwhile.
+    if (factx->n_threads > 1 && n_rows_g >= (size_t)(factx->n_threads * 2)) {
+        worker_pool_run_func(factx->worker_pool, fa_q_load_thread, &args, factx->n_threads);
+    } else {
+        fa_q_load_thread(1, 0, &args);
+    }
+}
+
+// ============================================================================
+// Multi-thread O store phase: read O tiles from VTCM, convert F16->F32 (or
+// deal F16 pairs), and write to strided DDR dst tensor.  Each thread owns a
+// disjoint row range; writes target distinct dst rows (different q_idx/h_idx
+// pairs produced by r/G and r%G), so there is no write conflict.
+// ============================================================================
+
+typedef struct {
+    struct hmx_fa_context *   factx;
+    const struct htp_tensor * dst;
+    const __fp16 *            o_tile_src;
+    uint32_t                  q_start;
+    uint32_t                  kv_head;
+    uint32_t                  ib3;
+    size_t                    n_rows_g;
+} fa_o_store_args_t;
+
+static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
+    fa_o_store_args_t *     args  = (fa_o_store_args_t *) data;
+    struct hmx_fa_context * factx = args->factx;
+
+    const size_t n_rows_g = args->n_rows_g;
+    const size_t G        = factx->G;
+    const size_t DV       = factx->DV;
+
+    const size_t rows_per_t = hmx_ceil_div(n_rows_g, n);
+    const size_t start      = (size_t) i * rows_per_t;
+    const size_t end        = hex_smin(start + rows_per_t, n_rows_g);
+
+    if (start >= n_rows_g) return;
+
+    const struct htp_tensor * dst        = args->dst;
+    const __fp16 *            o_tile_src = args->o_tile_src;
+    const uint32_t            q_start    = args->q_start;
+    const uint32_t            kv_head    = args->kv_head;
+    const uint32_t            ib3        = args->ib3;
+
+    for (size_t r = start; r < end; ++r) {
+        const size_t q_idx = r / G;
+        const size_t h_idx = r % G;
+
+        uint8_t * dst_row = (uint8_t *) dst->data + (q_start + q_idx) * dst->nb[1] +
+                            (kv_head * G + h_idx) * dst->nb[2] + ib3 * dst->nb[3];
+
+        size_t         r0            = r / HMX_FP16_TILE_N_ROWS;
+        size_t         r1            = r % HMX_FP16_TILE_N_ROWS;
+        const __fp16 * tile_row_base = o_tile_src + r0 * HMX_FP16_TILE_N_ROWS * DV;
+
+        if (factx->is_dst_fp32) {
+            float * out = (float *) dst_row;
+            for (uint32_t d = 0; d < DV / 32; ++d) {
+                const HVX_Vector * in_tile =
+                    (const HVX_Vector *) (tile_row_base + d * HMX_FP16_TILE_N_ELMS);
+                HVX_VectorPair vp = hvx_vec_f16_to_f32_shuff(in_tile[r1 / 2]);
+                if (r1 % 2 == 0) {
+                    *(HVX_UVector *) (out + d * 32) = Q6_V_lo_W(vp);
+                } else {
+                    *(HVX_UVector *) (out + d * 32) = Q6_V_hi_W(vp);
+                }
+            }
+        } else {
+            __fp16 * out = (__fp16 *) dst_row;
+            for (uint32_t d = 0; d < DV / 64; ++d) {
+                const __fp16 *     in_dual_tile = tile_row_base + d * HMX_FP16_TILE_N_ELMS * 2;
+                const HVX_Vector * pv_in0       = ((const HVX_Vector *) in_dual_tile) + r1 / 2;
+                const HVX_Vector * pv_in1       = pv_in0 + 16;
+                HVX_VectorPair     vp           = Q6_W_vdeal_VVR(*pv_in1, *pv_in0, -2);
+                if (r1 % 2 == 0) {
+                    *(HVX_UVector *) (out + d * 64) = Q6_V_lo_W(vp);
+                } else {
+                    *(HVX_UVector *) (out + d * 64) = Q6_V_hi_W(vp);
+                }
+            }
+        }
+    }
+}
+
+static void fa_phase_o_store(struct hmx_fa_context *   factx,
+                              const struct htp_tensor * dst,
+                              const __fp16 *            o_tile_src,
+                              uint32_t q_start, uint32_t kv_head, uint32_t ib3,
+                              size_t n_rows_g) {
+    fa_o_store_args_t args = { factx, dst, o_tile_src, q_start, kv_head, ib3, n_rows_g };
+    if (factx->n_threads > 1 && n_rows_g >= (size_t)(factx->n_threads * 2)) {
+        worker_pool_run_func(factx->worker_pool, fa_o_store_thread, &args, factx->n_threads);
+    } else {
+        fa_o_store_thread(1, 0, &args);
+    }
+}
+
+// ============================================================================
 // Multi-thread softmax phase + serial m/l update + build_D
 // ============================================================================
 
@@ -710,8 +903,14 @@ static void fa_phase_softmax_and_build_d(struct hmx_fa_context * factx,
                                           size_t n_row_tiles, size_t n_row_tiles_g_br) {
     const size_t n_row_vec_cnt = hmx_ceil_div(sargs->n_rows_g, 64);
 
-    if (factx->n_threads > 1 && n_row_vec_cnt >= factx->n_threads) {
-        worker_pool_run_func(factx->worker_pool, fa_softmax_thread, sargs, factx->n_threads);
+    // Multi-thread as long as we have at least 2 row vectors (2 × 64 = 128 rows)
+    // to split.  The original gate `n_row_vec_cnt >= n_threads` was too strict —
+    // with n_threads=8 it forced single-thread fallback any time n_rows_g < 512,
+    // even though softmax is the dominant 70% phase.  worker_pool uses the
+    // caller's count as an upper bound and skips workers with no rows to process.
+    if (factx->n_threads > 1 && n_row_vec_cnt >= 2) {
+        uint32_t n_use = (uint32_t) hex_smin((size_t) factx->n_threads, n_row_vec_cnt);
+        worker_pool_run_func(factx->worker_pool, fa_softmax_thread, sargs, n_use);
     } else {
         fa_softmax_thread(1, 0, sargs);
     }
@@ -1103,61 +1302,10 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                 // ---- Load Q block [g_br, D] -> tiles, interleaving G heads ----
                 TIMER_START(q_load);
-                {
-                    if (n_rows_g < g_br) {
-                        hvx_fill_uh(factx.vtcm_q_tiles, 0, q_tile_bytes);
-                    }
-
-                    for (size_t r = 0; r < n_rows_g; r += 2) {
-                        const bool next_row_valid = (r + 1) < n_rows_g;
-
-                        const size_t q_idx0 = (r + 0) / G;
-                        const size_t h_idx0 = (r + 0) % G;
-                        const size_t q_idx1 = (r + 1) / G;
-                        const size_t h_idx1 = (r + 1) % G;
-
-                        const uint8_t * q_ptr0 = (const uint8_t *) q->data + (q_start + q_idx0) * q->nb[1] +
-                                                 (kv_head * G + h_idx0) * q->nb[2] + ib3 * q->nb[3];
-                        const uint8_t * q_ptr1 = next_row_valid ?
-                                                     ((const uint8_t *) q->data + (q_start + q_idx1) * q->nb[1] +
-                                                      (kv_head * G + h_idx1) * q->nb[2] + ib3 * q->nb[3]) :
-                                                     NULL;
-
-                        size_t   r0       = r / HMX_FP16_TILE_N_ROWS;
-                        size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
-                        __fp16 * out_base = factx.vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * DK;
-
-                        if (factx.is_q_fp32) {
-                            const HVX_Vector * pv_in0 = (const HVX_Vector *) q_ptr0;
-                            const HVX_Vector * pv_in1 = q_ptr1 ? (const HVX_Vector *) q_ptr1 : NULL;
-
-                            for (uint32_t d = 0; d < DK / 32; ++d) {
-                                HVX_Vector v0 = pv_in0[d];
-                                HVX_Vector v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
-                                HVX_Vector v_hf = hvx_vec_f32_to_f16_shuff(v0, v1);
-
-                                HVX_Vector * out_tile = (HVX_Vector *) (out_base + d * HMX_FP16_TILE_N_ELMS);
-                                out_tile[r1 / 2]      = v_hf;
-                            }
-                        } else {
-                            const HVX_Vector * pv_in0 = (const HVX_Vector *) q_ptr0;
-                            const HVX_Vector * pv_in1 = q_ptr1 ? (const HVX_Vector *) q_ptr1 : NULL;
-
-                            for (uint32_t d = 0; d < DK / 64; ++d) {
-                                HVX_Vector     v0 = pv_in0[d];
-                                HVX_Vector     v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
-                                HVX_VectorPair vp = Q6_W_vshuff_VVR(v1, v0, -2);
-
-                                __fp16 *     out_dual_tile = out_base + d * HMX_FP16_TILE_N_ELMS * 2;
-                                HVX_Vector * pv_out0       = ((HVX_Vector *) out_dual_tile) + r1 / 2;
-                                HVX_Vector * pv_out1       = pv_out0 + 16;
-
-                                *pv_out0 = Q6_V_lo_W(vp);
-                                *pv_out1 = Q6_V_hi_W(vp);
-                            }
-                        }
-                    }
+                if (n_rows_g < g_br) {
+                    hvx_fill_uh(factx.vtcm_q_tiles, 0, q_tile_bytes);
                 }
+                fa_phase_q_load(&factx, q, q_start, kv_head, ib3, n_rows_g);
                 TIMER_STOP(q_load);
 
                 // ---- Initialize per-block state ----
@@ -1555,46 +1703,7 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                 // ---- Store O block ----
                 TIMER_START(o_store);
-                {
-                    for (size_t r = 0; r < n_rows_g; ++r) {
-                        const size_t q_idx = r / G;
-                        const size_t h_idx = r % G;
-
-                        uint8_t * dst_row = (uint8_t *) dst->data + (q_start + q_idx) * dst->nb[1] +
-                                            (kv_head * G + h_idx) * dst->nb[2] + ib3 * dst->nb[3];
-
-                        size_t         r0            = r / HMX_FP16_TILE_N_ROWS;
-                        size_t         r1            = r % HMX_FP16_TILE_N_ROWS;
-                        const __fp16 * tile_row_base = o_tile_curr + r0 * HMX_FP16_TILE_N_ROWS * DV;
-
-                        if (factx.is_dst_fp32) {
-                            float * out = (float *) dst_row;
-                            for (uint32_t d = 0; d < DV / 32; ++d) {
-                                const HVX_Vector * in_tile =
-                                    (const HVX_Vector *) (tile_row_base + d * HMX_FP16_TILE_N_ELMS);
-                                HVX_VectorPair vp = hvx_vec_f16_to_f32_shuff(in_tile[r1 / 2]);
-                                if (r1 % 2 == 0) {
-                                    *(HVX_UVector *) (out + d * 32) = Q6_V_lo_W(vp);
-                                } else {
-                                    *(HVX_UVector *) (out + d * 32) = Q6_V_hi_W(vp);
-                                }
-                            }
-                        } else {
-                            __fp16 * out = (__fp16 *) dst_row;
-                            for (uint32_t d = 0; d < DV / 64; ++d) {
-                                const __fp16 *     in_dual_tile = tile_row_base + d * HMX_FP16_TILE_N_ELMS * 2;
-                                const HVX_Vector * pv_in0       = ((const HVX_Vector *) in_dual_tile) + r1 / 2;
-                                const HVX_Vector * pv_in1       = pv_in0 + 16;
-                                HVX_VectorPair     vp           = Q6_W_vdeal_VVR(*pv_in1, *pv_in0, -2);
-                                if (r1 % 2 == 0) {
-                                    *(HVX_UVector *) (out + d * 64) = Q6_V_lo_W(vp);
-                                } else {
-                                    *(HVX_UVector *) (out + d * 64) = Q6_V_hi_W(vp);
-                                }
-                            }
-                        }
-                    }
-                }
+                fa_phase_o_store(&factx, dst, o_tile_curr, q_start, kv_head, ib3, n_rows_g);
                 TIMER_STOP(o_store);
 
                 #undef MASK_DMA_PUSH
