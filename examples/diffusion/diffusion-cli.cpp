@@ -602,8 +602,8 @@ int main(int argc, char ** argv) {
 
     int n_input = input_tokens.size();
 
-    if (n_input >= params.n_ctx) {
-        LOG_ERR("error: input too long (%d tokens), max context is %d\n", n_input, params.n_ctx);
+    if (static_cast<uint32_t>(n_input) >= llama_n_ctx(ctx)) {
+        LOG_ERR("error: input too long (%d tokens), max context is %d\n", n_input, llama_n_ctx(ctx));
         llama_free(ctx);
         llama_model_free(model);
         return 1;

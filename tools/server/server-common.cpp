@@ -84,6 +84,14 @@ std::string gen_tool_call_id() {
     return random_string();
 }
 
+static std::string media_marker = "";
+const char * get_media_marker() {
+    if (media_marker.empty()) {
+        media_marker = "<__media_" + random_string() + "__>";
+    }
+    return media_marker.c_str();
+}
+
 //
 // lora utils
 //
@@ -975,7 +983,7 @@ json oaicompat_chat_params_parse(
                 handle_media(out_files, image_url, opt.media_path);
 
                 p["type"] = "media_marker";
-                p["text"] = mtmd_default_marker();
+                p["text"] = get_media_marker();
                 p.erase("image_url");
 
             } else if (type == "input_audio") {
@@ -996,7 +1004,7 @@ json oaicompat_chat_params_parse(
                 // TODO: add audio_url support by reusing handle_media()
 
                 p["type"] = "media_marker";
-                p["text"] = mtmd_default_marker();
+                p["text"] = get_media_marker();
                 p.erase("input_audio");
 
             } else if (type != "text") {
@@ -1428,6 +1436,60 @@ json convert_responses_to_chatcmpl(const json & response_body) {
     if (response_body.contains("max_output_tokens")) {
         chatcmpl_body.erase("max_output_tokens");
         chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
+    }
+
+    return chatcmpl_body;
+}
+
+json convert_transcriptions_to_chatcmpl(
+        const json & inp_body,
+        const std::map<std::string, raw_buffer> & in_files,
+        std::vector<raw_buffer> & out_files) {
+    // TODO @ngxson : this function may need to be improved in the future
+    // handle input files
+    out_files.clear();
+    auto it = in_files.find("file");
+    if (it != in_files.end()) {
+        out_files.push_back(it->second);
+    } else {
+        throw std::invalid_argument("No input file found for transcription");
+    }
+
+    // handle input data
+    std::string prompt = json_value(inp_body, "prompt", std::string());
+    std::string language = json_value(inp_body, "language", std::string());
+    std::string response_format = json_value(inp_body, "response_format", std::string("json"));
+    if (response_format != "json") {
+        throw std::invalid_argument("Only 'json' response_format is supported for transcription");
+    }
+    if (prompt.empty()) {
+        prompt = "Transcribe audio to text";
+    }
+    if (!language.empty()) {
+        prompt += string_format(" (language: %s)", language.c_str());
+    }
+    prompt += get_media_marker();
+
+    json chatcmpl_body = inp_body; // copy all fields
+    chatcmpl_body["messages"] = json::array({
+        {
+            {"role", "user"},
+            {"content", prompt},
+        },
+    });
+
+    // because input from form-data, everything is string, we need to correct the types here
+    std::string stream = json_value(inp_body, "stream", std::string("false"));
+    chatcmpl_body["stream"] = stream == "true";
+
+    if (inp_body.contains("max_tokens")) {
+        std::string inp = inp_body["max_tokens"].get<std::string>();
+        chatcmpl_body["max_tokens"] = std::stoul(inp);
+    }
+
+    if (inp_body.contains("temperature")) {
+        std::string inp = inp_body["temperature"].get<std::string>();
+        chatcmpl_body["temperature"] = std::stof(inp);
     }
 
     return chatcmpl_body;

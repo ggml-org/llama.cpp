@@ -68,7 +68,7 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
 
             const float kq_scale = 1.0f / sqrtf(float(n_embd_head_k));
             ggml_tensor * attn_out = build_attn(inp_attn,
-                    nullptr, nullptr,
+                    nullptr, nullptr, nullptr,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(attn_out, "attn_out", il);
             // head-wise attention gate: sigmoid(g_proj(x)) in torch
@@ -92,7 +92,7 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
             }
 
             // output projection
-            cur = build_lora_mm(model.layers[il].wo, attn_out);
+            cur = build_lora_mm(model.layers[il].wo, attn_out, model.layers[il].wo_s);
             cb(cur, "attn_proj", il);
         }
 

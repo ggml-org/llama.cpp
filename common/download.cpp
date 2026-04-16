@@ -258,6 +258,9 @@ static bool common_pull_file(httplib::Client & cli,
             if (progress_step >= p.total / 1000 || p.downloaded == p.total) {
                 if (callback) {
                     callback->on_update(p);
+                    if (callback->is_cancelled()) {
+                        return false;
+                    }
                 }
                 progress_step = 0;
             }
@@ -373,6 +376,9 @@ static int common_download_file_single_online(const std::string & url,
     }
 
     for (int i = 0; i < max_attempts; ++i) {
+        if (opts.callback && opts.callback->is_cancelled()) {
+            break;
+        }
         if (i) {
             LOG_WRN("%s: retrying after %d seconds...\n", __func__, delay);
             std::this_thread::sleep_for(std::chrono::seconds(delay));
@@ -411,6 +417,12 @@ static int common_download_file_single_online(const std::string & url,
 
     if (opts.callback) {
         opts.callback->on_done(p, success);
+    }
+    if (opts.callback && opts.callback->is_cancelled() &&
+        std::filesystem::exists(path_temporary)) {
+        if (remove(path_temporary.c_str()) != 0) {
+            LOG_ERR("%s: unable to delete temporary file: %s\n", __func__, path_temporary.c_str());
+        }
     }
     if (!success) {
         LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);

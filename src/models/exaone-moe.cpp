@@ -65,7 +65,7 @@ llm_build_exaone_moe::llm_build_exaone_moe(const llama_model & model, const llm_
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn_iswa,
-                model.layers[il].wo, NULL,
+                model.layers[il].wo, NULL, model.layers[il].wo_s,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             cb(cur, "attn_out", il);
         }
