@@ -400,6 +400,7 @@ struct ggml_backend_opencl_context {
     ggml_cl_compiler_version adreno_cl_compiler_version;
 
     int adreno_wave_size;
+    bool adreno_subgroup_bug;
 
     cl_bool non_uniform_workgroups;
     size_t  image_max_buffer_size;
@@ -780,9 +781,10 @@ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, co
         program_log = (char*) malloc(log_size + 1);
         program_log[log_size] = '\0';
         clGetProgramBuildInfo(p, dev, CL_PROGRAM_BUILD_LOG, log_size + 1, program_log, NULL);
-        GGML_LOG_ERROR("ggml_opencl: kernel compile error:\n\n%s\n", program_log);
+        GGML_LOG_ERROR("ggml_opencl: kernel compile error (err=%d):\n%s\n", err, program_log);
         free(program_log);
-        exit(1);
+        clReleaseProgram(p);
+        return nullptr;
     }
 
     return p;
@@ -800,6 +802,16 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 
     if (backend_ctx->adreno_use_large_buffer) {
         compile_opts += " -qcom-enable-large-buffer ";
+    }
+
+    // Detect Adreno compiler versions affected by SIGSEGV in
+    // QGPUPeepholeOptimizer::lowerPseudoSubgroupArithOpWithAdvSubgroupFeature.
+    // The define triggers fallback kernels (local-memory reduction) in rms_norm.cl.
+    backend_ctx->adreno_subgroup_bug = (backend_ctx->gpu_family == ADRENO &&
+        !backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0));
+    if (backend_ctx->adreno_subgroup_bug) {
+        compile_opts += " -DGGML_OPENCL_NO_REQD_SUBGROUP_SIZE";
+        GGML_LOG_WARN("ggml_opencl: Adreno compiler has subgroup bug, disabling reqd_sub_group_size attribute\n");
     }
 
     GGML_LOG_INFO("ggml_opencl: loading OpenCL kernels");
@@ -2042,7 +2054,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
     }
 
     // cumsum
-    {
+    // cumsum.cl uses sub_group_scan_* which triggers the same Adreno compiler bug.
+    // Skip compilation entirely on affected devices.
+    if (!backend_ctx->adreno_subgroup_bug) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "cumsum.cl.h"
@@ -2055,9 +2069,11 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 
         CL_CHECK((backend_ctx->kernel_cumsum_blk = clCreateKernel(prog, "kernel_cumsum_blk", &err), err));
         CL_CHECK((backend_ctx->kernel_cumsum_add = clCreateKernel(prog, "kernel_cumsum_add", &err), err));
-        GGML_LOG_CONT(".");
         CL_CHECK(clReleaseProgram(prog));
+    } else {
+        GGML_LOG_WARN("ggml_opencl: cumsum kernels skipped (Adreno subgroup bug)\n");
     }
+    GGML_LOG_CONT(".");
 
     // sigmoid
     {
@@ -4114,8 +4130,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return cols <= max_workgroup_size && op->src[0]->type == GGML_TYPE_F32;
         }
         case GGML_OP_SUM_ROWS:
-        case GGML_OP_CUMSUM:
             return op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
+        case GGML_OP_CUMSUM:
+            return backend_ctx->kernel_cumsum_blk && op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
         case GGML_OP_MEAN:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT:
@@ -6062,10 +6079,12 @@ static ggml_backend_buffer_t ggml_backend_opencl_buffer_type_alloc_buffer(ggml_b
 
     cl_int err;
     cl_mem mem = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, size, NULL, &err);
+#if CL_TARGET_OPENCL_VERSION >= 300
     if (err != CL_SUCCESS && backend_ctx->adreno_use_large_buffer) {
         cl_mem_properties props[] = { 0x41A6 /* CL_LARGE_BUFFER_QCOM */, 1, 0 };
         mem = clCreateBufferWithProperties(backend_ctx->context, props, CL_MEM_READ_WRITE, size, NULL, &err);
     }
+#endif
 
     if (err != CL_SUCCESS) {
         GGML_LOG_INFO("%s: failed to allocate %.2f MiB\n", __func__, size / 1024.0 / 1024.0);
@@ -8031,8 +8050,12 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
     CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong),  &nb02));
     CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong),  &nb03));
     CL_CHECK(clSetKernelArg(kernel, 11, sizeof(float),     &eps));
-    // This is local memory - the size depends on subgroup size.
-    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float)*nth/sgs,  NULL));
+    // Local memory size: normally nth/sgs floats (one per subgroup), but the
+    // fallback kernel uses tree reduction and needs nth floats (one per work-item).
+    size_t local_mem_size = backend_ctx->adreno_subgroup_bug
+        ? sizeof(float) * nth
+        : sizeof(float) * nth / sgs;
+    CL_CHECK(clSetKernelArg(kernel, 12, local_mem_size,  NULL));
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
@@ -8143,7 +8166,11 @@ static void ggml_opencl_op_rms_norm_fused(ggml_backend_t backend, ggml_tensor * 
     CL_CHECK(clSetKernelArg(kernel, 21, sizeof(cl_ulong),      &nb2));
     CL_CHECK(clSetKernelArg(kernel, 22, sizeof(cl_ulong),      &nb3));
     CL_CHECK(clSetKernelArg(kernel, 23, sizeof(float),         &eps));
-    CL_CHECK(clSetKernelArg(kernel, 24, sizeof(float)*sgs,     NULL));
+    // Fallback kernel uses tree reduction: needs nth floats instead of sgs.
+    size_t local_mem_rms_mul = backend_ctx->adreno_subgroup_bug
+        ? sizeof(float) * nth
+        : sizeof(float) * sgs;
+    CL_CHECK(clSetKernelArg(kernel, 24, local_mem_rms_mul,     NULL));
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }

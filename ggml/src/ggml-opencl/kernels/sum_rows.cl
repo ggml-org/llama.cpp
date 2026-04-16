@@ -1,4 +1,7 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+#ifndef GGML_OPENCL_NO_REQD_SUBGROUP_SIZE
+// Normal path: use subgroup operations
 #pragma OPENCL EXTENSION cl_khr_subgroups : enable
 
 // Most devices have max workgroup size of 1024, so this is enough for subgroup
@@ -138,3 +141,121 @@ kernel void kernel_sum_rows_f32_4(
         dst_row[0] = sumf;
     }
 }
+
+#else // GGML_OPENCL_NO_REQD_SUBGROUP_SIZE
+// Fallback path: local-memory tree reduction, no subgroup operations.
+
+#define MAX_LOCAL_SIZE 1024
+kernel void kernel_sum_rows_f32(
+    global char *  src0,
+    ulong           offset0,
+    global char *  dst,
+    ulong           offsetd,
+    int             ne00,
+    int             ne01,
+    int             ne02,
+    int             ne03,
+    ulong           nb01,
+    ulong           nb02,
+    ulong           nb03,
+    ulong           nb1,
+    ulong           nb2,
+    ulong           nb3
+) {
+    src0 = src0 + offset0;
+    dst  = dst  + offsetd;
+
+    const int i3 = get_group_id(2);
+    const int i2 = get_group_id(1);
+    const int i1 = get_group_id(0);
+
+    const int lid = get_local_id(0);
+    const int lsize = get_local_size(0);
+
+    __local float lmem[MAX_LOCAL_SIZE];
+
+    if (i3 >= ne03 || i2 >= ne02 || i1 >= ne01) {
+        return;
+    }
+
+    global float * src_row = (global float *) (src0 + i1*nb01 + i2*nb02 + i3*nb03);
+    global float * dst_row = (global float *) (dst  + i1*nb1  + i2*nb2  + i3*nb3);
+
+    float sumf = 0.0f;
+
+    for (int i0 = lid; i0 < ne00; i0 += lsize) {
+        sumf += src_row[i0];
+    }
+
+    lmem[lid] = sumf;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int s = lsize / 2; s > 0; s >>= 1) {
+        if (lid < s) {
+            lmem[lid] += lmem[lid + s];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    if (lid == 0) {
+        dst_row[0] = lmem[0];
+    }
+}
+
+kernel void kernel_sum_rows_f32_4(
+    global char *  src0,
+    ulong           offset0,
+    global char *  dst,
+    ulong           offsetd,
+    int             ne00,
+    int             ne01,
+    int             ne02,
+    int             ne03,
+    ulong           nb01,
+    ulong           nb02,
+    ulong           nb03,
+    ulong           nb1,
+    ulong           nb2,
+    ulong           nb3
+) {
+    src0 = src0 + offset0;
+    dst  = dst  + offsetd;
+
+    const int i3 = get_group_id(2);
+    const int i2 = get_group_id(1);
+    const int i1 = get_group_id(0);
+
+    const int lid = get_local_id(0);
+    const int lsize = get_local_size(0);
+
+    __local float lmem[MAX_LOCAL_SIZE];
+
+    if (i3 >= ne03 || i2 >= ne02 || i1 >= ne01) {
+        return;
+    }
+
+    global float4 * src_row = (global float4 *) (src0 + i1*nb01 + i2*nb02 + i3*nb03);
+    global float  * dst_row = (global float  *) (dst  + i1*nb1  + i2*nb2  + i3*nb3);
+
+    float4 sum_vec = (float4)0.0f;
+
+    for (int i0 = lid; i0 < ne00 / 4; i0 += lsize) {
+        sum_vec += src_row[i0];
+    }
+
+    float sumf = dot(sum_vec, (float4)(1.0f));
+
+    lmem[lid] = sumf;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int s = lsize / 2; s > 0; s >>= 1) {
+        if (lid < s) {
+            lmem[lid] += lmem[lid + s];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    if (lid == 0) {
+        dst_row[0] = lmem[0];
+    }
+}
+
+#endif // GGML_OPENCL_NO_REQD_SUBGROUP_SIZE
