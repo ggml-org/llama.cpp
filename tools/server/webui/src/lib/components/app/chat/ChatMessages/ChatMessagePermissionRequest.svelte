@@ -5,6 +5,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { ToolSource, ToolPermissionDecision, ToolServerLabel } from '$lib/enums';
 	import { toolsStore } from '$lib/stores/tools.svelte';
+	import ChatMessageActionCard from './ChatMessageActionCard.svelte';
 
 	interface Props {
 		toolName: string;
@@ -15,19 +16,20 @@
 	let { toolName, serverLabel, onDecision }: Props = $props();
 </script>
 
-<div class="permission-request my-2 rounded-lg border border-border bg-card p-3">
-	<div class="mb-3 flex items-center gap-2 text-sm">
-		<ShieldQuestion class="h-4 w-4 shrink-0 text-muted-foreground" />
-		<span>
-			Allow use of
-			<span class="font-semibold">{toolName}</span>
-			{#if serverLabel}
-				from <span class="font-semibold">{serverLabel}</span>
-			{/if}
-			?
-		</span>
-	</div>
-	<div class="flex flex-wrap items-center gap-2">
+<ChatMessageActionCard icon={ShieldQuestion}>
+	{#snippet message()}
+		Allow use of
+
+		<span class="font-semibold">{toolName}</span>
+
+		{#if serverLabel}
+			from <span class="font-semibold">{serverLabel}</span>
+		{/if}
+
+		?
+	{/snippet}
+
+	{#snippet actions()}
 		<DropdownMenu.Root>
 			<ButtonGroup.Root
 				class="overflow-hidden rounded-md bg-foreground text-white shadow-sm dark:bg-secondary dark:text-foreground"
@@ -81,5 +83,5 @@
 		>
 			Deny
 		</Button>
-	</div>
-</div>
+	{/snippet}
+</ChatMessageActionCard>

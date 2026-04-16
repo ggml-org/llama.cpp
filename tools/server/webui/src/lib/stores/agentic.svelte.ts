@@ -33,7 +33,6 @@ import { isAbortError } from '$lib/utils';
 import {
 	DEFAULT_AGENTIC_CONFIG,
 	NEWLINE_SEPARATOR,
-	TURN_LIMIT_MESSAGE,
 	LLM_ERROR_BLOCK_START,
 	LLM_ERROR_BLOCK_END
 } from '$lib/constants';
@@ -135,6 +134,11 @@ class AgenticStore {
 	/** Non-reactive: stores resolve functions for pending permission Promises */
 	private _permissionResolvers = new Map<string, (decision: ToolPermissionDecision) => void>();
 
+	/** Dedicated reactive state for pending continue requests (turn limit reached) */
+	private _pendingContinueRequests = new SvelteMap<string, boolean>();
+	/** Non-reactive: stores resolve functions for pending continue Promises */
+	private _continueResolvers = new Map<string, (shouldContinue: boolean) => void>();
+
 	get isReady(): boolean {
 		return true;
 	}
@@ -195,6 +199,18 @@ class AgenticStore {
 		conversationId: string
 	): { toolName: string; serverLabel: string } | null {
 		return this._pendingPermissions.get(conversationId) ?? null;
+	}
+
+	pendingContinueRequest(conversationId: string): boolean {
+		return this._pendingContinueRequests.get(conversationId) ?? false;
+	}
+
+	resolveContinue(conversationId: string, shouldContinue: boolean): void {
+		const resolver = this._continueResolvers.get(conversationId);
+		if (resolver) {
+			this._continueResolvers.delete(conversationId);
+			resolver(shouldContinue);
+		}
 	}
 
 	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
@@ -282,12 +298,44 @@ class AgenticStore {
 		});
 	}
 
+	private async requestContinue(conversationId: string, signal?: AbortSignal): Promise<boolean> {
+		this._pendingContinueRequests.set(conversationId, true);
+
+		return new Promise<boolean>((resolve) => {
+			if (signal?.aborted) {
+				this._pendingContinueRequests.set(conversationId, false);
+				resolve(false);
+				return;
+			}
+
+			this._continueResolvers.set(conversationId, (shouldContinue) => {
+				this._pendingContinueRequests.set(conversationId, false);
+				resolve(shouldContinue);
+			});
+
+			signal?.addEventListener(
+				'abort',
+				() => {
+					const resolver = this._continueResolvers.get(conversationId);
+					if (resolver) {
+						this._continueResolvers.delete(conversationId);
+						this._pendingContinueRequests.set(conversationId, false);
+						resolve(false);
+					}
+				},
+				{ once: true }
+			);
+		});
+	}
+
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
 		const { conversationId, messages, options = {}, callbacks, signal, perChatOverrides } = params;
 
-		// Clear any pending permissions for this conversation when starting a new flow
+		// Clear any pending permissions/continue requests for this conversation when starting a new flow
 		this._pendingPermissions.set(conversationId, null);
 		this._permissionResolvers.delete(conversationId);
+		this._pendingContinueRequests.set(conversationId, false);
+		this._continueResolvers.delete(conversationId);
 
 		// Ensure built-in tools are fetched before checking if agentic is enabled
 		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
@@ -409,7 +457,24 @@ class AgenticStore {
 
 		const effectiveModel = options.model || modelsStore.models[0]?.model || '';
 
-		for (let turn = 0; turn < maxTurns; turn++) {
+		let turn = 0;
+		while (true) {
+			if (turn >= maxTurns) {
+				// Turn limit reached - ask user whether to continue
+				const shouldContinue = await this.requestContinue(conversationId, signal);
+
+				// Yield to allow Svelte to flush the UI update
+				await new Promise((r) => setTimeout(r, 0));
+
+				if (!shouldContinue || signal?.aborted) {
+					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+					return;
+				}
+
+				// User chose to continue - extend the limit
+				turn = 0;
+			}
+
 			this.updateSession(conversationId, { currentTurn: turn + 1 });
 			agenticTimings.turns = turn + 1;
 
@@ -713,17 +778,9 @@ class AgenticStore {
 				const intermediateTimings = this.buildFinalTimings(capturedTimings, agenticTimings);
 				if (intermediateTimings) onTurnComplete?.(intermediateTimings);
 			}
-		}
 
-		// Turn limit reached
-		onChunk?.(TURN_LIMIT_MESSAGE);
-		await onAssistantTurnComplete?.(
-			TURN_LIMIT_MESSAGE,
-			undefined,
-			this.buildFinalTimings(capturedTimings, agenticTimings),
-			undefined
-		);
-		onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+			turn++;
+		}
 	}
 
 	private buildFinalTimings(
@@ -827,6 +884,14 @@ export function agenticPendingPermissionRequest(conversationId: string) {
 
 export function agenticResolvePermission(conversationId: string, decision: ToolPermissionDecision) {
 	agenticStore.resolvePermission(conversationId, decision);
+}
+
+export function agenticPendingContinueRequest(conversationId: string) {
+	return agenticStore.pendingContinueRequest(conversationId);
+}
+
+export function agenticResolveContinue(conversationId: string, shouldContinue: boolean) {
+	agenticStore.resolveContinue(conversationId, shouldContinue);
 }
 
 export function agenticIsAnyRunning() {

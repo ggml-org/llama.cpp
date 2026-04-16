@@ -7,6 +7,7 @@
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
 	import ChatMessagePermissionRequest from './ChatMessagePermissionRequest.svelte';
+	import ChatMessageContinueRequest from './ChatMessageContinueRequest.svelte';
 
 	import {
 		AgenticSectionType,
@@ -28,7 +29,9 @@
 	} from '$lib/utils';
 	import {
 		agenticPendingPermissionRequest,
-		agenticResolvePermission
+		agenticResolvePermission,
+		agenticPendingContinueRequest,
+		agenticResolveContinue
 	} from '$lib/stores/agentic.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 
@@ -73,6 +76,27 @@
 	function handlePermission(decision: ToolPermissionDecision) {
 		permissionDismissed = true;
 		agenticResolvePermission(message.convId, decision);
+	}
+
+	let continueDismissed = $state(false);
+
+	const pendingContinue = $derived(
+		isStreaming && isLastAssistantMessage ? agenticPendingContinueRequest(message.convId) : false
+	);
+
+	let prevContinueRef = false;
+	$effect(() => {
+		if (pendingContinue !== prevContinueRef) {
+			prevContinueRef = pendingContinue;
+			if (pendingContinue) {
+				continueDismissed = false;
+			}
+		}
+	});
+
+	function handleContinue(shouldContinue: boolean) {
+		continueDismissed = true;
+		agenticResolveContinue(message.convId, shouldContinue);
 	}
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
@@ -338,6 +362,10 @@
 			serverLabel={pendingPermission.serverLabel}
 			onDecision={handlePermission}
 		/>
+	{/if}
+
+	{#if pendingContinue && !continueDismissed}
+		<ChatMessageContinueRequest onDecision={handleContinue} />
 	{/if}
 </div>
 
