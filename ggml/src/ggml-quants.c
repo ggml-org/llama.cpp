@@ -6398,7 +6398,7 @@ static inline float hsum_float_8(__m256 v) {
 static inline int iq2tq_find_best_grid_avx2(
     const float * xn,          // [8] normalized values
     const float * wk,          // [8] importance weights
-    const float (* grid_f)[4], // [16] grid entries as float
+    float (* grid_f)[4],       // [16] grid entries as float
     float dq,                  // scale factor for error
     float * best_err_out
 ) {
@@ -6446,7 +6446,7 @@ static inline int iq2tq_find_best_grid_avx2(
 static inline int iq3tq_find_best_grid_avx2(
     const float * xn,          // [8] normalized values
     const float * wk,          // [8] importance weights
-    const float (* grid_f)[IQ3TQ_N_LEVELS], // [16] grid entries as float
+    float (* grid_f)[IQ3TQ_N_LEVELS], // [16] grid entries as float
     float dq,                  // scale factor for error
     float * best_err_out
 ) {
@@ -6510,8 +6510,8 @@ void dequantize_row_iq2_tq(const block_iq2_tq * GGML_RESTRICT x, float * GGML_RE
 // SIMD K-means assignment: find nearest centroid for each data point
 // IQ2_TQ version: 4 dimensions, 16 centroids
 #if defined(__AVX2__)
-static void kmeans_assign_4d_avx2(const float (*sets)[4], int n_sets, int * assign,
-                                   const float centroids[16][4], int * changed) {
+static void kmeans_assign_4d_avx2(float (*sets)[4], int n_sets, int * assign,
+                                   float centroids[16][4], int * changed) {
     // Reorganize centroids into SoA for SIMD: cx[16], cy[16], cz[16], cw[16]
     float cx[16], cy[16], cz[16], cw[16];
     for (int c = 0; c < 16; c++) {
@@ -6552,8 +6552,8 @@ static void kmeans_assign_4d_avx2(const float (*sets)[4], int n_sets, int * assi
 }
 
 // IQ3_TQ version: 8 dimensions, 16 centroids
-static void kmeans_assign_8d_avx2(const float (*sets)[8], int n_sets, int * assign,
-                                   const float centroids[16][8], int * changed) {
+static void kmeans_assign_8d_avx2(float (*sets)[8], int n_sets, int * assign,
+                                   float centroids[16][8], int * changed) {
     // Reorganize centroids into SoA
     float csoa[8][16];
     for (int c = 0; c < 16; c++)
