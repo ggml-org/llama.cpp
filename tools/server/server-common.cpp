@@ -85,9 +85,7 @@ std::string gen_tool_call_id() {
 }
 
 const char * get_media_marker() {
-    // magic statics: initialized exactly once, thread-safe by C++11
     static const std::string marker = []() {
-        // allow user to pin a reproducible marker via env var (useful for tests and external pipelines)
         const char * env = getenv("LLAMA_MEDIA_MARKER");
         if (env && env[0] != '\0') {
             return std::string(env);
