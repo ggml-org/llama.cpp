@@ -1397,6 +1397,33 @@ double ggml_type_sizef(enum ggml_type type) {
     return ((double)(type_traits[type].type_size))/type_traits[type].blck_size;
 }
 
+// Reference tensor size for amortizing per-tensor codebook/grid/level overhead
+#define GGML_BPW_REF_N_ELEMENTS 10000000.0
+
+double ggml_get_bpw(enum ggml_type type) {
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
+
+    const double base_bpw = ((double)(type_traits[type].type_size)) * 8.0 / type_traits[type].blck_size;
+
+    // Per-tensor overhead for types with trained codebooks/grids/levels
+    // This overhead is amortized over the reference tensor size
+    double overhead_bits = 0.0;
+    switch (type) {
+        case GGML_TYPE_IQ2_TQ: overhead_bits = 64    * 8; break;   // int8_t grid[64]
+        case GGML_TYPE_IQ3_TQ: overhead_bits = 128   * 8; break;   // int8_t grid[128]
+        case GGML_TYPE_IQ1_BN: overhead_bits = 32768 * 8; break;   // int8_t codebook[32768]
+        case GGML_TYPE_Q3_PT:  overhead_bits = 8     * 32; break;  // float levels[8]
+        case GGML_TYPE_Q3_KPT: overhead_bits = 8     * 32; break;  // float levels[8]
+        case GGML_TYPE_Q4_DPT: overhead_bits = 16    * 8; break;   // int8_t levels[16]
+        case GGML_TYPE_Q2_DPT: overhead_bits = 16    * 8; break;   // int8_t levels[16]
+        case GGML_TYPE_Q2_KPT: overhead_bits = 4     * 32; break;  // float levels[4]
+        default: break;
+    }
+
+    return base_bpw + overhead_bits / GGML_BPW_REF_N_ELEMENTS;
+}
+
 const char * ggml_type_name(enum ggml_type type) {
     assert(type >= 0);
     assert(type < GGML_TYPE_COUNT);

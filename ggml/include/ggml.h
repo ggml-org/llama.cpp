@@ -757,6 +757,13 @@ extern "C" {
     GGML_API double ggml_type_sizef(enum ggml_type type), // ggml_type_size()/ggml_blck_size() as float
     "use ggml_row_size() instead");
 
+    // Returns the effective bits per weight for a quantized type.
+    // For standard types this is type_size*8/blck_size.
+    // For types with per-tensor trained codebooks/grids/levels, this includes
+    // the amortized overhead of the auxiliary data stored alongside each tensor.
+    // The overhead is amortized over a reference tensor of 10M elements.
+    GGML_API double ggml_get_bpw(enum ggml_type type);
+
     GGML_API const char * ggml_type_name(enum ggml_type type);
     GGML_API const char * ggml_op_name  (enum ggml_op   op);
     GGML_API const char * ggml_op_symbol(enum ggml_op   op);

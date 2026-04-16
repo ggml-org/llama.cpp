@@ -6381,17 +6381,113 @@ static inline int iq2tq_nearest_qi(float xn, const int8_t * g) {
     return 3;
 }
 
+// AVX2 SIMD horizontal sum of 8 floats in a __m256
+#if defined(__AVX2__)
+static inline float hsum_float_8(__m256 v) {
+    __m128 hi = _mm256_extractf128_ps(v, 1);
+    __m128 lo = _mm256_castps256_ps128(v);
+    __m128 sum4 = _mm_add_ps(lo, hi);
+    __m128 sum2 = _mm_add_ps(sum4, _mm_movehl_ps(sum4, sum4));
+    __m128 sum1 = _mm_add_ss(sum2, _mm_movehdup_ps(sum2));
+    return _mm_cvtss_f32(sum1);
+}
+
+// AVX2 SIMD grid search for IQ2_TQ: find best grid entry for one group of 8 elements.
+// Computes normalized error: sum(wk * (xn - ge[qi])^2) * dq^2
+// xn[k] = xb[k] * inv_dq (normalized values), wk[k] = importance weights
+static inline int iq2tq_find_best_grid_avx2(
+    const float * xn,          // [8] normalized values
+    const float * wk,          // [8] importance weights
+    const float (* grid_f)[4], // [16] grid entries as float
+    float dq,                  // scale factor for error
+    float * best_err_out
+) {
+    __m256 vxn = _mm256_loadu_ps(xn);
+    __m256 vwk = _mm256_loadu_ps(wk);
+    __m256 vdq2 = _mm256_set1_ps(dq * dq);
+
+    float best_err = 1e30f;
+    int best_si = 3;
+
+    for (int si = 0; si < 16; ++si) {
+        const float * ge = grid_f[si];
+
+        // Broadcast grid levels
+        __m256 vge0 = _mm256_set1_ps(ge[0]);
+        __m256 vge1 = _mm256_set1_ps(ge[1]);
+        __m256 vge2 = _mm256_set1_ps(ge[2]);
+        __m256 vge3 = _mm256_set1_ps(ge[3]);
+
+        // Compute midpoints for nearest-qi selection
+        __m256 vm01 = _mm256_set1_ps(0.5f * (ge[0] + ge[1]));
+        __m256 vm12 = _mm256_set1_ps(0.5f * (ge[1] + ge[2]));
+        __m256 vm23 = _mm256_set1_ps(0.5f * (ge[2] + ge[3]));
+
+        // Select reconstruction via cascade of blendv (matches nested if in iq2tq_nearest_qi)
+        __m256 vrecon = vge3;
+        vrecon = _mm256_blendv_ps(vge2, vrecon, _mm256_cmp_ps(vxn, vm23, _MM_CMPINT_GT));
+        vrecon = _mm256_blendv_ps(vge1, vrecon, _mm256_cmp_ps(vxn, vm12, _MM_CMPINT_GT));
+        vrecon = _mm256_blendv_ps(vge0, vrecon, _mm256_cmp_ps(vxn, vm01, _MM_CMPINT_GT));
+
+        // Weighted squared error: wk * dq^2 * (xn - recon)^2
+        __m256 vdiff = _mm256_sub_ps(vxn, vrecon);
+        __m256 vwerr = _mm256_mul_ps(vwk, _mm256_mul_ps(_mm256_mul_ps(vdiff, vdiff), vdq2));
+
+        float g_err = hsum_float_8(vwerr);
+        if (g_err < best_err) { best_err = g_err; best_si = si; }
+    }
+
+    *best_err_out = best_err;
+    return best_si;
+}
+
+// AVX2 SIMD grid search for IQ3_TQ: find best grid entry for one group of 8 elements.
+// Same approach but with 8 levels (7 midpoints) instead of 4 (3 midpoints).
+static inline int iq3tq_find_best_grid_avx2(
+    const float * xn,          // [8] normalized values
+    const float * wk,          // [8] importance weights
+    const float (* grid_f)[IQ3TQ_N_LEVELS], // [16] grid entries as float
+    float dq,                  // scale factor for error
+    float * best_err_out
+) {
+    __m256 vxn = _mm256_loadu_ps(xn);
+    __m256 vwk = _mm256_loadu_ps(wk);
+    __m256 vdq2 = _mm256_set1_ps(dq * dq);
+
+    float best_err = 1e30f;
+    int best_si = 0;
+
+    for (int si = 0; si < 16; ++si) {
+        const float * ge = grid_f[si];
+
+        // Select reconstruction via cascade from ge[7] down to ge[0]
+        __m256 vrecon = _mm256_set1_ps(ge[7]);
+        for (int i = 6; i >= 0; --i) {
+            __m256 vm = _mm256_set1_ps(0.5f * (ge[i] + ge[i + 1]));
+            vrecon = _mm256_blendv_ps(_mm256_set1_ps(ge[i]), vrecon,
+                                      _mm256_cmp_ps(vxn, vm, _MM_CMPINT_GT));
+        }
+
+        // Weighted squared error: wk * dq^2 * (xn - recon)^2
+        __m256 vdiff = _mm256_sub_ps(vxn, vrecon);
+        __m256 vwerr = _mm256_mul_ps(vwk, _mm256_mul_ps(_mm256_mul_ps(vdiff, vdiff), vdq2));
+
+        float g_err = hsum_float_8(vwerr);
+        if (g_err < best_err) { best_err = g_err; best_si = si; }
+    }
+
+    *best_err_out = best_err;
+    return best_si;
+}
+#endif // __AVX2__
+
 // Dequantization — 2-bit with asymmetric grid per group
 void dequantize_row_iq2_tq(const block_iq2_tq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
-#ifndef _MSC_VER
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-qual"
-#endif
     const int8_t (*grid)[4] = levels ? (const int8_t (*)[4])levels
                                      : (const int8_t (*)[4])iq2tq_grid_default;
-#ifndef _MSC_VER
 #pragma GCC diagnostic pop
-#endif
     const int nb = k / QK_K;
 
     for (int i = 0; i < nb; ++i) {
@@ -6411,6 +6507,86 @@ void dequantize_row_iq2_tq(const block_iq2_tq * GGML_RESTRICT x, float * GGML_RE
     }
 }
 
+// SIMD K-means assignment: find nearest centroid for each data point
+// IQ2_TQ version: 4 dimensions, 16 centroids
+#if defined(__AVX2__)
+static void kmeans_assign_4d_avx2(const float (*sets)[4], int n_sets, int * assign,
+                                   const float centroids[16][4], int * changed) {
+    // Reorganize centroids into SoA for SIMD: cx[16], cy[16], cz[16], cw[16]
+    float cx[16], cy[16], cz[16], cw[16];
+    for (int c = 0; c < 16; c++) {
+        cx[c] = centroids[c][0]; cy[c] = centroids[c][1];
+        cz[c] = centroids[c][2]; cw[c] = centroids[c][3];
+    }
+
+    int local_changed = 0;
+    for (int i = 0; i < n_sets; i++) {
+        __m256 vx = _mm256_set1_ps(sets[i][0]);
+        __m256 vy = _mm256_set1_ps(sets[i][1]);
+        __m256 vz = _mm256_set1_ps(sets[i][2]);
+        __m256 vw = _mm256_set1_ps(sets[i][3]);
+
+        float best_dist = 1e30f;
+        int best_c = 0;
+
+        // Process 8 centroids at a time (2 batches for 16 centroids)
+        for (int c = 0; c < 16; c += 8) {
+            __m256 dx = _mm256_sub_ps(vx, _mm256_loadu_ps(cx + c));
+            __m256 dy = _mm256_sub_ps(vy, _mm256_loadu_ps(cy + c));
+            __m256 dz = _mm256_sub_ps(vz, _mm256_loadu_ps(cz + c));
+            __m256 dw = _mm256_sub_ps(vw, _mm256_loadu_ps(cw + c));
+            __m256 dist = _mm256_add_ps(
+                _mm256_add_ps(_mm256_mul_ps(dx, dx), _mm256_mul_ps(dy, dy)),
+                _mm256_add_ps(_mm256_mul_ps(dz, dz), _mm256_mul_ps(dw, dw)));
+
+            // Extract and find minimum among 8 distances
+            float d_arr[8];
+            _mm256_storeu_ps(d_arr, dist);
+            for (int j = 0; j < 8; j++) {
+                if (d_arr[j] < best_dist) { best_dist = d_arr[j]; best_c = c + j; }
+            }
+        }
+        if (assign[i] != best_c) { assign[i] = best_c; local_changed++; }
+    }
+    *changed = local_changed;
+}
+
+// IQ3_TQ version: 8 dimensions, 16 centroids
+static void kmeans_assign_8d_avx2(const float (*sets)[8], int n_sets, int * assign,
+                                   const float centroids[16][8], int * changed) {
+    // Reorganize centroids into SoA
+    float csoa[8][16];
+    for (int c = 0; c < 16; c++)
+        for (int d = 0; d < 8; d++)
+            csoa[d][c] = centroids[c][d];
+
+    int local_changed = 0;
+    for (int i = 0; i < n_sets; i++) {
+        __m256 v[8];
+        for (int d = 0; d < 8; d++) v[d] = _mm256_set1_ps(sets[i][d]);
+
+        float best_dist = 1e30f;
+        int best_c = 0;
+
+        for (int c = 0; c < 16; c += 8) {
+            __m256 dist = _mm256_setzero_ps();
+            for (int d = 0; d < 8; d++) {
+                __m256 diff = _mm256_sub_ps(v[d], _mm256_loadu_ps(csoa[d] + c));
+                dist = _mm256_fmadd_ps(diff, diff, dist);
+            }
+
+            float d_arr[8];
+            _mm256_storeu_ps(d_arr, dist);
+            for (int j = 0; j < 8; j++) {
+                if (d_arr[j] < best_dist) { best_dist = d_arr[j]; best_c = c + j; }
+            }
+        }
+        if (assign[i] != best_c) { assign[i] = best_c; local_changed++; }
+    }
+    *changed = local_changed;
+}
+#endif // __AVX2__
+
 // Reference quantization
 void quantize_row_iq2_tq_ref(const float * GGML_RESTRICT x, block_iq2_tq * GGML_RESTRICT y, int64_t k) {
     quantize_iq2_tq(x, y, 1, k, NULL);
@@ -6426,6 +6602,14 @@ static void quantize_row_iq2_tq_impl(
     assert(n_per_row % QK_K == 0);
     const int8_t (*grid)[4] = iq2tq_cur_grid();
     const int nb = n_per_row / QK_K;
+
+#if defined(__AVX2__)
+    // Precompute grid as float for SIMD
+    float grid_f[16][4];
+    for (int si = 0; si < 16; ++si)
+        for (int k = 0; k < 4; ++k)
+            grid_f[si][k] = (float)grid[si][k];
+#endif
 
     for (int bi = 0; bi < nb; ++bi) {
         const float * xb = x + bi * QK_K;
@@ -6447,6 +6631,14 @@ static void quantize_row_iq2_tq_impl(
         // Initial d: max grid value ~24 in int8, recon = d * 0.125 * 24 = 3d → d = amax/3
         float d = amax / 3.0f;
 
+        // Precompute importance weights (eliminates sqrtf from hot grid search loops)
+        float wk_arr[QK_K];
+        if (quant_weights) {
+            for (int j = 0; j < QK_K; ++j) {
+                wk_arr[j] = quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]);
+            }
+        }
+
         uint8_t qs[64] = {0};
         uint8_t scales_out[16] = {0};
         int grid_idx[IQ2TQ_N_GROUPS];  // chosen grid entry per group
@@ -6455,41 +6647,46 @@ static void quantize_row_iq2_tq_impl(
         float dq = d * IQ2TQ_GRID_SCALE;
         float inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
         for (int g = 0; g < IQ2TQ_N_GROUPS; ++g) {
-            float best_err = 1e30f;
-            int best_si = 3;  // default: centered medium
-
+            float best_err;
+            int best_si;
+            float xn[8], wk[8];
+            for (int k = 0; k < 8; ++k) {
+                xn[k] = xb[g * 8 + k] * inv_dq;
+                wk[k] = quant_weights ? wk_arr[g * 8 + k] : 1.0f;
+            }
+#if defined(__AVX2__)
+            best_si = iq2tq_find_best_grid_avx2(xn, wk, grid_f, dq, &best_err);
+#else
+            best_err = 1e30f; best_si = 3;
             for (int si = 0; si < 16; ++si) {
                 const int8_t * ge = grid[si];
                 float g_err = 0;
                 for (int k = 0; k < 8; ++k) {
-                    int j = g * 8 + k;
-                    float xn = xb[j] * inv_dq;
-                    int qi = iq2tq_nearest_qi(xn, ge);
+                    int qi = iq2tq_nearest_qi(xn[k], ge);
                     float recon = dq * (float)ge[qi];
-                    float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                    float err = xb[j] - recon;
-                    g_err += wk * err * err;
+                    float err = xb[g * 8 + k] - recon;
+                    g_err += wk[k] * err * err;
                 }
                 if (g_err < best_err) { best_err = g_err; best_si = si; }
             }
+#endif
             grid_idx[g] = best_si;
 
             // Quantize elements with chosen grid
             const int8_t * ge = grid[best_si];
             for (int k = 0; k < 8; ++k) {
-                int j = g * 8 + k;
-                iq2tq_set_qi(qs, j, iq2tq_nearest_qi(xb[j] * inv_dq, ge));
+                iq2tq_set_qi(qs, g * 8 + k, iq2tq_nearest_qi(xn[k], ge));
             }
         }
 
-        // Iterative refinement
+        // Iterative refinement (with convergence early-stop)
         for (int iter = 0; iter < 12; ++iter) {
             // Re-fit d via weighted OLS: d = sum(w*x*g) / (GRID_SCALE * sum(w*g*g))
             double sumxg = 0, sumgg = 0;
             for (int j = 0; j < QK_K; ++j) {
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq2tq_get_qi(qs, j)];
-                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                float wk = quant_weights ? wk_arr[j] : 1.0f;
                 sumxg += (double)(wk * xb[j] * gval);
                 sumgg += (double)(wk * gval * gval);
             }
@@ -6499,33 +6696,41 @@ static void quantize_row_iq2_tq_impl(
             dq = d * IQ2TQ_GRID_SCALE;
             inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
             memset(scales_out, 0, 16);
+            int grid_changed = 0;
             for (int g = 0; g < IQ2TQ_N_GROUPS; ++g) {
-                float best_err = 1e30f;
-                int best_si = 3;
-
+                float best_err;
+                int best_si;
+                float xn[8], wk[8];
+                for (int k = 0; k < 8; ++k) {
+                    xn[k] = xb[g * 8 + k] * inv_dq;
+                    wk[k] = quant_weights ? wk_arr[g * 8 + k] : 1.0f;
+                }
+#if defined(__AVX2__)
+                best_si = iq2tq_find_best_grid_avx2(xn, wk, grid_f, dq, &best_err);
+#else
+                best_err = 1e30f; best_si = 3;
                 for (int si = 0; si < 16; ++si) {
                     const int8_t * ge = grid[si];
                     float g_err = 0;
                     for (int k = 0; k < 8; ++k) {
-                        int j = g * 8 + k;
-                        float xn = xb[j] * inv_dq;
-                        int qi = iq2tq_nearest_qi(xn, ge);
+                        int qi = iq2tq_nearest_qi(xn[k], ge);
                         float recon = dq * (float)ge[qi];
-                        float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                        float err = xb[j] - recon;
-                        g_err += wk * err * err;
+                        float err = xb[g * 8 + k] - recon;
+                        g_err += wk[k] * err * err;
                     }
                     if (g_err < best_err) { best_err = g_err; best_si = si; }
                 }
+#endif
+                if (best_si != grid_idx[g]) grid_changed++;
                 scales_out[g / 2] |= (best_si << (4 * (g % 2)));
                 grid_idx[g] = best_si;
 
                 const int8_t * ge = grid[best_si];
                 for (int k = 0; k < 8; ++k) {
-                    int j = g * 8 + k;
-                    iq2tq_set_qi(qs, j, iq2tq_nearest_qi(xb[j] * inv_dq, ge));
+                    iq2tq_set_qi(qs, g * 8 + k, iq2tq_nearest_qi(xn[k], ge));
                 }
             }
+            if (grid_changed == 0) break;  // converged
         }
 
         // Final OLS d
@@ -6534,18 +6739,18 @@ static void quantize_row_iq2_tq_impl(
             for (int j = 0; j < QK_K; ++j) {
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq2tq_get_qi(qs, j)];
-                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                float wk = quant_weights ? wk_arr[j] : 1.0f;
                 sumxg += (double)(wk * xb[j] * gval);
                 sumgg += (double)(wk * gval * gval);
             }
             d = (sumgg > 0) ? (float)(sumxg / ((double)IQ2TQ_GRID_SCALE * sumgg)) : d;
         }
 
-        // Multi-d search: try nearby d values and re-optimize grids
+        // Multi-d search: try nearby d values and re-optimize grids (with partial sum pruning)
         {
             float best_d = d;
             float best_total_err = 1e30f;
-            uint8_t best_scales[16] = {0}, best_qs[64] = {0};
+            uint8_t best_scales[16], best_qs[64];
             int best_grid_idx[IQ2TQ_N_GROUPS];
             static const float d_factors[] = {0.8f, 0.85f, 0.9f, 0.925f, 0.95f, 0.975f, 1.0f, 1.025f, 1.05f, 1.075f, 1.1f, 1.15f, 1.2f};
             static const int n_d_factors = sizeof(d_factors) / sizeof(d_factors[0]);
@@ -6559,29 +6764,35 @@ static void quantize_row_iq2_tq_impl(
                 int tgrid[IQ2TQ_N_GROUPS];
                 float total_err = 0;
 
-                for (int g = 0; g < IQ2TQ_N_GROUPS; ++g) {
-                    float best_err = 1e30f;
-                    int best_si = 3;
+                for (int g = 0; g < IQ2TQ_N_GROUPS && total_err <= best_total_err; ++g) {
+                    float best_err;
+                    int best_si;
+                    float xn[8], wk[8];
+                    for (int k = 0; k < 8; ++k) {
+                        xn[k] = xb[g * 8 + k] * tinv;
+                        wk[k] = quant_weights ? wk_arr[g * 8 + k] : 1.0f;
+                    }
+#if defined(__AVX2__)
+                    best_si = iq2tq_find_best_grid_avx2(xn, wk, grid_f, tdq, &best_err);
+#else
+                    best_err = 1e30f; best_si = 3;
                     for (int si = 0; si < 16; ++si) {
                         const int8_t * ge = grid[si];
                         float g_err = 0;
                         for (int k = 0; k < 8; ++k) {
-                            int j = g * 8 + k;
-                            float xn = xb[j] * tinv;
-                            int qi = iq2tq_nearest_qi(xn, ge);
+                            int qi = iq2tq_nearest_qi(xn[k], ge);
                             float recon = tdq * (float)ge[qi];
-                            float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                            float err = xb[j] - recon;
-                            g_err += wk * err * err;
+                            float err = xb[g * 8 + k] - recon;
+                            g_err += wk[k] * err * err;
                         }
                         if (g_err < best_err) { best_err = g_err; best_si = si; }
                     }
+#endif
                     tscales[g / 2] |= (best_si << (4 * (g % 2)));
                     tgrid[g] = best_si;
                     const int8_t * ge = grid[best_si];
                     for (int k = 0; k < 8; ++k) {
-                        int j = g * 8 + k;
-                        iq2tq_set_qi(tqs, j, iq2tq_nearest_qi(xb[j] * tinv, ge));
+                        iq2tq_set_qi(tqs, g * 8 + k, iq2tq_nearest_qi(xn[k], ge));
                     }
                     total_err += best_err;
                 }
@@ -6600,13 +6811,13 @@ static void quantize_row_iq2_tq_impl(
             memcpy(grid_idx, best_grid_idx, sizeof(grid_idx));
         }
 
-        // Post multi-d refinement: 2 more OLS+grid iterations from the best d
+        // Post multi-d refinement (with convergence early-stop)
         for (int iter = 0; iter < 2; ++iter) {
             double sumxg = 0, sumgg = 0;
             for (int j = 0; j < QK_K; ++j) {
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq2tq_get_qi(qs, j)];
-                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                float wk = quant_weights ? wk_arr[j] : 1.0f;
                 sumxg += (double)(wk * xb[j] * gval);
                 sumgg += (double)(wk * gval * gval);
             }
@@ -6615,31 +6826,40 @@ static void quantize_row_iq2_tq_impl(
             dq = d * IQ2TQ_GRID_SCALE;
             inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
             memset(scales_out, 0, 16);
+            int grid_changed = 0;
             for (int g = 0; g < IQ2TQ_N_GROUPS; ++g) {
-                float best_err = 1e30f;
-                int best_si = 3;
+                float best_err;
+                int best_si;
+                float xn[8], wk[8];
+                for (int k = 0; k < 8; ++k) {
+                    xn[k] = xb[g * 8 + k] * inv_dq;
+                    wk[k] = quant_weights ? wk_arr[g * 8 + k] : 1.0f;
+                }
+#if defined(__AVX2__)
+                best_si = iq2tq_find_best_grid_avx2(xn, wk, grid_f, dq, &best_err);
+#else
+                best_err = 1e30f; best_si = 3;
                 for (int si = 0; si < 16; ++si) {
                     const int8_t * ge = grid[si];
                     float g_err = 0;
                     for (int k = 0; k < 8; ++k) {
-                        int j = g * 8 + k;
-                        float xn = xb[j] * inv_dq;
-                        int qi = iq2tq_nearest_qi(xn, ge);
+                        int qi = iq2tq_nearest_qi(xn[k], ge);
                         float recon = dq * (float)ge[qi];
-                        float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                        float err = xb[j] - recon;
-                        g_err += wk * err * err;
+                        float err = xb[g * 8 + k] - recon;
+                        g_err += wk[k] * err * err;
                     }
                     if (g_err < best_err) { best_err = g_err; best_si = si; }
                 }
+#endif
+                if (best_si != grid_idx[g]) grid_changed++;
                 scales_out[g / 2] |= (best_si << (4 * (g % 2)));
                 grid_idx[g] = best_si;
                 const int8_t * ge = grid[best_si];
                 for (int k = 0; k < 8; ++k) {
-                    int j = g * 8 + k;
-                    iq2tq_set_qi(qs, j, iq2tq_nearest_qi(xb[j] * inv_dq, ge));
+                    iq2tq_set_qi(qs, g * 8 + k, iq2tq_nearest_qi(xn[k], ge));
                 }
             }
+            if (grid_changed == 0) break;  // converged
         }
 
         // Write result
@@ -6748,6 +6968,9 @@ void iq2tq_train_grid(const float * data, int64_t nrow, int64_t n_per_row,
     int * assign = (int *)calloc(n_sets, sizeof(int));
     for (int iter = 0; iter < 100; iter++) {
         int changed = 0;
+#if defined(__AVX2__)
+        kmeans_assign_4d_avx2(sets, n_sets, assign, centroids, &changed);
+#else
         for (int i = 0; i < n_sets; i++) {
             float best_dist = 1e30f;
             int best_c = 0;
@@ -6761,6 +6984,7 @@ void iq2tq_train_grid(const float * data, int64_t nrow, int64_t n_per_row,
             }
             if (assign[i] != best_c) { assign[i] = best_c; changed++; }
         }
+#endif
 
         double sum[16][4] = {{0}};
         double wcnt[16] = {0};
@@ -6880,15 +7104,11 @@ static inline int iq3tq_nearest_qi(float xn, const int8_t * g) {
 
 // Dequantization
 void dequantize_row_iq3_tq(const block_iq3_tq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
-#ifndef _MSC_VER
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-qual"
-#endif
     const int8_t (*grid)[IQ3TQ_N_LEVELS] = levels ? (const int8_t (*)[IQ3TQ_N_LEVELS])levels
                                                    : (const int8_t (*)[IQ3TQ_N_LEVELS])iq3tq_grid_default;
-#ifndef _MSC_VER
 #pragma GCC diagnostic pop
-#endif
     const int nb = k / QK_K;
 
     for (int i = 0; i < nb; ++i) {
@@ -6923,6 +7143,14 @@ static void quantize_row_iq3_tq_impl(
     const int8_t (*grid)[IQ3TQ_N_LEVELS] = iq3tq_cur_grid();
     const int nb = n_per_row / QK_K;
 
+#if defined(__AVX2__)
+    // Precompute grid as float for SIMD
+    float grid_f[16][IQ3TQ_N_LEVELS];
+    for (int si = 0; si < 16; ++si)
+        for (int k = 0; k < IQ3TQ_N_LEVELS; ++k)
+            grid_f[si][k] = (float)grid[si][k];
+#endif
+
     for (int bi = 0; bi < nb; ++bi) {
         const float * xb = x + bi * QK_K;
         block_iq3_tq * yb = y + bi;
@@ -6941,6 +7169,14 @@ static void quantize_row_iq3_tq_impl(
 
         float d = amax / 3.0f;
 
+        // Precompute importance weights (eliminates sqrtf from hot grid search loops)
+        float wk_arr[QK_K];
+        if (quant_weights) {
+            for (int j = 0; j < QK_K; ++j) {
+                wk_arr[j] = quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]);
+            }
+        }
+
         uint8_t qs[96] = {0};
         uint8_t scales_out[16] = {0};
         int grid_idx[IQ3TQ_N_GROUPS];
@@ -6949,38 +7185,43 @@ static void quantize_row_iq3_tq_impl(
         float dq = d * IQ3TQ_GRID_SCALE;
         float inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
         for (int g = 0; g < IQ3TQ_N_GROUPS; ++g) {
-            float best_err = 1e30f;
-            int best_si = 0;
-
+            float best_err;
+            int best_si;
+            float xn[8], wk[8];
+            for (int k = 0; k < 8; ++k) {
+                xn[k] = xb[g * 8 + k] * inv_dq;
+                wk[k] = quant_weights ? wk_arr[g * 8 + k] : 1.0f;
+            }
+#if defined(__AVX2__)
+            best_si = iq3tq_find_best_grid_avx2(xn, wk, grid_f, dq, &best_err);
+#else
+            best_err = 1e30f; best_si = 0;
             for (int si = 0; si < 16; ++si) {
                 const int8_t * ge = grid[si];
                 float g_err = 0;
                 for (int k = 0; k < 8; ++k) {
-                    int j = g * 8 + k;
-                    float xn = xb[j] * inv_dq;
-                    int qi = iq3tq_nearest_qi(xn, ge);
+                    int qi = iq3tq_nearest_qi(xn[k], ge);
                     float recon = dq * (float)ge[qi];
-                    float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                    float err = xb[j] - recon;
-                    g_err += wk * err * err;
+                    float err = xb[g * 8 + k] - recon;
+                    g_err += wk[k] * err * err;
                 }
                 if (g_err < best_err) { best_err = g_err; best_si = si; }
             }
+#endif
             grid_idx[g] = best_si;
             const int8_t * ge = grid[best_si];
             for (int k = 0; k < 8; ++k) {
-                int j = g * 8 + k;
-                iq3tq_set_qi(qs, j, iq3tq_nearest_qi(xb[j] * inv_dq, ge));
+                iq3tq_set_qi(qs, g * 8 + k, iq3tq_nearest_qi(xn[k], ge));
             }
         }
 
-        // Iterative refinement
+        // Iterative refinement (with convergence early-stop)
         for (int iter = 0; iter < 12; ++iter) {
             double sumxg = 0, sumgg = 0;
             for (int j = 0; j < QK_K; ++j) {
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq3tq_get_qi(qs, j)];
-                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                float wk = quant_weights ? wk_arr[j] : 1.0f;
                 sumxg += (double)(wk * xb[j] * gval);
                 sumgg += (double)(wk * gval * gval);
             }
@@ -6989,31 +7230,40 @@ static void quantize_row_iq3_tq_impl(
             dq = d * IQ3TQ_GRID_SCALE;
             inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
             memset(scales_out, 0, 16);
+            int grid_changed = 0;
             for (int g = 0; g < IQ3TQ_N_GROUPS; ++g) {
-                float best_err = 1e30f;
-                int best_si = 0;
+                float best_err;
+                int best_si;
+                float xn[8], wk[8];
+                for (int k = 0; k < 8; ++k) {
+                    xn[k] = xb[g * 8 + k] * inv_dq;
+                    wk[k] = quant_weights ? wk_arr[g * 8 + k] : 1.0f;
+                }
+#if defined(__AVX2__)
+                best_si = iq3tq_find_best_grid_avx2(xn, wk, grid_f, dq, &best_err);
+#else
+                best_err = 1e30f; best_si = 0;
                 for (int si = 0; si < 16; ++si) {
                     const int8_t * ge = grid[si];
                     float g_err = 0;
                     for (int k = 0; k < 8; ++k) {
-                        int j = g * 8 + k;
-                        float xn = xb[j] * inv_dq;
-                        int qi = iq3tq_nearest_qi(xn, ge);
+                        int qi = iq3tq_nearest_qi(xn[k], ge);
                         float recon = dq * (float)ge[qi];
-                        float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                        float err = xb[j] - recon;
-                        g_err += wk * err * err;
+                        float err = xb[g * 8 + k] - recon;
+                        g_err += wk[k] * err * err;
                     }
                     if (g_err < best_err) { best_err = g_err; best_si = si; }
                 }
+#endif
+                if (best_si != grid_idx[g]) grid_changed++;
                 scales_out[g / 2] |= (best_si << (4 * (g % 2)));
                 grid_idx[g] = best_si;
                 const int8_t * ge = grid[best_si];
                 for (int k = 0; k < 8; ++k) {
-                    int j = g * 8 + k;
-                    iq3tq_set_qi(qs, j, iq3tq_nearest_qi(xb[j] * inv_dq, ge));
+                    iq3tq_set_qi(qs, g * 8 + k, iq3tq_nearest_qi(xn[k], ge));
                 }
             }
+            if (grid_changed == 0) break;  // converged
         }
 
         // Final OLS d
@@ -7022,18 +7272,18 @@ static void quantize_row_iq3_tq_impl(
             for (int j = 0; j < QK_K; ++j) {
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq3tq_get_qi(qs, j)];
-                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                float wk = quant_weights ? wk_arr[j] : 1.0f;
                 sumxg += (double)(wk * xb[j] * gval);
                 sumgg += (double)(wk * gval * gval);
             }
             d = (sumgg > 0) ? (float)(sumxg / ((double)IQ3TQ_GRID_SCALE * sumgg)) : d;
         }
 
-        // Multi-d search
+        // Multi-d search (with partial sum pruning)
         {
             float best_d = d;
             float best_total_err = 1e30f;
-            uint8_t best_scales[16] = {0}, best_qs[96] = {0};
+            uint8_t best_scales[16], best_qs[96];
             int best_grid_idx[IQ3TQ_N_GROUPS];
             static const float d_factors[] = {0.8f, 0.85f, 0.9f, 0.925f, 0.95f, 0.975f, 1.0f, 1.025f, 1.05f, 1.075f, 1.1f, 1.15f, 1.2f};
             static const int n_d_factors = sizeof(d_factors) / sizeof(d_factors[0]);
@@ -7047,29 +7297,35 @@ static void quantize_row_iq3_tq_impl(
                 int tgrid[IQ3TQ_N_GROUPS];
                 float total_err = 0;
 
-                for (int g = 0; g < IQ3TQ_N_GROUPS; ++g) {
-                    float best_err = 1e30f;
-                    int best_si = 0;
+                for (int g = 0; g < IQ3TQ_N_GROUPS && total_err <= best_total_err; ++g) {
+                    float best_err;
+                    int best_si;
+                    float xn[8], wk[8];
+                    for (int k = 0; k < 8; ++k) {
+                        xn[k] = xb[g * 8 + k] * tinv;
+                        wk[k] = quant_weights ? wk_arr[g * 8 + k] : 1.0f;
+                    }
+#if defined(__AVX2__)
+                    best_si = iq3tq_find_best_grid_avx2(xn, wk, grid_f, tdq, &best_err);
+#else
+                    best_err = 1e30f; best_si = 0;
                     for (int si = 0; si < 16; ++si) {
                         const int8_t * ge = grid[si];
                         float g_err = 0;
                         for (int k = 0; k < 8; ++k) {
-                            int j = g * 8 + k;
-                            float xn = xb[j] * tinv;
-                            int qi = iq3tq_nearest_qi(xn, ge);
+                            int qi = iq3tq_nearest_qi(xn[k], ge);
                             float recon = tdq * (float)ge[qi];
-                            float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                            float err = xb[j] - recon;
-                            g_err += wk * err * err;
+                            float err = xb[g * 8 + k] - recon;
+                            g_err += wk[k] * err * err;
                         }
                         if (g_err < best_err) { best_err = g_err; best_si = si; }
                     }
+#endif
                     tscales[g / 2] |= (best_si << (4 * (g % 2)));
                     tgrid[g] = best_si;
                     const int8_t * ge = grid[best_si];
                     for (int k = 0; k < 8; ++k) {
-                        int j = g * 8 + k;
-                        iq3tq_set_qi(tqs, j, iq3tq_nearest_qi(xb[j] * tinv, ge));
+                        iq3tq_set_qi(tqs, g * 8 + k, iq3tq_nearest_qi(xn[k], ge));
                     }
                     total_err += best_err;
                 }
@@ -7088,13 +7344,13 @@ static void quantize_row_iq3_tq_impl(
             memcpy(grid_idx, best_grid_idx, sizeof(grid_idx));
         }
 
-        // Post multi-d refinement
+        // Post multi-d refinement (with convergence early-stop)
         for (int iter = 0; iter < 2; ++iter) {
             double sumxg = 0, sumgg = 0;
             for (int j = 0; j < QK_K; ++j) {
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq3tq_get_qi(qs, j)];
-                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                float wk = quant_weights ? wk_arr[j] : 1.0f;
                 sumxg += (double)(wk * xb[j] * gval);
                 sumgg += (double)(wk * gval * gval);
             }
@@ -7103,31 +7359,40 @@ static void quantize_row_iq3_tq_impl(
             dq = d * IQ3TQ_GRID_SCALE;
             inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
             memset(scales_out, 0, 16);
+            int grid_changed = 0;
             for (int g = 0; g < IQ3TQ_N_GROUPS; ++g) {
-                float best_err = 1e30f;
-                int best_si = 0;
+                float best_err;
+                int best_si;
+                float xn[8], wk[8];
+                for (int k = 0; k < 8; ++k) {
+                    xn[k] = xb[g * 8 + k] * inv_dq;
+                    wk[k] = quant_weights ? wk_arr[g * 8 + k] : 1.0f;
+                }
+#if defined(__AVX2__)
+                best_si = iq3tq_find_best_grid_avx2(xn, wk, grid_f, dq, &best_err);
+#else
+                best_err = 1e30f; best_si = 0;
                 for (int si = 0; si < 16; ++si) {
                     const int8_t * ge = grid[si];
                     float g_err = 0;
                     for (int k = 0; k < 8; ++k) {
-                        int j = g * 8 + k;
-                        float xn = xb[j] * inv_dq;
-                        int qi = iq3tq_nearest_qi(xn, ge);
+                        int qi = iq3tq_nearest_qi(xn[k], ge);
                         float recon = dq * (float)ge[qi];
-                        float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                        float err = xb[j] - recon;
-                        g_err += wk * err * err;
+                        float err = xb[g * 8 + k] - recon;
+                        g_err += wk[k] * err * err;
                     }
                     if (g_err < best_err) { best_err = g_err; best_si = si; }
                 }
+#endif
+                if (best_si != grid_idx[g]) grid_changed++;
                 scales_out[g / 2] |= (best_si << (4 * (g % 2)));
                 grid_idx[g] = best_si;
                 const int8_t * ge = grid[best_si];
                 for (int k = 0; k < 8; ++k) {
-                    int j = g * 8 + k;
-                    iq3tq_set_qi(qs, j, iq3tq_nearest_qi(xb[j] * inv_dq, ge));
+                    iq3tq_set_qi(qs, g * 8 + k, iq3tq_nearest_qi(xn[k], ge));
                 }
             }
+            if (grid_changed == 0) break;  // converged
         }
 
         yb->d = GGML_FP32_TO_FP16(d);
@@ -7230,6 +7495,9 @@ void iq3tq_train_grid(const float * data, int64_t nrow, int64_t n_per_row,
     int * assign = (int *)calloc(n_sets, sizeof(int));
     for (int iter = 0; iter < 100; iter++) {
         int changed = 0;
+#if defined(__AVX2__)
+        kmeans_assign_8d_avx2(sets, n_sets, assign, centroids, &changed);
+#else
         for (int i = 0; i < n_sets; i++) {
             float best_dist = 1e30f;
             int best_c = 0;
@@ -7243,6 +7511,7 @@ void iq3tq_train_grid(const float * data, int64_t nrow, int64_t n_per_row,
             }
             if (assign[i] != best_c) { assign[i] = best_c; changed++; }
         }
+#endif
 
         double sum[16][IQ3TQ_N_LEVELS];
         double wcnt[16];
@@ -7634,9 +7903,7 @@ size_t quantize_iq1_bn(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
 }
 
 // Thread work structs for parallel K-means
-#ifndef _WIN32
 #include <pthread.h>
-#endif
 
 // Worker for K-means++ min_dist update (parallel over samples)
 typedef struct {
@@ -7803,24 +8070,10 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
     // Full K-means++ initialization with parallel min_dist update
     if (nthread < 1) nthread = 1;
     if (nthread > n_samples) nthread = n_samples;
-    assert(nthread >= 1);
-    const size_t nth = (size_t)(unsigned)nthread;
-    const size_t kmpp_sz = nth * sizeof(iq1bn_kmpp_work_t);
 
-#ifndef _WIN32
-    const size_t threads_sz = nth * sizeof(pthread_t);
-    pthread_t * threads = (pthread_t *)malloc(threads_sz);
-    assert(threads != NULL);
-#else
-    nthread = 1;
-    void * threads = NULL;
-    const size_t threads_sz = 0;
-#endif
-
-    iq1bn_kmpp_work_t * kmpp_workers = (iq1bn_kmpp_work_t *)malloc(kmpp_sz);
-    assert(kmpp_workers != NULL);
-    if (threads != NULL) memset(threads, 0, threads_sz);
-    memset(kmpp_workers, 0, kmpp_sz);
+    // Set up thread pool for K-means++ min_dist update
+    pthread_t * threads = (pthread_t *)calloc(nthread, sizeof(pthread_t));
+    iq1bn_kmpp_work_t * kmpp_workers = (iq1bn_kmpp_work_t *)calloc(nthread, sizeof(iq1bn_kmpp_work_t));
     for (int t = 0; t < nthread; ++t) {
         kmpp_workers[t].samples  = samples;
         kmpp_workers[t].min_dist = min_dist;
@@ -7840,18 +8093,12 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
                 kmpp_workers[t].centroid = cc;
             }
             if (nthread > 1) {
-#ifndef _WIN32
                 for (int t = 0; t < nthread; ++t) {
                     pthread_create(&threads[t], NULL, iq1bn_kmpp_worker, &kmpp_workers[t]);
                 }
                 for (int t = 0; t < nthread; ++t) {
                     pthread_join(threads[t], NULL);
                 }
-#else
-                for (int t = 0; t < nthread; ++t) {
-                    iq1bn_kmpp_worker(&kmpp_workers[t]);
-                }
-#endif
             } else {
                 iq1bn_kmpp_worker(&kmpp_workers[0]);
             }
@@ -7877,7 +8124,7 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
     // Phase 3: Full-batch K-means with SIMD and pthread parallelism
 
     // Allocate per-thread accumulators (reuse threads array from K-means++ init)
-    iq1bn_kmeans_work_t * workers = (iq1bn_kmeans_work_t *)malloc(nth * sizeof(iq1bn_kmeans_work_t));
+    iq1bn_kmeans_work_t * workers = (iq1bn_kmeans_work_t *)calloc(nthread, sizeof(iq1bn_kmeans_work_t));
     for (int t = 0; t < nthread; ++t) {
         workers[t].samples   = samples;
         workers[t].weights   = weights;
@@ -7895,7 +8142,6 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
     const int n_iters = 30;
     for (int iter = 0; iter < n_iters; ++iter) {
         // Launch threads for sample assignment
-#ifndef _WIN32
         for (int t = 0; t < nthread; ++t) {
             if (nthread > 1) {
                 pthread_create(&threads[t], NULL, iq1bn_kmeans_worker, &workers[t]);
@@ -7908,11 +8154,6 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
                 pthread_join(threads[t], NULL);
             }
         }
-#else
-        for (int t = 0; t < nthread; ++t) {
-            iq1bn_kmeans_worker(&workers[t]);
-        }
-#endif
 
         // Merge per-thread accumulators
         int changed = 0;
