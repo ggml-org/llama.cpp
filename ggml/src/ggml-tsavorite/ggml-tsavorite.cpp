@@ -457,7 +457,7 @@ static void tsi_load_all_blobs() {
 
         // ADD
         loadResult_add[i] = tsi_load_blob(
-            (int)i,
+            i,
             name_add,
             blob_prefix(
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_add/blobs/txe_add"
@@ -472,7 +472,7 @@ static void tsi_load_all_blobs() {
 
         // MULT
         loadResult_mult[i] = tsi_load_blob(
-            (int)i,
+            i,
             name_mult,
             blob_prefix(
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_mult/blobs/txe_mult"
@@ -487,7 +487,7 @@ static void tsi_load_all_blobs() {
 
         // RMS NORM
         loadResult_rms_norm[i] = tsi_load_blob(
-            (int)i,
+            i,
             name_rms,
             blob_prefix(
                 "/ggml-tsi-kernel/fpga-kernel/build-fpga/txe_rms_norm/blobs/txe_rms_norm"
@@ -541,7 +541,7 @@ static void tsi_unload_all_blobs() {
 
 static void ensure_tsi_runtime_initialized() {
     if (runtime_initialized) {
-        printf("\n tsavorite backend already initialized \n");
+        GGML_TSAVORITE_LOG_INFO("\n tsavorite backend already initialized \n");
         return;
     }
     std::string mainProfilerName = "OPU ";
