@@ -302,6 +302,14 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             return vk_device_architecture::OTHER;
         }
 
+        // Arrow Lake H (Arc 140T) misreports minSubgroupSize=8 despite being Xe2.
+        // Device-ID override to force Xe2 classification.
+        // See: https://github.com/ggml-org/llama.cpp/issues/20776
+        const uint32_t devid = props.deviceID;
+        if (devid == 0x7D51 || devid == 0x7D45) {
+            return vk_device_architecture::INTEL_XE2;
+        }
+
         vk::PhysicalDeviceProperties2 props2;
         vk::PhysicalDeviceShaderCorePropertiesAMD shader_core_props_amd;
         vk::PhysicalDeviceShaderIntegerDotProductPropertiesKHR integer_dot_props;
@@ -339,6 +347,14 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
 
         if (!subgroup_size_control) {
             return vk_device_architecture::OTHER;
+        }
+
+        // Arrow Lake H (Arc 140T) misreports minSubgroupSize=8 despite being Xe2.
+        // Device-ID override to force Xe2 classification.
+        // See: https://github.com/ggml-org/llama.cpp/issues/20776
+        const uint32_t devid = props.deviceID;
+        if (devid == 0x7D51 || devid == 0x7D45) {
+            return vk_device_architecture::INTEL_XE2;
         }
 
         vk::PhysicalDeviceProperties2 props2;
