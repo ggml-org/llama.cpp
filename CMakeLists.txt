@@ -25,6 +25,16 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 
     include(git-vars)
 
+    # Prefer the colocated build artifacts so standalone binaries do not pick up
+    # stale libllama/libggml copies from an activated environment.
+    if (NOT DEFINED CMAKE_BUILD_RPATH)
+        list(APPEND CMAKE_BUILD_RPATH "$ORIGIN")
+    endif()
+    if (NOT DEFINED CMAKE_INSTALL_RPATH)
+        set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/..")
+    endif()
+    set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+
     # configure project version
     # TODO
 else()

@@ -46,6 +46,43 @@ Notes:
 - `pp` and `tg` should be compared separately
 - if you benchmark with custom KV-cache settings, keep that separate from the base weight-format numbers
 
+## Ampere Deployment Notes
+
+Measured on a single `RTX 3090` (`sm_86`) for the live `Qwopus3.5-27B-v3-Abliterated-TQ3_4S` service with:
+
+- `--mmproj Qwopus3.5-27B-v3-Abliterated-mmproj.gguf`
+- `-ngl 99 -c 112640 -b 512`
+- live KV cache: `-ctk q8_0 -ctv q8_0`
+
+Observed on this workload:
+
+- keeping `q8_0` KV was faster than switching the live service to `tq3_0` KV
+- forcing `-fa on` did not improve this live single-GPU path
+- an aggressive rebuild (local-lib standalone binary with extra Ampere knobs) was slightly slower than the existing live binary on this exact service, so production stayed on the faster runtime command
+
+Live request timings on GPU 4 for the same request pair (`short`: 6 prompt tokens + 32 decode tokens, `long`: 2048 prompt tokens + 1 decode token):
+
+| Build / state | short prompt tok/s | short decode tok/s | long prompt tok/s |
+|---------------|-------------------:|-------------------:|------------------:|
+| existing live server (before restart) | 48.45 | 23.10 | 686.76 |
+| rebuilt local-lib preset (candidate) | 46.02 | 22.32 | 678.63 |
+| restored live runtime (warm rollback) | 50.30 | 22.80 | 680.43 |
+
+Recommended live command for this service:
+
+```bash
+./build/bin/llama-server \
+  -m /path/to/Qwopus3.5-27B-v3-Abliterated-TQ3_4S.gguf \
+  --mmproj /path/to/Qwopus3.5-27B-v3-Abliterated-mmproj.gguf \
+  -ngl 99 \
+  -c 112640 \
+  -b 512 \
+  -ctk q8_0 \
+  -ctv q8_0 \
+  --host 0.0.0.0 \
+  --port 1234
+```
+
 ## Build From Source
 
 ```bash
@@ -54,6 +91,13 @@ cd llama.cpp-tq3
 
 cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
+```
+
+For a clean standalone Ampere rebuild that prefers colocated `libllama` / `libggml` instead of environment copies:
+
+```bash
+cmake --fresh --preset x64-linux-cuda-ampere-release
+cmake --build build-x64-linux-cuda-ampere-release -j
 ```
 
 ## Download A Model
