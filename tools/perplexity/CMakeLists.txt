@@ -15,9 +15,8 @@ endif()
 # llama-perplexity executable
 
 set(TARGET llama-perplexity)
-
 add_executable(${TARGET} main.cpp)
-target_link_libraries(${TARGET} PRIVATE llama-perplexity-impl)
+target_link_libraries(${TARGET} PRIVATE llama-perplexity-impl ${CMAKE_DL_LIBS} rt)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 if(LLAMA_TOOLS_INSTALL)

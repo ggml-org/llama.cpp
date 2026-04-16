@@ -15,9 +15,8 @@ endif()
 # llama-bench executable
 
 set(TARGET llama-bench)
-
 add_executable(${TARGET} main.cpp)
-target_link_libraries(${TARGET} PRIVATE llama-bench-impl)
+target_link_libraries(${TARGET} PRIVATE llama-bench-impl ${CMAKE_DL_LIBS} rt)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 if(LLAMA_TOOLS_INSTALL)
