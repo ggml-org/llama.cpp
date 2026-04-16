@@ -132,12 +132,22 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 if (NOT ARM_MCPU_RESULT)
                     string(REGEX MATCH "-mcpu=[^ ']+" ARM_MCPU_FLAG "${ARM_MCPU}")
                     string(REGEX MATCH "-march=[^ ']+" ARM_MARCH_FLAG "${ARM_MCPU}")
-
                     # on some old GCC we need to read -march=
                     if (ARM_MARCH_FLAG AND NOT "${ARM_MARCH_FLAG}" STREQUAL "-march=native")
                         set(ARM_NATIVE_FLAG "${ARM_MARCH_FLAG}")
                     elseif(ARM_MCPU_FLAG AND NOT "${ARM_MCPU_FLAG}" STREQUAL "-mcpu=native")
                         set(ARM_NATIVE_FLAG "${ARM_MCPU_FLAG}")
+                    endif()
+
+                    if (CMAKE_C_COMPILER_ID STREQUAL "Clang" OR
+		       CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
+                        # clang shows the resolved cpu as:
+                        #  -target-cpu <name>
+                        string(REGEX MATCH "-target-cpu [^ '\"]+" ARM_TARGET_CPU_FLAG "${ARM_MCPU}")
+                        if(ARM_TARGET_CPU_FLAG)
+                            string(REGEX REPLACE ".*-target-cpu ([^ '\"]+).*" "-mcpu=\\1" ARM_MCPU_FLAG "${ARM_TARGET_CPU_FLAG}")
+                            set(ARM_NATIVE_FLAG "${ARM_MCPU_FLAG}")
+                        endif()
                     endif()
                 endif()
 
