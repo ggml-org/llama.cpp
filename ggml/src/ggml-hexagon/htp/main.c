@@ -180,7 +180,7 @@ AEEResult htp_iface_mmap(remote_handle64 handle, int fd, uint32_t size, uint32_t
 #if __HVX_ARCH__ > 73
             void *va = HAP_mmap2(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
 #else
-            if (size > 2147483648u) { // HAP_mmap has a size limit of 2GB
+            if (size > HTP_MMAP_MAX_VMEM) { // HAP_mmap has a size limit of 2GB
                 FARF(ERROR, "mmap failed : size %u exceeds 2GB limit for HAP_mmap", (uint32_t) size);
                 abort(); // can't do much else at this point
             }
@@ -563,7 +563,7 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
 #if __HVX_ARCH__ > 73
             void *va = HAP_mmap2(NULL, b->size, HAP_PROT_READ | HAP_PROT_WRITE, 0, b->fd, 0);
 #else
-            if (b->size > 2147483648u) { // HAP_mmap has a size limit of 2GB
+            if (b->size > HTP_MMAP_MAX_VMEM) { // HAP_mmap has a size limit of 2GB
                 FARF(ERROR, "mmap failed : size %u exceeds 2GB limit for HAP_mmap", (uint32_t) b->size);
                 abort(); // can't do much else at this point
             }
