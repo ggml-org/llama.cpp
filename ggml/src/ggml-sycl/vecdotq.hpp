@@ -340,11 +340,14 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
         int             u[2 * q4_0_traits::vdr_mmvq];
 
 
+        const int * v_ptr    = reinterpret_cast<const int *>(bq4_0 + sizeof(int) * iqs);
+        const int * u_ptr    = reinterpret_cast<const int *>(q8_1_quant_ptr + sizeof(int) * iqs);
+        const int * u_ptr_hi = reinterpret_cast<const int *>(q8_1_quant_ptr + sizeof(int) * (iqs + q4_0_traits::qi));
 #pragma unroll
         for (size_t i = 0; i < q4_0_traits::vdr_mmvq; ++i) {
-            v[i]         = get_int_from_uint8(bq4_0, iqs + i);
-            u[2 * i + 0] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i);
-            u[2 * i + 1] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i + q4_0_traits::qi);
+            v[i]         = v_ptr[i];
+            u[2 * i + 0] = u_ptr[i];
+            u[2 * i + 1] = u_ptr_hi[i];
         }
 
         return vec_dot_q4_0_q8_1_impl(v, u, d, *q8_1_ds);
@@ -381,10 +384,12 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0> {
         int             v[q8_0_traits::vdr_mmvq];
         int             u[q8_0_traits::vdr_mmvq];
 
+        const int * v_ptr = reinterpret_cast<const int *>(bq8_0 + sizeof(int) * iqs);
+        const int * u_ptr = reinterpret_cast<const int *>(q8_1_quant_ptr + sizeof(int) * iqs);
 #pragma unroll
         for (size_t i = 0; i < q8_0_traits::vdr_mmvq; ++i) {
-            v[i] = get_int_from_int8(bq8_0, iqs + i);
-            u[i] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i);
+            v[i] = v_ptr[i];
+            u[i] = u_ptr[i];
         }
 
         return vec_dot_q8_0_q8_1_impl(v, u, d, *q8_1_ds);
