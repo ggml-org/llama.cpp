@@ -84,18 +84,17 @@ std::string gen_tool_call_id() {
     return random_string();
 }
 
-static std::string media_marker = "";
 const char * get_media_marker() {
-    if (media_marker.empty()) {
+    // magic statics: initialized exactly once, thread-safe by C++11
+    static const std::string marker = []() {
         // allow user to pin a reproducible marker via env var (useful for tests and external pipelines)
         const char * env = getenv("LLAMA_MEDIA_MARKER");
         if (env && env[0] != '\0') {
-            media_marker = env;
-        } else {
-            media_marker = "<__media_" + random_string() + "__>";
+            return std::string(env);
         }
-    }
-    return media_marker.c_str();
+        return std::string("<__media_") + random_string() + "__>";
+    }();
+    return marker.c_str();
 }
 
 //
