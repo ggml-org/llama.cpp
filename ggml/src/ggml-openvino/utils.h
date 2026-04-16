@@ -3,12 +3,15 @@
 #include "ggml-impl.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <openvino/runtime/core.hpp>
 #include <openvino/runtime/infer_request.hpp>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 struct graph_key {
@@ -41,13 +44,13 @@ struct graph_key_hash {
 };
 
 struct decoder_runtime_ctx {
-    decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) :
-        mutex(mutex) {}
+    decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) : mutex(std::move(mutex)) {}
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
 };
 
 struct ov_runtime_context {
+    mutable std::mutex ctx_mutex;
     std::string device;
     bool stateful;
     std::unordered_map<graph_key, std::shared_ptr<decoder_runtime_ctx>, graph_key_hash> decoder_cache;
@@ -59,7 +62,7 @@ struct ov_runtime_context {
     //      Simultanous stateful inference request support to be added.
     size_t stateful_kv_size;
     std::map<std::string, std::string> kv_state_input_name_map;
-    int backend_count;
+    std::atomic<int> backend_count;
 
     ov_runtime_context() :
         device("CPU"),
@@ -68,6 +71,7 @@ struct ov_runtime_context {
         backend_count(0) {}
 
     void clear_caches() {
+        std::lock_guard<std::mutex> lock(ctx_mutex);
         decoder_cache.clear();
         infer_request_cache.clear();
         infer_request_cache_prefill.clear();
