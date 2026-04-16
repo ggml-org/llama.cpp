@@ -146,10 +146,11 @@ static int get_mmq_y_host(const int cc) {
 
 static constexpr __device__ int get_iter_k([[maybe_unused]] const ggml_type type) {
 #if defined(BLACKWELL_MMA_AVAILABLE)
+if (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4) {
     return MMQ_ITER_K_FP4;
-#else
-    return MMQ_ITER_K;
+}
 #endif // defined(BLACKWELL_MMA_AVAILABLE)
+    return MMQ_ITER_K;
 }
 
 static constexpr __device__ int get_mmq_y_device() {
