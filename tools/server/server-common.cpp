@@ -87,7 +87,13 @@ std::string gen_tool_call_id() {
 static std::string media_marker = "";
 const char * get_media_marker() {
     if (media_marker.empty()) {
-        media_marker = "<__media_" + random_string() + "__>";
+        // allow user to pin a reproducible marker via env var (useful for tests and external pipelines)
+        const char * env = getenv("LLAMA_MEDIA_MARKER");
+        if (env && env[0] != '\0') {
+            media_marker = env;
+        } else {
+            media_marker = "<__media_" + random_string() + "__>";
+        }
     }
     return media_marker.c_str();
 }

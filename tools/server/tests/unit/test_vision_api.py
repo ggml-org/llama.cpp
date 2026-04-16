@@ -1,7 +1,6 @@
 import pytest
 from utils import *
 import base64
-import re
 import requests
 
 server: ServerProcess
@@ -35,26 +34,10 @@ def get_img_url(id: str) -> str:
 JSON_MULTIMODAL_KEY = "multimodal_data"
 JSON_PROMPT_STRING_KEY = "prompt_string"
 
-# the server picks a random media marker at startup; fetch it by asking
-# /apply-template to render a message with image_url, which substitutes the
-# marker inline via oaicompat_chat_params_parse
-MEDIA_MARKER_RE = re.compile(r"<__media_[0-9A-Za-z]{32}__>")
-MEDIA_MARKER_PROBE_IMG = "data:image/png;base64,AAAA"
-
-def fetch_media_marker(server) -> str:
-    res = server.make_request("POST", "/apply-template", data={
-        "messages": [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": MEDIA_MARKER_PROBE_IMG}},
-        ]}],
-    })
-    assert res.status_code == 200
-    match = MEDIA_MARKER_RE.search(res.body["prompt"])
-    assert match is not None, f"media marker not found in rendered prompt: {res.body['prompt']!r}"
-    return match.group(0)
-
 @pytest.fixture(autouse=True)
 def create_server():
     global server
+    os.environ['LLAMA_MEDIA_MARKER'] = '<__media__>'
     server = ServerPreset.tinygemma3()
 
 def test_models_supports_multimodal_capability():
@@ -128,7 +111,6 @@ def test_vision_chat_completion(prompt, image_url, success, re_content):
 def test_vision_completion(prompt, image_data, success, re_content):
     global server
     server.start()
-    prompt = prompt.replace("<__media__>", fetch_media_marker(server))
     res = server.make_request("POST", "/completions", data={
         "temperature": 0.0,
         "top_k": 1,
@@ -160,7 +142,6 @@ def test_vision_embeddings(prompt, image_data, success):
     server.server_embeddings = True
     server.n_batch = 512
     server.start()
-    prompt = prompt.replace("<__media__>", fetch_media_marker(server))
     image_data = get_img_url(image_data)
     res = server.make_request("POST", "/embeddings", data={
         "content": [
