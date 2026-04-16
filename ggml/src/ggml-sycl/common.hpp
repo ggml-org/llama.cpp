@@ -87,8 +87,8 @@ extern int g_ggml_sycl_enable_flash_attention;
 #define __SYCL_ARCH__ DPCT_COMPATIBILITY_TEMP
 #define VER_4VEC 610 // todo for hardware optimize.
 #define VER_GEN9 700 // todo for hardware optimize.
-#define VER_GEN12 1000000 // todo for hardware optimize.
-#define VER_GEN13 (VER_GEN12 + 1030) // todo for hardware optimize.
+#define VER_GEN12 1200 // Intel discrete GPUs (DG2/Alchemist, major=12)
+#define VER_GEN13 1300 // Intel Xe2/Battlemage GPUs (major=13)
 
 #define GGML_SYCL_MAX_NODES 8192 // TODO: adapt to hardwares
 
