@@ -86,6 +86,8 @@ struct common_speculative_callback {
     virtual void delete_checkpoint() = 0;
 };
 
+typedef std::unique_ptr<common_speculative_callback> common_speculative_callback_ptr;
+
 struct common_speculative_accept_response {
     llama_tokens tokens;
     size_t       draft_size_initial;
@@ -97,11 +99,10 @@ struct common_speculative_accept_response {
 
 // speculative decoding which may use checkpoints to rewind in tokens history
 struct common_speculative_session {
-
     common_speculative_session(
-            const common_params_speculative   & params,
-                  common_speculative_callback & callback,
-                  llama_context               * ctx_tgt);
+            const common_params_speculative       & params,
+                  common_speculative_callback_ptr   callback,
+                  llama_context                   * ctx_tgt);
 
     ~common_speculative_session();
 
@@ -135,7 +136,5 @@ struct common_speculative_session {
 
     private:
         struct impl;
-        impl * p_impl;
-
+        std::unique_ptr<impl> pimpl;
 };
-

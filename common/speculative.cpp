@@ -1195,8 +1195,9 @@ common_speculative_callback::~common_speculative_callback() = default;
 // server session
 //
 struct common_speculative_session::impl {
-    common_speculative_callback & callback;
     common_params_speculative params_spec;
+
+    common_speculative_callback_ptr callback;
 
     llama_context * ctx_tgt = nullptr;
 
@@ -1215,10 +1216,10 @@ struct common_speculative_session::impl {
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
 
     impl(
-        const common_params_speculative & params,
-        common_speculative_callback     & callback,
-        llama_context                   * ctx_tgt)
-        : callback(callback), params_spec(params), ctx_tgt(ctx_tgt) {
+        const common_params_speculative       & params,
+              common_speculative_callback_ptr   callback,
+              llama_context                   * ctx_tgt)
+        : params_spec(params), callback(std::move(callback)), ctx_tgt(ctx_tgt) {
         spec = common_speculative_init(params_spec, ctx_tgt);
     }
 
@@ -1306,7 +1307,7 @@ struct common_speculative_session::impl {
         }
 
         if (do_checkpoint) {
-            const size_t n = callback.create_checkpoint(tokens.size());
+            const size_t n = callback->create_checkpoint(tokens.size());
             if (n == 0) {
                 LOG_WRN("%s: checkpoint creation failed (#tokens=%zu)\n", __func__, tokens.size());
                 leave_draft_state();
@@ -1316,11 +1317,11 @@ struct common_speculative_session::impl {
         }
 
         // add last sampled token to the batch
-        callback.batch_add_token(id_last, true);
+        callback->batch_add_token(id_last, true);
 
         // add all drafted tokens to the batch
         for (size_t i = 0; i < draft.size(); i++) {
-            callback.batch_add_token(draft[i], true);
+            callback->batch_add_token(draft[i], true);
         }
 
         return draft;
@@ -1330,7 +1331,7 @@ struct common_speculative_session::impl {
         const size_t n_draft = draft.size();
 
         // the accepted tokens from the speculation
-        auto ids = callback.sampler_sample_and_accept_n(draft);
+        auto ids = callback->sampler_sample_and_accept_n(draft);
 
         LOG_DBG("%s: n_draft=%zu, ids.size=%zu\n", __func__, n_draft, ids.size());
         if (ids.size() < n_draft + 1) {
@@ -1341,13 +1342,13 @@ struct common_speculative_session::impl {
             if (spec_has_ckpt) {
                 // we need to rollback to the state before sampling the draft tokens
                 // (restore_checkpoint shortens context and slot.prompt.tokens)
-                const size_t n = callback.restore_checkpoint();
+                const size_t n = callback->restore_checkpoint();
                 LOG_DBG("%s: partial acceptance: %zu < %zu, restored checkpoint: got %zu bytes\n",
                         __func__,
                         ids.size() - 1, n_draft, n);
 
                 // delete Checkpoint
-                callback.delete_checkpoint();
+                callback->delete_checkpoint();
                 spec_has_ckpt = false;
 
                 spec_ckpt_n_denials++;
@@ -1381,10 +1382,10 @@ struct common_speculative_session::impl {
         spec_ckpt_n_denials = 0;
         if (spec_has_ckpt) {
             // Delete Checkpoint
-            callback.delete_checkpoint();
+            callback->delete_checkpoint();
             spec_has_ckpt = false;
         } else {
-            callback.memory_seq_rm(p0, -1);
+            callback->memory_seq_rm(p0, -1);
         }
     }
 
@@ -1408,44 +1409,42 @@ struct common_speculative_session::impl {
 };
 
 common_speculative_session::common_speculative_session(
-        const common_params_speculative & params,
-        common_speculative_callback     & callback,
-        llama_context                   * ctx_tgt) : p_impl(new impl{params, callback, ctx_tgt}) {
+        const common_params_speculative       & params,
+              common_speculative_callback_ptr   callback,
+              llama_context                   * ctx_tgt) : pimpl(new impl{params, std::move(callback), ctx_tgt}) {
 }
 
 common_speculative_session::~common_speculative_session() {
-    common_speculative_free(p_impl->spec);
-    delete p_impl;
+    common_speculative_free(pimpl->spec);
 }
 
 void common_speculative_session::begin(const llama_tokens & prompt_history) {
-    p_impl->begin(prompt_history);
+    pimpl->begin(prompt_history);
 }
 
 bool common_speculative_session::has_batch_dft() {
-    return !p_impl->has_batch_dft();
+    return !pimpl->has_batch_dft();
 }
 
 llama_tokens common_speculative_session::compute_draft(
        const llama_tokens & prompt,
              llama_token    id_last,
              int            n_draft_max_slot) {
-    return p_impl->compute_draft(prompt, id_last, n_draft_max_slot);
+    return pimpl->compute_draft(prompt, id_last, n_draft_max_slot);
 }
 
 common_speculative_accept_response common_speculative_session::sample_and_accept() {
-    return p_impl->sample_and_accept();
+    return pimpl->sample_and_accept();
 }
 
 void common_speculative_session::rewind(const llama_pos p0) {
-    p_impl->rewind(p0);
+    pimpl->rewind(p0);
 }
 
 void common_speculative_session::print_stats() const {
-    p_impl->print_stats();
+    pimpl->print_stats();
 }
 
 void common_speculative_session::reset() {
-    p_impl->reset();
+    pimpl->reset();
 }
-

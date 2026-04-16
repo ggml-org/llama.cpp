@@ -83,8 +83,7 @@ struct server_slot {
     // multimodal
     mtmd_context * mctx = nullptr;
 
-    std::unique_ptr<common_speculative_callback> spec_callback;
-    std::unique_ptr<common_speculative_session>  spec_session = nullptr;
+    std::unique_ptr<common_speculative_session> spec = nullptr;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -204,8 +203,8 @@ struct server_slot {
         stopping_word  = "";
         n_sent_text    = 0;
 
-        if (spec_session != nullptr) {
-            spec_session->reset();
+        if (spec != nullptr) {
+            spec->reset();
         }
         i_batch_dft.clear();
         generated_tokens.clear();
@@ -288,7 +287,7 @@ struct server_slot {
     }
 
     bool can_speculate() const {
-        return !!spec_session;
+        return !!spec;
     }
 
     void add_token(const completion_token_output & token) {
@@ -428,8 +427,8 @@ struct server_slot {
             );
         }
 
-        if (spec_session) {
-            spec_session->print_stats();
+        if (spec) {
+            spec->print_stats();
         }
     }
 
@@ -629,9 +628,9 @@ private:
 
         // Clear any sampling context
         for (server_slot & slot : slots) {
-            if (slot.spec_session != nullptr) {
-                slot.spec_session->reset();
-                slot.spec_session = nullptr;
+            if (slot.spec != nullptr) {
+                slot.spec->reset();
+                slot.spec = nullptr;
             }
         }
 
@@ -914,9 +913,11 @@ private:
                     SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
                     return false;
                 }
-                slot.spec_callback = std::make_unique<server_speculative_callback>(slot.id, *this);
-                slot.spec_session = std::make_unique<common_speculative_session>(
-                    params_base.speculative, *slot.spec_callback, slot.ctx);
+
+                auto spec_callback = std::make_unique<server_speculative_callback>(slot.id, *this);
+                slot.spec = std::make_unique<common_speculative_session>(
+                    params_base.speculative, std::move(spec_callback), slot.ctx);
+
                 SLT_INF(slot, "%s", "speculative decoding context initialized\n");
             }
 
@@ -1316,7 +1317,7 @@ private:
             backend_sampling &= task.params.sampling.backend_sampling;
 
             // TODO: speculative decoding requires multiple samples per batch - not supported yet
-            backend_sampling &= !(slot.spec_session && task.params.speculative.n_max > 0);
+            backend_sampling &= !(slot.spec && task.params.speculative.n_max > 0);
 
             // TODO: getting post/pre sampling logits is not yet supported with backend sampling
             backend_sampling &= !need_logits;
@@ -2250,7 +2251,7 @@ private:
                 const llama_tokens & tokens = slot.prompt.tokens.get_tokens();
 
                 // compute draft and add draft to internal batch
-                draft = slot.spec_session->compute_draft(tokens, slot.sampled, n_draft_max_slot);
+                draft = slot.spec->compute_draft(tokens, slot.sampled, n_draft_max_slot);
                 if (draft.size() > 0) {
                     SLT_DBG(slot, "compute_draft: id=%d, #tokens=%zu, #draft=%zu, #i_batch_dft=%zu\n",
                             slot.sampled, tokens.size(), draft.size(), slot.i_batch_dft.size());
@@ -2943,7 +2944,7 @@ private:
                     slot.state = SLOT_STATE_GENERATING;
 
                     if (slot.can_speculate()) {
-                        slot.spec_session->begin(slot.prompt.tokens.get_text_tokens());
+                        slot.spec->begin(slot.prompt.tokens.get_text_tokens());
                     }
                 } else if (slot.state != SLOT_STATE_GENERATING) {
                     continue; // continue loop of slots
@@ -3000,7 +3001,7 @@ private:
                     continue;
                 }
 
-                auto accept_response = slot.spec_session->sample_and_accept();
+                auto accept_response = slot.spec->sample_and_accept();
                 slot.i_batch_dft.clear();
                 const size_t n_draft = accept_response.draft_size_initial;
                 if (accept_response.skip_acceptance) {
@@ -3027,7 +3028,7 @@ private:
                 slot.sampled = ids.back(); // last accepted token
                 SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);
 
-                slot.spec_session->rewind(slot.prompt.n_tokens());
+                slot.spec->rewind(slot.prompt.n_tokens());
 
                 for (size_t i = 0; i < ids.size(); ++i) {
                     completion_token_output result;
