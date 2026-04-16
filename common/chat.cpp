@@ -2041,121 +2041,6 @@ static void func_args_not_string(json & messages) {
 
 }
 
-static void reka_foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
-    for (const auto & tool : tools) {
-        if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) {
-            continue;
-        }
-        fn(tool);
-    }
-}
-
-static json reka_sort_tools_for_parsing(const json & tools) {
-    if (!tools.is_array()) {
-        return tools;
-    }
-
-    json sorted = tools;
-    std::stable_sort(sorted.begin(), sorted.end(), [](const json & a, const json & b) {
-        const std::string a_name = a.contains("function") ? a.at("function").value("name", "") : "";
-        const std::string b_name = b.contains("function") ? b.at("function").value("name", "") : "";
-        return a_name.size() > b_name.size();
-    });
-    return sorted;
-}
-
-static common_chat_params common_chat_params_init_reka_edge(const common_chat_template &        tmpl,
-                                                            const autoparser::generation_params & inputs) {
-    common_chat_params data;
-
-    data.prompt            = common_chat_template_direct_apply(tmpl, inputs);
-    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
-    data.supports_thinking = true;
-    data.preserved_tokens  = {
-        "<think>",
-        "</think>",
-        "<tool_call>",
-        "</tool_call>",
-        "<tool_response>",
-        "</tool_response>",
-        "<sep>",
-        "<image>",
-        "</image>",
-        "<video>",
-        "</video>",
-        "<REKA_IMG_TOKEN>",
-    };
-
-    const bool has_tools = inputs.tools.is_array() && !inputs.tools.empty();
-    const bool extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    const bool include_grammar = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
-    const json parser_tools = has_tools ? reka_sort_tools_for_parsing(inputs.tools) : inputs.tools;
-
-    if (extract_reasoning) {
-        data.thinking_start_tag = "<think>";
-        data.thinking_end_tag   = "</think>";
-    }
-
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        const std::string THINK_START = "<think>";
-        const std::string THINK_END   = "</think>";
-        const std::string TOOL_CALL   = "<tool_call>";
-
-        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
-        auto end = p.end();
-        auto reasoning = p.eps();
-
-        if (extract_reasoning && inputs.enable_thinking) {
-            reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
-        }
-
-        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
-            return generation_prompt + reasoning + p.content(p.rest()) + end;
-        }
-
-        auto single_tool = p.standard_json_tools(
-            "<tool_call>",
-            "</tool_call>",
-            parser_tools,
-            /* parallel_tool_calls = */ false,
-            /* force_tool_calls    = */ true);
-
-        auto min_calls  = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
-        auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
-        auto tool_calls = p.rule("tool-calls", p.repeat(single_tool + p.space(), min_calls, max_calls));
-        auto content    = p.content(p.until(TOOL_CALL));
-
-        return generation_prompt + reasoning + content + tool_calls + end;
-    });
-
-    data.additional_stops = { "<sep>" };
-    data.parser = parser.save();
-
-    if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
-        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            reka_foreach_function(parser_tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto         schema   = function.at("parameters");
-                builder.resolve_refs(schema);
-            });
-            parser.build_grammar(builder, data.grammar_lazy);
-        });
-        if (inputs.parallel_tool_calls) {
-            string_replace_all(
-                data.grammar,
-                "root ::= tool-call\n",
-                "root ::= tool-call (space tool-call)*\n");
-        }
-
-        data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>" }
-        };
-    }
-
-    return data;
-}
-
 static json common_chat_extra_context() {
     json ctx = json::object();
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
@@ -2240,15 +2125,6 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
             workaround::convert_tool_responses_gemma4(params.messages);
         }
         return common_chat_params_init_gemma4(tmpl, params);
-    }
-
-    // Reka Edge - uses <tool_call>/<tool_response> with <sep> delimiters and vision tokens
-    if (src.find("<REKA_IMG_TOKEN>") != std::string::npos &&
-        src.find("continue_final_message") != std::string::npos &&
-        src.find("<tool_response>") != std::string::npos &&
-        src.find("num_video_frames") != std::string::npos) {
-        LOG_DBG("Using specialized template: Reka Edge\n");
-        return common_chat_params_init_reka_edge(tmpl, params);
     }
 
     return std::nullopt;
@@ -2520,4 +2396,3 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     GGML_ASSERT(chat_templates->template_default != nullptr);
     return chat_templates->template_default->caps.to_map();
 }
-
