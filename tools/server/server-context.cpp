@@ -19,6 +19,7 @@
 #include <exception>
 #include <memory>
 #include <filesystem>
+#include <utility>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -32,6 +33,31 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+static server_prompt_checkpoint server_get_checkpoint(llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min = -1, llama_pos pos_max = -1) {
+    if (pos_min == -1) {
+        pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), id);
+    }
+    if (pos_max == -1) {
+        pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx), id);
+    }
+
+    const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+    auto cur = server_prompt_checkpoint {
+        /*.pos_min  = */ pos_min,
+        /*.pos_max  = */ pos_max,
+        /*.n_tokens = */ n_tokens,
+        /*.data     = */ std::vector<uint8_t>(checkpoint_size),
+    };
+
+    const size_t n = llama_state_seq_get_data_ext(ctx, cur.data.data(), checkpoint_size, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    if (n != checkpoint_size) {
+        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
+    }
+
+    return cur;
+}
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
@@ -59,7 +85,6 @@ struct server_slot {
 
     std::unique_ptr<common_speculative_callback> spec_callback;
     std::unique_ptr<common_speculative_session>  spec_session = nullptr;
-    struct common_sampler *                      spec_saved_sampler = nullptr;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -608,10 +633,6 @@ private:
                 slot.spec_session->reset();
                 slot.spec_session = nullptr;
             }
-            if (slot.spec_saved_sampler != nullptr) {
-                common_sampler_free(slot.spec_saved_sampler);
-                slot.spec_saved_sampler = nullptr;
-            }
         }
 
         llama_batch_free(batch);
@@ -649,6 +670,9 @@ private:
         int slot_id; // store slot.id instead of server_slot & slot
         server_context_impl & ctx_impl;
 
+        common_sampler_ptr smpl;
+        server_prompt_checkpoint ckpt;
+
         server_speculative_callback(int slot_id, server_context_impl & ctx_impl)
             : slot_id(slot_id), ctx_impl(ctx_impl) {}
 
@@ -682,54 +706,41 @@ private:
             return llama_memory_seq_rm(llama_get_memory(ctx_impl.ctx), slot_id, p0, p1);
         }
 
-        size_t create_checkpoint() override {
+        size_t create_checkpoint(int64_t n_tokens) override {
+            ckpt = server_get_checkpoint(ctx_impl.ctx, slot_id, n_tokens);
+
             server_slot * slot = get_slot();
-            const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_impl.ctx), slot_id);
-            const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_impl.ctx), slot_id);
-            const auto n_tokens_cur = 0; // TODO was ctx_impl.batch.n_tokens; The draft model doesn't change the prompt?
-            const auto cur = ctx_impl.get_checkpoint(*slot, n_tokens_cur, pos_min, pos_max);
 
-            SLT_DBG(*slot, "created context checkpoint %zu of %d (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
-                    slot->prompt.checkpoints.size(), ctx_impl.params_base.n_ctx_checkpoints,
-                    cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
+            SLT_DBG(*slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n",
+                    ckpt.pos_min, ckpt.pos_max, (float) ckpt.data.size() / 1024 / 1024);
 
-            if (slot->spec_saved_sampler != nullptr) {
-                common_sampler_free(slot->spec_saved_sampler);
-            }
             // save sampler (we may want to restore the RNG in the sampler after refusal of a draft)
-            slot->spec_saved_sampler = common_sampler_clone(slot->smpl.get());
+            smpl.reset(common_sampler_clone(slot->smpl.get()));
 
-            return cur.size();
+            return ckpt.size();
         }
 
-        size_t restore_checkpoint(size_t ckpt_size_part_expected) override {
+        size_t restore_checkpoint() override {
             server_slot * slot = get_slot();
-            auto & ckpt = slot->prompt.checkpoints.back();
 
-            SLT_DBG(*slot, "restoring checkpoint (pos_min = %d, pos_max = %d)\n", ckpt.pos_min, ckpt.pos_max);
-            const size_t n = llama_state_seq_set_data_ext(ctx_impl.ctx,
-                    ckpt.data.data(), ckpt.size(), slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-            if (n != ckpt_size_part_expected) {
+            SLT_DBG(*slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d)\n", ckpt.pos_min, ckpt.pos_max);
+            const size_t n = llama_state_seq_set_data_ext(ctx_impl.ctx, ckpt.data.data(), ckpt.size(), slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+            if (n != ckpt.size()) {
                 GGML_ABORT("%s: failed to restore context checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
-                            __func__, ckpt.pos_min, ckpt.pos_max, ckpt.size(), ckpt_size_part_expected, n);
+                            __func__, ckpt.pos_min, ckpt.pos_max, ckpt.size(), ckpt.size(), n);
             }
             // remove entries after ckpt.pos_max
             llama_memory_seq_rm(llama_get_memory(ctx_impl.ctx), slot->id, ckpt.pos_max + 1, -1);
 
-            slot->prompt.tokens.keep_first(ckpt.pos_max + 1);
-
-            if (slot->spec_saved_sampler != nullptr) {
-                slot->smpl.reset(slot->spec_saved_sampler);
-
-                slot->spec_saved_sampler = nullptr;
-            }
+            slot->prompt.tokens.keep_first(ckpt.n_tokens);
+            slot->smpl = std::move(smpl);
 
             return n;
         }
 
         void delete_checkpoint() override {
-            server_slot * slot = get_slot();
-            slot->prompt.checkpoints.pop_back();
+            ckpt = {};
+            smpl.reset();
         }
     };
 
@@ -904,8 +915,8 @@ private:
                     return false;
                 }
                 slot.spec_callback = std::make_unique<server_speculative_callback>(slot.id, *this);
-                slot.spec_session = std::make_unique<common_speculative_session>(*slot.spec_callback,
-                    params_base.speculative, slot.ctx);
+                slot.spec_session = std::make_unique<common_speculative_session>(
+                    params_base.speculative, *slot.spec_callback, slot.ctx);
                 SLT_INF(slot, "%s", "speculative decoding context initialized\n");
             }
 
@@ -1814,8 +1825,7 @@ private:
     // Creates a checkpoint.
     //
     // n_tokens_cur: the number of tokens added to the batch for the current slot
-    server_prompt_checkpoint get_checkpoint(server_slot & slot, const int64_t n_tokens_cur,
-            llama_pos pos_min, llama_pos pos_max) {
+    void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
             // make room for the new checkpoint, if needed
             const auto & cur = slot.prompt.checkpoints.front();
@@ -1826,21 +1836,12 @@ private:
             slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
         }
 
-        const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        const auto & cur = slot.prompt.checkpoints.emplace_back(server_get_checkpoint(ctx, slot.id, slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max));
 
-        auto & cur = slot.prompt.checkpoints.emplace_back(server_prompt_checkpoint{
-            /*.pos_min  = */ pos_min,
-            /*.pos_max  = */ pos_max,
-            /*.n_tokens = */ slot.prompt.n_tokens() - n_tokens_cur,
-            /*.data     = */ std::vector<uint8_t>(checkpoint_size),
-        });
-
-        const size_t n = llama_state_seq_get_data_ext(ctx, cur.data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-        if (n != checkpoint_size) {
-            GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
-        }
-
-        return cur;
+        SLT_WRN(slot,
+                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
+                cur.pos_max, cur.n_tokens, (float) cur.data.size() / 1024 / 1024);
     }
 
     void process_single_task(server_task && task) {
@@ -2246,13 +2247,13 @@ private:
             llama_tokens draft;
             const int n_draft_max_slot = slot.get_n_draft_max();
             if (n_draft_max_slot > 0) {
-                const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
+                const llama_tokens & tokens = slot.prompt.tokens.get_tokens();
+
                 // compute draft and add draft to internal batch
-                draft = slot.spec_session->compute_draft(cached_text_tokens, slot.sampled, n_draft_max_slot);
+                draft = slot.spec_session->compute_draft(tokens, slot.sampled, n_draft_max_slot);
                 if (draft.size() > 0) {
-                    SLT_DBG(slot, "compute_draft: id=%d, #cached_text_tokens=%zu, #tokens=%zu, #i_batch_dft=%zu\n",
-                            slot.sampled,
-                            cached_text_tokens.size(), draft.size(), slot.i_batch_dft.size());
+                    SLT_DBG(slot, "compute_draft: id=%d, #tokens=%zu, #draft=%zu, #i_batch_dft=%zu\n",
+                            slot.sampled, tokens.size(), draft.size(), slot.i_batch_dft.size());
                 }
             }
 
@@ -2770,12 +2771,7 @@ private:
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
                     //       yet processed and therefore it is not part of the checkpoint.
                     if (do_checkpoint) {
-                        const auto cur = get_checkpoint(slot, n_tokens_cur, pos_min, pos_max);
-                        SLT_WRN(slot,
-                                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64
-                                ", size = %.3f MiB)\n",
-                                (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
-                                cur.pos_max, cur.n_tokens, (float) cur.data.size() / 1024 / 1024);
+                        create_checkpoint(slot, n_tokens_cur, pos_min, pos_max);
                     }
                 }
 
@@ -3011,8 +3007,8 @@ private:
                     SLT_DBG(slot, "partial acceptance: n_tokens=%zu, n_draft=%zu\n", accept_response.tokens.size(), n_draft);
                     continue;
                 }
-                const auto ids = accept_response.tokens;
 
+                const auto ids = accept_response.tokens;
 
                 const int64_t t_current = ggml_time_us();
 

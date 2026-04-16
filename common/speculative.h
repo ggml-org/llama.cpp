@@ -76,11 +76,11 @@ struct common_speculative_callback {
 
     // Creates a checkpoint of the current state of the context.
     // Returns the size of the checkpoint in bytes.
-    virtual size_t create_checkpoint() = 0;
+    virtual size_t create_checkpoint(int64_t n_tokens) = 0;
 
     // Restore a checkpoint previously created by create_checkpoint().
     // Returns the size of the restored checkpoint in bytes.
-    virtual size_t restore_checkpoint(size_t ckpt_size_part_expected) = 0;
+    virtual size_t restore_checkpoint() = 0;
 
     // Delete a checkpoint previously created by create_checkpoint().
     virtual void delete_checkpoint() = 0;
@@ -99,8 +99,8 @@ struct common_speculative_accept_response {
 struct common_speculative_session {
 
     common_speculative_session(
-                  common_speculative_callback & callback,
             const common_params_speculative   & params,
+                  common_speculative_callback & callback,
                   llama_context               * ctx_tgt);
 
     ~common_speculative_session();

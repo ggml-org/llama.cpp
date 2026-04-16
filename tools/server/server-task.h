@@ -576,6 +576,10 @@ struct server_prompt_checkpoint {
     size_t size() const {
         return data.size();
     }
+
+    bool empty() const {
+        return data.empty();
+    }
 };
 
 struct server_prompt {
