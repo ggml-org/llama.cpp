@@ -23,6 +23,7 @@
 #include <memory>
 #include <filesystem>
 #include <utility>
+#include <fstream>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -3704,6 +3705,16 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         const auto & prompt = data.at("prompt");
         // TODO: this log can become very long, put it behind a flag or think about a more compact format
         //SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
+
+        if (!params.path_prompts_log_dir.empty()) {
+            const auto file_path = std::filesystem::path(params.path_prompts_log_dir) / string_format("%012" PRId64 ".txt", ggml_time_ms());
+            std::ofstream f(file_path);
+            if (f) {
+                f << (prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
+            } else {
+                SRV_ERR("failed to create %s\n", file_path.string().c_str());
+            }
+        }
 
         // process prompt
         std::vector<server_tokens> inputs;

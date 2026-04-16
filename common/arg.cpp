@@ -3334,6 +3334,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_LOG_FILE"));
     add_opt(common_arg(
+        {"--log-prompts-dir"}, "PATH",
+        "Log prompts to directory (only used for debugging, default: disabled)",
+        [](common_params &params, const std::string & value) {
+            params.path_prompts_log_dir = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"--log-colors"}, "[on|off|auto]",
         "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
         "'auto' enables colors when output is to a terminal",
