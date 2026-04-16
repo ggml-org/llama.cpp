@@ -103,10 +103,10 @@ extern int g_ggml_sycl_enable_flash_attention;
 
 // dmmv = dequantize_mul_mat_vec
 #ifndef GGML_SYCL_DMMV_X
-#define GGML_SYCL_DMMV_X 32
+#define GGML_SYCL_DMMV_X 64
 #endif
 #ifndef GGML_SYCL_MMV_Y
-#define GGML_SYCL_MMV_Y 1
+#define GGML_SYCL_MMV_Y 2
 #endif
 
 typedef sycl::queue *queue_ptr;

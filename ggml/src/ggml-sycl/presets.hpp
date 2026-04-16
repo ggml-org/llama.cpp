@@ -54,10 +54,10 @@
 
 // dmmv = dequantize_mul_mat_vec
 #ifndef GGML_SYCL_DMMV_X
-#define GGML_SYCL_DMMV_X 32
+#define GGML_SYCL_DMMV_X 64
 #endif
 #ifndef GGML_SYCL_MMV_Y
-#define GGML_SYCL_MMV_Y 1
+#define GGML_SYCL_MMV_Y 2
 #endif
 
 #ifndef K_QUANTS_PER_ITERATION
