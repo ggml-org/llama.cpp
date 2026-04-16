@@ -55,11 +55,6 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
 
-
-
-// Interactions with server
-//
-
 // callback implemented by the server
 struct common_speculative_callback {
     virtual ~common_speculative_callback();
@@ -119,8 +114,8 @@ struct common_speculative_session {
 
     // do speculative decoding to compute a draft of tokens
     llama_tokens compute_draft(const llama_tokens & prompt,
-                                      llama_token   id_last,
-                                      int           n_draft_max_slot);
+                                     llama_token    id_last,
+                                     int            n_draft_max);
 
     // check if and how far the current draft is accepted
     common_speculative_accept_response sample_and_accept();

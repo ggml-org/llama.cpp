@@ -203,7 +203,7 @@ struct server_slot {
         stopping_word  = "";
         n_sent_text    = 0;
 
-        if (spec != nullptr) {
+        if (spec) {
             spec->reset();
         }
         i_batch_dft.clear();
@@ -620,17 +620,16 @@ private:
 
     void destroy() {
         llama_init.reset();
+
         ctx = nullptr;
         model = nullptr;
 
         mtmd_free(mctx);
         mctx = nullptr;
 
-        // Clear any sampling context
         for (server_slot & slot : slots) {
-            if (slot.spec != nullptr) {
-                slot.spec->reset();
-                slot.spec = nullptr;
+            if (slot.spec) {
+                slot.spec.reset();
             }
         }
 
@@ -894,10 +893,8 @@ private:
 
         // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
-            // Create a new slot in the vector.
             slots.emplace_back();
 
-            // Get a reference of the new slot.
             server_slot & slot = slots.back();
 
             slot.id    = i;
@@ -1823,8 +1820,6 @@ private:
         return true;
     }
 
-    // Creates a checkpoint.
-    //
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
@@ -2246,12 +2241,12 @@ private:
             // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
             //       perform the speculative drafting for all sequences at the same time in a single batch
             llama_tokens draft;
-            const int n_draft_max_slot = slot.get_n_draft_max();
-            if (n_draft_max_slot > 0) {
+            const int n_draft_max = slot.get_n_draft_max();
+            if (n_draft_max > 0) {
                 const llama_tokens & tokens = slot.prompt.tokens.get_tokens();
 
                 // compute draft and add draft to internal batch
-                draft = slot.spec->compute_draft(tokens, slot.sampled, n_draft_max_slot);
+                draft = slot.spec->compute_draft(tokens, slot.sampled, n_draft_max);
                 if (draft.size() > 0) {
                     SLT_DBG(slot, "compute_draft: id=%d, #tokens=%zu, #draft=%zu, #i_batch_dft=%zu\n",
                             slot.sampled, tokens.size(), draft.size(), slot.i_batch_dft.size());
