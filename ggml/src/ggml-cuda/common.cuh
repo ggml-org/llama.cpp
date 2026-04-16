@@ -1374,20 +1374,21 @@ struct ggml_backend_cuda_context {
         std::pair<int64_t, const void *>,
         std::vector<std::pair<int64_t, const void *>>,
         std::greater<>
-    > graph_roots;
+    > graph_lru_cache;
 
     std::unordered_map<const void *, int64_t> graph_last_used_time;
 
     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
         int64_t time_now = ggml_time_us();
 
-        // delete all graph elements older than 10 seconds
-        while (!graph_roots.empty() && time_now - graph_roots.top().first >= 10'000'000) {
-            const auto & [ts, node_ptr] = graph_roots.top();
-            graph_roots.pop();
+        // delete all cuda graphs older than 10 seconds
+        while (!graph_lru_cache.empty() && time_now - graph_lru_cache.top().first >= 10'000'000) {
+            const auto & [ts, node_ptr] = graph_lru_cache.top();
+            graph_lru_cache.pop();
 
             // lazy delete
-            if (ts == graph_last_used_time.at(node_ptr)) {
+            auto it = graph_last_used_time.find(node_ptr);
+            if (it != graph_last_used_time.end() && ts == it->second) {
                 cuda_graphs.erase(node_ptr);
                 graph_last_used_time.erase(node_ptr);
             }
@@ -1402,7 +1403,7 @@ struct ggml_backend_cuda_context {
         auto last_it = graph_last_used_time.find(first_node_ptr);
         if (last_it == graph_last_used_time.end() || time_now - last_it->second >= 1'000'000) {
             graph_last_used_time[first_node_ptr] = time_now;
-            graph_roots.emplace(time_now, first_node_ptr);
+            graph_lru_cache.emplace(time_now, first_node_ptr);
         }
         return it->second.get();
     }
