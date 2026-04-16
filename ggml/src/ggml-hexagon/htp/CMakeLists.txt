@@ -47,6 +47,7 @@ list(FIND HTP_HMX_VERSIONS ${DSP_VERSION} _hmx_idx)
 
 if (_hmx_idx GREATER_EQUAL 0)
     target_sources(${HTP_LIB} PRIVATE
+        hmx-queue.c
         hmx-matmul-ops.c
     )
 

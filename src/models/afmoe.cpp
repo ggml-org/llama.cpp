@@ -80,7 +80,7 @@ llm_build_afmoe::llm_build_afmoe(const llama_model & model, const llm_graph_para
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
             cur = build_attn(inp_attn,
-                    NULL, NULL,  // wo will be applied after gating
+                    NULL, NULL, NULL,  // wo will be applied after gating
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
@@ -91,7 +91,7 @@ llm_build_afmoe::llm_build_afmoe(const llama_model & model, const llm_graph_para
             cb(cur, "attn_gated", il);
 
             // now apply output projection
-            cur = build_lora_mm(model.layers[il].wo, cur);
+            cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
             cb(cur, "attn_o_proj", il);
         }
 

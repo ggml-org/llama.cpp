@@ -1,6 +1,5 @@
 #include "models.h"
 
-
 llm_build_gemma::llm_build_gemma(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -60,7 +59,7 @@ llm_build_gemma::llm_build_gemma(const llama_model & model, const llm_graph_para
             cb(Qcur, "Qcur_scaled", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL,
+                    model.layers[il].wo, NULL, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
         }
         if (il == n_layer - 1 && inp_out_ids) {

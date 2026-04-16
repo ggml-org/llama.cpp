@@ -106,6 +106,9 @@ class common_peg_ast_arena {
 
     const common_peg_ast_node & get(common_peg_ast_id id) const { return nodes_.at(id); }
 
+    common_peg_ast_id find_by_tag(const common_peg_ast_node & parent, const std::string & tag, int max_depth = 3) const;
+    common_peg_ast_id find_by_rule(const common_peg_ast_node & parent, const std::string & tag, int max_depth = 3) const;
+
     size_t size() const { return nodes_.size(); }
 
     void clear() { nodes_.clear(); }
@@ -267,6 +270,11 @@ struct common_peg_tag_parser {
     std::string tag;
 };
 
+struct common_peg_gbnf_parser {
+    common_peg_parser_id child;
+    std::string grammar;
+};
+
 // Variant holding all parser types
 using common_peg_parser_variant = std::variant<
     common_peg_epsilon_parser,
@@ -287,7 +295,8 @@ using common_peg_parser_variant = std::variant<
     common_peg_rule_parser,
     common_peg_ref_parser,
     common_peg_atomic_parser,
-    common_peg_tag_parser
+    common_peg_tag_parser,
+    common_peg_gbnf_parser
 >;
 
 class common_peg_arena {
@@ -500,6 +509,10 @@ class common_peg_parser_builder {
     // Tags create nodes in the generated AST for semantic purposes.
     // Unlike rules, you can tag multiple nodes with the same tag.
     common_peg_parser tag(const std::string & tag, const common_peg_parser & p) { return add(common_peg_tag_parser{p.id(), tag}); }
+
+    // Wraps a child parser but emits a custom GBNF grammar string instead of
+    // the child's grammar. Parsing delegates entirely to the child.
+    common_peg_parser gbnf(const common_peg_parser & p, const std::string & grammar) { return add(common_peg_gbnf_parser{p, grammar}); }
 
     void set_root(const common_peg_parser & p);
 

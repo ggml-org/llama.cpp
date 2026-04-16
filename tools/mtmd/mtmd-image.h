@@ -144,6 +144,35 @@ struct mtmd_image_preprocessor_deepseekocr : mtmd_image_preprocessor {
     bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
 };
 
+// custom image preprocessing for Step3VL
+// ref: https://huggingface.co/stepfun-ai/Step3-VL-10B/blob/main/processing_step3.py
+struct mtmd_image_preprocessor_step3vl : mtmd_image_preprocessor_llava_uhd {
+    mtmd_image_preprocessor_step3vl(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
+    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    static slice_instructions build_slice_instructions(const clip_hparams & params, const clip_image_size & prepared_size);
+
+private:
+    static constexpr int   default_image_longest_edge = 3024;
+    static constexpr int   default_image_crop_size    = 504;
+    static constexpr float small_aspect_ratio_limit   = 1.5f;
+    static constexpr float wide_aspect_ratio_limit    = 4.0f;
+    static constexpr float crop_rounding_threshold    = 0.2f;
+
+    void img_u8_resize_bilinear_to_f32(
+            const clip_image_u8 & src,
+            clip_image_f32 & dst,
+            int target_width,
+            int target_height,
+            const float mean[3],
+            const float std[3]);
+    static int get_image_longest_edge(const clip_hparams & params);
+    static int determine_window_size(const clip_hparams & params, int longer, int shorter);
+    static int calc_crop_extent(int length, int window_size);
+    static std::vector<int> calc_grid(int length, int window_size);
+    static clip_image_u8 prepare_image(const clip_image_u8 & img, const clip_hparams & params);
+    static clip_image_u8 crop_with_black_padding(const clip_image_u8 & image, int x, int y, int w, int h);
+};
+
 struct mtmd_image_preprocessor_youtuvl : mtmd_image_preprocessor {
     mtmd_image_preprocessor_youtuvl(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
     bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
