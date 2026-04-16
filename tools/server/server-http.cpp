@@ -115,7 +115,16 @@ bool server_http_context::init(const common_params & params) {
     srv->set_read_timeout (params.timeout_read);
     srv->set_write_timeout(params.timeout_write);
     srv->set_socket_options([reuse_port = params.reuse_port](socket_t sock) {
+        // Set linger to 0 to avoid TIME_WAIT state after server exits
+        linger sl{};
+        sl.l_onoff  = 1;
+        sl.l_linger = 0;
+        setsockopt(sock, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char *>(&sl), sizeof(sl));
+
+        // Allow binding to port during TIME_WAIT state after server exited
         httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEADDR, 1);
+
+        // If flag is set, allow multiple processes to bind to the same port for load balancing
         if (reuse_port) {
 #ifdef SO_REUSEPORT
             httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEPORT, 1);
@@ -314,14 +323,6 @@ bool server_http_context::start() {
         was_bound = srv->bind_to_port(hostname, 8080);
     } else {
         LOG_INF("%s: binding port with default address family\n", __func__);
-
-        // Set linger time to 0 to force close the socket immediately when the server stops
-        srv->set_socket_options([](socket_t sock) {
-            linger sl{};
-            sl.l_onoff  = 1;
-            sl.l_linger = 0;
-            setsockopt(sock, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char *>(&sl), sizeof(sl));
-        });
 
         // bind HTTP listen port
         if (port == 0) {
