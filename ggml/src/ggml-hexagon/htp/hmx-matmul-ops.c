@@ -1201,7 +1201,12 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     // --- Dynamic VTCM layout ---
     const size_t vtcm_budget   = ctx->vtcm_size;
     const size_t vec_dot_size  = k * sizeof(__fp16);
-    const bool   use_pipeline  = (m >= 128) && (k <= n);
+    // Pipeline = 4-stage DMA→dequant→HMX→store with HMX worker overlap.
+    // Previously gated on `k <= n`, which left FFN_down-like shapes (e.g. 512×2560×1024)
+    // stuck on the non-pipeline STANDARD path even though they have enough M and N
+    // chunks to benefit from HVX/HMX overlap.  Relax to `n >= 256` (2× HMX tile width,
+    // enough for >=2 N chunks), and keep the m >= 128 minimum for HMX efficiency.
+    const bool   use_pipeline  = (m >= 128) && (n >= 256);
 
     // Select cost parameters based on execution path
     size_t per_n_cost, per_mn_cost;
