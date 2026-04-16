@@ -56,14 +56,11 @@
 uint64_t ggml_graph_next_uid(void) {
 #ifdef _MSC_VER
     static volatile long long counter = 1;
-    long long ret = (uint64_t) _InterlockedIncrement64(&counter) - 1;
-    GGML_ASSERT(ret < (1ULL << (64 - GGML_SCHED_MAX_SPLIT_BITS)));
+    return (uint64_t) _InterlockedIncrement64(&counter) - 1;
 #else
     static uint64_t counter = 1;
-    uint64_t ret = __atomic_fetch_add(&counter, 1, __ATOMIC_RELAXED);
-    GGML_ASSERT(ret < (1ULL << (64 - GGML_SCHED_MAX_SPLIT_BITS)));
+    return __atomic_fetch_add(&counter, 1, __ATOMIC_RELAXED);
 #endif
-    return ret;
 }
 
 // Needed for ggml_fp32_to_bf16_row()

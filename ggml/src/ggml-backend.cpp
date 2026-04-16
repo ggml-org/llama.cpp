@@ -1481,9 +1481,8 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     }
 
     // set ids for all splits
-    GGML_ASSERT(sched->n_splits < (1 << GGML_SCHED_MAX_SPLIT_BITS));
     for (int i = 0; i < sched->n_splits; ++i) {
-        sched->splits[i].graph.uid = graph->uid | ((uint64_t)(i + 1) << (64 - GGML_SCHED_MAX_SPLIT_BITS));
+        sched->splits[i].graph.uid = ggml_graph_next_uid();
     }
 }
 
