@@ -1636,6 +1636,26 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
         ggml_cuda_set_iq1bn_aux(src0->quant_levels, ctx.stream());
     }
 
+    // Q3_KPT per-tensor levels (8 floats)
+    if (src0->type == GGML_TYPE_Q3_KPT) {
+        GGML_ASSERT(src0->quant_levels && "Q3_KPT MUL_MAT requires levels (set tensor->quant_levels)");
+        ggml_cuda_set_q3kpt_levels((const float *)src0->quant_levels, ctx.stream());
+    }
+
+    // Q2_KPT per-block levels. Upstream no longer splits src0 by rows here, so the whole
+    // tensor's levels are uploaded (the old code offset by row_low/row_diff per device).
+    ggml_cuda_pool_alloc<float> q2kpt_levels_alloc(ctx.pool());
+    if (src0->type == GGML_TYPE_Q2_KPT) {
+        GGML_ASSERT(src0->quant_levels && "Q2_KPT MUL_MAT requires levels (set tensor->quant_levels)");
+        const int64_t blocks_per_row = src0->ne[0] / QK_K;
+        const int64_t total_blocks   = src0->ne[1] * blocks_per_row;
+        const size_t  n_levels       = total_blocks * Q2KPT_N_LEVELS;
+        float * d_levels = q2kpt_levels_alloc.alloc(n_levels);
+        CUDA_CHECK(cudaMemcpyAsync(d_levels, (const float *)src0->quant_levels,
+                                   n_levels * sizeof(float), cudaMemcpyHostToDevice, ctx.stream()));
+        ggml_cuda_set_q2kpt_levels(d_levels, n_levels, ctx.stream());
+    }
+
     ggml_type compute_type = src0->type;
     if (ggml_is_quantized(compute_type)) {
         compute_type = fast_fp16_hardware_available(ggml_cuda_info().devices[ctx.device].cc) ? GGML_TYPE_F16 : GGML_TYPE_F32;
@@ -4982,6 +5002,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ2_TQ:
                     case GGML_TYPE_IQ3_TQ:
                     case GGML_TYPE_IQ1_BN:
+                    case GGML_TYPE_Q2_DPT:
+                    case GGML_TYPE_Q3_KPT:
+                    case GGML_TYPE_Q2_KPT:
                     case GGML_TYPE_IQ4_XS:
                     case GGML_TYPE_BF16:
                         return true;

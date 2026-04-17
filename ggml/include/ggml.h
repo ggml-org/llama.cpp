@@ -437,7 +437,7 @@ extern "C" {
         GGML_TYPE_Q4_DPT  = 102, // IQ4_NL with learned per-tensor int8 levels (4.125 bpw)
         GGML_TYPE_Q2_DPT  = 103, // 2-bit with learned per-tensor int8 levels (2.5 bpw)
         GGML_TYPE_Q2_KPT  = 104, // Q2_K with learned per-tensor float levels (2.625 bpw)
-        GGML_TYPE_IQ2_TQ  = 105, // Trellis quantized with RNG codebook (2.0625 bpw)
+        GGML_TYPE_IQ2_TQ  = 105, // Trellis quantized with RNG codebook (2.5625 bpw)
         GGML_TYPE_IQ3_TQ  = 106, // 3-bit with per-tensor trained grid table (3.5625 bpw)
         GGML_TYPE_IQ1_BN  = 107, // 8D vector quantized with per-tensor trained codebook (1.5625 bpw)
         GGML_TYPE_COUNT   = 108,
