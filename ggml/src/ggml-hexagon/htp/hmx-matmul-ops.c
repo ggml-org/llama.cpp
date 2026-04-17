@@ -303,34 +303,6 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(const uint8_t *  packed_128
     out[1] = v_hi; // group2 already in [0:63]
 }
 
-// Batch-dequantize 4 contiguous x4x2 Q4_0 groups (4x32 = 128 packed bytes) using
-// full HVX vector width.  One vmemu + one vlut16 replaces 4 separate calls.
-// Output: out[0..3] each hold 32 FP16 values in the first 64 bytes.
-static inline void dequantize_x4x2_q4_0_x4groups_hvx_noscale(const uint8_t *   packed_128,
-                                                             bool              upper_nibbles,
-                                                             const HVX_Vector vlut_cvt,
-                                                             HVX_Vector        out[4]) {
-    // Load all 128 packed bytes (4 contiguous 32-byte groups)
-    HVX_Vector       vq       = hvx_vmemu(packed_128);
-    const HVX_Vector mask_h4  = Q6_Vb_vsplat_R(0x0F);
-    HVX_Vector       v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
-    v_quants                  = Q6_V_vand_VV(v_quants, mask_h4);
-
-    // Shuffle before LUT
-    v_quants = Q6_Vb_vshuff_Vb(v_quants);
-
-    // LUT lookup only, no vmpy
-    HVX_VectorPair vp   = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-    HVX_Vector     v_lo = Q6_V_lo_W(vp);  // [group0: 32 fp16 | group1: 32 fp16]
-    HVX_Vector     v_hi = Q6_V_hi_W(vp);  // [group2: 32 fp16 | group3: 32 fp16]
-
-    // Extract individual groups (no scale multiplication)
-    out[0] = v_lo;                    // group0 already in [0:63]
-    out[1] = Q6_V_vror_VR(v_lo, 64);  // group1 rotated to [0:63]
-    out[2] = v_hi;                    // group2 already in [0:63]
-    out[3] = Q6_V_vror_VR(v_hi, 64);  // group3 rotated to [0:63]
-}
-
 // Dequantize one x4x2 Q8_0 group (32 int8 quants) -> 32 FP16 in first 64 bytes.
 static inline HVX_Vector dequantize_x4x2_q8_0_group_hvx(
         const int8_t *quants_32, const __fp16 *scale) {
@@ -1391,7 +1363,6 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     const size_t output_area_size = hex_align_up(
         m_chunk_n_rows * n_chunk_n_cols * sizeof(__fp16), HMX_FP16_TILE_SIZE);
 
-    const size_t weight_scale_size = hex_align_up(m_chunk_n_rows / 32 * n_chunk_n_cols * sizeof(__fp16), HMX_FP16_TILE_SIZE);
     size_t scratch0_size, scratch1_size, scratch2_size;
     if (use_pipeline) {
         scratch0_size = hex_align_up(n_chunk_n_cols * vec_dot_size, HMX_FP16_TILE_SIZE);  // dequant buf 0
@@ -1410,7 +1381,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch0_size);
     void    *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch1_size);
     void    *vtcm_scratch2   = scratch2_size ? vtcm_seq_alloc(&vtcm_ptr, scratch2_size) : NULL;
-    __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_scale_size);
+    __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
     if ((size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base) > vtcm_budget) {
         FARF(ERROR, "%s: vtcm overflow: used=%zu limit=%zu", __func__,
              (size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base), vtcm_budget);
@@ -1776,9 +1747,8 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
     const size_t out_size     = hex_align_up(M_BLOCK_SIZE * N_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
     const size_t scratch0_sz  = hex_align_up(N_BLOCK_SIZE * sub_row_stride_alloc, HMX_FP16_TILE_SIZE);
     const size_t scratch1_sz  = hex_align_up(M_BLOCK_SIZE * K_BLOCK_SIZE * sizeof(float), HMX_FP16_TILE_SIZE);
-    const size_t weight_scale_size = hex_align_up(M_BLOCK_SIZE / 32 * N_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
 
-    const size_t total_vtcm = weight_size + act_size + out_size + scratch0_sz + scratch1_sz + HMX_FP16_TILE_SIZE + 256 + weight_scale_size;
+    const size_t total_vtcm = weight_size + act_size + out_size + scratch0_sz + scratch1_sz + HMX_FP16_TILE_SIZE + 256;
     if (total_vtcm > vtcm_budget) {
         FARF(HIGH, "%s: VTCM overflow after search: need %zu have %zu (M=%zu N=%zu K=%zu)", __func__, total_vtcm,
              vtcm_budget, M_BLOCK_SIZE, N_BLOCK_SIZE, K_BLOCK_SIZE);
@@ -1793,7 +1763,6 @@ int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx, float *restrict 
     uint8_t *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch1_sz);
     __fp16  *vtcm_eye_tile   = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, HMX_FP16_TILE_SIZE);
     __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
-    __fp16  *vtcm_weight_scales = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_scale_size);
     assert((size_t)(vtcm_ptr - (uint8_t *)ctx->vtcm_base) <= vtcm_budget);
 
     FARF(HIGH, "hmx-mm: m=%d k=%d n=%d wtype=%d block M=%zu N=%zu K=%zu vtcm=%zu/%zu", __func__, m, k, n, weight_type,
