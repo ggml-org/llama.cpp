@@ -806,6 +806,7 @@ By default, it is read-only. To make POST request to change global properties, y
   "modalities": {
     "vision": false
   },
+  "media_marker": "<__media_YoNhud46VdDqbuFmKYEO9PY7A4ARzRfg__>",
   "build_info": "b(build number)-(build commit hash)",
   "is_sleeping": false
 }
