@@ -204,7 +204,7 @@ struct server_slot {
         n_sent_text    = 0;
 
         if (spec) {
-            spec->reset();
+            spec->clear();
         }
         i_batch_dft.clear();
         generated_tokens.clear();
@@ -700,10 +700,6 @@ private:
             return ids;
         }
 
-        bool memory_seq_rm(llama_pos p0, llama_pos p1) override {
-            return llama_memory_seq_rm(llama_get_memory(ctx_impl.ctx), slot_id, p0, p1);
-        }
-
         size_t create_checkpoint(int64_t n_tokens) override {
             ckpt = server_get_checkpoint(ctx_impl.ctx, slot_id, n_tokens);
 
@@ -721,7 +717,8 @@ private:
         size_t restore_checkpoint() override {
             server_slot * slot = get_slot();
 
-            SLT_DBG(*slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d)\n", ckpt.pos_min, ckpt.pos_max);
+            SLT_DBG(*slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
+
             const size_t n = llama_state_seq_set_data_ext(ctx_impl.ctx, ckpt.data.data(), ckpt.size(), slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
             if (n != ckpt.size()) {
                 GGML_ABORT("%s: failed to restore context checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
@@ -730,15 +727,11 @@ private:
             // remove entries after ckpt.pos_max
             llama_memory_seq_rm(llama_get_memory(ctx_impl.ctx), slot->id, ckpt.pos_max + 1, -1);
 
-            slot->prompt.tokens.keep_first(ckpt.n_tokens);
             slot->smpl = std::move(smpl);
 
-            return n;
-        }
-
-        void delete_checkpoint() override {
             ckpt = {};
-            smpl.reset();
+
+            return n;
         }
     };
 
@@ -2996,8 +2989,13 @@ private:
                 }
 
                 auto accept_response = slot.spec->sample_and_accept();
-                slot.i_batch_dft.clear();
                 const size_t n_draft = accept_response.draft_size_initial;
+
+                slot.i_batch_dft.clear();
+
+                // rollback to the state before sampling the draft tokens
+                slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
+
                 if (accept_response.skip_acceptance) {
                     SLT_DBG(slot, "partial acceptance: n_tokens=%zu, n_draft=%zu\n", accept_response.tokens.size(), n_draft);
                     continue;
@@ -3014,15 +3012,12 @@ private:
                 slot.n_draft_accepted += ids.size() - 1;
                 slot.n_draft_total += n_draft;
 
-                // rollback to the state before sampling the draft tokens
-                slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
-
                 // add accepted tokens to the prompt
                 slot.prompt.tokens.insert({ids.begin(), ids.end() - 1});
                 slot.sampled = ids.back(); // last accepted token
                 SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);
 
-                slot.spec->rewind(slot.prompt.n_tokens());
+                llama_memory_seq_rm(llama_get_memory(ctx), slot.id, slot.prompt.n_tokens(), -1);
 
                 for (size_t i = 0; i < ids.size(); ++i) {
                     completion_token_output result;

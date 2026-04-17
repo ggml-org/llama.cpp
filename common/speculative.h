@@ -65,10 +65,6 @@ struct common_speculative_callback {
     // Sample and accept tokens from the main model.
     virtual llama_tokens sampler_sample_and_accept_n(const llama_tokens & drafted) = 0;
 
-    // Deletes a part of the context.
-    // Returns true if the memory was modified.
-    virtual bool memory_seq_rm(llama_pos p0, llama_pos p1) = 0;
-
     // Creates a checkpoint of the current state of the context.
     // Returns the size of the checkpoint in bytes.
     virtual size_t create_checkpoint(int64_t n_tokens) = 0;
@@ -76,9 +72,6 @@ struct common_speculative_callback {
     // Restore a checkpoint previously created by create_checkpoint().
     // Returns the size of the restored checkpoint in bytes.
     virtual size_t restore_checkpoint() = 0;
-
-    // Delete a checkpoint previously created by create_checkpoint().
-    virtual void delete_checkpoint() = 0;
 };
 
 typedef std::unique_ptr<common_speculative_callback> common_speculative_callback_ptr;
@@ -101,18 +94,12 @@ struct common_speculative_session {
 
     ~common_speculative_session();
 
-    // don't copy
-    common_speculative_session(const common_speculative_session &) = delete;
-    common_speculative_session & operator=(const common_speculative_session &) = delete;
-
     // no implementations available
     bool empty() const;
 
     // call once at the beginning of a new generation
     // some spec implementations use the prompt history to initialize lookup maps
     void begin(const llama_tokens & prompt_history);
-
-    bool has_batch_dft();
 
     // do speculative decoding to compute a draft of tokens
     llama_tokens compute_draft(const llama_tokens & prompt,
@@ -122,14 +109,9 @@ struct common_speculative_session {
     // check if and how far the current draft is accepted
     common_speculative_accept_response sample_and_accept();
 
-    // rewind (because of a draft not fully accepted)
-    void rewind(llama_pos p0);
-
-    // print statistics
     void print_stats() const;
 
-    // reset and delete structures
-    void reset();
+    void clear();
 
     private:
         struct impl;

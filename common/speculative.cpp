@@ -1199,8 +1199,6 @@ struct common_speculative_session::impl {
 
     llama_tokens draft;
 
-    uint16_t spec_ckpt_n_denials = 0; // number of drafts not accepted at the current position (0 or 1)
-
     // Speculative decoding stats
     int32_t n_draft_total    = 0;   // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
@@ -1217,91 +1215,61 @@ struct common_speculative_session::impl {
         common_speculative_begin(spec, prompt_history);
     }
 
-    bool has_batch_dft() const {
-        return !draft.empty();
-    }
-
-    void leave_draft_state() {
-        draft.clear();
-        spec_ckpt_n_denials = 0;
-    }
-
     llama_tokens compute_draft(
                const llama_tokens & tokens,
                      llama_token    id_last,
                const int            n_draft_max) {
-        if (spec == nullptr) {
-            // no implementation, nothing to do
-            leave_draft_state();
-            return draft;
-        }
+        GGML_ASSERT(spec);
 
         if (n_draft_max == 0) {
-            leave_draft_state();
-            return draft;
+            this->clear();
+            return {};
         }
 
-        if (params.use_checkpoints && spec_ckpt_n_denials > 1) {
-            // We shouldn't get two denials.
-            LOG_WRN("%s: #tokens=%zu, spec_ckpt_n_denials=%d, id_last=%d, #draft=%zu\n", __func__,
-                    tokens.size(), spec_ckpt_n_denials, id_last, draft.size());
-            leave_draft_state();
-            return draft;
-        }
+        // there is a previous speculation which wasn't accepted in full length
+        const bool is_partial = !draft.empty();
 
-        if (spec_ckpt_n_denials == 1) {
-            // there is a previous speculation which wasn't accepted in full length
-            if (draft.empty()) {
-                // switch to non-draft inference
-                LOG_DBG("%s: draft of length 0 after denied checkpoint\n", __func__);
-                leave_draft_state();
-                return draft;
-            }
-            // we use the shortened draft of previous speculation
-            LOG_DBG("%s: reuse shortened draft, #tokens=%zu, id_last=%d, size=%zu\n", __func__,
-                    tokens.size(), id_last, draft.size());
-        } else if (spec_ckpt_n_denials > 1) {
-            GGML_ABORT("illegal state: spec_ckpt_n_denials = %d > 1", spec_ckpt_n_denials);
+        if (is_partial) {
+            LOG_DBG("%s: reuse shortened draft, #tokens=%zu, id_last=%d, size=%zu\n", __func__, tokens.size(), id_last, draft.size());
         } else {
             // call the speculative implementation to create a draft
             draft = common_speculative_draft(spec, params, tokens, id_last);
             LOG_DBG("draft: id_last=%d, #draft=%zu\n", id_last, draft.size());
+
             if (draft.empty()) {
-                leave_draft_state();
-                return draft;
+                this->clear();
+                return {};
             }
-        }
 
-        if (draft.size() > (size_t) n_draft_max) {
-            LOG_WRN("draft size %d exceeds max %d, truncating\n", (int) draft.size(), n_draft_max);
-            draft.resize(n_draft_max);
-        }
+            if (draft.size() > (size_t) n_draft_max) {
+                LOG_WRN("draft size %d exceeds max %d, truncating\n", (int) draft.size(), n_draft_max);
+                draft.resize(n_draft_max);
+            }
 
-        bool do_checkpoint = !draft.empty() && params.use_checkpoints;
-        if (do_checkpoint && tokens.size() > 5 && draft.size() >= 3) {
-            LOG_DBG("%s: #tokens=%zu, draft.size=%zu, n_spec_denials=%d, do_checkpoint=%s, id_last=%d, tokens=[..., %d, %d, %d], draft=[%d, %d, %d, ...]\n",
-                __func__,
-                tokens.size(),
-                draft.size(), spec_ckpt_n_denials,
-                do_checkpoint ? "yes" : "no", id_last,
-                tokens[tokens.size() - 3],
-                tokens[tokens.size() - 2],
-                tokens[tokens.size() - 1],
-                draft[0], draft[1], draft[2]);
-        }
+            if (draft.size() < (size_t) params.n_min) {
+                LOG_DBG("ignoring small draft: %d < %d\n", (int) draft.size(), params.n_min);
+                this->clear();
+                return {};
+            }
 
-        if (spec_ckpt_n_denials == 0 && params.n_min > (int) draft.size()) {
-            LOG_DBG("ignoring small draft: %d < %d\n", (int) draft.size(), params.n_min);
-            leave_draft_state();
-            return draft;
-        }
+            const bool do_checkpoint = params.use_checkpoints;
+            if (do_checkpoint) {
+                if (tokens.size() > 5 && draft.size() >= 3) {
+                    LOG_DBG("%s: #tokens=%zu, draft.size=%zu, do_checkpoint=%s, id_last=%d, tokens=[..., %d, %d, %d], draft=[%d, %d, %d, ...]\n",
+                            __func__, tokens.size(), draft.size(),
+                            do_checkpoint ? "yes" : "no", id_last,
+                            tokens[tokens.size() - 3],
+                            tokens[tokens.size() - 2],
+                            tokens[tokens.size() - 1],
+                            draft[0], draft[1], draft[2]);
+                }
 
-        if (do_checkpoint) {
-            const size_t n = callback->create_checkpoint(tokens.size());
-            if (n == 0) {
-                LOG_WRN("%s: checkpoint creation failed (#tokens=%zu)\n", __func__, tokens.size());
-                leave_draft_state();
-                return draft;
+                const size_t n = callback->create_checkpoint(tokens.size());
+                if (n == 0) {
+                    LOG_WRN("%s: checkpoint creation failed (#tokens=%zu)\n", __func__, tokens.size());
+                    this->clear();
+                    return {};
+                }
             }
         }
 
@@ -1329,18 +1297,11 @@ struct common_speculative_session::impl {
             // we shorten the draft
             draft.resize(ids.size() - 1);
             if (params.use_checkpoints) {
-                // we need to rollback to the state before sampling the draft tokens
-                // (restore_checkpoint shortens context and slot.prompt.tokens)
-                const size_t n = callback->restore_checkpoint();
-                LOG_DBG("%s: partial acceptance: %zu < %zu, restored checkpoint: got %zu bytes\n",
-                        __func__,
-                        ids.size() - 1, n_draft, n);
+                LOG_DBG("%s: partial acceptance: %zu < %zu\n", __func__, ids.size() - 1, n_draft);
 
-                // delete Checkpoint
-                callback->delete_checkpoint();
+                callback->restore_checkpoint();
 
-                spec_ckpt_n_denials++;
-                if (ids.size() > 1u && spec_ckpt_n_denials == 1) {
+                if (ids.size() > 1u) {
                     // we will do the batch again but with the shortened draft
                     return common_speculative_accept_response(std::move(ids), n_draft, true);
                 }
@@ -1348,12 +1309,7 @@ struct common_speculative_session::impl {
                 LOG_DBG("%s: don't accept partial draft, n_draft=%zu, ids.size=%zu\n", __func__, n_draft, ids.size());
                 draft.clear();
 
-                // use the sampled token only
-                ids.resize(1);
-                // drafted tokens in prompt have been deleted in restore_checkpoint(...).
-
-                // skip acceptance, don't calculate a new draft
-                return common_speculative_accept_response{std::move(ids), 0, true};
+                GGML_ASSERT(ids.size() == 1);
             }
         }
 
@@ -1366,29 +1322,16 @@ struct common_speculative_session::impl {
         return common_speculative_accept_response{std::move(ids), n_draft, false};
     }
 
-    void rewind(llama_pos p0) {
-        spec_ckpt_n_denials = 0;
-        if (params.use_checkpoints) {
-            callback->delete_checkpoint();
-        } else {
-            callback->memory_seq_rm(p0, -1);
-        }
-    }
-
     void print_stats() const {
-        if (spec == nullptr) {
-            return;
-        }
+        GGML_ASSERT(spec);
 
         common_speculative_print_stats(spec);
     }
 
-    void reset() {
-        if (spec == nullptr) {
-            return;
-        }
+    void clear() {
+        GGML_ASSERT(spec);
 
-        leave_draft_state();
+        draft.clear();
     }
 };
 
@@ -1410,10 +1353,6 @@ void common_speculative_session::begin(const llama_tokens & prompt_history) {
     pimpl->begin(prompt_history);
 }
 
-bool common_speculative_session::has_batch_dft() {
-    return !pimpl->has_batch_dft();
-}
-
 llama_tokens common_speculative_session::compute_draft(
        const llama_tokens & prompt,
              llama_token    id_last,
@@ -1425,14 +1364,10 @@ common_speculative_accept_response common_speculative_session::sample_and_accept
     return pimpl->sample_and_accept();
 }
 
-void common_speculative_session::rewind(const llama_pos p0) {
-    pimpl->rewind(p0);
-}
-
 void common_speculative_session::print_stats() const {
     pimpl->print_stats();
 }
 
-void common_speculative_session::reset() {
-    pimpl->reset();
+void common_speculative_session::clear() {
+    pimpl->clear();
 }
