@@ -1026,7 +1026,7 @@ common_speculative * common_speculative_init(
                     /* .ctx_tgt       = */ ctx_tgt,
                     /* .ctx_dft       = */ ctx_dft,
                     /* .replacements  = */ params.replacements,
-                    /* .use_checkpoint= */ params.use_checkpoints
+                    /* .use_checkpoint= */ params.use_checkpoints // TODO: this should be based on the draft model!
                 ));
                 break;
             }
@@ -1240,6 +1240,7 @@ struct common_speculative_session::impl {
                      llama_token    id_last,
                const int            n_draft_max) {
         GGML_ASSERT(spec);
+        GGML_ASSERT(i_batch.empty());
 
         if (n_draft_max == 0) {
             this->clear();
@@ -1304,6 +1305,8 @@ struct common_speculative_session::impl {
                  llama_token    id_last,
                  llama_pos      pos0,
                  llama_seq_id   seq_id) {
+        GGML_ASSERT(i_batch.empty());
+
         i_batch.push_back(batch.n_tokens);
 
         for (size_t i = 0; i < draft.size(); i++) {
@@ -1313,44 +1316,37 @@ struct common_speculative_session::impl {
         common_speculative_add_to_batch(spec, batch, draft, id_last, pos0, seq_id);
     }
 
-    common_speculative_accept_response sample_and_accept(common_sampler * smpl, llama_context * ctx) {
-        const size_t n_draft = draft.size();
-
-        GGML_ASSERT(i_batch.size() == 1 + draft.size());
+    bool sample_and_accept(common_sampler * smpl, llama_context * ctx) {
+        GGML_ASSERT(i_batch.size() == draft.size() + 1);
 
         auto ids = common_sampler_sample_and_accept_n(smpl, ctx, i_batch, draft);
 
+        i_batch.clear();
+
         is_partial = false;
 
-        LOG_WRN("%s: n_draft=%zu, ids.size=%zu\n", __func__, n_draft, ids.size());
-        if (ids.size() < n_draft + 1) {
+        LOG_WRN("%s: n_draft=%zu, ids.size=%zu\n", __func__, draft.size(), ids.size());
+        if (ids.size() < draft.size() + 1) {
             // the main model rejected some tokens
-
-            // we shorten the draft
-            draft.resize(ids.size() - 1);
-            i_batch.clear();
+            LOG_DBG("%s: partial acceptance: %zu < %zu\n", __func__, draft.size(), draft.size());
 
             if (params.use_checkpoints) {
-                LOG_DBG("%s: partial acceptance: %zu < %zu\n", __func__, draft.size(), n_draft);
+                // we shorten the draft and retry
+                draft.resize(ids.size() - 1);
 
                 callback->restore_checkpoint();
 
                 is_partial = true;
 
-                // we will do the batch again but with the shortened draft
-                return common_speculative_accept_response(std::move(ids), n_draft, true);
+                return false;
             }
         }
 
-        const size_t draft_size_accepted = draft.size();
-        LOG_DBG("%s: draft.size=%zu, ids.size=%zu\n", __func__, draft_size_accepted, ids.size());
+        draft = std::move(ids);
 
-        common_speculative_accept(spec, draft_size_accepted);
+        common_speculative_accept(spec, draft.size());
 
-        draft.clear();
-        i_batch.clear();
-
-        return common_speculative_accept_response{std::move(ids), n_draft, false};
+        return true;
     }
 
     void print_stats() const {
@@ -1402,7 +1398,7 @@ void common_speculative_session::add_to_batch(
     pimpl->add_to_batch(batch, draft, id_last, pos0, seq_id);
 }
 
-common_speculative_accept_response common_speculative_session::sample_and_accept(common_sampler * smpl, llama_context * ctx) {
+bool common_speculative_session::sample_and_accept(common_sampler * smpl, llama_context * ctx) {
     return pimpl->sample_and_accept(smpl, ctx);
 }
 

@@ -78,15 +78,6 @@ struct common_speculative_callback {
 
 typedef std::unique_ptr<common_speculative_callback> common_speculative_callback_ptr;
 
-struct common_speculative_accept_response {
-    llama_tokens tokens;
-    size_t       draft_size_initial;
-    bool         skip_acceptance;
-
-    common_speculative_accept_response(llama_tokens t, size_t draft_size_initial, bool skip)
-        : tokens(std::move(t)), draft_size_initial(draft_size_initial), skip_acceptance(skip) {}
-};
-
 // speculative decoding which may use checkpoints to rewind in tokens history
 struct common_speculative_session {
     common_speculative_session(
@@ -117,7 +108,7 @@ struct common_speculative_session {
                   llama_seq_id   seq_id);
 
     // check if and how far the current draft is accepted
-    common_speculative_accept_response sample_and_accept(common_sampler * smpl, llama_context * ctx);
+    bool sample_and_accept(common_sampler * smpl, llama_context * ctx);
 
     const llama_tokens & get_draft() const;
 

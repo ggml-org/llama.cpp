@@ -2949,18 +2949,17 @@ private:
                     continue;
                 }
 
-                auto accept_response = slot.spec->sample_and_accept(slot.smpl.get(), ctx);
-                const size_t n_draft = accept_response.draft_size_initial;
+                const auto & ids = slot.spec->get_draft();
+
+                const size_t n_draft = ids.size();
 
                 //SLT_WRN(slot, "roll back to pos=%d, n_draft=%zu\n", slot.prompt.n_tokens() - n_draft, n_draft);
 
-                if (accept_response.skip_acceptance) {
-                    SLT_DBG(slot, "partial acceptance: n_tokens=%zu, n_draft=%zu\n", accept_response.tokens.size(), n_draft);
+                if (!slot.spec->sample_and_accept(slot.smpl.get(), ctx)) {
+                    SLT_DBG(slot, "partial acceptance: n_tokens=%zu, n_draft=%zu\n", ids.size(), n_draft);
                     slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - (n_draft + 1));
                     continue;
                 }
-
-                const auto ids = accept_response.tokens;
 
                 const int64_t t_current = ggml_time_us();
 
