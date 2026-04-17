@@ -24,10 +24,33 @@
 #include <random>
 #include <limits>
 #include <sys/mman.h>
+#include <sstream>
 
 #define UNUSED(x) (void)(x)
 
 // --- IOMMU Domain Manager ---
+
+// Helper function for parsing complex integer lists
+static std::vector<int32_t> parse_domain_list(const std::string& str) {
+    std::vector<int32_t> result;
+    if (str.empty()) return result;
+    std::stringstream ss(str);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        if (token.empty()) continue;
+        auto dash_pos = token.find('-');
+        if (dash_pos != std::string::npos) {
+            int start = std::strtol(token.substr(0, dash_pos).c_str(), nullptr, 10);
+            int end = std::strtol(token.substr(dash_pos + 1).c_str(), nullptr, 10);
+            for (int i = start; i <= end; ++i) result.push_back(i);
+        } else {
+            result.push_back(std::strtol(token.c_str(), nullptr, 10));
+        }
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
 
 struct IOMMUDomainManager {
     std::mutex mutex;
@@ -39,16 +62,55 @@ struct IOMMUDomainManager {
     std::unordered_map<int32_t, size_t> domain_sizes;
     std::unordered_map<int32_t, rknn_matmul_ctx> allocator_contexts;
 
+    // Allowed domain IDs defined by the user
+    std::vector<int32_t> allowed_domains;
+
+    IOMMUDomainManager() {
+        // Read restricted domains from ENV variable
+        const char* env_domains = std::getenv("RKNPU_DOMAINS");
+        if (env_domains != nullptr) {
+            allowed_domains = parse_domain_list(env_domains);
+
+            if (!allowed_domains.empty()) {
+                fprintf(stderr, "\n"
+                    "RKNPU WARNING: Custom IOMMU domains detected via RKNPU_DOMAINS.\n"
+                    "Due to Rockchip library limitations, concurrent execution of\n"
+                    "multiple processes accessing the NPU simultaneously WILL LEAD\n"
+                    "to a SYSTEM KERNEL PANIC and WILL FREEZE YOUR OPERATING SYSTEM.\n"
+                    "Execute models SEQUENTIALLY if using multiple independent processes.\n");
+            }
+        }
+    }
+
     // Function for assigning the domain for the tensor of given size
     int32_t assign_domain_memory(size_t size) {
         std::lock_guard<std::mutex> lock(mutex);
 
-        for (int32_t i = 0; ; ++i) {
-            if (domain_sizes[i] + size <= max_domain_size) {
-                domain_sizes[i] += size;
-                ensure_allocator_context(i);
-                return i;
+        // Allocate strictly within the allowed domains
+        if (!allowed_domains.empty()) {
+            for (int32_t d : allowed_domains) {
+                if (domain_sizes[d] + size <= max_domain_size) {
+                    domain_sizes[d] += size;
+                    ensure_allocator_context(d);
+                    return d;
+                }
             }
+
+            fprintf(stderr, "RKNPU ERROR: Out of memory in allowed IOMMU domains!\n");
+            assert(false);
+            return -1;
+        // Allocate dynamically
+        } else {
+            for (int32_t i = 0; i <= 15; ++i) {
+                if (domain_sizes[i] + size <= max_domain_size) {
+                    domain_sizes[i] += size;
+                    ensure_allocator_context(i);
+                    return i;
+                }
+            }
+            fprintf(stderr, "RKNPU ERROR: Out of memory in all IOMMU domains!\n");
+            assert(false);
+            return -1;
         }
     }
 
@@ -150,8 +212,11 @@ struct MatrixSegmentK {
 };
 
 // Split B-matrix into N-segments for cores
-static std::vector<MatrixSegmentN> compute_n_segments(int N, int num_cores, int alignment) {
+static std::vector<MatrixSegmentN> compute_n_segments(int N, const std::vector<int>& active_cores, int alignment) {
     std::vector<MatrixSegmentN> segments;
+    int num_cores = active_cores.size();
+
+    if (num_cores == 0) return segments;
 
     int base_segment_size = (N / num_cores / alignment) * alignment;
     int remaining = N - (base_segment_size * num_cores);
@@ -161,7 +226,7 @@ static std::vector<MatrixSegmentN> compute_n_segments(int N, int num_cores, int 
         MatrixSegmentN seg;
         seg.offset_n = offset;
         seg.size_n = base_segment_size;
-        seg.core_id = i;
+        seg.core_id = active_cores[i];
 
         if (i < remaining / alignment) {
             seg.size_n += alignment;
@@ -355,7 +420,7 @@ static void* get_tensor_real_ptr(const struct ggml_tensor* tensor) {
     const auto& config = rknpu2_configuration::Rknpu2ConfigManager::get_instance().get_current_config();
     const auto* pipeline = config.resolve_op_support(tensor);
 
-    if (pipeline && pipeline->pack_func) {
+    if (pipeline) {
         auto* ctx = (ggml_backend_rknpu_buffer_context*)tensor->buffer->context;
         size_t offset = (uintptr_t)tensor->data - (uintptr_t)ctx->virtual_base;
 
@@ -445,7 +510,7 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             k_limit = (k_limit > 0) ? std::min(k_limit, pipeline->effective_k) : pipeline->effective_k;
         }
         auto all_k_segments = compute_k_segments(K_op, k_limit, pipeline->k_align);
-        auto all_n_segments = compute_n_segments(N, config.core_count, alignment);
+        auto all_n_segments = compute_n_segments(N, config.active_cores, alignment);
 
         std::vector<MatrixSegmentN> active_n_segments;
         for (const auto& seg : all_n_segments) {
@@ -493,7 +558,7 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
         // Calculating the B-matrix scale
         std::vector<float> scales_B_grid;
-        if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8 || pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
+        if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT8 || pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT4) {
             std::lock_guard<std::mutex> lock(src0_buf_ctx->mutex);
             auto it = src0_buf_ctx->quantized_tensor_scales.find(src0);
             GGML_ASSERT(it != src0_buf_ctx->quantized_tensor_scales.end() && "Quantized scales grid not found");
@@ -502,8 +567,8 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
         // Calculating tensor packed size
         size_t type_size_packed = 0;
-        if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) type_size_packed = 2;
-        else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) type_size_packed = 1;
+        if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_FP16) type_size_packed = 2;
+        else if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT8) type_size_packed = 1;
 
         // Computing K dimensions segments
         size_t current_offset_in_tensor = 0;
@@ -560,7 +625,7 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             // ===========================================
             // ========== 2. Preparing A-matrix ==========
             // ===========================================
-            std::vector<float> scales_A(M);
+            std::vector<float> scales_A(M, 1.0f);
             {
                 auto cache_key = std::make_tuple(M_op, K_seg_op, (int)pipeline->npu_type_a, b_domain_id);
                 auto& matmul_ctx_0 = matmul_ctxs[0];
@@ -670,6 +735,9 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
                     switch (pipeline->npu_type_c) {
                         case rknpu2_configuration::NPU_TYPE_FP32: {
                             for (size_t idx = 0; idx < num_active_segments; idx++) {
+                                float scale_B = scales_B_grid.empty() ? 1.0f : scales_B_grid[k_idx * num_active_segments + idx];
+                                float dequant_scale = (scales_A[m] * scale_B) / hadamard_divisor;
+
                                 int N_offset = active_n_segments[idx].offset_n;
                                 int N_segment = active_n_segments[idx].size_n;
                                 float* src_segment_base = (float*)mem_C_segments[idx]->virt_addr;
@@ -677,7 +745,7 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
                                 float* src_ptr = src_segment_base + (size_t)m * N_segment;
 
                                 for(int n=0; n<N_segment; ++n) {
-                                    dst_ptr[n] += src_ptr[n] / hadamard_divisor;
+                                    dst_ptr[n] += src_ptr[n] * dequant_scale;
                                 }
                             }
                             break;
@@ -751,17 +819,17 @@ static size_t get_tensor_packed_size(const struct ggml_tensor * tensor) {
         }
 
         auto k_segments = compute_k_segments(K_op, k_limit, pipeline->k_align);
-        auto n_segments = compute_n_segments(N, config.core_count, pipeline->n_align);
+        auto n_segments = compute_n_segments(N, config.active_cores, pipeline->n_align);
 
         size_t total_size = 0;
         for (const auto& k_seg : k_segments) {
             for (const auto& seg : n_segments) {
                 if (seg.size_n > 0) {
-                    if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
+                    if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT4) {
                         total_size += (size_t)seg.size_n * k_seg.size_k / 2;
-                    } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) {
+                    } else if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT8) {
                         total_size += (size_t)seg.size_n * k_seg.size_k;
-                    } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) {
+                    } else if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_FP16) {
                         total_size += (size_t)seg.size_n * k_seg.size_k * 2;
                     }
                 }
@@ -802,7 +870,7 @@ static enum ggml_status ggml_backend_rknpu_buffer_init_tensor(ggml_backend_buffe
     const auto* pipeline = config.resolve_op_support(tensor);
 
     // Initialize tensor only if it is supported by the pipeline
-    if (pipeline && pipeline->pack_func) {
+    if (pipeline) {
         size_t offset = (uintptr_t)tensor->data - (uintptr_t)ctx->virtual_base;
         size_t size = get_tensor_packed_size(tensor);
         ctx->get_tensor_allocation(offset, size);
@@ -920,6 +988,49 @@ static void quantize_tensor_segment(
     }
 }
 
+// Function for packing
+static void pack_native(
+    uint8_t* dst, const uint8_t* src,
+    int K_total, int k_offset, int k_segment, int k_align,
+    int N_total, int n_offset, int n_segment, int n_align,
+    int element_bits)
+{
+    UNUSED(N_total);
+
+    GGML_ASSERT(k_segment % k_align == 0 && "k_segment must be aligned to k_align");
+    GGML_ASSERT(n_segment % n_align == 0 && "n_segment must be aligned to n_align");
+
+    const size_t k_sub_bytes     = (size_t)k_align * element_bits / 8;
+    const size_t src_row_bytes  = (size_t)K_total * element_bits / 8;
+    const size_t n_blocks       = n_segment / n_align;
+    const size_t k_blocks       = k_segment / k_align;
+    const size_t kblock_stride  = (size_t)n_align * k_sub_bytes;
+    const size_t nblock_stride  = k_blocks * kblock_stride;
+
+    for (size_t ni = 0; ni < n_blocks; ++ni) {
+        for (size_t ki = 0; ki < k_blocks; ++ki) {
+            uint8_t* dst_tile = dst + ni * nblock_stride + ki * kblock_stride;
+
+            for (int nn = 0; nn < n_align; ++nn) {
+                const size_t n_global = (size_t)n_offset + ni * n_align + nn;
+                const size_t k_start  = (size_t)k_offset + ki * k_align;
+
+                const uint8_t* src_ptr = src + n_global * src_row_bytes
+                                             + k_start * element_bits / 8;
+                uint8_t* dst_ptr = dst_tile + nn * k_sub_bytes;
+
+                size_t off = 0;
+                for (; off + 16 <= k_sub_bytes; off += 16) {
+                    vst1q_u8(dst_ptr + off, vld1q_u8(src_ptr + off));
+                }
+                for (; off < k_sub_bytes; ++off) {
+                    dst_ptr[off] = src_ptr[off];
+                }
+            }
+        }
+    }
+}
+
 // Function for packing the quantized segment into the native NPU layout and writing to DMA
 static size_t pack_tensor_segment(
     const std::vector<uint8_t>& quantized_segment,
@@ -928,19 +1039,24 @@ static size_t pack_tensor_segment(
     const MatrixSegmentN & n_seg,
     const rknpu2_configuration::Rknpu2HardwarePipeline * pipeline)
 {
+    int element_bits = 0;
     size_t segment_packed_size = 0;
 
-    if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_FP16) {
+    if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_FP16) {
+        element_bits = 16;
         segment_packed_size = (size_t)n_seg.size_n * k_seg.size_k * 2;
-    } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT8) {
+    } else if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT8) {
+        element_bits = 8;
         segment_packed_size = (size_t)n_seg.size_n * k_seg.size_k;
-    } else if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
+    } else if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT4) {
+        element_bits = 4;
         segment_packed_size = (size_t)n_seg.size_n * k_seg.size_k / 2;
     }
 
-    pipeline->pack_func(dst_dma_ptr, quantized_segment.data(),
-                        k_seg.size_k, 0, k_seg.size_k,
-                        n_seg.size_n, 0, n_seg.size_n);
+    pack_native(dst_dma_ptr, quantized_segment.data(),
+                k_seg.size_k, 0, k_seg.size_k, pipeline->k_align,
+                n_seg.size_n, 0, n_seg.size_n, pipeline->n_align,
+                element_bits);
 
     return segment_packed_size;
 }
@@ -953,7 +1069,7 @@ static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, s
 
     size_t tensor_offset_in_virtual = (uintptr_t)tensor->data - (uintptr_t)ctx->virtual_base;
 
-    if (pipeline && pipeline->pack_func) {
+    if (pipeline) {
         const int K = (int)tensor->ne[0];
         const int N = (int)tensor->ne[1];
         const int K_op = pipeline->use_hadamard ? rknpu2_calibration::next_power_of_two(K) : K;
@@ -985,7 +1101,7 @@ static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, s
 
         // Computing specific hardware segments
         auto k_segments = compute_k_segments(K_op, k_limit, pipeline->k_align);
-        auto n_segments = compute_n_segments(N, config.core_count, pipeline->n_align);
+        auto n_segments = compute_n_segments(N, config.active_cores, pipeline->n_align);
 
         std::vector<float> seg_fp32;
         std::vector<uint8_t> seg_npu;
@@ -1003,22 +1119,22 @@ static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, s
 
                 // Calculating local scale of the block
                 float block_scale = 1.0f;
-                if (pipeline->npu_type_a != rknpu2_configuration::NPU_TYPE_FP16) {
+                if (pipeline->npu_type_b != rknpu2_configuration::NPU_TYPE_FP16) {
                     float amax = 0.0f;
-                    if (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) {
+                    if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT4) {
                         amax = rknpu2_calibration::calculate_entropy_amax(seg_fp32.data(), seg_fp32.size());
                     } else {
                         for (float val : seg_fp32) {
                             amax = std::max(amax, std::abs(val));
                         }
                     }
-                    float quant_divisor = (pipeline->npu_type_a == rknpu2_configuration::NPU_TYPE_INT4) ? 7.0f : 127.0f;
+                    float quant_divisor = (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT4) ? 7.0f : 127.0f;
                     block_scale = (amax == 0.0f) ? 1.0f : amax / quant_divisor;
                 }
                 tensor_block_scales.push_back(block_scale);
 
                 // Quantizing
-                quantize_tensor_segment(seg_fp32, seg_npu, k_seg, n_seg, block_scale, pipeline->npu_type_a);
+                quantize_tensor_segment(seg_fp32, seg_npu, k_seg, n_seg, block_scale, pipeline->npu_type_b);
 
                 // Packing into chip native layout
                 size_t bytes_written = pack_tensor_segment(seg_npu, current_write_ptr, k_seg, n_seg, pipeline);
@@ -1212,8 +1328,10 @@ static ggml_backend_t ggml_backend_rknpu_device_init_backend(ggml_backend_dev_t 
     UNUSED(dev);
     UNUSED(params);
 
-    // TODO: Make device selection dynamic (e.g., from params or env var)
-    if (!rknpu2_configuration::Rknpu2ConfigManager::get_instance().select_device("RK3588")) return NULL;
+    // Fetch device from environment variable, default to RK3588 if not set
+    const char* env_device = std::getenv("RKNPU_DEVICE");
+    std::string target_device = env_device ? env_device : "RK3588";
+    if (!rknpu2_configuration::Rknpu2ConfigManager::get_instance().select_device(target_device)) return NULL;
 
     ggml_backend_rknpu_context * ctx = new ggml_backend_rknpu_context();
 

@@ -35,7 +35,7 @@ Contributions in these areas are always welcome:
 Here are several "cutting-edge" ideas and active development goals:
 
 *  **Support for Other Chipsets:** Expanding configurations in `rknpu2-configuration.cpp` to support other Rockchip SoCs, including RISC-V variants.
-*  **Advanced Low-Bit Optimizations:** Currently, pure `INT4_STANDARD` produces garbage output. The Hadamard Transform solves the accuracy issue but introduces significant $O(K \log K)$ CPU overhead. Architectural optimizations, faster math routines or advanced algorithms are welcomed to solve the problem.
+*  **Advanced Low-Bit Optimizations:** Currently, pure `INT4` produces garbage output. The Hadamard Transform solves the accuracy issue but introduces significant $O(K \log K)$ CPU overhead. Architectural optimizations, faster math routines or advanced algorithms are welcomed to solve the problem.
 *  **Split Quantization:** Implementing a system where a single weight matrix is split into two: a sparse matrix containing outliers (computed in high-bit pipeline) and a dense matrix for the rest (computed in low-bit pipeline). Orchestrating this efficiently on the NPU is a major milestone.
 *  **Smart Hybrid Quantization:** Currently, hybrid quantization applies a cyclical pattern across layers. Adding support for "smart" quantization-such as using Regex patterns to target specific, sensitive neural network layers with high-bit pipelines-would vastly improve the performance/accuracy ratio.
 

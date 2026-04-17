@@ -117,16 +117,16 @@ Instead of forcing the entire model into a single format, the backend processes 
 
 Building on this layer-by-layer approach, you can easily override the default behavior to experiment with your own quantization strategies.
 
-By setting the `HYBRID_PATTERN` environment variable, you define a custom sequence of hardware pipelines. The backend will cyclically iterate through this sequence as it loads the model's layers. For example, if you specify two pipelines, Layer 1 will use the first, Layer 2 will use the second, Layer 3 will revert to the first, and so on.
+By setting the `RKNPU_HYBRID` environment variable, you define a custom sequence of hardware pipelines. The backend will cyclically iterate through this sequence as it loads the model's layers. For example, if you specify two pipelines, Layer 1 will use the first, Layer 2 will use the second, Layer 3 will revert to the first, and so on.
 
 ```sh
 # Alternates model layers between FP16, INT8 and INT4 NPU pipelines
 # This pipeline results in (16 + 8 + 4) / 3 ≈ 9.3 BPW
-HYBRID_PATTERN="FP16_STANDARD,INT8_STANDARD,INT4_HADAMARD" ./build/bin/llama-cli -m ./model.gguf
+RKNPU_HYBRID="W16A16_STANDARD,W8A8_STANDARD,W4A4_HADAMARD" ./build/bin/llama-cli -m ./model.gguf
 
 # When the backend encounters a wrong pipeline name, it offloads layer to the default CPU backend
 # This pipeline will offload to the NPU around half of the model's layers
-HYBRID_PATTERN="CPU_STANDARD,INT8_STANDARD" ./build/bin/llama-cli -m ./model.gguf
+RKNPU_HYBRID="CPU_STANDARD,W8A8_STANDARD" ./build/bin/llama-cli -m ./model.gguf
 ```
 
 ### Weights Requantizations
@@ -158,28 +158,62 @@ The **Perplexity** metrics were measured on the `Granite-4.0-350M-F16` model to 
 
 | Name | Operation | Perplexity | Notes |
 | :--- | :--- | :--- | :--- |
-| `FP16_HADAMARD` | FP16xFP16 | 20.74 ± 0.74 | Hadamard Transform\* |
-| `FP16_STANDARD` | FP16xFP16 | 20.74 ± 0.74 | - |
-| `INT8_HADAMARD` | INT8xINT8 | 20.85 ± 0.74 | Hadamard Transform\* |
-| `INT8_STANDARD` | INT8xINT8 | 22.50 ± 0.81 | - |
-| `INT4_HADAMARD` | INT4xINT4 | 86.16 ± 3.42 | Hadamard\*, KL-Div\*\* |
-| `INT4_STANDARD` | INT4xINT4 | 240048.97 ± 9261.03 | KL-Divergence\*\* |
+| `W16A16_HADAMARD` | FP16xFP16 | 20.74 ± 0.74 | Hadamard Transform\* |
+| `W16A16_STANDARD` | FP16xFP16 | 20.74 ± 0.74 | - |
+| `W8A8_HADAMARD` | INT8xINT8 | 20.85 ± 0.74 | Hadamard Transform\* |
+| `W8A8_STANDARD` | INT8xINT8 | 22.50 ± 0.81 | - |
+| `W4A4_HADAMARD` | INT4xINT4 | 86.16 ± 3.42 | Hadamard\*, KL-Div\*\* |
+| `W4A4_STANDARD` | INT4xINT4 | 240048.97 ± 9261.03 | KL-Divergence\*\* |
 
 \* **Hadamard Transform:** Applies a randomized Fast Walsh-Hadamard Transform to smooth out activation outliers before quantization (see [2404.00456](https://arxiv.org/abs/2404.00456)).<br>
 \*\* **KL-Divergence:** Uses entropy-based calibration to find the optimal scaling factor for 4-bit weights by minimizing information loss (see [2411.02530](https://arxiv.org/abs/2411.02530)).
 
-> **Note:** As seen in the table, pure `INT4_STANDARD` produces completely broken outputs (extremely high perplexity). This is due to massive outliers being heavily clipped in the limited 4-bit range. The `INT4_HADAMARD` pipeline mitigates this by mathematically distributing the outliers across all channels, making 4-bit inference actually usable, though it introduces some CPU overhead.
+> **Note:** As seen in the table, pure `W4A4_STANDARD` produces completely broken outputs (extremely high perplexity). This is due to massive outliers being heavily clipped in the limited 4-bit range. The `W4A4_HADAMARD` pipeline mitigates this by mathematically distributing the outliers across all channels, making 4-bit inference actually usable, though it introduces some CPU overhead.
 
 #### Default Mappings
 
-If no custom `HYBRID_PATTERN` is provided, the RK3588 backend will automatically map your input GGUF model types to the following default NPU pipelines to provide the best out-of-the-box balance of speed and accuracy:
+If no custom `RKNPU_HYBRID` is provided, the RK3588 backend will automatically map your input GGUF model types to the following default NPU pipelines to provide the best out-of-the-box balance of speed and accuracy:
 
 | Input Weight Type | Default Hardware Pipeline | Bits Per Weight |
 | :--- | :--- | :--- |
-| `F16` | [`FP16_STANDARD`] | 16 |
-| `Q8_0` | [`INT8_STANDARD`] | 8 |
-| `Q6_K` | [`INT8_STANDARD`, `INT4_HADAMARD`] | 6 |
-| `Q4_0` | [`INT4_HADAMARD`] | 4 |
+| `F16` | [`W16A16_STANDARD`] | 16 |
+| `Q8_0` | [`W8A8_STANDARD`] | 8 |
+| `Q6_K` | [`W8A8_STANDARD`, `W4A4_HADAMARD`] | 6 |
+| `Q4_0` | [`W4A4_HADAMARD`] | 4 |
+
+## FAQ
+
+### Q: How do I select a specific Rockchip SoC?
+By default, the backend targets the **RK3588**. If you are using a different chip, specify it using the `RKNPU_DEVICE` environment variable. You can find the list of all available chips in **Chipsets** section above.
+
+```sh
+# Select RK3576 configuration
+RKNPU_DEVICE="RK3576" ./build/bin/llama-cli -m ./model.gguf
+```
+
+### Q: Can I limit inference to specific NPU cores?
+The backend tries to utilize all available NPU cores. You can restrict execution to specific cores using the `RKNPU_CORES` variable. This is useful for saving power or leaving cores free for other tasks.
+
+```sh
+# Use only the first core
+RKNPU_CORES="0" ./build/bin/llama-cli -m ./model.gguf
+
+# Use cores 0 and 2
+RKNPU_CORES="0,2" ./build/bin/llama-cli -m ./model.gguf
+```
+
+### Q: How can I run multiple model instances without memory conflicts?
+The Rockchip NPU has a strict 4GB limit per IOMMU domain. To run multiple instances, you can manually partition the available domains using the `RKNPU_DOMAINS` variable.
+
+```sh
+# Use domains 0, 1, 2 and 3 for the model
+RKNPU_DOMAINS="0-3" ./build/bin/llama-cli -m ./model.gguf
+
+# Use domains 4, 5, 6, 7 and 9 for the model
+RKNPU_DOMAINS="4-7,9" ./build/bin/llama-cli -m ./model.gguf
+```
+
+> **Warning:** Due to library and driver limitations, assigning custom domains while running multiple independent processes will cause a **System Kernel Panic** if they attempt to access the NPU hardware simultaneously. This leads to a total **Operating System Freeze**. To run concurrent models, ensure that inference in independent processes is executed **sequentially**. Loaded models can safely idle for an indefinite amount of time.
 
 ## Contributing
 

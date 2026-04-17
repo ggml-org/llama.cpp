@@ -64,12 +64,12 @@ struct Rknpu2HardwarePipeline {
     std::string pipeline_name;  // The unique hardware pipeline name
 
     Rknpu2NpuType npu_type_a;   // The target data type for activations on the NPU
+    Rknpu2NpuType npu_type_b;   // The target data type for weights on the NPU
     Rknpu2NpuType npu_type_c;   // The data type of the result from the NPU
     rknn_matmul_type mm_type;   // Corresponding RKNN operation type
 
     int k_align;                // Required alignment for the K dimension
     int n_align;                // Required alignment for the N dimension
-    PackingFunction pack_func;  // Function to pack the weight matrix for this op
 
     int effective_k;            // Specific K limit for matrix tiling
     bool use_hadamard;          // Flag for using Hadamard Transform
@@ -83,7 +83,7 @@ struct Rknpu2HardwarePipeline {
  */
 struct Rknpu2DeviceConfig {
     std::string device_name;
-    int core_count;
+    std::vector<int> active_cores;
     int max_k_limit = 0;
     std::vector<Rknpu2HardwarePipeline> hardware_pipelines;
 
