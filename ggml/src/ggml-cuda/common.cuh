@@ -28,7 +28,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <queue>
 
 #if defined(GGML_USE_HIP)
 #include "vendors/hip.h"
@@ -1188,6 +1187,7 @@ struct ggml_cuda_graph {
     bool disable_due_to_gpu_arch = false;
     bool warmup_complete = false;
     uint64_t uid = 0;
+    int64_t last_used_time = 0;
     struct node_properties {
         ggml_tensor node;
         void *   node_src_data_ptrs[GGML_MAX_SRC];
@@ -1369,28 +1369,20 @@ struct ggml_backend_cuda_context {
     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
     std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
 
-    // pair of timestamp and node ptr
-    std::priority_queue<
-        std::pair<int64_t, const void *>,
-        std::vector<std::pair<int64_t, const void *>>,
-        std::greater<>
-    > graph_lru_cache;
-
-    std::unordered_map<const void *, int64_t> graph_last_used_time;
+    int64_t last_graph_eviction_sweep = 0;
 
     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
-        int64_t time_now = ggml_time_us();
+        const int64_t time_now = ggml_time_us();
 
-        // delete all cuda graphs older than 10 seconds
-        while (!graph_lru_cache.empty() && time_now - graph_lru_cache.top().first >= 10'000'000) {
-            const auto & [ts, node_ptr] = graph_lru_cache.top();
-            graph_lru_cache.pop();
-
-            // lazy delete
-            auto it = graph_last_used_time.find(node_ptr);
-            if (it != graph_last_used_time.end() && ts == it->second) {
-                cuda_graphs.erase(node_ptr);
-                graph_last_used_time.erase(node_ptr);
+        // sweep every 5s, evicting cuda graphs unused for >=10s
+        if (time_now - last_graph_eviction_sweep >= 5'000'000) {
+            last_graph_eviction_sweep = time_now;
+            for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
+                if (time_now - it->second->last_used_time >= 10'000'000) {
+                    it = cuda_graphs.erase(it);
+                } else {
+                    ++it;
+                }
             }
         }
 
@@ -1398,13 +1390,7 @@ struct ggml_backend_cuda_context {
         if (it == cuda_graphs.end()) {
             it = cuda_graphs.emplace(first_node_ptr, std::make_unique<ggml_cuda_graph>()).first;
         }
-
-        // throttle re-pushes into the lru queue by 1s per entry
-        auto last_it = graph_last_used_time.find(first_node_ptr);
-        if (last_it == graph_last_used_time.end() || time_now - last_it->second >= 1'000'000) {
-            graph_last_used_time[first_node_ptr] = time_now;
-            graph_lru_cache.emplace(time_now, first_node_ptr);
-        }
+        it->second->last_used_time = time_now;
         return it->second.get();
     }
 
