@@ -1460,6 +1460,24 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
         ggml_cuda_set_iq1bn_aux(src0->quant_levels, main_stream);
     }
 
+    // Q3_KPT per-tensor levels (8 floats)
+    if (src0->type == GGML_TYPE_Q3_KPT) {
+        GGML_ASSERT(src0->quant_levels && "Q3_KPT MUL_MAT requires levels (set tensor->quant_levels)");
+        ggml_cuda_set_q3kpt_levels((const float *)src0->quant_levels, main_stream);
+    }
+
+    // Q2_KPT per-block levels (whole src0 is dequantized here, so all blocks)
+    ggml_cuda_pool_alloc<float> q2kpt_levels_alloc(ctx.pool());
+    if (src0->type == GGML_TYPE_Q2_KPT) {
+        GGML_ASSERT(src0->quant_levels && "Q2_KPT MUL_MAT requires levels (set tensor->quant_levels)");
+        const int blocks_per_row = ne00 / QK_K;
+        const int total_blocks = ne01 * blocks_per_row;
+        const size_t n_levels = (size_t) total_blocks * Q2KPT_N_LEVELS;
+        float * d_levels = q2kpt_levels_alloc.alloc(n_levels);
+        CUDA_CHECK(cudaMemcpyAsync(d_levels, (const float *)src0->quant_levels, n_levels * sizeof(float), cudaMemcpyHostToDevice, main_stream));
+        ggml_cuda_set_q2kpt_levels(d_levels, n_levels, main_stream);
+    }
+
     if (src0->type == compute_type) {
         src0_ptr = (const cuda_t *) src0->data;
     } else {
@@ -4832,6 +4850,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ2_TQ:
                     case GGML_TYPE_IQ3_TQ:
                     case GGML_TYPE_IQ1_BN:
+                    case GGML_TYPE_Q2_DPT:
+                    case GGML_TYPE_Q3_KPT:
+                    case GGML_TYPE_Q2_KPT:
                     case GGML_TYPE_IQ4_XS:
                     case GGML_TYPE_BF16:
                         return true;
