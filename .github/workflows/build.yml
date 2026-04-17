@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - update-workflows
     paths: [
       '.github/workflows/build.yml',
       '.github/workflows/build-cmake-pkg.yml',
@@ -58,9 +59,11 @@ env:
 
 jobs:
   build-cmake-pkg:
+    if: false
     uses: ./.github/workflows/build-cmake-pkg.yml
 
   macOS-latest-arm64:
+    if: false
     runs-on: macos-latest
 
     steps:
@@ -97,6 +100,7 @@ jobs:
           ctest -L main -E "test-llama-archs" --verbose --timeout 900
 
   macOS-latest-x64:
+    if: false
     runs-on: macos-15-intel
 
     steps:
@@ -133,6 +137,7 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   macOS-latest-arm64-webgpu:
+    if: false
     runs-on: macos-latest
 
     steps:
@@ -174,6 +179,7 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   ubuntu-cpu:
+    if: false
     strategy:
       matrix:
         include:
@@ -268,6 +274,7 @@ jobs:
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   ubuntu-latest-rpc:
+    if: false
     runs-on: ubuntu-latest
 
     continue-on-error: true
@@ -299,6 +306,7 @@ jobs:
           ctest -L main --verbose
 
   ubuntu-24-vulkan:
+    if: false
     strategy:
       matrix:
         include:
@@ -401,6 +409,17 @@ jobs:
             -DGGML_WEBGPU=ON
           time cmake --build build --config Release -j $(nproc)
 
+      - name: Environment dump
+        run: |
+          uname -a
+          lscpu || true
+          vulkaninfo --summary || true
+          glxinfo -B || true
+          ls -l /usr/share/vulkan/icd.d || true
+
+      - name: Setup tmate
+        uses: mxschmitt/action-tmate@v3
+
       - name: Test
         id: cmake_test
         run: |
@@ -409,6 +428,7 @@ jobs:
           ctest -L main --verbose --timeout 900
 
   ubuntu-24-webgpu-wasm:
+    if: false
     runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     steps:
@@ -445,6 +465,7 @@ jobs:
           time cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)
 
   ubuntu-22-hip:
+    if: false
     runs-on: ubuntu-22.04
     container: rocm/dev-ubuntu-22.04:6.1.2
 
@@ -477,6 +498,7 @@ jobs:
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-musa:
+    if: false
     runs-on: ubuntu-22.04
     container: mthreads/musa:rc4.3.0-devel-ubuntu22.04-amd64
 
@@ -506,6 +528,7 @@ jobs:
           time cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-sycl:
+    if: false
     runs-on: ubuntu-22.04
 
     continue-on-error: true
@@ -555,6 +578,7 @@ jobs:
           time cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-sycl-fp16:
+    if: false
     runs-on: ubuntu-22.04
 
     continue-on-error: true
@@ -607,6 +631,7 @@ jobs:
           time cmake --build build --config Release -j $(nproc)
 
   ubuntu-24-openvino:
+      if: false
       name: ubuntu-24-openvino-${{ matrix.openvino_device }}
       strategy:
         matrix:
@@ -687,6 +712,7 @@ jobs:
             ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 2000
 
   windows-latest:
+    if: false
     runs-on: windows-2025
 
     env:
@@ -809,6 +835,7 @@ jobs:
       #     & $sde -future -- ctest -L main -C Release --verbose --timeout 900
 
   ubuntu-latest-cuda:
+    if: false
     runs-on: ubuntu-latest
     container: nvidia/cuda:12.6.2-devel-ubuntu24.04
 
@@ -845,6 +872,7 @@ jobs:
             cmake --build build
 
   windows-2022-cuda:
+    if: false
     runs-on: windows-2022
 
     strategy:
@@ -894,6 +922,7 @@ jobs:
           cmake --build build --config Release
 
   windows-latest-sycl:
+    if: false
     runs-on: windows-2022
 
     defaults:
@@ -928,6 +957,7 @@ jobs:
         run:  examples/sycl/win-build-sycl.bat
 
   windows-latest-hip:
+    if: false
     runs-on: windows-2022
 
     env:
@@ -996,6 +1026,7 @@ jobs:
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 
   ubuntu-cpu-riscv64-native:
+    if: false
     runs-on: ubuntu-24.04-riscv
 
     steps:
@@ -1068,6 +1099,7 @@ jobs:
 # TODO: simplify the following workflows using a matrix
 # TODO: run lighter CI on PRs and the full CI only on master (if needed)
   ggml-ci-x64-cpu-low-perf:
+    if: false
     runs-on: ubuntu-22.04
 
     steps:
@@ -1094,6 +1126,7 @@ jobs:
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-low-perf:
+    if: false
     runs-on: ubuntu-22.04-arm
 
     steps:
@@ -1120,6 +1153,7 @@ jobs:
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-cpu-high-perf:
+    if: false
     runs-on: ubuntu-22.04
 
     steps:
@@ -1146,6 +1180,7 @@ jobs:
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf:
+    if: false
     runs-on: ubuntu-22.04-arm
 
     steps:
@@ -1172,6 +1207,7 @@ jobs:
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf-sve:
+    if: false
     runs-on: ubuntu-22.04-arm
 
     steps:
@@ -1198,6 +1234,7 @@ jobs:
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-kleidiai:
+     if: false
      runs-on: ubuntu-22.04-arm
 
      steps:
@@ -1224,6 +1261,7 @@ jobs:
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-kleidiai-graviton4:
+     if: false
      runs-on: ah-ubuntu_22_04-c8g_8x
 
      steps:
