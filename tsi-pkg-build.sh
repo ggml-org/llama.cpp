@@ -143,12 +143,21 @@
 # 12) Provide explicit paths:
 # source tsi-pkg-build.sh debug build-fpga /path/to/compiler /path/to/toolbox/install-fpga
 #
-# 13)  SDK_VERSION must be provided by the user
-# SDK_VERSION=0.4.1 source tsi-pkg-build.sh
-# passes it as an env var (works with CMake + script logic)
-# source tsi-pkg-build.sh SDK_VERSION=0.4.1 
-# passes it as a positional argument (won’t work unless we parse $1, this code doesnt exist, 
-# hence dont use it )
+# ------------------------------------------------------------------------------
+# 13 SDK_VERSION (MANDATORY)
+# ------------------------------------------------------------------------------
+# SDK_VERSION must be provided explicitly by the user as an environment variable.
+#
+# Correct usage:
+#   SDK_VERSION=0.4.0 source tsi-pkg-build.sh
+#
+# Positional SDK_VERSION arguments are NOT supported:
+#   source tsi-pkg-build.sh SDK_VERSION=0.4.1   # this is not supported
+#
+# If SDK_VERSION is not provided, the script will fail fast.
+# This avoids hard-coded defaults and ensures the intended SDK version
+# is always selected intentionally by the user.
+# ------------------------------------------------------------------------------
 #
 # ==============================================================================
 log_error(){ echo "ERROR: $*" >&2; }
@@ -169,9 +178,6 @@ __TSI_OLD_SET="$(set +o)"
 __TSI_SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 __TSI_SCRIPT_DIR="$(cd "$(dirname "${__TSI_SCRIPT_PATH}")" 2>/dev/null && pwd)"
 
-# Default SDK_VERSION (kept backward compatible)
-SDK_VERSION="${SDK_VERSION:-0.4.0}"
-export SDK_VERSION
 
 # --- VENV TRACKING (FIX) ---
 # If script activates blob-creation venv, restore previous env when sourced.
@@ -333,16 +339,6 @@ parse_args() {
 
   local a
   for a in "$@"; do
-    # support "source tsi-pkg-build.sh SDK_VERSION=0.4.0"
-    case "$a" in
-      SDK_VERSION=*)
-        SDK_VERSION="${a#SDK_VERSION=}"
-        SDK_VERSION="${SDK_VERSION:-0.4.0}"
-        export SDK_VERSION
-        log_info "SDK_VERSION set to ${SDK_VERSION}"
-        continue
-        ;;
-    esac
 
     case "$(tolower "$a")" in
       help|-h|--help|-help)
@@ -491,8 +487,6 @@ parse_args() {
     BUILD_TYPE="debug"
   fi
 
-  SDK_VERSION="${SDK_VERSION:-0.4.0}"
-  export SDK_VERSION
 
   return 0
 }
@@ -774,7 +768,7 @@ bundle_fpga() {
   log_info "creating tar bundle for fpga (${build_dir})"
 
   # REQUIRED CHANGE: local version now comes from SDK_VERSION (default 0.4.0)
-  local TSI_GGML_VERSION="${SDK_VERSION:-0.4.0}"
+  local TSI_GGML_VERSION="${SDK_VERSION}"
 
   local TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
   local GGML_TSI_INSTALL_DIR=ggml-tsi-kernel
