@@ -8,15 +8,79 @@
 # source tsi-pkg-build.sh [build-mode] [flags...] [MLIR_COMPILER_DIR] [TOOLBOX_DIR]
 #
 # ------------------------------------------------------------------------------
-# Include tsavorite-model-deployment.yaml in the FPGA package
+# Tsavorite Deployment Configuration (llama.cpp)
 # ------------------------------------------------------------------------------
-# The FPGA bundle now includes tsavorite-model-deployment.yaml in the same
-# directory where the .so files are placed inside the tarball (tsi-ggml/).
+# llama.cpp supports an deployment configuration file:
 #
-# Source selection order:
-#   1) TSAVORITE_DEPLOYMENT_YAML_SRC=/path/to/tsavorite-model-deployment.yaml
-#   2) ./tsavorite-model-deployment.yaml
-#   3) <script-dir>/tsavorite-model-deployment.yaml
+#   tsavorite-model-deployment.yaml
+#
+# This file controls how the Tsavorite backend uses TXEs and whether
+# multi-threaded execution is enabled at runtime.
+#
+# ------------------------------------------------------------------------------
+# Configuration Options
+# ------------------------------------------------------------------------------
+#
+# 1) Number of TXEs
+# -----------------
+# - Specifies how many TXEs are available for execution.
+# - Value can be 1 or more.
+#
+# 2) Multi-threading (enable / disable)
+# -------------------------------------
+#
+# a) Multi-threading DISABLED:
+#    - llama.cpp uses host-generated code produced by mlir_compiler.
+#    - The generated host code always targets TXE0.
+#    - No dynamic TXE selection or scheduling is performed.
+#
+# b) Multi-threading ENABLED:
+#    - llama.cpp Tsavorite backend contains host-side scheduling logic.
+#    - At runtime, the backend:
+#        * Scans for a free TXE
+#        * Selects an available TXE dynamically
+#        * Creates a host thread bound to the selected TXE
+#    - This enables concurrent execution across multiple TXEs.
+#
+# ------------------------------------------------------------------------------
+# Deployment File Location and Usage
+# ------------------------------------------------------------------------------
+#
+# FPGA:
+# -----
+# - During FPGA bundle creation, tsavorite-model-deployment.yaml is packaged
+#   alongside the Tsavorite shared libraries.
+# - Inside the final tarball, the file is placed in the same directory
+#   as the Tsavorite .so files (tsi-ggml/).
+# - At runtime (after untarring), the Tsavorite backend loads this file
+#   from the same directory as the shared libraries.
+#
+# POSIX:
+# ------
+# - For POSIX builds, tsavorite-model-deployment.yaml is expected to be present
+#   in the llama.cpp root directory (the working directory where llama.cpp
+#   is built and executed).
+#
+#   Example:
+#     /proj/work/akapoor/llama-cpp-april-16/llama.cpp/tsavorite-model-deployment.yaml
+#
+# - If present, the Tsavorite backend loads this file at runtime to determine
+#   TXE configuration and multi-threading behavior.
+#
+# ------------------------------------------------------------------------------
+# FPGA Packaging – Source Selection Order
+# ------------------------------------------------------------------------------
+#
+# When creating an FPGA bundle, the deployment file is picked up using the
+# following priority order:
+#
+# 1) TSAVORITE_DEPLOYMENT_YAML_SRC=/path/to/tsavorite-model-deployment.yaml
+# 2) ./tsavorite-model-deployment.yaml
+# 3) <script-dir>/tsavorite-model-deployment.yaml
+#
+# The resolved file is then copied into the FPGA bundle alongside the
+# Tsavorite shared libraries.
+# ------------------------------------------------------------------------------
 #
 #
 # Build modes (optional):
