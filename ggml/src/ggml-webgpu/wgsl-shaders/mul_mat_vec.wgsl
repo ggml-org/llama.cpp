@@ -3,6 +3,7 @@ enable subgroups;
 #endif
 enable f16;
 
+#define DECLARE_BYTE_LOADERS_SRC0
 #include "common_decls.tmpl"
 
 #ifdef U32_DEQUANT_HELPERS
@@ -147,10 +148,10 @@ fn main(
             let output_row = row_base + row;
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
-                let d = f32(load_src0_f16_at(block_byte_base));
+                let d = f32(load_f16_at_src0(block_byte_base));
                 var row_sum = 0.0;
 
-                let q_packed = load_src0_u32_at(block_byte_base + 2u + 4u * thread_within_block);
+                let q_packed = load_u32_at_src0(block_byte_base + 2u + 4u * thread_within_block);
                 for (var byte_idx = 0u; byte_idx < 4u; byte_idx++) {
                     let q_byte = get_byte(q_packed, byte_idx);
                     let q_lo = (f32(q_byte & 0xFu) - 8.0) * d;
@@ -184,11 +185,11 @@ fn main(
             let output_row = row_base + row;
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
-                let d = f32(load_src0_f16_at(block_byte_base));
-                let m = f32(load_src0_f16_at(block_byte_base + 2u));
+                let d = f32(load_f16_at_src0(block_byte_base));
+                let m = f32(load_f16_at_src0(block_byte_base + 2u));
                 var row_sum = 0.0;
 
-                let q_packed = load_src0_u32_at(block_byte_base + 4u + 4u * thread_within_block);
+                let q_packed = load_u32_at_src0(block_byte_base + 4u + 4u * thread_within_block);
                 for (var byte_idx = 0u; byte_idx < 4u; byte_idx++) {
                     let q_byte = get_byte(q_packed, byte_idx);
                     let q_lo = f32(q_byte & 0xFu) * d + m;
@@ -222,9 +223,9 @@ fn main(
             let output_row = row_base + row;
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
-                let d = f32(load_src0_f16_at(block_byte_base));
-                let qh_packed = load_src0_u32_at(block_byte_base + 2u);
-                let q_packed = load_src0_u32_at(block_byte_base + 6u + 4u * thread_within_block);
+                let d = f32(load_f16_at_src0(block_byte_base));
+                let qh_packed = load_u32_at_src0(block_byte_base + 2u);
+                let q_packed = load_u32_at_src0(block_byte_base + 6u + 4u * thread_within_block);
                 let qh_shift = thread_within_block * 4u;
                 var row_sum = 0.0;
 
@@ -263,10 +264,10 @@ fn main(
             let output_row = row_base + row;
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
-                let d = f32(load_src0_f16_at(block_byte_base));
-                let m = f32(load_src0_f16_at(block_byte_base + 2u));
-                let qh_packed = load_src0_u32_at(block_byte_base + 4u);
-                let q_packed = load_src0_u32_at(block_byte_base + 8u + 4u * thread_within_block);
+                let d = f32(load_f16_at_src0(block_byte_base));
+                let m = f32(load_f16_at_src0(block_byte_base + 2u));
+                let qh_packed = load_u32_at_src0(block_byte_base + 4u);
+                let q_packed = load_u32_at_src0(block_byte_base + 8u + 4u * thread_within_block);
                 let qh_shift = thread_within_block * 4u;
                 var row_sum = 0.0;
 
@@ -304,11 +305,11 @@ fn main(
             let output_row = row_base + row;
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
-                let d = f32(load_src0_f16_at(block_byte_base));
+                let d = f32(load_f16_at_src0(block_byte_base));
                 var row_sum = 0.0;
 
                 for (var packed_idx = 0u; packed_idx < ELEMS_PER_THREAD / 4u; packed_idx++) {
-                    let q_packed = load_src0_u32_at(block_byte_base + 2u + 4u * (thread_within_block * 2u + packed_idx));
+                    let q_packed = load_u32_at_src0(block_byte_base + 2u + 4u * (thread_within_block * 2u + packed_idx));
                     for (var byte_idx = 0u; byte_idx < 4u; byte_idx++) {
                         let q_val = f32(get_byte_i32(q_packed, byte_idx)) * d;
                         row_sum += q_val * x_block[packed_idx * 4u + byte_idx];
@@ -339,12 +340,12 @@ fn main(
             let output_row = row_base + row;
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
-                let d = f32(load_src0_f16_at(block_byte_base));
-                let m = f32(load_src0_f16_at(block_byte_base + 2u));
+                let d = f32(load_f16_at_src0(block_byte_base));
+                let m = f32(load_f16_at_src0(block_byte_base + 2u));
                 var row_sum = 0.0;
 
                 for (var packed_idx = 0u; packed_idx < ELEMS_PER_THREAD / 4u; packed_idx++) {
-                    let q_packed = load_src0_u32_at(block_byte_base + 4u + 4u * (thread_within_block * 2u + packed_idx));
+                    let q_packed = load_u32_at_src0(block_byte_base + 4u + 4u * (thread_within_block * 2u + packed_idx));
                     for (var byte_idx = 0u; byte_idx < 4u; byte_idx++) {
                         let q_val = f32(get_byte_i32(q_packed, byte_idx)) * d + m;
                         row_sum += q_val * x_block[packed_idx * 4u + byte_idx];
@@ -395,15 +396,15 @@ fn main(
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
 
-                let dall = f32(load_src0_f16_at(block_byte_base + 80u));
-                let dmin = f32(load_src0_f16_at(block_byte_base + 82u)) * (1.0 / 16.0);
+                let dall = f32(load_f16_at_src0(block_byte_base + 80u));
+                let dmin = f32(load_f16_at_src0(block_byte_base + 82u)) * (1.0 / 16.0);
 
-                let sc0 = byte_of(load_src0_u32_at_aligned(block_byte_base + sc0_byte), sc0_byte & 3u);
-                let sc2 = byte_of(load_src0_u32_at_aligned(block_byte_base + sc2_byte), sc2_byte & 3u);
-                let sc4 = byte_of(load_src0_u32_at_aligned(block_byte_base + sc4_byte), sc4_byte & 3u);
-                let sc6 = byte_of(load_src0_u32_at_aligned(block_byte_base + sc6_byte), sc6_byte & 3u);
+                let sc0 = byte_of(load_u32_at_src0_aligned(block_byte_base + sc0_byte), sc0_byte & 3u);
+                let sc2 = byte_of(load_u32_at_src0_aligned(block_byte_base + sc2_byte), sc2_byte & 3u);
+                let sc4 = byte_of(load_u32_at_src0_aligned(block_byte_base + sc4_byte), sc4_byte & 3u);
+                let sc6 = byte_of(load_u32_at_src0_aligned(block_byte_base + sc6_byte), sc6_byte & 3u);
 
-                let q_u32 = load_src0_u32_at_aligned(block_byte_base + qs_byte);
+                let q_u32 = load_u32_at_src0_aligned(block_byte_base + qs_byte);
                 let qs0 = q_u32 & 0xFFFFu;
                 let qs1 = q_u32 >> 16u;
 
@@ -495,12 +496,12 @@ fn main(
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
 
-                let d = f32(load_src0_f16_at(block_byte_base + 108u));
+                let d = f32(load_f16_at_src0(block_byte_base + 108u));
                 let a_base = 96u;
-                let a_il0 = load_src0_u16_at(block_byte_base + a_base + il * 2u);
-                let a_il1 = load_src0_u16_at(block_byte_base + a_base + (il + 1u) * 2u);
-                let a_4 = load_src0_u16_at(block_byte_base + a_base + 8u);
-                let a_5 = load_src0_u16_at(block_byte_base + a_base + 10u);
+                let a_il0 = load_u16_at_src0(block_byte_base + a_base + il * 2u);
+                let a_il1 = load_u16_at_src0(block_byte_base + a_base + (il + 1u) * 2u);
+                let a_4 = load_u16_at_src0(block_byte_base + a_base + 8u);
+                let a_5 = load_u16_at_src0(block_byte_base + a_base + 10u);
 
                 var scales32 = a_4 | (a_5 << 16u);
                 let aux32 = ((scales32 >> s_shift2) << 4u) & 0x30303030u;
@@ -510,10 +511,10 @@ fn main(
                 let scale0 = f32(i32(byte_of(scales32, phase + 0u)) - 32);
                 let scale1 = f32(i32(byte_of(scales32, phase + 2u)) - 32);
 
-                let q_u32_0 = load_src0_u32_at(block_byte_base + q_byte + 0u);
-                let q_u32_1 = load_src0_u32_at(block_byte_base + q_byte + 4u);
-                let h_u32_0 = load_src0_u32_at(block_byte_base + h_byte + 0u);
-                let h_u32_1 = load_src0_u32_at(block_byte_base + h_byte + 4u);
+                let q_u32_0 = load_u32_at_src0(block_byte_base + q_byte + 0u);
+                let q_u32_1 = load_u32_at_src0(block_byte_base + q_byte + 4u);
+                let h_u32_0 = load_u32_at_src0(block_byte_base + h_byte + 0u);
+                let h_u32_1 = load_u32_at_src0(block_byte_base + h_byte + 4u);
 
                 var s1 = 0.0; var s2 = 0.0; var s3 = 0.0;
                 var s4 = 0.0; var s5 = 0.0; var s6 = 0.0;
@@ -580,14 +581,14 @@ fn main(
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
 
-                let d = f32(load_src0_f16_at(block_byte_base + 0u));
-                let dmin = f32(load_src0_f16_at(block_byte_base + 2u));
+                let d = f32(load_f16_at_src0(block_byte_base + 0u));
+                let dmin = f32(load_f16_at_src0(block_byte_base + 2u));
 
-                let sc0_u32 = load_src0_u32_at_aligned(block_byte_base + sc0_byte);
+                let sc0_u32 = load_u32_at_src0_aligned(block_byte_base + sc0_byte);
                 let sc0 = select(sc0_u32 & 0xFFFFu, sc0_u32 >> 16u, (sc0_byte & 2u) != 0u);
-                let sc2_u32 = load_src0_u32_at_aligned(block_byte_base + sc2_byte);
+                let sc2_u32 = load_u32_at_src0_aligned(block_byte_base + sc2_byte);
                 let sc2 = select(sc2_u32 & 0xFFFFu, sc2_u32 >> 16u, (sc2_byte & 2u) != 0u);
-                let sc4_u32 = load_src0_u32_at_aligned(block_byte_base + sc4_byte);
+                let sc4_u32 = load_u32_at_src0_aligned(block_byte_base + sc4_byte);
                 let sc4 = select(sc4_u32 & 0xFFFFu, sc4_u32 >> 16u, (sc4_byte & 2u) != 0u);
 
                 let sc16_0 = sc0 & 0x3F3Fu;
@@ -604,8 +605,8 @@ fn main(
                 let min2 = f32(sc16_3 & 0xFFu);
                 let min3 = f32((sc16_3 >> 8u) & 0xFFu);
 
-                let q1_u32 = load_src0_u32_at_aligned(block_byte_base + 16u + q_offset);
-                let q2_u32 = load_src0_u32_at_aligned(block_byte_base + 80u + q_offset);
+                let q1_u32 = load_u32_at_src0_aligned(block_byte_base + 16u + q_offset);
+                let q2_u32 = load_u32_at_src0_aligned(block_byte_base + 80u + q_offset);
 
                 var dot = vec4<f32>(0.0, 0.0, 0.0, 0.0);
                 var sumx = vec4<f32>(0.0, 0.0, 0.0, 0.0);
@@ -673,14 +674,14 @@ fn main(
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
 
-                let d = f32(load_src0_f16_at(block_byte_base + 0u));
-                let dmin = f32(load_src0_f16_at(block_byte_base + 2u));
+                let d = f32(load_f16_at_src0(block_byte_base + 0u));
+                let dmin = f32(load_f16_at_src0(block_byte_base + 2u));
 
-                let sc0_u32 = load_src0_u32_at_aligned(block_byte_base + sc0_byte);
+                let sc0_u32 = load_u32_at_src0_aligned(block_byte_base + sc0_byte);
                 let sc0 = select(sc0_u32 & 0xFFFFu, sc0_u32 >> 16u, (sc0_byte & 2u) != 0u);
-                let sc2_u32 = load_src0_u32_at_aligned(block_byte_base + sc2_byte);
+                let sc2_u32 = load_u32_at_src0_aligned(block_byte_base + sc2_byte);
                 let sc2 = select(sc2_u32 & 0xFFFFu, sc2_u32 >> 16u, (sc2_byte & 2u) != 0u);
-                let sc4_u32 = load_src0_u32_at_aligned(block_byte_base + sc4_byte);
+                let sc4_u32 = load_u32_at_src0_aligned(block_byte_base + sc4_byte);
                 let sc4 = select(sc4_u32 & 0xFFFFu, sc4_u32 >> 16u, (sc4_byte & 2u) != 0u);
 
                 let sc16_0 = sc0 & 0x3F3Fu;
@@ -697,9 +698,9 @@ fn main(
                 let m4 = f32(sc16_3 & 0xFFu);
                 let m5 = f32((sc16_3 >> 8u) & 0xFFu);
 
-                let q1_u32 = load_src0_u32_at_aligned(block_byte_base + q_offset);
-                let q2_u32 = load_src0_u32_at_aligned(block_byte_base + q_offset + 64u);
-                let qh_u32 = load_src0_u32_at_aligned(block_byte_base + qh_offset);
+                let q1_u32 = load_u32_at_src0_aligned(block_byte_base + q_offset);
+                let q2_u32 = load_u32_at_src0_aligned(block_byte_base + q_offset + 64u);
+                let qh_u32 = load_u32_at_src0_aligned(block_byte_base + qh_offset);
 
                 var vals = vec4<f32>(0.0, 0.0, 0.0, 0.0);
                 var sumy = vec4<f32>(0.0, 0.0, 0.0, 0.0);
@@ -774,12 +775,12 @@ fn main(
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
 
-                let d = f32(load_src0_f16_at(block_byte_base + 208u));
-                let ql1_u32 = load_src0_u32_at(block_byte_base + q_offset_l);
-                let ql2_u32 = load_src0_u32_at(block_byte_base + q_offset_l + 32u);
-                let qh_u32 = load_src0_u32_at(block_byte_base + 128u + q_offset_h);
-                let sc_u32_0 = load_src0_u32_at(block_byte_base + sc_base_byte);
-                let sc_u32_1 = load_src0_u32_at(block_byte_base + sc_base_byte + 4u);
+                let d = f32(load_f16_at_src0(block_byte_base + 208u));
+                let ql1_u32 = load_u32_at_src0(block_byte_base + q_offset_l);
+                let ql2_u32 = load_u32_at_src0(block_byte_base + q_offset_l + 32u);
+                let qh_u32 = load_u32_at_src0(block_byte_base + 128u + q_offset_h);
+                let sc_u32_0 = load_u32_at_src0(block_byte_base + sc_base_byte);
+                let sc_u32_1 = load_u32_at_src0(block_byte_base + sc_base_byte + 4u);
 
                 let sc0 = sbyte_of(sc_u32_0, sc_byte_pos);
                 let sc2 = sbyte_of(sc_u32_0, sc_byte_pos + 2u);

@@ -71,19 +71,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
 
         // self-attention
         if (hparams.has_kv(il)) {
-            // compute Q and K and RoPE them
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            cb(Qcur, "Qcur", il);
-
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            cb(Kcur, "Kcur", il);
-
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            cb(Vcur, "Vcur", il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur, n_embd_head, n_head, n_head_kv, il);
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
@@ -103,7 +91,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
             cb(Kcur, "Kcur_pos", il);
 
             cur = build_attn(inp_attn, model.layers[il].wo,
-                    NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
+                    NULL, model.layers[il].wo_s, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
                     hparams.f_attention_scale, il);
         } else {
             // reuse KV cache of earlier layers
@@ -119,7 +107,7 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
             cb(Qcur, "Qcur_pos", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL,
+                    model.layers[il].wo, NULL, model.layers[il].wo_s,
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
         cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
@@ -250,27 +238,29 @@ ggml_tensor * llm_build_gemma3n_iswa::calc_magnitude(ggml_tensor * x) {
 ggml_tensor * llm_build_gemma3n_iswa::build_inp_per_layer() {
     auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
     ggml_tensor * inp_per_layer;
+    float tok_embd_scale = sqrtf((float) n_embd_altup);
     if (ubatch.token) {
         inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
         ggml_set_input(inp->tokens);
         res->t_inp_tokens = inp->tokens;
-        inp_per_layer = ggml_get_rows(ctx0, model.per_layer_tok_embd, inp->tokens);
+        inp_per_layer = ggml_get_rows  (ctx0, model.per_layer_tok_embd, inp->tokens);
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_altup, n_layer, n_tokens);
-        inp_per_layer = ggml_scale(ctx0, inp_per_layer, sqrtf((float) n_embd_altup));
+        inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
         cb(inp_per_layer, "inp_per_layer_selected", -1);
         res->add_input(std::move(inp));
     } else {
-        // Vision embedding path: use padding token (ID=0) embedding
+        // Multimodal embedding path: use padding token (ID=0) embedding
         // TODO: verify if this is the correct behavior in transformers implementation
         const int64_t embd_size = model.per_layer_tok_embd->ne[0];  // n_embd_altup * n_layer
 
         // Extract and dequantize padding token embedding (row 0)
         ggml_tensor * padding = ggml_view_1d(ctx0, model.per_layer_tok_embd, embd_size, 0);
-        inp_per_layer = ggml_cast(ctx0, padding, GGML_TYPE_F32);
+        inp_per_layer = ggml_cast (ctx0, padding, GGML_TYPE_F32);
+        inp_per_layer = ggml_scale(ctx0, inp_per_layer, tok_embd_scale);
 
         // Reshape to [n_embd_altup, n_layer, 1]
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_altup, n_layer, 1);
-        cb(inp_per_layer, "inp_per_layer_vision", -1);
+        cb(inp_per_layer, "inp_per_layer_multimodal", -1);
     }
     return inp_per_layer;
 }

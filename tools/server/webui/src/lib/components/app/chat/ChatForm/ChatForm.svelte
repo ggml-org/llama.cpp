@@ -294,11 +294,16 @@
 		}
 
 		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
-			event.preventDefault();
+			const isModifier = event.ctrlKey || event.metaKey;
+			const sendOnEnter = currentConfig.sendOnEnter !== false;
 
-			if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
+			if (sendOnEnter || isModifier) {
+				event.preventDefault();
 
-			onSubmit?.();
+				if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
+
+				onSubmit?.();
+			}
 		}
 	}
 

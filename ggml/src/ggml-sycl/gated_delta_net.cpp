@@ -176,14 +176,12 @@ static void launch_gated_delta_net(const float *   q_d,
     const sycl::uint3 neqk1_magic = init_fastdiv_values(neqk1);
     const sycl::uint3 rq3_magic   = init_fastdiv_values(rq3);
 
-    int cc = ggml_sycl_info().devices[ggml_sycl_get_device()].cc;
-
     switch (S_v) {
         case 16:
             {
                 constexpr int sv = 16;
                 stream->parallel_for(sycl::nd_range<3>(grid_dims * block_dims, block_dims),
-                                     [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                                     [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                          gated_delta_net_sycl<sv, KDA>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H, n_tokens,
                                                                        n_seqs, sq1, sq2, sq3, sv1, sv2, sv3, sb1, sb2,
                                                                        sb3, neqk1_magic, rq3_magic, scale);
@@ -194,7 +192,7 @@ static void launch_gated_delta_net(const float *   q_d,
             {
                 constexpr int sv = 32;
                 stream->parallel_for(sycl::nd_range<3>(grid_dims * block_dims, block_dims),
-                                     [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                                     [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                          gated_delta_net_sycl<sv, KDA>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H, n_tokens,
                                                                        n_seqs, sq1, sq2, sq3, sv1, sv2, sv3, sb1, sb2,
                                                                        sb3, neqk1_magic, rq3_magic, scale);
@@ -205,7 +203,7 @@ static void launch_gated_delta_net(const float *   q_d,
             {
                 constexpr int sv = 64;
                 stream->parallel_for(sycl::nd_range<3>(grid_dims * block_dims, block_dims),
-                                        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                                        [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                             gated_delta_net_sycl<sv, KDA>(
                                                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H, n_tokens, n_seqs, sq1, sq2,
                                                 sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
@@ -217,7 +215,7 @@ static void launch_gated_delta_net(const float *   q_d,
             {
                 constexpr int sv = 128;
                 stream->parallel_for(sycl::nd_range<3>(grid_dims * block_dims, block_dims),
-                                        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                                        [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                             gated_delta_net_sycl<sv, KDA>(
                                                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H, n_tokens, n_seqs, sq1, sq2,
                                                 sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);

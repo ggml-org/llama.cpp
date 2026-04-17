@@ -75,21 +75,13 @@ android:
             - examples/llama.android/**
 server/webui:
     - changed-files:
-        - all:
-            - any-glob-to-any-file:
-                - tools/server/webui/**
-                - tools/server/public/**
-            - all-globs-to-all-files:
-                - '!tools/server/webui/**'
-                - '!tools/server/public/**'
+        - any-glob-to-any-file:
+            - tools/server/webui/**
+            - tools/server/public/**
 server:
     - changed-files:
-        - all:
-            - any-glob-to-any-file:
-                - tools/server/**
-            - all-globs-to-all-files:
-                - '!tools/server/webui/**'
-                - '!tools/server/public/**'
+        - any-glob-to-any-file:
+            - tools/server/**
 
 
 

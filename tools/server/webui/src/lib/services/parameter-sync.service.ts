@@ -131,6 +131,12 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		canSync: true
 	},
 	{
+		key: 'titleGenerationUseFirstLine',
+		serverKey: 'titleGenerationUseFirstLine',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
 		key: 'disableAutoScroll',
 		serverKey: 'disableAutoScroll',
 		type: SyncableParameterType.BOOLEAN,
@@ -237,6 +243,12 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 	{
 		key: 'excludeReasoningFromContext',
 		serverKey: 'excludeReasoningFromContext',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'sendOnEnter',
+		serverKey: 'sendOnEnter',
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	}

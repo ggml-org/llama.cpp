@@ -873,3 +873,34 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
             return false;
     }
 }
+
+bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_GROK:
+        case LLM_ARCH_MPT:
+        case LLM_ARCH_PLAMO2:
+        case LLM_ARCH_MINICPM3:
+        case LLM_ARCH_GEMMA3N:
+        case LLM_ARCH_MAMBA:
+        case LLM_ARCH_MAMBA2:
+        case LLM_ARCH_JAMBA:
+        case LLM_ARCH_FALCON_H1:
+        case LLM_ARCH_OLMO2:
+        case LLM_ARCH_OLMOE:
+        case LLM_ARCH_DEEPSEEK2:
+        case LLM_ARCH_GLM_DSA:
+        case LLM_ARCH_BITNET:
+        case LLM_ARCH_T5:
+        case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_NEMOTRON_H_MOE:
+        case LLM_ARCH_GRANITE_HYBRID:
+        case LLM_ARCH_LFM2:
+        case LLM_ARCH_LFM2MOE:
+        case LLM_ARCH_MINIMAX_M2:
+        case LLM_ARCH_MISTRAL4:
+        case LLM_ARCH_KIMI_LINEAR:
+            return false;
+        default:
+            return true;
+    }
+}

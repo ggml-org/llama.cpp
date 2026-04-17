@@ -1,5 +1,6 @@
 #include "arg.h"
 
+#include "build-info.h"
 #include "common.h"
 #include "log.h"
 #include "download.h"
@@ -114,7 +115,7 @@ std::pair<std::string, std::string> common_download_split_repo_tag(const std::st
     return {hf_repo, tag};
 }
 
-class ProgressBar {
+class ProgressBar : public common_download_callback {
     static inline std::mutex mutex;
     static inline std::map<const ProgressBar *, int> lines;
     static inline int max_line = 0;
@@ -138,7 +139,11 @@ class ProgressBar {
     }
 
 public:
-    ProgressBar(const std::string & url = "") : filename(url) {
+    ProgressBar() = default;
+
+    void on_start(const common_download_progress & p) override {
+        filename = p.url;
+
         if (auto pos = filename.rfind('/'); pos != std::string::npos) {
             filename = filename.substr(pos + 1);
         }
@@ -156,13 +161,13 @@ public:
         }
     }
 
-    ~ProgressBar() {
+    void on_done(const common_download_progress &, bool) override {
         std::lock_guard<std::mutex> lock(mutex);
         cleanup(this);
     }
 
-    void update(size_t current, size_t total) {
-        if (!total || !is_output_a_tty()) {
+    void on_update(const common_download_progress & p) override {
+        if (!p.total || !is_output_a_tty()) {
             return;
         }
 
@@ -174,17 +179,17 @@ public:
         }
         int lines_up = max_line - lines[this];
 
-        size_t bar = 55 - len;
-        size_t pct = (100 * current) / total;
-        size_t pos = (bar * current) / total;
+        size_t bar = (55 - len) * 2;
+        size_t pct = (100 * p.downloaded) / p.total;
+        size_t pos = (bar * p.downloaded) / p.total;
 
         if (lines_up > 0) {
             std::cout << "\033[" << lines_up << "A";
         }
         std::cout << '\r' << "Downloading " << filename << " ";
 
-        for (size_t i = 0; i < bar; ++i) {
-            std::cout << (i < pos ? "—" : " ");
+        for (size_t i = 0; i < bar; i += 2) {
+            std::cout << (i + 1 < pos ? "─" : (i < pos ? "╴" : " "));
         }
         std::cout << std::setw(4) << pct << "%\033[K";
 
@@ -193,7 +198,7 @@ public:
         }
         std::cout << '\r' << std::flush;
 
-        if (current == total) {
+        if (p.downloaded == p.total) {
             cleanup(this);
         }
     }
@@ -206,8 +211,8 @@ static bool common_pull_file(httplib::Client & cli,
                              const std::string & resolve_path,
                              const std::string & path_tmp,
                              bool supports_ranges,
-                             size_t existing_size,
-                             size_t & total_size) {
+                             common_download_progress & p,
+                             common_download_callback * callback) {
     std::ofstream ofs(path_tmp, std::ios::binary | std::ios::app);
     if (!ofs.is_open()) {
         LOG_ERR("%s: error opening local file for writing: %s\n", __func__, path_tmp.c_str());
@@ -215,29 +220,27 @@ static bool common_pull_file(httplib::Client & cli,
     }
 
     httplib::Headers headers;
-    if (supports_ranges && existing_size > 0) {
-        headers.emplace("Range", "bytes=" + std::to_string(existing_size) + "-");
+    if (supports_ranges && p.downloaded > 0) {
+        headers.emplace("Range", "bytes=" + std::to_string(p.downloaded) + "-");
     }
 
     const char * func = __func__; // avoid __func__ inside a lambda
-    size_t downloaded = existing_size;
     size_t progress_step = 0;
-    ProgressBar bar(resolve_path);
 
     auto res = cli.Get(resolve_path, headers,
         [&](const httplib::Response &response) {
-            if (existing_size > 0 && response.status != 206) {
+            if (p.downloaded > 0 && response.status != 206) {
                 LOG_WRN("%s: server did not respond with 206 Partial Content for a resume request. Status: %d\n", func, response.status);
                 return false;
             }
-            if (existing_size == 0 && response.status != 200) {
+            if (p.downloaded == 0 && response.status != 200) {
                 LOG_WRN("%s: download received non-successful status code: %d\n", func, response.status);
                 return false;
             }
-            if (total_size == 0 && response.has_header("Content-Length")) {
+            if (p.total == 0 && response.has_header("Content-Length")) {
                 try {
                     size_t content_length = std::stoull(response.get_header_value("Content-Length"));
-                    total_size = existing_size + content_length;
+                    p.total = p.downloaded + content_length;
                 } catch (const std::exception &e) {
                     LOG_WRN("%s: invalid Content-Length header: %s\n", func, e.what());
                 }
@@ -250,11 +253,16 @@ static bool common_pull_file(httplib::Client & cli,
                 LOG_ERR("%s: error writing to file: %s\n", func, path_tmp.c_str());
                 return false;
             }
-            downloaded += len;
+            p.downloaded += len;
             progress_step += len;
 
-            if (progress_step >= total_size / 1000 || downloaded == total_size) {
-                bar.update(downloaded, total_size);
+            if (progress_step >= p.total / 1000 || p.downloaded == p.total) {
+                if (callback) {
+                    callback->on_update(p);
+                    if (callback->is_cancelled()) {
+                        return false;
+                    }
+                }
                 progress_step = 0;
             }
             return true;
@@ -275,27 +283,12 @@ static bool common_pull_file(httplib::Client & cli,
 
 // download one single file from remote URL to local path
 // returns status code or -1 on error
-static int common_download_file_single_online(const std::string        & url,
-                                              const std::string        & path,
-                                              const std::string        & bearer_token,
-                                              const common_header_list & custom_headers,
-                                              bool                       skip_etag = false) {
+static int common_download_file_single_online(const std::string & url,
+                                              const std::string & path,
+                                              const common_download_opts & opts,
+                                              bool skip_etag) {
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
-
-    auto [cli, parts] = common_http_client(url);
-
-    httplib::Headers headers;
-    for (const auto & h : custom_headers) {
-        headers.emplace(h.first, h.second);
-    }
-    if (headers.find("User-Agent") == headers.end()) {
-        headers.emplace("User-Agent", "llama-cpp/" + build_info);
-    }
-    if (!bearer_token.empty()) {
-        headers.emplace("Authorization", "Bearer " + bearer_token);
-    }
-    cli.set_default_headers(headers);
 
     const bool file_exists = std::filesystem::exists(path);
 
@@ -303,6 +296,20 @@ static int common_download_file_single_online(const std::string        & url,
         LOG_DBG("%s: using cached file: %s\n", __func__, path.c_str());
         return 304; // 304 Not Modified - fake cached response
     }
+
+    auto [cli, parts] = common_http_client(url);
+
+    httplib::Headers headers;
+    for (const auto & h : opts.headers) {
+        headers.emplace(h.first, h.second);
+    }
+    if (headers.find("User-Agent") == headers.end()) {
+        headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
+    }
+    if (!opts.bearer_token.empty()) {
+        headers.emplace("Authorization", "Bearer " + opts.bearer_token);
+    }
+    cli.set_default_headers(headers);
 
     std::string last_etag;
     if (file_exists) {
@@ -326,10 +333,11 @@ static int common_download_file_single_online(const std::string        & url,
         etag = head->get_header_value("ETag");
     }
 
-    size_t total_size = 0;
+    common_download_progress p;
+    p.url = url;
     if (head->has_header("Content-Length")) {
         try {
-            total_size = std::stoull(head->get_header_value("Content-Length"));
+            p.total = std::stoull(head->get_header_value("Content-Length"));
         } catch (const std::exception& e) {
             LOG_WRN("%s: invalid Content-Length in HEAD response: %s\n", __func__, e.what());
         }
@@ -357,14 +365,21 @@ static int common_download_file_single_online(const std::string        & url,
 
     { // silent
         std::error_code ec;
-        std::filesystem::path p(path);
-        std::filesystem::create_directories(p.parent_path(), ec);
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
     }
 
+    bool success = false;
     const std::string path_temporary = path + ".downloadInProgress";
     int delay = retry_delay_seconds;
 
+    if (opts.callback) {
+        opts.callback->on_start(p);
+    }
+
     for (int i = 0; i < max_attempts; ++i) {
+        if (opts.callback && opts.callback->is_cancelled()) {
+            break;
+        }
         if (i) {
             LOG_WRN("%s: retrying after %d seconds...\n", __func__, delay);
             std::this_thread::sleep_for(std::chrono::seconds(delay));
@@ -378,28 +393,44 @@ static int common_download_file_single_online(const std::string        & url,
                 existing_size = std::filesystem::file_size(path_temporary);
             } else if (remove(path_temporary.c_str()) != 0) {
                 LOG_ERR("%s: unable to delete file: %s\n", __func__, path_temporary.c_str());
-                return -1;
+                break;
             }
         }
+
+        p.downloaded = existing_size;
 
         LOG_DBG("%s: downloading from %s to %s (etag:%s)...\n",
                 __func__, common_http_show_masked_url(parts).c_str(),
                 path_temporary.c_str(), etag.c_str());
 
-        if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, existing_size, total_size)) {
+        if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, p, opts.callback)) {
             if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {
                 LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
-                return -1;
+                break;
             }
             if (!etag.empty() && !skip_etag) {
                 write_etag(path, etag);
             }
-            return head->status;
+            success = true;
+            break;
         }
     }
 
-    LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
-    return -1; // max attempts reached
+    if (opts.callback) {
+        opts.callback->on_done(p, success);
+    }
+    if (opts.callback && opts.callback->is_cancelled() &&
+        std::filesystem::exists(path_temporary)) {
+        if (remove(path_temporary.c_str()) != 0) {
+            LOG_ERR("%s: unable to delete temporary file: %s\n", __func__, path_temporary.c_str());
+        }
+    }
+    if (!success) {
+        LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
+        return -1; // max attempts reached
+    }
+
+    return head->status;
 }
 
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
@@ -411,7 +442,7 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
         headers.emplace(h.first, h.second);
     }
     if (headers.find("User-Agent") == headers.end()) {
-        headers.emplace("User-Agent", "llama-cpp/" + build_info);
+        headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
     }
 
     if (params.timeout > 0) {
@@ -438,12 +469,15 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
 
 int common_download_file_single(const std::string & url,
                                 const std::string & path,
-                                const std::string & bearer_token,
-                                bool offline,
-                                const common_header_list & headers,
+                                const common_download_opts & opts,
                                 bool skip_etag) {
-    if (!offline) {
-        return common_download_file_single_online(url, path, bearer_token, headers, skip_etag);
+    if (!opts.offline) {
+        ProgressBar tty_cb;
+        common_download_opts online_opts = opts;
+        if (!online_opts.callback) {
+            online_opts.callback = &tty_cb;
+        }
+        return common_download_file_single_online(url, path, online_opts, skip_etag);
     }
 
     if (!std::filesystem::exists(path)) {
@@ -452,6 +486,16 @@ int common_download_file_single(const std::string & url,
     }
 
     LOG_DBG("%s: using cached file (offline mode): %s\n", __func__, path.c_str());
+
+    // notify the callback that the file was cached
+    if (opts.callback) {
+        common_download_progress p;
+        p.url = url;
+        p.cached = true;
+        opts.callback->on_start(p);
+        opts.callback->on_done(p, true);
+    }
+
     return 304; // Not Modified - fake cached response
 }
 
@@ -591,6 +635,10 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
         for (const auto & f : files) {
             if (gguf_filename_is_model(f.path) &&
                 std::regex_search(f.path, pattern)) {
+                auto split = get_gguf_split_info(f.path);
+                if (split.count > 1 && split.index != 1) {
+                    continue;
+                }
                 return f;
             }
         }
@@ -600,6 +648,10 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
     if (tag.empty()) {
         for (const auto & f : files) {
             if (gguf_filename_is_model(f.path)) {
+                auto split = get_gguf_split_info(f.path);
+                if (split.count > 1 && split.index != 1) {
+                    continue;
+                }
                 return f;
             }
         }
@@ -618,20 +670,21 @@ static void list_available_gguf_files(const hf_cache::hf_files & files) {
 }
 
 struct hf_plan {
+    hf_cache::hf_file primary;
     hf_cache::hf_files model_files;
     hf_cache::hf_file mmproj;
 };
 
-static hf_plan get_hf_plan(const common_params_model        & model,
-                           const std::string                & token,
-                           const common_download_model_opts & opts) {
+static hf_plan get_hf_plan(const common_params_model  & model,
+                           const common_download_opts & opts,
+                           bool download_mmproj) {
     hf_plan plan;
     hf_cache::hf_files all;
 
     auto [repo, tag] = common_download_split_repo_tag(model.hf_repo);
 
     if (!opts.offline) {
-        all = hf_cache::get_repo_files(repo, token);
+        all = hf_cache::get_repo_files(repo, opts.bearer_token);
     }
     if (all.empty()) {
         all = hf_cache::get_cached_files(repo);
@@ -663,9 +716,10 @@ static hf_plan get_hf_plan(const common_params_model        & model,
         }
     }
 
+    plan.primary = primary;
     plan.model_files = get_split_files(all, primary);
 
-    if (opts.download_mmproj) {
+    if (download_mmproj) {
         plan.mmproj = find_best_mmproj(all, primary.path);
     }
 
@@ -700,10 +754,9 @@ static std::vector<download_task> get_url_tasks(const common_params_model & mode
     return tasks;
 }
 
-common_download_model_result common_download_model(const common_params_model        & model,
-                                                   const std::string                & bearer_token,
-                                                   const common_download_model_opts & opts,
-                                                   const common_header_list         & headers) {
+common_download_model_result common_download_model(const common_params_model  & model,
+                                                   const common_download_opts & opts,
+                                                   bool download_mmproj) {
     common_download_model_result result;
     std::vector<download_task> tasks;
     hf_plan hf;
@@ -711,7 +764,7 @@ common_download_model_result common_download_model(const common_params_model    
     bool is_hf = !model.hf_repo.empty();
 
     if (is_hf) {
-        hf = get_hf_plan(model, bearer_token, opts);
+        hf = get_hf_plan(model, opts, download_mmproj);
         for (const auto & f : hf.model_files) {
             tasks.push_back({f.url, f.local_path});
         }
@@ -732,8 +785,8 @@ common_download_model_result common_download_model(const common_params_model    
     std::vector<std::future<bool>> futures;
     for (const auto & task : tasks) {
         futures.push_back(std::async(std::launch::async,
-            [&task, &bearer_token, offline = opts.offline, &headers, is_hf]() {
-                int status = common_download_file_single(task.url, task.path, bearer_token, offline, headers, is_hf);
+            [&task, &opts, is_hf]() {
+                int status = common_download_file_single(task.url, task.path, opts, is_hf);
                 return is_http_status_ok(status);
             }
         ));
@@ -749,7 +802,7 @@ common_download_model_result common_download_model(const common_params_model    
         for (const auto & f : hf.model_files) {
             hf_cache::finalize_file(f);
         }
-        result.model_path = hf.model_files[0].final_path;
+        result.model_path = hf.primary.final_path;
 
         if (!hf.mmproj.path.empty()) {
             result.mmproj_path = hf_cache::finalize_file(hf.mmproj);
@@ -869,7 +922,9 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string local_path = fs_get_cache_file(model_filename);
 
         const std::string blob_url = url_prefix + "/blobs/" + gguf_digest;
-        const int http_status = common_download_file_single(blob_url, local_path, token, false, {});
+        common_download_opts opts;
+        opts.bearer_token = token;
+        const int http_status = common_download_file_single(blob_url, local_path, opts);
         if (!is_http_status_ok(http_status)) {
             throw std::runtime_error("Failed to download Docker Model");
         }

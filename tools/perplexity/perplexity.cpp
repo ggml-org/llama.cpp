@@ -2049,8 +2049,13 @@ int main(int argc, char ** argv) {
     auto * model = llama_init->model();
     auto * ctx   = llama_init->context();
 
-    if (model == NULL) {
+    if (model == nullptr) {
         LOG_ERR("%s: unable to load model\n", __func__);
+        return 1;
+    }
+
+    if (ctx == nullptr) {
+        LOG_ERR("%s: failed to create context\n", __func__);
         return 1;
     }
 
