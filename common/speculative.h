@@ -105,6 +105,8 @@ struct common_speculative_session {
     common_speculative_session(const common_speculative_session &) = delete;
     common_speculative_session & operator=(const common_speculative_session &) = delete;
 
+    // no implementations available
+    bool empty() const;
 
     // call once at the beginning of a new generation
     // some spec implementations use the prompt history to initialize lookup maps

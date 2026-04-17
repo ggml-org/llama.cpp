@@ -906,16 +906,15 @@ private:
 
             // try speculative decoding
             if (spec_type != COMMON_SPECULATIVE_COMPAT_TYPE_NO) {
-                if (mctx) {
-                    SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
-                    return false;
-                }
-
                 auto spec_callback = std::make_unique<server_speculative_callback>(slot.id, *this);
                 slot.spec = std::make_unique<common_speculative_session>(
                     params_base.speculative, std::move(spec_callback), slot.ctx);
 
-                SLT_INF(slot, "%s", "speculative decoding context initialized\n");
+                if (slot.spec->empty()) {
+                    slot.spec.reset();
+                } else {
+                    SLT_INF(slot, "%s", "speculative decoding context initialized\n");
+                }
             }
 
             SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);

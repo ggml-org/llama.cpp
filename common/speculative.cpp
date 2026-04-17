@@ -1402,6 +1402,10 @@ common_speculative_session::~common_speculative_session() {
     common_speculative_free(pimpl->spec);
 }
 
+bool common_speculative_session::empty() const {
+    return pimpl->spec == nullptr;
+}
+
 void common_speculative_session::begin(const llama_tokens & prompt_history) {
     pimpl->begin(prompt_history);
 }
