@@ -1204,12 +1204,8 @@ void common_speculative_print_stats(const common_speculative * spec) {
     }
 }
 
-common_speculative_callback::~common_speculative_callback() = default;
-
 struct common_speculative_session::impl {
     common_params_speculative params;
-
-    common_speculative_callback_ptr callback;
 
     common_speculative * spec = nullptr;
 
@@ -1219,15 +1215,9 @@ struct common_speculative_session::impl {
 
     std::vector<int32_t> i_batch;
 
-    // Speculative decoding stats
-    int32_t n_draft_total    = 0;   // Total draft tokens generated
-    int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
-
     impl(
-        const common_params_speculative       & params,
-              common_speculative_callback_ptr   callback,
-              llama_context                   * ctx_tgt)
-        : params(params), callback(std::move(callback)) {
+        const common_params_speculative & params,
+              llama_context             * ctx_tgt) : params(params) {
         spec = common_speculative_init(this->params, ctx_tgt);
     }
 
@@ -1235,7 +1225,7 @@ struct common_speculative_session::impl {
         common_speculative_begin(spec, prompt_history);
     }
 
-    llama_tokens compute_draft(
+    bool generate_draft(
                const llama_tokens & tokens,
                      llama_token    id_last,
                const int            n_draft_max) {
@@ -1244,59 +1234,40 @@ struct common_speculative_session::impl {
 
         if (n_draft_max == 0) {
             this->clear();
-            return {};
+            return false;
         }
 
         if (is_partial) {
             if (draft.empty()) {
                 this->clear();
-                return {};
             }
 
             LOG_DBG("%s: reuse shortened draft, #tokens=%zu, id_last=%d, size=%zu\n", __func__, tokens.size(), id_last, draft.size());
-        } else {
-            // call the speculative implementation to create a draft
-            draft = common_speculative_draft(spec, params, tokens, id_last);
-            LOG_DBG("draft: id_last=%d, #draft=%zu\n", id_last, draft.size());
 
-            if (draft.empty()) {
-                this->clear();
-                return {};
-            }
-
-            if (draft.size() > (size_t) n_draft_max) {
-                LOG_WRN("draft size %d exceeds max %d, truncating\n", (int) draft.size(), n_draft_max);
-                draft.resize(n_draft_max);
-            }
-
-            if (draft.size() < (size_t) params.n_min) {
-                LOG_DBG("ignoring small draft: %d < %d\n", (int) draft.size(), params.n_min);
-                this->clear();
-                return {};
-            }
-
-            const bool do_checkpoint = params.use_checkpoints;
-            if (do_checkpoint) {
-                if (tokens.size() > 5 && draft.size() >= 3) {
-                    LOG_DBG("%s: #tokens=%zu, draft.size=%zu, do_checkpoint=%s, id_last=%d, tokens=[..., %d, %d, %d], draft=[%d, %d, %d, ...]\n",
-                            __func__, tokens.size(), draft.size(),
-                            do_checkpoint ? "yes" : "no", id_last,
-                            tokens[tokens.size() - 3],
-                            tokens[tokens.size() - 2],
-                            tokens[tokens.size() - 1],
-                            draft[0], draft[1], draft[2]);
-                }
-
-                const size_t n = callback->create_checkpoint();
-                if (n == 0) {
-                    LOG_WRN("%s: checkpoint creation failed (#tokens=%zu)\n", __func__, tokens.size());
-                    this->clear();
-                    return {};
-                }
-            }
+            return false;
         }
 
-        return draft;
+        // call the speculative implementation to create a draft
+        draft = common_speculative_draft(spec, params, tokens, id_last);
+        LOG_DBG("draft: id_last=%d, #draft=%zu\n", id_last, draft.size());
+
+        if (draft.empty()) {
+            this->clear();
+            return false;
+        }
+
+        if (draft.size() > (size_t) n_draft_max) {
+            LOG_WRN("draft size %d exceeds max %d, truncating\n", (int) draft.size(), n_draft_max);
+            draft.resize(n_draft_max);
+        }
+
+        if (draft.size() < (size_t) params.n_min) {
+            LOG_DBG("ignoring small draft: %d < %d\n", (int) draft.size(), params.n_min);
+            this->clear();
+            return false;
+        }
+
+        return true;
     }
 
     void add_to_batch(
@@ -1322,10 +1293,10 @@ struct common_speculative_session::impl {
         auto ids = common_sampler_sample_and_accept_n(smpl, ctx, i_batch, draft);
 
         i_batch.clear();
-
         is_partial = false;
 
         LOG_WRN("%s: n_draft=%zu, ids.size=%zu\n", __func__, draft.size(), ids.size());
+
         if (ids.size() < draft.size() + 1) {
             // the main model rejected some tokens
             LOG_DBG("%s: partial acceptance: %zu < %zu\n", __func__, draft.size(), draft.size());
@@ -1333,8 +1304,6 @@ struct common_speculative_session::impl {
             if (params.use_checkpoints) {
                 // we shorten the draft and retry
                 draft.resize(ids.size() - 1);
-
-                callback->restore_checkpoint();
 
                 is_partial = true;
 
@@ -1359,15 +1328,13 @@ struct common_speculative_session::impl {
         GGML_ASSERT(spec);
 
         is_partial = false;
-
         draft.clear();
     }
 };
 
 common_speculative_session::common_speculative_session(
-        const common_params_speculative       & params,
-              common_speculative_callback_ptr   callback,
-              llama_context                   * ctx_tgt) : pimpl(new impl{params, std::move(callback), ctx_tgt}) {
+        const common_params_speculative & params,
+              llama_context             * ctx_tgt) : pimpl(new impl{params, ctx_tgt}) {
 }
 
 common_speculative_session::~common_speculative_session() {
@@ -1382,11 +1349,11 @@ void common_speculative_session::begin(const llama_tokens & prompt_history) {
     pimpl->begin(prompt_history);
 }
 
-llama_tokens common_speculative_session::compute_draft(
+bool common_speculative_session::generate_draft(
        const llama_tokens & prompt,
              llama_token    id_last,
              int            n_draft_max) {
-    return pimpl->compute_draft(prompt, id_last, n_draft_max);
+    return pimpl->generate_draft(prompt, id_last, n_draft_max);
 }
 
 void common_speculative_session::add_to_batch(

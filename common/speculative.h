@@ -63,27 +63,11 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
 
-// callback implemented by the server
-struct common_speculative_callback {
-    virtual ~common_speculative_callback();
-
-    // Creates a checkpoint of the current state of the context.
-    // Returns the size of the checkpoint in bytes.
-    virtual size_t create_checkpoint() = 0;
-
-    // Restore a checkpoint previously created by create_checkpoint().
-    // Returns the size of the restored checkpoint in bytes.
-    virtual size_t restore_checkpoint() = 0;
-};
-
-typedef std::unique_ptr<common_speculative_callback> common_speculative_callback_ptr;
-
 // speculative decoding which may use checkpoints to rewind in tokens history
 struct common_speculative_session {
     common_speculative_session(
-            const common_params_speculative       & params,
-                  common_speculative_callback_ptr   callback,
-                  llama_context                   * ctx_tgt);
+            const common_params_speculative & params,
+                  llama_context             * ctx_tgt);
 
     ~common_speculative_session();
 
@@ -95,7 +79,7 @@ struct common_speculative_session {
     void begin(const llama_tokens & prompt_history);
 
     // do speculative decoding to compute a draft of tokens
-    llama_tokens compute_draft(
+    bool generate_draft(
             const llama_tokens & prompt,
                   llama_token    id_last,
                   int            n_draft_max);
