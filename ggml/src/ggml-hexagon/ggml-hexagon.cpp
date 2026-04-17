@@ -2698,7 +2698,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * n = graph->nodes[i];
-        if (op_is_compute(n)) {
+        if (op_is_compute(n) && (opt_opmask & HTP_OPMASK_QUEUE)) {
             sess->enqueue_op(op_remap_to_htp(n), n);
         }
     }
