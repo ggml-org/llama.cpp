@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <list>
 
 #if defined(GGML_USE_HIP)
 #define GGML_COMMON_DECL_HIP
@@ -1183,7 +1184,8 @@ struct ggml_cuda_graph {
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
     size_t num_nodes = 0;
-    std::vector<cudaGraphNode_t> nodes;
+    size_t allocated_memory_size = 0;
+    bool committed = false;
     bool disable_due_to_gpu_arch = false;
     bool warmup_complete = false;
     uint64_t uid = 0;
@@ -1353,6 +1355,29 @@ struct ggml_cuda_stream_context {
     }
 };
 
+#ifdef USE_CUDA_GRAPH 
+
+class ggml_cuda_graph_cache
+{
+    class ggml_cuda_graph_cache_implementation;
+    std::unique_ptr<ggml_cuda_graph_cache_implementation> pImpl;
+    
+public:
+    ggml_cuda_graph* get_graph(const void* first_node_ptr); 
+    void commit_graph(const void* first_node_ptr);
+    void remove_unused();
+    bool any_graph_enabled()      const;
+    bool any_graph_has_instance() const;
+    
+    explicit ggml_cuda_graph_cache();    
+    ~ggml_cuda_graph_cache();     
+    ggml_cuda_graph_cache(ggml_cuda_graph_cache&&)                  = delete;
+    ggml_cuda_graph_cache& operator=(ggml_cuda_graph_cache&&)       = delete;
+    ggml_cuda_graph_cache(const ggml_cuda_graph_cache&)             = delete;    
+    ggml_cuda_graph_cache& operator=(const ggml_cuda_graph_cache&)  = delete;
+};
+
+#endif
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -1363,39 +1388,35 @@ struct ggml_backend_cuda_context {
 
     int curr_stream_no = 0;
 
-#ifdef USE_CUDA_GRAPH
-    // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
-    // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
-    std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
+#ifdef USE_CUDA_GRAPH  
+    ggml_cuda_graph_cache cuda_graphs;
 
+    // Mark a graph as committed and update memory usage. This should be called after successfully instantiating a CUDA graph instance from the ggml graph. 
+    void commit_graph(const void * query_graph_key) 
+    {
+        cuda_graphs.commit_graph(query_graph_key);
+    }
+    
+    // Scan through the cache and remove graphs that are not used in the current execution (i.e. those that have no cudaGraph_t instance)
+    void remove_unused_graphs() 
+    {
+        cuda_graphs.remove_unused();
+    }
+    
+    // Read graph from cache or create new graph if not found
     ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
-        auto it = cuda_graphs.find(first_node_ptr);
-        if (it == cuda_graphs.end()) {
-            cuda_graphs[first_node_ptr] = std::make_unique<ggml_cuda_graph>();
-            return cuda_graphs[first_node_ptr].get();
-        }
-        return it->second.get();
+        return cuda_graphs.get_graph(first_node_ptr);
     }
 
     // Check if any CUDA graph is enabled for this context (used by kernels that need to know
     // if graphs are in use without having access to the specific graph key)
     bool any_cuda_graph_enabled() const {
-        for (const auto & [key, graph] : cuda_graphs) {
-            if (graph && graph->is_enabled()) {
-                return true;
-            }
-        }
-        return false;
+        return cuda_graphs.any_graph_enabled();      
     }
 
     // Check if any CUDA graph has an instance for this context
     bool any_cuda_graph_has_instance() const {
-        for (const auto & [key, graph] : cuda_graphs) {
-            if (graph && graph->instance != nullptr) {
-                return true;
-            }
-        }
-        return false;
+        return cuda_graphs.any_graph_has_instance();
     }
 #endif // USE_CUDA_GRAPH
 
