@@ -145,13 +145,15 @@ bool server_http_context::init(const common_params & params) {
             "/v1/models",
             "/api/tags",
             "/",
-            "/index.html",
-            "/bundle.js",
-            "/bundle.css",
         };
 
         // If API key is not set, skip validation
         if (api_keys.empty()) {
+            return true;
+        }
+
+        // If path contains dot ( index.html, abc.css, abc.js ... )
+        if (req.path.find(".") != std::string::npos && req.path.rfind("/v1/", 0) == std::string::npos) {
             return true;
         }
 
