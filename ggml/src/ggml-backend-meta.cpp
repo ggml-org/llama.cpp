@@ -1595,7 +1595,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         }
         backend_ctx->max_nnodes = cgraph->n_nodes;
         max_nnodes_raised = true;
-        needs_rebuild = true;
+        assert(needs_rebuild);
     }
 
     size_t n_subgraphs  = 0;
@@ -1618,7 +1618,6 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             }
         }
 
-        {
         // For MoE models it may make sense to delay the AllReduce in order to reduce I/O:
         auto get_i_delayed = [&](const int i) -> int {
             int id = i; // i_delayed
@@ -1711,7 +1710,6 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             i_start = i + 1;
         }
         GGML_ASSERT(i_start == cgraph->n_nodes);
-        }
 
         backend_ctx->last_uid          = cgraph->uid;
         backend_ctx->last_n_subgraphs  = n_subgraphs;
@@ -1729,7 +1727,6 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         backend_ctx->max_tmp_size = max_tmp_size;
     }
 
-    bool context_reallocated = false;
     if (max_nnodes_raised || n_subgraphs > backend_ctx->max_subgraphs) {
         backend_ctx->max_subgraphs = std::max(backend_ctx->max_subgraphs, n_subgraphs);
         const size_t n_reduce_steps = backend_ctx->n_reduce_steps();
@@ -1758,10 +1755,11 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         for (size_t k = 0; k < backend_ctx->nodes_aux.size(); k++) {
             backend_ctx->nodes_aux[k] = ggml_new_tensor_1d(backend_ctx->ctx.get(), GGML_TYPE_F32, 1);
         }
-        context_reallocated = true;
+
+        assert(needs_rebuild);
     }
 
-    if (needs_rebuild || context_reallocated) {
+    if (needs_rebuild) {
         for (size_t j = 0; j < n_backends; j++) {
             auto & bcj = backend_ctx->backend_configs[j];
             for (size_t i_graph = 0; i_graph < n_subgraphs; i_graph++) {
