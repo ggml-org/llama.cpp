@@ -156,6 +156,22 @@ static bool category_is_attn_v(tensor_category cat) {
            cat == tensor_category::ATTENTION_KV_B;
 }
 
+// check if a tensor belongs to a shared-KV layer (layers that reuse KV cache from earlier layers)
+// in such models, layers >= n_layer_kv_from_start do not use their own attn_k/attn_v weights
+// during inference, so these tensors will never appear in the importance matrix
+static bool tensor_is_in_shared_kv_layer(const std::string & tensor_name, const llama_hparams & hparams) {
+    if (hparams.n_layer_kv_from_start < 0) {
+        return false;  // model does not use shared KV
+    }
+    static const std::regex pattern(R"(blk\.(\d+)\.)");
+    std::smatch match;
+    if (std::regex_search(tensor_name, match, pattern)) {
+        uint32_t layer_idx = std::stoi(match[1]);
+        return !hparams.has_kv(layer_idx);
+    }
+    return false;
+}
+
 //
 // quantization state
 //
@@ -413,6 +429,15 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
 
     // TODO: avoid hardcoded tensor names - use the TN_* constants
     const llm_arch arch = qs.model.arch;
+
+    // for models with shared KV layers, attn_k/attn_v weights in shared layers are unused
+    // during inference (the KV cache is reused from earlier layers). These tensors will not
+    // appear in the importance matrix, so use Q8_0 which doesn't require one.
+    if ((category == tensor_category::ATTENTION_K || category == tensor_category::ATTENTION_V) &&
+            tensor_is_in_shared_kv_layer(name, qs.model.hparams)) {
+        LLAMA_LOG_INFO("(shared-KV layer, unused at inference)\n");
+        return GGML_TYPE_Q8_0;
+    }
 
     auto use_more_bits = [](int i_layer, int n_layers) -> bool {
         return i_layer < n_layers/8 || i_layer >= 7*n_layers/8 || (i_layer - n_layers/8)%3 == 2;
