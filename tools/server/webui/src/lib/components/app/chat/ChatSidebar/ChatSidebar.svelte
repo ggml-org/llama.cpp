@@ -34,10 +34,14 @@
 	);
 
 	let filteredConversations = $derived.by(() => {
-		if (searchQuery.trim().length > 0) {
-			return conversations().filter((conversation: { name: string }) =>
-				conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
-			);
+		if (isSearchModeActive) {
+			if (searchQuery.trim().length > 0) {
+				return conversations().filter((conversation: { name: string }) =>
+					conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
+				);
+			}
+
+			return [];
 		}
 
 		return conversations();
