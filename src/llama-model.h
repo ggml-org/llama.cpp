@@ -84,6 +84,7 @@ enum llm_type {
     LLM_TYPE_26B,
     LLM_TYPE_27B,
     LLM_TYPE_30B,
+    LLM_TYPE_31B,
     LLM_TYPE_32B,
     LLM_TYPE_34B,
     LLM_TYPE_35B,
@@ -118,6 +119,7 @@ enum llm_type {
     LLM_TYPE_16B_A1B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_24B_A2B, // lfm2moe
+    LLM_TYPE_26B_A4B, // Gemma4
     LLM_TYPE_30B_A3B,
     LLM_TYPE_31B_A3_5B,
     LLM_TYPE_35B_A3B, // Qwen3.5

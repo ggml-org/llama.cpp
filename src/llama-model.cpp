@@ -432,6 +432,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_26B:           return "26B";
         case LLM_TYPE_27B:           return "27B";
         case LLM_TYPE_30B:           return "30B";
+        case LLM_TYPE_31B:           return "31B";
         case LLM_TYPE_32B:           return "32B";
         case LLM_TYPE_34B:           return "34B";
         case LLM_TYPE_35B:           return "35B";
@@ -466,6 +467,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_16B_A1B:       return "16B.A1B";
         case LLM_TYPE_21B_A3B:       return "21B.A3B";
         case LLM_TYPE_24B_A2B:       return "24B.A2B";
+        case LLM_TYPE_26B_A4B:       return "26B.A4B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
         case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
         case LLM_TYPE_35B_A3B:       return "35B.A3B";
@@ -1624,8 +1626,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
 
                 switch (hparams.n_layer) {
+                    case 30: type = LLM_TYPE_26B_A4B; break;
                     case 35: type = LLM_TYPE_E2B; break;
-                    case 42: type = LLM_TYPE_E4B; break; // to confirm: E4B or E5B?
+                    case 42: type = LLM_TYPE_E4B; break;
+                    case 60: type = LLM_TYPE_31B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
