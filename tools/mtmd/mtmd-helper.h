@@ -49,7 +49,7 @@ MTMD_API llama_pos mtmd_helper_get_n_pos(const mtmd_input_chunks * chunks);
 
 // helper to get the list of relative positions corresponding to the embedding tokens, to be used by M-RoPE
 // out_pos must have length == mtmd_helper_get_n_tokens(image)
-MTMD_API void mtmd_helper_image_get_decoder_pos(const mtmd_image_tokens * image, mtmd_decoder_pos * out_pos);
+MTMD_API void mtmd_helper_image_get_decoder_pos(const mtmd_image_tokens * image, struct mtmd_decoder_pos * out_pos);
 
 // helper function that automatically:
 // 1. run llama_decode() on text chunks
