@@ -597,9 +597,6 @@ static void ensure_tsi_runtime_initialized() {
     // IMPORTANT: fixed-size arrays in this file => clamp
     if (txe > (int)NUM_OF_TXES) txe = (int)NUM_OF_TXES;
 
-    // INTENTIONAL PLACEHOLDER
-    multi_thread_enable = false;
-    num_of_txes = 1;
     tsi_initialize(num_of_txes, NULL);
 
     if (multi_thread_enable) {
