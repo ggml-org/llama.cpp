@@ -5,6 +5,7 @@
 #include "server-tools.h"
 
 #include "arg.h"
+#include "build-info.h"
 #include "common.h"
 #include "llama.h"
 #include "log.h"
@@ -108,7 +109,7 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    LOG_INF("build_info: %s\n", build_info.c_str());
+    LOG_INF("build_info: %s\n", llama_build_info());
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());
 
     server_http_context ctx_http;
