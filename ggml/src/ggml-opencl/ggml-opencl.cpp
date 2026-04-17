@@ -5116,115 +5116,8 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             GGML_ASSERT(tensor->ne[2] == 1);
             GGML_ASSERT(tensor->ne[3] == 1);
 
-            // Transpose weights
-            size_t q_size_bytes = K * M / 4 * sizeof(float);
-            cl_buffer_region region;
-            region.origin = 0;
-            region.size = q_size_bytes;
-            cl_mem qT_d = clCreateSubBuffer(
-                backend_ctx->prealloc_quant_trans.buffer,
-                0,
-                CL_BUFFER_CREATE_TYPE_REGION,
-                &region,
-                &err);
-            CL_CHECK(err);
-
-            cl_mem q_d_image1D;
-            cl_mem qT_d_image1D;
-
-            cl_image_format img_fmt_1d;
-            cl_image_desc img_desc_1d;
-
-            img_fmt_1d = { CL_RGBA, CL_FLOAT };
-            memset(&img_desc_1d, 0, sizeof(img_desc_1d));
-            img_desc_1d.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-            img_desc_1d.image_width = M * K / 4 / 4;
-            img_desc_1d.buffer = extra->q;
-            q_d_image1D = clCreateImage(context, 0, &img_fmt_1d, &img_desc_1d, NULL, &err);
-            CL_CHECK(err);
-
-            img_fmt_1d = { CL_RGBA, CL_FLOAT };
-            memset(&img_desc_1d, 0, sizeof(img_desc_1d));
-            img_desc_1d.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-            img_desc_1d.image_width = M * K / 4 / 4;
-            img_desc_1d.buffer = qT_d;
-            qT_d_image1D = clCreateImage(context, 0, &img_fmt_1d, &img_desc_1d, NULL, &err);
-            CL_CHECK(err);
-
-            int height_q = M / 4;
-            int width_q = K / 4 / 4;
-            kernel = backend_ctx->kernel_transpose_32;
-
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &q_d_image1D));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &qT_d_image1D));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int),    &height_q));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(int),    &width_q));
-
-            size_t local_size_q[3] = {4, 16, 1};
-            size_t global_size_q[3] = {static_cast<size_t>(width_q), static_cast<size_t>(height_q), 1};
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_size_q, local_size_q, 0, NULL, &evt));
-            CL_CHECK(clWaitForEvents(1, &evt));
-
-            // Transpose scales
-            size_t d_size_bytes = M * (K / 32) * 2;
-            region.origin = 0;
-            region.size = d_size_bytes;
-            cl_mem dT_d = clCreateSubBuffer(
-                backend_ctx->prealloc_scales_trans.buffer,
-                0,
-                CL_BUFFER_CREATE_TYPE_REGION,
-                &region,
-                &err);
-            CL_CHECK(err);
-
-            cl_mem d_d_image1D;
-            cl_mem dT_d_image1D;
-
-            memset(&img_desc_1d, 0, sizeof(img_desc_1d));
-            img_fmt_1d = { CL_R, CL_HALF_FLOAT };
-            img_desc_1d.image_width = M * K / 32;
-            img_desc_1d.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-            img_desc_1d.buffer = extra->d;
-            d_d_image1D = clCreateImage(context, 0, &img_fmt_1d, &img_desc_1d, NULL, &err);
-            CL_CHECK(err);
-
-            img_fmt_1d = { CL_RGBA, CL_HALF_FLOAT };
-            memset(&img_desc_1d, 0, sizeof(img_desc_1d));
-            img_desc_1d.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-            img_desc_1d.image_width = M * K / 32 / 4;
-            img_desc_1d.buffer = dT_d;
-            dT_d_image1D = clCreateImage(context, 0, &img_fmt_1d, &img_desc_1d, NULL, &err);
-            CL_CHECK(err);
-
-            int height_s = M / 4;
-            int width_s = K / 32;
-
-            kernel = backend_ctx->kernel_transpose_16_4x1;
-
-            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_d_image1D));
-            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &dT_d_image1D));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int), &height_s));
-            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(int), &width_s));
-
-            size_t local_size_s[3] = {4, 16, 1};
-            size_t global_size_s[3] = {static_cast<size_t>(width_s), static_cast<size_t>(height_s), 1};
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_size_s, local_size_s, 0, NULL, &evt));
-            CL_CHECK(clWaitForEvents(1, &evt));
-
-            // copy transposed buffer contents to original buffers
-            CL_CHECK(clEnqueueCopyBuffer(queue, qT_d, extra->q, 0, 0, q_size_bytes, 0, NULL, &evt));
-            CL_CHECK(clWaitForEvents(1, &evt));
-
-            CL_CHECK(clEnqueueCopyBuffer(queue, dT_d, extra->d, 0, 0, d_size_bytes, 0, NULL, &evt));
-            CL_CHECK(clWaitForEvents(1, &evt));
-
-            CL_CHECK(clReleaseMemObject(qT_d));
-            CL_CHECK(clReleaseMemObject(dT_d));
-
-            CL_CHECK(clReleaseMemObject(q_d_image1D));
-            CL_CHECK(clReleaseMemObject(d_d_image1D));
-            CL_CHECK(clReleaseMemObject(qT_d_image1D));
-            CL_CHECK(clReleaseMemObject(dT_d_image1D));
+            transpose_2d_as_32b(backend_ctx, extra->q, extra->q, size_q, K/4,  M);
+            transpose_2d_as_16b(backend_ctx, extra->d, extra->d, size_d, K/32, M);
         } // end transpose
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
@@ -9956,18 +9849,17 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
     GGML_ASSERT(dst);
     GGML_ASSERT(dst->extra);
 
-    const enum ggml_type src0t = src0->type;
-    const enum ggml_type src1t = src1->type;
-
-    GGML_ASSERT(src0t == GGML_TYPE_Q8_0);
-    GGML_ASSERT(src1t == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
-
     ggml_tensor_extra_cl_q8_0 * extra0_q8_0 = (ggml_tensor_extra_cl_q8_0 *)src0->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
 
     GGML_ASSERT(src1->view_offs == 0);
     GGML_ASSERT(dst->view_offs == 0);
@@ -9989,148 +9881,112 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
     cl_context context = backend_ctx->context;
     cl_kernel kernel;
 
-    // init CL objects
-    cl_int              status;
-    cl_image_format     img_fmt_1d;
-    cl_image_desc       img_desc_1d;
+    cl_int              err;
+    cl_image_format     img_fmt;
+    cl_image_desc       img_desc;
     cl_buffer_region    region;
-    cl_mem              A_image1d;
-    cl_mem              B_image1d;
-    cl_mem              B_sub_buffer;
-    cl_mem              S_image1d;
-    // for B transpose
-    cl_mem              B_image1d_trans = nullptr;
-    cl_mem              B_d = nullptr;
-
-    cl_mem              D_image1d;
-    cl_mem              D_sub_buffer;
 
     int M = ne01;
     int N = ne1;
     int K = ne00;
 
-    // create an image for A
-    img_fmt_1d = { CL_R, CL_FLOAT};
-    memset(&img_desc_1d, 0, sizeof(img_desc_1d));
-    img_desc_1d.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-    img_desc_1d.image_width = M * K / 4;    // Divide by 4 for char -> float
-    img_desc_1d.buffer = extra0_q8_0->q;
-    A_image1d = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt_1d, &img_desc_1d, NULL, &status);
-    CL_CHECK(status);
+    if (ne1 == 1) {
+        cl_mem q_img = nullptr;
+        cl_mem b_sub_buf = nullptr;
+        cl_mem b_img = nullptr;
 
-    // create an image for Scale
-    img_fmt_1d = { CL_R, CL_HALF_FLOAT};
-    memset(&img_desc_1d, 0, sizeof(img_desc_1d));
-    img_desc_1d.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-    img_desc_1d.image_width = M * K / 32;    // Block size is 32
-    img_desc_1d.buffer = extra0_q8_0->d;
-    S_image1d = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt_1d, &img_desc_1d, NULL, &status);
-    CL_CHECK(status);
+        // image for q
+        img_fmt = { CL_R, CL_UNSIGNED_INT32};
+        memset(&img_desc, 0, sizeof(img_desc));
+        img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+        img_desc.image_width = M * K / 4;
+        img_desc.buffer = extra0_q8_0->q;
+        CL_CHECK((q_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
 
-    // create a sub_buffer for B
-    region.origin = (extra1->offset); // + src1->view_offs);
-    region.size = K * N * sizeof(float);
-    B_sub_buffer = clCreateSubBuffer((extra1->data_device), 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
-    CL_CHECK(status);
+        // create a sub_buffer for B
+        region.origin = offset1;
+        region.size = K * N * sizeof(float);
+        CL_CHECK((b_sub_buf = clCreateSubBuffer((extra1->data_device), 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
 
-    // create an image for B from sub_buffer: RGBA (OCL)
-    img_fmt_1d = {CL_RGBA, CL_FLOAT};
-    memset(&img_desc_1d, 0, sizeof(img_desc_1d));
-    img_desc_1d.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-    img_desc_1d.image_width = K * N / 4;
-    img_desc_1d.buffer = B_sub_buffer;
-    B_image1d = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt_1d, &img_desc_1d, NULL, &status);
-    CL_CHECK(status);
+        // image for activations
+        img_fmt = {CL_RGBA, CL_FLOAT};
+        memset(&img_desc, 0, sizeof(img_desc));
+        img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+        img_desc.image_width = K * N / 4;
+        img_desc.buffer = b_sub_buf;
+        CL_CHECK((b_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
 
-    // Create subbuffer and image1d_buffer for dst
-    region.origin = (extrad->offset); // + dst->view_offs;
-    region.size = M * N * sizeof(float);
-    D_sub_buffer = clCreateSubBuffer((extrad->data_device), 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
-    CL_CHECK(status);
-
-    img_fmt_1d = {CL_R, CL_FLOAT};
-    memset(&img_desc_1d, 0, sizeof(img_desc_1d));
-    img_desc_1d.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-    img_desc_1d.image_width = M * N;
-    img_desc_1d.buffer = D_sub_buffer;
-    D_image1d = clCreateImage(context, CL_MEM_WRITE_ONLY, &img_fmt_1d, &img_desc_1d, NULL, &status);
-    CL_CHECK(status);
-
-    size_t local_work_size[3] = {1, 1, 1};
-    size_t global_work_size[3] = {1, 1, 1};
-
-    if (N == 1) {
         kernel = backend_ctx->CL_mul_mat_vec_q8_0_f32;
 
         int r2 = 1;
         int r3 = 1;
-        cl_uint k_arg = 0;
 
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_mem),   &A_image1d));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_mem),   &extra0_q8_0->d));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_mem),   &B_image1d));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_ulong), &extra1->offset));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_mem),   &extrad->data_device));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(cl_ulong), &extrad->offset));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(int),      &ne00));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(int),      &ne01));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(int),      &ne02));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(int),      &ne10));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(int),      &ne12));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(int),      &ne0));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(int),      &ne1));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(int),      &r2));
-        CL_CHECK(clSetKernelArg(kernel,  k_arg++, sizeof(int),      &r3));
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &q_img));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q8_0->d));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &b_img));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &extra1->offset));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &extrad->offset));
+        CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+        CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
+        CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
+        CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne10));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne0));
+        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne1));
+        CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &r2));
+        CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &r3));
 
         size_t wavesize = backend_ctx->adreno_wave_size;
-        local_work_size[0] = wavesize;
-        local_work_size[1] = 4; // reduce factor
-        local_work_size[2] = 1;
+        size_t local_work_size[]  = { wavesize, 4, 1 };
+        size_t global_work_size[] = { CEIL_DIV(M, wavesize)*wavesize, 4, 1 };
 
-        global_work_size[0] = ((M + wavesize - 1) / wavesize) * wavesize;
-        global_work_size[1] = 4; // reduce factor
-        global_work_size[2] = 1;
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+
+        CL_CHECK(clReleaseMemObject(q_img));
+        CL_CHECK(clReleaseMemObject(b_img));
+        CL_CHECK(clReleaseMemObject(b_sub_buf));
     } else {
-        cl_ulong offsetd = extrad->offset + dst->view_offs;
-        int padding;
+        cl_mem b_sub_buf = nullptr;
+        cl_mem b_sub_buf_trans = nullptr;
+        cl_mem b_img = nullptr;
+        cl_mem b_img_trans = nullptr;
 
-        //how many extra elements beyond multiple of 8
+        // subbuffer for activations
+        region.origin = offset1;
+        region.size = K * N * sizeof(float);
+        CL_CHECK((b_sub_buf = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+
+        // image for activations
+        img_fmt = {CL_RGBA, CL_FLOAT};
+        memset(&img_desc, 0, sizeof(img_desc));
+        img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+        img_desc.image_width = K * N / 4;
+        img_desc.buffer = b_sub_buf;
+        CL_CHECK((b_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
+
+        // pad N to multiple of 8
         int extra_elements = N % 8;
-
-        //how much padding to add
-        padding = 0;
+        int padding = 0;
         if (extra_elements > 0){
             padding = 8 - extra_elements;
         }
 
-        // Specify the starting offset (in bytes)
+        // subbuffer for transposed activations
         region.origin = 0;
-        // Specify the size of the sub-buffer (divide by 2 for FP16)
         region.size = K * (N + padding) * sizeof(float)/2;
         backend_ctx->prealloc_act_trans.allocate(context, region.size);
-        B_d = clCreateSubBuffer(
-            backend_ctx->prealloc_act_trans.buffer,
-            0,
-            CL_BUFFER_CREATE_TYPE_REGION,
-            &region,
-            &status);
-        CL_CHECK(status);
+        CL_CHECK((b_sub_buf_trans = clCreateSubBuffer(backend_ctx->prealloc_act_trans.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
 
-        cl_image_format image_format_B_d_output = { CL_RGBA, CL_HALF_FLOAT }; //(CL_HALF_FLOAT for FP16)
-        cl_image_desc image_desc_B_d_output = {
-            CL_MEM_OBJECT_IMAGE1D_BUFFER,
-            static_cast<size_t>(K * (N + padding)/4),
-            0, 0, 0, 0, 0, 0, 0, { B_d }
-        };
-        B_image1d_trans = clCreateImage(
-            context,
-            0,
-            &image_format_B_d_output,
-            &image_desc_B_d_output,
-            NULL,
-            &status);
-        CL_CHECK(status);
+        // image for transposed activations
+        img_fmt = {CL_RGBA, CL_HALF_FLOAT};
+        memset(&img_desc, 0, sizeof(img_desc));
+        img_desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+        img_desc.image_width = K * (N + padding) / 4;
+        img_desc.buffer = b_sub_buf_trans;
+        CL_CHECK((b_img_trans = clCreateImage(context, 0, &img_fmt, &img_desc, NULL, &err), err));
 
+        // transpose activations
         int height_B = N/4;
         if (height_B == 0) {
             height_B = 1;
@@ -10139,58 +9995,39 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         int padded_height_B = (N + padding)/4;
 
         kernel = backend_ctx->kernel_transpose_32_16;
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &B_image1d));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &B_image1d_trans));
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &b_img));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &b_img_trans));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int),    &height_B));
         CL_CHECK(clSetKernelArg(kernel, 3, sizeof(int),    &width_B));
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),    &padded_height_B));
 
-        size_t local_size_t[2] = { 1, 16 };
-        size_t global_size_t[2] = {
-            static_cast<size_t>(width_B),
-            static_cast<size_t>(padded_height_B)
-        };
+        size_t local_work_size_t[2] = { 1, 16 };
+        size_t global_work_size_t[2] = { (size_t)width_B, (size_t)padded_height_B };
+        backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size_t, local_work_size_t, dst);
 
-        backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_size_t, local_size_t, dst);
-
+        // gemm
         kernel = backend_ctx->kernel_mul_mm_q8_0_f32_8x4;
-
-        int N_with_padding = N + padding;
+        int padded_N = N + padding;
 
         CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q8_0->q));
         CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q8_0->d));
-        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &B_image1d_trans));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &b_img_trans));
         CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extrad->data_device));
         CL_CHECK(clSetKernelArg(kernel,  4, sizeof(int),      &K));
         CL_CHECK(clSetKernelArg(kernel,  5, sizeof(int),      &M));
-        CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &N_with_padding));
+        CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &padded_N));
         CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &N));
         CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &offsetd));
 
-        global_work_size[0] = (size_t)(N + 7) / 8;
-        global_work_size[1] = (size_t)(M + 3) / 4;
-        global_work_size[2] = 1;
+        size_t global_work_size[] = { (size_t)CEIL_DIV(N, 8), (size_t)CEIL_DIV(M, 4), 1 };
+        size_t local_work_size[]  = { 2, 128, 1 };
 
-        local_work_size[0] = 2;
-        local_work_size[1] = 128;
-        local_work_size[2] = 1;
-    }
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 
-    // enqueue kernel with profiling
-    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-
-    // deallocate sub buffers and images
-    CL_CHECK(clReleaseMemObject(A_image1d));
-    CL_CHECK(clReleaseMemObject(B_sub_buffer));
-    CL_CHECK(clReleaseMemObject(B_image1d));
-    CL_CHECK(clReleaseMemObject(S_image1d));
-    CL_CHECK(clReleaseMemObject(D_sub_buffer));
-    CL_CHECK(clReleaseMemObject(D_image1d));
-    if (B_image1d_trans) {
-        CL_CHECK(clReleaseMemObject(B_image1d_trans));
-    }
-    if (B_d) {
-        CL_CHECK(clReleaseMemObject(B_d));
+        CL_CHECK(clReleaseMemObject(b_img_trans));
+        CL_CHECK(clReleaseMemObject(b_sub_buf_trans));
+        CL_CHECK(clReleaseMemObject(b_img));
+        CL_CHECK(clReleaseMemObject(b_sub_buf));
     }
 #else
     GGML_UNUSED(backend);
