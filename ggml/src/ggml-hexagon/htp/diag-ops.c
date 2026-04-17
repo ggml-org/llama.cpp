@@ -1,3 +1,7 @@
+#pragma clang diagnostic ignored "-Wunused-variable"
+#pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wunused-but-set-variable"
+
 #include <HAP_farf.h>
 #include <HAP_perf.h>
 
@@ -57,7 +61,7 @@ static inline void hvx_diag_row_f32(const float * restrict src, float * restrict
 }
 
 // ---------------------------------------------------------------------------
-// Per thread worker: Double-buffered DMA
+// Per thread worker: DMA src fetch, compute in VTCM, DMA dst writeback
 // ---------------------------------------------------------------------------
 
 static void diag_thread_f32_dma(unsigned int nth, unsigned int ith, void * data) {
@@ -81,9 +85,9 @@ static void diag_thread_f32_dma(unsigned int nth, unsigned int ith, void * data)
     const uint8_t * src_data = (const uint8_t *) src0->data;
     uint8_t *       dst_data = (uint8_t *) dst->data;
 
-    // 1 src buffer (shared across all rows in batch) + 2 ping-pong dst buffers
+    // 1 src buffer + 1 dst row buffer per thread in VTCM
     uint8_t * src_spad = octx->src0_spad.data + (ith * src_batch_size_aligned);
-    uint8_t * dst_spad = octx->dst_spad.data  + (ith * dst_row_size_aligned * 2);
+    uint8_t * dst_spad = octx->dst_spad.data  + (ith * dst_row_size_aligned);
 
     for (uint32_t ib = ib0; ib < ib1; ib++) {
         const uint32_t i3 = ib / ne02;
@@ -91,45 +95,26 @@ static void diag_thread_f32_dma(unsigned int nth, unsigned int ith, void * data)
 
         const uint8_t * src_batch = src_data + i3 * nb03 + i2 * nb02;
 
-        // Fetch source vector once per batch (all rows share the same src)
+        // Fetch source vector into VTCM
         dma_queue_push_ddr_to_vtcm(dma_queue,
                                    dma_make_ptr(src_spad, src_batch),
                                    src_batch_size_aligned, src_batch_size, 1);
         dma_queue_flush(dma_queue);
 
         const float * src_spad_f32 = (const float *) src_spad;
-
-        // Prime dst ping-pong buffers
-        for (uint32_t i1 = 0, spad_idx = 0; i1 < ne1 && spad_idx < 2; i1++, spad_idx++) {
-            uint8_t * dst_row = dst_data + i3 * nb3 + i2 * nb2 + i1 * nb1;
-
-            // Dummy writeback to establish queue ordering
-            dma_queue_push_vtcm_to_ddr(dma_queue,
-                                       dma_make_ptr(dst_row, dst_spad + (spad_idx * dst_row_size_aligned)),
-                                       dst_row_size, dst_row_size_aligned, 0);
-        }
+        float       * dst_spad_f32 = (float *) dst_spad;
 
         for (uint32_t i1 = 0; i1 < ne1; i1++) {
-            float * dst_spad_row = (float *) dma_queue_pop(dma_queue).src;
+            // Compute row in VTCM
+            hvx_diag_row_f32(src_spad_f32, dst_spad_f32, i1, ne0);
 
-            hvx_diag_row_f32(src_spad_f32, dst_spad_row, i1, ne0);
-
+            // Write completed row back to DDR
             uint8_t * dst_row = dst_data + i3 * nb3 + i2 * nb2 + i1 * nb1;
-
             dma_queue_push_vtcm_to_ddr(dma_queue,
-                                       dma_make_ptr(dst_row, (uint8_t *) dst_spad_row),
+                                       dma_make_ptr(dst_row, dst_spad),
                                        dst_row_size, dst_row_size_aligned, 1);
-
-            const uint32_t next_row = i1 + 2;
-            if (next_row < ne1) {
-                uint8_t * next_dst_row = dst_data + i3 * nb3 + i2 * nb2 + next_row * nb1;
-                dma_queue_push_vtcm_to_ddr(dma_queue,
-                                           dma_make_ptr(next_dst_row, (uint8_t *) dst_spad_row),
-                                           dst_row_size, dst_row_size_aligned, 0);
-            }
+            dma_queue_flush(dma_queue);
         }
-
-        dma_queue_flush(dma_queue);
     }
 
     t2 = HAP_perf_get_qtimer_count();
@@ -192,11 +177,11 @@ int op_diag_f32(struct htp_ops_context * octx) {
     const size_t src_batch_size_aligned = hex_round_up(src_batch_size, VLEN);
     const size_t dst_row_size_aligned   = hex_round_up(dst_row_size, VLEN);
 
-    // 1 src buffer (shared) + 2 ping-pong dst buffers per thread
-    const size_t spad_per_thread = src_batch_size_aligned + (2 * dst_row_size_aligned);
+    // 1 src buffer + 1 dst row buffer per thread
+    const size_t spad_per_thread = src_batch_size_aligned + dst_row_size_aligned;
 
     octx->src0_spad.size_per_thread = src_batch_size_aligned;
-    octx->dst_spad.size_per_thread  = dst_row_size_aligned * 2;
+    octx->dst_spad.size_per_thread  = dst_row_size_aligned;
 
     octx->src0_spad.size = n_threads * octx->src0_spad.size_per_thread;
     octx->dst_spad.size  = n_threads * octx->dst_spad.size_per_thread;
