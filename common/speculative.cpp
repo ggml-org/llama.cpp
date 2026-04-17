@@ -1285,7 +1285,7 @@ struct common_speculative_session::impl {
                             draft[0], draft[1], draft[2]);
                 }
 
-                const size_t n = callback->create_checkpoint(tokens.size());
+                const size_t n = callback->create_checkpoint();
                 if (n == 0) {
                     LOG_WRN("%s: checkpoint creation failed (#tokens=%zu)\n", __func__, tokens.size());
                     this->clear();

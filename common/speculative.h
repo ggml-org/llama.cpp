@@ -69,7 +69,7 @@ struct common_speculative_callback {
 
     // Creates a checkpoint of the current state of the context.
     // Returns the size of the checkpoint in bytes.
-    virtual size_t create_checkpoint(int64_t n_tokens) = 0;
+    virtual size_t create_checkpoint() = 0;
 
     // Restore a checkpoint previously created by create_checkpoint().
     // Returns the size of the restored checkpoint in bytes.

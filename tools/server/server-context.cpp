@@ -168,7 +168,7 @@ struct server_slot {
 
     common_sampler_ptr smpl;
 
-    llama_token  sampled; // in speculative mode, this is the last accepted token
+    llama_token sampled; // in speculative mode, this is the last accepted token
 
     // stats
     size_t n_sent_text = 0; // number of sent text character
@@ -676,12 +676,14 @@ private:
             return slot;
         }
 
-        size_t create_checkpoint(int64_t n_tokens) override {
-            ckpt = server_get_checkpoint(ctx_impl.ctx, slot_id, n_tokens);
-
+        size_t create_checkpoint() override {
             server_slot * slot = get_slot();
 
-            SLT_WRN(*slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+            const auto n_tokens = slot->prompt.tokens.size();
+
+            ckpt = server_get_checkpoint(ctx_impl.ctx, slot_id, n_tokens);
+
+            SLT_WRN(*slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
                     ckpt.pos_min, ckpt.pos_max, n_tokens, (float) ckpt.data.size() / 1024 / 1024);
 
             // save sampler (we may want to restore the RNG in the sampler after refusal of a draft)
@@ -806,11 +808,6 @@ private:
             if (params_base.n_cache_reuse) {
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
-            }
-
-            if (params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE) {
-                params_base.speculative.type =  COMMON_SPECULATIVE_TYPE_NONE;
-                SRV_WRN("%s\n", "speculative decoding is not supported by multimodal, it will be disabled");
             }
         }
 
@@ -1958,7 +1955,7 @@ private:
                     std::string filename = task.slot_action.filename;
                     std::string filepath = task.slot_action.filepath;
 
-                    const llama_tokens & tokens = slot->prompt.tokens.get_text_tokens();
+                    const llama_tokens & tokens = slot->prompt.tokens.get_tokens();
                     const size_t nwrite = llama_state_seq_save_file(ctx, filepath.c_str(), slot->id, tokens.data(), token_count);
 
                     const int64_t t_end = ggml_time_us();
@@ -2165,7 +2162,7 @@ private:
                 {
                     GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
 
-                    llama_tokens new_tokens = slot.prompt.tokens.get_text_tokens(); // copy
+                    llama_tokens new_tokens = slot.prompt.tokens.get_tokens(); // copy
                     for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
                         new_tokens[i - n_discard] = new_tokens[i];
                     }
@@ -2211,7 +2208,7 @@ private:
 
             const int n_draft_max = slot.get_n_draft_max();
             if (n_draft_max > 0) {
-                const llama_tokens & tokens = slot.prompt.tokens.get_tokens();
+                const llama_tokens & tokens = slot.prompt.tokens.get_text_tokens();
 
                 // compute draft and add draft to internal batch
                 draft = slot.spec->compute_draft(tokens, slot.sampled, n_draft_max);
@@ -3718,7 +3715,7 @@ void server_routes::init_routes() {
             params.n_predict,
             meta->slot_n_ctx,
             params.spm_infill,
-            tokenized_prompts[0].get_text_tokens() // TODO: this could maybe be multimodal.
+            tokenized_prompts[0].get_tokens() // TODO: this could maybe be multimodal.
         );
 
         std::vector<raw_buffer> files; // dummy
