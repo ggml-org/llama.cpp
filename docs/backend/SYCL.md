@@ -229,6 +229,7 @@ Upon a successful installation, SYCL is enabled for the available intel devices,
 
 |Verified release|
 |-|
+|2025.3.3|
 |2025.2.1|
 |2025.1|
 |2024.1|
