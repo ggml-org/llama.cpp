@@ -46,7 +46,7 @@ struct block_q8_1_mmq {
     int8_t qs[4*QK8_1]; // 128 values quantized to 8 bit each
 };
 
-// this struct is used for fp4 data types (currently only used in Blackwell)
+// this struct is used for fp4 data types (currently only used for Blackwell)
 // mxfp4 has block size 32, each int32 of d4 contains 2 e8m0 scales in the lower 16 bits
 // nvfp4 has block size 16, each int32 of d4 contains 4 ue4m3 scales
 struct block_fp4_mmq {
