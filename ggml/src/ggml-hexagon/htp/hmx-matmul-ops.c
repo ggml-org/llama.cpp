@@ -684,35 +684,36 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(__fp16 * restrict vtcm_dst
     for (unsigned t = start_tile; t < end_tile; ) {
         if (kt >= n_k_tiles) { kt = 0; ct++; }
 
-        // --- Batch-4 fast path for Q4: process 4 contiguous K-tiles with one vlut16 per row ---
-        const bool can_use_x4 = (kt % 4 == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct);
-        if (is_q4 && can_use_x4) {
-            dequantize_weight_q4_to_fp16_cx4(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
-                                            v_scat_base, v_scat_step, q_mask64);
-            t += 4; kt += 4;
-            continue;
-        }
-
-        // --- Batch-4 fast path for MXFP4: same nibble layout but E8M0 scales ---
-        if (weight_type == HTP_TYPE_MXFP4 && can_use_x4) {
-            dequantize_weight_mxfp4_to_fp16_cx4(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
-                                                v_scat_base, v_scat_step, q_mask64);
-            t += 4; kt += 4;
-            continue;
-        }
-
         // --- Single-tile fallback ---
         if (is_q4) {
-            dequantize_weight_q4_to_fp16_cx2(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
-                                             v_scat_base, v_scat_step, q_mask64);
-        } else if (weight_type == HTP_TYPE_MXFP4) {
-            dequantize_weight_mxfp4_to_fp16_cx2(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
+            // --- Batch-4 fast path for Q4: process 4 contiguous K-tiles with one vlut16 per row ---
+            const bool can_use_x4 = (kt % 4 == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct);
+            if (can_use_x4) {
+                dequantize_weight_q4_to_fp16_cx4(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
                                                 v_scat_base, v_scat_step, q_mask64);
+                t += 4; kt += 4;
+            } else {
+                dequantize_weight_q4_to_fp16_cx2(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
+                                                v_scat_base, v_scat_step, q_mask64);
+                ++t; ++kt;
+            }
+        } else if (weight_type == HTP_TYPE_MXFP4) {
+            // --- Batch-4 fast path for MXFP4: same nibble layout but E8M0 scales ---
+            const bool can_use_x4 = (kt % 4 == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct);
+            if (can_use_x4) {
+                dequantize_weight_mxfp4_to_fp16_cx4(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
+                                                    v_scat_base, v_scat_step, q_mask64);
+                t += 4; kt += 4;
+            } else {
+                dequantize_weight_mxfp4_to_fp16_cx2(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
+                                                    v_scat_base, v_scat_step, q_mask64);
+                ++t; ++kt;
+            }
         } else {
             dequantize_weight_q8_to_fp16_cx2(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, v_scat_base,
                                              v_scat_step, q_mask64);
+            ++t; ++kt;
         }
-        ++t; ++kt;
     }
 
     // Drain HVX scatter write buffer: a vmem load on the same HW thread retires
