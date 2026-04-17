@@ -1503,3 +1503,110 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
     const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
     return d * sumi;
 }
+
+#define VDR_Q3_KPT_Q8_1_MMVQ 1
+#define VDR_Q3_KPT_Q8_1_MMQ  2
+
+static __device__ __forceinline__ float vec_dot_q3_kpt_q8_K(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q3_kpt * bq3_K = (const block_q3_kpt *) vbq + kbx;
+
+    const int bq8_offset = QR3_K * (iqs / (QI3_K/2));
+    const int scale_offset = iqs - iqs % QI8_1 + (iqs % QI8_1) / (QI8_1/2);
+
+    const float d = bq3_K->d;
+
+    const int vl = get_int_b2(bq3_K->qs, iqs);
+    const int vh = get_int_b2(bq3_K->hmask, iqs % (QI3_K/2)) >> bq8_offset;
+
+    float sumf = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < QR3_K; ++i) {
+        const int isc = scale_offset + 2*i;
+
+        const int isc_low = isc % (QK_K/32);
+        const int sc_shift_low = 4 * (isc / (QK_K/32));
+        const int sc_low  = (bq3_K->scales[isc_low] >> sc_shift_low) & 0xF;
+
+        const int isc_high = isc % (QK_K/64);
+        const int sc_shift_high = 2 * (isc / (QK_K/64));
+        const int sc_high = ((bq3_K->scales[(QK_K/32) + isc_high] >> sc_shift_high) & 3) << 4;
+
+        const int sc = (sc_low | sc_high) - 32;
+
+        const int vil = (vl >> (2*i)) & 0x03030303;
+        const int vih = ((vh >> i) << 2) & 0x04040404;
+
+        const int u_i = get_int_b4(bq8_1[bq8_offset + i].qs, iqs % QI8_1);
+        const float d8_i = __low2float(bq8_1[bq8_offset + i].ds);
+
+        float dot = 0.0f;
+#pragma unroll
+        for (int b = 0; b < 4; ++b) {
+            const int shift = 8*b;
+            const int low2 = (vil >> shift) & 3;
+            const int high = (vih >> shift) & 4;
+            const int k_idx = low2 + high;
+            const float level_val = q3kpt_levels_cuda[k_idx] * 7.0f - 4.0f;
+            const int q8_val = (int)(int8_t)((u_i >> shift) & 0xFF);
+            dot += level_val * (float)q8_val;
+        }
+
+        sumf += d8_i * (dot * sc);
+    }
+
+    return d * sumf;
+}
+
+#define VDR_Q2_KPT_Q8_1_MMVQ 1
+#define VDR_Q2_KPT_Q8_1_MMQ  4
+
+static __device__ __forceinline__ float vec_dot_q2_kpt_q8_K(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q2_kpt * bq2_K = (const block_q2_kpt *) vbq + kbx;
+
+    const int bq8_offset = QR2_K * (iqs / QI8_1);
+    const int scale_offset = iqs - iqs % QI8_1 + (iqs % QI8_1) / (QI8_1/2);
+
+    const uint8_t * scales = bq2_K->scales + scale_offset;
+
+    const int v = get_int_b4(bq2_K->qs, iqs);
+
+    const float * block_lv = q2kpt_levels_cuda_ptr + kbx * Q2KPT_N_LEVELS;
+
+    const float2 dm2f = __half22float2(bq2_K->dm);
+
+    float sumf_d = 0.0f;
+    float sumf_m = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < QR2_K; ++i) {
+        const int sc = scales[2*i];
+        const float d8_i = __low2float(bq8_1[bq8_offset + i].ds);
+        const int u_i = get_int_b4(bq8_1[bq8_offset + i].qs, iqs % QI8_1);
+
+        const int vi = (v >> (2*i)) & 0x03030303;
+
+        float dot = 0.0f;
+#pragma unroll
+        for (int b = 0; b < 4; ++b) {
+            const int shift = 8*b;
+            const int idx = (vi >> shift) & 3;
+            const float level_val = block_lv[idx] * 3.0f;
+            const int q8_val = (int)(int8_t)((u_i >> shift) & 0xFF);
+            dot += level_val * (float)q8_val;
+        }
+
+        sumf_d += d8_i * (dot * (sc & 0xF));
+
+        int m = sc >> 4;
+        m |= m <<  8;
+        m |= m << 16;
+        sumf_m += d8_i * ggml_cuda_dp4a(m, u_i, 0);
+    }
+
+    return dm2f.x*sumf_d - dm2f.y*sumf_m;
+}

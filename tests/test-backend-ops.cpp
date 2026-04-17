@@ -19,6 +19,7 @@
 #include <ggml-alloc.h>
 #include <ggml-backend.h>
 #include <ggml-cpp.h>
+#include <ggml-quants.h>
 
 #include <algorithm>
 #include <atomic>
@@ -4180,6 +4181,77 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
         return "MUL_MAT_HADAMARD";
+    }
+};
+
+struct test_mul_mat_kpt : public test_mul_mat {
+    using test_mul_mat::test_mul_mat;
+
+    double max_nmse_err() override {
+        // Q2_KPT needs slightly higher tolerance due to 2-bit quantization
+        return type_a == GGML_TYPE_Q2_KPT ? 5e-3 : 3e-3;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_Q3_KPT) {
+                init_tensor_q3_kpt(t);
+            } else if (t->type == GGML_TYPE_Q2_KPT) {
+                init_tensor_q2_kpt(t);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
+private:
+    void init_tensor_q3_kpt(ggml_tensor * tensor) {
+        const int64_t nels = ggml_nelements(tensor);
+        const int64_t n_per_row = tensor->ne[0];
+        const int64_t nrows = nels / n_per_row;
+
+        std::vector<float> data(nels);
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+        for (int64_t i = 0; i < nels; ++i) data[i] = dis(gen);
+
+        float levels[Q3KPT_N_LEVELS];
+        q3kpt_train_levels(data.data(), nrows, n_per_row, nullptr, levels);
+        q3kpt_set_levels(levels);
+
+        static std::vector<float> stored_levels;
+        stored_levels.assign(levels, levels + Q3KPT_N_LEVELS);
+        tensor->quant_levels = stored_levels.data();
+
+        std::vector<uint8_t> dataq(ggml_row_size(tensor->type, nels));
+        ggml_quantize_chunk(tensor->type, data.data(), dataq.data(), 0, nrows, n_per_row, nullptr);
+        ggml_backend_tensor_set(tensor, dataq.data(), 0, dataq.size());
+    }
+
+    void init_tensor_q2_kpt(ggml_tensor * tensor) {
+        const int64_t nels = ggml_nelements(tensor);
+        const int64_t n_per_row = tensor->ne[0];
+        const int64_t nrows = nels / n_per_row;
+        const int nb = n_per_row / QK_K;
+
+        std::vector<float> data(nels);
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+        for (int64_t i = 0; i < nels; ++i) data[i] = dis(gen);
+
+        q2kpt_prepare_levels(nrows, n_per_row);
+
+        std::vector<uint8_t> dataq(ggml_row_size(tensor->type, nels));
+        ggml_quantize_chunk(tensor->type, data.data(), dataq.data(), 0, nrows, n_per_row, nullptr);
+        ggml_backend_tensor_set(tensor, dataq.data(), 0, dataq.size());
+
+        static std::vector<float> stored_block_levels;
+        const float * block_levels = q2kpt_get_levels();
+        const size_t total_levels = nrows * nb * Q2KPT_N_LEVELS;
+        stored_block_levels.assign(block_levels, block_levels + total_levels);
+        tensor->quant_levels = stored_block_levels.data();
     }
 };
 
@@ -8536,6 +8608,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_mul_mat(type_a, type_b, 16, 1, ggml_blck_size(type_a), {1,  1}, {1, 1}));
             }
             test_cases.emplace_back(new test_mul_mat(type_a, type_b, 16, 1, 256, {1,  1}, {1, 1}));
+        }
+    }
+    // KPT types: require level training before quantization
+    for (ggml_type type_a : {GGML_TYPE_Q3_KPT, GGML_TYPE_Q2_KPT}) {
+        for (ggml_type type_b : {GGML_TYPE_F32}) {
+            test_cases.emplace_back(new test_mul_mat_kpt(type_a, type_b, 16,  1, 256, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_kpt(type_a, type_b, 16,  1, 256, {1, 1}, {2, 1}));
+            test_cases.emplace_back(new test_mul_mat_kpt(type_a, type_b, 16, 16, 256, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_kpt(type_a, type_b, 16,  1, 256, {3, 1}, {1, 1}));
         }
     }
 #else
