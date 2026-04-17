@@ -1618,98 +1618,100 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             }
         }
 
-        // For MoE models it may make sense to delay the AllReduce in order to reduce I/O:
-        auto get_i_delayed = [&](const int i) -> int {
-            int id = i; // i_delayed
-            int idr = i; // i_delayed return, last safe return value
+        {
+            // For MoE models it may make sense to delay the AllReduce in order to reduce I/O:
+            auto get_i_delayed = [&](const int i) -> int {
+                int id = i; // i_delayed
+                int idr = i; // i_delayed return, last safe return value
 
-            ggml_tensor * node = cgraph->nodes[id];
-            int32_t n_used = ggml_node_get_use_count(cgraph, id);
-            if (id + 1 >= cgraph->n_nodes) {
-                return idr;
-            }
-            {
-                ggml_tensor * next = cgraph->nodes[id+1];
-                if (next->op == GGML_OP_ADD_ID && next->src[0] == node &&
-                        ggml_backend_meta_get_split_state(next->src[1], false).axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL &&
-                        ggml_backend_meta_get_split_state(next->src[2], false).axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
-                    node = next;
+                ggml_tensor * node = cgraph->nodes[id];
+                int32_t n_used = ggml_node_get_use_count(cgraph, id);
+                if (id + 1 >= cgraph->n_nodes) {
+                    return idr;
+                }
+                {
+                    ggml_tensor * next = cgraph->nodes[id+1];
+                    if (next->op == GGML_OP_ADD_ID && next->src[0] == node &&
+                            ggml_backend_meta_get_split_state(next->src[1], false).axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL &&
+                            ggml_backend_meta_get_split_state(next->src[2], false).axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+                        node = next;
+                        id++;
+                        idr = id;
+                        n_used = ggml_node_get_use_count(cgraph, id);
+                    }
+                }
+                if (id + 1 >= cgraph->n_nodes) {
+                    return idr;
+                }
+                {
+                    ggml_tensor * next = cgraph->nodes[id+1];
+                    if (next->op == GGML_OP_MUL && next->src[0] == node &&
+                            ggml_backend_meta_get_split_state(next->src[1], false).axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+                        node = next;
+                        id++;
+                        idr = id;
+                        n_used = ggml_node_get_use_count(cgraph, id);
+                    }
+                }
+
+                if (n_used != node->ne[1] || id + 2*n_used-1 >= cgraph->n_nodes) {
+                    return idr;
+                }
+                for (int32_t k = 0; k < n_used; k++) {
+                    ggml_tensor * next = cgraph->nodes[id+1];
+                    if (next->op != GGML_OP_VIEW || next->view_src != node || next->view_offs != k*node->nb[1] ||
+                            next->ne[0] != node->ne[0] || next->ne[1] != node->ne[2] || next->nb[1] != node->nb[2] ||
+                            ggml_node_get_use_count(cgraph, id+1) != 1) {
+                        return idr;
+                    }
                     id++;
-                    idr = id;
-                    n_used = ggml_node_get_use_count(cgraph, id);
                 }
-            }
-            if (id + 1 >= cgraph->n_nodes) {
-                return idr;
-            }
-            {
-                ggml_tensor * next = cgraph->nodes[id+1];
-                if (next->op == GGML_OP_MUL && next->src[0] == node &&
-                        ggml_backend_meta_get_split_state(next->src[1], false).axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
-                    node = next;
+                {
+                    ggml_tensor * next = cgraph->nodes[id+1];
+                    if (next->op != GGML_OP_ADD || next->src[0] != cgraph->nodes[id - (n_used-1)] ||
+                            next->src[1] != cgraph->nodes[id - (n_used-2)] || ggml_node_get_use_count(cgraph, id+1) != 1) {
+                        return idr;
+                    }
                     id++;
-                    idr = id;
-                    n_used = ggml_node_get_use_count(cgraph, id);
                 }
-            }
-
-            if (n_used != node->ne[1] || id + 2*n_used-1 >= cgraph->n_nodes) {
+                for (int32_t k = 0; k < n_used - 2; k++) {
+                    ggml_tensor * next = cgraph->nodes[id+1];
+                    if (next->op != GGML_OP_ADD || next->src[0] != cgraph->nodes[id] ||
+                            next->src[1] != cgraph->nodes[id - (n_used-2)] || ggml_node_get_use_count(cgraph, id+1) != 1) {
+                        return idr;
+                    }
+                    id++;
+                }
+                idr = id;
                 return idr;
-            }
-            for (int32_t k = 0; k < n_used; k++) {
-                ggml_tensor * next = cgraph->nodes[id+1];
-                if (next->op != GGML_OP_VIEW || next->view_src != node || next->view_offs != k*node->nb[1] ||
-                        next->ne[0] != node->ne[0] || next->ne[1] != node->ne[2] || next->nb[1] != node->nb[2] ||
-                        ggml_node_get_use_count(cgraph, id+1) != 1) {
-                    return idr;
-                }
-                id++;
-            }
-            {
-                ggml_tensor * next = cgraph->nodes[id+1];
-                if (next->op != GGML_OP_ADD || next->src[0] != cgraph->nodes[id - (n_used-1)] ||
-                        next->src[1] != cgraph->nodes[id - (n_used-2)] || ggml_node_get_use_count(cgraph, id+1) != 1) {
-                    return idr;
-                }
-                id++;
-            }
-            for (int32_t k = 0; k < n_used - 2; k++) {
-                ggml_tensor * next = cgraph->nodes[id+1];
-                if (next->op != GGML_OP_ADD || next->src[0] != cgraph->nodes[id] ||
-                        next->src[1] != cgraph->nodes[id - (n_used-2)] || ggml_node_get_use_count(cgraph, id+1) != 1) {
-                    return idr;
-                }
-                id++;
-            }
-            idr = id;
-            return idr;
-        };
+            };
 
-        int i_start = 0;
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            ggml_tensor * node = cgraph->nodes[i];
-            if (node->view_src != nullptr && node->view_src->op == GGML_OP_NONE && ggml_backend_buffer_is_host(node->view_src->buffer)) {
-                continue;
-            }
-            const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(node, /*assume_sync =*/ false);
-            if (split_state.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL) {
-                max_tmp_size = std::max(max_tmp_size, ggml_nbytes(node));
-            }
-            const bool new_subgraph = i + 1 == cgraph->n_nodes || split_state.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL;
-            if (!new_subgraph) {
-                continue;
-            }
+            int i_start = 0;
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                ggml_tensor * node = cgraph->nodes[i];
+                if (node->view_src != nullptr && node->view_src->op == GGML_OP_NONE && ggml_backend_buffer_is_host(node->view_src->buffer)) {
+                    continue;
+                }
+                const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(node, /*assume_sync =*/ false);
+                if (split_state.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL) {
+                    max_tmp_size = std::max(max_tmp_size, ggml_nbytes(node));
+                }
+                const bool new_subgraph = i + 1 == cgraph->n_nodes || split_state.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL;
+                if (!new_subgraph) {
+                    continue;
+                }
 
-            i = get_i_delayed(i);
+                i = get_i_delayed(i);
 
-            for (size_t j = 0; j < n_backends; j++) {
-                auto & bcj = backend_ctx->backend_configs[j];
-                bcj.cgraphs[n_subgraphs].offset = i_start;
+                for (size_t j = 0; j < n_backends; j++) {
+                    auto & bcj = backend_ctx->backend_configs[j];
+                    bcj.cgraphs[n_subgraphs].offset = i_start;
+                }
+                n_subgraphs++;
+                i_start = i + 1;
             }
-            n_subgraphs++;
-            i_start = i + 1;
+            GGML_ASSERT(i_start == cgraph->n_nodes);
         }
-        GGML_ASSERT(i_start == cgraph->n_nodes);
 
         backend_ctx->last_uid          = cgraph->uid;
         backend_ctx->last_n_subgraphs  = n_subgraphs;
