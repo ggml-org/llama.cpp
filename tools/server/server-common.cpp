@@ -1154,8 +1154,6 @@ json oaicompat_chat_params_parse(
     return llama_params;
 }
 
-=======
->>>>>>> 531b71bef (Squash - refactor conversion functions)
 json format_embeddings_response_oaicompat(
         const json & request,
         const std::string & model_name,
