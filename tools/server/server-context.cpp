@@ -109,11 +109,6 @@ struct server_slot {
     std::string  debug_generated_text;
     llama_tokens generated_tokens;
 
-    // idx of draft tokens in the main batch
-    // non-empty if we went to evaluate draft tokens
-    // ref: https://github.com/ggml-org/llama.cpp/pull/17808
-    std::vector<int32_t> i_batch_dft;
-
     std::vector<completion_token_output> generated_token_probs;
 
     bool has_next_token = true;
@@ -206,7 +201,6 @@ struct server_slot {
         if (spec) {
             spec->clear();
         }
-        i_batch_dft.clear();
         generated_tokens.clear();
         generated_token_probs.clear();
         json_schema = json();
@@ -682,30 +676,12 @@ private:
             return slot;
         }
 
-        void batch_add_token(llama_token token, bool logits) override {
-            server_slot * slot = get_slot();
-            slot->i_batch_dft.push_back(ctx_impl.batch.n_tokens);
-            common_batch_add(ctx_impl.batch, token, slot->prompt.tokens.pos_next(), { slot_id }, logits);
-            slot->prompt.tokens.push_back(token);
-        }
-
-        std::vector<llama_token> sampler_sample_and_accept_n(const llama_tokens & drafted) override {
-            const server_slot * slot = get_slot();
-            if (slot->i_batch_dft.size() != 1 + drafted.size()) {
-                GGML_ABORT("%s: #i_batch_dft = %zu != 1 + #drafted=%zu",
-                            __func__, slot->i_batch_dft.size(), 1 + drafted.size());
-            }
-            const auto ids = common_sampler_sample_and_accept_n(slot->smpl.get(), ctx_impl.ctx, slot->i_batch_dft, drafted);
-
-            return ids;
-        }
-
         size_t create_checkpoint(int64_t n_tokens) override {
             ckpt = server_get_checkpoint(ctx_impl.ctx, slot_id, n_tokens);
 
             server_slot * slot = get_slot();
 
-            SLT_DBG(*slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+            SLT_WRN(*slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                     ckpt.pos_min, ckpt.pos_max, n_tokens, (float) ckpt.data.size() / 1024 / 1024);
 
             // save sampler (we may want to restore the RNG in the sampler after refusal of a draft)
@@ -717,19 +693,18 @@ private:
         size_t restore_checkpoint() override {
             server_slot * slot = get_slot();
 
-            SLT_DBG(*slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
+            SLT_WRN(*slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
 
             const size_t n = llama_state_seq_set_data_ext(ctx_impl.ctx, ckpt.data.data(), ckpt.size(), slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
             if (n != ckpt.size()) {
                 GGML_ABORT("%s: failed to restore context checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
                             __func__, ckpt.pos_min, ckpt.pos_max, ckpt.size(), ckpt.size(), n);
             }
+
             // remove entries after ckpt.pos_max
             llama_memory_seq_rm(llama_get_memory(ctx_impl.ctx), slot->id, ckpt.pos_max + 1, -1);
 
             slot->smpl = std::move(smpl);
-
-            ckpt = {};
 
             return n;
         }
@@ -903,7 +878,7 @@ private:
                 slot.spec = std::make_unique<common_speculative_session>(
                     params_base.speculative, std::move(spec_callback), slot.ctx);
 
-                if (slot.spec->empty()) {
+                if (slot.spec->fail()) {
                     slot.spec.reset();
                 } else {
                     SLT_INF(slot, "%s", "speculative decoding context initialized\n");
@@ -2233,31 +2208,32 @@ private:
             // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
             //       perform the speculative drafting for all sequences at the same time in a single batch
             llama_tokens draft;
+
             const int n_draft_max = slot.get_n_draft_max();
             if (n_draft_max > 0) {
                 const llama_tokens & tokens = slot.prompt.tokens.get_tokens();
 
                 // compute draft and add draft to internal batch
                 draft = slot.spec->compute_draft(tokens, slot.sampled, n_draft_max);
-                if (draft.size() > 0) {
-                    SLT_DBG(slot, "compute_draft: id=%d, #tokens=%zu, #draft=%zu, #i_batch_dft=%zu\n",
-                            slot.sampled, tokens.size(), draft.size(), slot.i_batch_dft.size());
-                }
             }
 
             if (draft.empty()) {
                 // no speculative decoding
                 slot.i_batch = batch.n_tokens;
-                slot.i_batch_dft.clear();
 
                 common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
-
-                slot.prompt.tokens.push_back(slot.sampled);
 
                 SLT_DBG(slot, "slot decode token, id=%d, n_ctx = %d, n_tokens = %d, truncated = %d\n",
                         slot.sampled,
                         slot.n_ctx, slot.prompt.n_tokens(), slot.truncated);
+            } else {
+                SLT_DBG(slot, "compute_draft: id=%d, #tokens=%zu, #draft=%zu, pos_next=%d\n", slot.sampled, slot.prompt.tokens.size(), draft.size(), slot.prompt.tokens.pos_next());
+
+                slot.spec->add_to_batch(batch, draft, slot.sampled, slot.prompt.tokens.pos_next(), slot.id);
             }
+
+            slot.prompt.tokens.push_back(slot.sampled);
+            slot.prompt.tokens.insert(draft);
         }
 
         // process in chunks of params.n_batch
@@ -2937,7 +2913,7 @@ private:
                     continue; // continue loop of slots
                 }
 
-                if (slot.i_batch_dft.size() > 0) {
+                if (!slot.spec->get_draft().empty()) {
                     continue; // sample using speculative decoding
                 }
 
@@ -2984,20 +2960,18 @@ private:
 
             // speculative decoding - main model sample and accept
             for (auto & slot : slots) {
-                if (slot.state != SLOT_STATE_GENERATING || slot.i_batch_dft.empty()) {
+                if (slot.state != SLOT_STATE_GENERATING || slot.spec->get_draft().empty()) {
                     continue;
                 }
 
-                auto accept_response = slot.spec->sample_and_accept();
+                auto accept_response = slot.spec->sample_and_accept(slot.smpl.get(), ctx);
                 const size_t n_draft = accept_response.draft_size_initial;
 
-                slot.i_batch_dft.clear();
-
-                // rollback to the state before sampling the draft tokens
-                slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
+                //SLT_WRN(slot, "roll back to pos=%d, n_draft=%zu\n", slot.prompt.n_tokens() - n_draft, n_draft);
 
                 if (accept_response.skip_acceptance) {
                     SLT_DBG(slot, "partial acceptance: n_tokens=%zu, n_draft=%zu\n", accept_response.tokens.size(), n_draft);
+                    slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - (n_draft + 1));
                     continue;
                 }
 
@@ -3013,7 +2987,9 @@ private:
                 slot.n_draft_total += n_draft;
 
                 // add accepted tokens to the prompt
+                slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
                 slot.prompt.tokens.insert({ids.begin(), ids.end() - 1});
+
                 slot.sampled = ids.back(); // last accepted token
                 SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);
 

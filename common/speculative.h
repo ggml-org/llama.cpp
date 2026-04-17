@@ -49,6 +49,14 @@ llama_tokens common_speculative_draft(
                      const llama_tokens & prompt,
                             llama_token   id_last);
 
+void common_speculative_add_to_batch(
+        common_speculative * spec,
+              llama_batch  & batch,
+        const llama_tokens & draft,
+               llama_token   id_last,
+               llama_pos     pos0,
+               llama_seq_id  seq_id);
+
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
@@ -58,12 +66,6 @@ void common_speculative_print_stats(const common_speculative * spec);
 // callback implemented by the server
 struct common_speculative_callback {
     virtual ~common_speculative_callback();
-
-    // Add a token to the draft sequence.
-    virtual void batch_add_token(llama_token token, bool logits) = 0;
-
-    // Sample and accept tokens from the main model.
-    virtual llama_tokens sampler_sample_and_accept_n(const llama_tokens & drafted) = 0;
 
     // Creates a checkpoint of the current state of the context.
     // Returns the size of the checkpoint in bytes.
@@ -95,19 +97,29 @@ struct common_speculative_session {
     ~common_speculative_session();
 
     // no implementations available
-    bool empty() const;
+    bool fail() const;
 
     // call once at the beginning of a new generation
     // some spec implementations use the prompt history to initialize lookup maps
     void begin(const llama_tokens & prompt_history);
 
     // do speculative decoding to compute a draft of tokens
-    llama_tokens compute_draft(const llama_tokens & prompt,
-                                     llama_token    id_last,
-                                     int            n_draft_max);
+    llama_tokens compute_draft(
+            const llama_tokens & prompt,
+                  llama_token    id_last,
+                  int            n_draft_max);
+
+    void add_to_batch(
+                  llama_batch  & batch,
+            const llama_tokens & draft,
+                  llama_token    id_last,
+                  llama_pos      pos0,
+                  llama_seq_id   seq_id);
 
     // check if and how far the current draft is accepted
-    common_speculative_accept_response sample_and_accept();
+    common_speculative_accept_response sample_and_accept(common_sampler * smpl, llama_context * ctx);
+
+    const llama_tokens & get_draft() const;
 
     void print_stats() const;
 
