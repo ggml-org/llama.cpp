@@ -30,13 +30,12 @@ if (GGML_TSAVORITE)
     endif()
 
     # SDK_VERSION is passed from tsi-pkg-build.sh (e.g. source tsi-pkg-build.sh SDK_VERSION=0.4.0)
-    # Used only when MLIR_SDK_VERSION is not set.
     if (NOT DEFINED SDK_VERSION AND DEFINED ENV{SDK_VERSION})
         set(SDK_VERSION "$ENV{SDK_VERSION}")
     endif()
     if (NOT DEFINED SDK_VERSION)
-        set(SDK_VERSION "0.4.0")
-   endif()
+       message(FATAL_ERROR "SDK_VERSION must be provided (e.g. source tsi-pkg-build.sh SDK_VERSION=0.4.1)")
+    endif()
 
     if (NOT DEFINED MLIR_COMPILER_DIR)
         if (NOT DEFINED $ENV{MLIR_SDK_VERSION})

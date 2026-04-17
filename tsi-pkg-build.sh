@@ -8,22 +8,7 @@
 # source tsi-pkg-build.sh [build-mode] [flags...] [MLIR_COMPILER_DIR] [TOOLBOX_DIR]
 #
 # ------------------------------------------------------------------------------
-# NEW: SDK_VERSION (removes hardcoded 0.4.0 in two places)
-# ------------------------------------------------------------------------------
-# This script previously hardcoded "0.4.0" in:
-#   1) Default MLIR_SDK_VERSION path (when MLIR_COMPILER_DIR is not provided)
-#   2) The produced bundle version (tsi-ggml-${TSI_GGML_VERSION}.tz)
-#
-# Now both come from the environment variable SDK_VERSION (default: 0.4.0).
-#
-#   source tsi-pkg-build.sh SDK_VERSION=0.4.0
-#
-# NOTE: "source script.sh SDK_VERSION=..." passes SDK_VERSION as an argument,
-# not as an environment variable. Therefore we parse SDK_VERSION=... from args
-# and export it so downstream logic uses it consistently.
-#
-# ------------------------------------------------------------------------------
-# NEW: Include tsavorite-model-deployment.yaml in the FPGA package
+# Include tsavorite-model-deployment.yaml in the FPGA package
 # ------------------------------------------------------------------------------
 # The FPGA bundle now includes tsavorite-model-deployment.yaml in the same
 # directory where the .so files are placed inside the tarball (tsi-ggml/).
@@ -158,12 +143,25 @@
 # 12) Provide explicit paths:
 # source tsi-pkg-build.sh debug build-fpga /path/to/compiler /path/to/toolbox/install-fpga
 #
-# 13) NEW: Provide SDK_VERSION as requested:
-# source tsi-pkg-build.sh SDK_VERSION=0.4.0
+# 13)  SDK_VERSION must be provided by the user
+# SDK_VERSION=0.4.1 source tsi-pkg-build.sh
+# passes it as an env var (works with CMake + script logic)
+# source tsi-pkg-build.sh SDK_VERSION=0.4.1 
+# passes it as a positional argument (won’t work unless we parse $1, this code doesnt exist, 
+# hence dont use it )
 #
 # ==============================================================================
 log_error(){ echo "ERROR: $*" >&2; }
 log_info(){ echo "INFO: $*"; }
+
+
+if [ -z "$SDK_VERSION" ]; then
+  echo "ERROR: SDK_VERSION not set. Usage: SDK_VERSION=<version> source tsi-pkg-build.sh"
+  return 1
+fi
+
+export SDK_VERSION
+
 
 __TSI_SOURCED=0
 (return 0 2>/dev/null) && __TSI_SOURCED=1
