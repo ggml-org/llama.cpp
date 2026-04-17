@@ -659,7 +659,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(__fp16 * restrict vtcm_dst
         // --- Single-tile fallback ---
         if (is_q4) {
             // --- Batch-4 fast path for Q4: process 4 contiguous K-tiles with one vlut16 per row ---
-            const bool can_use_x4 = (kt % 4 == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct);
+            const bool can_use_x4 = ((kt & 3) == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct);
             if (can_use_x4) {
                 dequantize_weight_q4_to_fp16_cx4(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
                                                 v_scat_base, v_scat_step, q_mask64);
@@ -671,7 +671,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(__fp16 * restrict vtcm_dst
             }
         } else if (weight_type == HTP_TYPE_MXFP4) {
             // --- Batch-4 fast path for MXFP4: same nibble layout but E8M0 scales ---
-            const bool can_use_x4 = (kt % 4 == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct);
+            const bool can_use_x4 = ((kt & 3) == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct);
             if (can_use_x4) {
                 dequantize_weight_mxfp4_to_fp16_cx4(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
                                                     v_scat_base, v_scat_step, q_mask64);
