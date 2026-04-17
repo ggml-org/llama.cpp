@@ -18,6 +18,7 @@
 #  include <unistd.h>
 #endif
 #include <cstdlib>
+#include <mutex>
 #include <optional>
 
 #ifdef GGML_RPC_RDMA
@@ -34,7 +35,6 @@ using ssize_t = __int64;
 #else
 typedef int sockfd_t;
 #endif
-
 
 static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
 
@@ -464,7 +464,7 @@ bool socket_t::impl::send_data(const void * data, size_t size) {
     if (use_rdma) {
         return rdma_send(data, size);
     }
-#endif    
+#endif
     size_t bytes_sent = 0;
     while (bytes_sent < size) {
         size_t size_to_send = std::min(size - bytes_sent, MAX_CHUNK_SIZE);
@@ -484,7 +484,7 @@ bool socket_t::impl::recv_data(void * data, size_t size) {
     if (use_rdma) {
         return rdma_recv(data, size);
     }
-#endif    
+#endif
     size_t bytes_recv = 0;
     while (bytes_recv < size) {
         size_t size_to_recv = std::min(size - bytes_recv, MAX_CHUNK_SIZE);
@@ -562,7 +562,7 @@ void socket_t::update_caps(const uint8_t * remote_caps) {
 
 static bool is_valid_fd(sockfd_t sockfd) {
 #ifdef _WIN32
-    return sockfd != INVALID_SOCK;
+    return sockfd != INVALID_SOCKET;
 #else
     return sockfd >= 0;
 #endif
@@ -650,3 +650,36 @@ socket_ptr socket_t::connect(const char * host, int port) {
     return ret;
 }
 
+#ifdef _WIN32
+static std::mutex g_rpc_transport_mu;
+static bool g_rpc_transport_wsa_started = false;
+#endif
+
+bool rpc_transport_init() {
+#ifdef _WIN32
+    std::lock_guard<std::mutex> lock(g_rpc_transport_mu);
+    if (g_rpc_transport_wsa_started) {
+        return true;
+    }
+    WSADATA wsaData;
+    int res = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (res != 0) {
+        return false;
+    }
+    g_rpc_transport_wsa_started = true;
+    return true;
+#else
+    return true;
+#endif
+}
+
+void rpc_transport_shutdown() {
+#ifdef _WIN32
+    std::lock_guard<std::mutex> lock(g_rpc_transport_mu);
+    if (!g_rpc_transport_wsa_started) {
+        return;
+    }
+    WSACleanup();
+    g_rpc_transport_wsa_started = false;
+#endif
+}

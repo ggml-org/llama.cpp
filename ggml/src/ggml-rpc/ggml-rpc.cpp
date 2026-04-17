@@ -367,7 +367,6 @@ static std::shared_ptr<socket_t> get_socket(const std::string & endpoint) {
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
     static std::unordered_map<std::string, std::weak_ptr<socket_t>> sockets;
-    static bool initialized = false;
 
     auto it = sockets.find(endpoint);
     if (it != sockets.end()) {
@@ -382,18 +381,9 @@ static std::shared_ptr<socket_t> get_socket(const std::string & endpoint) {
         return nullptr;
     }
 
-#ifdef _WIN32
-    if (!initialized) {
-        WSADATA wsaData;
-        int res = WSAStartup(MAKEWORD(2, 2), &wsaData);
-        if (res != 0) {
-            return nullptr;
-        }
-        initialized = true;
+    if (!rpc_transport_init()) {
+        return nullptr;
     }
-#else
-    GGML_UNUSED(initialized);
-#endif
     auto sock = socket_t::connect(host.c_str(), port);
     if (sock == nullptr) {
         return nullptr;
@@ -1764,16 +1754,10 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
 #else
     printf("  transport      : TCP\n");
 #endif // GGML_RPC_RDMA
-#ifdef _WIN32
-    {
-        WSADATA wsaData;
-        int res = WSAStartup(MAKEWORD(2, 2), &wsaData);
-        if (res != 0) {
-            fprintf(stderr, "WSAStartup failed: %d\n", res);
-            return;
-        }
+    if (!rpc_transport_init()) {
+        fprintf(stderr, "Failed to initialize RPC transport\n");
+        return;
     }
-#endif
     auto server_socket = socket_t::create_server(host.c_str(), port);
     if (server_socket == nullptr) {
         fprintf(stderr, "Failed to create server socket\n");
@@ -1791,9 +1775,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
         printf("Client connection closed\n");
         fflush(stdout);
     }
-#ifdef _WIN32
-    WSACleanup();
-#endif
+    rpc_transport_shutdown();
     for (auto backend : backends) {
         ggml_backend_free(backend);
     }

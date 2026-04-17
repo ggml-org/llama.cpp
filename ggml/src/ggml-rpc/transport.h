@@ -29,3 +29,6 @@ private:
     struct impl;
     std::unique_ptr<impl> pimpl;
 };
+
+bool rpc_transport_init();
+void rpc_transport_shutdown();
