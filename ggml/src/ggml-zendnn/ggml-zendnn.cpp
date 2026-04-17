@@ -199,160 +199,232 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
     ggml_backend_zendnn_context * ctx,
     ggml_tensor * dst) {
 
-    const ggml_tensor * src0 = dst->src[0];  // expert weights
-    const ggml_tensor * src1 = dst->src[1];  // inputs
-    const ggml_tensor * ids  = dst->src[2];  // expert ids
+    const ggml_tensor * src0 = dst->src[0];  // [hidden_K, out_N, n_experts]
+    const ggml_tensor * src1 = dst->src[1];  // [hidden_K, n_ids, n_tokens]
+    const ggml_tensor * ids  = dst->src[2];  // [n_ids, n_tokens]
 
-    GGML_TENSOR_BINARY_OP_LOCALS
+    const int n_as     = (int)src0->ne[2];
+    const int n_ids    = (int)ids->ne[0];
+    const int n_tokens = (int)ids->ne[1];
 
-    // exit for no tokens to process
-    if (ne2 == 0 || ne11 == 0) {
-        return;
+    const int hidden_K = (int)src0->ne[0];
+    const int out_N    = (int)src0->ne[1];
+
+    const size_t src0_elem_bytes = src0->nb[0];
+    const size_t src1_elem_bytes = src1->nb[0];
+    const size_t dst_elem_bytes  = dst->nb[0];
+
+    const size_t src1_slot_stride  = src1->nb[1];
+    const size_t src1_token_stride = src1->nb[2];
+
+    const size_t dst_slot_stride   = dst->nb[1];
+    const size_t dst_token_stride  = dst->nb[2];
+
+    using dt = zendnnl::lowoha::matmul::data_type_t;
+    auto to_dt = [](ggml_type t)->dt {
+        switch(t) {
+            case GGML_TYPE_F32:  return dt::f32;
+            case GGML_TYPE_F16:  return dt::f16;
+            case GGML_TYPE_BF16: return dt::bf16;
+            default: GGML_ABORT("unsupported dtype");
+        }
+    };
+
+    const dt src_dt = to_dt(src1->type);
+    const dt wei_dt = to_dt(src0->type);
+    const dt dst_dt = to_dt(dst->type);
+
+    std::vector<int> M_all(n_as, 0);
+    std::vector<std::vector<std::pair<int,int>>> assignments(n_as);
+
+    for (int tok = 0; tok < n_tokens; tok++) {
+        for (int slot = 0; slot < n_ids; slot++) {
+
+            int expert =
+                *(int32_t *)((char*)ids->data +
+                slot * ids->nb[0] +
+                tok  * ids->nb[1]);
+
+            GGML_ASSERT(expert >= 0 && expert < n_as);
+
+            M_all[expert]++;
+            assignments[expert].emplace_back(tok, slot);
+        }
     }
 
-    ggml_type         const vec_dot_type = src0->type;
-    ggml_from_float_t const from_float = ggml_get_type_traits(vec_dot_type)->from_float_ref;
+    
 
-    // we don't support permuted src0 or src1
-    GGML_ASSERT(nb00 == ggml_type_size(src0->type));
-    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+    const size_t packed_src_row_bytes = hidden_K * src1_elem_bytes;
+    const size_t packed_dst_row_bytes = out_N    * dst_elem_bytes;
+    const size_t packed_wei_bytes     = hidden_K * out_N * src0_elem_bytes;
 
-    // dst cannot be transposed or permuted
-    GGML_ASSERT(nb0 == sizeof(float));
-    GGML_ASSERT(nb0 <= nb1);
-    GGML_ASSERT(nb1 <= nb2);
-    GGML_ASSERT(nb2 <= nb3);
+    std::vector<char> layout;
+    std::vector<bool> transA, transB, wconst;
+    std::vector<int>  M_vec, N_vec, K_vec;
+    std::vector<float> alpha, beta;
+    std::vector<const void*> src_vec, wei_vec, bias_vec;
+    std::vector<void*> dst_vec;
+    std::vector<int> lda, ldb, ldc;
 
-    GGML_ASSERT(ne03 == 1);
-    GGML_ASSERT(ne13 == 1);
-    GGML_ASSERT(ne3  == 1);
+    std::vector<void*> src_allocs;
+    std::vector<void*> wei_allocs;
+    std::vector<void*> dst_allocs;
 
-    // row groups
-    const int n_ids = ids->ne[0]; // n_expert_used
-    const int n_as  = ne02;       // n_experts
+    std::vector<int> expert_map(n_as, -1);
 
-    std::vector<int64_t> matrix_row_counts(n_as, 0);
-    std::vector<std::vector<mmid_row_mapping>> matrix_rows(n_as);
+    std::vector<zendnnl::lowoha::matmul::matmul_params> params;
 
-    int64_t max_rows = 0;
-    // group rows by expert (preprocessing step)
-    for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
-        for (int id = 0; id < n_ids; ++id) {
-            const int32_t i02 = *(const int32_t *)((const char *)ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+    for (int e = 0; e < n_as; e++) {
 
-            GGML_ASSERT(i02 >= 0 && i02 < n_as);
+        if (M_all[e] == 0) continue;
 
-            matrix_rows[i02].push_back({id, iid1});
-            matrix_row_counts[i02]++;
-            if (matrix_row_counts[i02] > max_rows) {
-                max_rows = matrix_row_counts[i02];
+        expert_map[e] = layout.size();
+
+        layout.push_back('r');
+        transA.push_back(false);
+        transB.push_back(true);
+        wconst.push_back(true);
+
+        M_vec.push_back(M_all[e]);
+        N_vec.push_back(out_N);
+        K_vec.push_back(hidden_K);
+
+        alpha.push_back(1.0f);
+        beta.push_back(0.0f);
+
+        lda.push_back(hidden_K);
+        ldb.push_back(hidden_K);
+        ldc.push_back(out_N);
+
+        bias_vec.push_back(nullptr);
+
+        void * psrc = ::operator new(M_all[e] * packed_src_row_bytes);
+        void * pwei = ::operator new(packed_wei_bytes);
+        void * pdst = ::operator new(M_all[e] * packed_dst_row_bytes);
+
+        src_allocs.push_back(psrc);
+        wei_allocs.push_back(pwei);
+        dst_allocs.push_back(pdst);
+
+        src_vec.push_back(psrc);
+        wei_vec.push_back(pwei);
+        dst_vec.push_back(pdst);
+
+        zendnnl::lowoha::matmul::matmul_params p;
+        p.dtypes.src = src_dt;
+        p.dtypes.wei = wei_dt;
+        p.dtypes.dst = dst_dt;
+        p.dtypes.bias = dt::f32;
+        p.mem_format_a = 'n';
+        p.mem_format_b = 'n';
+
+        params.push_back(p);
+
+        char * wei_dst = (char*)pwei;
+        char * wei_src = (char*)src0->data + e * src0->nb[2];
+
+        for (int n = 0; n < out_N; n++) {
+            for (int k = 0; k < hidden_K; k++) {
+
+                char * src_elem =
+                    wei_src +
+                    k * src0->nb[0] +
+                    n * src0->nb[1];
+
+                char * dst_elem =
+                    wei_dst +
+                    (n * hidden_K + k) * src0_elem_bytes;
+
+                memcpy(dst_elem, src_elem, src0_elem_bytes);
             }
         }
     }
 
-    if (max_rows == 0) {
-        return; // no rows to process
-    }
+    for (int e = 0; e < n_as; e++) {
 
-    const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+        if (M_all[e] == 0) continue;
 
-    // size for converting src1 rows to vec_dot_type if needed
-    const size_t nbw1 = row_size;
-    const size_t nbw2 = nbw1 * ne11;
-    const size_t nbw3 = nbw2 * ne12;
-    const size_t src1_conv_size = (src1->type != vec_dot_type) ? ne13 * nbw3 : 0;
+        int gi = expert_map[e];
 
-    // size for MoE gather/scatter buffers
-    const size_t wdata_cur_size = max_rows * row_size;
-    const size_t dst_cur_size = max_rows * ggml_row_size(dst->type, ne01);
+        char * dstp = (char*)src_allocs[gi];
 
-    // allocate single buffer for all needs
-    const size_t total_size = src1_conv_size + wdata_cur_size + dst_cur_size;
-    if (ctx->work_size < total_size) {
-        ctx->work_data.reset(new char[total_size]);
-        ctx->work_size = total_size;
-    }
+        for (int row = 0; row < M_all[e]; row++) {
 
-    // partition the buffer
-    char * work_data = ctx->work_data.get();
-    char * wdata_cur = work_data + src1_conv_size;
-    char * dst_cur = wdata_cur + wdata_cur_size;
+            int tok  = assignments[e][row].first;
+            int slot = assignments[e][row].second;
 
-    if (src1->type != vec_dot_type) {
-        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+            char * src_row =
+                (char*)src1->data +
+                slot * src1_slot_stride +
+                tok  * src1_token_stride;
 
-        #pragma omp parallel for collapse(3) num_threads(ctx->n_threads) schedule(static)
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                for (int64_t i11 = 0; i11 < ne11; ++i11) {
-                    const float * src1_f32 = (float *)((char *)src1->data + i11*nb11 + i12*nb12 + i13*nb13);
-                    void * src1_conv = (char *)work_data + i11*nbw1 + i12*nbw2 + i13*nbw3;
-                    from_float(src1_f32, src1_conv, ne10);
-                }
+            char * dst_row =
+                dstp + row * packed_src_row_bytes;
+
+            for (int k = 0; k < hidden_K; k++) {
+
+                memcpy(
+                    dst_row + k * src1_elem_bytes,
+                    src_row + k * src1->nb[0],
+                    src1_elem_bytes);
             }
         }
     }
 
-    const void * wdata = src1->type == vec_dot_type ? src1->data : work_data;
+    if (src_vec.empty()) return;
 
-    // process each expert with gather -> gemm -> scatter pattern
-    for (int64_t cur_a = 0; cur_a < n_as; ++cur_a) {
-        const int64_t cne1 = matrix_row_counts[cur_a];
+    status_t result =
+        zendnnl::lowoha::matmul::group_gemm_direct(
+            layout, transA, transB,
+            M_vec, N_vec, K_vec,
+            alpha,
+            src_vec, lda,
+            wei_vec, ldb,
+            bias_vec,
+            beta,
+            dst_vec, ldc,
+            wconst,
+            params);
 
-        if (cne1 == 0) {
-            continue;
-        }
+    GGML_ASSERT(result == status_t::success);
 
-        const char * src0_cur = (const char *) src0->data + cur_a*nb02;
+    char * dst_base = (char*)dst->data;
 
-        // gather input rows for this expert
-        #pragma omp parallel for num_threads(ctx->n_threads) schedule(static)
-        for (int64_t ir1 = 0; ir1 < cne1; ++ir1) {
-            const mmid_row_mapping & row_mapping = matrix_rows[cur_a][ir1];
-            const int64_t id = row_mapping.i1;
-            const int64_t i11 = id % ne11;
-            const int64_t i12 = row_mapping.i2;
+    for (int e = 0; e < n_as; e++) {
 
-            std::memcpy(
-                wdata_cur + ir1 * row_size,
-                (const char *) wdata + (i11 + i12*ne11) * row_size,
-                row_size
-            );
-        }
+        if (M_all[e] == 0) continue;
 
-        // batched gemm for all tokens in this expert
-        if (!ggml_zendnn_sgemm(ctx,
-                              ne01,       // m
-                              cne1,       // n
-                              ne10,       // k
-                              src0_cur,
-                              ne00,       // lda
-                              wdata_cur,
-                              ne10,       // ldb
-                              dst_cur,
-                              ne01,       // ldc
-                              src0->type,
-                              vec_dot_type,
-                              dst->type)) {
-            GGML_ABORT("%s: ZenDNN sgemm failed\n", __func__);
-        }
+        int gi = expert_map[e];
+        char * srcp = (char*)dst_vec[gi];
 
-        // scatter output rows to destination
-        #pragma omp parallel for num_threads(ctx->n_threads) schedule(static)
-        for (int64_t ir1 = 0; ir1 < cne1; ++ir1) {
-            const mmid_row_mapping & row_mapping = matrix_rows[cur_a][ir1];
-            const int64_t id = row_mapping.i1;
-            const int64_t i1 = id;
-            const int64_t i2 = row_mapping.i2;
+        for (int row = 0; row < M_all[e]; row++) {
 
-            std::memcpy(
-                (char *) dst->data + i1*nb1 + i2*nb2,
-                dst_cur + ir1 * ggml_row_size(dst->type, ne01),
-                ggml_row_size(dst->type, ne01)
-            );
+            int tok  = assignments[e][row].first;
+            int slot = assignments[e][row].second;
+
+            char * src_row =
+                srcp + row * packed_dst_row_bytes;
+
+            char * dst_row =
+                dst_base +
+                slot * dst_slot_stride +
+                tok  * dst_token_stride;
+
+            for (int n = 0; n < out_N; n++) {
+
+                memcpy(
+                    dst_row + n * dst->nb[0],
+                    src_row + n * dst_elem_bytes,
+                    dst_elem_bytes);
+            }
         }
     }
+
+    for (void * p : src_allocs) operator delete(p);
+    for (void * p : wei_allocs) operator delete(p);
+    for (void * p : dst_allocs) operator delete(p);
 }
+
 
 // backend interface
 
