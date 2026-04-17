@@ -706,7 +706,7 @@ private:
             // remove entries after ckpt.pos_max
             llama_memory_seq_rm(llama_get_memory(ctx_impl.ctx), slot->id, ckpt.pos_max + 1, -1);
 
-            slot->smpl = std::move(smpl);
+            slot->smpl.reset(common_sampler_clone(slot->smpl.get()));
 
             return n;
         }
