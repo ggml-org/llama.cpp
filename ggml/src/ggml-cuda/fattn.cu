@@ -75,7 +75,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
             return;
         }
 
-        if constexpr (DKQ <= 256) {
+        if constexpr (DKQ <= 256 || DKQ == 320) {
             if (use_gqa_opt && gqa_ratio % 2 == 0) {
                 ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 2>(ctx, dst);
                 return;
@@ -98,7 +98,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
         return;
     }
 
-    if constexpr (DKQ <= 256) {
+    if constexpr (DKQ <= 256 || DKQ == 320) {
         if (use_gqa_opt && gqa_ratio > 1) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 2>(ctx, dst);
             return;
@@ -142,6 +142,10 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
         case 256:
             GGML_ASSERT(V->ne[0] == 256);
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<256, 256>(ctx, dst);
+            break;
+        case 320:
+            GGML_ASSERT(V->ne[0] == 256);
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<320, 256>(ctx, dst);
             break;
         case 512:
             GGML_ASSERT(V->ne[0] == 512);
@@ -360,6 +364,14 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
+        case 320:
+            if (V->ne[0] != 256) {
+                return BEST_FATTN_KERNEL_NONE;
+            }
+            if (!gqa_opt_applies) {
+                return BEST_FATTN_KERNEL_NONE;
+            }
+            break;
         case 576:
             if (V->ne[0] != 512) {
                 return BEST_FATTN_KERNEL_NONE;
@@ -444,7 +456,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     // Use the WMMA kernel if possible:
-    if (ggml_cuda_should_use_wmma_fattn(cc) && K->ne[1] % FATTN_KQ_STRIDE == 0 && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[0] != 512 && Q->ne[0] != 576) {
+    if (ggml_cuda_should_use_wmma_fattn(cc) && K->ne[1] % FATTN_KQ_STRIDE == 0 && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[0] != 320 && Q->ne[0] != 512 && Q->ne[0] != 576) {
         if (can_use_vector_kernel && Q->ne[1] <= 2) {
             return BEST_FATTN_KERNEL_VEC;
         }
@@ -477,7 +489,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     // Use MFMA flash attention for CDNA (MI100+):
-    if (amd_mfma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[0] != 256 && Q->ne[0] != 512 && Q->ne[0] != 576) {
+    if (amd_mfma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[0] != 256 && Q->ne[0] != 320 && Q->ne[0] != 512 && Q->ne[0] != 576) {
         const int64_t eff_nq = Q->ne[1] * (gqa_opt_applies ? gqa_ratio : 1);
         // MMA vs tile crossover benchmarked on MI300X @ d32768:
         //   hsk=64  (gqa=4): MMA wins at eff >= 128 (+11%)

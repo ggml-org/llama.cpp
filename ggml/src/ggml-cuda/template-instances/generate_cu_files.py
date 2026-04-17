@@ -3,7 +3,7 @@
 from glob import glob
 import os
 
-HEAD_SIZES_KQ = [40, 64, 72, 80, 96, 112, 128, 256, 512, 576]
+HEAD_SIZES_KQ = [40, 64, 72, 80, 96, 112, 128, 256, 320, 512, 576]
 
 TYPES_KV = ["GGML_TYPE_F16", "GGML_TYPE_Q4_0", "GGML_TYPE_Q4_1", "GGML_TYPE_Q5_0", "GGML_TYPE_Q5_1", "GGML_TYPE_Q8_0", "GGML_TYPE_BF16"]
 
@@ -62,7 +62,12 @@ for filename in glob("*.cu"):
     os.remove(filename)
 
 for head_size_kq in HEAD_SIZES_KQ:
-    head_size_v = head_size_kq if head_size_kq != 576 else 512
+    if head_size_kq == 576:
+        head_size_v = 512
+    elif head_size_kq == 320:
+        head_size_v = 256
+    else:
+        head_size_v = head_size_kq
     with open(f"fattn-tile-instance-dkq{head_size_kq}-dv{head_size_v}.cu", "w") as f:
         f.write(SOURCE_FATTN_TILE.format(head_size_kq=head_size_kq, head_size_v=head_size_v))
 
@@ -86,11 +91,19 @@ for ncols in [8, 16, 32, 64]:
                     continue
                 if head_size_kq == 512 and ncols2 not in (4, 8):
                     continue
+                # MLA (320/256): high GQA uses ncols2=8 only; skip ncols2=4 to avoid unused instantiations.
+                if head_size_kq == 320 and ncols2 != 8:
+                    continue
                 if head_size_kq != 576 and ncols2 in (16, 32):
                     continue
                 if head_size_kq == 576 and ncols2 not in (4, 16, 32):
                     continue
-                head_size_v = head_size_kq if head_size_kq != 576 else 512
+                if head_size_kq == 576:
+                    head_size_v = 512
+                elif head_size_kq == 320:
+                    head_size_v = 256
+                else:
+                    head_size_v = head_size_kq
                 f.write(SOURCE_FATTN_MMA_CASE.format(ncols1=ncols1, ncols2=ncols2, head_size_kq=head_size_kq, head_size_v=head_size_v))
 
 for type in TYPES_MMQ:
