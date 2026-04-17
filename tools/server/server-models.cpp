@@ -1,6 +1,7 @@
 #include "server-common.h"
 #include "server-models.h"
 
+#include "build-info.h"
 #include "preset.h"
 #include "download.h"
 
@@ -936,7 +937,7 @@ void server_models_routes::init_routes() {
                     {"n_ctx",  0},
                 }},
                 {"webui_settings", webui_settings},
-                {"build_info",     build_info},
+                {"build_info",     std::string(llama_build_info())},
             });
             return res;
         }

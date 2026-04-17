@@ -1,5 +1,6 @@
 #include "hf-cache.h"
 
+#include "build-info.h"
 #include "common.h"
 #include "log.h"
 #include "http.h"
@@ -200,7 +201,7 @@ static nl::json api_get(const std::string & url,
     auto [cli, parts] = common_http_client(url);
 
     httplib::Headers headers = {
-        {"User-Agent", "llama-cpp/" + build_info},
+        {"User-Agent", "llama-cpp/" + std::string(llama_build_info())},
         {"Accept", "application/json"}
     };
 

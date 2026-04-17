@@ -86,12 +86,12 @@ if (TARGET BUILD_INFO)
     add_dependencies(mtmd-helper BUILD_INFO)
 endif()
 
-# if mtmd is linked against common, we throw an error
+# if mtmd is linked against llama-common, we throw an error
 if (TARGET mtmd)
     get_target_property(libs mtmd LINK_LIBRARIES)
-    if (libs AND "common" IN_LIST libs)
+    if (libs AND "llama-common" IN_LIST libs)
         message(FATAL_ERROR "mtmd is designed to be a public library.\n"
-                            "It must not link against common")
+                            "It must not link against llama-common")
     endif()
 endif()
 
@@ -106,11 +106,11 @@ set_target_properties  (${TARGET} PROPERTIES OUTPUT_NAME llama-mtmd-cli)
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()
-target_link_libraries  (${TARGET} PRIVATE common mtmd Threads::Threads)
+target_link_libraries  (${TARGET} PRIVATE llama-common mtmd Threads::Threads)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 # mtmd-debug tool
 add_executable(llama-mtmd-debug debug/mtmd-debug.cpp)
 set_target_properties(llama-mtmd-debug PROPERTIES OUTPUT_NAME llama-mtmd-debug)
-target_link_libraries(llama-mtmd-debug PRIVATE common mtmd Threads::Threads)
+target_link_libraries(llama-mtmd-debug PRIVATE llama-common mtmd Threads::Threads)
 target_compile_features(llama-mtmd-debug PRIVATE cxx_std_17)

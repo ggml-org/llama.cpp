@@ -38,7 +38,7 @@ enum log_colors {
 
 // needed by the LOG_TMPL macro to avoid computing log arguments if the verbosity lower
 // set via common_log_set_verbosity()
-extern int common_log_verbosity_thold;
+int  common_log_get_verbosity_thold(void);
 
 void common_log_set_verbosity_thold(int verbosity); // not thread-safe
 
@@ -98,7 +98,7 @@ void common_log_flush         (struct common_log * log);                    // f
 
 #define LOG_TMPL(level, verbosity, ...) \
     do { \
-        if ((verbosity) <= common_log_verbosity_thold) { \
+        if ((verbosity) <= common_log_get_verbosity_thold()) { \
             common_log_add(common_log_main(), (level), __VA_ARGS__); \
         } \
     } while (0)

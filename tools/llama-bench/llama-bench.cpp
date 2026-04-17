@@ -19,6 +19,7 @@
 #include <vector>
 #include <unordered_set>
 
+#include "build-info.h"
 #include "common.h"
 #include "download.h"
 #include "ggml.h"
@@ -1624,8 +1625,8 @@ struct test {
     }
 };
 
-const std::string test::build_commit = LLAMA_COMMIT;
-const int         test::build_number = LLAMA_BUILD_NUMBER;
+const std::string test::build_commit = llama_commit();
+const int         test::build_number = llama_build_number();
 
 struct printer {
     virtual ~printer() {}

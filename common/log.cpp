@@ -23,6 +23,10 @@
 
 int common_log_verbosity_thold = LOG_DEFAULT_LLAMA;
 
+int common_log_get_verbosity_thold(void) {
+    return common_log_verbosity_thold;
+}
+
 void common_log_set_verbosity_thold(int verbosity) {
     common_log_verbosity_thold = verbosity;
 }

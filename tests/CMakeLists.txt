@@ -10,7 +10,7 @@ function(llama_build source)
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
-    target_link_libraries(${TEST_TARGET} PRIVATE common)
+    target_link_libraries(${TEST_TARGET} PRIVATE llama llama-common)
     if (LLAMA_TESTS_INSTALL)
         install(TARGETS ${TEST_TARGET} RUNTIME)
     endif()
@@ -105,7 +105,7 @@ function(llama_build_and_test source)
     if (LLAMA_TESTS_INSTALL)
         install(TARGETS ${TEST_TARGET} RUNTIME)
     endif()
-    target_link_libraries(${TEST_TARGET} PRIVATE common)
+    target_link_libraries(${TEST_TARGET} PRIVATE llama-common)
 
     add_test(
         NAME ${TEST_TARGET}
@@ -269,11 +269,11 @@ if (TARGET cpp-httplib)
     get_target_property(_cpp_httplib_defs cpp-httplib INTERFACE_COMPILE_DEFINITIONS)
     if (_cpp_httplib_defs MATCHES "CPPHTTPLIB_OPENSSL_SUPPORT")
         add_library(gguf-model-data STATIC gguf-model-data.cpp)
-        target_link_libraries(gguf-model-data PRIVATE common cpp-httplib)
+        target_link_libraries(gguf-model-data PRIVATE llama-common cpp-httplib)
         target_include_directories(gguf-model-data PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
         add_executable(test-gguf-model-data test-gguf-model-data.cpp)
-        target_link_libraries(test-gguf-model-data PRIVATE gguf-model-data common)
+        target_link_libraries(test-gguf-model-data PRIVATE gguf-model-data llama-common)
         llama_test(test-gguf-model-data LABEL "model")
 
         # test-quant-type-selection requires gguf-model-data for remote model metadata
