@@ -251,7 +251,7 @@ struct common_speculative_state_draft : public common_speculative_state {
         }
     }
 
-    size_t draft_init_checkpoint(int n_tokens_prompt, int n_tokens_batch) {
+    size_t draft_create_checkpoint(int n_tokens_prompt, int n_tokens_batch) {
         int slot_id = 0;
         const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx_dft, slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
@@ -273,12 +273,13 @@ struct common_speculative_state_draft : public common_speculative_state {
     size_t draft_restore_checkpoint(size_t ckpt_size_part_expected) {
         int slot_id = 0;
         LOG_DBG("%s: pos_min = %d, pos_max = %d\n", __func__, ckpt.pos_min, ckpt.pos_max);
-        const size_t n = llama_state_seq_set_data_ext(ctx_dft,
-                ckpt.data.data(), ckpt.size(), slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        const size_t n = llama_state_seq_set_data_ext(ctx_dft, ckpt.data.data(), ckpt.size(), slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
         if (n != ckpt_size_part_expected) {
             GGML_ABORT("%s: failed to restore context checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
                         __func__, ckpt.pos_min, ckpt.pos_max, ckpt.size(), ckpt_size_part_expected, n);
         }
+        llama_memory_seq_rm(llama_get_memory(ctx_dft), slot_id, ckpt.pos_max + 1, -1);
+
         return n;
     }
 
@@ -420,7 +421,7 @@ struct common_speculative_state_draft : public common_speculative_state {
         }
 
         if (needs_ckpt) {
-            ckpt.ckpt_size = draft_init_checkpoint(prompt_dft.size(), batch.n_tokens);
+            ckpt.ckpt_size = draft_create_checkpoint(prompt_dft.size(), batch.n_tokens);
         }
 
         // prepare a batch to evaluate any new tokens in the prompt

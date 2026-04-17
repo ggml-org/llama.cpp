@@ -2898,7 +2898,7 @@ private:
                     continue; // continue loop of slots
                 }
 
-                if (!slot.spec->get_draft().empty()) {
+                if (slot.can_speculate() && !slot.spec->get_draft().empty()) {
                     continue; // sample using speculative decoding
                 }
 
@@ -2945,7 +2945,7 @@ private:
 
             // speculative decoding - main model sample and accept
             for (auto & slot : slots) {
-                if (slot.state != SLOT_STATE_GENERATING || slot.spec->get_draft().empty()) {
+                if (slot.state != SLOT_STATE_GENERATING || !slot.can_speculate() || slot.spec->get_draft().empty()) {
                     continue;
                 }
 
