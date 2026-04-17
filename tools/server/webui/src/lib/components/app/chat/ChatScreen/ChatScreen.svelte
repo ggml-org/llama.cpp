@@ -19,7 +19,8 @@
 		isLoading,
 		isChatStreaming,
 		isEditing,
-		getAddFilesHandler
+		getAddFilesHandler,
+		activeProcessingState
 	} from '$lib/stores/chat.svelte';
 	import {
 		conversationsStore,
@@ -77,6 +78,10 @@
 	let hasPropsError = $derived(!!serverError());
 
 	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
+
+	let showProcessingInfo = $derived(
+		isCurrentConversationLoading || config().keepStatsVisible || activeProcessingState() !== null
+	);
 
 	let isRouter = $derived(isRouterMode());
 
@@ -355,22 +360,22 @@
 		onscroll={handleScroll}
 		role="main"
 	>
-		<div class="flex flex-col">
+		<div class="flex grow flex-col pt-14">
 			{#if !isEmpty}
 				<ChatMessages
-					class="mb-16 md:mb-24"
 					messages={activeMessages()}
 					onUserAction={() => {
 						autoScroll.enable();
 						autoScroll.scrollToBottom();
 					}}
+					{showProcessingInfo}
 				/>
 			{/if}
 
 			<div
 				class="pointer-events-none {isEmpty
 					? 'absolute bottom-[calc(50dvh-7rem)]'
-					: 'sticky bottom-4'} right-4 left-4 my-auto transition-all duration-200"
+					: 'sticky bottom-4'} right-4 left-4 mt-auto pt-16 transition-all duration-200"
 			>
 				{#if isEmpty}
 					<div class="mb-8 px-4 text-center" use:fadeInView={{ duration: 300 }}>
@@ -384,7 +389,7 @@
 					</div>
 				{/if}
 
-				<ChatScreenProcessingInfo />
+				<ChatScreenProcessingInfo {showProcessingInfo} />
 
 				{#if hasPropsError}
 					<div

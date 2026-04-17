@@ -62,7 +62,8 @@ import type {
 	AgenticMessage,
 	AgenticToolCallList,
 	AgenticFlowCallbacks,
-	AgenticFlowOptions
+	AgenticFlowOptions,
+	SteeringMessage
 } from '$lib/types/agentic';
 import type {
 	ApiChatCompletionToolCall,
@@ -138,6 +139,11 @@ class AgenticStore {
 	private _pendingContinueRequests = new SvelteMap<string, boolean>();
 	/** Non-reactive: stores resolve functions for pending continue Promises */
 	private _continueResolvers = new Map<string, (shouldContinue: boolean) => void>();
+
+	/** Non-reactive: queued steering messages to inject between turns */
+	private _steeringMessages = new Map<string, SteeringMessage>();
+	/** Reactive: whether a steering message is pending (for UI) */
+	private _pendingSteeringMessages = new SvelteMap<string, boolean>();
 
 	get isReady(): boolean {
 		return true;
@@ -223,6 +229,48 @@ class AgenticStore {
 
 	clearError(conversationId: string): void {
 		this.updateSession(conversationId, { lastError: null });
+	}
+
+	hasPendingSteeringMessage(conversationId: string): boolean {
+		return this._pendingSteeringMessages.get(conversationId) ?? false;
+	}
+
+	pendingSteeringMessageContent(conversationId: string): string | null {
+		if (!this._pendingSteeringMessages.get(conversationId)) return null;
+		return this._steeringMessages.get(conversationId)?.content ?? null;
+	}
+
+	/**
+	 * Queue a steering message. When the current agentic turn completes,
+	 * the flow exits and the caller re-sends the message as a normal chat message.
+	 */
+	injectSteeringMessage(
+		conversationId: string,
+		content: string,
+		extras?: DatabaseMessageExtra[]
+	): void {
+		this._steeringMessages.set(conversationId, { content, extras });
+		this._pendingSteeringMessages.set(conversationId, true);
+	}
+
+	/**
+	 * Clear the pending steering message without consuming it.
+	 */
+	clearSteeringMessage(conversationId: string): void {
+		this._steeringMessages.delete(conversationId);
+		this._pendingSteeringMessages.set(conversationId, false);
+	}
+
+	/**
+	 * Consume and return the pending steering message for re-sending.
+	 * Called by chatStore after the agentic flow exits.
+	 */
+	consumePendingSteeringMessage(conversationId: string): SteeringMessage | null {
+		const msg = this._steeringMessages.get(conversationId);
+		if (!msg) return null;
+		this._steeringMessages.delete(conversationId);
+		this._pendingSteeringMessages.set(conversationId, false);
+		return msg;
 	}
 
 	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
@@ -336,6 +384,8 @@ class AgenticStore {
 		this._permissionResolvers.delete(conversationId);
 		this._pendingContinueRequests.set(conversationId, false);
 		this._continueResolvers.delete(conversationId);
+		this._steeringMessages.delete(conversationId);
+		this._pendingSteeringMessages.set(conversationId, false);
 
 		// Ensure built-in tools are fetched before checking if agentic is enabled
 		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
@@ -597,6 +647,20 @@ class AgenticStore {
 				throw normalizedError;
 			}
 
+			// === Steering check: if a user message was queued during this turn, exit the flow.
+			// The caller (chatStore) will consume the pending message and re-send it normally.
+			if (this._steeringMessages.has(conversationId)) {
+				console.log('[AgenticStore] Steering message detected after turn, exiting agentic flow');
+				await onAssistantTurnComplete?.(
+					turnContent,
+					turnReasoningContent || undefined,
+					this.buildFinalTimings(capturedTimings, agenticTimings),
+					turnToolCalls.length > 0 ? this.normalizeToolCalls(turnToolCalls) : undefined
+				);
+				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+				return;
+			}
+
 			// No tool calls = final turn, save and complete
 			if (turnToolCalls.length === 0) {
 				agenticTimings.perTurn!.push(turnStats);
@@ -650,10 +714,32 @@ class AgenticStore {
 			});
 
 			// Execute each tool call and create result messages
-			for (const toolCall of normalizedCalls) {
+			for (let i = 0; i < normalizedCalls.length; i++) {
+				const toolCall = normalizedCalls[i];
+
 				if (signal?.aborted) {
 					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 					return;
+				}
+
+				// Check for pending steering message - skip remaining tool calls
+				if (this._steeringMessages.has(conversationId)) {
+					console.log(
+						`[AgenticStore] Steering message detected, skipping ${normalizedCalls.length - i} remaining tool call(s)`
+					);
+					for (let j = i; j < normalizedCalls.length; j++) {
+						const remainingCall = normalizedCalls[j];
+						const interruptedContent = 'Tool execution was interrupted by a new user message.';
+						if (createToolResultMessage) {
+							await createToolResultMessage(remainingCall.id, interruptedContent);
+						}
+						sessionMessages.push({
+							role: MessageRole.TOOL,
+							tool_call_id: remainingCall.id,
+							content: interruptedContent
+						});
+					}
+					break;
 				}
 
 				const toolName = toolCall.function.name;
@@ -779,6 +865,15 @@ class AgenticStore {
 				if (intermediateTimings) onTurnComplete?.(intermediateTimings);
 			}
 
+			// If tools were interrupted by a steering message, exit now instead of starting another LLM turn
+			if (this._steeringMessages.has(conversationId)) {
+				console.log(
+					'[AgenticStore] Steering message detected after tool execution, exiting agentic flow'
+				);
+				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+				return;
+			}
+
 			turn++;
 		}
 	}
@@ -892,6 +987,26 @@ export function agenticPendingContinueRequest(conversationId: string) {
 
 export function agenticResolveContinue(conversationId: string, shouldContinue: boolean) {
 	agenticStore.resolveContinue(conversationId, shouldContinue);
+}
+
+export function agenticHasPendingSteeringMessage(conversationId: string) {
+	return agenticStore.hasPendingSteeringMessage(conversationId);
+}
+
+export function agenticInjectSteeringMessage(
+	conversationId: string,
+	content: string,
+	extras?: DatabaseMessageExtra[]
+) {
+	agenticStore.injectSteeringMessage(conversationId, content, extras);
+}
+
+export function agenticPendingSteeringMessageContent(conversationId: string) {
+	return agenticStore.pendingSteeringMessageContent(conversationId);
+}
+
+export function agenticClearSteeringMessage(conversationId: string) {
+	agenticStore.clearSteeringMessage(conversationId);
 }
 
 export function agenticIsAnyRunning() {

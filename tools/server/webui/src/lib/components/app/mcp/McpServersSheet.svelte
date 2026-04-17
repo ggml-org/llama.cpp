@@ -5,6 +5,7 @@
 	import { McpActiveServersAvatars, SearchInput } from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 
@@ -79,7 +80,11 @@
 	}
 
 	async function toggleServerForChat(serverId: string) {
+		const wasEnabled = conversationsStore.isMcpServerEnabledForChat(serverId);
 		await conversationsStore.toggleMcpServerForChat(serverId);
+		if (!wasEnabled) {
+			toolsStore.enableAllToolsForServer(serverId);
+		}
 	}
 </script>
 

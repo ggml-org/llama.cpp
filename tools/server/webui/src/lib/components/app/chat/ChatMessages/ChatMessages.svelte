@@ -1,11 +1,16 @@
 <script lang="ts">
-	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { ChatMessage } from '$lib/components/app';
+	import ChatMessageUserPending from './ChatMessageUserPending.svelte';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import {
+		agenticPendingSteeringMessageContent,
+		agenticClearSteeringMessage,
+		agenticInjectSteeringMessage
+	} from '$lib/stores/agentic.svelte';
 	import {
 		copyToClipboard,
 		formatMessageForClipboard,
@@ -14,12 +19,12 @@
 	} from '$lib/utils';
 
 	interface Props {
-		class?: string;
 		messages?: DatabaseMessage[];
 		onUserAction?: () => void;
+		showProcessingInfo?: boolean;
 	}
 
-	let { class: className, messages = [], onUserAction }: Props = $props();
+	let { messages = [], onUserAction, showProcessingInfo = false }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 	const currentConfig = config();
@@ -196,19 +201,28 @@
 	});
 </script>
 
-<div
-	class="flex h-full flex-col space-y-10 pt-24 {className}"
-	style="height: auto; min-height: calc(100dvh - 14rem);"
->
-	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
-		<div use:fadeInView>
-			<ChatMessage
-				class="mx-auto w-full max-w-[48rem]"
-				{message}
-				{toolMessages}
-				{isLastAssistantMessage}
-				{siblingInfo}
-			/>
-		</div>
-	{/each}
-</div>
+{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
+	<ChatMessage
+		class="mx-auto mt-12 w-full max-w-[48rem]"
+		{message}
+		{toolMessages}
+		{isLastAssistantMessage}
+		{siblingInfo}
+	/>
+{/each}
+
+{#if activeConversation() && agenticPendingSteeringMessageContent(activeConversation()!.id)}
+	{@const convId = activeConversation()!.id}
+	{@const pendingContent = agenticPendingSteeringMessageContent(convId)}
+
+	{#if pendingContent}
+		<ChatMessageUserPending
+			class="mx-auto mt-12 w-full max-w-[48rem]"
+			content={pendingContent}
+			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+			onEdit={(newContent) => agenticInjectSteeringMessage(convId, newContent)}
+			onDelete={() => agenticClearSteeringMessage(convId)}
+			{showProcessingInfo}
+		/>
+	{/if}
+{/if}

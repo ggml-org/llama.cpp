@@ -51,12 +51,7 @@
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 
 	async function handleSubmit() {
-		if (
-			(!message.trim() && uploadedFiles.length === 0) ||
-			disabled ||
-			isLoading ||
-			hasLoadingAttachments
-		)
+		if ((!message.trim() && uploadedFiles.length === 0) || disabled || hasLoadingAttachments)
 			return;
 
 		if (!chatFormRef?.checkModelSelected()) return;

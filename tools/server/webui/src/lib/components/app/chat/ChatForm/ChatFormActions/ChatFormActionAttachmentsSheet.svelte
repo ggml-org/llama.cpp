@@ -93,7 +93,11 @@
 	}
 
 	async function toggleServerForChat(serverId: string) {
+		const wasEnabled = conversationsStore.isMcpServerEnabledForChat(serverId);
 		await conversationsStore.toggleMcpServerForChat(serverId);
+		if (!wasEnabled) {
+			toolsStore.enableAllToolsForServer(serverId);
+		}
 	}
 
 	function closeAndCall(fn?: () => void) {

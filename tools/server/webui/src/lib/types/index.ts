@@ -150,7 +150,8 @@ export type {
 	AgenticFlowCallbacks,
 	AgenticFlowOptions,
 	AgenticFlowParams,
-	AgenticFlowResult
+	AgenticFlowResult,
+	SteeringMessage
 } from './agentic';
 
 // Tools types

@@ -176,6 +176,19 @@ class ChatStore {
 		}
 	}
 
+	/**
+	 * Abort the current agentic flow signal without clearing loading state.
+	 * Used by "Send immediately" to force the agentic loop to exit so that
+	 * the pending steering message can be re-sent.
+	 */
+	abortCurrentFlow(convId: string): void {
+		const c = this.abortControllers.get(convId);
+		if (c) {
+			c.abort();
+			this.abortControllers.delete(convId);
+		}
+	}
+
 	private showErrorDialog(state: ErrorDialogState | null): void {
 		this.errorDialogState = state;
 	}
@@ -462,6 +475,13 @@ class ChatStore {
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
 		if (!content.trim() && (!extras || extras.length === 0)) return;
 		const activeConv = conversationsStore.activeConversation;
+
+		// If agentic loop is running, inject as a steering message instead of starting a new flow
+		if (activeConv && agenticStore.isRunning(activeConv.id)) {
+			agenticStore.injectSteeringMessage(activeConv.id, content, extras);
+			return;
+		}
+
 		if (activeConv && this.isChatLoadingInternal(activeConv.id)) return;
 
 		// Cancel any in-flight pre-encode request
@@ -779,7 +799,14 @@ class ChatStore {
 				signal: abortController.signal,
 				perChatOverrides
 			});
-			if (agenticResult.handled) return;
+			if (agenticResult.handled) {
+				// Check if there's a pending steering message to re-send
+				const pending = agenticStore.consumePendingSteeringMessage(convId);
+				if (pending) {
+					await this.sendMessage(pending.content, pending.extras);
+				}
+				return;
+			}
 		}
 
 		await ChatService.sendMessage(

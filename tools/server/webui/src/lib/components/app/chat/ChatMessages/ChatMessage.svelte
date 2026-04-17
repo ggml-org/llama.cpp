@@ -7,6 +7,7 @@
 	import { DatabaseService } from '$lib/services/database.service';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 	import { MessageRole, AttachmentType } from '$lib/enums';
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatMessageAssistant,
 		ChatMessageUser,
@@ -252,70 +253,72 @@
 	}
 </script>
 
-{#if message.role === MessageRole.SYSTEM}
-	<ChatMessageSystem
-		bind:textareaElement
-		class={className}
-		{deletionInfo}
-		{message}
-		onConfirmDelete={handleConfirmDelete}
-		onCopy={handleCopy}
-		onDelete={handleDelete}
-		onEdit={handleEdit}
-		onNavigateToSibling={handleNavigateToSibling}
-		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{showDeleteDialog}
-		{siblingInfo}
-	/>
-{:else if mcpPromptExtra}
-	<ChatMessageMcpPrompt
-		class={className}
-		{deletionInfo}
-		{message}
-		mcpPrompt={mcpPromptExtra}
-		onConfirmDelete={handleConfirmDelete}
-		onCopy={handleCopy}
-		onDelete={handleDelete}
-		onEdit={handleEdit}
-		onNavigateToSibling={handleNavigateToSibling}
-		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{showDeleteDialog}
-		{siblingInfo}
-	/>
-{:else if message.role === MessageRole.USER}
-	<ChatMessageUser
-		class={className}
-		{deletionInfo}
-		{message}
-		onConfirmDelete={handleConfirmDelete}
-		onCopy={handleCopy}
-		onDelete={handleDelete}
-		onEdit={handleEdit}
-		onForkConversation={handleForkConversation}
-		onNavigateToSibling={handleNavigateToSibling}
-		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{showDeleteDialog}
-		{siblingInfo}
-	/>
-{:else}
-	<ChatMessageAssistant
-		bind:textareaElement
-		class={className}
-		{deletionInfo}
-		{isLastAssistantMessage}
-		{message}
-		{toolMessages}
-		messageContent={message.content}
-		onConfirmDelete={handleConfirmDelete}
-		onContinue={handleContinue}
-		onCopy={handleCopy}
-		onDelete={handleDelete}
-		onEdit={handleEdit}
-		onForkConversation={handleForkConversation}
-		onNavigateToSibling={handleNavigateToSibling}
-		onRegenerate={handleRegenerate}
-		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{showDeleteDialog}
-		{siblingInfo}
-	/>
-{/if}
+<div use:fadeInView>
+	{#if message.role === MessageRole.SYSTEM}
+		<ChatMessageSystem
+			bind:textareaElement
+			class={className}
+			{deletionInfo}
+			{message}
+			onConfirmDelete={handleConfirmDelete}
+			onCopy={handleCopy}
+			onDelete={handleDelete}
+			onEdit={handleEdit}
+			onNavigateToSibling={handleNavigateToSibling}
+			onShowDeleteDialogChange={handleShowDeleteDialogChange}
+			{showDeleteDialog}
+			{siblingInfo}
+		/>
+	{:else if mcpPromptExtra}
+		<ChatMessageMcpPrompt
+			class={className}
+			{deletionInfo}
+			{message}
+			mcpPrompt={mcpPromptExtra}
+			onConfirmDelete={handleConfirmDelete}
+			onCopy={handleCopy}
+			onDelete={handleDelete}
+			onEdit={handleEdit}
+			onNavigateToSibling={handleNavigateToSibling}
+			onShowDeleteDialogChange={handleShowDeleteDialogChange}
+			{showDeleteDialog}
+			{siblingInfo}
+		/>
+	{:else if message.role === MessageRole.USER}
+		<ChatMessageUser
+			class={className}
+			{deletionInfo}
+			{message}
+			onConfirmDelete={handleConfirmDelete}
+			onCopy={handleCopy}
+			onDelete={handleDelete}
+			onEdit={handleEdit}
+			onForkConversation={handleForkConversation}
+			onNavigateToSibling={handleNavigateToSibling}
+			onShowDeleteDialogChange={handleShowDeleteDialogChange}
+			{showDeleteDialog}
+			{siblingInfo}
+		/>
+	{:else}
+		<ChatMessageAssistant
+			bind:textareaElement
+			class={className}
+			{deletionInfo}
+			{isLastAssistantMessage}
+			{message}
+			{toolMessages}
+			messageContent={message.content}
+			onConfirmDelete={handleConfirmDelete}
+			onContinue={handleContinue}
+			onCopy={handleCopy}
+			onDelete={handleDelete}
+			onEdit={handleEdit}
+			onForkConversation={handleForkConversation}
+			onNavigateToSibling={handleNavigateToSibling}
+			onRegenerate={handleRegenerate}
+			onShowDeleteDialogChange={handleShowDeleteDialogChange}
+			{showDeleteDialog}
+			{siblingInfo}
+		/>
+	{/if}
+</div>

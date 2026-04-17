@@ -148,3 +148,11 @@ export interface AgenticFlowResult {
 	handled: boolean;
 	error?: Error;
 }
+
+/**
+ * A user message to be injected into the agentic loop between turns.
+ */
+export interface SteeringMessage {
+	content: string;
+	extras?: DatabaseMessageExtra[];
+}

@@ -275,6 +275,19 @@ class ToolsStore {
 		}
 	}
 
+	/**
+	 * Enable all tools belonging to a specific MCP server.
+	 * Called when a server is enabled for a conversation.
+	 */
+	enableAllToolsForServer(serverId: string): void {
+		const connection = mcpStore.getConnections().get(serverId);
+		if (!connection) return;
+		for (const tool of connection.tools) {
+			this._disabledTools.delete(tool.name);
+		}
+		this.persistDisabledTools();
+	}
+
 	toggleGroup(group: ToolGroup): void {
 		const allEnabled = group.tools.every((t) => this.isToolEnabled(t.function.name));
 		for (const tool of group.tools) {

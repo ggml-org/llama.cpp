@@ -237,7 +237,7 @@
 		{/if}
 	</div>
 
-	{#if isLoading}
+	{#if isLoading && !hasText}
 		<Button
 			type="button"
 			variant="secondary"
@@ -256,7 +256,6 @@
 		<ChatFormActionSubmit
 			canSend={canSend && hasModelSelected && isSelectedModelInCache}
 			{disabled}
-			{isLoading}
 			tooltipLabel={submitTooltip}
 			showErrorState={hasModelSelected && !isSelectedModelInCache}
 		/>
