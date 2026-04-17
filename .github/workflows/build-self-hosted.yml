@@ -97,6 +97,36 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
+  # TODO: investigate slight precision issues in some operations for test-backend-ops on the WebGPU backend.
+  #ggml-ci-nvidia-webgpu:
+  #  runs-on: [self-hosted, Linux, NVIDIA]
+
+  #  steps:
+  #    - name: Clone
+  #      id: checkout
+  #      uses: actions/checkout@v6
+
+  #    - name: Dawn Dependency
+  #      id: dawn-depends
+  #      run: |
+  #        DAWN_VERSION="v20260317.182325"
+  #        DAWN_OWNER="google"
+  #        DAWN_REPO="dawn"
+  #        DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release"
+  #        echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+  #        curl -L -o artifact.tar.gz \
+  #          "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+  #        mkdir dawn
+  #        tar -xvf artifact.tar.gz -C dawn --strip-components=1
+
+  #    - name: Test
+  #      id: ggml-ci
+  #      run: |
+  #        GG_BUILD_WEBGPU=1 \
+  #        GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
+  #        GG_BUILD_WEBGPU_DAWN_DIR="$GITHUB_WORKSPACE/dawn/lib64/cmake/Dawn" \
+  #          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+
   # TODO: provision AMX-compatible machine
   #ggml-ci-cpu-amx:
   #  runs-on: [self-hosted, Linux, CPU, AMX]
