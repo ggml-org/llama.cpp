@@ -607,6 +607,8 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
         double pct = (total_cpu > 0.0) ? (kv.second / total_cpu * 100.0) : 0.0;
         std::cout << "ggml_webgpu:  " << kv.first << ": " << kv.second << " ms (" << pct << "%)\n";
     }
+    ctx->webgpu_ctx->global_ctx->cpu_time_ms.clear();
+    ctx->webgpu_ctx->global_ctx->cpu_detail_ms.clear();
 #endif
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
@@ -622,6 +624,7 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
         std::cout << "ggml_webgpu:  " << kv.first << ": " << kv.second << " ms (" << std::fixed << std::setprecision(2)
                   << pct << "%)\n";
     }
+    ctx->webgpu_ctx->global_ctx->shader_gpu_time_ms.clear();
 #endif
 
 #if defined(GGML_WEBGPU_CPU_PROFILE) && defined(GGML_WEBGPU_GPU_PROFILE)
