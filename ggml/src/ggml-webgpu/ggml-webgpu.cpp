@@ -2501,9 +2501,9 @@ static webgpu_encoded_op ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor 
 }
 
 // Returns the encoded command, or std::nullopt if the operation is a no-op
-static std::optional<webgpu_encoded_op> ggml_webgpu_encode_node(webgpu_context         ctx,
-                                                                ggml_tensor **         nodes,
-                                                                uint32_t               node_idx) {
+static std::optional<webgpu_encoded_op> ggml_webgpu_encode_node(webgpu_context ctx,
+                                                                ggml_tensor ** nodes,
+                                                                uint32_t       node_idx) {
     ggml_tensor * node = nodes[node_idx];
 
     if (ggml_is_empty(node)) {
@@ -3323,7 +3323,8 @@ static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
     ggml_backend_webgpu_device_context * dev_ctx    = (ggml_backend_webgpu_device_context *) dev->context;
     webgpu_context                       webgpu_ctx = std::make_shared<webgpu_context_struct>();
     webgpu_ctx->global_ctx                          = dev_ctx->webgpu_global_ctx;
-    webgpu_ctx->shader_lib = std::make_unique<ggml_webgpu_shader_lib>(dev_ctx->webgpu_global_ctx->device);
+    webgpu_ctx->shader_lib     = std::make_unique<ggml_webgpu_shader_lib>(dev_ctx->webgpu_global_ctx->device);
+    webgpu_ctx->disable_fusion = getenv("GGML_WEBGPU_DISABLE_FUSION") != nullptr;
     webgpu_ctx->param_arena.init(
         webgpu_ctx->global_ctx->device, WEBGPU_PARAMS_BUF_SIZE_BYTES,
         webgpu_ctx->global_ctx->command_submit_batch_size + WEBGPU_NUM_PARAM_SLOT_SAFETY_MARGIN,
