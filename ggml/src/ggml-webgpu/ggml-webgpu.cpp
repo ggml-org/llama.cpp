@@ -3008,6 +3008,30 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     return GGML_STATUS_SUCCESS;
 }
 
+struct ggml_backend_webgpu_event_context {
+    webgpu_global_context global_ctx;
+    wgpu::Future future;
+    bool recorded = false;
+};
+
+static ggml_backend_event_t ggml_backend_webgpu_device_event_new(ggml_backend_dev_t device) {
+    ggml_backend_webgpu_device_context * dev_ctx =
+        (ggml_backend_webgpu_device_context *) device->context;
+    
+    auto * event_ctx = new ggml_backend_webgpu_event_context();
+    event_ctx->global_ctx = dev_ctx->webgpu_global_ctx;
+
+    auto * event = new ggml_backend_event;
+    event->device = device;
+    event->context = event_ctx;
+    return event;
+}
+
+static void ggml_backend_webgpu_device_event_free(ggml_backend_dev_t dev, ggml_backend_event_t event) {
+    GGML_UNUSED(dev);
+    delete static_cast<ggml_backend_webgpu_event_context *>(event->context);
+    delete event;
+}
 
 static void ggml_backend_webgpu_set_tensor_async(
         ggml_backend_t backend,
@@ -3033,7 +3057,7 @@ static void ggml_backend_webgpu_set_tensor_async(
     desc.label = "set_tensor_async_scratch_buffer";
     wgpu::Buffer staging = buf_ctx->global_ctx->device.CreateBuffer(&desc);
 
-    void * mapped = staging.GetMappedRang(0, aligned_size);
+    void * mapped = staging.GetMappedRange(0, aligned_size);
     std::memcpy(mapped, data, size);
     if (size < aligned_size) {
         // zero out extra padded space on align
@@ -3048,7 +3072,7 @@ static void ggml_backend_webgpu_set_tensor_async(
 }
 
 static void ggml_backend_webgpu_synchronize(ggml_backend_t backend) {
-    ggml_backend_webgpu_context * backend_ctx = (ggml_backend_webgpu_context) backend->context;
+    ggml_backend_webgpu_context * backend_ctx = (ggml_backend_webgpu_context *) backend->context;
     ggml_backend_webgpu_wait_queue(backend_ctx->webgpu_ctx->global_ctx);
 }
 
