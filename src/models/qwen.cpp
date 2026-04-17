@@ -27,15 +27,8 @@ llm_build_qwen::llm_build_qwen(const llama_model & model, const llm_graph_params
 
         // self-attention
         {
-            cur = build_lora_mm(model.layers[il].wqkv, cur);
-            cb(cur, "wqkv", il);
-
-            cur = ggml_add(ctx0, cur, model.layers[il].bqkv);
-            cb(cur, "bqkv", il);
-
-            ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head,    n_tokens, n_embd_head*sizeof(float), cur->nb[1], 0*sizeof(float)*(n_embd));
-            ggml_tensor * Kcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), cur->nb[1], 1*sizeof(float)*(n_embd));
-            ggml_tensor * Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), cur->nb[1], 2*sizeof(float)*(n_embd));
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             // using mode = 2 for neox mode
             Qcur = ggml_rope_ext(

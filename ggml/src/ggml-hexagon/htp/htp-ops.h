@@ -98,6 +98,8 @@ enum htp_op_code {
 #define HTP_OP_MAX_VMEM    (3221225472u)
 #endif
 
+#define HTP_MMAP_MAX_VMEM  (2147483648u)
+
 enum htp_tensor_flags {
     HTP_TENSOR_COMPUTE = (1U << 0), // Tensor buffer temporal compute data (not weights)
     HTP_TENSOR_FLUSHED = (1U << 1)  // Tensor buffer has been flushed (set by the NPU)

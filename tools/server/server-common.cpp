@@ -84,12 +84,16 @@ std::string gen_tool_call_id() {
     return random_string();
 }
 
-static std::string media_marker = "";
 const char * get_media_marker() {
-    if (media_marker.empty()) {
-        media_marker = "<__media_" + random_string() + "__>";
-    }
-    return media_marker.c_str();
+    static const std::string marker = []() {
+        // allow user to pin a reproducible marker via env var
+        const char * env = getenv("LLAMA_MEDIA_MARKER");
+        if (env && env[0] != '\0') {
+            return std::string(env);
+        }
+        return std::string("<__media_") + random_string() + "__>";
+    }();
+    return marker.c_str();
 }
 
 //

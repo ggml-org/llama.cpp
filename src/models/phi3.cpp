@@ -3,7 +3,6 @@
 template<bool iswa>
 llm_build_phi3<iswa>::llm_build_phi3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
-    const int64_t n_embd_gqa = hparams.n_embd_v_gqa();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
@@ -39,27 +38,8 @@ llm_build_phi3<iswa>::llm_build_phi3(const llama_model & model, const llm_graph_
                     LLM_NORM_RMS, il);
             cb(attn_norm_output, "attn_norm", il);
 
-            ggml_tensor * Qcur = nullptr;
-            ggml_tensor * Kcur = nullptr;
-            ggml_tensor * Vcur = nullptr;
-
-            if (model.layers[il].wqkv) {
-                cur = build_lora_mm(model.layers[il].wqkv, attn_norm_output);
-                cb(cur, "wqkv", il);
-
-                Qcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head,    n_tokens, n_embd_head * sizeof(float), cur->nb[1], 0 * sizeof(float) * (n_embd));
-                Kcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head * sizeof(float), cur->nb[1], 1 * sizeof(float) * (n_embd));
-                Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head * sizeof(float), cur->nb[1], 1 * sizeof(float) * (n_embd + n_embd_gqa));
-                }
-                else {
-                Qcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wq, attn_norm_output), model.layers[il].bq);
-                Kcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wk, attn_norm_output), model.layers[il].bk);
-                Vcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wv, attn_norm_output), model.layers[il].bv);
-
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-            }
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], attn_norm_output,
+                    n_embd_head, n_head, n_head_kv, il);
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, rope_factors,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
