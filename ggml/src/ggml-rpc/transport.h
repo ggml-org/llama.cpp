@@ -11,8 +11,7 @@ static constexpr size_t MAX_CHUNK_SIZE = 1024ull * 1024ull * 1024ull; // 1 GiB
 static constexpr size_t RPC_CONN_CAPS_SIZE = 24;
 
 struct socket_t {
-    socket_t() = default;
-    ~socket_t() = default;
+    ~socket_t();
 
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
@@ -27,6 +26,7 @@ struct socket_t {
 
 private:
     struct impl;
+    explicit socket_t(std::unique_ptr<impl> p);
     std::unique_ptr<impl> pimpl;
 };
 

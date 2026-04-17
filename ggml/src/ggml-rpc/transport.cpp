@@ -544,6 +544,10 @@ void socket_t::impl::update_caps(const uint8_t * remote_caps) {
 
 /////////////////////////////////////////////////////////////////////////////
 
+socket_t::socket_t(std::unique_ptr<impl> p) : pimpl(std::move(p)) {}
+
+socket_t::~socket_t() = default;
+
 bool socket_t::send_data(const void * data, size_t size) {
     return pimpl->send_data(data, size);
 }
@@ -590,9 +594,7 @@ socket_ptr socket_t::accept() {
         GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
-    auto ret = std::make_shared<socket_t>();
-    ret->pimpl = std::make_unique<impl>(client_socket_fd);
-    return ret;
+    return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd)));
 }
 
 socket_ptr socket_t::create_server(const char * host, int port) {
@@ -619,9 +621,7 @@ socket_ptr socket_t::create_server(const char * host, int port) {
     if (listen(sockfd, 1) < 0) {
         return nullptr;
     }
-    auto ret = std::make_shared<socket_t>();
-    ret->pimpl = std::make_unique<impl>(sockfd);
-    return ret;
+    return socket_ptr(new socket_t(std::make_unique<impl>(sockfd)));
 }
 
 socket_ptr socket_t::connect(const char * host, int port) {
@@ -645,9 +645,7 @@ socket_ptr socket_t::connect(const char * host, int port) {
     if (::connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         return nullptr;
     }
-    auto ret = std::make_shared<socket_t>();
-    ret->pimpl = std::make_unique<impl>(sockfd);
-    return ret;
+    return socket_ptr(new socket_t(std::make_unique<impl>(sockfd)));
 }
 
 #ifdef _WIN32
