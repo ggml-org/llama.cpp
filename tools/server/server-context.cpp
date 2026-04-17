@@ -659,54 +659,40 @@ private:
     // callback for speculative decoding
     //
     struct server_speculative_callback : public common_speculative_callback {
-        int slot_id; // store slot.id instead of server_slot & slot
-        server_context_impl & ctx_impl;
+        server_slot & slot;
 
         common_sampler_ptr smpl;
         server_prompt_checkpoint ckpt;
 
-        server_speculative_callback(int slot_id, server_context_impl & ctx_impl)
-            : slot_id(slot_id), ctx_impl(ctx_impl) {}
-
-        server_slot * get_slot() {
-            server_slot * slot = ctx_impl.get_slot_by_id(slot_id);
-            if (slot == nullptr) {
-                GGML_ABORT("missing slot, slot.id=%d", slot_id);
-            }
-            return slot;
-        }
+        server_speculative_callback(server_slot & slot) : slot(slot) {}
 
         size_t create_checkpoint() override {
-            server_slot * slot = get_slot();
+            const auto n_tokens = slot.prompt.tokens.size();
 
-            const auto n_tokens = slot->prompt.tokens.size();
+            ckpt = server_get_checkpoint(slot.ctx, slot.id, n_tokens);
 
-            ckpt = server_get_checkpoint(ctx_impl.ctx, slot_id, n_tokens);
-
-            SLT_WRN(*slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
+            SLT_WRN(slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
                     ckpt.pos_min, ckpt.pos_max, n_tokens, (float) ckpt.data.size() / 1024 / 1024);
 
             // save sampler (we may want to restore the RNG in the sampler after refusal of a draft)
-            smpl.reset(common_sampler_clone(slot->smpl.get()));
+            smpl.reset(common_sampler_clone(slot.smpl.get()));
 
             return ckpt.size();
         }
 
         size_t restore_checkpoint() override {
-            server_slot * slot = get_slot();
+            SLT_WRN(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
 
-            SLT_WRN(*slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
-
-            const size_t n = llama_state_seq_set_data_ext(ctx_impl.ctx, ckpt.data.data(), ckpt.size(), slot_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+            const size_t n = llama_state_seq_set_data_ext(slot.ctx, ckpt.data.data(), ckpt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
             if (n != ckpt.size()) {
                 GGML_ABORT("%s: failed to restore context checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
                             __func__, ckpt.pos_min, ckpt.pos_max, ckpt.size(), ckpt.size(), n);
             }
 
             // remove entries after ckpt.pos_max
-            llama_memory_seq_rm(llama_get_memory(ctx_impl.ctx), slot->id, ckpt.pos_max + 1, -1);
+            llama_memory_seq_rm(llama_get_memory(slot.ctx), slot.id, ckpt.pos_max + 1, -1);
 
-            slot->smpl.reset(common_sampler_clone(slot->smpl.get()));
+            slot.smpl.reset(common_sampler_clone(slot.smpl.get()));
 
             return n;
         }
@@ -859,8 +845,10 @@ private:
         // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
             slots.emplace_back();
+        }
 
-            server_slot & slot = slots.back();
+        for (int i = 0; i < params_base.n_parallel; i++) {
+            server_slot & slot = slots[i];
 
             slot.id    = i;
             slot.ctx   = ctx;
@@ -871,7 +859,7 @@ private:
 
             // try speculative decoding
             if (spec_type != COMMON_SPECULATIVE_COMPAT_TYPE_NO) {
-                auto spec_callback = std::make_unique<server_speculative_callback>(slot.id, *this);
+                auto spec_callback = std::make_unique<server_speculative_callback>(slot);
                 slot.spec = std::make_unique<common_speculative_session>(
                     params_base.speculative, std::move(spec_callback), slot.ctx);
 
