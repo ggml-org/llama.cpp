@@ -44,18 +44,9 @@
 // Matrix-vector multiplication parameters
 #define WEBGPU_MUL_MAT_VEC_WG_SIZE 256
 
-// Must be multiple of 4 to work with vectorized paths, and must divide
-// mul_mat_vec wg size
-#define WEBGPU_MUL_MAT_VEC_FLOAT_OUTPUTS_PER_WG 4
-#define WEBGPU_MUL_MAT_VEC_FLOAT_TILE_K         1024
-
+#define WEBGPU_MUL_MAT_VEC_FLOAT_OUTPUTS_PER_WG    4
 #define WEBGPU_MUL_MAT_VEC_LEGACY_Q_OUTPUTS_PER_WG 4
-#define WEBGPU_MUL_MAT_VEC_LEGACY_Q_TILE_K         1024
-
-// Requires 32 threads per output (wg_size/outputs_per_wg == 32)
-#define WEBGPU_MUL_MAT_VEC_K_Q_OUTPUTS_PER_WG 4
-// Requires at least two (and multiple of 2) k-quant blocks per tile
-#define WEBGPU_MUL_MAT_VEC_K_Q_TILE_K         2048
+#define WEBGPU_MUL_MAT_VEC_K_Q_OUTPUTS_PER_WG      4
 
 // default size for legacy matrix multiplication
 #define WEBGPU_MUL_MAT_WG_SIZE 256
