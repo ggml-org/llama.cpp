@@ -88,8 +88,8 @@ You may want to pass in some different `ARGS`, depending on the CUDA environment
 
 The defaults are:
 
-- `CUDA_VERSION` set to `12.8.1`
-- `CUDA_DOCKER_ARCH` set to the cmake build default, which includes all the supported architectures
+- `CUDA_VERSION` set to `12.5.1` for CUDA 12 images and `13.0.1` for CUDA 13 images
+- `CUDA_DOCKER_ARCH` is set to the cmake build default, which includes all the supported architectures
 
 The resulting images, are essentially the same as the non-CUDA images:
 
