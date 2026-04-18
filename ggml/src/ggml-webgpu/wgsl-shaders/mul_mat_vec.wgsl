@@ -1,6 +1,8 @@
 enable f16;
 
+#define DECLARE_BYTE_LOADERS_SRC0
 #include "common_decls.tmpl"
+
 
 #ifdef VEC
 
@@ -65,10 +67,10 @@ fn mul_acc(tig:u32, tile_size: u32, idx_base: u32, k_outer: u32) -> f32 {
         let block_byte_base = (idx_base + k_outer / BLOCK_SIZE + blck_idx) * BLOCK_SIZE_BYTES;
         // each f16 contains offsets [block_offset, block_offset + 1] and [block_offset + 16, block_offset + 17]
         let shmem_idx = blck_idx * BLOCK_SIZE + block_offset * 2u;
-        let d = f32(load_f16_at(&src0, block_byte_base));
+        let d = f32(load_f16_at_src0(block_byte_base));
         for (var j = 0u; j < F16_PER_THREAD; j += 2) {
             let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
-            let q_packed = load_u32_at(&src0, q_byte_offset);
+            let q_packed = load_u32_at_src0(q_byte_offset);
             for (var k: u32 = 0; k < 4; k++) {
                 let q_byte = get_byte(q_packed, k);
                 let q_hi = (f32((q_byte >> 4) & 0xF) - 8.0) * d;
@@ -98,11 +100,11 @@ fn mul_acc(tig:u32, tile_size: u32, idx_base: u32, k_outer: u32) -> f32 {
         let block_byte_base = (idx_base + k_outer / BLOCK_SIZE + blck_idx) * BLOCK_SIZE_BYTES;
         // each f16 contains offsets [block_offset, block_offset + 1] and [block_offset + 16, block_offset + 17]
         let shmem_idx = blck_idx * BLOCK_SIZE + block_offset * 2u;
-        let d = f32(load_f16_at(&src0, block_byte_base));
-        let m = f32(load_f16_at(&src0, block_byte_base + 2u));
+        let d = f32(load_f16_at_src0(block_byte_base));
+        let m = f32(load_f16_at_src0(block_byte_base + 2u));
         for (var j = 0u; j < F16_PER_THREAD; j += 2) {
             let q_byte_offset = block_byte_base + 4u + 2u * (block_offset + j);
-            let q_packed = load_u32_at(&src0, q_byte_offset);
+            let q_packed = load_u32_at_src0(q_byte_offset);
             for (var k: u32 = 0; k < 4; k++) {
                 let q_byte = get_byte(q_packed, k);
                 let q_hi = f32((q_byte >> 4) & 0xF) * d + m;
@@ -132,12 +134,12 @@ fn mul_acc(tig:u32, tile_size: u32, idx_base: u32, k_outer: u32) -> f32 {
         let block_byte_base = (idx_base + k_outer / BLOCK_SIZE + blck_idx) * BLOCK_SIZE_BYTES;
         // each f16 contains offsets [block_offset, block_offset + 1] and [block_offset + 16, block_offset + 17]
         let shmem_idx = blck_idx * BLOCK_SIZE + block_offset * 2u;
-        let d = f32(load_f16_at(&src0, block_byte_base));
-        let qh_packed = load_u32_at(&src0, block_byte_base + 2u);
+        let d = f32(load_f16_at_src0(block_byte_base));
+        let qh_packed = load_u32_at_src0(block_byte_base + 2u);
 
         for (var j = 0u; j < 2; j++) {
             let q_byte_offset = block_byte_base + 6u + 2u * (block_offset + j * 2u);
-            let q_packed = load_u32_at(&src0, q_byte_offset);
+            let q_packed = load_u32_at_src0(q_byte_offset);
 
             let j_adjusted = j + (block_offset / 2u);
 
@@ -176,13 +178,13 @@ fn mul_acc(tig:u32, tile_size: u32, idx_base: u32, k_outer: u32) -> f32 {
         let block_byte_base = (idx_base + k_outer / BLOCK_SIZE + blck_idx) * BLOCK_SIZE_BYTES;
         // each f16 contains offsets [block_offset, block_offset + 1] and [block_offset + 16, block_offset + 17]
         let shmem_idx = blck_idx * BLOCK_SIZE + block_offset * 2u;
-        let d = f32(load_f16_at(&src0, block_byte_base));
-        let m = load_f16_at(&src0, block_byte_base + 2u);
-        let qh_packed = load_u32_at(&src0, block_byte_base + 4u);
+        let d = f32(load_f16_at_src0(block_byte_base));
+        let m = load_f16_at_src0(block_byte_base + 2u);
+        let qh_packed = load_u32_at_src0(block_byte_base + 4u);
 
         for (var j = 0u; j < 2; j++) {
             let q_byte_offset = block_byte_base + 8u + 2u * (block_offset + j * 2u);
-            let q_packed = load_u32_at(&src0, q_byte_offset);
+            let q_packed = load_u32_at_src0(q_byte_offset);
 
             let j_adjusted = j + (block_offset / 2u);
 
@@ -221,11 +223,11 @@ fn mul_acc(tig:u32, tile_size: u32, idx_base: u32, k_outer: u32) -> f32 {
         let block_byte_base = (idx_base + k_outer / BLOCK_SIZE + blck_idx) * BLOCK_SIZE_BYTES;
         // each f16 contains offsets [block_offset, block_offset + 1] and [block_offset + 16, block_offset + 17]
         let shmem_idx = blck_idx * BLOCK_SIZE + block_offset * 2u;
-        let d = f32(load_f16_at(&src0, block_byte_base));
+        let d = f32(load_f16_at_src0(block_byte_base));
 
         for (var j = 0u; j < F16_PER_THREAD; j += 2) {
             let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
-            let q_packed = load_u32_at(&src0, q_byte_offset);
+            let q_packed = load_u32_at_src0(q_byte_offset);
             for (var k: u32 = 0; k < 4; k++) {
                 let q_byte = get_byte_i32(q_packed, k);
                 let q_val = f32(q_byte) * d;
@@ -254,12 +256,12 @@ fn mul_acc(tig:u32, tile_size: u32, idx_base: u32, k_outer: u32) -> f32 {
         let block_byte_base = (idx_base + k_outer / BLOCK_SIZE + blck_idx) * BLOCK_SIZE_BYTES;
         // each f16 contains offsets [block_offset, block_offset + 1] and [block_offset + 16, block_offset + 17]
         let shmem_idx = blck_idx * BLOCK_SIZE + block_offset * 2u;
-        let d = f32(load_f16_at(&src0, block_byte_base));
-        let m = load_f16_at(&src0, block_byte_base + 2u);
+        let d = f32(load_f16_at_src0(block_byte_base));
+        let m = load_f16_at_src0(block_byte_base + 2u);
 
         for (var j = 0u; j < F16_PER_THREAD; j += 2) {
             let q_byte_offset = block_byte_base + 4u + 2u * (block_offset + j);
-            let q_packed = load_u32_at(&src0, q_byte_offset);
+            let q_packed = load_u32_at_src0(q_byte_offset);
             for (var k: u32 = 0; k < 4; k++) {
                 let q_byte = get_byte_i32(q_packed, k);
                 let q_val = f32(q_byte) * d + f32(m);
@@ -309,13 +311,13 @@ fn mul_acc(tig: u32, tile_size: u32, idx_base: u32, k_outer: u32) -> f32 {
     for (var i = ix; i < nb; i += 2u) {
         let bbase = (idx_base + k_block_start + i) * BLOCK_SIZE_BYTES;
 
-        let d = f32(load_f16_at(&src0, bbase + 208u));
+        let d = f32(load_f16_at_src0(bbase + 208u));
 
-        let ql1_u32  = load_u32_at(&src0, bbase + q_offset_l);
-        let ql2_u32  = load_u32_at(&src0, bbase + q_offset_l + 32u);
-        let qh_u32   = load_u32_at(&src0, bbase + 128u + q_offset_h);
-        let sc_u32_0 = load_u32_at(&src0, bbase + sc_base_byte);
-        let sc_u32_1 = load_u32_at(&src0, bbase + sc_base_byte + 4u);
+        let ql1_u32  = load_u32_at_src0(bbase + q_offset_l);
+        let ql2_u32  = load_u32_at_src0(bbase + q_offset_l + 32u);
+        let qh_u32   = load_u32_at_src0(bbase + 128u + q_offset_h);
+        let sc_u32_0 = load_u32_at_src0(bbase + sc_base_byte);
+        let sc_u32_1 = load_u32_at_src0(bbase + sc_base_byte + 4u);
 
         let sc0 = sbyte_of(sc_u32_0, sc_byte_pos);
         let sc2 = sbyte_of(sc_u32_0, sc_byte_pos + 2u);

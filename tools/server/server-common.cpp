@@ -84,6 +84,18 @@ std::string gen_tool_call_id() {
     return random_string();
 }
 
+const char * get_media_marker() {
+    static const std::string marker = []() {
+        // allow user to pin a reproducible marker via env var
+        const char * env = getenv("LLAMA_MEDIA_MARKER");
+        if (env && env[0] != '\0') {
+            return std::string(env);
+        }
+        return std::string("<__media_") + random_string() + "__>";
+    }();
+    return marker.c_str();
+}
+
 //
 // lora utils
 //
@@ -975,7 +987,7 @@ json oaicompat_chat_params_parse(
                 handle_media(out_files, image_url, opt.media_path);
 
                 p["type"] = "media_marker";
-                p["text"] = mtmd_default_marker();
+                p["text"] = get_media_marker();
                 p.erase("image_url");
 
             } else if (type == "input_audio") {
@@ -996,7 +1008,7 @@ json oaicompat_chat_params_parse(
                 // TODO: add audio_url support by reusing handle_media()
 
                 p["type"] = "media_marker";
-                p["text"] = mtmd_default_marker();
+                p["text"] = get_media_marker();
                 p.erase("input_audio");
 
             } else if (type != "text") {
@@ -1460,7 +1472,7 @@ json convert_transcriptions_to_chatcmpl(
     if (!language.empty()) {
         prompt += string_format(" (language: %s)", language.c_str());
     }
-    prompt += mtmd_default_marker();
+    prompt += get_media_marker();
 
     json chatcmpl_body = inp_body; // copy all fields
     chatcmpl_body["messages"] = json::array({

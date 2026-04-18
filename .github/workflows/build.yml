@@ -267,6 +267,56 @@ jobs:
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
+  android-arm64:
+    runs-on: ubuntu-latest
+
+    env:
+      NDK_VERSION: "29.0.14206865"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: android-arm64
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: 17
+          distribution: temurin
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install NDK
+        run: |
+          sdkmanager "ndk;${{ env.NDK_VERSION }}"
+          echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DGGML_RPC=ON
+          time cmake --build build --config Release -j $(nproc)
+
   ubuntu-latest-rpc:
     runs-on: ubuntu-latest
 
@@ -1001,21 +1051,13 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          sudo apt-get update
-
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 cmake build-essential libssl-dev wget git-lfs
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-
-          if ! which rustc; then
-            # Install Rust stable version
-            sudo apt-get install -y rustup
-            rustup install stable
-            rustup default stable
-          fi
 
           git lfs install
 
@@ -1032,13 +1074,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      # FIXME: Enable when ggml-org/ccache-action works on riscv64
-      # - name: ccache
-      #   uses: ggml-org/ccache-action@v1.2.21
-      #   with:
-      #     key: ubuntu-cpu-riscv64-native
-      #     evict-old-files: 1d
-      #     save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      - name: ccache
+        uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
+        with:
+          key: ubuntu-cpu-riscv64-native
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build

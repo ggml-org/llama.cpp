@@ -31,25 +31,8 @@ llm_build_jais2::llm_build_jais2(const llama_model & model, const llm_graph_para
 
         // Self-attention with separate Q, K, V projections
         {
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            cb(Qcur, "Qcur", il);
-            Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
-            cb(Qcur, "Qcur_bias", il);
-
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            cb(Kcur, "Kcur", il);
-            Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
-            cb(Kcur, "Kcur_bias", il);
-
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            cb(Vcur, "Vcur", il);
-            Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
-            cb(Vcur, "Vcur_bias", il);
-
-            // Reshape for attention
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             // Apply RoPE
             Qcur = ggml_rope_ext(
@@ -68,7 +51,7 @@ llm_build_jais2::llm_build_jais2(const llama_model & model, const llm_graph_para
             cb(Kcur, "Kcur_rope", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].bo,
+                    model.layers[il].wo, model.layers[il].bo, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
 
