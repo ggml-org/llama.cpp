@@ -1850,20 +1850,29 @@ class TextModel(ModelBase):
             with open(module_path, encoding="utf-8") as f:
                 modules = json.load(f)
             for mod in modules:
-                if mod["type"] == "sentence_transformers.models.Pooling":
+                if mod["type"].endswith("Pooling"):
                     pooling_path = mod["path"]
                     break
+
+        mapping = {
+            "mean": gguf.PoolingType.MEAN,
+            "cls": gguf.PoolingType.CLS,
+            "lasttoken": gguf.PoolingType.LAST,
+        }
 
         # get pooling type
         if pooling_path is not None:
             with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
                 pooling = json.load(f)
-            if pooling["pooling_mode_mean_tokens"]:
+            if pooling.get("pooling_mode_mean_tokens"):
                 pooling_type = gguf.PoolingType.MEAN
-            elif pooling["pooling_mode_cls_token"]:
+            elif pooling.get("pooling_mode_cls_token"):
                 pooling_type = gguf.PoolingType.CLS
-            elif pooling["pooling_mode_lasttoken"]:
+            elif pooling.get("pooling_mode_lasttoken"):
                 pooling_type = gguf.PoolingType.LAST
+            elif pooling.get("pooling_mode") and pooling["pooling_mode"] in mapping:
+                pooling_mode = pooling["pooling_mode"]
+                pooling_type = mapping[pooling_mode]
             else:
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
