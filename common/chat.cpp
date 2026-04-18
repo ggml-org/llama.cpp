@@ -2190,7 +2190,7 @@ static void func_args_not_string(json & messages) {
                         try {
                             args = json::parse(args.get<std::string>());
                         } catch (const std::exception & e) {
-                            throw std::runtime_error("Failed to parse tool call arguments as JSON: " + std::string(e.what()));
+                            LOG_WRN("Failed to parse tool call arguments as JSON, keeping as string: %s\n", e.what());
                         }
                     }
                 }
@@ -2198,7 +2198,6 @@ static void func_args_not_string(json & messages) {
         }
     }
 }
-
 }
 
 static json common_chat_extra_context() {
