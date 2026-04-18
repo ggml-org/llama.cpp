@@ -208,7 +208,11 @@ void common_ngram_map_begin(
                 count_keys, count_keys_del, count_values_del, count_map_entries_upd);
     }
 
-    map.idx_last_check = (map.size_last_begin > 0) ? map.size_last_begin - 1 : 0;
+    // Rebase the last checked index to the current prompt. After a shorter
+    // prompt (for example, a reused server slot or a context shift) the old
+    // prompt length is no longer a valid upper bound for subsequent draft
+    // lookups.
+    map.idx_last_check = (size_begin > 0) ? size_begin - 1 : 0;
     map.size_last_begin = size_begin;
 }
 
