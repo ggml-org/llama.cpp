@@ -580,6 +580,13 @@ struct server_prompt_checkpoint {
     bool empty() const {
         return data.empty();
     }
+
+    void clear() {
+        pos_min = 0;
+        pos_max = 0;
+        n_tokens = 0;
+        data.clear();
+    }
 };
 
 struct server_prompt {

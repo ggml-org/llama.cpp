@@ -84,10 +84,8 @@ struct server_slot {
     mtmd_context * mctx = nullptr;
 
     // speculative decoding
-    server_prompt_checkpoint spec_ckpt;
-
     std::vector<int32_t> spec_i_batch;
-
+    server_prompt_checkpoint spec_ckpt;
     std::unique_ptr<common_speculative_session> spec = nullptr;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
@@ -204,8 +202,8 @@ struct server_slot {
         n_sent_text    = 0;
 
         if (can_speculate()) {
-            spec_ckpt = {};
             spec_i_batch.clear();
+            spec_ckpt.clear();
             spec->clear();
         }
         generated_tokens.clear();
@@ -2950,9 +2948,7 @@ private:
                     common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                     GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
-
                     auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx, slot.spec_i_batch, draft);
-
                     slot.spec_i_batch.clear();
 
                     if (!slot.spec->accept(std::move(accepted))) {

@@ -1252,22 +1252,22 @@ struct common_speculative_session::impl {
     }
 
     bool accept(llama_tokens ids) {
-        has_partial = false;
-
         LOG_WRN("%s: n_draft=%zu, ids.size=%zu\n", __func__, draft.size(), ids.size());
+
+        has_partial = false;
 
         if (ids.size() < draft.size() + 1) {
             // the main model rejected some tokens
-            LOG_DBG("%s: partial acceptance: %zu < %zu\n", __func__, draft.size(), draft.size());
-
             if (params.use_checkpoints) {
-                // we shorten the draft and retry
+                // shorten the draft to the number of accepted tokens
                 draft.resize(ids.size() - 1);
 
                 has_partial = true;
 
                 return false;
             }
+
+            LOG_DBG("%s: partial acceptance: %zu < %zu\n", __func__, draft.size(), draft.size());
         }
 
         draft = std::move(ids);
