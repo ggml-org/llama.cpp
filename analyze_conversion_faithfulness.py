@@ -39,12 +39,12 @@ def extract_class_info(file_path: Path) -> dict[str, ClassInfo]:
     try:
         source = file_path.read_text(encoding="utf-8")
     except Exception as e:
-        print(f"Error reading {file_path}: {e}")
+        print(f"Error reading {file_path}: {e}") # noqa: NP100
         return {}
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
-        print(f"Syntax error in {file_path}: {e}")
+        print(f"Syntax error in {file_path}: {e}") # noqa: NP100
         return {}
 
     classes: dict[str, ClassInfo] = {}
@@ -81,11 +81,11 @@ def run() -> int:
     conversion_dir = script_dir / "conversion"
 
     if not reference_file.exists():
-        print(f"Error: reference file not found: {reference_file}")
-        print("Place the original monolithic convert_hf_to_gguf.py at that path to compare.")
+        print(f"Error: reference file not found: {reference_file}") # noqa: NP100
+        print("Place the original monolithic convert_hf_to_gguf.py at that path to compare.") # noqa: NP100
         return 1
     if not conversion_dir.exists():
-        print(f"Error: conversion directory not found: {conversion_dir}")
+        print(f"Error: conversion directory not found: {conversion_dir}")# noqa: NP100
         return 1
 
     reference = extract_class_info(reference_file)
@@ -96,7 +96,7 @@ def run() -> int:
             continue
         for name, info in extract_class_info(py).items():
             if name in converted:
-                print(f"Warning: duplicate class {name} in {py} and {converted[name].file_path}")
+                print(f"Warning: duplicate class {name} in {py} and {converted[name].file_path}") # noqa: NP100
             converted[name] = info
 
     base_classes = {"ModelBase", "TextModel", "MmprojModel", "LazyTorchTensor",
@@ -125,50 +125,50 @@ def run() -> int:
 
     extra = [n for n in converted if n not in reference and n not in base_classes]
 
-    print("=" * 80)
-    print("CONVERSION FAITHFULNESS REPORT")
-    print("=" * 80)
-    print(f"Reference classes: {len(reference)}")
-    print(f"Converted classes: {len(converted)}")
-    print(f"Perfect matches:   {len(perfect)}")
-    print(f"Missing:           {len(missing)}")
-    print(f"Extra:             {len(extra)}")
-    print(f"Reg mismatches:    {len(reg_mismatch)}")
-    print(f"Code mismatches:   {len(code_mismatch)}")
+    print("=" * 80) # noqa: NP100
+    print("CONVERSION FAITHFULNESS REPORT") # noqa: NP100
+    print("=" * 80) # noqa: NP100
+    print(f"Reference classes: {len(reference)}") # noqa: NP100
+    print(f"Converted classes: {len(converted)}") # noqa: NP100
+    print(f"Perfect matches:   {len(perfect)}") # noqa: NP100
+    print(f"Missing:           {len(missing)}") # noqa: NP100
+    print(f"Extra:             {len(extra)}") # noqa: NP100
+    print(f"Reg mismatches:    {len(reg_mismatch)}") # noqa: NP100
+    print(f"Code mismatches:   {len(code_mismatch)}") # noqa: NP100
 
     if missing:
-        print("\nMISSING:")
+        print("\nMISSING:") # noqa: NP100
         for n in sorted(missing):
-            print(f"  - {n}")
+            print(f"  - {n}") # noqa: NP100
     if extra:
-        print("\nEXTRA:")
+        print("\nEXTRA:") # noqa: NP100
         for n in sorted(extra):
-            print(f"  - {n}")
+            print(f"  - {n}") # noqa: NP100
     if reg_mismatch:
-        print("\nREGISTRATION MISMATCHES:")
+        print("\nREGISTRATION MISMATCHES:") # noqa: NP100
         for name, ref_r, conv_r in reg_mismatch:
-            print(f"  {name}:")
-            print(f"    ref:  {ref_r}")
-            print(f"    conv: {conv_r}")
+            print(f"  {name}:") # noqa: NP100
+            print(f"    ref:  {ref_r}") # noqa: NP100
+            print(f"    conv: {conv_r}") # noqa: NP100
     if code_mismatch:
-        print("\nCODE MISMATCHES:")
+        print("\nCODE MISMATCHES:") # noqa: NP100
         for name, ref_n, conv_n, rp, cp in code_mismatch:
-            print(f"\n  {name}")
-            print(f"    {rp} -> {cp}")
+            print(f"\n  {name}") # noqa: NP100
+            print(f"    {rp} -> {cp}") # noqa: NP100
             diff = list(difflib.unified_diff(
                 ref_n.split("\n"), conv_n.split("\n"),
                 fromfile=f"reference/{name}", tofile=f"converted/{name}",
                 lineterm=""))
             for line in diff[:40]:
-                print(f"      {line}")
+                print(f"      {line}") # noqa: NP100
             if len(diff) > 40:
-                print(f"      ... ({len(diff) - 40} more lines)")
+                print(f"      ... ({len(diff) - 40} more lines)") # noqa: NP100
 
     print()
     if not missing and not reg_mismatch and not code_mismatch:
-        print("CONVERSION IS FAITHFUL")
+        print("CONVERSION IS FAITHFUL") # noqa: NP100
         return 0
-    print("CONVERSION HAS DIFFERENCES")
+    print("CONVERSION HAS DIFFERENCES") # noqa: NP100
     return 1
 
 

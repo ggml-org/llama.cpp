@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
 import gguf
+from gguf.constants import GGUFValueType
 
 # reuse model definitions from the conversion/ package
 from conversion import LazyTorchTensor, ModelBase, load_all_models
@@ -29,10 +30,7 @@ from conversion import LazyTorchTensor, ModelBase, load_all_models
 # Ensure all model classes are registered before we use them.
 load_all_models()
 
-from gguf.constants import GGUFValueType
-
 logger = logging.getLogger("lora-to-gguf")
-
 
 @dataclass
 class PartialLoraTensor:
