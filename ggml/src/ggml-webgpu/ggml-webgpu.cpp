@@ -3033,6 +3033,40 @@ static void ggml_backend_webgpu_device_event_free(ggml_backend_dev_t dev, ggml_b
     delete event;
 }
 
+static void ggml_backend_webgpu_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
+    GGML_UNUSED(dev);
+    ggml_backend_webgpu_event_context * event_ctx =
+        (ggml_backend_webgpu_event_context *) event->context;
+    if (!event_ctx->recorded) {
+        return;
+    }
+    wgpu::WaitStatus status =
+        event_ctx->global_ctx->instance.WaitAny(ev_ctx->future, WEBGPU_RUNTIME_WAIT_TIMEOUT_NS);
+    if (status == wgpu::WaitStatus::TimedOut) {
+        GGML_ABORT("ggml_webgpu: event_synchronize timed out after %u ms\n",
+                   WEBGPU_RUNTIME_WAIT_TIMEOUT_MS);
+    }
+    event_ctx->recorded = false;
+}
+
+static void ggml_backend_webgpu_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
+    ggml_backend_webgpu_context       * backend_ctx = (ggml_backend_webgpu_context *) backend->context;
+    ggml_backend_webgpu_event_context * event_ctx =
+        (ggml_backend_webgpu_event_context *) event->context;
+
+    event_ctx->future = backend_ctx->webgpu_ctx->global_ctx->queue.OnSubmittedWorkDone(
+        ggml_webgpu_callback_mode(),
+        [](wgpu::QueueWorkDoneStatus, wgpu::StringView) {});
+    event_ctx->recorded = true;
+}
+
+static void ggml_backend_webgpu_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
+    // event_wait makes the GPU stream stall until the event fires (used by scheduler).
+    // WebGPU has one implicit queue so this is equivalent to synchronize on the CPU.
+    GGML_UNUSED(backend);
+    ggml_backend_webgpu_device_event_synchronize(nullptr, event);
+}
+
 static void ggml_backend_webgpu_set_tensor_async(
         ggml_backend_t backend,
         ggml_tensor * tensor, 
