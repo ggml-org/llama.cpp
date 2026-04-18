@@ -164,7 +164,7 @@ def run() -> int:
             if len(diff) > 40:
                 print(f"      ... ({len(diff) - 40} more lines)") # noqa: NP100
 
-    print()
+    print() # noqa: NP100
     if not missing and not reg_mismatch and not code_mismatch:
         print("CONVERSION IS FAITHFUL") # noqa: NP100
         return 0
