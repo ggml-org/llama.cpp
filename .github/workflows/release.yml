@@ -687,6 +687,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Free up disk space
+        uses: ggml-org/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
