@@ -5,9 +5,6 @@
 #include "ggml-alloc.h"
 #include "ggml-cpp.h"
 
-// TODO: tmp
-#include "ggml-ext.h"
-
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -1273,7 +1270,45 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
     GGML_ASSERT(ggml_is_contiguous(tensor));
 
     const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(tensor, /*assume_sync =*/ false);
-    GGML_ASSERT(split_state.n_segments == 1);
+
+    if (split_state.n_segments != 1) {
+        GGML_ASSERT(split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS);
+        GGML_ASSERT(offset == 0);
+        GGML_ASSERT(size == ggml_nbytes(tensor));
+        GGML_ASSERT(tensor->ne[3] == 1);
+        size_t offset_data = 0;
+        std::vector<size_t> simple_offsets(n_bufs, 0);
+        if (split_state.axis == GGML_BACKEND_SPLIT_AXIS_0) {
+            GGML_ASSERT(tensor->ne[2] == 1);
+            const int64_t blck_size = ggml_blck_size(tensor->type);
+            for (size_t s = 0; s < split_state.n_segments; s++) {
+                for (size_t j = 0; j < n_bufs; j++) {
+                    const ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
+                    GGML_ASSERT(split_state.ne[s*n_bufs + j] % blck_size == 0);
+                    const size_t nbytes = split_state.ne[s*n_bufs + j]/blck_size * tensor->nb[0];
+                    ggml_backend_tensor_get_2d(simple_tensor, (char *) data + offset_data, simple_offsets[j], nbytes,
+                        tensor->ne[1], simple_tensor->nb[1], tensor->nb[1]);
+                    offset_data       += nbytes;
+                    simple_offsets[j] += nbytes;
+                }
+            }
+            GGML_ASSERT(offset_data*tensor->ne[1] == size);
+            return;
+        }
+        GGML_ASSERT(split_state.axis == GGML_BACKEND_SPLIT_AXIS_1);
+        for (size_t s = 0; s < split_state.n_segments; s++) {
+            for (size_t j = 0; j < n_bufs; j++) {
+                const ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
+                const size_t nbytes = split_state.ne[s*n_bufs + j] * tensor->nb[1];
+                ggml_backend_tensor_get_2d(simple_tensor, (char *) data + offset_data, simple_offsets[j], nbytes,
+                    tensor->ne[2], simple_tensor->nb[2], tensor->nb[2]);
+                offset_data       += nbytes;
+                simple_offsets[j] += nbytes;
+            }
+        }
+        GGML_ASSERT(offset_data*tensor->ne[2] == size);
+        return;
+    }
 
     switch (split_state.axis) {
         case GGML_BACKEND_SPLIT_AXIS_0:
@@ -1422,22 +1457,48 @@ struct ggml_backend_meta_context {
     size_t                      max_tmp_size  = 0;
     size_t                      max_subgraphs = 0;
 
+    void *                               comm_ctx       = nullptr;
+    ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
+
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
         name = "Meta(";
+        std::vector<ggml_backend_t> simple_backends;
         backend_configs.reserve(n_devs);
+        simple_backends.reserve(n_devs);
         for (size_t i = 0; i < n_devs; i++) {
             ggml_backend_dev_t simple_dev = ggml_backend_meta_dev_simple_dev(meta_dev, i);
             if (i > 0) {
                 name += ",";
             }
             name += ggml_backend_dev_name(simple_dev);
-            backend_configs.emplace_back(ggml_backend_dev_init(simple_dev, params));
+            simple_backends.push_back(ggml_backend_dev_init(simple_dev, params));
+            backend_configs.emplace_back(simple_backends.back());
         }
         name += ")";
+
+        if (n_devs > 1) {
+            ggml_backend_comm_init_t comm_init = (ggml_backend_comm_init_t) ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_init");
+            if (comm_init != nullptr) {
+                comm_ctx = comm_init(simple_backends.data(), simple_backends.size());
+            }
+        }
+        if (comm_ctx != nullptr) {
+            comm_allreduce = (ggml_backend_comm_allreduce_tensor_t)
+                ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
+                    ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_tensor");
+            GGML_ASSERT(comm_allreduce != nullptr);
+        }
     }
 
     ~ggml_backend_meta_context() {
+        if (comm_ctx != nullptr) {
+            ggml_backend_comm_free_t comm_free = (ggml_backend_comm_free_t) ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_configs[0].backend)), "ggml_backend_comm_free");
+            GGML_ASSERT(comm_free != nullptr);
+            comm_free(comm_ctx);
+        }
         for (auto & bc : backend_configs) {
             ggml_backend_free(bc.backend);
         }
@@ -1848,20 +1909,15 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 
         if (n_backends > 1 && i < n_subgraphs - 1) {
             bool backend_allreduce_success = false;
-            ggml_backend_allreduce_tensor_t allreduce_tensor = (ggml_backend_allreduce_tensor_t) ggml_backend_reg_get_proc_address(
-                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_ctx->backend_configs[0].backend)), "ggml_backend_allreduce_tensor");
-            if (allreduce_tensor) {
-                std::vector<ggml_backend_t> backends;
-                backends.reserve(n_backends);
+            if (backend_ctx->comm_ctx) {
                 std::vector<ggml_tensor *> nodes;
                 nodes.reserve(n_backends);
                 for (size_t j = 0; j < n_backends; j++) {
                     auto & bcj = backend_ctx->backend_configs[j];
-                    backends.push_back(bcj.backend);
                     ggml_cgraph * cgraph_ij = bcj.cgraphs[i].cgraph_main;
                     nodes.push_back(cgraph_ij->nodes[cgraph_ij->n_nodes-1]);
                 }
-                backend_allreduce_success = allreduce_tensor(backends.data(), nodes.data(), n_backends);
+                backend_allreduce_success = backend_ctx->comm_allreduce(backend_ctx->comm_ctx, nodes.data());
             }
 
             if (!backend_allreduce_success) {

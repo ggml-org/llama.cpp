@@ -1,5 +1,6 @@
 #include "arg.h"
 
+#include "build-info.h"
 #include "chat.h"
 #include "common.h"
 #include "download.h"
@@ -291,14 +292,16 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
         hf_tag = "default";
     }
 
-    const bool offline = params.offline;
     std::string model_endpoint = get_model_endpoint();
     auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
 
     // prepare local path for caching
     auto preset_fname = clean_file_name(hf_repo + "_preset.ini");
     auto preset_path = fs_get_cache_file(preset_fname);
-    const int status = common_download_file_single(preset_url, preset_path, params.hf_token, offline);
+    common_download_opts opts;
+    opts.bearer_token = params.hf_token;
+    opts.offline = params.offline;
+    const int status = common_download_file_single(preset_url, preset_path, opts);
     const bool has_preset = status >= 200 && status < 400;
 
     // remote preset is optional, so we don't error out if not found
@@ -341,10 +344,10 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.hf_file = model.path;
             model.path = "";
         }
-        common_download_model_opts opts;
-        opts.download_mmproj = true;
+        common_download_opts opts;
+        opts.bearer_token = bearer_token;
         opts.offline = offline;
-        auto download_result = common_download_model(model, bearer_token, opts);
+        auto download_result = common_download_model(model, opts, true);
 
         if (download_result.model_path.empty()) {
             LOG_ERR("error: failed to download model from Hugging Face\n");
@@ -365,9 +368,10 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
         }
 
-        common_download_model_opts opts;
+        common_download_opts opts;
+        opts.bearer_token = bearer_token;
         opts.offline = offline;
-        auto download_result = common_download_model(model, bearer_token, opts);
+        auto download_result = common_download_model(model, opts);
         if (download_result.model_path.empty()) {
             LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
             exit(1);
@@ -1041,8 +1045,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--version"},
         "show version and build info",
         [](common_params &) {
-            fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
-            fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+            fprintf(stderr, "version: %d (%s)\n", llama_build_number(), llama_commit());
+            fprintf(stderr, "built with %s for %s\n", llama_compiler(), llama_build_target());
             exit(0);
         }
     ));
@@ -2353,7 +2357,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- none: use one GPU only\n"
         "- layer (default): split layers and KV across GPUs (pipelined)\n"
         "- row: split weight across GPUs by rows (parallelized)\n"
-        "- tensor: split weights and KV across GPUs (parallelized)",
+        "- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)",
         [](common_params & params, const std::string & value) {
             if (value == "none") {
                 params.split_mode = LLAMA_SPLIT_MODE_NONE;

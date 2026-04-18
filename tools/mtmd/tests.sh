@@ -91,11 +91,14 @@ add_test_vision "ggml-org/LightOnOCR-1B-1025-GGUF:Q8_0"
 add_test_vision "ggml-org/DeepSeek-OCR-GGUF:Q8_0" -p "Free OCR." --chat-template deepseek-ocr
 add_test_vision "ggml-org/dots.ocr-GGUF:Q8_0" -p "OCR"
 add_test_vision "ggml-org/HunyuanOCR-GGUF:Q8_0" -p "OCR"
+add_test_vision "ggml-org/gemma-4-E2B-it-GGUF:Q8_0" --jinja
 
 add_test_audio  "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF:Q8_0"
 add_test_audio  "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
 add_test_audio  "ggml-org/Voxtral-Mini-3B-2507-GGUF:Q4_K_M"
 add_test_audio  "ggml-org/LFM2-Audio-1.5B-GGUF:Q8_0"
+add_test_audio  "ggml-org/gemma-4-E2B-it-GGUF:Q8_0" --jinja
+add_test_audio  "ggml-org/Qwen3-ASR-0.6B-GGUF:Q8_0"
 
 # to test the big models, run: ./tests.sh big
 if [ "$RUN_BIG_TESTS" = true ]; then

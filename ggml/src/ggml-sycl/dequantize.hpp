@@ -14,6 +14,7 @@
 #define GGML_SYCL_DEQUANTIZE_HPP
 
 #include "common.hpp"
+#include "convert.hpp"
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
 typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
@@ -234,6 +235,34 @@ static void dequantize_block_q4_0_reorder(const void * __restrict__ vx, dst_t * 
         int vq = qs[l];
         y_ptr[l + 0] = d * ((vq & 0xF) - 8);
         y_ptr[l + 16] = d * ((vq >> 4) - 8);
+    }
+
+}
+
+// Dequantize Q8_0 from reorder layout: [all qs (k bytes)][all d values]
+// Each thread handles one block of QK8_0 elements.
+template<typename dst_t>
+static void dequantize_block_q8_0_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t k,
+                                  const sycl::nd_item<3> &item_ct1) {
+
+    const int64_t i = item_ct1.get_group(2);
+    const int64_t tid = item_ct1.get_local_id(2);
+    const int lane_ib = i * WARP_SIZE + tid;
+
+    if (lane_ib >= k / QK8_0) {
+        return;
+    }
+
+    dst_t * y_ptr = yy + lane_ib * QK8_0;
+
+    auto qs = (const int8_t*)vx + lane_ib * QK8_0;
+    auto s_ptr = (const sycl::half*)((const uint8_t*)vx + k) + lane_ib;
+
+    const float d = float(*s_ptr);
+
+#pragma unroll
+    for (int l = 0; l < QK8_0; ++l) {
+        y_ptr[l] = d * qs[l];
     }
 
 }

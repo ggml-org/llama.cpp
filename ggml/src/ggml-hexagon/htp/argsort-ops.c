@@ -12,7 +12,7 @@
 #include "hex-dma.h"
 
 #include "htp-ctx.h"
-#include "htp-msg.h"
+#include "htp-ops.h"
 #include "htp-ops.h"
 
 #ifndef MIN
@@ -175,8 +175,8 @@ static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = actx->octx;
 
     // Unpack context
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst = octx->dst;
 
     // Scratchpad memory
     uint8_t * spad = octx->src0_spad.data + octx->src0_spad.size_per_thread * i;
@@ -249,16 +249,16 @@ static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
 
 int op_argsort(struct htp_ops_context * octx) {
     // Check supported types
-    if (octx->src0.type != HTP_TYPE_F32) {
+    if (octx->src[0]->type != HTP_TYPE_F32) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t total_rows = octx->src0.ne[1] * octx->src0.ne[2] * octx->src0.ne[3];
+    const uint32_t total_rows = octx->src[0]->ne[1] * octx->src[0]->ne[2] * octx->src[0]->ne[3];
     const uint32_t n_threads = MIN(total_rows, octx->n_threads);
 
     // Allocate scratchpad
     // We need 1 row of float + 1 row of int32 per thread.
-    uint32_t ne00 = octx->src0.ne[0];
+    uint32_t ne00 = octx->src[0]->ne[0];
     size_t values_size  = hex_round_up(ne00 * sizeof(float), 128);
     size_t indices_size = hex_round_up(ne00 * sizeof(int32_t), 128);
     size_t spad_per_thread = values_size + indices_size;
@@ -278,9 +278,9 @@ int op_argsort(struct htp_ops_context * octx) {
     octx->src0_spad.size_per_thread = spad_per_thread;
 
     FARF(HIGH, "argsort: %ux%ux%ux%u -> %ux%ux%ux%u (0x%x, 0x%x)",
-         octx->src0.ne[0], octx->src0.ne[1], octx->src0.ne[2], octx->src0.ne[3],
-         octx->dst.ne[0], octx->dst.ne[1], octx->dst.ne[2], octx->dst.ne[3],
-         octx->src0.data, octx->dst.data);
+         octx->src[0]->ne[0], octx->src[0]->ne[1], octx->src[0]->ne[2], octx->src[0]->ne[3],
+         octx->dst->ne[0], octx->dst->ne[1], octx->dst->ne[2], octx->dst->ne[3],
+         octx->src[0]->data, octx->dst->data);
 
     struct htp_argsort_context actx;
     actx.octx = octx;

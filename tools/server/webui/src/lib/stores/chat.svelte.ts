@@ -30,7 +30,8 @@ import {
 	findDescendantMessages,
 	findLeafNode,
 	findMessageById,
-	isAbortError
+	isAbortError,
+	generateConversationTitle
 } from '$lib/utils';
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
@@ -504,7 +505,10 @@ class ChatStore {
 				allExtras
 			);
 			if (isNewConversation && content)
-				await conversationsStore.updateConversationName(currentConv.id, content.trim());
+				await conversationsStore.updateConversationName(
+					currentConv.id,
+					generateConversationTitle(content, Boolean(config().titleGenerationUseFirstLine))
+				);
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
@@ -896,7 +900,7 @@ class ChatStore {
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationTitleWithConfirmation(
 					activeConv.id,
-					newContent.trim()
+					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
 			for (const message of messagesToRemove) await DatabaseService.deleteMessage(message.id);
@@ -1317,7 +1321,7 @@ class ChatStore {
 			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
 				await conversationsStore.updateConversationTitleWithConfirmation(
 					activeConv.id,
-					newContent.trim()
+					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
 			}
 
@@ -1391,7 +1395,7 @@ class ChatStore {
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationTitleWithConfirmation(
 					activeConv.id,
-					newContent.trim()
+					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
 			await conversationsStore.refreshActiveMessages();
 			if (msg.role === MessageRole.USER)
