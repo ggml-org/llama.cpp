@@ -20,10 +20,6 @@ if ($null -ne $env:V) {
     $env:GGML_HEXAGON_VERBOSE=$env:V
 }
 
-if ($null -ne $env:E) {
-    $env:GGML_HEXAGON_EXPERIMENTAL=$env:E
-}
-
 if ($null -ne $env:PROF) {
     $env:GGML_HEXAGON_PROFILE=$env:PROF; $env:GGML_HEXAGON_OPSYNC=1
 }

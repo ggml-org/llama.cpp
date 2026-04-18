@@ -1,6 +1,5 @@
 #version 450
 
-#include "rte.glsl"
 #include "generic_head.glsl"
 #include "types.glsl"
 

@@ -13,9 +13,9 @@
 #include "hvx-utils.h"
 #include "hex-dma.h"
 
-#define htp_cumsum_tensors_preamble                  \
-    struct htp_tensor * restrict src0 = &octx->src0; \
-    struct htp_tensor * restrict dst  = &octx->dst;  \
+#define htp_cumsum_tensors_preamble                         \
+    const struct htp_tensor * restrict src0 = octx->src[0]; \
+    const struct htp_tensor * restrict dst  = octx->dst;    \
                                                      \
     const uint32_t ne00 = src0->ne[0];               \
     const uint32_t ne01 = src0->ne[1];               \
@@ -206,8 +206,8 @@ static void cumsum_thread_f32(unsigned int nth, unsigned int ith, void * data) {
 }
 
 int op_cumsum_f32(struct htp_ops_context * octx) {
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * dst  = &octx->dst;
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
 
     if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
         return HTP_STATUS_OK;
@@ -226,10 +226,12 @@ int op_cumsum_f32(struct htp_ops_context * octx) {
 
     octx->src0_spad.size_per_thread = src_row_size_aligned * 2;
     octx->dst_spad.size_per_thread  = dst_row_size_aligned * 2;
-    octx->src0_spad.size            = n_threads * octx->src0_spad.size_per_thread;
-    octx->dst_spad.size             = n_threads * octx->dst_spad.size_per_thread;
-    octx->src0_spad.data            = octx->ctx->vtcm_base;
-    octx->dst_spad.data             = octx->src0_spad.data + octx->src0_spad.size;
+
+    octx->src0_spad.size  = n_threads * octx->src0_spad.size_per_thread;
+    octx->dst_spad.size   = n_threads * octx->dst_spad.size_per_thread;
+
+    octx->src0_spad.data  = octx->ctx->vtcm_base;                        octx->src0_spad.src = NULL;
+    octx->dst_spad.data   = octx->src0_spad.data + octx->src0_spad.size; octx->dst_spad.src  = NULL;
 
     struct htp_cumsum_context cctx = {
         .octx                 = octx,
@@ -251,8 +253,9 @@ int op_cumsum_f32(struct htp_ops_context * octx) {
 }
 
 int op_cumsum(struct htp_ops_context * octx) {
-    int                 err = HTP_STATUS_OK;
-    struct htp_tensor * dst = &octx->dst;
+    const struct htp_tensor * dst = octx->dst;
+
+    int err = HTP_STATUS_OK;
 
     switch (dst->type) {
         case HTP_TYPE_F32:

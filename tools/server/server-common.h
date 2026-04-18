@@ -92,6 +92,9 @@ std::string random_string();
 std::string gen_chatcmplid();
 std::string gen_tool_call_id();
 
+// get a random marker; note: each time the server restarts, the marker will be different
+const char * get_media_marker();
+
 //
 // lora utils
 //
@@ -304,6 +307,12 @@ json oaicompat_chat_params_parse(
 
 // convert OpenAI Responses API format to OpenAI Chat Completions API format
 json convert_responses_to_chatcmpl(const json & body);
+
+// convert OpenAI transcriptions API format to OpenAI Chat Completions API format
+json convert_transcriptions_to_chatcmpl(
+    const json & body,
+    const std::map<std::string, raw_buffer> & in_files,
+    std::vector<raw_buffer> & out_files);
 
 // convert Anthropic Messages API format to OpenAI Chat Completions API format
 json convert_anthropic_to_oai(const json & body);

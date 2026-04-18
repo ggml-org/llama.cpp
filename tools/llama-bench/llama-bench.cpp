@@ -19,6 +19,7 @@
 #include <vector>
 #include <unordered_set>
 
+#include "build-info.h"
 #include "common.h"
 #include "download.h"
 #include "ggml.h"
@@ -1014,7 +1015,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 model.hf_file = params.hf_file[i];
             }
 
-            auto download_result = common_download_model(model, params.hf_token);
+            common_download_opts opts;
+            opts.bearer_token = params.hf_token;
+            auto download_result = common_download_model(model, opts);
             if (download_result.model_path.empty()) {
                 fprintf(stderr, "error: failed to download model from HuggingFace\n");
                 exit(1);
@@ -1622,8 +1625,8 @@ struct test {
     }
 };
 
-const std::string test::build_commit = LLAMA_COMMIT;
-const int         test::build_number = LLAMA_BUILD_NUMBER;
+const std::string test::build_commit = llama_commit();
+const int         test::build_number = llama_build_number();
 
 struct printer {
     virtual ~printer() {}
