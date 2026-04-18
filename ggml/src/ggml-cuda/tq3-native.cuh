@@ -1,11 +1,23 @@
 #pragma once
 
+#if defined(GGML_USE_HIP)
+#include <hip/hip_fp16.h>
+#include <hip/hip_runtime.h>
+#else
 #include <cuda_fp16.h>
+#include <cuda_runtime.h>
+#endif
 #include <stdint.h>
 
+#if defined(GGML_USE_HIP)
+#define GGML_COMMON_DECL_HIP
+#include "../ggml-common.h"
+#undef GGML_COMMON_DECL_HIP
+#else
 #define GGML_COMMON_DECL_CUDA
 #include "../ggml-common.h"
 #undef GGML_COMMON_DECL_CUDA
+#endif
 
 #ifndef QK_TQ3_0
 #define QK_TQ3_0 32

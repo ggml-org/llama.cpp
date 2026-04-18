@@ -1,5 +1,5 @@
-#include "tq3-native.cuh"
 #include "common.cuh"
+#include "tq3-native.cuh"
 
 __global__ void ggml_cuda_native_tq3_dot_kernel(
         const block_tq3_0 * __restrict__ in,
