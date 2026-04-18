@@ -3,15 +3,6 @@
 #include "llama.h"
 #include "common.h"
 
-// common/speculative.h has two interfaces:
-//
-// 1) struct common_speculative with init, begin, draft, accept and print_stats
-//    Simple interface, see examples/speculative/speculative.cpp
-//
-// 2) struct common_speculative_session with struct common_speculative_callback
-//    Complex interface which supports checkpoints, see tools/server/server-context.cpp
-//
-
 struct common_speculative;
 
 // comma separated list of all types
@@ -55,37 +46,8 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
 
-// speculative decoding which may use checkpoints to rewind in tokens history
-struct common_speculative_session {
-    common_speculative_session(
-            const common_params_speculative & params,
-                  llama_context             * ctx_tgt);
-
-    ~common_speculative_session();
-
-    // no implementations available
-    bool fail() const;
-
-    // call once at the beginning of a new generation
-    // some spec implementations use the prompt history to initialize lookup maps
-    void begin(const llama_tokens & prompt_history);
-
-    // do speculative decoding to compute a draft of tokens
-    bool generate_draft(
-            const llama_tokens & prompt,
-                  llama_token    id_last,
-                  int            n_draft_max);
-
-    // check if and how far the current draft is accepted
-    bool accept(llama_tokens ids);
-
-    const llama_tokens & get_draft() const;
-
-    void print_stats() const;
-
-    void clear();
-
-    private:
-        struct impl;
-        std::unique_ptr<impl> pimpl;
+struct common_speculative_deleter {
+    void operator()(common_speculative * s) { common_speculative_free(s); }
 };
+
+typedef std::unique_ptr<common_speculative, common_speculative_deleter> common_speculative_ptr;

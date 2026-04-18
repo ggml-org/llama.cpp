@@ -303,6 +303,8 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.backend_sampling   = json_value(data, "backend_sampling",    defaults.sampling.backend_sampling);
     params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
 
+    params.speculative = defaults.speculative;
+
     params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
     params.speculative.n_max = json_value(data, "speculative.n_max", defaults.speculative.n_max);
     params.speculative.p_min = json_value(data, "speculative.p_min", defaults.speculative.p_min);
