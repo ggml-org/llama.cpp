@@ -12,6 +12,11 @@
 
 #include "common.hpp"
 
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#include <sycl/backend.hpp>
+#include <level_zero/ze_api.h>
+#endif
+
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 
@@ -66,6 +71,49 @@ int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block
   return sycl_down_blk_size;
 }
 
+// ggml_sycl_malloc_device: allocates device memory via Level Zero (if available)
+// to avoid the xe driver's TTM staging path triggered by sycl::malloc_device.
+// sycl::malloc_device creates a 1:1 host mirror of every VRAM allocation via
+// xe_gem_prime_export; zeMemAllocDevice uses SVM/P2P path with ~8 MiB overhead.
+void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+    if (g_ggml_sycl_enable_level_zero) {
+        auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
+        auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
+
+        ze_relaxed_allocation_limits_exp_desc_t relaxed = {
+            ZE_STRUCTURE_TYPE_RELAXED_ALLOCATION_LIMITS_EXP_DESC,
+            nullptr,
+            ZE_RELAXED_ALLOCATION_LIMITS_EXP_FLAG_MAX_SIZE
+        };
+        ze_device_mem_alloc_desc_t alloc_desc = {
+            ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
+            &relaxed,
+            0, 0
+        };
+        void *ptr = nullptr;
+        ze_result_t r = zeMemAllocDevice(ze_ctx, &alloc_desc, size, 64, ze_dev, &ptr);
+        if (r == ZE_RESULT_SUCCESS && ptr) {
+            return ptr;
+        }
+        GGML_LOG_WARN("zeMemAllocDevice failed (0x%x), falling back to sycl::malloc_device\n", r);
+    }
+#endif
+    return sycl::malloc_device(size, q);
+}
+
+void ggml_sycl_free_device(void *ptr, sycl::queue &q) {
+    if (!ptr) return;
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+    if (g_ggml_sycl_enable_level_zero) {
+        auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
+        zeMemFree(ze_ctx, ptr);
+        return;
+    }
+#endif
+    sycl::free(ptr, q);
+}
+
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams) {
     for (int i = 0; i < ggml_sycl_info().device_count; ++i) {
         for (int64_t is = 0; is < GGML_SYCL_MAX_STREAMS; ++is) {
@@ -75,8 +123,7 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
         }
         if (extra->data_device[i] != nullptr && streams.size()>0) {
             ggml_sycl_set_device(i);
-            SYCL_CHECK(
-                CHECK_TRY_ERROR(sycl::free(extra->data_device[i], *(streams[i]))));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(extra->data_device[i], *(streams[i]))));
         }
     }
     delete extra;

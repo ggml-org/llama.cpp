@@ -85,6 +85,12 @@ detect_and_find_package(IntelSYCL)
 if (IntelSYCL_FOUND)
     # Use oneAPI CMake when possible
     target_link_libraries(ggml-sycl PRIVATE IntelSYCL::SYCL_CXX)
+    # Add compatibility shim for work_group_static.hpp if not present in this oneAPI version
+    get_target_property(_sycl_inc IntelSYCL::SYCL_CXX INTERFACE_INCLUDE_DIRECTORIES)
+    if(NOT EXISTS "${_sycl_inc}/sycl/ext/oneapi/work_group_static.hpp")
+        message(STATUS "work_group_static.hpp not found in oneAPI, using compatibility shim")
+        target_include_directories(ggml-sycl BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/sycl_compat")
+    endif()
 else()
     # Fallback to the simplest way of enabling SYCL when using intel/llvm nightly for instance
     target_compile_options(ggml-sycl PRIVATE "-fsycl")
@@ -92,6 +98,23 @@ else()
 endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
+
+# Level Zero: direct device memory allocation bypasses xe/TTM staging overhead
+message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO ${GGML_SYCL_SUPPORT_LEVEL_ZERO}")
+if (GGML_SYCL_SUPPORT_LEVEL_ZERO)
+    find_path(LEVEL_ZERO_INCLUDE_DIR level_zero/ze_api.h
+              HINTS ${ONEAPI_ROOT}/include /usr/include)
+    find_library(ZE_LOADER_LIB ze_loader
+                 HINTS ${ONEAPI_ROOT}/lib /usr/lib /usr/lib64 ENV LD_LIBRARY_PATH)
+    if(ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
+        target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
+        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO)
+        message(STATUS "Level Zero loader: ${ZE_LOADER_LIB}")
+        message(STATUS "Level Zero headers: ${LEVEL_ZERO_INCLUDE_DIR}")
+    else()
+        message(WARNING "Level Zero not found — L0 memory path disabled (loader=${ZE_LOADER_LIB}, inc=${LEVEL_ZERO_INCLUDE_DIR})")
+    endif()
+endif()
 
 # Link against oneDNN
 set(GGML_SYCL_DNNL 0)

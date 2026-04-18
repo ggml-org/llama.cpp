@@ -30,10 +30,29 @@
 #include <regex>
 
 #include <sycl/sycl.hpp>
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#  include <sycl/backend.hpp>
+#  include <level_zero/ze_api.h>
+#  ifdef __linux__
+#    include <fcntl.h>
+#    include <sys/ioctl.h>
+#    include <sys/mman.h>
+#    include <linux/udmabuf.h>
+#    include <unistd.h>
+// memfd_create is in sys/mman.h on glibc ≥ 2.27; define MFD_ALLOW_SEALING if missing
+#    ifndef MFD_ALLOW_SEALING
+#      define MFD_ALLOW_SEALING 2U
+#    endif
+#  endif
+#endif
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
 #    include <sycl/ext/oneapi/experimental/async_alloc/async_alloc.hpp>
 #endif
 #include <sycl/half_type.hpp>
+
+#if defined(__x86_64__) || defined(_M_X64)
+#  include <immintrin.h>
+#endif
 
 #include "ggml.h"
 #include "ggml-sycl.h"
@@ -64,6 +83,10 @@ int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+int g_ggml_sycl_enable_level_zero = 1; // initialized fully in ggml_check_sycl
+int g_ggml_sycl_enable_zero_copy = 0;  // initialized fully in ggml_check_sycl
+#endif
 
 
 static ggml_sycl_device_info ggml_sycl_init() {
@@ -112,6 +135,19 @@ static ggml_sycl_device_info ggml_sycl_init() {
     }
     return info;
 }
+
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO) && defined(__linux__) && (defined(__x86_64__) || defined(_M_X64))
+static void ggml_sycl_flush_range(void *ptr, size_t size) {
+    const size_t cache_line_size = 64;
+    char *p = (char *)((uintptr_t)ptr & ~(cache_line_size - 1));
+    char *end = (char *)ptr + size;
+    for (; p < end; p += cache_line_size) {
+        // _mm_clflushopt(p); // Prefer clflushopt but clflush is more portable
+        _mm_clflush(p);
+    }
+    _mm_sfence();
+}
+#endif
 
 const ggml_sycl_device_info & ggml_sycl_info() {
     static ggml_sycl_device_info info = ggml_sycl_init();
@@ -217,6 +253,21 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
         g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+        g_ggml_sycl_enable_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
+        g_ggml_sycl_enable_zero_copy = get_sycl_env("GGML_SYCL_ENABLE_ZERO_COPY", 0);
+        if (g_ggml_sycl_enable_level_zero) {
+            // Only enable if all devices actually use the Level Zero backend
+            for (unsigned int i = 0; i < dpct::dev_mgr::instance().device_count(); i++) {
+                auto &q = dpct::dev_mgr::instance().get_device(i).default_queue();
+                if (q.get_backend() != sycl::backend::ext_oneapi_level_zero) {
+                    GGML_LOG_WARN("SYCL device %d is not Level Zero — disabling L0 memory path\n", i);
+                    g_ggml_sycl_enable_level_zero = 0;
+                    break;
+                }
+            }
+        }
+#endif
 
 #ifdef SYCL_FLASH_ATTN
         g_ggml_sycl_enable_flash_attention = get_sycl_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
@@ -262,6 +313,9 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: DNN disabled by compile flag\n");
 #endif
         GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_ZERO_COPY: %d\n", g_ggml_sycl_enable_zero_copy);
+#endif
 
 #ifdef SYCL_FLASH_ATTN
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FLASH_ATTN: %d\n", g_ggml_sycl_enable_flash_attention);
@@ -355,6 +409,14 @@ struct ggml_backend_sycl_buffer_context {
     optimize_feature opt_feature;
     std::vector<ggml_tensor_extra_gpu *> tensor_extras;
 
+    // Zero-copy DMA-BUF fields (Lunar Lake UMA only).
+    // Physical pages are shared: CPU writes via memfd_mmap_ptr, GPU reads via dev_ptr.
+    bool  is_zero_copy   = false;
+    int   memfd          = -1;   // memfd backing the DMA-BUF
+    int   dma_fd         = -1;   // udmabuf dma_buf file descriptor
+    void *memfd_mmap_ptr = nullptr; // CPU mmap of memfd for direct writes in set_tensor
+    size_t dma_size      = 0;
+
     ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream) :
         device(device), dev_ptr(dev_ptr), stream(stream) {
             check_allow_gpu_index(device);
@@ -365,14 +427,27 @@ struct ggml_backend_sycl_buffer_context {
     ~ggml_backend_sycl_buffer_context() {
         if (dev_ptr != nullptr) {
             ggml_sycl_set_device(device);
-            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(dev_ptr, *stream)));
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO) && defined(__linux__)
+            if (is_zero_copy) {
+                // Free the L0 device mapping of the DMA-BUF pages
+                auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(stream->get_context());
+                zeMemFree(ze_ctx, dev_ptr);
+                // Release the CPU mmap — physical pages still held by dma_fd
+                if (memfd_mmap_ptr) munmap(memfd_mmap_ptr, dma_size);
+                if (dma_fd  >= 0) close(dma_fd);
+                if (memfd   >= 0) close(memfd);
+            } else {
+                SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(dev_ptr, *stream)));
+            }
+#else
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(dev_ptr, *stream)));
+#endif
         }
 
         //release extra used by tensors
         for (ggml_tensor_extra_gpu * extra : tensor_extras) {
             release_extra_gpu(extra);
         }
-
     }
 };
 
@@ -456,12 +531,34 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
+
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO) && defined(__linux__)
+    if (ctx->is_zero_copy) {
+        // Zero-copy path: the buffer was imported via DMA-BUF — the GPU already
+        // has a mapping to the same physical pages as ctx->memfd_mmap_ptr.
+        // Just copy from the mmap source (host model data) into the pinned memfd
+        // region. No sycl::memcpy needed: the GPU reads via tensor->data (L0 ptr)
+        // from the exact same physical pages we write to here.
+        //
+        // tensor->data == ctx->dev_ptr + tensor_byte_offset_within_buffer
+        // We reproduce that offset on the CPU side via memfd_mmap_ptr.
+        size_t tensor_buf_offset = (size_t)((char *)tensor->data - (char *)ctx->dev_ptr);
+        void *dst_ptr = (char *)ctx->memfd_mmap_ptr + tensor_buf_offset + offset;
+        memcpy(dst_ptr, data, size);
+
+#if defined(__x86_64__) || defined(_M_X64)
+        ggml_sycl_flush_range(dst_ptr, size);
+#endif
+        return;
+    }
+#endif
+
     ggml_sycl_set_device(ctx->device);
     auto stream = &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
     SYCL_CHECK(CHECK_TRY_ERROR(dpct::dev_mgr::instance().get_device(ctx->device).queues_wait_and_throw()));
 #ifndef _WIN32
-    // Note: Use host buffer to save the data from mmap(), then copy to device. It's workaround for mmap() issue on PVC GPU.
-    // This function will be called during load model from disk. Use memory buffer replace dynamic won't save more time and brings potential memory leak risk here.
+    // Note: Use host buffer to save the data from mmap(), then copy to device.
+    // Workaround for mmap() issue on PVC GPU.
     char * host_buf = (char *) malloc(size);
     memcpy(host_buf, data, size);
     SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, host_buf, size).wait()));
@@ -660,6 +757,176 @@ static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_t
     return ctx->name.c_str();
 }
 
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO) && defined(__linux__)
+// ---------------------------------------------------------------------------
+// Zero-copy helpers for Lunar Lake UMA
+//
+// Strategy:
+//   1. memfd_create — anonymous RAM-backed file (no disk I/O)
+//   2. ftruncate    — reserve the size without touching pages yet
+//   3. mmap         — CPU-accessible view for set_tensor writes
+//   4. F_SEAL_SHRINK/GROW — required by udmabuf; does NOT block CPU writes
+//   5. udmabuf ioctl — kernel pins the pages as a dma_buf (dma_fd)
+//   6. zeMemAllocDevice via ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF
+//      — maps the same pages into the GPU's page tables (no TTM staging)
+//
+// Result: CPU writes via memfd_mmap_ptr, GPU reads via the returned USM ptr.
+// ---------------------------------------------------------------------------
+
+// Try to raise /sys/module/udmabuf/parameters/size_limit_mb to cover `size`.
+// Returns the current limit in bytes (after the attempted raise).
+static size_t udmabuf_ensure_size_limit(size_t size) {
+    const char *path = "/sys/module/udmabuf/parameters/size_limit_mb";
+    size_t limit_bytes = (size_t)64 << 20; // conservative default: 64 MiB
+
+    FILE *f = fopen(path, "r");
+    if (f) {
+        unsigned long cur_mb = 0;
+        if (fscanf(f, "%lu", &cur_mb) == 1) limit_bytes = cur_mb << 20;
+        fclose(f);
+    }
+
+    if (size <= limit_bytes) return limit_bytes; // already sufficient
+
+    // Try to raise the limit (requires root / CAP_SYS_ADMIN)
+    unsigned long need_mb = (unsigned long)((size + ((1ul << 20) - 1)) >> 20);
+    f = fopen(path, "w");
+    if (f) {
+        fprintf(f, "%lu", need_mb);
+        fclose(f);
+        // Re-read to confirm
+        f = fopen(path, "r");
+        if (f) {
+            unsigned long new_mb = 0;
+            if (fscanf(f, "%lu", &new_mb) == 1) limit_bytes = new_mb << 20;
+            fclose(f);
+        }
+    }
+
+    if (size > limit_bytes) {
+        GGML_LOG_WARN(
+            "[ZC] udmabuf size_limit_mb=%lu MiB < required %lu MiB.\n"
+            "[ZC] To enable zero-copy for buffers > 64 MiB, run:\n"
+            "[ZC]   echo 8192 | sudo tee /sys/module/udmabuf/parameters/size_limit_mb\n"
+            "[ZC] For persistence add to /etc/tmpfiles.d/udmabuf.conf:\n"
+            "[ZC]   w /sys/module/udmabuf/parameters/size_limit_mb - - - - 8192\n",
+            (unsigned long)(limit_bytes >> 20), (unsigned long)(size >> 20));
+    }
+    return limit_bytes;
+}
+
+// Step 1-5: turn a size into a pinned (memfd, dma_fd, mmap_ptr) triple.
+// Returns dma_fd >= 0 on success; caller owns all three on success.
+static int ggml_sycl_create_udmabuf(size_t size, int *out_memfd, void **out_mmap_ptr) {
+    *out_memfd    = -1;
+    *out_mmap_ptr = nullptr;
+
+    // Check (and try to raise) the kernel's udmabuf size limit
+    size_t limit = udmabuf_ensure_size_limit(size);
+    if (size > limit) {
+        // Can't raise — caller will fall through to sycl::malloc_shared
+        return -1;
+    }
+
+    // Create anonymous RAM-backed file
+    int mfd = memfd_create("gguf_weights_zc", MFD_ALLOW_SEALING);
+    if (mfd < 0) {
+        GGML_LOG_WARN("[ZC] memfd_create failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    if (ftruncate(mfd, (off_t)size) < 0) {
+        GGML_LOG_WARN("[ZC] ftruncate failed: %s\n", strerror(errno));
+        close(mfd);
+        return -1;
+    }
+
+    // Map for CPU writes during set_tensor; pages are demand-paged
+    void *mptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+    if (mptr == MAP_FAILED) {
+        GGML_LOG_WARN("[ZC] mmap memfd failed: %s\n", strerror(errno));
+        close(mfd);
+        return -1;
+    }
+
+    // Seal: prevent size changes (required by udmabuf); F_SEAL_WRITE intentionally
+    // NOT set — we still need to write through the mmap above.
+    if (fcntl(mfd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW) < 0) {
+        GGML_LOG_WARN("[ZC] F_ADD_SEALS failed: %s\n", strerror(errno));
+        munmap(mptr, size);
+        close(mfd);
+        return -1;
+    }
+
+    int ufd = open("/dev/udmabuf", O_RDWR);
+    if (ufd < 0) {
+        GGML_LOG_WARN("[ZC] /dev/udmabuf open failed: %s\n", strerror(errno));
+        munmap(mptr, size);
+        close(mfd);
+        return -1;
+    }
+
+    struct udmabuf_create req = {};
+    req.memfd  = (uint32_t)mfd;
+    req.flags  = UDMABUF_FLAGS_CLOEXEC;
+    req.offset = 0;
+    req.size   = size;
+
+    int dma_fd = ioctl(ufd, UDMABUF_CREATE, &req);
+    close(ufd);
+
+    if (dma_fd < 0) {
+        GGML_LOG_WARN("[ZC] UDMABUF_CREATE failed for %zu MiB: %s\n", size >> 20, strerror(errno));
+        munmap(mptr, size);
+        close(mfd);
+        return -1;
+    }
+
+    GGML_LOG_INFO("[ZC] zero-copy udmabuf created: %zu MiB, dma_fd=%d\n", size >> 20, dma_fd);
+    *out_memfd    = mfd;
+    *out_mmap_ptr = mptr;
+    return dma_fd;
+}
+
+// Step 6: import a dma_buf FD into Level Zero as a device USM pointer.
+// The physical pages are already pinned by the kernel (via udmabuf).
+// On Lunar Lake UMA there is no real device/host distinction — this maps
+// the same LPDDR5X pages into the GPU's MMU without any TTM staging.
+static void *ggml_sycl_import_dma_buf(sycl::queue &q, int dma_fd, size_t size) {
+    auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
+    auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
+
+    ze_external_memory_import_fd_t import_fd = {
+        ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD,
+        nullptr,
+        ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF,
+        dma_fd
+    };
+
+    // Allow allocations >4 GiB (necessary for large models)
+    ze_relaxed_allocation_limits_exp_desc_t relaxed = {
+        ZE_STRUCTURE_TYPE_RELAXED_ALLOCATION_LIMITS_EXP_DESC,
+        &import_fd,
+        ZE_RELAXED_ALLOCATION_LIMITS_EXP_FLAG_MAX_SIZE
+    };
+
+    ze_device_mem_alloc_desc_t alloc_desc = {
+        ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC,
+        &relaxed,
+        0, 0
+    };
+
+    void *ptr = nullptr;
+    ze_result_t res = zeMemAllocDevice(ze_ctx, &alloc_desc, size, 4096, ze_dev, &ptr);
+    if (res != ZE_RESULT_SUCCESS || !ptr) {
+        GGML_LOG_WARN("[ZC] zeMemAllocDevice DMA_BUF import failed: 0x%x\n", (unsigned)res);
+        return nullptr;
+    }
+    GGML_LOG_DEBUG("[ZC] DMA-BUF imported as USM ptr %p (size %zu)\n", ptr, size);
+    return ptr;
+}
+#endif // GGML_SYCL_SUPPORT_LEVEL_ZERO && __linux__
+
 static ggml_backend_buffer_t
 ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
                                            size_t size) try {
@@ -668,14 +935,51 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
     const queue_ptr stream = buft_ctx->stream;
     size = std::max(size, (size_t)1); // syclMalloc returns null for size 0
 
+    bool is_integrated = stream->get_device().get_info<sycl::info::device::host_unified_memory>();
+
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO) && defined(__linux__)
+    // Zero-copy path for Lunar Lake UMA: import memory via DMA-BUF instead of
+    // allocating a separate device buffer. This eliminates the TTM staging mirror
+    // AND the double memcpy in set_tensor (CPU host_buf + sycl::memcpy).
+    if (is_integrated && g_ggml_sycl_enable_zero_copy) {
+        int out_memfd = -1;
+        void *mmap_ptr = nullptr;
+        int dma_fd = ggml_sycl_create_udmabuf(size, &out_memfd, &mmap_ptr);
+        if (dma_fd >= 0) {
+            void *dev_ptr = ggml_sycl_import_dma_buf(*stream, dma_fd, size);
+            if (dev_ptr) {
+                GGML_LOG_INFO("[ZC] zero-copy buffer %zu MiB via DMA-BUF\n", size >> 20);
+                ggml_backend_sycl_buffer_context *ctx =
+                    new ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, buft_ctx->stream);
+                ctx->is_zero_copy   = true;
+                ctx->memfd          = out_memfd;
+                ctx->dma_fd         = dma_fd;
+                ctx->memfd_mmap_ptr = mmap_ptr;
+                ctx->dma_size       = size;
+                return ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface, ctx, size);
+            }
+            // Import failed — fall through to standard allocation
+            munmap(mmap_ptr, size);
+            close(dma_fd);
+            close(out_memfd);
+            GGML_LOG_WARN("[ZC] DMA-BUF import failed, falling back to sycl::malloc_shared\n");
+        }
+    }
+#endif
+
     void * dev_ptr;
-    SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)sycl::malloc_device(
-                                    size, *stream)));
+    if (is_integrated) {
+        // For iGPU without zero-copy: sycl::malloc_shared avoids discrete-GPU memcpy overhead
+        SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)sycl::malloc(size, *stream, sycl::usm::alloc::shared)));
+    } else {
+        // For dGPU: zeMemAllocDevice bypasses TTM staging (PR #21597 approach)
+        SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)ggml_sycl_malloc_device(size, *stream)));
+    }
     if (!dev_ptr) {
-      GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
+      GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on device\n", __func__, size);
       return nullptr;
     }
-    ggml_backend_sycl_buffer_context * ctx = new  ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, buft_ctx->stream);
+    ggml_backend_sycl_buffer_context * ctx = new ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, buft_ctx->stream);
     return ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface, ctx, size);
 }
 catch (sycl::exception const &exc) {
@@ -921,8 +1225,9 @@ ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_buffer_t buffer,
         error codes. The original code was commented out and a warning string
         was inserted. You need to rewrite this code.
         */
-        SYCL_CHECK(CHECK_TRY_ERROR(buf = (char *)sycl::malloc_device(
-                                        size, *stream)));
+        bool is_integrated = stream->get_device().get_info<sycl::info::device::host_unified_memory>();
+        auto alloc_kind = is_integrated ? sycl::usm::alloc::shared : sycl::usm::alloc::device;
+        SYCL_CHECK(CHECK_TRY_ERROR(buf = (char *)sycl::malloc(size, *stream, alloc_kind)));
         if (!buf) {
             char err_buf[1024];
             snprintf(err_buf, 1023, "%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
