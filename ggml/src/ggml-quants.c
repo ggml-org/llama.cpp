@@ -6873,11 +6873,10 @@ static void quantize_row_iq2_tq_impl(
 size_t quantize_iq2_tq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
                        int64_t nrows, int64_t n_per_row, const float * imatrix) {
     size_t row_size = ggml_row_size(GGML_TYPE_IQ2_TQ, n_per_row);
-    char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrows; ++row) {
-        quantize_row_iq2_tq_impl(src, (block_iq2_tq *)qrow, n_per_row, imatrix);
-        src += n_per_row;
-        qrow += row_size;
+        const float * src_row = src + row * n_per_row;
+        char * qrow = (char *)dst + row * row_size;
+        quantize_row_iq2_tq_impl(src_row, (block_iq2_tq *)qrow, n_per_row, imatrix);
     }
     return nrows * row_size;
 }
@@ -7404,11 +7403,10 @@ static void quantize_row_iq3_tq_impl(
 size_t quantize_iq3_tq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
                        int64_t nrows, int64_t n_per_row, const float * imatrix) {
     size_t row_size = ggml_row_size(GGML_TYPE_IQ3_TQ, n_per_row);
-    char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrows; ++row) {
-        quantize_row_iq3_tq_impl(src, (block_iq3_tq *)qrow, n_per_row, imatrix);
-        src += n_per_row;
-        qrow += row_size;
+        const float * src_row = src + row * n_per_row;
+        char * qrow = (char *)dst + row * row_size;
+        quantize_row_iq3_tq_impl(src_row, (block_iq3_tq *)qrow, n_per_row, imatrix);
     }
     return nrows * row_size;
 }

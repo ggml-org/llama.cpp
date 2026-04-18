@@ -596,13 +596,13 @@ static void dequantize_row_iq1_s_cuda(const void * vx, dst_t * y, const int64_t 
 void ggml_cuda_set_q4dpt_levels(const int8_t * levels, cudaStream_t stream) {
     int8_t * d_q4dpt_levels;
     CUDA_CHECK(cudaGetSymbolAddress((void **)&d_q4dpt_levels, q4dpt_levels_cuda));
-    CUDA_CHECK(cudaMemcpyAsync(d_q4dpt_levels, levels, 16, cudaMemcpyDeviceToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(d_q4dpt_levels, levels, 16, cudaMemcpyHostToDevice, stream));
 }
 
 void ggml_cuda_set_q2dpt_levels(const int8_t * levels, cudaStream_t stream) {
     int8_t * d_q2dpt_levels;
     CUDA_CHECK(cudaGetSymbolAddress((void **)&d_q2dpt_levels, q2dpt_levels_cuda));
-    CUDA_CHECK(cudaMemcpyAsync(d_q2dpt_levels, levels, 4, cudaMemcpyDeviceToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(d_q2dpt_levels, levels, 4, cudaMemcpyHostToDevice, stream));
 }
 
 void ggml_cuda_set_iq2tq_grid(const void * grid, cudaStream_t stream) {
