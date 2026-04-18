@@ -746,64 +746,6 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-24-sycl-${{ matrix.dtype }}.tar.gz
           name: llama-bin-ubuntu-24-sycl-${{ matrix.dtype }}.tar.gz
 
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ubuntu-sycl-${{ matrix.build }}
-          evict-old-files: 1d
-
-      - name: Dependencies
-        id: depends
-        run: |
-          if [[ "${{ matrix.os }}" =~ "ubuntu-22.04" ]]; then
-            wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
-            sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
-            sudo apt-get update -y
-            sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libssl-dev
-          else
-            sudo apt-get update -y
-            sudo apt-get install -y gcc-14 g++-14 build-essential glslc libvulkan-dev spirv-headers libssl-dev ninja-build
-            echo "CC=gcc-14" >> "$GITHUB_ENV"
-            echo "CXX=g++-14" >> "$GITHUB_ENV"
-          fi
-
-      - name: Build
-        id: cmake_build
-        run: |
-          cmake -B build \
-            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
-            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DGGML_BACKEND_DL=ON \
-            -DGGML_NATIVE=OFF \
-            -DGGML_CPU_ALL_VARIANTS=ON \
-            -DGGML_VULKAN=ON \
-            ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release -j $(nproc)
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
-      - name: Pack artifacts
-        id: pack_artifacts
-        run: |
-          cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
-          name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
-
   ubuntu-22-rocm:
     runs-on: ubuntu-22.04
 
