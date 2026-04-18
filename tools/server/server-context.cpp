@@ -2975,6 +2975,8 @@ private:
 
                     SLT_DBG(slot, "%s: n_draft=%zu, accepted=%zu\n", __func__, slot.spec_draft.size(), accepted.size());
 
+                    GGML_ASSERT(accepted.size() >= 1);
+
                     // check for partial draft acceptance
                     if (accepted.size() < slot.spec_draft.size() + 1) {
                         if (params_spec.use_checkpoints) {
@@ -3002,9 +3004,9 @@ private:
                         LOG_DBG("%s: partial acceptance: %zu < %zu\n", __func__, accepted.size(), slot.spec_draft.size());
                     }
 
-                    slot.spec_draft = std::move(accepted);
+                    common_speculative_accept(slot.spec.get(), accepted.size() - 1);
 
-                    common_speculative_accept(slot.spec.get(), slot.spec_draft.size());
+                    slot.spec_draft = std::move(accepted);
                 }
 
                 const int64_t t_current = ggml_time_us();
