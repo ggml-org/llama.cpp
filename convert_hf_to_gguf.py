@@ -7189,7 +7189,7 @@ class EmbeddingGemma(Gemma3Model):
                 with open(modules_file, encoding="utf-8") as modules_json_file:
                     mods = json.load(modules_json_file)
                 for mod in mods:
-                    if mod["type"] == "sentence_transformers.models.Dense":
+                    if mod["type"].endswith("Dense"):
                         mod_path = mod["path"]
                         # check if model.safetensors file for Dense layer exists
                         model_tensors_file = self.dir_model / mod_path / "model.safetensors"
