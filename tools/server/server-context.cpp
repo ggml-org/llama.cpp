@@ -3537,6 +3537,7 @@ void server_routes::init_routes() {
                 {"vision", meta->has_inp_image},
                 {"audio",  meta->has_inp_audio},
             } },
+            { "media_marker",                get_media_marker() },
             { "endpoint_slots",              params.endpoint_slots },
             { "endpoint_props",              params.endpoint_props },
             { "endpoint_metrics",            params.endpoint_metrics },
