@@ -87,6 +87,14 @@ struct config {
     int max_iterations           = 100;
     std::string output_path;
     int n_threads                = 1;
+    // Imatrix-energy bias correction: per-role KLD is multiplied by
+    //   (geomean_energy / role_energy)^alpha
+    // to counter the local-KLD signal's systematic under-weighting of
+    // low-input-magnitude residual-path tensors (ffn_down, attn_output, ssm_out).
+    // alpha = 0 disables the correction; alpha = 1 is a full inverse-energy flip.
+    // Default chosen from empirical PPL sweeps on Qwen3.5-0.8B and Nanbeige-3B
+    // (see docs/auto-tensor-type.md); 0.5 was fragile on some architectures.
+    float importance_alpha       = 1.0f;
 };
 
 struct tensor_info {
@@ -145,15 +153,20 @@ static std::string extract_role(const std::string & name) {
     return name;
 }
 
-static bool is_quantizable_weight(const tensor_info & ti, int64_t min_elements) {
-    // Must end with .weight
+// 2D .weight matrix, regardless of size. Used for BPW accounting — llama-quantize
+// will quantize these to the fallback ftype even if we don't measure them.
+static bool is_matrix_weight(const tensor_info & ti) {
     if (ti.name.size() < 8 || ti.name.substr(ti.name.size() - 7) != ".weight") return false;
-    // Must be 2D (matrix)
     if (ti.ne[2] != 1 || ti.ne[3] != 1) return false;
-    // Must have enough elements
-    if ((int64_t)ti.n_elements < min_elements) return false;
-    // Skip norms (1D-like: small ne[0] or ne[1] == 1)
     if (ti.ne[0] <= 1 || ti.ne[1] <= 1) return false;
+    return true;
+}
+
+static bool is_quantizable_weight(const tensor_info & ti, int64_t min_elements) {
+    // Must be a 2D matrix weight…
+    if (!is_matrix_weight(ti)) return false;
+    // …and large enough to justify per-role KLD measurement.
+    if ((int64_t)ti.n_elements < min_elements) return false;
     return true;
 }
 
@@ -738,7 +751,7 @@ static bool eval_mul_mat(ggml_type weight_type, const void * weight_data,
 static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
         const config & cfg,
         const std::vector<tensor_info> & /*tensors*/,
-        const std::unordered_map<std::string, std::vector<mul_mat_capture>> & captures_by_role,
+        std::unordered_map<std::string, std::vector<mul_mat_capture>> & captures_by_role,
         const std::string & model_path,
         const struct gguf_context * gguf_ctx,
         const std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
@@ -750,34 +763,45 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
     std::map<std::string, std::map<ggml_type, double>> kld_sums;
     std::map<std::string, std::map<ggml_type, int>> kld_counts;
 
-    // Cache for F32 weight data: tensor_name → float data
-    std::unordered_map<std::string, std::vector<float>> weight_cache;
-
     const int n_parallel = std::max(1, cfg.n_threads);
 
     // Create a pool of backends — try CUDA first, fall back to CPU
-    // Each thread gets its own backend to avoid contention.
+    // Each thread gets its own backend to avoid contention (VMM pool requires LIFO alloc/free).
     struct backend_pool {
         std::vector<ggml_backend_t> backends;
         std::atomic<int> next_idx{0};
         std::string backend_name;
 
         backend_pool(int count) {
-            // Use ggml_backend_init_best() — picks GPU if available, falls back to CPU
+            // Initialize first backend to determine type
             ggml_backend_t be = ggml_backend_init_best();
             if (!be) {
                 LOG_ERR("Failed to init any backend\n");
                 return;
             }
             backend_name = ggml_backend_name(be);
-            // Single shared backend — ggml handles concurrency internally
-            for (int i = 0; i < count; i++) {
-                backends.push_back(be);
+            backends.push_back(be);
+
+            // Create separate backends for remaining threads
+            // This is required because the CUDA VMM pool is a stack allocator
+            // that requires strict LIFO allocation/deallocation order per pool.
+            for (int i = 1; i < count; i++) {
+                ggml_backend_t be_i = ggml_backend_init_best();
+                if (be_i) {
+                    backends.push_back(be_i);
+                } else {
+                    LOG_WRN("Failed to init backend %d, reusing backend 0\n", i);
+                    backends.push_back(be);  // Fallback to sharing
+                }
             }
         }
         ~backend_pool() {
-            if (!backends.empty()) {
-                ggml_backend_free(backends[0]);
+            // Free all unique backends
+            std::unordered_set<ggml_backend_t> freed;
+            for (auto be : backends) {
+                if (freed.insert(be).second) {
+                    ggml_backend_free(be);
+                }
             }
         }
         ggml_backend_t get() {
@@ -790,76 +814,99 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
         pool.backend_name.c_str(), n_parallel);
 
     // For each role that has captures
-    for (const auto & [role, captures] : captures_by_role) {
-        LOG("Building cost matrix for role '%s' (%zu captures, %d parallel threads)...\n",
-            role.c_str(), captures.size(), n_parallel);
-
+    for (auto & [role, captures] : captures_by_role) {
+        // Group captures by weight_name. quantize_weight_to_type() depends only on
+        // (weight_name, qtype) — with multiple test_sizes the same weight is captured
+        // N times, so we quantize once per unique weight and reuse across captures.
+        std::unordered_map<std::string, std::vector<const mul_mat_capture *>> caps_by_weight;
         for (const auto & cap : captures) {
-            // Read weight data as F32 (cached)
-            auto cache_it = weight_cache.find(cap.weight_name);
-            if (cache_it == weight_cache.end()) {
-                std::vector<float> weight_f32;
-                if (!read_tensor_f32(model_path, gguf_ctx, cap.weight_name, weight_f32)) {
-                    LOG_WRN("  Failed to read weight data for '%s', skipping\n", cap.weight_name.c_str());
-                    continue;
-                }
-                weight_cache[cap.weight_name] = std::move(weight_f32);
-                cache_it = weight_cache.find(cap.weight_name);
+            caps_by_weight[cap.weight_name].push_back(&cap);
+        }
+
+        LOG("Building cost matrix for role '%s' (%zu captures across %zu unique weights, %d parallel threads)...\n",
+            role.c_str(), captures.size(), caps_by_weight.size(), n_parallel);
+
+        const size_t n_types = cfg.quant_types.size();
+
+        for (const auto & [weight_name, caps_for_weight] : caps_by_weight) {
+            // Read weight data as F32 — scoped to this weight, freed at end of iteration
+            std::vector<float> weight_f32;
+            if (!read_tensor_f32(model_path, gguf_ctx, weight_name, weight_f32)) {
+                LOG_WRN("  Failed to read weight data for '%s', skipping\n", weight_name.c_str());
+                continue;
             }
-            const auto & weight_f32 = cache_it->second;
 
-            // Get imatrix for this tensor
-            auto imat = get_imatrix_for_tensor(imatrix_data, cap.weight_name, cap.weight_ne0);
+            const mul_mat_capture & first_cap = *caps_for_weight.front();
+            auto imat = get_imatrix_for_tensor(imatrix_data, weight_name, first_cap.weight_ne0);
 
-            // Evaluate all quant types for this capture in parallel batches
-            const size_t n_types = cfg.quant_types.size();
-            std::vector<std::future<std::pair<ggml_type, double>>> futures;
-            futures.reserve(n_parallel);
-
-            for (size_t ti = 0; ti < n_types; /* advanced inside */) {
-                // Launch up to n_parallel evaluations
-                futures.clear();
-                for (int p = 0; p < n_parallel && ti < n_types; p++, ti++) {
-                    ggml_type qtype = cfg.quant_types[ti];
-                    ggml_backend_t backend = pool.get();
-                    futures.push_back(std::async(std::launch::async,
-                        [&cap, &weight_f32, &imat, qtype, backend]() -> std::pair<ggml_type, double> {
-                            // Quantize (sets per-type global state — safe since each type is different)
-                            auto qres = quantize_weight_to_type(
-                                qtype, weight_f32.data(), cap.weight_ne1, cap.weight_ne0, imat.data());
-
-                            // Run MUL_MAT with quantized weight
-                            std::vector<float> quant_output;
-                            if (!eval_mul_mat(qtype, qres.data.data(),
-                                              cap.weight_ne0, cap.weight_ne1,
-                                              cap.input_data.data(), cap.input_ne0, cap.input_ne1,
-                                              qres.levels,
-                                              quant_output,
-                                              backend)) {
-                                return {qtype, std::numeric_limits<double>::quiet_NaN()};
-                            }
-
-                            // Compute KLD
-                            return {qtype, compute_avg_kld(cap.ref_output_data.data(), quant_output.data(),
-                                                           cap.ref_ne0, cap.ref_ne1)};
-                        }));
+            // Quantize each qtype once for this weight (parallel across qtypes).
+            // Different qtypes use disjoint per-type globals, so parallel training is safe.
+            std::unordered_map<ggml_type, quant_result> quant_cache;
+            std::mutex quant_cache_mutex;
+            {
+                std::vector<std::future<void>> qfutures;
+                qfutures.reserve(n_parallel);
+                for (size_t ti = 0; ti < n_types; /* advanced inside */) {
+                    qfutures.clear();
+                    for (int p = 0; p < n_parallel && ti < n_types; p++, ti++) {
+                        ggml_type qtype = cfg.quant_types[ti];
+                        qfutures.push_back(std::async(std::launch::async,
+                            [&first_cap, &weight_f32, &imat, qtype, &quant_cache, &quant_cache_mutex]() {
+                                auto qres = quantize_weight_to_type(
+                                    qtype, weight_f32.data(),
+                                    first_cap.weight_ne1, first_cap.weight_ne0, imat.data());
+                                std::lock_guard<std::mutex> lock(quant_cache_mutex);
+                                quant_cache.emplace(qtype, std::move(qres));
+                            }));
+                    }
+                    for (auto & f : qfutures) f.get();
                 }
+            }
 
-                // Collect results
-                for (auto & f : futures) {
-                    auto [qtype, kld] = f.get();
-                    if (std::isfinite(kld)) {
-                        std::lock_guard<std::mutex> lock(accum_mutex);
-                        kld_sums[role][qtype] += kld;
-                        kld_counts[role][qtype]++;
+            // For each capture × qtype, run MUL_MAT + KLD using the cached quant_result.
+            // eval_mul_mat reads the trained grid/levels from tensor->quant_levels
+            // (set from quant_result::levels), not from per-type globals, so a stale
+            // global state from later quantize calls is irrelevant here.
+            for (const auto * cap_ptr : caps_for_weight) {
+                const auto & cap = *cap_ptr;
+
+                std::vector<std::future<std::pair<ggml_type, double>>> futures;
+                futures.reserve(n_parallel);
+
+                for (size_t ti = 0; ti < n_types; /* advanced inside */) {
+                    futures.clear();
+                    for (int p = 0; p < n_parallel && ti < n_types; p++, ti++) {
+                        ggml_type qtype = cfg.quant_types[ti];
+                        auto qit = quant_cache.find(qtype);
+                        if (qit == quant_cache.end()) continue;  // quantization failed earlier
+                        const quant_result * qres = &qit->second;
+                        ggml_backend_t backend = pool.get();
+                        futures.push_back(std::async(std::launch::async,
+                            [&cap, qtype, qres, backend]() -> std::pair<ggml_type, double> {
+                                std::vector<float> quant_output;
+                                if (!eval_mul_mat(qtype, qres->data.data(),
+                                                  cap.weight_ne0, cap.weight_ne1,
+                                                  cap.input_data.data(), cap.input_ne0, cap.input_ne1,
+                                                  qres->levels,
+                                                  quant_output,
+                                                  backend)) {
+                                    return {qtype, std::numeric_limits<double>::quiet_NaN()};
+                                }
+                                return {qtype, compute_avg_kld(cap.ref_output_data.data(), quant_output.data(),
+                                                               cap.ref_ne0, cap.ref_ne1)};
+                            }));
+                    }
+
+                    for (auto & f : futures) {
+                        auto [qtype, kld] = f.get();
+                        if (std::isfinite(kld)) {
+                            std::lock_guard<std::mutex> lock(accum_mutex);
+                            kld_sums[role][qtype] += kld;
+                            kld_counts[role][qtype]++;
+                        }
                     }
                 }
             }
-        }
-
-        // Free cache entries for this role's captures (no longer needed)
-        for (const auto & cap : captures) {
-            weight_cache.erase(cap.weight_name);
         }
 
         // Build cost entries from accumulated KLD
@@ -870,6 +917,10 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
             entry.bpw = compute_bpw(qtype);
             cost_matrix[role][qtype] = entry;
         }
+
+        // Release this role's captured input/output buffers — largest single chunk of
+        // Phase-2 memory, no longer needed once the cost matrix row is populated.
+        std::vector<mul_mat_capture>().swap(captures);
     }
 
     return cost_matrix;
@@ -1281,6 +1332,9 @@ static void print_usage(const char * prog) {
     LOG("  --output-tensor-type T   Quant type for output.weight (default: highest from list)\n");
     LOG("  --max-iterations N       Max optimization iterations (default: 100)\n");
     LOG("  --threads N              Number of threads (default: 1)\n");
+    LOG("  --importance-alpha A     Imatrix-energy bias for per-role KLD (default: 1.0)\n");
+    LOG("                           weight[r] = (geomean_energy / role_energy[r])^A\n");
+    LOG("                           0 = no bias, 1 = full inverse-energy reweighting\n");
 }
 
 static config parse_args(int argc, char ** argv) {
@@ -1325,6 +1379,8 @@ static config parse_args(int argc, char ** argv) {
             cfg.max_iterations = std::stoi(argv[++i]);
         } else if (arg == "--threads" && i + 1 < argc) {
             cfg.n_threads = std::stoi(argv[++i]);
+        } else if (arg == "--importance-alpha" && i + 1 < argc) {
+            cfg.importance_alpha = std::stof(argv[++i]);
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argv[0]);
             exit(0);
@@ -1370,8 +1426,11 @@ int main(int argc, char ** argv) {
     // ---- Phase 1: Load model metadata from GGUF ----
     LOG("--- Phase 1: Loading model metadata ---\n");
 
+    // no_alloc=true: we only need tensor metadata (dims, type, offset); raw weight data
+    // is read from disk in Phase 3 via read_tensor_f32. Loading it here would duplicate
+    // the entire model in host RAM alongside the llama-backend copy.
     struct ggml_context * ggml_ctx = nullptr;
-    struct gguf_init_params gguf_params = {false, &ggml_ctx};
+    struct gguf_init_params gguf_params = {true, &ggml_ctx};
     struct gguf_context * gguf_ctx = gguf_init_from_file(cfg.model_path.c_str(), gguf_params);
     if (!gguf_ctx) {
         LOG_ERR("Failed to open model: %s\n", cfg.model_path.c_str());
@@ -1501,9 +1560,14 @@ int main(int argc, char ** argv) {
     common_params params;
     params.model.path = cfg.model_path;
     params.n_gpu_layers = 99;  // Offload to GPU if available, falls back to CPU
-    params.n_batch = 512;
-    params.n_ubatch = 512;
-    params.n_ctx = 1024;  // enough for test sizes
+    // Size batch/context to the largest requested test size (+BOS); n_batch must be
+    // >= n_tokens_all or llama_decode asserts.
+    int max_test_size = 0;
+    for (int s : cfg.test_sizes) max_test_size = std::max(max_test_size, s);
+    const int min_batch = std::max(512, max_test_size + 1);
+    params.n_batch  = min_batch;
+    params.n_ubatch = min_batch;
+    params.n_ctx    = std::max(1024, max_test_size + 1);
 
     capture_state cap_state;
     for (const auto & ti : quantizable) {
@@ -1606,6 +1670,14 @@ int main(int argc, char ** argv) {
     llama_init.reset();
     llama_backend_free();
 
+    // Free Phase 2 scaffolding: only the captured input/output tensors are needed from here.
+    // swap-with-empty forces the underlying bucket arrays to actually return memory.
+    decltype(cap_state.target_weight_names)().swap(cap_state.target_weight_names);
+    decltype(cap_state.weight_to_role)().swap(cap_state.weight_to_role);
+    decltype(cap_state.weight_to_layer)().swap(cap_state.weight_to_layer);
+    std::vector<uint8_t>().swap(cap_state.tmp_data);
+    std::vector<std::vector<llama_token>>().swap(test_token_sets);
+
     // ---- Phase 3: Build cost matrix ----
     LOG("\n--- Phase 3: Building cost matrix ---\n");
 
@@ -1634,13 +1706,32 @@ int main(int argc, char ** argv) {
     LOG("\n--- Phase 4: Optimizing assignment ---\n");
 
     // Determine fixed types for global tensors (before building roles map)
-    ggml_type token_embd_type = closest_bpw_if(cfg.quant_types, cfg.target_bpw, supports_get_rows);
-    if (token_embd_type == GGML_TYPE_COUNT) {
-        token_embd_type = highest_bpw(cfg.quant_types); // fallback
-    }
     ggml_type output_type = cfg.output_tensor_type != GGML_TYPE_COUNT
                             ? cfg.output_tensor_type
                             : highest_bpw(cfg.quant_types);
+
+    // Detect tied embeddings: llama-quantize (src/llama-quant.cpp:~534) silently
+    // promotes token_embd to output_tensor_type when the arch lacks a distinct
+    // output.weight. If we pick a different (lower-bpw) token_embd type in that
+    // case, our BPW estimate is off by a lot (e.g. Q4_K vs Q6_K on a 150k-vocab
+    // embedding table is ~60MB). Match llama-quantize's behavior up front.
+    bool has_output_weight = false;
+    for (const auto & ti : all_tensors) {
+        if (ti.name == "output.weight") { has_output_weight = true; break; }
+    }
+    const bool has_tied_embeddings = !has_output_weight;
+
+    ggml_type token_embd_type;
+    if (has_tied_embeddings) {
+        token_embd_type = output_type;
+        LOG("Detected tied embeddings: token_embd will be quantized with output_type (%s)\n",
+            ggml_type_name(token_embd_type));
+    } else {
+        token_embd_type = closest_bpw_if(cfg.quant_types, cfg.target_bpw, supports_get_rows);
+        if (token_embd_type == GGML_TYPE_COUNT) {
+            token_embd_type = highest_bpw(cfg.quant_types); // fallback
+        }
+    }
 
     // Add global tensors to the cost matrix with their fixed types.
     // KLD=0 since they're not optimized — we just need their BPW in the budget.
@@ -1668,13 +1759,27 @@ int main(int argc, char ** argv) {
         total_quant_elements += ti.n_elements;
     }
 
-    // Compute non-quantizable tensor overhead (small tensors kept at original precision)
-    // These contribute fixed BPW that must be accounted for in the budget.
+    // Small 2D .weight tensors below min_elements aren't measured for KLD, but
+    // llama-quantize will still quantize them (to the fallback ftype passed on
+    // the CLI). We don't know the user's chosen fallback, so we approximate it
+    // as the listed type closest to the target BPW.
+    ggml_type small_matrix_type = closest_bpw(cfg.quant_types, cfg.target_bpw);
+    if (small_matrix_type == GGML_TYPE_COUNT) small_matrix_type = token_embd_type;
+
     size_t total_all_elements = 0;
     double non_quantizable_bits = 0;
+    size_t small_matrix_elements = 0;
     for (const auto & ti : all_tensors) {
         total_all_elements += ti.n_elements;
-        if (!is_quantizable_weight(ti, cfg.min_elements)) {
+        if (is_quantizable_weight(ti, cfg.min_elements)) {
+            continue;  // counted via role_to_type in compute_total_bpw
+        }
+        if (is_matrix_weight(ti)) {
+            // Small 2D weight: llama-quantize will quantize it with the fallback ftype.
+            non_quantizable_bits += compute_bpw(small_matrix_type) * ti.n_elements;
+            small_matrix_elements += ti.n_elements;
+        } else {
+            // 1D, biases, norms: stay at original precision.
             non_quantizable_bits += compute_bpw(ti.orig_type) * ti.n_elements;
         }
     }
@@ -1683,6 +1788,10 @@ int main(int argc, char ** argv) {
     LOG("Total elements in all tensors:         %zu\n", total_all_elements);
     LOG("Non-quantizable overhead:              %.4f BPW\n",
         total_all_elements > 0 ? non_quantizable_bits / total_all_elements : 0);
+    if (small_matrix_elements > 0) {
+        LOG("Small matrix weights below --min-elements (%zu elements) assumed %s for BPW estimate\n",
+            small_matrix_elements, ggml_type_name(small_matrix_type));
+    }
     for (const auto & [role, ri] : roles) {
         LOG("  %s: %zu elements%s\n", role.c_str(), ri.n_elements,
             cost_matrix.count(role) ? "" : " [NO CAPTURES]");
@@ -1704,7 +1813,60 @@ int main(int argc, char ** argv) {
             }
         }
     }
-    auto result = optimize_assignment(cfg, cost_matrix, roles, total_all_elements, non_quantizable_bits);
+    // Imatrix-energy bias correction. Local MUL_MAT KLD systematically under-weights
+    // residual-path tensors with small-magnitude inputs (ffn_down, attn_output, ssm_out)
+    // because softmax over a small-output row is flatter. We compensate by scaling each
+    // role's KLD by (geomean_energy / role_energy)^alpha, computed from the imatrix.
+    std::map<std::string, double> role_weight;
+    if (cfg.importance_alpha > 0.0f && !imatrix_data.empty()) {
+        std::map<std::string, std::vector<double>> role_mean_by_tensor;
+        for (const auto & [tname, imat] : imatrix_data) {
+            if (imat.empty()) continue;
+            double s = 0;
+            for (float v : imat) s += v;
+            role_mean_by_tensor[extract_role(tname)].push_back(s / imat.size());
+        }
+
+        std::map<std::string, double> role_energy;
+        double log_sum = 0;
+        int n_energies = 0;
+        for (const auto & [role, vs] : role_mean_by_tensor) {
+            double sum = 0;
+            for (double v : vs) sum += v;
+            double mean = vs.empty() ? 0.0 : sum / vs.size();
+            role_energy[role] = mean;
+            if (mean > 1e-20) {
+                log_sum += std::log(mean);
+                n_energies++;
+            }
+        }
+
+        const double geo_mean = n_energies > 0 ? std::exp(log_sum / n_energies) : 1.0;
+        for (const auto & [role, e] : role_energy) {
+            role_weight[role] = e > 1e-20
+                ? std::pow(geo_mean / e, (double)cfg.importance_alpha)
+                : 1.0;
+        }
+
+        LOG("\nRole importance weights (alpha=%.2f, geomean_energy=%.4g):\n", cfg.importance_alpha, geo_mean);
+        for (const auto & [role, w] : role_weight) {
+            LOG("  %-16s  energy=%10.4g  weight=%6.3f\n", role.c_str(), role_energy[role], w);
+        }
+    }
+
+    // Apply weights to a cost-matrix copy used by the optimizer; preserve raw values
+    // for display and for the final KLD we report to the user.
+    auto weighted_cost = cost_matrix;
+    for (auto & [role, row] : weighted_cost) {
+        auto wit = role_weight.find(role);
+        if (wit == role_weight.end()) continue;
+        double w = wit->second;
+        for (auto & [qt, ce] : row) {
+            if (ce.kld < 1e29) ce.kld *= w;  // keep sentinels intact
+        }
+    }
+
+    auto result = optimize_assignment(cfg, weighted_cost, roles, total_all_elements, non_quantizable_bits);
 
     LOG("\nOptimal assignment:\n");
     for (const auto & [role, type] : result.role_to_type) {
@@ -1716,7 +1878,15 @@ int main(int argc, char ** argv) {
     }
     LOG("Total BPW: %.4f (target: %.2f +%.2f/-%.2f)\n",
         result.total_bpw, cfg.target_bpw, cfg.bpw_tol_high, cfg.bpw_tol_low);
-    LOG("Total KLD: %.6f\n", result.total_kld);
+    // Raw total KLD is the unweighted sum from cost_matrix; the optimizer's
+    // result.total_kld is in weighted units when importance_alpha > 0.
+    double raw_total_kld = compute_total_kld(result.role_to_type, cost_matrix);
+    if (cfg.importance_alpha > 0.0f && !role_weight.empty()) {
+        LOG("Total KLD: %.6f raw  (%.6f weighted, used by optimizer)\n",
+            raw_total_kld, result.total_kld);
+    } else {
+        LOG("Total KLD: %.6f\n", raw_total_kld);
+    }
 
     // ---- Phase 5: Output tensor-type-file ----
     LOG("\n--- Phase 5: Writing output ---\n");
