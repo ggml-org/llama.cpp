@@ -2649,7 +2649,7 @@ static void ggml_backend_webgpu_device_event_synchronize(ggml_backend_dev_t dev,
         return;
     }
     wgpu::WaitStatus status =
-        event_ctx->global_ctx->instance.WaitAny(ev_ctx->future, WEBGPU_RUNTIME_WAIT_TIMEOUT_NS);
+        event_ctx->global_ctx->instance.WaitAny(event_ctx->future, WEBGPU_RUNTIME_WAIT_TIMEOUT_NS);
     if (status == wgpu::WaitStatus::TimedOut) {
         GGML_ABORT("ggml_webgpu: event_synchronize timed out after %u ms\n",
                    WEBGPU_RUNTIME_WAIT_TIMEOUT_MS);
@@ -2663,7 +2663,7 @@ static void ggml_backend_webgpu_event_record(ggml_backend_t backend, ggml_backen
         (ggml_backend_webgpu_event_context *) event->context;
 
     event_ctx->future = backend_ctx->webgpu_ctx->global_ctx->queue.OnSubmittedWorkDone(
-        ggml_webgpu_callback_mode(),
+        wgpu::CallbackMode::AllowSpontaneous,
         [](wgpu::QueueWorkDoneStatus, wgpu::StringView) {});
     event_ctx->recorded = true;
 }
