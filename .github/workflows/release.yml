@@ -670,7 +670,7 @@ jobs:
           path: llama-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
 
-  ubuntu-sycl:
+  ubuntu-24-sycl:
     strategy:
       matrix:
         include:
@@ -1174,6 +1174,7 @@ jobs:
       - ubuntu-cpu
       - ubuntu-vulkan
       - ubuntu-24-openvino
+      - ubuntu-24-sycl
       - android-arm64
       - macOS-cpu
       - ios-xcode-build
