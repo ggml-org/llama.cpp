@@ -1139,22 +1139,6 @@ llama_tokens common_speculative_draft(
     return result;
 }
 
-void common_speculative_add_to_batch(
-        common_speculative * spec,
-              llama_batch  & batch,
-        const llama_tokens & draft,
-               llama_token   id_last,
-               llama_pos     pos0,
-               llama_seq_id  seq_id) {
-    GGML_UNUSED(spec);
-
-    common_batch_add(batch, id_last, pos0++, { seq_id }, true);
-
-    for (auto id : draft) {
-        common_batch_add(batch, id, pos0++, { seq_id }, true);
-    }
-}
-
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
     if (n_accepted == 0) {
         return;
@@ -1209,11 +1193,9 @@ struct common_speculative_session::impl {
 
     common_speculative * spec = nullptr;
 
-    bool is_partial = false;
+    bool has_partial = false;
 
     llama_tokens draft;
-
-    std::vector<int32_t> i_batch;
 
     impl(
         const common_params_speculative & params,
@@ -1230,14 +1212,13 @@ struct common_speculative_session::impl {
                      llama_token    id_last,
                const int            n_draft_max) {
         GGML_ASSERT(spec);
-        GGML_ASSERT(i_batch.empty());
 
         if (n_draft_max == 0) {
             this->clear();
             return false;
         }
 
-        if (is_partial) {
+        if (has_partial) {
             if (draft.empty()) {
                 this->clear();
             }
@@ -1270,30 +1251,8 @@ struct common_speculative_session::impl {
         return true;
     }
 
-    void add_to_batch(
-                 llama_batch  & batch,
-           const llama_tokens & draft,
-                 llama_token    id_last,
-                 llama_pos      pos0,
-                 llama_seq_id   seq_id) {
-        GGML_ASSERT(i_batch.empty());
-
-        i_batch.push_back(batch.n_tokens);
-
-        for (size_t i = 0; i < draft.size(); i++) {
-            i_batch.push_back(batch.n_tokens + i + 1);
-        }
-
-        common_speculative_add_to_batch(spec, batch, draft, id_last, pos0, seq_id);
-    }
-
-    bool sample_and_accept(common_sampler * smpl, llama_context * ctx) {
-        GGML_ASSERT(i_batch.size() == draft.size() + 1);
-
-        auto ids = common_sampler_sample_and_accept_n(smpl, ctx, i_batch, draft);
-
-        i_batch.clear();
-        is_partial = false;
+    bool accept(llama_tokens ids) {
+        has_partial = false;
 
         LOG_WRN("%s: n_draft=%zu, ids.size=%zu\n", __func__, draft.size(), ids.size());
 
@@ -1305,7 +1264,7 @@ struct common_speculative_session::impl {
                 // we shorten the draft and retry
                 draft.resize(ids.size() - 1);
 
-                is_partial = true;
+                has_partial = true;
 
                 return false;
             }
@@ -1327,7 +1286,7 @@ struct common_speculative_session::impl {
     void clear() {
         GGML_ASSERT(spec);
 
-        is_partial = false;
+        has_partial = false;
         draft.clear();
     }
 };
@@ -1356,17 +1315,8 @@ bool common_speculative_session::generate_draft(
     return pimpl->generate_draft(prompt, id_last, n_draft_max);
 }
 
-void common_speculative_session::add_to_batch(
-             llama_batch & batch,
-       const llama_tokens & draft,
-             llama_token    id_last,
-             llama_pos      pos0,
-             llama_seq_id   seq_id) {
-    pimpl->add_to_batch(batch, draft, id_last, pos0, seq_id);
-}
-
-bool common_speculative_session::sample_and_accept(common_sampler * smpl, llama_context * ctx) {
-    return pimpl->sample_and_accept(smpl, ctx);
+bool common_speculative_session::accept(llama_tokens ids) {
+    return pimpl->accept(std::move(ids));
 }
 
 const llama_tokens & common_speculative_session::get_draft() const {

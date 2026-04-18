@@ -49,14 +49,6 @@ llama_tokens common_speculative_draft(
                      const llama_tokens & prompt,
                             llama_token   id_last);
 
-void common_speculative_add_to_batch(
-        common_speculative * spec,
-              llama_batch  & batch,
-        const llama_tokens & draft,
-               llama_token   id_last,
-               llama_pos     pos0,
-               llama_seq_id  seq_id);
-
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
@@ -84,15 +76,8 @@ struct common_speculative_session {
                   llama_token    id_last,
                   int            n_draft_max);
 
-    void add_to_batch(
-                  llama_batch  & batch,
-            const llama_tokens & draft,
-                  llama_token    id_last,
-                  llama_pos      pos0,
-                  llama_seq_id   seq_id);
-
     // check if and how far the current draft is accepted
-    bool sample_and_accept(common_sampler * smpl, llama_context * ctx);
+    bool accept(llama_tokens ids);
 
     const llama_tokens & get_draft() const;
 
