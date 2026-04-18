@@ -684,13 +684,13 @@ namespace dpct
             "use total memory as free memory";
 #if (defined(__SYCL_COMPILER_VERSION) && __SYCL_COMPILER_VERSION >= 20221105)
         if (!has(sycl::aspect::ext_intel_free_memory)) {
-          std::cerr << warning_info << std::endl;
           free_memory = total_memory;
         } else {
           free_memory = get_info<sycl::ext::intel::info::device::free_memory>();
         }
 #else
-        std::cerr << warning_info << std::endl;
+        static bool warned = false;
+        if (!warned) { std::cerr << warning_info << std::endl; warned = true; }
         free_memory = total_memory;
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma message("Querying the number of bytes of free memory is not supported")

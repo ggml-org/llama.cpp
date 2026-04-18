@@ -106,9 +106,12 @@ void ggml_sycl_free_device(void *ptr, sycl::queue &q) {
     if (!ptr) return;
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
     if (g_ggml_sycl_enable_level_zero) {
-        auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
-        zeMemFree(ze_ctx, ptr);
-        return;
+        sycl::usm::alloc type = sycl::get_pointer_type(ptr, q.get_context());
+        if (type == sycl::usm::alloc::unknown) {
+            auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
+            zeMemFree(ze_ctx, ptr);
+            return;
+        }
     }
 #endif
     sycl::free(ptr, q);

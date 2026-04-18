@@ -141,10 +141,23 @@ static void ggml_sycl_flush_range(void *ptr, size_t size) {
     const size_t cache_line_size = 64;
     char *p = (char *)((uintptr_t)ptr & ~(cache_line_size - 1));
     char *end = (char *)ptr + size;
+
+#if defined(__CLFLUSHOPT__)
+    static bool has_clflushopt = __builtin_cpu_supports("clflushopt");
+    if (has_clflushopt) {
+        for (; p < end; p += cache_line_size) {
+            _mm_clflushopt(p);
+        }
+    } else {
+        for (; p < end; p += cache_line_size) {
+            _mm_clflush(p);
+        }
+    }
+#else
     for (; p < end; p += cache_line_size) {
-        // _mm_clflushopt(p); // Prefer clflushopt but clflush is more portable
         _mm_clflush(p);
     }
+#endif
     _mm_sfence();
 }
 #endif
@@ -555,6 +568,15 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     ggml_sycl_set_device(ctx->device);
     auto stream = &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
+
+    bool is_integrated = stream->get_device().get_info<sycl::info::device::host_unified_memory>();
+    if (is_integrated) {
+        // Direct copy for integrated GPU using shared memory (UMA)
+        // avoids double-copy and synchronous wait() overhead.
+        memcpy((char *)tensor->data + offset, data, size);
+        return;
+    }
+
     SYCL_CHECK(CHECK_TRY_ERROR(dpct::dev_mgr::instance().get_device(ctx->device).queues_wait_and_throw()));
 #ifndef _WIN32
     // Note: Use host buffer to save the data from mmap(), then copy to device.
