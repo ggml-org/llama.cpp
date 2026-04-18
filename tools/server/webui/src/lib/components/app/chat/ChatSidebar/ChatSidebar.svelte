@@ -114,15 +114,27 @@
 	}
 
 	let chatSidebarActions: { activateSearch?: () => void } | undefined = $state();
+	let openedForSearch = $state(false);
 
 	export function activateSearchMode() {
+		if (!sidebar.open) {
+			openedForSearch = true;
+		}
 		chatSidebarActions?.activateSearch?.();
+	}
+
+	function handleSearchDeactivated() {
+		if (openedForSearch) {
+			openedForSearch = false;
+			sidebar.toggle();
+		}
 	}
 
 	$effect(() => {
 		if (!sidebar.open) {
 			isSearchModeActive = false;
 			searchQuery = '';
+			openedForSearch = false;
 		}
 	});
 
@@ -157,7 +169,7 @@
 <div class="flex h-full flex-col">
 	<ScrollArea class="h-full flex-1">
 		<Sidebar.Header
-			class=" sticky top-0 z-10 gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2"
+			class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2"
 		>
 			<div class="flex items-center justify-between">
 				<a href="#/" onclick={handleMobileSidebarItemClick}>
@@ -180,6 +192,7 @@
 				{handleMobileSidebarItemClick}
 				bind:isSearchModeActive
 				bind:searchQuery
+				onSearchDeactivated={handleSearchDeactivated}
 			/>
 		</Sidebar.Header>
 

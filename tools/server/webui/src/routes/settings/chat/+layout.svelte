@@ -130,8 +130,8 @@
 >
 	<div class="flex flex-1 flex-col gap-4 md:flex-row">
 		<!-- Desktop Sidebar -->
-		<div class="sticky top-0 hidden w-64 flex-col self-start bg-background pt-8 pb-4 md:flex">
-			<div class="flex items-center gap-2 pb-12">
+		<div class="sticky top-0 hidden w-64 flex-col self-start bg-background pt-10 pb-4 md:flex">
+			<div class="flex items-center gap-2 pb-10">
 				<Settings class="h-6 w-6" />
 				<h1 class="text-2xl font-semibold">Settings</h1>
 			</div>

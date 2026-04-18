@@ -10,13 +10,15 @@
 		isSearchModeActive: boolean;
 		searchQuery: string;
 		isCancelAlwaysVisible?: boolean;
+		onSearchDeactivated?: () => void;
 	}
 
 	let {
 		handleMobileSidebarItemClick,
 		isSearchModeActive = $bindable(),
 		searchQuery = $bindable(),
-		isCancelAlwaysVisible = false
+		isCancelAlwaysVisible = false,
+		onSearchDeactivated
 	}: Props = $props();
 
 	let searchInputRef = $state<HTMLInputElement | null>(null);
@@ -27,6 +29,7 @@
 	function handleSearchModeDeactivate() {
 		isSearchModeActive = false;
 		searchQuery = '';
+		onSearchDeactivated?.();
 	}
 
 	export function activateSearch() {
