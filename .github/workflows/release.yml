@@ -461,7 +461,6 @@ jobs:
           done
 
           echo "Moving other artifacts..."
-          mv -v artifact/*.zip release
           mv -v artifact/*.tar.gz release
 
       - name: Create release
