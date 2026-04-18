@@ -681,8 +681,9 @@ jobs:
             fp16: 'ON'
             dtype: 'fp16'
 
-
     runs-on: ubuntu-24.04
+
+    steps:
 
       - uses: actions/checkout@v6
 
