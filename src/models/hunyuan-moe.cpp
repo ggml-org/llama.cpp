@@ -65,7 +65,7 @@ llm_build_hunyuan_moe::llm_build_hunyuan_moe(const llama_model & model, const ll
             cb(Qcur, "Qcur_norm", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].bo, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }

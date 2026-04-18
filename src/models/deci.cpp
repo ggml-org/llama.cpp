@@ -59,7 +59,7 @@ llm_build_deci::llm_build_deci(const llama_model & model, const llm_graph_params
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].bo, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
         }
         if (il == n_layer - 1 && inp_out_ids) {

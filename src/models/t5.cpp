@@ -41,7 +41,7 @@ llm_build_t5<false>::llm_build_t5(const llama_model & model, const llm_graph_par
             ggml_tensor * kq_b = build_pos_bias(pos_bucket_dec, attn_rel_b);
 
             cur = build_attn(inp_attn_self,
-                    model.layers[il].wo, model.layers[il].bo, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, kq_b, nullptr, nullptr, 1.0f, il);
             cb(cur, "kqv_out", il);
         }
