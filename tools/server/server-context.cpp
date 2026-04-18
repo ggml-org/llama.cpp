@@ -686,9 +686,6 @@ private:
 
     json json_webui_settings = json::object();
 
-    // Necessary similarity of prompt for slot selection
-    float slot_prompt_similarity = 0.0f;
-
     std::string model_name; // name of the loaded model, to be used by API
     std::set<std::string> model_aliases; // additional names for the model
     std::set<std::string> model_tags;    // informational tags
@@ -853,9 +850,6 @@ private:
             }
         }
 
-        // Necessary similarity of prompt for slot selection
-        slot_prompt_similarity = params_base.slot_prompt_similarity;
-
         // setup slots
         SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
 
@@ -999,6 +993,16 @@ private:
             }
         }
 
+        // prompt similarity doesn't work with idle slots, rely on the unified cache instead
+        if (params_base.cache_idle_slots) {
+            params_base.slot_prompt_similarity = 0.0f;
+        }
+
+        // bypass prompt similarity when we only have one slot
+        if (params_base.n_parallel == 1) {
+            params_base.slot_prompt_similarity = 0.0f;
+        }
+
         // populate webui settings
         {
             if (!params_base.webui_config_json.empty()) {
@@ -1073,7 +1077,7 @@ private:
         bool update_cache = false;
 
         // find the slot that has at least n% prompt similarity
-        if (ret == nullptr && slot_prompt_similarity != 0.0f) {
+        if (ret == nullptr && params_base.slot_prompt_similarity != 0.0f) {
             float sim_best = 0;
 
             for (server_slot & slot : slots) {
@@ -1093,7 +1097,7 @@ private:
                 const float sim_cur = float(tokens.get_common_prefix(task.tokens)) / task.tokens.size();
 
                 // select the current slot if the criteria match
-                if (sim_cur > sim_best && sim_cur > slot_prompt_similarity) {
+                if (sim_cur > sim_best && sim_cur > params_base.slot_prompt_similarity) {
                     sim_best = sim_cur;
 
                     ret = &slot;
@@ -1104,7 +1108,7 @@ private:
                 const float f_keep = (sim_best*task.tokens.size()) / ret->prompt.tokens.size();
 
                 SLT_INF(*ret, "selected slot by LCP similarity, sim_best = %.3f (> %.3f thold), f_keep = %.3f\n",
-                        sim_best, slot_prompt_similarity, f_keep);
+                        sim_best, params_base.slot_prompt_similarity, f_keep);
 
                 // if we are about to lose a large portion of the existing context - save it in the prompt cache
                 if (f_keep < 0.5f) {
