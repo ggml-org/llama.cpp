@@ -721,8 +721,70 @@ ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer
 }
 
 bool ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer) {
-    GGML_ASSERT(buffer);
+    // Public API: NULL is a valid input.  Report "not a multi-buffer"
+    // rather than aborting.  Aborting from a public predicate is a
+    // denial-of-service vector for callers that forgot a NULL check.
+    if (!buffer) {
+        return false;
+    }
     return buffer->iface.free_buffer == ggml_backend_multi_buffer_free_buffer;
+}
+
+// Public enumeration of a multi-buffer wrapper's sub-buffers.  Returns 0
+// if `buffer` is NULL or not a multi-buffer.
+size_t ggml_backend_multi_buffer_n_sub_buffers(ggml_backend_buffer_t buffer) {
+    if (!ggml_backend_buffer_is_multi_buffer(buffer)) {
+        return 0;
+    }
+    ggml_backend_multi_buffer_context * ctx = (ggml_backend_multi_buffer_context *) buffer->context;
+    return ctx->n_buffers;
+}
+
+// Returns the i-th sub-buffer of a multi-buffer wrapper, or NULL if
+// `buffer` is NULL / not a multi-buffer / `i` is out of range.  The
+// returned pointer is owned by the wrapper; callers must not
+// `ggml_backend_buffer_free` it directly.
+ggml_backend_buffer_t ggml_backend_multi_buffer_sub_buffer(ggml_backend_buffer_t buffer, size_t i) {
+    if (!ggml_backend_buffer_is_multi_buffer(buffer)) {
+        return NULL;
+    }
+    ggml_backend_multi_buffer_context * ctx = (ggml_backend_multi_buffer_context *) buffer->context;
+    if (i >= ctx->n_buffers) {
+        return NULL;
+    }
+    return ctx->buffers[i];
+}
+
+// Atomically swap sub-buffer `i` of a multi-buffer wrapper for a replacement
+// and free the old sub-buffer.  The replacement must have the same
+// `ggml_backend_buffer_type_t` as the existing sub-buffer so the wrapper's
+// allocator accounting stays consistent; zero-size buffers of the same
+// `buft` are valid placeholders.  Returns true on success; returns false
+// if `buffer` is NULL / not a multi-buffer, `i` is out of range, or the
+// replacement's `buft` differs from the existing sub-buffer's.  No-op
+// when the replacement already equals the current sub-buffer.
+bool ggml_backend_multi_buffer_replace_sub_buffer(ggml_backend_buffer_t buffer, size_t i, ggml_backend_buffer_t replacement) {
+    if (!ggml_backend_buffer_is_multi_buffer(buffer)) {
+        return false;
+    }
+    ggml_backend_multi_buffer_context * ctx = (ggml_backend_multi_buffer_context *) buffer->context;
+    if (i >= ctx->n_buffers) {
+        return false;
+    }
+    if (ctx->buffers[i] == replacement) {
+        return true;
+    }
+    // Require matching ggml_backend_buffer_type so the wrapper's allocator accounting stays consistent.
+    if (replacement && ctx->buffers[i] &&
+        ggml_backend_buffer_get_type(ctx->buffers[i]) != ggml_backend_buffer_get_type(replacement)) {
+        return false;
+    }
+    ggml_backend_buffer_t old = ctx->buffers[i];
+    ctx->buffers[i] = replacement;
+    if (old) {
+        ggml_backend_buffer_free(old);
+    }
+    return true;
 }
 
 void ggml_backend_multi_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage) {
