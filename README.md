@@ -152,5 +152,7 @@ Not in scope for this public fork:
 
 - `TheTom/turboquant_plus` for public TurboQuant KV-cache engineering, benchmarking, and implementation notes:
   - https://github.com/TheTom/turboquant_plus
-- `TheTom/ik_llama.cpp` for related open-source runtime work in the same area:
-  - https://github.com/TheTom/ik_llama.cpp
+- `flamme-demon/llama.cpp-hip-turboquant-tq3` for HIP/ROCm compatibility port of the TQ3 native kernels:
+  - https://github.com/flamme-demon/llama.cpp-hip-turboquant-tq3
+- Google Research for the TurboQuant compression algorithm and technical paper:
+  - https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/
