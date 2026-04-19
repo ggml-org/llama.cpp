@@ -208,7 +208,7 @@ void common_ngram_map_begin(
                 count_keys, count_keys_del, count_values_del, count_map_entries_upd);
     }
 
-    map.idx_last_check = (map.size_last_begin > 0) ? map.size_last_begin - 1 : 0;
+    map.idx_last_check = size_begin;
     map.size_last_begin = size_begin;
 }
 
@@ -231,7 +231,7 @@ void common_ngram_map_draft(common_ngram_map & map,
         GGML_ABORT("%s: cur_len exceeds UINT32_MAX: %zu", __func__, cur_len);
     }
 
-    if (map.idx_last_check  > cur_len) {
+    if (map.idx_last_check > cur_len) {
         // Should not happen because of common_ngram_map_begin().
         GGML_ABORT("%s: map.idx_last_check > cur_len: %zu > %zu", __func__, map.idx_last_check, cur_len);
     }
@@ -386,7 +386,7 @@ void common_ngram_map_draft(common_ngram_map & map,
         LOG_DBG("%s: key_idx = %zu, key_offset = %zu, key_num = %d, draft.size = %zu\n", __func__,
                 curr_key.key_idx, key_offset, curr_key.key_num, draft.size());
 
-        map.last_draft_created   = false;
+        map.last_draft_created   = true;
         map.last_draft_key_idx   = key_offset;
         map.last_draft_value_idx = 0; // value 0 is used for simple mode
         return;
@@ -524,7 +524,7 @@ void common_ngram_map_accept(common_ngram_map & map, uint16_t n_accepted) {
     struct common_ngram_map_value & curr_value = curr_key.values[val_idx]; // value used for draft generation.
 
     // update the value statistics
-    LOG_INF("common_ngram_map_send_accepted: n_accepted = %d, prev value_num = %d\n",
+    LOG_DBG("common_ngram_map_send_accepted: n_accepted = %d, prev value_num = %d\n",
             n_accepted, curr_value.n_accepted);
     curr_value.n_accepted = n_accepted;
 }

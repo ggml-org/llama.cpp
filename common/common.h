@@ -11,7 +11,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <variant>
 #include <vector>
 #include <map>
 
@@ -303,7 +302,7 @@ struct common_params_speculative {
     // general-purpose speculative decoding parameters
 
     int32_t n_max   = 16; // maximum number of tokens to draft during speculative decoding
-    int32_t n_min   = 0; // minimum number of draft tokens to use for speculative decoding
+    int32_t n_min   = 0;  // minimum number of draft tokens to use for speculative decoding
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min   = 0.75f; // minimum speculative decoding probability (greedy)
 
@@ -312,6 +311,7 @@ struct common_params_speculative {
     uint16_t ngram_size_n     = 12; // ngram size for lookup
     uint16_t ngram_size_m     = 48; // mgram size for speculative tokens
     uint16_t ngram_min_hits   =  1; // minimum hits at ngram/mgram lookup for mgram to be proposed
+    bool     use_checkpoints  =  false; // use checkpoints to rewind in token history of recurrent models
 
     std::shared_ptr<common_ngram_mod> ngram_mod;
 

@@ -190,7 +190,9 @@ public:
     void insert(const llama_tokens & inp_tokens);
 
     // for compatibility with speculative decoding, ctx shift, slot save/load
-    const llama_tokens & get_text_tokens() const;
+    const llama_tokens & get_tokens() const;
+
+    llama_tokens get_text_tokens() const;
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
