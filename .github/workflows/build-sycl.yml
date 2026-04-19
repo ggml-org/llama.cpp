@@ -97,59 +97,6 @@ jobs:
             -DGGML_SYCL_F16=${{ matrix.dtype }}
           time cmake --build build --config Release -j $(nproc)
 
-  ubuntu-24-sycl-fp16:
-    runs-on: ubuntu-24.04
-
-    continue-on-error: true
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: add oneAPI to apt
-        shell: bash
-        run: |
-          cd /tmp
-          wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          rm GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          sudo add-apt-repository "deb https://apt.repos.intel.com/oneapi all main"
-
-      - name: install oneAPI dpcpp compiler
-        shell: bash
-        run: |
-          sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp libssl-dev ninja-build
-
-      - name: install oneAPI MKL library
-        shell: bash
-        run: |
-          sudo apt install intel-oneapi-mkl-devel
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ubuntu-24-sycl-fp16
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build
-        id: cmake_build
-        run: |
-          source /opt/intel/oneapi/setvars.sh
-          cmake -B build \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_SYCL=ON \
-            -DCMAKE_C_COMPILER=icx \
-            -DCMAKE_CXX_COMPILER=icpx \
-            -DGGML_SYCL_F16=ON
-          time cmake --build build --config Release -j $(nproc)
-
-
   windows-latest-sycl:
     runs-on: windows-2022
 
