@@ -1870,9 +1870,8 @@ class TextModel(ModelBase):
                 pooling_type = gguf.PoolingType.CLS
             elif pooling.get("pooling_mode_lasttoken"):
                 pooling_type = gguf.PoolingType.LAST
-            elif pooling.get("pooling_mode") and pooling["pooling_mode"] in mapping:
-                pooling_mode = pooling["pooling_mode"]
-                pooling_type = mapping[pooling_mode]
+            elif (pooling_mode := pooling.get("pooling_mode")) in mode_mapping:
+                pooling_type = mode_mapping[pooling_mode]
             else:
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
