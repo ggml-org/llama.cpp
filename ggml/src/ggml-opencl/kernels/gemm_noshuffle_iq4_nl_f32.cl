@@ -2,15 +2,31 @@
 #pragma OPENCL EXTENSION cl_qcom_reqd_sub_group_size : enable
 
 #ifdef cl_qcom_reqd_sub_group_size
-#pragma OPENCL EXTENSION cl_qcom_reqd_sub_group_size : enable
 #define ADRENO_GPU 1
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
 #endif
 
-constant float kvalues_iq4nl[16] = {
-    -127.f, -104.f, -83.f, -65.f, -49.f, -35.f, -22.f, -10.f,
-      1.f,   13.f,  25.f,  38.f,  53.f,  69.f,  89.f, 113.f
+constant half kvalues_iq4nl[16] = {
+    (half)-127.f, (half)-104.f, (half)-83.f, (half)-65.f,
+    (half) -49.f, (half) -35.f, (half)-22.f, (half)-10.f,
+    (half)   1.f, (half)  13.f, (half) 25.f, (half) 38.f,
+    (half)  53.f, (half)  69.f, (half) 89.f, (half)113.f
 };
+
+// Packed LUT: 2 FP16 values per uint, 8 unique constant loads instead of 16
+constant uint iq4nl_packed[8] = {
+    0xD680D7F0u,  // idx 0,1: -127, -104
+    0xD410D530u,  // idx 2,3: -83, -65
+    0xD060D220u,  // idx 4,5: -49, -35
+    0xC900CD80u,  // idx 6,7: -22, -10
+    0x4A803C00u,  // idx 8,9: 1, 13
+    0x50C04E40u,  // idx 10,11: 25, 38
+    0x545052A0u,  // idx 12,13: 53, 69
+    0x57105590u   // idx 14,15: 89, 113
+};
+
+// Packed dequant: 1 uint constant load (8-way divergence) + shift + as_half
+#define IQ4_NL_DEQUANT(nibble) as_half((ushort)(iq4nl_packed[(nibble) >> 1] >> (((nibble) & 1u) << 4)))
 
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_128
@@ -52,10 +68,10 @@ kernel void kernel_gemm_noshuffle_iq4_nl_f32(
         half4 scale = vload4(0, scale_ptr + (i/32)*(m));
 
         // j=0
-        dequantized_weights.s0 = (half)kvalues_iq4nl[(bits4.s0 & (0x000F))] * scale.s0;
-        dequantized_weights.s1 = (half)kvalues_iq4nl[(bits4.s1 & (0x000F))] * scale.s1;
-        dequantized_weights.s2 = (half)kvalues_iq4nl[(bits4.s2 & (0x000F))] * scale.s2;
-        dequantized_weights.s3 = (half)kvalues_iq4nl[(bits4.s3 & (0x000F))] * scale.s3;
+        dequantized_weights.s0 = IQ4_NL_DEQUANT(bits4.s0 & 0x000Fu) * scale.s0;
+        dequantized_weights.s1 = IQ4_NL_DEQUANT(bits4.s1 & 0x000Fu) * scale.s1;
+        dequantized_weights.s2 = IQ4_NL_DEQUANT(bits4.s2 & 0x000Fu) * scale.s2;
+        dequantized_weights.s3 = IQ4_NL_DEQUANT(bits4.s3 & 0x000Fu) * scale.s3;
         c0 += B * dequantized_weights.s0;
         c1 += B * dequantized_weights.s1;
         c2 += B * dequantized_weights.s2;
@@ -64,10 +80,10 @@ kernel void kernel_gemm_noshuffle_iq4_nl_f32(
         // j=1
         B.s0123 = read_imageh(src1, gy*2 + (i+1)*(n_4));
         B.s4567 = read_imageh(src1, gy*2 + (i+1)*(n_4)+1);
-        dequantized_weights.s0 = (half)kvalues_iq4nl[((bits4.s0 & (0x00F0)) >> 4)] * scale.s0;
-        dequantized_weights.s1 = (half)kvalues_iq4nl[((bits4.s1 & (0x00F0)) >> 4)] * scale.s1;
-        dequantized_weights.s2 = (half)kvalues_iq4nl[((bits4.s2 & (0x00F0)) >> 4)] * scale.s2;
-        dequantized_weights.s3 = (half)kvalues_iq4nl[((bits4.s3 & (0x00F0)) >> 4)] * scale.s3;
+        dequantized_weights.s0 = IQ4_NL_DEQUANT((bits4.s0 >> 4) & 0x000Fu) * scale.s0;
+        dequantized_weights.s1 = IQ4_NL_DEQUANT((bits4.s1 >> 4) & 0x000Fu) * scale.s1;
+        dequantized_weights.s2 = IQ4_NL_DEQUANT((bits4.s2 >> 4) & 0x000Fu) * scale.s2;
+        dequantized_weights.s3 = IQ4_NL_DEQUANT((bits4.s3 >> 4) & 0x000Fu) * scale.s3;
         c0 += B * dequantized_weights.s0;
         c1 += B * dequantized_weights.s1;
         c2 += B * dequantized_weights.s2;
@@ -76,10 +92,10 @@ kernel void kernel_gemm_noshuffle_iq4_nl_f32(
         // j=2
         B.s0123 = read_imageh(src1, gy*2 + (i+2)*(n_4));
         B.s4567 = read_imageh(src1, gy*2 + (i+2)*(n_4)+1);
-        dequantized_weights.s0 = (half)kvalues_iq4nl[((bits4.s0 & (0x0F00)) >> 8)] * scale.s0;
-        dequantized_weights.s1 = (half)kvalues_iq4nl[((bits4.s1 & (0x0F00)) >> 8)] * scale.s1;
-        dequantized_weights.s2 = (half)kvalues_iq4nl[((bits4.s2 & (0x0F00)) >> 8)] * scale.s2;
-        dequantized_weights.s3 = (half)kvalues_iq4nl[((bits4.s3 & (0x0F00)) >> 8)] * scale.s3;
+        dequantized_weights.s0 = IQ4_NL_DEQUANT((bits4.s0 >> 8) & 0x000Fu) * scale.s0;
+        dequantized_weights.s1 = IQ4_NL_DEQUANT((bits4.s1 >> 8) & 0x000Fu) * scale.s1;
+        dequantized_weights.s2 = IQ4_NL_DEQUANT((bits4.s2 >> 8) & 0x000Fu) * scale.s2;
+        dequantized_weights.s3 = IQ4_NL_DEQUANT((bits4.s3 >> 8) & 0x000Fu) * scale.s3;
         c0 += B * dequantized_weights.s0;
         c1 += B * dequantized_weights.s1;
         c2 += B * dequantized_weights.s2;
@@ -88,10 +104,10 @@ kernel void kernel_gemm_noshuffle_iq4_nl_f32(
         // j=3
         B.s0123 = read_imageh(src1, gy*2 + (i+3)*(n_4));
         B.s4567 = read_imageh(src1, gy*2 + (i+3)*(n_4)+1);
-        dequantized_weights.s0 = (half)kvalues_iq4nl[((bits4.s0 & (0xF000)) >> 12)] * scale.s0;
-        dequantized_weights.s1 = (half)kvalues_iq4nl[((bits4.s1 & (0xF000)) >> 12)] * scale.s1;
-        dequantized_weights.s2 = (half)kvalues_iq4nl[((bits4.s2 & (0xF000)) >> 12)] * scale.s2;
-        dequantized_weights.s3 = (half)kvalues_iq4nl[((bits4.s3 & (0xF000)) >> 12)] * scale.s3;
+        dequantized_weights.s0 = IQ4_NL_DEQUANT((bits4.s0 >> 12) & 0x000Fu) * scale.s0;
+        dequantized_weights.s1 = IQ4_NL_DEQUANT((bits4.s1 >> 12) & 0x000Fu) * scale.s1;
+        dequantized_weights.s2 = IQ4_NL_DEQUANT((bits4.s2 >> 12) & 0x000Fu) * scale.s2;
+        dequantized_weights.s3 = IQ4_NL_DEQUANT((bits4.s3 >> 12) & 0x000Fu) * scale.s3;
         c0 += B * dequantized_weights.s0;
         c1 += B * dequantized_weights.s1;
         c2 += B * dequantized_weights.s2;

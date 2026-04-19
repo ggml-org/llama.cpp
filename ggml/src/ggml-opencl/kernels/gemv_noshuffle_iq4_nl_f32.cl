@@ -11,187 +11,204 @@
 #define NSUBGROUPS 4
 #define SUBGROUP_SIZE 64
 
-constant float kvalues_iq4nl[16] = {
-    -127.f, -104.f, -83.f, -65.f, -49.f, -35.f, -22.f, -10.f,
-      1.f,   13.f,  25.f,  38.f,  53.f,  69.f,  89.f, 113.f
+constant half kvalues_iq4nl[16] = {
+    (half)-127.f, (half)-104.f, (half)-83.f, (half)-65.f,
+    (half) -49.f, (half) -35.f, (half)-22.f, (half)-10.f,
+    (half)   1.f, (half)  13.f, (half) 25.f, (half) 38.f,
+    (half)  53.f, (half)  69.f, (half) 89.f, (half)113.f
 };
+
+// Packed LUT: 2 FP16 values per uint, 8 unique constant loads instead of 16
+constant uint iq4nl_packed[8] = {
+    0xD680D7F0u,  // idx 0,1: -127, -104
+    0xD410D530u,  // idx 2,3: -83, -65
+    0xD060D220u,  // idx 4,5: -49, -35
+    0xC900CD80u,  // idx 6,7: -22, -10
+    0x4A803C00u,  // idx 8,9: 1, 13
+    0x50C04E40u,  // idx 10,11: 25, 38
+    0x545052A0u,  // idx 12,13: 53, 69
+    0x57105590u   // idx 14,15: 89, 113
+};
+
+// Packed dequant: 1 uint constant load (8-way divergence) + shift + as_half
+#define IQ4_NL_DEQUANT(nibble) as_half((ushort)(iq4nl_packed[(nibble) >> 1] >> (((nibble) & 1u) << 4)))
 
 #define dequantizeBlockAccum_ns_sgbroadcast_1_hi(total_sums, bits4, scale, y) \
     float shared_y; \
     shared_y = sub_group_broadcast(y.s0, 0); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s0 & 0x000F)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s1 & 0x000F)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s0 & 0x000F)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s1 & 0x000F)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s1, 0); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0x00F0) >> 4)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0x00F0) >> 4)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0x00F0) >> 4)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0x00F0) >> 4)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s2, 0); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0x0F00) >> 8)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0x0F00) >> 8)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0x0F00) >> 8)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0x0F00) >> 8)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s3, 0); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0xF000) >> 12)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0xF000) >> 12)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0xF000) >> 12)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0xF000) >> 12)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s4, 0); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s2 & 0x000F)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s3 & 0x000F)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s2 & 0x000F)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s3 & 0x000F)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s5, 0); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0x00F0) >> 4)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0x00F0) >> 4)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0x00F0) >> 4)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0x00F0) >> 4)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s6, 0); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0x0F00) >> 8)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0x0F00) >> 8)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0x0F00) >> 8)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0x0F00) >> 8)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s7, 0); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0xF000) >> 12)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0xF000) >> 12)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0xF000) >> 12)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0xF000) >> 12)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s0, 1); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s4 & 0x000F)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s5 & 0x000F)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s4 & 0x000F)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s5 & 0x000F)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s1, 1); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0x00F0) >> 4)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0x00F0) >> 4)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0x00F0) >> 4)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0x00F0) >> 4)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s2, 1); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0x0F00) >> 8)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0x0F00) >> 8)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0x0F00) >> 8)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0x0F00) >> 8)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s3, 1); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0xF000) >> 12)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0xF000) >> 12)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0xF000) >> 12)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0xF000) >> 12)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s4, 1); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s6 & 0x000F)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s7 & 0x000F)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s6 & 0x000F)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s7 & 0x000F)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s5, 1); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0x00F0) >> 4)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0x00F0) >> 4)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0x00F0) >> 4)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0x00F0) >> 4)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s6, 1); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0x0F00) >> 8)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0x0F00) >> 8)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0x0F00) >> 8)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0x0F00) >> 8)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s7, 1); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0xF000) >> 12)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0xF000) >> 12)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0xF000) >> 12)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0xF000) >> 12)) * scale.s1 * shared_y; \
 
 
 #define dequantizeBlockAccum_ns_sgbroadcast_1_lo(total_sums, bits4, scale, y) \
     shared_y = sub_group_broadcast(y.s0, 2); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s0 & 0x000F)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s1 & 0x000F)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s0 & 0x000F)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s1 & 0x000F)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s1, 2); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0x00F0) >> 4)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0x00F0) >> 4)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0x00F0) >> 4)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0x00F0) >> 4)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s2, 2); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0x0F00) >> 8)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0x0F00) >> 8)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0x0F00) >> 8)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0x0F00) >> 8)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s3, 2); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0xF000) >> 12)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0xF000) >> 12)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0xF000) >> 12)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0xF000) >> 12)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s4, 2); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s2 & 0x000F)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s3 & 0x000F)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s2 & 0x000F)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s3 & 0x000F)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s5, 2); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0x00F0) >> 4)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0x00F0) >> 4)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0x00F0) >> 4)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0x00F0) >> 4)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s6, 2); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0x0F00) >> 8)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0x0F00) >> 8)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0x0F00) >> 8)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0x0F00) >> 8)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s7, 2); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0xF000) >> 12)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0xF000) >> 12)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0xF000) >> 12)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0xF000) >> 12)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s0, 3); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s4 & 0x000F)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s5 & 0x000F)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s4 & 0x000F)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s5 & 0x000F)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s1, 3); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0x00F0) >> 4)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0x00F0) >> 4)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0x00F0) >> 4)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0x00F0) >> 4)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s2, 3); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0x0F00) >> 8)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0x0F00) >> 8)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0x0F00) >> 8)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0x0F00) >> 8)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s3, 3); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0xF000) >> 12)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0xF000) >> 12)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0xF000) >> 12)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0xF000) >> 12)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s4, 3); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s6 & 0x000F)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s7 & 0x000F)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s6 & 0x000F)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s7 & 0x000F)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s5, 3); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0x00F0) >> 4)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0x00F0) >> 4)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0x00F0) >> 4)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0x00F0) >> 4)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s6, 3); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0x0F00) >> 8)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0x0F00) >> 8)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0x0F00) >> 8)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0x0F00) >> 8)) * scale.s1 * shared_y; \
     shared_y = sub_group_broadcast(y.s7, 3); \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0xF000) >> 12)] * scale.s0 * shared_y; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0xF000) >> 12)] * scale.s1 * shared_y; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0xF000) >> 12)) * scale.s0 * shared_y; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0xF000) >> 12)) * scale.s1 * shared_y; \
 
 
 #define dequantizeBlockAccum_ns_sgbroadcast_8_hi(total_sums, bits4, scale, y) \
     float8 shared_y; \
     shared_y = sub_group_broadcast(y, 0); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s0 & 0x000F)]         * scale.s0 * shared_y.s0; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0x00F0) >> 4)]  * scale.s0 * shared_y.s1; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0x0F00) >> 8)]  * scale.s0 * shared_y.s2; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0xF000) >> 12)] * scale.s0 * shared_y.s3; \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s2 & 0x000F)]         * scale.s0 * shared_y.s4; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0x00F0) >> 4)]  * scale.s0 * shared_y.s5; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0x0F00) >> 8)]  * scale.s0 * shared_y.s6; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0xF000) >> 12)] * scale.s0 * shared_y.s7; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s1 & 0x000F)]         * scale.s1 * shared_y.s0; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0x00F0) >> 4)]  * scale.s1 * shared_y.s1; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0x0F00) >> 8)]  * scale.s1 * shared_y.s2; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0xF000) >> 12)] * scale.s1 * shared_y.s3; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s3 & 0x000F)]         * scale.s1 * shared_y.s4; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0x00F0) >> 4)]  * scale.s1 * shared_y.s5; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0x0F00) >> 8)]  * scale.s1 * shared_y.s6; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0xF000) >> 12)] * scale.s1 * shared_y.s7; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s0 & 0x000F))         * scale.s0 * shared_y.s0; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0x00F0) >> 4))  * scale.s0 * shared_y.s1; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0x0F00) >> 8))  * scale.s0 * shared_y.s2; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0xF000) >> 12)) * scale.s0 * shared_y.s3; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s2 & 0x000F))         * scale.s0 * shared_y.s4; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0x00F0) >> 4))  * scale.s0 * shared_y.s5; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0x0F00) >> 8))  * scale.s0 * shared_y.s6; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0xF000) >> 12)) * scale.s0 * shared_y.s7; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s1 & 0x000F))         * scale.s1 * shared_y.s0; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0x00F0) >> 4))  * scale.s1 * shared_y.s1; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0x0F00) >> 8))  * scale.s1 * shared_y.s2; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0xF000) >> 12)) * scale.s1 * shared_y.s3; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s3 & 0x000F))         * scale.s1 * shared_y.s4; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0x00F0) >> 4))  * scale.s1 * shared_y.s5; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0x0F00) >> 8))  * scale.s1 * shared_y.s6; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0xF000) >> 12)) * scale.s1 * shared_y.s7; \
     shared_y = sub_group_broadcast(y, 1); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s4 & 0x000F)]         * scale.s0 * shared_y.s0; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0x00F0) >> 4)]  * scale.s0 * shared_y.s1; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0x0F00) >> 8)]  * scale.s0 * shared_y.s2; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0xF000) >> 12)] * scale.s0 * shared_y.s3; \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s6 & 0x000F)]         * scale.s0 * shared_y.s4; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0x00F0) >> 4)]  * scale.s0 * shared_y.s5; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0x0F00) >> 8)]  * scale.s0 * shared_y.s6; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0xF000) >> 12)] * scale.s0 * shared_y.s7; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s5 & 0x000F)]         * scale.s1 * shared_y.s0; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0x00F0) >> 4)]  * scale.s1 * shared_y.s1; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0x0F00) >> 8)]  * scale.s1 * shared_y.s2; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0xF000) >> 12)] * scale.s1 * shared_y.s3; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s7 & 0x000F)]         * scale.s1 * shared_y.s4; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0x00F0) >> 4)]  * scale.s1 * shared_y.s5; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0x0F00) >> 8)]  * scale.s1 * shared_y.s6; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0xF000) >> 12)] * scale.s1 * shared_y.s7; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s4 & 0x000F))         * scale.s0 * shared_y.s0; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0x00F0) >> 4))  * scale.s0 * shared_y.s1; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0x0F00) >> 8))  * scale.s0 * shared_y.s2; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0xF000) >> 12)) * scale.s0 * shared_y.s3; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s6 & 0x000F))         * scale.s0 * shared_y.s4; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0x00F0) >> 4))  * scale.s0 * shared_y.s5; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0x0F00) >> 8))  * scale.s0 * shared_y.s6; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0xF000) >> 12)) * scale.s0 * shared_y.s7; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s5 & 0x000F))         * scale.s1 * shared_y.s0; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0x00F0) >> 4))  * scale.s1 * shared_y.s1; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0x0F00) >> 8))  * scale.s1 * shared_y.s2; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0xF000) >> 12)) * scale.s1 * shared_y.s3; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s7 & 0x000F))         * scale.s1 * shared_y.s4; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0x00F0) >> 4))  * scale.s1 * shared_y.s5; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0x0F00) >> 8))  * scale.s1 * shared_y.s6; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0xF000) >> 12)) * scale.s1 * shared_y.s7; \
 
 
 #define dequantizeBlockAccum_ns_sgbroadcast_8_lo(total_sums, bits4, scale, y) \
     shared_y = sub_group_broadcast(y, 2); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s0 & 0x000F)]         * scale.s0 * shared_y.s0; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0x00F0) >> 4)]  * scale.s0 * shared_y.s1; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0x0F00) >> 8)]  * scale.s0 * shared_y.s2; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s0 & 0xF000) >> 12)] * scale.s0 * shared_y.s3; \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s2 & 0x000F)]         * scale.s0 * shared_y.s4; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0x00F0) >> 4)]  * scale.s0 * shared_y.s5; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0x0F00) >> 8)]  * scale.s0 * shared_y.s6; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s2 & 0xF000) >> 12)] * scale.s0 * shared_y.s7; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s1 & 0x000F)]         * scale.s1 * shared_y.s0; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0x00F0) >> 4)]  * scale.s1 * shared_y.s1; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0x0F00) >> 8)]  * scale.s1 * shared_y.s2; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s1 & 0xF000) >> 12)] * scale.s1 * shared_y.s3; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s3 & 0x000F)]         * scale.s1 * shared_y.s4; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0x00F0) >> 4)]  * scale.s1 * shared_y.s5; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0x0F00) >> 8)]  * scale.s1 * shared_y.s6; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s3 & 0xF000) >> 12)] * scale.s1 * shared_y.s7; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s0 & 0x000F))         * scale.s0 * shared_y.s0; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0x00F0) >> 4))  * scale.s0 * shared_y.s1; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0x0F00) >> 8))  * scale.s0 * shared_y.s2; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s0 & 0xF000) >> 12)) * scale.s0 * shared_y.s3; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s2 & 0x000F))         * scale.s0 * shared_y.s4; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0x00F0) >> 4))  * scale.s0 * shared_y.s5; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0x0F00) >> 8))  * scale.s0 * shared_y.s6; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s2 & 0xF000) >> 12)) * scale.s0 * shared_y.s7; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s1 & 0x000F))         * scale.s1 * shared_y.s0; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0x00F0) >> 4))  * scale.s1 * shared_y.s1; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0x0F00) >> 8))  * scale.s1 * shared_y.s2; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s1 & 0xF000) >> 12)) * scale.s1 * shared_y.s3; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s3 & 0x000F))         * scale.s1 * shared_y.s4; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0x00F0) >> 4))  * scale.s1 * shared_y.s5; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0x0F00) >> 8))  * scale.s1 * shared_y.s6; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s3 & 0xF000) >> 12)) * scale.s1 * shared_y.s7; \
     shared_y = sub_group_broadcast(y, 3); \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s4 & 0x000F)]         * scale.s0 * shared_y.s0; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0x00F0) >> 4)]  * scale.s0 * shared_y.s1; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0x0F00) >> 8)]  * scale.s0 * shared_y.s2; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s4 & 0xF000) >> 12)] * scale.s0 * shared_y.s3; \
-    total_sums.s0 += kvalues_iq4nl[(bits4.s6 & 0x000F)]         * scale.s0 * shared_y.s4; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0x00F0) >> 4)]  * scale.s0 * shared_y.s5; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0x0F00) >> 8)]  * scale.s0 * shared_y.s6; \
-    total_sums.s0 += kvalues_iq4nl[((bits4.s6 & 0xF000) >> 12)] * scale.s0 * shared_y.s7; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s5 & 0x000F)]         * scale.s1 * shared_y.s0; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0x00F0) >> 4)]  * scale.s1 * shared_y.s1; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0x0F00) >> 8)]  * scale.s1 * shared_y.s2; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s5 & 0xF000) >> 12)] * scale.s1 * shared_y.s3; \
-    total_sums.s1 += kvalues_iq4nl[(bits4.s7 & 0x000F)]         * scale.s1 * shared_y.s4; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0x00F0) >> 4)]  * scale.s1 * shared_y.s5; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0x0F00) >> 8)]  * scale.s1 * shared_y.s6; \
-    total_sums.s1 += kvalues_iq4nl[((bits4.s7 & 0xF000) >> 12)] * scale.s1 * shared_y.s7; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s4 & 0x000F))         * scale.s0 * shared_y.s0; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0x00F0) >> 4))  * scale.s0 * shared_y.s1; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0x0F00) >> 8))  * scale.s0 * shared_y.s2; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s4 & 0xF000) >> 12)) * scale.s0 * shared_y.s3; \
+    total_sums.s0 += IQ4_NL_DEQUANT((bits4.s6 & 0x000F))         * scale.s0 * shared_y.s4; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0x00F0) >> 4))  * scale.s0 * shared_y.s5; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0x0F00) >> 8))  * scale.s0 * shared_y.s6; \
+    total_sums.s0 += IQ4_NL_DEQUANT(((bits4.s6 & 0xF000) >> 12)) * scale.s0 * shared_y.s7; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s5 & 0x000F))         * scale.s1 * shared_y.s0; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0x00F0) >> 4))  * scale.s1 * shared_y.s1; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0x0F00) >> 8))  * scale.s1 * shared_y.s2; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s5 & 0xF000) >> 12)) * scale.s1 * shared_y.s3; \
+    total_sums.s1 += IQ4_NL_DEQUANT((bits4.s7 & 0x000F))         * scale.s1 * shared_y.s4; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0x00F0) >> 4))  * scale.s1 * shared_y.s5; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0x0F00) >> 8))  * scale.s1 * shared_y.s6; \
+    total_sums.s1 += IQ4_NL_DEQUANT(((bits4.s7 & 0xF000) >> 12)) * scale.s1 * shared_y.s7; \
 
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
