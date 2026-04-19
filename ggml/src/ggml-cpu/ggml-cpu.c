@@ -202,6 +202,11 @@ typedef pthread_t ggml_thread_t;
 #include <unistd.h>
 #include <mach/mach.h>
 #include <TargetConditionals.h>
+
+#if defined(__aarch64__) && TARGET_OS_MAC
+#include "macos-scheduling.h"
+#endif
+
 #endif
 
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
@@ -2564,6 +2569,18 @@ static bool ggml_thread_apply_priority(int32_t prio) {
     return true;
 }
 
+#if defined(CLUSTER_SCHEDULING_AVAILABLE)
+/* if it's a secondary SME thread, call this as a hint to the OS. */
+static void ggml_thread_apply_sme_settings(int ith) {
+    int cnt = pthread_qos_max_parallelism(QOS_CLASS_USER_INTERACTIVE, PTHREAD_MAX_PARALLELISM_CLUSTER);
+    if (ith != 0 && ith <= cnt) {
+#if 0
+        pthread_prefer_alternate_amx_self();
+#endif
+    }
+}
+#endif
+
 #elif defined(__gnu_linux__)
 // TODO: this may not work on BSD, to be verified
 
@@ -3093,6 +3110,10 @@ static thread_ret_t ggml_graph_compute_secondary_thread(void* data) {
     if (ggml_thread_cpumask_is_valid(state->cpumask)) {
         ggml_thread_apply_affinity(state->cpumask);
     }
+
+#if defined(CLUSTER_SCHEDULING_AVAILABLE)
+    ggml_thread_apply_sme_settings(state->ith);
+#endif
 
     while (true) {
         // Check if we need to sleep

@@ -35,6 +35,12 @@
 #include <excpt.h>
 #endif
 
+#if defined(__APPLE__) && defined(__aarch64__)
+#if TARGET_OS_MAC
+#include "macos-scheduling.h"
+#endif
+#endif
+
 #include "kleidiai.h"
 
 #include "ggml-cpu.h"
@@ -132,30 +138,8 @@ static size_t detect_num_smcus() {
 
     return num_private + shared_ids.size();
 
-#elif defined(__APPLE__) && defined(__aarch64__)
-    // table for known M4 variants. Users can override via GGML_KLEIDIAI_SME=<n>.
-    char chip_name[256] = {};
-    size_t size = sizeof(chip_name);
-
-    if (sysctlbyname("machdep.cpu.brand_string", chip_name, &size, nullptr, 0) == 0) {
-        const std::string brand(chip_name);
-
-        struct ModelSMCU { const char *match; size_t smcus; };
-        static const ModelSMCU table[] = {
-            { "M4 Ultra", 2 },
-            { "M4 Max",   2 },
-            { "M4 Pro",   2 },
-            { "M4",       1 },
-        };
-
-        for (const auto &e : table) {
-            if (brand.find(e.match) != std::string::npos) {
-                return e.smcus;
-            }
-        }
-    }
-    return 1;
-
+#elif defined(CLUSTER_SCHEDULING_AVAILABLE)
+    return pthread_qos_max_parallelism(QOS_CLASS_USER_INTERACTIVE, PTHREAD_MAX_PARALLELISM_CLUSTER);
 #else
     return 1;
 #endif
