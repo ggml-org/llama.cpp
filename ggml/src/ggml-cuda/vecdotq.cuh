@@ -308,22 +308,63 @@ static __device__ __forceinline__ float vec_dot_mxfp4_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
     const block_mxfp4 * bq4 = (const block_mxfp4 *) vbq + kbx;
+    const uint8_t * qs_base = bq4->qs;
+    const uint8_t   e_byte  = bq4->e;
 
     const int * q8 = (const int *) bq8_1->qs + iqs;
 
     int sumi = 0;
 #pragma unroll
     for (int l = 0; l < VDR_MXFP4_Q8_1_MMVQ; ++l) {
-        const int aux_q4 = get_int_b1(bq4->qs, iqs + l);
+        const int aux_q4 = get_int_b1(qs_base, iqs + l);
         const int2 v = get_int_from_table_16(aux_q4, kvalues_mxfp4);
 
         sumi = ggml_cuda_dp4a(v.x, q8[l + 0], sumi);
         sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
     }
 
-    const float d = ggml_cuda_e8m0_to_fp32(bq4->e) * 0.5f * __low2float(bq8_1->ds);
+    const float d = ggml_cuda_e8m0_to_fp32(e_byte) * 0.5f * __low2float(bq8_1->ds);
     return d * sumi;
 }
+
+#ifdef GGML_CUDA_MXFP4_REPACK
+// SoA variant: tensor is repacked per-row into
+//   [qs_0..qs_{B_dst-1} | e_0..e_{B_dst-1}]
+// with B_dst = GGML_PAD(B_src, 16). bsrc_fd carries fastdiv values for
+// B_src = ncols_x / QK_MXFP4 so the caller can supply (row_idx, kbx_in_row)
+// via mulhi + shift instead of a hardware divide. Caller computes bsrc_fd
+// once per kernel and passes it in.
+static __device__ __forceinline__ float vec_dot_mxfp4_q8_1_soa(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1,
+    const int kbx, const int iqs, const uint3 bsrc_fd) {
+
+    const int B_src = (int) bsrc_fd.z;
+    const int B_dst = (B_src + 15) & ~15;
+    const uint2 dm = fast_div_modulo((uint32_t) kbx, bsrc_fd);
+    const int row_idx    = (int) dm.x;
+    const int kbx_in_row = (int) dm.y;
+
+    const uint8_t * row_base = (const uint8_t *) vbq + (size_t) row_idx * 17 * B_dst;
+    const uint8_t * qs_base  = row_base + (size_t) kbx_in_row * 16;
+    const uint8_t * sc_base  = row_base + 16 * B_dst;
+    const uint8_t   e_byte   = sc_base[kbx_in_row];
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < VDR_MXFP4_Q8_1_MMVQ; ++l) {
+        const int aux_q4 = get_int_b1(qs_base, iqs + l);
+        const int2 v = get_int_from_table_16(aux_q4, kvalues_mxfp4);
+
+        sumi = ggml_cuda_dp4a(v.x, q8[l + 0], sumi);
+        sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
+    }
+
+    const float d = ggml_cuda_e8m0_to_fp32(e_byte) * 0.5f * __low2float(bq8_1->ds);
+    return d * sumi;
+}
+#endif // GGML_CUDA_MXFP4_REPACK
 
 #define VDR_NVFP4_Q8_1_MMVQ 4
 #define VDR_NVFP4_Q8_1_MMQ  8
