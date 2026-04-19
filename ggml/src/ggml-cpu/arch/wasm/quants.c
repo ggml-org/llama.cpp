@@ -1137,17 +1137,48 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int32_t aux32[8] __attribute__((aligned(16))) = {0};
     float sums[8] __attribute__((aligned(16))) = {0};
 
+    // Vectorized unpack constants (strict SIMD only, deterministic)
+    const v128_t mask_0F = wasm_i8x16_splat(0x0F);
+    const v128_t mask_03 = wasm_i8x16_splat(0x03);
+    const v128_t bias_32 = wasm_i8x16_splat(32);
+
     for (int i = 0; i < nb; ++i) {
-        // Unpack 6-bit quantized data into aux8 (unchanged)
+        // Unpack 6-bit quantized data into aux8 (vectorized)
         const uint8_t * GGML_RESTRICT q4 = x[i].ql;
         const uint8_t * GGML_RESTRICT qh = x[i].qh;
         int8_t * a = aux8;
         for (int j = 0; j < QK_K; j += 128) {
-            for (int l = 0; l < 32; ++l) {
-                a[l +  0] = (int8_t)((q4[l +  0] & 0xF) | (((qh[l] >> 0) & 3) << 4)) - 32;
-                a[l + 32] = (int8_t)((q4[l + 32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32;
-                a[l + 64] = (int8_t)((q4[l +  0] >>  4) | (((qh[l] >> 4) & 3) << 4)) - 32;
-                a[l + 96] = (int8_t)((q4[l + 32] >>  4) | (((qh[l] >> 6) & 3) << 4)) - 32;
+            // Two 16-lane chunks per j-iteration (covers l = 0..31 of the
+            // scalar version). Each chunk decodes 64 output weights.
+            for (int chunk = 0; chunk < 32; chunk += 16) {
+                const v128_t q4_lo_src = wasm_v128_load(q4 + chunk);
+                const v128_t q4_hi_src = wasm_v128_load(q4 + chunk + 32);
+                const v128_t qh_src    = wasm_v128_load(qh + chunk);
+
+                const v128_t q4_lo_nib  = wasm_v128_and(q4_lo_src, mask_0F);
+                const v128_t q4_hi_nib  = wasm_v128_and(q4_hi_src, mask_0F);
+                const v128_t q4_lo_hnib = wasm_u8x16_shr(q4_lo_src, 4);
+                const v128_t q4_hi_hnib = wasm_u8x16_shr(q4_hi_src, 4);
+
+                const v128_t qh_b01 = wasm_v128_and(qh_src, mask_03);
+                const v128_t qh_b23 = wasm_v128_and(wasm_u8x16_shr(qh_src, 2), mask_03);
+                const v128_t qh_b45 = wasm_v128_and(wasm_u8x16_shr(qh_src, 4), mask_03);
+                const v128_t qh_b67 = wasm_u8x16_shr(qh_src, 6);  // only 2 bits left
+
+                const v128_t qh_b01_sh = wasm_i8x16_shl(qh_b01, 4);
+                const v128_t qh_b23_sh = wasm_i8x16_shl(qh_b23, 4);
+                const v128_t qh_b45_sh = wasm_i8x16_shl(qh_b45, 4);
+                const v128_t qh_b67_sh = wasm_i8x16_shl(qh_b67, 4);
+
+                const v128_t out_0  = wasm_i8x16_sub(wasm_v128_or(q4_lo_nib,  qh_b01_sh), bias_32);
+                const v128_t out_32 = wasm_i8x16_sub(wasm_v128_or(q4_hi_nib,  qh_b23_sh), bias_32);
+                const v128_t out_64 = wasm_i8x16_sub(wasm_v128_or(q4_lo_hnib, qh_b45_sh), bias_32);
+                const v128_t out_96 = wasm_i8x16_sub(wasm_v128_or(q4_hi_hnib, qh_b67_sh), bias_32);
+
+                wasm_v128_store(a + chunk +  0, out_0);
+                wasm_v128_store(a + chunk + 32, out_32);
+                wasm_v128_store(a + chunk + 64, out_64);
+                wasm_v128_store(a + chunk + 96, out_96);
             }
             a += 128;
             q4 += 64;
