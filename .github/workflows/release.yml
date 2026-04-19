@@ -374,6 +374,8 @@ jobs:
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx \
+            -DLLAMA_OPENSSL=OFF \
+            -DGGML_NATIVE=OFF \
             -DGGML_SYCL_F16=${{ matrix.dtype }}
           time cmake --build build --config Release -j $(nproc)
 
