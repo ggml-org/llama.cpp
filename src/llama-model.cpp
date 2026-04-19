@@ -8186,7 +8186,8 @@ void llama_model::print_info() const {
         }
     }
 
-    if (arch == LLM_ARCH_MAMBA ||
+    if (!hparams.vocab_only && (
+        arch == LLM_ARCH_MAMBA ||
         arch == LLM_ARCH_MAMBA2 ||
         arch == LLM_ARCH_JAMBA ||
         arch == LLM_ARCH_FALCON_H1 ||
@@ -8196,7 +8197,7 @@ void llama_model::print_info() const {
         arch == LLM_ARCH_QWEN35 ||
         arch == LLM_ARCH_QWEN35MOE ||
         arch == LLM_ARCH_NEMOTRON_H ||
-        arch == LLM_ARCH_NEMOTRON_H_MOE) {
+        arch == LLM_ARCH_NEMOTRON_H_MOE)) {
         LLAMA_LOG_INFO("%s: ssm_d_conv            = %u\n",     __func__, hparams.ssm_d_conv);
         LLAMA_LOG_INFO("%s: ssm_d_inner           = %u\n",     __func__, hparams.ssm_d_inner);
         LLAMA_LOG_INFO("%s: ssm_d_state           = %u\n",     __func__, hparams.ssm_d_state);
@@ -8219,7 +8220,7 @@ void llama_model::print_info() const {
     // general kv
     LLAMA_LOG_INFO("%s: general.name          = %s\n",    __func__, name.c_str());
 
-    if (arch == LLM_ARCH_DEEPSEEK) {
+    if (!hparams.vocab_only && arch == LLM_ARCH_DEEPSEEK) {
         LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
         LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
@@ -8239,27 +8240,28 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: expert_gating_func    = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
     }
 
-    if (arch == LLM_ARCH_QWEN2MOE) {
+    if (!hparams.vocab_only && arch == LLM_ARCH_QWEN2MOE) {
         LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n",     __func__, hparams.n_ff_shexp);
     }
 
-    if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1) {
+    if (!hparams.vocab_only && (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1)) {
         LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
     }
 
-    if (arch == LLM_ARCH_MINICPM ||
+    if (!hparams.vocab_only && (
+        arch == LLM_ARCH_MINICPM ||
         arch == LLM_ARCH_GRANITE ||
         arch == LLM_ARCH_GRANITE_MOE ||
         arch == LLM_ARCH_GRANITE_HYBRID ||
-        arch == LLM_ARCH_NEMOTRON_H_MOE) {
+        arch == LLM_ARCH_NEMOTRON_H_MOE)) {
         LLAMA_LOG_INFO("%s: f_embedding_scale     = %f\n", __func__, hparams.f_embedding_scale);
         LLAMA_LOG_INFO("%s: f_residual_scale      = %f\n", __func__, hparams.f_residual_scale);
         LLAMA_LOG_INFO("%s: f_attention_scale     = %f\n", __func__, hparams.f_attention_scale);
         LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n", __func__, hparams.n_ff_shexp);
     }
 
-    if (arch == LLM_ARCH_BAILINGMOE) {
+    if (!hparams.vocab_only && arch == LLM_ARCH_BAILINGMOE) {
         LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
         LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
@@ -8267,7 +8269,7 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: expert_weights_norm   = %d\n",     __func__, hparams.expert_weights_norm);
     }
 
-    if (arch == LLM_ARCH_BAILINGMOE2) {
+    if (!hparams.vocab_only && arch == LLM_ARCH_BAILINGMOE2) {
         LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
         LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n",     __func__, hparams.n_ff_shexp);
@@ -8278,12 +8280,12 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: nextn_predict_layers  = %d\n",     __func__, hparams.nextn_predict_layers);
     }
 
-    if (arch == LLM_ARCH_SMALLTHINKER || arch == LLM_ARCH_LFM2MOE) {
+    if (!hparams.vocab_only && (arch == LLM_ARCH_SMALLTHINKER || arch == LLM_ARCH_LFM2MOE)) {
         LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: expert_gating_func    = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
     }
 
-    if (arch == LLM_ARCH_GROVEMOE) {
+    if (!hparams.vocab_only && arch == LLM_ARCH_GROVEMOE) {
         LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: n_ff_chexp            = %d\n",     __func__, hparams.n_ff_chexp);
         LLAMA_LOG_INFO("%s: n_group_experts       = %d\n",     __func__, hparams.n_group_experts);
