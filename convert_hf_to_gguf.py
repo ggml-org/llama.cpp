@@ -1854,7 +1854,7 @@ class TextModel(ModelBase):
                     pooling_path = mod["path"]
                     break
 
-        mapping = {
+        mode_mapping = {
             "mean": gguf.PoolingType.MEAN,
             "cls": gguf.PoolingType.CLS,
             "lasttoken": gguf.PoolingType.LAST,
