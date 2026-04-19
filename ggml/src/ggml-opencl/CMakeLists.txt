@@ -161,6 +161,9 @@ set(GGML_OPENCL_KERNELS
     flash_attn_f32_f16
     flash_attn_f16
     flash_attn_f32
+    adreno_xmem_attn
+    adreno_xmem_exact_qk
+    adreno_xmem_exact_pv
 )
 
 foreach (K ${GGML_OPENCL_KERNELS})
