@@ -3710,14 +3710,17 @@ void server_routes::init_routes() {
         if (data.contains("prompt") && !data.at("prompt").is_string()) {
             // prompt is optional
             res->error(format_error_response("\"prompt\" must be a string", ERROR_TYPE_INVALID_REQUEST));
+            return res;
         }
 
         if (!data.contains("input_prefix")) {
             res->error(format_error_response("\"input_prefix\" is required", ERROR_TYPE_INVALID_REQUEST));
+            return res;
         }
 
         if (!data.contains("input_suffix")) {
             res->error(format_error_response("\"input_suffix\" is required", ERROR_TYPE_INVALID_REQUEST));
+            return res;
         }
 
         if (data.contains("input_extra") && !data.at("input_extra").is_array()) {
