@@ -1246,11 +1246,14 @@ size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
     return image_tokens->ny;
 }
 
-mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, size_t i) {
+mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i) {
     mtmd_decoder_pos pos;
-    pos.t = 0;
-    pos.x = i % image_tokens->nx;
-    pos.y = i / image_tokens->nx;
+    // M-RoPE logic
+    // TODO: support other types of position encoding if needed
+    pos.t = pos_0;
+    pos.x = pos_0 + (i % image_tokens->nx);
+    pos.y = pos_0 + (i / image_tokens->nx);
+    pos.z = 0; // unused for now
     return pos;
 }
 
