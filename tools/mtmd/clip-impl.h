@@ -182,6 +182,27 @@
 #define TN_CONV_NORM       "%s.blk.%d.conv_norm.%s"
 #define TN_CONV_PW1        "%s.blk.%d.conv_pw1.%s"
 #define TN_CONV_PW2        "%s.blk.%d.conv_pw2.%s"
+// granite_speech
+#define TN_GS_INP_LINEAR         "a.enc_inp_linear.%s"
+#define TN_GS_CTC_OUT           "a.enc_ctc_out.%s"
+#define TN_GS_CTC_OUT_MID       "a.enc_ctc_out_mid.%s"
+#define TN_GS_ATTN_REL_POS      "%s.blk.%d.attn_rel_pos_emb"
+#define TN_GS_PROJ_QUERY        "a.proj_query"
+#define TN_GS_PROJ_NORM         "a.proj_norm.%s"
+#define TN_GS_PROJ_LINEAR       "a.proj_linear.%s"
+#define TN_GS_PROJ_SELF_ATTN_Q  "a.proj_blk.%d.self_attn_q.%s"
+#define TN_GS_PROJ_SELF_ATTN_K  "a.proj_blk.%d.self_attn_k.%s"
+#define TN_GS_PROJ_SELF_ATTN_V  "a.proj_blk.%d.self_attn_v.%s"
+#define TN_GS_PROJ_SELF_ATTN_O  "a.proj_blk.%d.self_attn_out.%s"
+#define TN_GS_PROJ_SELF_ATTN_N  "a.proj_blk.%d.self_attn_norm.%s"
+#define TN_GS_PROJ_CROSS_ATTN_Q "a.proj_blk.%d.cross_attn_q.%s"
+#define TN_GS_PROJ_CROSS_ATTN_K "a.proj_blk.%d.cross_attn_k.%s"
+#define TN_GS_PROJ_CROSS_ATTN_V "a.proj_blk.%d.cross_attn_v.%s"
+#define TN_GS_PROJ_CROSS_ATTN_O "a.proj_blk.%d.cross_attn_out.%s"
+#define TN_GS_PROJ_CROSS_ATTN_N "a.proj_blk.%d.cross_attn_norm.%s"
+#define TN_GS_PROJ_FFN_UP       "a.proj_blk.%d.ffn_up.%s"
+#define TN_GS_PROJ_FFN_DOWN     "a.proj_blk.%d.ffn_down.%s"
+#define TN_GS_PROJ_FFN_NORM     "a.proj_blk.%d.ffn_norm.%s"
 
 // gemma4 audio conformer
 #define TN_A_MM_INP_PROJ     "mm.a.input_projection.%s"
@@ -304,6 +325,7 @@ enum projector_type {
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANOCR,
     PROJECTOR_TYPE_HUNYUANVL,
+    PROJECTOR_TYPE_GRANITE_SPEECH,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -351,6 +373,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
     { PROJECTOR_TYPE_HUNYUANOCR, "hunyuanocr"},
     { PROJECTOR_TYPE_HUNYUANVL,  "hunyuanvl"},
+    { PROJECTOR_TYPE_GRANITE_SPEECH, "granite_speech"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

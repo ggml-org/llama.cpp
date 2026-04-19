@@ -936,6 +936,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_gemma4a>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_GRANITE_SPEECH:
+            {
+                builder = std::make_unique<clip_graph_granite_speech>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_GLM4V:
             {
                 builder = std::make_unique<clip_graph_glm4v>(ctx, img);
@@ -1503,6 +1507,14 @@ struct clip_model_loader {
                         hparams.audio_window_len       = 320;  // 20ms frame (NOT 25ms/400)
                         hparams.audio_hop_len          = 160;
                     } break;
+                case PROJECTOR_TYPE_GRANITE_SPEECH:
+                    {
+                        hparams.audio_chunk_len        = 0;
+                        hparams.audio_sample_rate      = 16000;
+                        hparams.audio_n_fft            = 512;
+                        hparams.audio_window_len       = 400;
+                        hparams.audio_hop_len          = 160;
+                    } break;
                 case PROJECTOR_TYPE_JANUS_PRO:
                     {
                         hparams.image_pad_color   = {127, 127, 127};
@@ -1654,8 +1666,10 @@ struct clip_model_loader {
 
         model.position_embeddings = get_tensor(string_format(TN_POS_EMBD, prefix), false);
 
-        if (model.proj_type == PROJECTOR_TYPE_GEMMA3NV) {
-            hparams.n_layer = 0; // gemma3n does not use normal layer structure
+        const int n_layer_orig = hparams.n_layer;
+        if (model.proj_type == PROJECTOR_TYPE_GEMMA3NV
+         || model.proj_type == PROJECTOR_TYPE_GRANITE_SPEECH) {
+            hparams.n_layer = 0; // these models do not use the generic layer structure
         }
 
         // layers
@@ -2415,6 +2429,100 @@ struct clip_model_loader {
                         layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
                 } break;
+            case PROJECTOR_TYPE_GRANITE_SPEECH:
+                {
+                    hparams.n_layer = n_layer_orig;
+                    model.layers.resize(hparams.n_layer);
+
+                    model.gs_inp_linear_w = get_tensor(string_format(TN_GS_INP_LINEAR, "weight"));
+                    model.gs_inp_linear_b = get_tensor(string_format(TN_GS_INP_LINEAR, "bias"));
+                    model.gs_ctc_out_w     = get_tensor(string_format(TN_GS_CTC_OUT,     "weight"));
+                    model.gs_ctc_out_b     = get_tensor(string_format(TN_GS_CTC_OUT,     "bias"));
+                    model.gs_ctc_out_mid_w = get_tensor(string_format(TN_GS_CTC_OUT_MID, "weight"));
+                    model.gs_ctc_out_mid_b = get_tensor(string_format(TN_GS_CTC_OUT_MID, "bias"));
+
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        auto & layer = model.layers[il];
+
+                        layer.q_w = get_tensor(string_format(TN_ATTN_Q, prefix, il, "weight"));
+                        layer.k_w = get_tensor(string_format(TN_ATTN_K, prefix, il, "weight"));
+                        layer.v_w = get_tensor(string_format(TN_ATTN_V, prefix, il, "weight"));
+                        layer.o_w = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "weight"));
+                        layer.o_b = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "bias"));
+                        layer.attn_rel_pos_emb = get_tensor(string_format(TN_GS_ATTN_REL_POS, prefix, il));
+
+                        layer.ln_1_w = get_tensor(string_format(TN_LN_1, prefix, il, "weight"));
+                        layer.ln_1_b = get_tensor(string_format(TN_LN_1, prefix, il, "bias"));
+
+                        layer.ln_2_w = get_tensor(string_format(TN_LN_2, prefix, il, "weight"));
+                        layer.ln_2_b = get_tensor(string_format(TN_LN_2, prefix, il, "bias"));
+
+                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM, prefix, il, "weight"));
+                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM, prefix, il, "bias"));
+                        layer.ff_up_w     = get_tensor(string_format(TN_FFN_UP,   prefix, il, "weight"));
+                        layer.ff_up_b     = get_tensor(string_format(TN_FFN_UP,   prefix, il, "bias"));
+                        layer.ff_down_w   = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "weight"));
+                        layer.ff_down_b   = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "bias"));
+
+                        layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "weight"));
+                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "bias"));
+                        layer.ff_up_1_w   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "weight"));
+                        layer.ff_up_1_b   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "bias"));
+                        layer.ff_down_1_w = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "weight"));
+                        layer.ff_down_1_b = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "bias"));
+
+                        layer.norm_conv_w = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"));
+                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"));
+                        layer.conv_norm_w = get_tensor(string_format(TN_CONV_NORM, prefix, il, "weight"));
+                        layer.conv_norm_b = get_tensor(string_format(TN_CONV_NORM, prefix, il, "bias"));
+                        layer.conv_dw_w   = get_tensor(string_format(TN_CONV_DW,   prefix, il, "weight"));
+                        layer.conv_pw1_w  = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "weight"));
+                        layer.conv_pw1_b  = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "bias"));
+                        layer.conv_pw2_w  = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
+                        layer.conv_pw2_b  = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
+                    }
+
+                    model.gs_proj_query    = get_tensor(TN_GS_PROJ_QUERY);
+                    model.gs_proj_norm_w   = get_tensor(string_format(TN_GS_PROJ_NORM, "weight"));
+                    model.gs_proj_norm_b   = get_tensor(string_format(TN_GS_PROJ_NORM, "bias"));
+                    model.gs_proj_linear_w = get_tensor(string_format(TN_GS_PROJ_LINEAR, "weight"));
+                    model.gs_proj_linear_b = get_tensor(string_format(TN_GS_PROJ_LINEAR, "bias"));
+
+                    const int n_proj_layers = 2;
+                    model.gs_proj_layers.resize(n_proj_layers);
+                    for (int il = 0; il < n_proj_layers; ++il) {
+                        auto & pl = model.gs_proj_layers[il];
+
+                        pl.self_attn_q_w    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_Q, il, "weight"));
+                        pl.self_attn_q_b    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_Q, il, "bias"));
+                        pl.self_attn_k_w    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_K, il, "weight"));
+                        pl.self_attn_k_b    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_K, il, "bias"));
+                        pl.self_attn_v_w    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_V, il, "weight"));
+                        pl.self_attn_v_b    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_V, il, "bias"));
+                        pl.self_attn_o_w    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_O, il, "weight"));
+                        pl.self_attn_o_b    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_O, il, "bias"));
+                        pl.self_attn_norm_w = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_N, il, "weight"));
+                        pl.self_attn_norm_b = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_N, il, "bias"));
+
+                        pl.cross_attn_q_w    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_Q, il, "weight"));
+                        pl.cross_attn_q_b    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_Q, il, "bias"));
+                        pl.cross_attn_k_w    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_K, il, "weight"));
+                        pl.cross_attn_k_b    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_K, il, "bias"));
+                        pl.cross_attn_v_w    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_V, il, "weight"));
+                        pl.cross_attn_v_b    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_V, il, "bias"));
+                        pl.cross_attn_o_w    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_O, il, "weight"));
+                        pl.cross_attn_o_b    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_O, il, "bias"));
+                        pl.cross_attn_norm_w = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_N, il, "weight"));
+                        pl.cross_attn_norm_b = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_N, il, "bias"));
+
+                        pl.ffn_up_w   = get_tensor(string_format(TN_GS_PROJ_FFN_UP,   il, "weight"));
+                        pl.ffn_up_b   = get_tensor(string_format(TN_GS_PROJ_FFN_UP,   il, "bias"));
+                        pl.ffn_down_w = get_tensor(string_format(TN_GS_PROJ_FFN_DOWN, il, "weight"));
+                        pl.ffn_down_b = get_tensor(string_format(TN_GS_PROJ_FFN_DOWN, il, "bias"));
+                        pl.ffn_norm_w = get_tensor(string_format(TN_GS_PROJ_FFN_NORM, il, "weight"));
+                        pl.ffn_norm_b = get_tensor(string_format(TN_GS_PROJ_FFN_NORM, il, "bias"));
+                    }
+                } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
         }
@@ -3105,6 +3213,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 }
                 n_patches = n;
             } break;
+        case PROJECTOR_TYPE_GRANITE_SPEECH:
+            {
+                n_patches = ((img->nx + 14) / 15) * 3;
+            } break;
         default:
             GGML_ABORT("unsupported projector type");
     }
@@ -3701,6 +3813,39 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_f32("pos_emb", pos_emb);
             } break;
+        case PROJECTOR_TYPE_GRANITE_SPEECH:
+            {
+                const int context_size = 200;
+                const int max_pos_emb  = 512;
+
+                std::vector<int32_t> dists(context_size * context_size);
+                for (int i = 0; i < context_size; i++) {
+                    for (int j = 0; j < context_size; j++) {
+                        int d = i - j;
+                        if (d < -context_size) d = -context_size;
+                        if (d >  context_size) d =  context_size;
+                        dists[i * context_size + j] = d + max_pos_emb;
+                    }
+                }
+                set_input_i32("attn_dists", dists);
+
+                const int n_frames   = image_size_width;
+                const int remainder  = n_frames % context_size;
+                if (remainder > 0) {
+                    const int num_blocks = (n_frames + context_size - 1) / context_size;
+                    std::vector<float> mask(context_size * context_size * num_blocks, 0.0f);
+                    const float neg_inf = -INFINITY;
+                    const int last_block_offset = (num_blocks - 1) * context_size * context_size;
+                    for (int q = 0; q < context_size; q++) {
+                        for (int k = 0; k < context_size; k++) {
+                            if (q >= remainder || k >= remainder) {
+                                mask[last_block_offset + q * context_size + k] = neg_inf;
+                            }
+                        }
+                    }
+                    set_input_f32("attn_mask", mask);
+                }
+            } break;
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -3849,6 +3994,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GEMMA4A:
             return ctx->model.hparams.projection_dim;
+        case PROJECTOR_TYPE_GRANITE_SPEECH:
+            return ctx->model.gs_proj_linear_w->ne[1];
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
         default:

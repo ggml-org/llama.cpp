@@ -651,6 +651,108 @@ bool mtmd_audio_preprocessor_conformer::preprocess(const float *                
 }
 
 //
+// mtmd_audio_preprocessor_granite_speech
+//
+
+void mtmd_audio_preprocessor_granite_speech::initialize() {
+    cache.fill_sin_cos_table(hparams.audio_n_fft);
+    cache.fill_hann_window(hparams.audio_window_len, true);
+    cache.fill_mel_filterbank_matrix(
+        hparams.n_mel_bins / 2, hparams.audio_n_fft, hparams.audio_sample_rate,
+        0.0f, -1.0f, false, 1.0f, true);
+}
+
+bool mtmd_audio_preprocessor_granite_speech::preprocess(const float *                 samples,
+                                                         size_t                        n_samples,
+                                                         std::vector<mtmd_audio_mel> & output) {
+    if (n_samples == 0) {
+        return false;
+    }
+
+    GGML_ASSERT(!cache.sin_vals.empty());
+    GGML_ASSERT(!cache.cos_vals.empty());
+    GGML_ASSERT(!cache.filters.data.empty());
+
+    const int n_fft = hparams.audio_n_fft;
+    const int pad   = n_fft / 2;
+
+    // reflect padding
+    const int n_padded = (int)n_samples + 2 * pad;
+    std::vector<float> padded(n_padded, 0.0f);
+    std::copy(samples, samples + n_samples, padded.data() + pad);
+    for (int i = 0; i < pad; i++) {
+        int src = i + 1;
+        if (src >= (int)n_samples) {
+            src = (int)n_samples - 1;
+        }
+        padded[pad - 1 - i] = samples[src];
+    }
+    for (int i = 0; i < pad; i++) {
+        int src = (int)n_samples - 2 - i;
+        if (src < 0) {
+            src = 0;
+        }
+        padded[pad + (int)n_samples + i] = samples[src];
+    }
+
+    filter_params params;
+    params.n_mel            = hparams.n_mel_bins / 2;
+    params.n_fft_bins       = 1 + (n_fft / 2);
+    params.hann_window_size = hparams.audio_window_len;
+    params.hop_length       = hparams.audio_hop_len;
+    params.sample_rate      = hparams.audio_sample_rate;
+    params.no_padding       = true;
+    params.center_padding   = false;
+    params.preemph          = 0.0f;
+    params.use_natural_log  = false;
+    params.norm_per_feature = false;
+    params.mel_floor        = 1e-10f;
+
+    mtmd_audio_mel mel;
+    if (!log_mel_spectrogram(padded.data(), n_padded, 4, params, cache, mel)) {
+        return false;
+    }
+
+    double mmax = -1e20;
+    for (int i = 0; i < mel.n_mel * mel.n_len; i++) {
+        if (mel.data[i] > mmax) {
+            mmax = mel.data[i];
+        }
+    }
+    mmax -= 8.0;
+
+    for (int i = 0; i < mel.n_mel * mel.n_len; i++) {
+        if (mel.data[i] < mmax) {
+            mel.data[i] = mmax;
+        }
+        mel.data[i] = (mel.data[i] + 4.0) / 4.0;
+    }
+
+    int n_frames = mel.n_len;
+    if (n_frames % 2 == 1) {
+        n_frames--;
+    }
+    const int n_mel     = mel.n_mel;
+    const int n_stacked = n_frames / 2;
+
+    mtmd_audio_mel stacked;
+    stacked.n_mel     = 2 * n_mel;
+    stacked.n_len     = n_stacked;
+    stacked.n_len_org = (int)n_samples;
+    stacked.data.resize(2 * n_mel * n_stacked);
+
+    for (int t = 0; t < n_stacked; t++) {
+        for (int m = 0; m < n_mel; m++) {
+            stacked.data[m * n_stacked + t] = mel.data[m * mel.n_len + 2 * t];
+            stacked.data[(m + n_mel) * n_stacked + t] = mel.data[m * mel.n_len + 2 * t + 1];
+        }
+    }
+
+    output.push_back(std::move(stacked));
+    return true;
+}
+
+//
 // mtmd_audio_preprocessor_gemma4a
 //
 

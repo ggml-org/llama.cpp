@@ -10729,6 +10729,18 @@ class GraniteModel(LlamaModel):
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
 
 
+@ModelBase.register("GraniteSpeechForConditionalGeneration", ModelType.TEXT)
+class GraniteSpeechTextModel(GraniteModel):
+    model_arch = gguf.MODEL_ARCH.GRANITE
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith(("encoder.", "projector.")):
+            return
+        if name.startswith("language_model."):
+            name = name[len("language_model."):]
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
 class GraniteMoeModel(GraniteModel):
     """Conversion for IBM's GraniteMoeForCausalLM"""
@@ -12581,6 +12593,154 @@ class LFM2AudioModel(ConformerAudioModel):
         return super().filter_tensors(item)
 
 
+@ModelBase.register("GraniteSpeechForConditionalGeneration", ModelType.MMPROJ)
+class GraniteSpeechMmprojModel(MmprojModel):
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    _batch_norm_tensors: list[dict[str, Tensor]] | None = None
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return self.global_config.get("encoder_config")
+
+    def set_gguf_parameters(self):
+        assert self.hparams_audio is not None
+        a = self.hparams_audio
+        a["hidden_size"] = a["hidden_dim"]
+        a["intermediate_size"] = a["hidden_dim"] * a["feedforward_mult"]
+        a["num_attention_heads"] = a["num_heads"]
+        a["num_hidden_layers"] = a["num_layers"]
+
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE_SPEECH)
+        self.gguf_writer.add_audio_num_mel_bins(a["input_dim"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if "encoder" in name or "projector" in name:
+            if ".conv" in name and ".weight" in name:
+                return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("language_model."):
+            return
+        if "attention_dists" in name:
+            return
+        if "num_batches_tracked" in name:
+            return
+
+        # fold running_mean, running_var and eps into weight and bias for batch_norm
+        if "batch_norm" in name and "encoder.layers." in name:
+            if self._batch_norm_tensors is None:
+                self._batch_norm_tensors = [{} for _ in range(self.block_count)]
+            assert bid is not None
+            self._batch_norm_tensors[bid][name] = data_torch
+            if len(self._batch_norm_tensors[bid]) < 4:
+                return
+            prefix = f"encoder.layers.{bid}.conv.batch_norm"
+            weight = self._batch_norm_tensors[bid][f"{prefix}.weight"]
+            bias = self._batch_norm_tensors[bid][f"{prefix}.bias"]
+            running_mean = self._batch_norm_tensors[bid][f"{prefix}.running_mean"]
+            running_var = self._batch_norm_tensors[bid][f"{prefix}.running_var"]
+            eps = 1e-5
+            a = weight / torch.sqrt(running_var + eps)
+            b = bias - running_mean * a
+            yield from super().modify_tensors(a, f"encoder.layers.{bid}.conv.batch_norm.weight", bid)
+            yield from super().modify_tensors(b, f"encoder.layers.{bid}.conv.batch_norm.bias", bid)
+            return
+
+        if ".attn.to_kv.weight" in name:
+            k_weight, v_weight = data_torch.chunk(2, dim=0)
+            yield from super().modify_tensors(k_weight, name.replace("to_kv", "to_k"), bid)
+            yield from super().modify_tensors(v_weight, name.replace("to_kv", "to_v"), bid)
+            return
+
+        if ("up_conv" in name or "down_conv" in name) and name.endswith(".weight"):
+            if data_torch.ndim == 3 and data_torch.shape[2] == 1:
+                data_torch = data_torch.squeeze(2)
+
+        if "depth_conv" in name and name.endswith(".weight"):
+            if data_torch.ndim == 3 and data_torch.shape[1] == 1:
+                data_torch = data_torch.squeeze(1)
+
+        if name.startswith("projector."):
+            gguf_name = self._map_projector_tensor(name)
+            if gguf_name is None:
+                return
+            yield (gguf_name, data_torch)
+            return
+
+        global_map = {
+            "encoder.input_linear.weight": "a.enc_inp_linear.weight",
+            "encoder.input_linear.bias":   "a.enc_inp_linear.bias",
+            "encoder.out.weight":          "a.enc_ctc_out.weight",
+            "encoder.out.bias":            "a.enc_ctc_out.bias",
+            "encoder.out_mid.weight":      "a.enc_ctc_out_mid.weight",
+            "encoder.out_mid.bias":        "a.enc_ctc_out_mid.bias",
+        }
+        if name in global_map:
+            yield (global_map[name], data_torch)
+            return
+
+        if ".attn.rel_pos_emb.weight" in name:
+            assert bid is not None
+            yield (f"a.blk.{bid}.attn_rel_pos_emb", data_torch)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    @staticmethod
+    def _map_projector_tensor(name: str) -> str | None:
+        static_map = {
+            "projector.query":                          "a.proj_query",
+            "projector.qformer.layernorm.weight":       "a.proj_norm.weight",
+            "projector.qformer.layernorm.bias":         "a.proj_norm.bias",
+            "projector.linear.weight":                  "a.proj_linear.weight",
+            "projector.linear.bias":                    "a.proj_linear.bias",
+        }
+        if name in static_map:
+            return static_map[name]
+        m = re.match(r"projector\.qformer\.encoder\.layer\.(\d+)\.(.*)", name)
+        if not m:
+            return None
+        lid = m.group(1)
+        rest = m.group(2)
+        layer_map = {
+            "attention.attention.query.weight":        "self_attn_q.weight",
+            "attention.attention.query.bias":          "self_attn_q.bias",
+            "attention.attention.key.weight":          "self_attn_k.weight",
+            "attention.attention.key.bias":            "self_attn_k.bias",
+            "attention.attention.value.weight":        "self_attn_v.weight",
+            "attention.attention.value.bias":          "self_attn_v.bias",
+            "attention.output.dense.weight":           "self_attn_out.weight",
+            "attention.output.dense.bias":             "self_attn_out.bias",
+            "attention.output.LayerNorm.weight":       "self_attn_norm.weight",
+            "attention.output.LayerNorm.bias":         "self_attn_norm.bias",
+            "crossattention.attention.query.weight":   "cross_attn_q.weight",
+            "crossattention.attention.query.bias":     "cross_attn_q.bias",
+            "crossattention.attention.key.weight":     "cross_attn_k.weight",
+            "crossattention.attention.key.bias":       "cross_attn_k.bias",
+            "crossattention.attention.value.weight":   "cross_attn_v.weight",
+            "crossattention.attention.value.bias":     "cross_attn_v.bias",
+            "crossattention.output.dense.weight":      "cross_attn_out.weight",
+            "crossattention.output.dense.bias":        "cross_attn_out.bias",
+            "crossattention.output.LayerNorm.weight":  "cross_attn_norm.weight",
+            "crossattention.output.LayerNorm.bias":    "cross_attn_norm.bias",
+            "intermediate_query.dense.weight":         "ffn_up.weight",
+            "intermediate_query.dense.bias":           "ffn_up.bias",
+            "output_query.dense.weight":               "ffn_down.weight",
+            "output_query.dense.bias":                 "ffn_down.bias",
+            "output_query.LayerNorm.weight":           "ffn_norm.weight",
+            "output_query.LayerNorm.bias":             "ffn_norm.bias",
+        }
+        suffix = layer_map.get(rest)
+        if suffix is None:
+            return None
+        return f"a.proj_blk.{lid}.{suffix}"
+
+
 @ModelBase.register("Lfm25AudioTokenizer")
 class LFM25AudioTokenizer(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
@@ -13630,6 +13790,8 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # For text conversion we route to a dedicated text-only class.
     # TODO: refactor this later to avoid adding exception here
     if model_type == ModelType.TEXT and arch == "StepVLForConditionalGeneration":
+        return arch
+    if model_type == ModelType.TEXT and arch == "GraniteSpeechForConditionalGeneration":
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

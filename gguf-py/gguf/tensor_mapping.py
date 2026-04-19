@@ -1903,6 +1903,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.self_attn.linear_q", # lfm2
             "conformer.layers.{bid}.attention.attn.q_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.q_proj", # gemma4
+            "encoder.layers.{bid}.attn.to_q", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K: (
@@ -1910,6 +1911,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.self_attn.linear_k", # lfm2
             "conformer.layers.{bid}.attention.attn.k_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.k_proj", # gemma4
+            "encoder.layers.{bid}.attn.to_k", # granite_speech (split from to_kv)
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_V: (
@@ -1917,6 +1919,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.self_attn.linear_v", # lfm2
             "conformer.layers.{bid}.attention.attn.v_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.v_proj", # gemma4
+            "encoder.layers.{bid}.attn.to_v", # granite_speech (split from to_kv)
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K_REL: (
@@ -1944,6 +1947,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_self_att", # lfm2
             "conformer.layers.{bid}.attention.pre_attn_norm", # gemma3n
+            "encoder.layers.{bid}.attn.pre_norm", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT: (
@@ -1951,18 +1955,21 @@ class TensorNameMap:
             "conformer.layers.{bid}.self_attn.linear_out", # lfm2
             "conformer.layers.{bid}.attention.post", # gemma3n
             "conformer.layers.{bid}.self_attn.post", # gemma4
+            "encoder.layers.{bid}.attn.to_out", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
             "audio_tower.layers.{bid}.final_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_out", # lfm2
             "conformer.layers.{bid}.attention.post_norm", # gemma3n
+            "encoder.layers.{bid}.post_norm", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_FFN_NORM: (
             "conformer.layers.{bid}.norm_feed_forward1", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.pre_layer_norm", # gemma3n
             "conformer.layers.{bid}.feed_forward1.pre_layer_norm", # gemma4
+            "encoder.layers.{bid}.ff1.pre_norm", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_FFN_POST_NORM: (
@@ -1979,6 +1986,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.feed_forward1.linear1", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_1", # gemma3n
             "conformer.layers.{bid}.feed_forward1.ffw_layer_1", # gemma4
+            "encoder.layers.{bid}.ff1.up_proj", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_FFN_GATE: (),
@@ -1988,24 +1996,28 @@ class TensorNameMap:
             "conformer.layers.{bid}.feed_forward1.linear2", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_2", # gemma3n
             "conformer.layers.{bid}.feed_forward1.ffw_layer_2", # gemma4
+            "encoder.layers.{bid}.ff1.down_proj", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_FFN_UP_1: (
             "conformer.layers.{bid}.feed_forward2.linear1", # lfm2
             "conformer.layers.{bid}.ffw_layer_end.ffw_layer_1", # gemma3n
             "conformer.layers.{bid}.feed_forward2.ffw_layer_1", # gemma4
+            "encoder.layers.{bid}.ff2.up_proj", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_FFN_DOWN_1: (
             "conformer.layers.{bid}.feed_forward2.linear2", # lfm2
             "conformer.layers.{bid}.ffw_layer_end.ffw_layer_2", # gemma3n
             "conformer.layers.{bid}.feed_forward2.ffw_layer_2", # gemma4
+            "encoder.layers.{bid}.ff2.down_proj", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_FFN_NORM_1: (
             "conformer.layers.{bid}.norm_feed_forward2", # lfm2
             "conformer.layers.{bid}.ffw_layer_end.pre_layer_norm", # gemma3n
             "conformer.layers.{bid}.feed_forward2.pre_layer_norm", # gemma4
+            "encoder.layers.{bid}.ff2.pre_norm", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_FFN_POST_NORM_1: (
@@ -2062,26 +2074,31 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_CONV_DW: (
             "conformer.layers.{bid}.conv.depthwise_conv", # lfm2
             "conformer.layers.{bid}.lconv1d.depthwise_conv1d", # gemma3n
+            "encoder.layers.{bid}.conv.depth_conv.conv", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_CONV_NORM: (
             "conformer.layers.{bid}.conv.batch_norm", # lfm2
             "conformer.layers.{bid}.lconv1d.pre_layer_norm", # gemma3n
+            "encoder.layers.{bid}.conv.batch_norm", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_CONV_PW1: (
             "conformer.layers.{bid}.conv.pointwise_conv1", # lfm2
             "conformer.layers.{bid}.lconv1d.linear_start", # gemma3n
+            "encoder.layers.{bid}.conv.up_conv", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_CONV_PW2: (
             "conformer.layers.{bid}.conv.pointwise_conv2", # lfm2
             "conformer.layers.{bid}.lconv1d.linear_end", # gemma3n
+            "encoder.layers.{bid}.conv.down_conv", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_NORM_CONV: (
             "conformer.layers.{bid}.norm_conv", # lfm2
             "conformer.layers.{bid}.lconv1d.conv_norm", # gemma3n
+            "encoder.layers.{bid}.conv.norm", # granite_speech
         ),
 
         MODEL_TENSOR.A_PER_DIM_K_SCALE: (
