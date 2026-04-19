@@ -246,6 +246,7 @@ jobs:
           apt-get install -y --no-install-recommends \
                   build-essential \
                   glslc \
+                  spirv-headers \
                   gcc-14-loongarch64-linux-gnu \
                   g++-14-loongarch64-linux-gnu \
                   libvulkan-dev:loong64
