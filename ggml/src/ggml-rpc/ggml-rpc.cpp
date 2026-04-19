@@ -109,6 +109,7 @@ struct rdma_conn {
         if (pd)  ibv_dealloc_pd(pd);
         if (ctx) ibv_close_device(ctx);
     }
+    std::mutex send_rpc_cmd_mutex;
 };
 
 // Local RDMA parameters captured during the probe phase and later consumed
@@ -965,6 +966,7 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // No response
 static bool send_rpc_cmd(const std::shared_ptr<socket_t> & sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
+    std::lock_guard<std::mutex> lock(sock->send_rpc_cmd_mutex);
     uint8_t cmd_byte = cmd;
     if (!send_data(sock.get(), &cmd_byte, sizeof(cmd_byte))) {
         return false;
