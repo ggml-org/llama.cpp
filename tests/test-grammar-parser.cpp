@@ -519,6 +519,19 @@ int main()
         {LLAMA_GRETYPE_END, 0},
     });
 
+    // Char terminals must accept \} as a literal '}' (extension required by <{TEXT}> token form).
+    verify_parsing(R"""(
+        root ::= "a\}b"
+    )""", {
+        {"root", 0}
+    }, {
+        // root (index 0)
+        {LLAMA_GRETYPE_CHAR, 'a'},
+        {LLAMA_GRETYPE_CHAR, '}'},
+        {LLAMA_GRETYPE_CHAR, 'b'},
+        {LLAMA_GRETYPE_END, 0},
+    });
+
     // <[1000]> = "<think>"
     // <[1001]> = "</think>"
     verify_parsing(R"""(
@@ -532,6 +545,14 @@ int main()
         {LLAMA_GRETYPE_TOKEN, 1001},
         {LLAMA_GRETYPE_END, 0},
     });
+
+    // <{TEXT}> token-string form: dispatch should fail cleanly on missing vocab and on syntax errors.
+    // Without a vocab, all three of these end up failing — they exist to lock in clean failure
+    // behavior of the new dispatch branch and catch crashes/regressions.
+    verify_failure(R"""(root ::= <{Hello}>)""");      // null vocab
+    verify_failure(R"""(root ::= <{abc)""");          // unterminated: missing '}'
+    verify_failure(R"""(root ::= <{abc})""");         // missing closing '>'
+    verify_failure(R"""(root ::= <{a}b>)""");         // characters between '}' and '>'
 
     return 0;
 }
