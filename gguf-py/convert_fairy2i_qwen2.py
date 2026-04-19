@@ -56,7 +56,7 @@ def token_looks_special(token: str | bytes) -> bool:
     return seems_special
 
 
-def get_qwen2_tokenizer_pre(tokenizer) -> str:
+def get_qwen2_tokenizer_pre(model_dir: Path) -> str:
     chktxt = (
         "\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n"
         "🚀 (normal) 😶\u200d🌫️ (multiple emojis concatenated) ✅ 🦙🦙 3 33 333 3333 33333 333333 "
@@ -65,35 +65,58 @@ def get_qwen2_tokenizer_pre(tokenizer) -> str:
         "'RE you sure? 'M not sure I'll make it, 'D you like some tea? We'Ve a'lL"
     )
 
-    chktok = tokenizer.encode(chktxt)
-    chkhsh = sha256(str(chktok).encode()).hexdigest()
-    if chkhsh in QWEN2_PRETOKENIZER_HASHES:
-        return "qwen2"
+    try:
+        from tokenizers import Tokenizer
 
-    print(
-        f"warning: unrecognized Qwen2 tokenizer pre hash {chkhsh}, falling back to tokenizer.ggml.pre=qwen2",
-        file=sys.stderr,
-    )
+        tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
+        chktok = tokenizer.encode(chktxt).ids
+        chkhsh = sha256(str(chktok).encode()).hexdigest()
+        if chkhsh in QWEN2_PRETOKENIZER_HASHES:
+            return "qwen2"
+
+        print(
+            f"warning: unrecognized Qwen2 tokenizer pre hash {chkhsh}, falling back to tokenizer.ggml.pre=qwen2",
+            file=sys.stderr,
+        )
+    except Exception as exc:
+        print(
+            f"warning: failed to evaluate Qwen2 tokenizer pre-tokenizer via tokenizers ({exc}), "
+            "falling back to tokenizer.ggml.pre=qwen2",
+            file=sys.stderr,
+        )
+
     return "qwen2"
 
 
 def set_vocab_qwen2(model_dir: Path, config: dict, writer: gguf.GGUFWriter) -> None:
-    try:
-        from transformers import AutoTokenizer
-    except ImportError as exc:
-        raise ImportError(
-            "Qwen2 tokenizer export requires transformers; install it before running this script"
-        ) from exc
+    tokenizer_json_file = model_dir / "tokenizer.json"
+    if not tokenizer_json_file.is_file():
+        raise FileNotFoundError(f"tokenizer.json not found in {model_dir}")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+    tokenizer_json = json.loads(tokenizer_json_file.read_text(encoding="utf-8"))
     vocab_size = int(config["vocab_size"])
-    vocab = tokenizer.get_vocab()
+    vocab = tokenizer_json.get("model", {}).get("vocab")
+    if not isinstance(vocab, dict):
+        raise ValueError(f"invalid vocab in {tokenizer_json_file}")
     assert max(vocab.values()) < vocab_size
 
-    tokpre = get_qwen2_tokenizer_pre(tokenizer)
+    tokpre = get_qwen2_tokenizer_pre(model_dir)
     reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
-    added_vocab = tokenizer.get_added_vocab()
-    added_tokens_decoder = getattr(tokenizer, "added_tokens_decoder", {})
+    added_tokens = tokenizer_json.get("added_tokens", [])
+
+    added_vocab: dict[str, int] = {}
+    added_tokens_decoder: dict[int, dict] = {}
+    if isinstance(added_tokens, list):
+        for item in added_tokens:
+            if not isinstance(item, dict):
+                continue
+            token = item.get("content")
+            token_id = item.get("id")
+            if not isinstance(token, str) or not isinstance(token_id, int):
+                continue
+            added_vocab[token] = token_id
+            added_tokens_decoder[token_id] = item
+            reverse_vocab[token_id] = token
 
     tokens: list[str] = []
     toktypes: list[int] = []
@@ -107,11 +130,7 @@ def set_vocab_qwen2(model_dir: Path, config: dict, writer: gguf.GGUFWriter) -> N
         token = reverse_vocab[i]
         if token in added_vocab:
             decoder_entry = added_tokens_decoder.get(i)
-            normalized = getattr(decoder_entry, "normalized", True)
-            if not normalized:
-                token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
-
-            is_special = getattr(decoder_entry, "special", False) or token_looks_special(token)
+            is_special = bool((decoder_entry or {}).get("special", False)) or token_looks_special(token)
             toktypes.append(gguf.TokenType.CONTROL if is_special else gguf.TokenType.USER_DEFINED)
         else:
             toktypes.append(gguf.TokenType.NORMAL)
