@@ -703,6 +703,73 @@ static std::string fnv_hash(const uint8_t * data, size_t len) {
     return std::to_string(hash);
 }
 
+/**
+ * media_path always end with '/', see arg.cpp
+ * Accepted url formats: file://, http://, https://, data:MIME;base64,data, or
+ * raw base64-encoded data if allow_raw_b64 is true.
+ */
+static void handle_media(
+        std::vector<raw_buffer> & out_files,
+        const std::string & url,
+        const std::string & media_path,
+        bool allow_raw_b64) {
+    if (string_starts_with(url, "http://") || string_starts_with(url, "https://")) {
+        // download remote file
+        // TODO @ngxson : maybe make these params configurable
+        common_remote_params params;
+        params.max_size = 1024 * 1024 * 10; // 10MB
+        params.timeout  = 10; // seconds
+        SRV_INF("downloading file from '%s'\n", url.c_str());
+        auto res = common_remote_get_content(url, params);
+        if (200 <= res.first && res.first < 300) {
+            SRV_INF("downloaded %zu bytes\n", res.second.size());
+            raw_buffer data;
+            data.insert(data.end(), res.second.begin(), res.second.end());
+            out_files.push_back(data);
+        } else {
+            throw std::runtime_error("Failed to download file");
+        }
+
+    } else if (string_starts_with(url, "file://")) {
+        if (media_path.empty()) {
+            throw std::invalid_argument("file:// URLs are only allowed when --media-path is specified");
+        }
+        // load local file
+        std::string file_path = url.substr(7); // remove "file://"
+        raw_buffer data;
+        if (!fs_validate_filename(media_path + file_path, true)) {
+            throw std::invalid_argument("file path is not allowed: " + file_path);
+        }
+        SRV_INF("loading local file '%s'\n", (media_path + file_path).c_str());
+        std::ifstream file(media_path + file_path, std::ios::binary);
+        if (!file) {
+            throw std::invalid_argument("file does not exist or cannot be opened: " + file_path);
+        }
+        data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        out_files.push_back(data);
+
+    } else {
+        // try to decode base64 file
+        std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
+        if (parts.size() == 1 && allow_raw_b64) {
+            out_files.push_back(base64_decode(parts[0]));
+        } else if (parts.size() == 2) {
+            if (!string_starts_with(parts[0], "data:image/")) {
+                throw std::runtime_error("Invalid url format: " + parts[0]);
+            } else if (!string_ends_with(parts[0], "base64")) {
+                throw std::runtime_error("url must be base64 encoded");
+            } else {
+                auto base64_data = parts[1];
+                auto decoded_data = base64_decode(base64_data);
+                out_files.push_back(decoded_data);
+            }
+        }
+        else {
+            throw std::runtime_error("Invalid url value");
+        }
+    }
+}
+
 server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
     mtmd::bitmaps bitmaps;
     for (auto & file : files) {
@@ -744,9 +811,16 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::
  * - "prompt": "string"
  * - "prompt": [12, 34, 56]
  * - "prompt": [12, 34, "string", 56, 78]
- * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
+ * - "prompt": { "prompt_string": "string", "multimodal_data": [ "data" ] }
+ * For accepted formats for "data", see handle_media() above.
  */
-static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+static server_tokens tokenize_input_subprompt(
+        const llama_vocab * vocab,
+        mtmd_context * mctx,
+        const json & json_prompt,
+        const std::string & media_path,
+        bool add_special,
+        bool parse_special) {
     constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
     constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
     const bool has_mtmd = mctx != nullptr;
@@ -767,7 +841,7 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
             // JSON object with prompt and multimodal key.
             std::vector<raw_buffer> files;
             for (const auto & entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
-                files.push_back(base64_decode(entry));
+                handle_media(files, entry, media_path, true);
             }
             return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files);
         } else {
@@ -780,15 +854,21 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
    }
 }
 
-std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+std::vector<server_tokens> tokenize_input_prompts(
+        const llama_vocab * vocab,
+        mtmd_context * mctx,
+        const json & json_prompt,
+        const std::string & media_path,
+        bool add_special,
+        bool parse_special) {
     std::vector<server_tokens> result;
     if (json_prompt.is_array() && !json_is_array_and_contains_numbers(json_prompt)) {
         result.reserve(json_prompt.size());
         for (const auto & p : json_prompt) {
-            result.push_back(tokenize_input_subprompt(vocab, mctx, p,add_special, parse_special));
+            result.push_back(tokenize_input_subprompt(vocab, mctx, p, media_path, add_special, parse_special));
         }
     } else {
-        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special));
+        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, media_path, add_special, parse_special));
     }
     if (result.empty()) {
         throw std::runtime_error("\"prompt\" must not be empty");
@@ -837,64 +917,6 @@ json oaicompat_completion_params_parse(const json & body) {
     }
 
     return llama_params;
-}
-
-// media_path always end with '/', see arg.cpp
-static void handle_media(
-        std::vector<raw_buffer> & out_files,
-        json & media_obj,
-        const std::string & media_path) {
-    std::string url = json_value(media_obj, "url", std::string());
-    if (string_starts_with(url, "http")) {
-        // download remote image
-        // TODO @ngxson : maybe make these params configurable
-        common_remote_params params;
-        params.max_size = 1024 * 1024 * 10; // 10MB
-        params.timeout  = 10; // seconds
-        SRV_INF("downloading image from '%s'\n", url.c_str());
-        auto res = common_remote_get_content(url, params);
-        if (200 <= res.first && res.first < 300) {
-            SRV_INF("downloaded %zu bytes\n", res.second.size());
-            raw_buffer data;
-            data.insert(data.end(), res.second.begin(), res.second.end());
-            out_files.push_back(data);
-        } else {
-            throw std::runtime_error("Failed to download image");
-        }
-
-    } else if (string_starts_with(url, "file://")) {
-        if (media_path.empty()) {
-            throw std::invalid_argument("file:// URLs are not allowed unless --media-path is specified");
-        }
-        // load local image file
-        std::string file_path = url.substr(7); // remove "file://"
-        raw_buffer data;
-        if (!fs_validate_filename(file_path, true)) {
-            throw std::invalid_argument("file path is not allowed: " + file_path);
-        }
-        SRV_INF("loading image from local file '%s'\n", (media_path + file_path).c_str());
-        std::ifstream file(media_path + file_path, std::ios::binary);
-        if (!file) {
-            throw std::invalid_argument("file does not exist or cannot be opened: " + file_path);
-        }
-        data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        out_files.push_back(data);
-
-    } else {
-        // try to decode base64 image
-        std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
-        if (parts.size() != 2) {
-            throw std::runtime_error("Invalid url value");
-        } else if (!string_starts_with(parts[0], "data:image/")) {
-            throw std::runtime_error("Invalid url format: " + parts[0]);
-        } else if (!string_ends_with(parts[0], "base64")) {
-            throw std::runtime_error("url must be base64 encoded");
-        } else {
-            auto base64_data = parts[1];
-            auto decoded_data = base64_decode(base64_data);
-            out_files.push_back(decoded_data);
-        }
-    }
 }
 
 // used by /chat/completions endpoint
@@ -984,7 +1006,8 @@ json oaicompat_chat_params_parse(
                 }
 
                 json image_url = json_value(p, "image_url", json::object());
-                handle_media(out_files, image_url, opt.media_path);
+                std::string url = json_value(image_url, "url", std::string());
+                handle_media(out_files, url, opt.media_path, false);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -2108,12 +2131,12 @@ server_tokens format_prompt_rerank(
         std::string prompt = rerank_prompt;
         string_replace_all(prompt, "{query}"   , query);
         string_replace_all(prompt, "{document}", doc  );
-        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
+        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, "", false, true);
         result.push_back(tokens);
     } else {
         // Get EOS token - use SEP token as fallback if EOS is not available
-        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false);
-        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false);
+        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, "", false, false);
+        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   "", false, false);
         llama_token eos_token = llama_vocab_eos(vocab);
         if (eos_token == LLAMA_TOKEN_NULL) {
             eos_token = llama_vocab_sep(vocab);

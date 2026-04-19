@@ -273,6 +273,7 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         const llama_vocab * vocab,
                                         mtmd_context * mctx,
                                         const json & json_prompt,
+                                        const std::string & media_path,
                                         bool add_special,
                                         bool parse_special);
 
