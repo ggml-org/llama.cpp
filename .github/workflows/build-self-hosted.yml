@@ -104,7 +104,7 @@ jobs:
   #  steps:
   #    - name: Clone
   #      id: checkout
-  #      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+  #      uses: actions/checkout@v6
 
   #    - name: Dawn Dependency
   #      id: dawn-depends
@@ -134,7 +134,7 @@ jobs:
   #  steps:
   #    - name: Clone
   #      id: checkout
-  #      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+  #      uses: actions/checkout@v6
 
   #    - name: Test
   #      id: ggml-ci
@@ -148,7 +148,7 @@ jobs:
   #   steps:
   #     - name: Clone
   #       id: checkout
-  #       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+  #       uses: actions/checkout@v6
 
   #     - name: Test
   #       id: ggml-ci
@@ -163,7 +163,7 @@ jobs:
   #   steps:
   #     - name: Clone
   #       id: checkout
-  #       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+  #       uses: actions/checkout@v6
 
   #     - name: Test
   #       id: ggml-ci

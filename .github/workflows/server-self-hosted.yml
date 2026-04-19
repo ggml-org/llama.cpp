@@ -102,7 +102,7 @@ jobs:
   #    steps:
   #      - name: Clone
   #        id: checkout
-  #        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+  #        uses: actions/checkout@v6
   #        with:
   #          fetch-depth: 0
   #          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
