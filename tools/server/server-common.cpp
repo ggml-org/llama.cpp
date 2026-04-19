@@ -754,7 +754,8 @@ static void handle_media(
         if (parts.size() == 1 && allow_raw_b64) {
             out_files.push_back(base64_decode(parts[0]));
         } else if (parts.size() == 2) {
-            if (!string_starts_with(parts[0], "data:image/")) {
+            if (!string_starts_with(parts[0], "data:image/") &&
+                !string_starts_with(parts[0], "data:audio/")) {
                 throw std::runtime_error("Invalid url format: " + parts[0]);
             } else if (!string_ends_with(parts[0], "base64")) {
                 throw std::runtime_error("url must be base64 encoded");
@@ -1025,10 +1026,7 @@ json oaicompat_chat_params_parse(
                 if (format != "wav" && format != "mp3") {
                     throw std::invalid_argument("input_audio.format must be either 'wav' or 'mp3'");
                 }
-                auto decoded_data = base64_decode(data); // expected to be base64 encoded
-                out_files.push_back(decoded_data);
-
-                // TODO: add audio_url support by reusing handle_media()
+                handle_media(out_files, data, opt.media_path, true);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
