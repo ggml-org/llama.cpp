@@ -66,10 +66,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: macOS-latest-arm64
           evict-old-files: 1d
@@ -102,10 +102,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: macOS-latest-x64
           evict-old-files: 1d
@@ -138,10 +138,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: macOS-latest-arm64-webgpu
           evict-old-files: 1d
@@ -191,11 +191,11 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
         if: ${{ matrix.build != 's390x' && matrix.build != 'ppc64le' }}
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-cpu-${{ matrix.build }}
           evict-old-files: 1d
@@ -276,17 +276,17 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: android-arm64
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
         with:
           java-version: 17
           distribution: temurin
@@ -325,7 +325,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Dependencies
         id: depends
@@ -362,7 +362,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Dependencies
         id: depends
@@ -393,10 +393,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-24-webgpu
           evict-old-files: 1d
@@ -416,7 +416,7 @@ jobs:
           echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
 
       - name: Use Vulkan SDK Cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         id: cache-sdk
         with:
           path: ./vulkan_sdk
@@ -464,7 +464,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install Emscripten
         run: |
@@ -501,7 +501,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Dependencies
         id: depends
@@ -510,7 +510,7 @@ jobs:
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-22-hip
           evict-old-files: 1d
@@ -533,7 +533,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Dependencies
         id: depends
@@ -542,7 +542,7 @@ jobs:
           apt-get install -y build-essential git cmake libssl-dev
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-22-musa
           evict-old-files: 1d
@@ -561,7 +561,7 @@ jobs:
     continue-on-error: true
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: add oneAPI to apt
         shell: bash
@@ -585,10 +585,10 @@ jobs:
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-22-sycl
           evict-old-files: 1d
@@ -610,7 +610,7 @@ jobs:
     continue-on-error: true
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: add oneAPI to apt
         shell: bash
@@ -634,10 +634,10 @@ jobs:
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-22-sycl-fp16
           evict-old-files: 1d
@@ -678,11 +678,11 @@ jobs:
       steps:
         - name: Clone
           id: checkout
-          uses: actions/checkout@v6
+          uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
         - name: ccache
           if: runner.environment == 'github-hosted'
-          uses: ggml-org/ccache-action@v1.2.21
+          uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
           with:
             key: ubuntu-24-openvino-${{ matrix.variant }}-no-preset-v1
             evict-old-files: 1d
@@ -697,7 +697,7 @@ jobs:
 
         - name: Use OpenVINO Toolkit Cache
           if: runner.environment == 'github-hosted'
-          uses: actions/cache@v5
+          uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
           id: cache-openvino
           with:
             path: ./openvino_toolkit
@@ -766,10 +766,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: windows-latest-${{ matrix.build }}
           variant: ccache
@@ -865,7 +865,7 @@ jobs:
     steps:
         - name: Clone
           id: checkout
-          uses: actions/checkout@v6
+          uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
         - name: Install dependencies
           env:
@@ -875,7 +875,7 @@ jobs:
               apt install -y cmake build-essential ninja-build libgomp1 git libssl-dev
 
         - name: ccache
-          uses: ggml-org/ccache-action@v1.2.21
+          uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
           with:
             key: ubuntu-latest-cuda
             evict-old-files: 1d
@@ -904,10 +904,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -957,10 +957,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: windows-latest-sycl
           variant: ccache
@@ -987,7 +987,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Grab rocWMMA package
         id: grab_rocwmma
@@ -997,7 +997,7 @@ jobs:
           7z x data.tar
 
       - name: Use ROCm Installation Cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         id: cache-rocm
         with:
           path: C:\Program Files\AMD\ROCm
@@ -1021,7 +1021,7 @@ jobs:
           & $clangPath.FullName --version
 
       - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ${{ github.job }}
           evict-old-files: 1d
@@ -1072,7 +1072,7 @@ jobs:
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
         uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
@@ -1123,10 +1123,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ggml-ci-x64-cpu-low-perf
           evict-old-files: 1d
@@ -1149,10 +1149,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ggml-ci-arm64-cpu-low-perf
           evict-old-files: 1d
@@ -1175,10 +1175,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ggml-ci-x64-cpu-high-perf
           evict-old-files: 1d
@@ -1201,10 +1201,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ggml-ci-arm64-cpu-high-perf
           evict-old-files: 1d
@@ -1227,10 +1227,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ggml-ci-arm64-cpu-high-perf-sve
           evict-old-files: 1d
@@ -1253,10 +1253,10 @@ jobs:
      steps:
        - name: Clone
          id: checkout
-         uses: actions/checkout@v6
+         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
        - name: ccache
-         uses: ggml-org/ccache-action@v1.2.21
+         uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
          with:
            key: ggml-ci-arm64-cpu-kleidiai
            evict-old-files: 1d
@@ -1279,7 +1279,7 @@ jobs:
      steps:
        - name: Clone
          id: checkout
-         uses: actions/checkout@v6
+         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
        - name: Dependencies
          id: depends
@@ -1308,7 +1308,7 @@ jobs:
            sudo apt-get install -y cmake
 
        - name: ccache
-         uses: ggml-org/ccache-action@v1.2.21
+         uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
          with:
            key: ggml-ci-arm64-cpu-kleidiai-graviton4
            evict-old-files: 1d

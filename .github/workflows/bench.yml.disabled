@@ -61,7 +61,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
@@ -85,7 +85,7 @@ jobs:
           done
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.21'
 
@@ -152,7 +152,7 @@ jobs:
           # Remove dataset as we do not want it in the artefact
           rm ShareGPT_V3_unfiltered_cleaned_split.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bench-server-${{ github.job }}-${{ env.RUNNER_LABEL }}-${{ matrix.model }}-${{ matrix.ftype }}
           compression-level: 9
@@ -162,7 +162,7 @@ jobs:
             tools/server/bench/*.log
 
       - name: Commit status
-        uses: Sibz/github-status-action@v1
+        uses: Sibz/github-status-action@faaa4d96fecf273bd762985e0e7f9f933c774918 # v1
         with:
           authToken: ${{secrets.GITHUB_TOKEN}}
           sha: ${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
@@ -172,7 +172,7 @@ jobs:
           state: 'success'
 
       - name: Upload benchmark images
-        uses: devicons/public-upload-to-imgur@v2.2.2
+        uses: devicons/public-upload-to-imgur@352cf5f2805c692539a96cfe49a09669e6fca88e # v2.2.2
         continue-on-error: true # Important as it looks unstable: 503
         id: imgur_step
         with:
@@ -221,7 +221,7 @@ jobs:
           echo "IMAGE_3=${{ fromJSON(steps.imgur_step.outputs.imgur_urls)[3] }}" >> $GITHUB_ENV
 
       - name: Comment PR
-        uses: mshick/add-pr-comment@v2
+        uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2
         id: comment_pr
         if: ${{ github.event.pull_request != '' && matrix.pr_comment_enabled == 'true' }}
         with:

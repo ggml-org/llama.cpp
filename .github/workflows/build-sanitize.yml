@@ -40,10 +40,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-latest-sanitizer-${{ matrix.sanitizer }}
           evict-old-files: 1d

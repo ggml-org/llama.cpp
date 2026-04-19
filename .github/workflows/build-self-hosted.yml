@@ -61,7 +61,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Test
         id: ggml-ci
@@ -75,7 +75,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Test
         id: ggml-ci
@@ -89,7 +89,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Test
         id: ggml-ci
@@ -104,7 +104,7 @@ jobs:
   #  steps:
   #    - name: Clone
   #      id: checkout
-  #      uses: actions/checkout@v6
+  #      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
   #    - name: Dawn Dependency
   #      id: dawn-depends
@@ -134,7 +134,7 @@ jobs:
   #  steps:
   #    - name: Clone
   #      id: checkout
-  #      uses: actions/checkout@v6
+  #      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
   #    - name: Test
   #      id: ggml-ci
@@ -148,7 +148,7 @@ jobs:
   #   steps:
   #     - name: Clone
   #       id: checkout
-  #       uses: actions/checkout@v6
+  #       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
   #     - name: Test
   #       id: ggml-ci
@@ -163,7 +163,7 @@ jobs:
   #   steps:
   #     - name: Clone
   #       id: checkout
-  #       uses: actions/checkout@v6
+  #       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
   #     - name: Test
   #       id: ggml-ci
@@ -177,7 +177,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Test
         id: ggml-ci
@@ -190,7 +190,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Dawn Dependency
         id: dawn-depends
@@ -217,7 +217,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Test
         id: ggml-ci
@@ -231,7 +231,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
 
@@ -247,7 +247,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Test
         id: ggml-ci
@@ -273,7 +273,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Setup OpenVINO Toolkit
         uses: ./.github/actions/linux-setup-openvino

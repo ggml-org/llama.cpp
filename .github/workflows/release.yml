@@ -60,12 +60,12 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: macOS-latest-${{ matrix.arch }}
           evict-old-files: 1d
@@ -94,7 +94,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-${{ matrix.build }}.tar.gz -s ",./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-${{ matrix.build }}.tar.gz
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
@@ -115,13 +115,13 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
       - name: ccache
         if: ${{ matrix.build != 's390x' }}
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-cpu-${{ matrix.build }}
           evict-old-files: 1d
@@ -163,7 +163,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
@@ -182,12 +182,12 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-vulkan-${{ matrix.build }}
           evict-old-files: 1d
@@ -231,7 +231,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
@@ -245,18 +245,18 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: android-arm64
           evict-old-files: 1d
 
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
         with:
           java-version: 17
           distribution: temurin
@@ -300,7 +300,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz
           name: llama-bin-android-arm64.tar.gz
@@ -323,12 +323,12 @@ jobs:
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-24-openvino-release-no-preset-v1
           evict-old-files: 1d
@@ -340,7 +340,7 @@ jobs:
           sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
 
       - name: Use OpenVINO Toolkit Cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         id: cache-openvino
         with:
           path: ./openvino_toolkit
@@ -380,7 +380,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/ReleaseOV/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
           name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
@@ -396,12 +396,12 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: windows-latest-cpu-${{ matrix.arch }}
           variant: ccache
@@ -432,7 +432,7 @@ jobs:
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-bin-win-cpu-${{ matrix.arch }}.zip
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
@@ -459,10 +459,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: windows-latest-${{ matrix.backend }}-${{ matrix.arch }}
           variant: ccache
@@ -514,7 +514,7 @@ jobs:
           7z a -snl llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\${{ matrix.target }}.dll
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
@@ -529,10 +529,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -570,7 +570,7 @@ jobs:
           7z a -snl llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip .\build\bin\Release\ggml-cuda.dll
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
           name: llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
@@ -585,7 +585,7 @@ jobs:
           7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip $dst\*
 
       - name: Upload Cuda runtime
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
@@ -605,10 +605,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: windows-latest-sycl
           variant: ccache
@@ -665,7 +665,7 @@ jobs:
           7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
 
       - name: Upload the release package
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
@@ -683,17 +683,17 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
       - name: Free up disk space
-        uses: ggml-org/free-disk-space@v1.3.1
+        uses: ggml-org/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
           tool-cache: true
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
@@ -768,7 +768,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
@@ -788,7 +788,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Grab rocWMMA package
         id: grab_rocwmma
@@ -799,13 +799,13 @@ jobs:
 
       - name: Cache ROCm Installation
         id: cache-rocm
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: C:\Program Files\AMD\ROCm
           key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@1bbbcda0748b3e340dee71a314fa68ffcbd6df79 # v1.2.21
         with:
           key: windows-latest-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
           evict-old-files: 1d
@@ -874,7 +874,7 @@ jobs:
           7z a -snl llama-bin-win-hip-${{ matrix.name }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-bin-win-hip-${{ matrix.name }}-x64.zip
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
@@ -884,7 +884,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
@@ -929,7 +929,7 @@ jobs:
           zip -r -y llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
           name: llama-${{ steps.tag.outputs.name }}-xcframework.zip
@@ -960,12 +960,12 @@ jobs:
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
       - name: Free up disk space
-        uses: ggml-org/free-disk-space@v1.3.1
+        uses: ggml-org/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
           tool-cache: true
 
@@ -1020,7 +1020,7 @@ jobs:
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
           name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
@@ -1053,7 +1053,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
@@ -1063,7 +1063,7 @@ jobs:
 
       - name: Download artifacts
         id: download-artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: ./artifact
           merge-multiple: true
@@ -1107,7 +1107,7 @@ jobs:
 
       - name: Create release
         id: create_release
-        uses: ggml-org/action-create-release@v1
+        uses: ggml-org/action-create-release@e077a644437c4947e7b2de1e24a72e460e85a066 # v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -1154,7 +1154,7 @@ jobs:
 
       - name: Upload release
         id: upload_release
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}
           script: |
