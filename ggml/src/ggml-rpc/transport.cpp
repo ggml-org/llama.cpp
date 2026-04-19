@@ -287,7 +287,7 @@ bool socket_t::impl::rdma_probe() {
     qia.cap.max_recv_wr     = RDMA_RX_DEPTH + 4;
     qia.cap.max_send_sge    = 1;
     qia.cap.max_recv_sge    = 1;
-    qia.cap.max_inline_data = 256;
+    qia.cap.max_inline_data = 0;  // 0 is portable: non-Mellanox RoCE (e.g. Intel E810 irdma) rejects inline > 0
 
     rdma->qp = ibv_create_qp(rdma->pd, &qia);
     if (!rdma->qp) return false;
