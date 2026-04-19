@@ -697,6 +697,9 @@ static void ggml_backend_cuda_buffer_get_tensor_2d(ggml_backend_buffer_t buffer,
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
+// Forward declaration — full definition follows in the mmap buffer section below.
+static bool ggml_backend_buffer_is_cuda_mmap(ggml_backend_buffer_t buffer);
+
 static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
     if (ggml_backend_buffer_is_cuda(src->buffer)) {
         ggml_backend_cuda_buffer_context * src_ctx = (ggml_backend_cuda_buffer_context *)src->buffer->context;
@@ -710,6 +713,12 @@ static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, co
             CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, dst_ctx->device, src->data, src_ctx->device, ggml_nbytes(src), cudaStreamPerThread));
 #endif
         }
+        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+        return true;
+    }
+    // mmap buffer device pointer is a valid CUDA device pointer — D2D copy works directly
+    if (ggml_backend_buffer_is_cuda_mmap(src->buffer)) {
+        CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(src), cudaMemcpyDeviceToDevice, cudaStreamPerThread));
         CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
         return true;
     }
@@ -737,6 +746,105 @@ static const ggml_backend_buffer_i ggml_backend_cuda_buffer_interface = {
     /* .get_tensor_2d   = */ ggml_backend_cuda_buffer_get_tensor_2d,
     /* .cpy_tensor      = */ ggml_backend_cuda_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_cuda_buffer_clear,
+    /* .reset           = */ NULL,
+};
+
+// cuda mmap buffer — wraps a host mmap pointer via cudaHostRegister + cudaHostGetDevicePointer.
+// On integrated GPUs (e.g. GB10/DGX Spark) both the host ptr and the returned device ptr
+// point to the same physical LPDDR5X, so the GPU can read weights directly from the
+// mmap'd file pages with no copy at all.
+
+struct ggml_backend_cuda_mmap_buffer_context {
+    int    device;
+    void * host_ptr; // original mmap pointer, used for cudaHostUnregister on teardown
+    void * dev_ptr;  // device-accessible pointer from cudaHostGetDevicePointer
+
+    ggml_backend_cuda_mmap_buffer_context(int device, void * host_ptr, void * dev_ptr)
+        : device(device), host_ptr(host_ptr), dev_ptr(dev_ptr) {}
+
+    ~ggml_backend_cuda_mmap_buffer_context() {
+        cudaError_t err = cudaHostUnregister(host_ptr);
+        if (err != cudaSuccess) {
+            GGML_LOG_WARN("%s: cudaHostUnregister failed: %s\n", __func__, cudaGetErrorString(err));
+            (void)cudaGetLastError();
+        }
+        // host_ptr is owned by the mmap caller — do NOT free it here.
+    }
+};
+
+static void ggml_backend_cuda_mmap_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    ggml_backend_cuda_mmap_buffer_context * ctx = (ggml_backend_cuda_mmap_buffer_context *)buffer->context;
+    delete ctx;
+}
+
+static bool ggml_backend_buffer_is_cuda_mmap(ggml_backend_buffer_t buffer) {
+    return buffer->iface.free_buffer == ggml_backend_cuda_mmap_buffer_free_buffer;
+}
+
+static void * ggml_backend_cuda_mmap_buffer_get_base(ggml_backend_buffer_t buffer) {
+    ggml_backend_cuda_mmap_buffer_context * ctx = (ggml_backend_cuda_mmap_buffer_context *)buffer->context;
+    return ctx->dev_ptr;
+}
+
+static enum ggml_status ggml_backend_cuda_mmap_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+    // Weights come pre-populated from the mmap region — no padding zeroing needed
+    // (and we must not write into read-only mmap pages).
+    if (tensor->view_src != NULL) {
+        assert(tensor->view_src->buffer->buft == buffer->buft);
+    }
+    return GGML_STATUS_SUCCESS;
+}
+
+static void ggml_backend_cuda_mmap_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    ggml_backend_cuda_mmap_buffer_context * ctx = (ggml_backend_cuda_mmap_buffer_context *)buffer->context;
+    ggml_cuda_set_device(ctx->device);
+    CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+}
+
+static void ggml_backend_cuda_mmap_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    ggml_backend_cuda_mmap_buffer_context * ctx = (ggml_backend_cuda_mmap_buffer_context *)buffer->context;
+    ggml_cuda_set_device(ctx->device);
+    CUDA_CHECK(cudaMemcpyAsync(data, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+}
+
+static void ggml_backend_cuda_mmap_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
+    // mmap weight buffers are read-only — memset is a no-op.
+    // This should never be called during normal inference, but must not be NULL
+    // because ggml_backend_tensor_memset() asserts the pointer is non-NULL.
+    GGML_UNUSED(buffer); GGML_UNUSED(tensor); GGML_UNUSED(value); GGML_UNUSED(offset); GGML_UNUSED(size);
+}
+
+static void ggml_backend_cuda_mmap_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
+    // mmap weight buffers are read-only — clear is a no-op.
+    // Must not be NULL because ggml_backend_buffer_clear() has no NULL guard.
+    GGML_UNUSED(buffer); GGML_UNUSED(value);
+}
+
+static bool ggml_backend_cuda_mmap_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
+    if (ggml_backend_buffer_is_cuda(src->buffer) || ggml_backend_buffer_is_cuda_mmap(src->buffer)) {
+        // buffer is the dst buffer (cpy_tensor calling convention matches the regular cuda impl)
+        ggml_backend_cuda_mmap_buffer_context * dst_ctx = (ggml_backend_cuda_mmap_buffer_context *)dst->buffer->context;
+        ggml_cuda_set_device(dst_ctx->device);
+        CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(src), cudaMemcpyDeviceToDevice, cudaStreamPerThread));
+        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+        return true;
+    }
+    return false;
+
+    GGML_UNUSED(buffer);
+}
+
+static const ggml_backend_buffer_i ggml_backend_cuda_mmap_buffer_interface = {
+    /* .free_buffer     = */ ggml_backend_cuda_mmap_buffer_free_buffer,
+    /* .get_base        = */ ggml_backend_cuda_mmap_buffer_get_base,
+    /* .init_tensor     = */ ggml_backend_cuda_mmap_buffer_init_tensor,
+    /* .memset_tensor   = */ ggml_backend_cuda_mmap_buffer_memset_tensor,
+    /* .set_tensor      = */ ggml_backend_cuda_mmap_buffer_set_tensor,
+    /* .get_tensor      = */ ggml_backend_cuda_mmap_buffer_get_tensor,
+    /* .cpy_tensor      = */ ggml_backend_cuda_mmap_buffer_cpy_tensor,
+    /* .clear           = */ ggml_backend_cuda_mmap_buffer_clear,
     /* .reset           = */ NULL,
 };
 
@@ -4651,10 +4759,26 @@ static void ggml_backend_cuda_device_get_props(ggml_backend_dev_t dev, ggml_back
     bool events = true;
 #endif
 
+    // buffer_from_host_ptr: enable on integrated GPUs (e.g. GB10/DGX Spark) where CPU and GPU
+    // share the same physical LPDDR5X. cudaHostRegister + cudaHostGetDevicePointer maps the
+    // mmap'd model file directly into the GPU address space — zero copies, no staging buffer.
+    // On discrete GPUs this would access weights over PCIe on every kernel access, which is
+    // far slower than copying to VRAM, so we restrict it to integrated devices only.
+    // Use soft-fail (no CUDA_CHECK) — get_props must never abort the process.
+    bool buffer_from_host_ptr = false;
+    {
+        cudaDeviceProp bfhp_prop = {};
+        int can_map_host = 0;
+        if (cudaGetDeviceProperties(&bfhp_prop, ctx->device) == cudaSuccess &&
+            cudaDeviceGetAttribute(&can_map_host, cudaDevAttrCanMapHostMemory, ctx->device) == cudaSuccess) {
+            buffer_from_host_ptr = (bfhp_prop.integrated > 0) && (can_map_host != 0);
+        }
+    }
+
     props->caps = {
         /* .async                 = */ true,
         /* .host_buffer           = */ host_buffer,
-        /* .buffer_from_host_ptr  = */ false,
+        /* .buffer_from_host_ptr  = */ buffer_from_host_ptr,
         /* .events                = */ events,
     };
 }
@@ -5115,6 +5239,52 @@ static void ggml_backend_cuda_device_event_synchronize(ggml_backend_dev_t dev, g
     CUDA_CHECK(cudaEventSynchronize((cudaEvent_t)event->context));
 }
 
+static ggml_backend_buffer_t ggml_backend_cuda_device_buffer_from_host_ptr(
+        ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
+    GGML_UNUSED(max_tensor_size);
+
+    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *)dev->context;
+    int device = dev_ctx->device;
+
+    ggml_cuda_set_device(device);
+
+    // Verify the device supports host memory mapping
+    int can_map_host = 0;
+    CUDA_CHECK(cudaDeviceGetAttribute(&can_map_host, cudaDevAttrCanMapHostMemory, device));
+    if (!can_map_host) {
+        GGML_LOG_ERROR("%s: device %d does not support host memory mapping\n", __func__, device);
+        return nullptr;
+    }
+
+    // Pin the mmap pages and make them accessible from the GPU address space.
+    // cudaHostRegisterPortable ensures the mapping is valid across all CUDA contexts.
+    // On GB10 (integrated), host_ptr and dev_ptr point to the same physical LPDDR5X pages —
+    // the GPU reads weights directly from the mmap'd file with zero copies.
+    cudaError_t err = cudaHostRegister(ptr, size, cudaHostRegisterMapped | cudaHostRegisterPortable);
+    if (err != cudaSuccess) {
+        GGML_LOG_ERROR("%s: cudaHostRegister failed: %s\n", __func__, cudaGetErrorString(err));
+        (void)cudaGetLastError();
+        return nullptr;
+    }
+
+    void * dev_ptr = nullptr;
+    err = cudaHostGetDevicePointer(&dev_ptr, ptr, 0);
+    if (err != cudaSuccess) {
+        GGML_LOG_ERROR("%s: cudaHostGetDevicePointer failed: %s\n", __func__, cudaGetErrorString(err));
+        (void)cudaGetLastError();
+        cudaHostUnregister(ptr);
+        return nullptr;
+    }
+
+    GGML_LOG_INFO("%s: device %d - mmap zero-copy buffer registered host_ptr=%p dev_ptr=%p size=%.2f MiB\n",
+            __func__, device, ptr, dev_ptr, (double)size / (1024.0*1024.0));
+    auto * ctx = new ggml_backend_cuda_mmap_buffer_context(device, ptr, dev_ptr);
+    return ggml_backend_buffer_init(
+        ggml_backend_cuda_buffer_type(device),
+        ggml_backend_cuda_mmap_buffer_interface,
+        ctx, size);
+}
+
 static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
     /* .get_name                = */ ggml_backend_cuda_device_get_name,
     /* .get_description         = */ ggml_backend_cuda_device_get_description,
@@ -5124,7 +5294,7 @@ static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
     /* .init_backend            = */ ggml_backend_cuda_device_init_backend,
     /* .get_buffer_type         = */ ggml_backend_cuda_device_get_buffer_type,
     /* .get_host_buffer_type    = */ ggml_backend_cuda_device_get_host_buffer_type,
-    /* .buffer_from_host_ptr    = */ NULL,
+    /* .buffer_from_host_ptr    = */ ggml_backend_cuda_device_buffer_from_host_ptr,
     /* .supports_op             = */ ggml_backend_cuda_device_supports_op,
     /* .supports_buft           = */ ggml_backend_cuda_device_supports_buft,
     /* .offload_op              = */ ggml_backend_cuda_device_offload_op,
