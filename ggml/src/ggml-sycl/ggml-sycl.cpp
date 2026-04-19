@@ -3725,11 +3725,7 @@ __dpct_inline__ static void k_copy_dst_from_contiguous(
     }
 }
 
-// Fused MoE TG fast path. One kernel launch handles all n_experts_used
-// matmuls by reading the expert-ID tensor directly from device memory, so we
-// can skip the per-expert mul_mat_vec_q kernel launch *and* the host-side
-// stream->wait() that precedes it. This mirrors the ids-aware mul_mat_vec_q
-// path the CUDA backend uses (see ggml_cuda_mul_mat_vec_q in ggml-cuda.cu).
+// Fused MoE TG fast path. Returns false to fall back to the per-expert loop below.
 static bool ggml_sycl_mul_mat_id_mmvq_fused(
     ggml_backend_sycl_context & ctx, const ggml_tensor * src0,
     const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst)
@@ -3742,18 +3738,13 @@ static bool ggml_sycl_mul_mat_id_mmvq_fused(
     if (ne10 != src0->ne[0] || ne10 % QK8_1 != 0) return false;
     if (!ggml_is_contiguous(src1)) return false;
 
-    // The fused kernel decodes src0 with the standard (non-reorder) block
-    // layout. If opt_for_reorder() has rewritten the weights in place for a
-    // prior MUL_MAT call, fall back to the generic path so the reorder-aware
-    // MMVQ kernel is used.
+    // Reorder layout not supported; fall back.
     const ggml_tensor_extra_gpu * src0_extra =
         static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
     if (src0_extra && src0_extra->optimized_feature.reorder) return false;
 
     const int64_t n_ids_per_group = ids->ne[0];
     if (ids->ne[1] != 1) return false;
-    // ne11 must be 1 (shared src1, e.g. gate/up proj) or n_experts_used
-    // (per-expert src1 row, e.g. down proj).
     if (ne11 != 1 && ne11 != n_ids_per_group) return false;
 
     const queue_ptr stream           = ctx.stream();
@@ -3794,10 +3785,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     const int64_t n_as = ne02;
     const int64_t n_ids = ids->ne[0];
 
-    // MoE TG fused fast path: one kernel launch reads expert IDs from device
-    // memory. No host sync required.
-    if (ne12 == 1 && ggml_sycl_mul_mat_id_mmvq_fused(ctx, src0, src1, ids, dst)) {
-        return;
+    if (ne12 == 1) {
+        if (ggml_sycl_mul_mat_id_mmvq_fused(ctx, src0, src1, ids, dst)) {
+            return;
+        }
     }
 
     std::vector<char> ids_host(ggml_nbytes(ids));
