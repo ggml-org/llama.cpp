@@ -1595,9 +1595,8 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         assert(needs_rebuild);
     }
 
-    size_t n_subgraphs = 0;
-
     if (needs_rebuild) {
+        size_t n_subgraphs  = 0;
         size_t max_tmp_size = 0;
 
         for (size_t j = 0; j < n_backends; j++) {
@@ -1771,8 +1770,6 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 cgraph_ij->uid = ggml_graph_next_uid();
             }
         }
-    } else {
-        n_subgraphs = backend_ctx->n_subgraphs;
     }
 
     size_t iga = 0; // i graph aux
@@ -1877,7 +1874,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     };
 
 
-    for (size_t i = 0; i < n_subgraphs; i++) {
+    for (size_t i = 0; i < backend_ctx->n_subgraphs; i++) {
         for (size_t j = 0; j < n_backends; j++) {
             auto & bcj = backend_ctx->backend_configs[j];
             const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, bcj.cgraphs[i].cgraph_main);
@@ -1886,7 +1883,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             }
         }
 
-        if (n_backends > 1 && i < n_subgraphs - 1) {
+        if (n_backends > 1 && i < backend_ctx->n_subgraphs - 1) {
             bool backend_allreduce_success = false;
             if (backend_ctx->comm_ctx) {
                 std::vector<ggml_tensor *> nodes;
