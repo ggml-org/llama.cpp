@@ -3848,8 +3848,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
             }
         }
     } else {
-        ggml_sycl_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(src1));
-        ggml_sycl_pool_alloc<char>  dst_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
+        const int64_t n_routed_rows = ids->ne[1] * n_ids;
+        ggml_sycl_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float)*n_routed_rows*ne10);
+        ggml_sycl_pool_alloc<char>  dst_contiguous(ctx.pool(), sizeof(float)*n_routed_rows*ne0);
 
         src1_row.data = src1_contiguous.get();
         dst_row.data  =  dst_contiguous.get();
