@@ -1029,10 +1029,12 @@ void launch_fattn(
     const int ntiles_z_gqa = ((gqa_ratio + ncols2 - 1) / ncols2);
     const int ntiles_dst   = ntiles_x * ntiles_z_gqa * K->ne[2] * Q->ne[3];
 
-    // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
-    // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
-    //     multiple sequences of possibly different lengths.
-    if (mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1)) {
+    // Optimization where the mask is scanned to determine the effective KV length so that the kernel
+    // can skip fully-masked KV tiles. This is important for correctness when K->ne[1] (the pre-allocated
+    // context size) is much larger than the actual number of valid KV entries: without it, the kernel
+    // would read uninitialized KV cache memory beyond the current context, which can cause device-side
+    // exceptions on Pascal GPUs that use the float32 vec kernel path.
+    if (mask && K->ne[1] % FATTN_KQ_STRIDE == 0) {
         const int s31 = mask->nb[1] / sizeof(half2);
         const int s33 = mask->nb[3] / sizeof(half2);
 
