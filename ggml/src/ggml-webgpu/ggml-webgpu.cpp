@@ -2664,8 +2664,6 @@ static void ggml_backend_webgpu_event_record(ggml_backend_t backend, ggml_backen
 }
 
 static void ggml_backend_webgpu_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
-    // event_wait makes the GPU stream stall until the event fires (used by scheduler).
-    // WebGPU has one implicit queue so this is equivalent to synchronize on the CPU.
     GGML_UNUSED(backend);
     ggml_backend_webgpu_device_event_synchronize(nullptr, event);
 }
@@ -2684,7 +2682,6 @@ static void ggml_backend_webgpu_set_tensor_async(ggml_backend_t backend,
     size_t aligned_size = (size + 3) & ~3ULL;
 
     // Create a one-shot staging buffer
-    // TODO(nikhil.jain) worthwhile to use a buffer arena for this?
     wgpu::BufferDescriptor desc{};
     desc.size             = aligned_size;
     desc.usage            = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
@@ -2726,8 +2723,8 @@ static ggml_backend_i ggml_backend_webgpu_i = {
     /* .graph_plan_update       = */ NULL,
     /* .graph_plan_compute      = */ NULL,
     /* .graph_compute           = */ ggml_backend_webgpu_graph_compute,
-    /* .event_record            = */ NULL,
-    /* .event_wait              = */ NULL,
+    /* .event_record            = */ ggml_backend_webgpu_event_record,
+    /* .event_wait              = */ ggml_backend_webgpu_event_wait,
     /* .graph_optimize          = */ NULL,
 };
 
@@ -3680,9 +3677,9 @@ static struct ggml_backend_device_i ggml_backend_webgpu_device_i = {
     /* .supports_op          = */ ggml_backend_webgpu_device_supports_op,
     /* .supports_buft        = */ ggml_backend_webgpu_device_supports_buft,
     /* .offload_op           = */ NULL,
-    /* .event_new            = */ NULL,
-    /* .event_free           = */ NULL,
-    /* .event_synchronize    = */ NULL,
+    /* .event_new            = */ ggml_backend_webgpu_device_event_new,
+    /* .event_free           = */ ggml_backend_webgpu_device_event_free,
+    /* .event_synchronize    = */ ggml_backend_webgpu_device_event_synchronize,
 };
 
 /* End GGML Backend Device Interface */
