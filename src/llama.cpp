@@ -46,16 +46,15 @@ const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_ty
     GGML_ABORT("fatal error");
 }
 
-struct llama_device_memory_data {
-    int64_t total;
-    int64_t free;
-    llama_memory_breakdown_data mb;
-};
-
-static std::vector<llama_device_memory_data> llama_get_device_memory_data(
-        const char * path_model, const llama_model_params * mparams, const llama_context_params * cparams,
-        std::vector<llama_device> & devs, uint32_t & hp_ngl, uint32_t & hp_n_ctx_train, uint32_t & hp_n_expert,
-        const ggml_log_level log_level) {
+std::vector<llama_device_memory_data> llama_get_device_memory_data(
+        const char * path_model,
+        const llama_model_params * mparams,
+        const llama_context_params * cparams,
+        std::vector<ggml_backend_dev_t> & devs,
+        uint32_t & hp_ngl,
+        uint32_t & hp_n_ctx_train,
+        uint32_t & hp_n_expert,
+        ggml_log_level log_level) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -145,7 +144,11 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
         ret[i].total = total;
     }
 
-    devs           = model->devices;
+    devs.clear();
+    for (const auto & dev : model->devices) {
+        devs.push_back(dev.dev);
+    }
+
     hp_ngl         = model->hparams.n_layer;
     hp_n_ctx_train = model->hparams.n_ctx_train;
     hp_n_expert    = model->hparams.n_expert;
@@ -183,7 +186,7 @@ static void llama_params_fit_impl(
     typedef std::vector<llama_device_memory_data> dmds_t;
     const llama_model_params default_mparams = llama_model_default_params();
 
-    std::vector<llama_device> devs;
+    std::vector<ggml_backend_dev_t> devs;
     uint32_t hp_ngl = 0; // hparams.n_gpu_layers
     uint32_t hp_nct = 0; // hparams.n_ctx_train
     uint32_t hp_nex = 0; // hparams.n_expert
@@ -208,10 +211,10 @@ static void llama_params_fit_impl(
     {
         dev_names.reserve(nd);
         size_t max_length = 0;
-        for (const llama_device & dev : devs) {
-            std::string name = ggml_backend_dev_name(dev.dev);
+        for (const auto & dev : devs) {
+            std::string name = ggml_backend_dev_name(dev);
             name += " (";
-            name += ggml_backend_dev_description(dev.dev);
+            name += ggml_backend_dev_description(dev);
             name += ")";
             dev_names.push_back(name);
             max_length = std::max(max_length, name.length());
@@ -730,7 +733,7 @@ static void llama_params_fit_impl(
             ngl_per_device_test[id].overflow_type = LAYER_FRACTION_UP;
             std::vector<ggml_backend_buffer_type_t> overflow_bufts_test = overflow_bufts;
             if (id < nd - 1) {
-                overflow_bufts_test[id] = ggml_backend_dev_buffer_type(devs[id + 1].dev);
+                overflow_bufts_test[id] = ggml_backend_dev_buffer_type(devs[id + 1]);
             }
             LLAMA_LOG_DEBUG("%s: trying to fit one extra layer with overflow_type=LAYER_FRACTION_UP\n", __func__);
             std::vector<int64_t> mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts_test);

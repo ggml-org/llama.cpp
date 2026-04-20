@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <cstdint>
+#include <vector>
 
 // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
 LLAMA_API struct ggml_cgraph * llama_graph_reserve(
@@ -14,7 +15,6 @@ LLAMA_API struct ggml_cgraph * llama_graph_reserve(
 // Get the default ggml_type for a given ftype.
 LLAMA_API ggml_type llama_ftype_get_default_type(llama_ftype ftype);
 
-// Quantization state.
 struct quantize_state_impl;
 
 LLAMA_API quantize_state_impl * llama_quant_init(
@@ -54,3 +54,32 @@ LLAMA_API void llama_quant_compute_types(
         ggml_tensor ** tensors,
         ggml_type * result_types,
         size_t n_tensors);
+
+// device memory querying
+
+// "memory" as in physical memory for a buffer type, in bytes
+struct llama_memory_breakdown_data {
+    size_t model   = 0; // memory allocated for the model
+    size_t context = 0; // memory allocated for the context
+    size_t compute = 0; // memory allocated for temporary compute buffers
+
+    size_t total() const {
+        return model + context + compute;
+    }
+};
+
+struct llama_device_memory_data {
+    int64_t total;
+    int64_t free;
+    llama_memory_breakdown_data mb;
+};
+
+std::vector<llama_device_memory_data> llama_get_device_memory_data(
+        const char * path_model,
+        const llama_model_params * mparams,
+        const llama_context_params * cparams,
+        std::vector<ggml_backend_dev_t> & devs,
+        uint32_t & hp_ngl,
+        uint32_t & hp_n_ctx_train,
+        uint32_t & hp_n_expert,
+        ggml_log_level log_level);
