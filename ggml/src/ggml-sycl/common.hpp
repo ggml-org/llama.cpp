@@ -23,6 +23,7 @@
 #include "ggml-impl.h"
 #include "ggml-sycl.h"
 #include "presets.hpp"
+#include "type.hpp"
 #include "sycl_hw.hpp"
 
 namespace syclexp = sycl::ext::oneapi::experimental;
@@ -963,6 +964,12 @@ static T block_reduce(T val, T * shared_vals, int block_size_template) {
         return block_reduce_policy<reduce_method_t, T, warp_size>::reduce(tmp);
     }
     return val;
+}
+
+static __dpct_inline__ float ggml_sycl_ue4m3_to_fp32(uint8_t x) {
+    const uint32_t bits = x * (x != 0x7F && x != 0xFF);
+    const __nv_fp8_e4m3 xf = *reinterpret_cast<const __nv_fp8_e4m3 *>(&bits);
+    return static_cast<float>(xf) / 2;
 }
 
 #endif // GGML_SYCL_COMMON_HPP

@@ -2,6 +2,7 @@
 #include "chat-auto-parser-helpers.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
+#include "common.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
 #include "peg-parser.h"
@@ -24,6 +25,9 @@ static const std::string ARG_SECOND = "BB_ARG_SND_BB";
 static const std::string USER_MSG = "U_USER_MSG Hello END_U";
 static const std::string ASSISTANT_MSG = "A_ASST_MSG I can help END_A";
 static const std::string THINKING_CONTENT = "REASON_PART I am thinking END_R";
+static const std::string CALL_ID_001 = "call00001";
+static const std::string CALL_ID_002 = "call00002";
+static const std::string CALL_ID_999 = "call99999";
 
 static std::vector<std::function<void(const common_chat_template & tmpl, autoparser &)>> workarounds(
     { // Old reasoning Qwen templates - they don't really display reasoning content, but we still want to
@@ -31,8 +35,9 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
       [](const common_chat_template & tmpl, autoparser & analysis) -> void {
           if (tmpl.src.find("content.split('</think>')") != std::string::npos &&
               tmpl.src.find("reasoning_content") == std::string::npos &&
+              tmpl.src.find("<SPECIAL_12>") == std::string::npos &&
               analysis.reasoning.mode == reasoning_mode::NONE) {
-              analysis.reasoning.mode  = reasoning_mode::FORCED_OPEN;
+              analysis.reasoning.mode  = reasoning_mode::TAG_BASED;
               analysis.reasoning.start = "<think>";
               analysis.reasoning.end   = "</think>";
               analysis.preserved_tokens.push_back("<think>");
@@ -101,6 +106,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               analysis.tools.function.name_prefix  = "<｜tool▁sep｜>";
               analysis.tools.format.per_call_end   = "<｜tool▁call▁end｜>";
               analysis.tools.function.close        = "```";
+              LOG_DBG(ANSI_ORANGE "[Patch: DeepSeek-R1-Distill-Qwen]\n" ANSI_RESET);
           }
       }
     });
@@ -128,7 +134,7 @@ static json user_msg = json{
     { "content", USER_MSG }
 };
 
-static json build_tool_call(const std::string & name, const json & args, const std::string & id = "call00001") {
+static json build_tool_call(const std::string & name, const json & args, const std::string & id = CALL_ID_001) {
     return json{
         { "id",       id                                              },
         { "type",     "function"                                      },
@@ -136,17 +142,17 @@ static json build_tool_call(const std::string & name, const json & args, const s
     };
 }
 
-static json first_tool_call_zero_args         = build_tool_call(FUN_FIRST, json::object(), "call00001");
-static json first_tool_call_one_arg           = build_tool_call(FUN_FIRST, {{ ARG_FIRST, "XXXX" }}, "call00001");
-static json first_tool_call_one_arg_other_val = build_tool_call(FUN_FIRST, {{ ARG_FIRST, "YYYY" }}, "call00001");
-static json first_tool_call_other_arg         = build_tool_call(FUN_FIRST, {{ ARG_SECOND, "YYYY" }}, "call00001");
+static json first_tool_call_zero_args         = build_tool_call(FUN_FIRST, json::object(), CALL_ID_001);
+static json first_tool_call_one_arg           = build_tool_call(FUN_FIRST, {{ ARG_FIRST, "XXXX" }}, CALL_ID_001);
+static json first_tool_call_one_arg_other_val = build_tool_call(FUN_FIRST, {{ ARG_FIRST, "YYYY" }}, CALL_ID_001);
+static json first_tool_call_other_arg         = build_tool_call(FUN_FIRST, {{ ARG_SECOND, "YYYY" }}, CALL_ID_001);
 
 static json first_tool_call =
-    build_tool_call(FUN_FIRST, json{{ ARG_FIRST,  "XXXX" }, { ARG_SECOND, "YYYY" }}, "call00001");
+    build_tool_call(FUN_FIRST, json{{ ARG_FIRST,  "XXXX" }, { ARG_SECOND, "YYYY" }}, CALL_ID_001);
 static json second_tool_call =
-    build_tool_call(FUN_SECOND, json{ { ARG_FIRST,  "XXXX" }, { ARG_SECOND, "YYYY" }}, "call00002");
+    build_tool_call(FUN_SECOND, json{ { ARG_FIRST,  "XXXX" }, { ARG_SECOND, "YYYY" }}, CALL_ID_002);
 static json first_tool_call_alt_id =
-    build_tool_call(FUN_FIRST, json{{ ARG_FIRST,  "XXXX" }, { ARG_SECOND, "YYYY" }}, "call99999");
+    build_tool_call(FUN_FIRST, json{{ ARG_FIRST,  "XXXX" }, { ARG_SECOND, "YYYY" }}, CALL_ID_999);
 
 template <typename T>
 static std::string mode_to_str(T mode) {
@@ -185,7 +191,11 @@ void autoparser::analyze_template(const common_chat_template & tmpl) {
     LOG_DBG("func_name_prefix: '%s'\n", tools.function.name_prefix.c_str());
     LOG_DBG("func_name_suffix: '%s'\n", tools.function.name_suffix.c_str());
     LOG_DBG("func_close: '%s'\n", tools.function.close.c_str());
-    LOG_DBG("python_dict_format: %s\n", tools.format.uses_python_dicts ? "true" : "false");
+    LOG_DBG("call_id_prefix: '%s'\n", tools.call_id.prefix.c_str());
+    LOG_DBG("call_id_suffix: '%s'\n", tools.call_id.suffix.c_str());
+    LOG_DBG("call_id_pos: '%s'\n", mode_to_str(tools.call_id.pos).c_str());
+    LOG_DBG("args_start: '%s'\n", tools.arguments.start.c_str());
+    LOG_DBG("args_end: '%s'\n", tools.arguments.end.c_str());
     LOG_DBG("arg_name_prefix: '%s'\n", tools.arguments.name_prefix.c_str());
     LOG_DBG("arg_name_suffix: '%s'\n", tools.arguments.name_suffix.c_str());
     LOG_DBG("arg_value_prefix: '%s'\n", tools.arguments.value_prefix.c_str());
@@ -286,7 +296,7 @@ void analyze_reasoning::compare_reasoning_presence() {
             return p.literal(reasoning_content) + p.space() + p.optional(p.tag("post", (p.marker() + p.space())) + p.rest());
         });
         auto parser_wrapped = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.tag("pre", p.marker()) + p.space() + p.literal(reasoning_content) + p.space() + p.tag("post", (p.marker() + p.space())) + p.rest();
+            return p.tag("pre", p.marker() + p.space()) + p.literal(reasoning_content) + p.space() + p.tag("post", (p.marker() + p.space())) + p.rest();
         });
         // try the more aggressive parse first, if it fails, fall back to the delimiter one
         auto result = parser_wrapped.parse_anywhere_and_extract(comparison->output_B);
@@ -295,16 +305,12 @@ void analyze_reasoning::compare_reasoning_presence() {
         }
         if (result.result.success()) {
             if (!result.tags["pre"].empty() && !result.tags["post"].empty()) {
-                if (parser_wrapped.parse_anywhere_and_extract(diff.right).result.success()) { // both tags in the diff = no forced close
-                    mode = reasoning_mode::TAG_BASED;
-                } else {
-                    mode = reasoning_mode::FORCED_CLOSED;
-                }
-                start = trim_whitespace(result.tags["pre"]);
-                end   = result.tags["post"];
+                mode = reasoning_mode::TAG_BASED;
+                start = trim_leading_whitespace(result.tags["pre"]);
+                end   = trim_trailing_whitespace(result.tags["post"]);
             } else if (!result.tags["post"].empty()) {
-                mode = reasoning_mode::DELIMITER;
-                end = result.tags["post"];
+                mode = reasoning_mode::TAG_BASED;
+                end = trim_trailing_whitespace(result.tags["post"]);
             }
         }
     }
@@ -331,53 +337,66 @@ void analyze_reasoning::compare_thinking_enabled() {
     const auto & diff = comparison->diff;
 
     std::string left_trimmed = trim_whitespace(diff.left);
+    std::string right_trimmed = trim_whitespace(diff.right);
 
     if (left_trimmed.empty() && !diff.right.empty()) {
-        std::string right_trimmed = trim_whitespace(diff.right);
-
         if (!right_trimmed.empty() && string_ends_with(comparison->output_B, right_trimmed)) {
             if (start.empty()) {
-                start = right_trimmed;
-                mode  = reasoning_mode::FORCED_OPEN;
+                start = trim_leading_whitespace(diff.right);
+                mode  = reasoning_mode::TAG_BASED;
+            }
+        }
+    } else if (right_trimmed.empty() && !diff.left.empty()) {
+        if (!left_trimmed.empty() && string_ends_with(comparison->output_A, left_trimmed)) {
+            if (end.empty()) {
+                auto seg = prune_whitespace_segments(segmentize_markers(comparison->output_A));
+                if (seg.size() >= 2 && seg[seg.size() - 1].value == left_trimmed && seg[seg.size() - 2].type == segment_type::MARKER) {
+                    start = seg[seg.size() - 2].value;
+                }
+                end = trim_trailing_whitespace(diff.left);
+                mode = reasoning_mode::TAG_BASED;
+            }
+        }
+    } else if (!left_trimmed.empty() && !right_trimmed.empty()) {
+        // Full-output diff is noisy (e.g., SmolLM3 changes the system message when enable_thinking flips).
+        // Try to find reasoning markers by tail-anchoring:
+        // one output's generation prompt tail may appear in the other with extra reasoning markers appended.
+        const auto & output_A = comparison->output_A;
+        const auto & output_B = comparison->output_B;
+        const size_t anchor_len = 64;
+
+        for (int dir = 0; dir < 2; dir++) {
+            const auto & base     = dir == 0 ? output_B : output_A;
+            const auto & extended = dir == 0 ? output_A : output_B;
+
+            size_t len = std::min(base.size(), anchor_len);
+            std::string anchor = base.substr(base.size() - len);
+            auto pos = extended.rfind(anchor);
+            if (pos == std::string::npos || pos + len >= extended.size()) {
+                continue;
+            }
+
+            std::string extra = trim_whitespace(extended.substr(pos + len));
+            if (extra.empty()) {
+                continue;
+            }
+
+            auto seg = prune_whitespace_segments(segmentize_markers(extra));
+            if (seg.size() == 2 && seg[0].type == segment_type::MARKER && seg[1].type == segment_type::MARKER) {
+                if (start.empty()) {
+                    start = seg[0].value;
+                }
+                if (end.empty()) {
+                    end   = seg[1].value;
+                }
+                mode = reasoning_mode::TAG_BASED;
+                break;
             }
         }
     }
 
-    if (start.empty() && !end.empty()) {
-        mode = reasoning_mode::DELIMITER;
-    }
-
-    // Check for FORCED_CLOSED: when enable_thinking=false produces both start and end markers,
-    // but enable_thinking=true produces only the start marker
-    if (!comparison->output_A.empty() && !comparison->output_B.empty()) {
-        auto parser_start = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.literal(start) + p.space() + p.literal(end) + p.rest();
-        });
-        auto parser_start_end = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.tag("pre", p.literal(start)) + p.space() + p.negate(p.literal(end)) + p.rest();
-        });
-        if (!start.empty() && parser_start_end.parse_anywhere_and_extract(comparison->output_A).result.success() &&
-            parser_start.parse_anywhere_and_extract(comparison->output_B).result.success()) {
-            mode = reasoning_mode::FORCED_CLOSED;
-        } else if (!end.empty()) { // we extract the starting marker now since we didn't get it earlier
-            auto result = parser_start_end.parse_anywhere_and_extract(comparison->output_A);
-            if (result.result.success()) {
-                start = result.tags["pre"];
-                mode  = reasoning_mode::FORCED_CLOSED;
-            }
-        }
-    }
-
-    if (start.empty() && end.empty()) {  // we might still have the case of "just open" and "just close"
-        if (!diff.left.empty() && !diff.right.empty()) {
-            auto seg_A = segmentize_markers(trim_trailing_whitespace(diff.left));
-            auto seg_B = segmentize_markers(trim_trailing_whitespace(diff.right));
-            if (seg_A.size() == 1 && seg_B.size() == 1) {
-                mode = reasoning_mode::FORCED_CLOSED;
-                start = seg_B[0].value;
-                end = seg_A[0].value;
-            }
-        }
+    if (mode == reasoning_mode::NONE && start.empty() && !end.empty()) {
+        mode = reasoning_mode::TAG_BASED;
     }
 }
 
@@ -421,21 +440,21 @@ void analyze_reasoning::compare_reasoning_scope() {
         LOG_DBG(ANSI_ORANGE "%s: Detected TOOLS_ONLY reasoning mode\n" ANSI_RESET, __func__);
 
         auto parser_wrapped = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.tag("pre", p.marker()) + p.space() + p.literal(reasoning_content) + p.space() + p.tag("post", (p.marker() + p.space()));
+            return p.tag("pre", p.marker() + p.space()) + p.literal(reasoning_content) + p.space() + p.tag("post", (p.marker() + p.space()));
         });
         auto result = parser_wrapped.parse_anywhere_and_extract(comparison->output_B);
         if (result.result.success()) {
             start = result.tags["pre"];
-            end = result.tags["post"];
+            end = trim_trailing_whitespace(result.tags["post"]);
         } else {
             auto parser_delimiter = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
                 return p.literal(reasoning_content) + p.space() + p.optional(p.tag("post", (p.marker() + p.space())));
             });
             result = parser_delimiter.parse_anywhere_and_extract(comparison->output_B);
             if (result.result.success()) {
-                end = result.tags["post"];
+                end = trim_trailing_whitespace(result.tags["post"]);
             } else {
-                LOG_DBG(ANSI_ORANGE "%s: Unable to extracft reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
+                LOG_DBG(ANSI_ORANGE "%s: Unable to extract reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
                 mode = reasoning_mode::NONE;
             }
         }
@@ -514,7 +533,7 @@ analyze_content::analyze_content(const common_chat_template & tmpl, const analyz
         // Take the more promising diff
         std::string pure_content = rdiff.length() > diff_tools.left.length() ? rdiff : diff_tools.left;
         auto parser_wrapped = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.tag("pre", p.marker()) + p.space() + p.literal(response) + p.space() + p.tag("post", (p.marker() + p.space())) + p.rest();
+            return p.tag("pre", p.marker() + p.space()) + p.literal(response) + p.space() + p.tag("post", (p.marker() + p.space())) + p.rest();
         });
         auto result = parser_wrapped.parse_anywhere_and_extract(pure_content);
         start = result.tags["pre"];
@@ -539,23 +558,26 @@ analyze_tools::analyze_tools(const common_chat_template & tmpl,
     : analyze_base(tmpl) {
     LOG_DBG(ANSI_ORANGE "Phase 3: Tool call analysis\n" ANSI_RESET);
 
-    analyze_tool_calls(reasoning);
+    analyze_tool_calls(reasoning, caps.supports_parallel_tool_calls);
 
     if (format.mode != tool_format::NONE && format.mode != tool_format::JSON_NATIVE) {
         if (caps.supports_parallel_tool_calls) {
             check_per_call_markers();
         }
+        LOG_DBG(ANSI_ORANGE "Phase 3a: Function call analysis\n" ANSI_RESET);
         extract_function_markers();
+        LOG_DBG(ANSI_ORANGE "Phase 3b: Argument analysis\n" ANSI_RESET);
         if (format.mode == tool_format::TAG_WITH_TAGGED) {
             analyze_arguments();
         }
         extract_argument_separator();
         extract_args_markers();
+        LOG_DBG(ANSI_ORANGE "Phase 3c: Call id analysis\n" ANSI_RESET);
         extract_call_id_markers();
     }
 }
 
-void analyze_tools::analyze_tool_calls(const analyze_reasoning & reasoning) {
+void analyze_tools::analyze_tool_calls(const analyze_reasoning & reasoning, bool supports_parallel_tool_calls) {
     json assistant_no_tools = json{
         { "role",    "assistant"   },
         { "content", ASSISTANT_MSG }
@@ -589,44 +611,35 @@ void analyze_tools::analyze_tool_calls(const analyze_reasoning & reasoning) {
         return;
     }
 
-    analyze_tool_call_format(tool_section, FUN_FIRST, ARG_FIRST, reasoning);
+    analyze_tool_call_format(tool_section, FUN_FIRST, ARG_FIRST, reasoning, supports_parallel_tool_calls);
 }
 
 void analyze_tools::analyze_tool_call_format(const std::string &       haystack,
                                              const std::string &       fun_name_needle,
                                              const std::string &       arg_name_needle,
-                                             const analyze_reasoning & reasoning) {
+                                             const analyze_reasoning & reasoning,
+                                             bool                      supports_parallel_tool_calls) {
     if (fun_name_needle.empty() || arg_name_needle.empty() || haystack.empty()) {
         return;
     }
 
-    enum class json_quote_style { NONE, DOUBLE_QUOTES, SINGLE_QUOTES };
-
-    auto in_json_haystack = [&haystack](const std::string & needle) -> json_quote_style {
+    auto in_json_haystack = [&haystack](const std::string & needle) -> bool {
         auto parser = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
             return p.choice({ p.literal("{"), p.literal(":") }) << p.choice({
-                p.tag("sq", p.literal("'") + p.literal(needle) + p.literal("'")),
                 p.tag("dq", p.literal("\"") + p.literal(needle) + p.literal("\"")) });
         });
         auto result = parser.parse_anywhere_and_extract(haystack);
-        if (!result.result.success()) {
-            return json_quote_style::NONE;
-        }
-        return result.tags.count("sq") && !result.tags["sq"].empty()
-            ? json_quote_style::SINGLE_QUOTES
-            : json_quote_style::DOUBLE_QUOTES;
+        return result.result.success();
     };
 
     auto fun_quote = in_json_haystack(fun_name_needle);
     auto arg_quote = in_json_haystack(arg_name_needle);
 
-    if (fun_quote != json_quote_style::NONE) {
+    if (fun_quote) {
         // no need to check further, we're in JSON land
         format.mode = tool_format::JSON_NATIVE;
-        format.uses_python_dicts = (fun_quote == json_quote_style::SINGLE_QUOTES);
-    } else if (arg_quote != json_quote_style::NONE) {
+    } else if (arg_quote) {
         format.mode = tool_format::TAG_WITH_JSON;
-        format.uses_python_dicts = (arg_quote == json_quote_style::SINGLE_QUOTES);
     } else {
         format.mode = tool_format::TAG_WITH_TAGGED;
     }
@@ -648,12 +661,51 @@ void analyze_tools::analyze_tool_call_format(const std::string &       haystack,
 
     if (format.mode == tool_format::JSON_NATIVE) {
         analyze_tool_call_format_json_native(clean_haystack, fun_name_needle, arg_name_needle);
+        if (supports_parallel_tool_calls) {
+            analyze_json_native_parallel_calls();
+        }
     } else {
         analyze_tool_call_format_non_json(clean_haystack, fun_name_needle);
     }
     // always relax whitespace requirements on ending markers since they don't influence content
     format.section_end  = trim_whitespace(format.section_end);
     format.per_call_end = trim_whitespace(format.per_call_end);
+}
+
+void analyze_tools::analyze_json_native_parallel_calls() {
+    json assistant_one_tool = json{
+        { "role",       "assistant" },
+        { "content",    ""          },
+        { "tool_calls", json::array({ first_tool_call }) }
+    };
+
+    json assistant_two_tools = json{
+        { "role",       "assistant" },
+        { "content",    ""          },
+        { "tool_calls", json::array({ first_tool_call, second_tool_call }) }
+    };
+
+    template_params params;
+    params.messages              = json::array({ user_msg, assistant_one_tool });
+    params.tools                 = tools;
+    params.add_generation_prompt = false;
+    params.enable_thinking       = true;
+
+    auto comparison = compare_variants(
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_two_tools }); });
+
+    if (!comparison) {
+        LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET, __func__);
+        return;
+    }
+
+    std::string & second_call = comparison->diff.right;
+    if (!format.section_start.empty() && second_call.find(format.section_start) != std::string::npos) {
+        format.per_call_start = format.section_start;
+        format.per_call_end = format.section_end;
+        format.section_start.clear();
+        format.section_end.clear();
+    }
 }
 
 void analyze_tools::analyze_tool_call_format_json_native(const std::string & clean_haystack,
@@ -951,8 +1003,6 @@ void analyze_tools::extract_function_markers() {
 }
 
 void analyze_tools::analyze_arguments() {
-    LOG_DBG(ANSI_ORANGE "Phase 4: Argument analysis\n" ANSI_RESET);
-
     extract_argument_name_markers();
     extract_argument_value_markers();
 }
@@ -1161,7 +1211,7 @@ void analyze_tools::extract_args_markers() {
 
     const auto & diff = comparison->diff;
 
-    if (format.mode != tool_format::JSON_NATIVE) {
+    if (format.mode == tool_format::JSON_NATIVE) {
         std::string prefix_marker = !format.section_start.empty() ? format.section_start : format.per_call_start;
         std::string suffix_marker = !format.section_end.empty() ? format.section_end : format.per_call_end;
         // these might happen earlier in the tools section as an example or somewhere else, so we need to find the closest ones
@@ -1182,6 +1232,10 @@ void analyze_tools::extract_args_markers() {
             size_t find_fun = args_start.find(FUN_FIRST);
             if (find_fun != std::string::npos) {
                 args_start = args_start.substr(find_fun + FUN_FIRST.size(), args_start.size() - find_fun - FUN_FIRST.size());
+            }
+            size_t find_call_id = args_start.find(CALL_ID_001);
+            if (find_call_id != std::string::npos) {
+                args_start = args_start.substr(find_call_id + CALL_ID_001.size(), args_start.size() - find_call_id - CALL_ID_001.size());
             }
             arguments.start = args_start;
             arguments.end   = args_end;
@@ -1222,8 +1276,8 @@ void analyze_tools::extract_call_id_markers() {
         return;
     }
 
-    std::string id_value_1 = "call00001";
-    std::string id_value_2 = "call99999";
+    std::string id_value_1 = CALL_ID_001;
+    std::string id_value_2 = CALL_ID_999;
 
     size_t common_id_prefix_len = 0;
     for (size_t i = 0; i < std::min(id_value_1.length(), id_value_2.length()); i++) {
@@ -1320,6 +1374,14 @@ void analyze_tools::extract_call_id_markers() {
         // call_id_suffix: first marker in the portion of diff.suffix before func_name
         std::string before_func = diff.suffix.substr(0, func_name_in_suffix);
         call_id.suffix = find_first_marker(before_func);
+    }
+
+    if (call_id.prefix == arguments.end) {
+        call_id.prefix = "";
+    }
+
+    if (call_id.suffix == arguments.start) {
+        call_id.suffix = "";
     }
 
     // When call_id is detected, per_call_end may have been incorrectly set to include

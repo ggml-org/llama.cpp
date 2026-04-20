@@ -89,6 +89,12 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 	{ key: 'max_tokens', serverKey: 'max_tokens', type: SyncableParameterType.NUMBER, canSync: true },
 	{ key: 'samplers', serverKey: 'samplers', type: SyncableParameterType.STRING, canSync: true },
 	{
+		key: 'backend_sampling',
+		serverKey: 'backend_sampling',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
 		key: 'pasteLongTextToFileLen',
 		serverKey: 'pasteLongTextToFileLen',
 		type: SyncableParameterType.NUMBER,
@@ -125,6 +131,12 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		canSync: true
 	},
 	{
+		key: 'titleGenerationUseFirstLine',
+		serverKey: 'titleGenerationUseFirstLine',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
 		key: 'disableAutoScroll',
 		serverKey: 'disableAutoScroll',
 		type: SyncableParameterType.BOOLEAN,
@@ -157,6 +169,86 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 	{
 		key: 'fullHeightCodeBlocks',
 		serverKey: 'fullHeightCodeBlocks',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'systemMessage',
+		serverKey: 'systemMessage',
+		type: SyncableParameterType.STRING,
+		canSync: true
+	},
+	{
+		key: 'showSystemMessage',
+		serverKey: 'showSystemMessage',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{ key: 'theme', serverKey: 'theme', type: SyncableParameterType.STRING, canSync: true },
+	{
+		key: 'copyTextAttachmentsAsPlainText',
+		serverKey: 'copyTextAttachmentsAsPlainText',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'showRawOutputSwitch',
+		serverKey: 'showRawOutputSwitch',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'alwaysShowSidebarOnDesktop',
+		serverKey: 'alwaysShowSidebarOnDesktop',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'autoShowSidebarOnNewChat',
+		serverKey: 'autoShowSidebarOnNewChat',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'showRawModelNames',
+		serverKey: 'showRawModelNames',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{ key: 'mcpServers', serverKey: 'mcpServers', type: SyncableParameterType.STRING, canSync: true },
+	{
+		key: 'agenticMaxTurns',
+		serverKey: 'agenticMaxTurns',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'agenticMaxToolPreviewLines',
+		serverKey: 'agenticMaxToolPreviewLines',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'showToolCallInProgress',
+		serverKey: 'showToolCallInProgress',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'alwaysShowAgenticTurns',
+		serverKey: 'alwaysShowAgenticTurns',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'excludeReasoningFromContext',
+		serverKey: 'excludeReasoningFromContext',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'sendOnEnter',
+		serverKey: 'sendOnEnter',
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	}

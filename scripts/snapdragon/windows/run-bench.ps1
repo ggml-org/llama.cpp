@@ -20,6 +20,10 @@ if ($null -ne $env:V) {
     $env:GGML_HEXAGON_VERBOSE=$env:V
 }
 
+if ($null -ne $env:PROF) {
+    $env:GGML_HEXAGON_PROFILE=$env:PROF; $env:GGML_HEXAGON_OPSYNC=1
+}
+
 if ($null -ne $env:OPMASK) {
     $env:GGML_HEXAGON_OPMASK=$env:OPMASK
 }
@@ -30,6 +34,10 @@ if ($null -ne $env:NHVX) {
 
 if ($null -ne $env:NDEV) {
     $env:GGML_HEXAGON_NDEV=$env:NDEV
+}
+
+if ($null -ne $env:HB) {
+    $env:GGML_HEXAGON_HOSTBUF=$env:HB
 }
 
 $env:ADSP_LIBRARY_PATH="$basedir\lib"

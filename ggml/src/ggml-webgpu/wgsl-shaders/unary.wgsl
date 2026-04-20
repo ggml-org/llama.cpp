@@ -5,7 +5,6 @@ enable f16;
 #define TYPE f32
 #endif
 
-
 @group(0) @binding(0)
 var<storage, read_write> src: array<TYPE>;
 
@@ -57,12 +56,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       return;
     }
     var i = gid.x;
-    let i3 = i / (params.ne2 * params.ne1 * params.ne0);
-    i = i % (params.ne2 * params.ne1 * params.ne0);
-    let i2 = i / (params.ne1 * params.ne0);
-    i = i % (params.ne1 * params.ne0);
-    let i1 = i / params.ne0;
-    let i0 = i % params.ne0;
+    let ne2 = params.ne2;
+#ifdef DIAG
+    let ne1 = params.ne0;
+#else
+    let ne1 = params.ne1;
+#endif
+    let ne0 = params.ne0;
+
+    let i3 = i / (ne2 * ne1 * ne0);
+    i = i % (ne2 * ne1 * ne0);
+    let i2 = i / (ne1 * ne0);
+    i = i % (ne1 * ne0);
+    let i1 = i / ne0;
+    let i0 = i % ne0;
 
     let src_idx = i0 * params.stride_src0 + i1 * params.stride_src1 +
                   i2 * params.stride_src2 + i3 * params.stride_src3;
@@ -100,7 +107,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = src[params.offset_src + src_idx] / (1.0 + exp(-src[params.offset_src + src_idx]));
 #endif
 #ifdef EXP
-    let res = exp(src[params.offset_src + src_idx]);
+    let src_f32 = f32(src[params.offset_src + src_idx]);
+    let res = TYPE(exp(src_f32));
 #endif
 #ifdef LOG
     let res = TYPE(log(f32(src[params.offset_src + src_idx])));
@@ -139,22 +147,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                                -9.010913, 9.010913)));
 #endif
 #ifdef XIELU
+    let val = f32(src[params.offset_src + src_idx]);
     let res =
-        select(((exp(min(src[params.offset_src + src_idx], TYPE(params.eps))) - 1.0) -
-                src[params.offset_src + src_idx]) *
-                   TYPE(params.alpha_n) +
-               TYPE(params.beta) * src[params.offset_src + src_idx],
-               TYPE(params.alpha_p) * src[params.offset_src + src_idx] *
-                   src[params.offset_src + src_idx] +
-                   TYPE(params.beta) * src[params.offset_src + src_idx],
-               src[params.offset_src + src_idx] > 0.0);
+        TYPE(select(
+            ((exp(min(val, params.eps)) - 1.0) - val) * params.alpha_n + params.beta * val,
+            params.alpha_p * val * val + params.beta * val,
+            val > 0.0));
 #endif
 #ifdef SOFTPLUS
     let src_f32 = f32(src[params.offset_src + src_idx]);
     let res = TYPE(select(log(1.0 + exp(src_f32)), src_f32, src_f32 > 20.0));
 #endif
 #ifdef EXPM1
-    let res = exp(src[params.offset_src + src_idx]) - 1.0;
+    let src_f32 = f32(src[params.offset_src + src_idx]);
+    let res = TYPE(exp(src_f32) - 1.0);
 #endif
 #ifdef FLOOR
     let res = floor(src[params.offset_src + src_idx]);
@@ -174,7 +180,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = src[params.offset_src + src_idx] * src[params.offset_src + src_idx];
 #endif
 #ifdef SQRT
-    let res = sqrt(src[params.offset_src + src_idx]);
+    let res = TYPE(sqrt(f32(src[params.offset_src + src_idx])));
 #endif
 #ifdef SIN
     let res_f32 = sin(f32(src[params.offset_src + src_idx]));
@@ -183,6 +189,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 #ifdef COS
     let res_f32 = cos(f32(src[params.offset_src + src_idx]));
     let res = TYPE(res_f32);
+#endif
+#ifdef DIAG
+    let res = select(0.0, src[params.offset_src + i0 + i2 * params.stride_src2 + i3 * params.stride_src3], i0 == i1);
+#endif
+#ifdef TRI
+#ifdef TRI_TYPE_LOWER
+    let res = select(0.0, src[params.offset_src + src_idx], i0 < i1);
+#elif TRI_TYPE_LOWER_DIAG
+    let res = select(0.0, src[params.offset_src + src_idx], i0 <= i1);
+#elif TRI_TYPE_UPPER
+    let res = select(0.0, src[params.offset_src + src_idx], i0 > i1);
+#elif TRI_TYPE_UPPER_DIAG
+    let res = select(0.0, src[params.offset_src + src_idx], i0 >= i1);
+#endif
 #endif
 
 #ifdef INPLACE

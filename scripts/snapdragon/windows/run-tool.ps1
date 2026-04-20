@@ -26,10 +26,6 @@ if ($null -ne $env:V) {
     $env:GGML_HEXAGON_VERBOSE=$env:V
 }
 
-if ($null -ne $env:E) {
-    $env:GGML_HEXAGON_EXPERIMENTAL=$env:E
-}
-
 if ($null -ne $env:SCHED) {
     $env:GGML_SCHED_DEBUG=$env:SCHED; $cli_opts="$cli_opts -v"
 }
@@ -48,6 +44,10 @@ if ($null -ne $env:NHVX) {
 
 if ($null -ne $env:NDEV) {
     $env:GGML_HEXAGON_NDEV=$env:NDEV
+}
+
+if ($null -ne $env:HB) {
+    $env:GGML_HEXAGON_HOSTBUF=$env:HB
 }
 
 $env:ADSP_LIBRARY_PATH="$basedir\lib"

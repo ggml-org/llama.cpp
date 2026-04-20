@@ -2,7 +2,6 @@
 
 llm_build_bloom::llm_build_bloom(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
-    const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
@@ -16,8 +15,8 @@ llm_build_bloom::llm_build_bloom(const llama_model & model, const llm_graph_para
     inpL = build_norm(inpL,
             model.tok_norm,
             model.tok_norm_b,
-            LLM_NORM, -1);
-    cb(inpL, "inp_norm", -1);
+            LLM_NORM, 0);
+    cb(inpL, "inp_norm", 0);
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -30,22 +29,11 @@ llm_build_bloom::llm_build_bloom(const llama_model & model, const llm_graph_para
 
         // self-attention
         {
-            cur = build_lora_mm(model.layers[il].wqkv, cur);
-            cb(cur, "wqkv", il);
-
-            cur = ggml_add(ctx0, cur, model.layers[il].bqkv);
-            cb(cur, "bqkv", il);
-
-            ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head,    n_tokens, n_embd_head*sizeof(float), cur->nb[1], 0*sizeof(float)*(n_embd));
-            ggml_tensor * Kcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), cur->nb[1], 1*sizeof(float)*(n_embd));
-            ggml_tensor * Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), cur->nb[1], 1*sizeof(float)*(n_embd + n_embd_gqa));
-
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].bo,
+                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
 

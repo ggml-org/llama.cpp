@@ -1,5 +1,7 @@
 enable f16;
+#define DECLARE_BYTE_LOADERS_SRC
 #include "common_decls.tmpl"
+
 
 #ifdef F32_VEC
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
@@ -27,17 +29,18 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 
 #ifdef Q4_0
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block_q4_0 = src[src_base + offset];
-    let d = f32(block_q4_0.d);
-    for (var j: u32 = 0; j < 4; j++) {
-        let q_packed = bitcast<u32>(vec2(block_q4_0.qs[2 * j], block_q4_0.qs[2 * j + 1]));
+    let block_byte_base = (src_base + offset) * 18; // Block stride: 18 bytes
+    let d = load_f16_as_f32_at_src(block_byte_base);
+    for (var j: u32 = 0u; j < 4; j++) {
+        let q_byte_offset = block_byte_base + 2 + j * 4;
+        let q_packed = load_u32_at_src(q_byte_offset);
         for (var k: u32 = 0; k < 4; k++) {
             let q_byte = get_byte(q_packed, k);
-            let q_hi = (f32((q_byte >> 4) & 0xF) - 8.0f) * d;
-            let q_lo = (f32(q_byte & 0xF) - 8.0f) * d;
+            let q_hi = (f32((q_byte >> 4) & 0xF) - 8.0) * d;
+            let q_lo = (f32(q_byte & 0xFu) - 8.0) * d;
             let dst_offset = dst_base + offset * 32 + j * 4 + k;
             dst[dst_offset] = q_lo;
-            dst[dst_offset + 16] = q_hi;
+            dst[dst_offset + 16u] = q_hi;
         }
     }
 }
@@ -64,17 +67,22 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 
 #ifdef Q5_0
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block_q5_0 = src[src_base + offset];
-    let d = f32(block_q5_0.d);
-    let qh_packed = bitcast<u32>(vec2(block_q5_0.qh[0], block_q5_0.qh[1]));
+    let block_byte_base = (src_base + offset) * 22; // Block stride: 22 bytes
+    let d = load_f16_as_f32_at_src(block_byte_base);
+    let qh_packed = load_u32_at_src(block_byte_base + 2);
     for (var j: u32 = 0; j < 4; j++) {
-        let q_packed = bitcast<u32>(vec2(block_q5_0.qs[2 * j], block_q5_0.qs[2 * j + 1]));
+        let q_byte_offset = block_byte_base + 6 + j * 4;
+        let q_packed = load_u32_at_src(q_byte_offset);
+
         for (var k: u32 = 0; k < 4; k++) {
             let q_byte = get_byte(q_packed, k);
+
             let qh_hi = (qh_packed >> (j * 4 + k + 12)) & 0x10;
             let q_hi = (f32(((q_byte >> 4) & 0xF) | qh_hi) - 16.0) * d;
+
             let qh_lo = ((qh_packed >> (j * 4 + k)) << 4) & 0x10;
             let q_lo = (f32((q_byte & 0xF) | qh_lo) - 16.0) * d;
+
             let dst_offset = dst_base + offset * 32 + j * 4 + k;
             dst[dst_offset] = q_lo;
             dst[dst_offset + 16] = q_hi;
@@ -106,14 +114,15 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 
 #ifdef Q8_0
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block_q8_0 = src[src_base + offset];
-    let d = f32(block_q8_0.d);
-    for (var j: u32 = 0; j < 8; j++) {
-        let q_packed = bitcast<u32>(vec2(block_q8_0.qs[2 * j], block_q8_0.qs[2 * j + 1]));
-        for (var k: u32 = 0; k < 4; k++) {
+    let block_byte_base = (src_base + offset) * 34; // Block stride: 34 bytes
+    let d = load_f16_as_f32_at_src(block_byte_base);
+    for (var j: u32 = 0u; j < 8u; j++) {
+        let q_byte_offset = block_byte_base + 2u + j * 4u;
+        let q_packed = load_u32_at_src(q_byte_offset);
+        for (var k: u32 = 0u; k < 4u; k++) {
             let q_byte = get_byte_i32(q_packed, k);
             let q_val = f32(q_byte) * d;
-            let dst_offset = dst_base + offset * 32 + j * 4 + k;
+            let dst_offset = dst_base + offset * 32u + j * 4u + k;
             dst[dst_offset] = q_val;
         }
     }
@@ -152,36 +161,42 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 
 #ifdef Q3_K
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block = src[src_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src_base + offset) * 110; // Block stride: 110 bytes
 
-    // extract 6-bit scales, which consist of 4-bits from first 8 bytes of scale,
-    // and 2-bits from the last 4 bytes
+    // Bytes 108-109: f16 scale 'd'
+    let d = load_f16_as_f32_at_src(block_byte_base + 108);
+
+    // Bytes 96-107: 12 bytes of scales (3 u32s)
     let kmask1: u32 = 0x03030303;
     let kmask2: u32 = 0x0f0f0f0f;
+
     var scale_vals: array<u32, 4>;
-    for (var i: u32 = 0; i < 4; i++) {
-        scale_vals[i] = bitcast<u32>(vec2(block.scales[2 * i], block.scales[2 * i + 1]));
-    }
+    scale_vals[0] = load_u32_at_src(block_byte_base + 96);
+    scale_vals[1] = load_u32_at_src(block_byte_base + 100);
+    scale_vals[2] = load_u32_at_src(block_byte_base + 104);
+
     var tmp: u32 = scale_vals[2];
     scale_vals[2] = ((scale_vals[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
     scale_vals[3] = ((scale_vals[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
     scale_vals[0] = (scale_vals[0] & kmask2) | ((tmp & kmask1) << 4);
     scale_vals[1] = (scale_vals[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
 
-    // convert arrays of f16 -> u32
+    // Bytes 0-31: 32 bytes of hmask (8 u32s)
     var hmask_vals: array<u32, 8>;
     for (var i: u32 = 0; i < 8; i++) {
-        hmask_vals[i] = bitcast<u32>(vec2(block.hmask[2 * i], block.hmask[2 * i + 1]));
+        hmask_vals[i] = load_u32_at_src(block_byte_base + i * 4);
     }
+
+    // Bytes 32-95: 64 bytes of qs (16 u32s)
     var qs_vals: array<u32, 16>;
-    for (var i: u32 = 0; i < 16; i++) {
-        qs_vals[i] = bitcast<u32>(vec2(block.qs[2 * i], block.qs[2 * i + 1]));
+    for (var i: u32 = 0u; i < 16; i++) {
+        qs_vals[i] = load_u32_at_src(block_byte_base + 32 + i * 4);
     }
 
     var dst_i = dst_base + offset * 256;
     var is: u32 = 0;
     var m: u32 = 1;
+
     // 2 halves of the block (128 elements each)
     for (var q_b_idx: u32 = 0; q_b_idx < 64; q_b_idx += 32) {
         // 4 groups (each group has 2 blocks of 16 elements)
@@ -191,11 +206,13 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
                 let sc = get_byte(scale_vals[is / 4], is % 4);
                 is++;
                 let dl = d * (f32(sc) - 32.0);
-                for (var l: u32 = 0u; l < 16u; l++) {
+
+                for (var l: u32 = 0; l < 16; l++) {
                     let q_idx = q_b_idx + k + l;
                     let hm_idx = k + l;
                     let q_byte = get_byte(qs_vals[q_idx / 4], q_idx % 4);
                     let hmask_byte = get_byte(hmask_vals[hm_idx / 4], hm_idx % 4);
+
                     let hm = select(4.0, 0.0, (hmask_byte & m) != 0);
                     let qs_val = (q_byte >> shift) & 3;
                     dst[dst_i] = (f32(qs_val) - hm) * dl;
@@ -268,21 +285,27 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 #ifdef Q6_K
 // 16 blocks of 16 elements each
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block = src[src_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src_base + offset) * 210; // Block stride: 210 bytes
 
-    // convert arrays of f16 -> u32
+    // Bytes 208-209: f16 scale 'd'
+    let d = load_f16_as_f32_at_src(block_byte_base + 208);
+
+    // Bytes 0-127: 128 bytes of ql (32 u32s)
     var ql_vals: array<u32, 32>;
     for (var i: u32 = 0; i < 32; i++) {
-        ql_vals[i] = bitcast<u32>(vec2(block.ql[2 * i], block.ql[2 * i + 1]));
+        ql_vals[i] = load_u32_at_src(block_byte_base + i * 4);
     }
+
+    // Bytes 128-191: 64 bytes of qh (16 u32s)
     var qh_vals: array<u32, 16>;
-    for (var i: u32 = 0; i < 16; i++) {
-        qh_vals[i] = bitcast<u32>(vec2(block.qh[2 * i], block.qh[2 * i + 1]));
+    for (var i: u32 = 0; i < 16u; i++) {
+        qh_vals[i] = load_u32_at_src(block_byte_base + 128 + i * 4u);
     }
+
+    // Bytes 192-207: 16 bytes of scales (4 u32s)
     var scale_vals: array<u32, 4>;
     for (var i: u32 = 0; i < 4; i++) {
-        scale_vals[i] = bitcast<u32>(vec2(block.scales[2 * i], block.scales[2 * i + 1]));
+        scale_vals[i] = load_u32_at_src(block_byte_base + 192 + i * 4);
     }
 
     var dst_i = dst_base + offset * 256;
@@ -323,12 +346,14 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 
 #ifdef IQ2_XXS
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block = src[src_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src_base + offset) * 66; // Block stride: 66 bytes
+    let d = load_f16_as_f32_at_src(block_byte_base);
     var dst_i = dst_base + offset * 256;
     for (var ib: u32 = 0; ib < 32; ib += 4) {
-        let aux0 = bitcast<u32>(vec2(block.qs[ib], block.qs[ib + 1]));
-        let aux1 = bitcast<u32>(vec2(block.qs[ib + 2], block.qs[ib + 3]));
+        let aux0_offset = block_byte_base + 2 + ib * 2;
+        let aux1_offset = block_byte_base + 2 + (ib + 2) * 2;
+        let aux0 = load_u32_at_src(aux0_offset);
+        let aux1 = load_u32_at_src(aux1_offset);
         let db = d * (0.5 + f32(aux1 >> 28)) * 0.25;
         for (var l: u32 = 0; l < 4; l++) {
             let ig = get_byte(aux0, l) * 8;
@@ -345,15 +370,19 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 }
 #endif
 
+
+
 #ifdef IQ2_XS
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block = src[src_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src_base + offset) * 74; // Block stride: 74 bytes
+    let d = load_f16_as_f32_at_src(block_byte_base);
     var dst_i = dst_base + offset * 256;
+
     var scale_vals = array<u32, 2>(
-        bitcast<u32>(vec2(block.scales[0], block.scales[1])),
-        bitcast<u32>(vec2(block.scales[2], block.scales[3]))
+        load_u32_at_src(block_byte_base + 66),
+        load_u32_at_src(block_byte_base + 70)
     );
+
     for (var ib: u32 = 0; ib < 32; ib += 4) {
         let s = get_byte(scale_vals[ib / 16], (ib % 16) / 4);
         let db = array<f32, 2>(
@@ -361,7 +390,8 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
             d * (0.5 + f32(s >> 4)) * 0.25
         );
         for (var l: u32 = 0; l < 4; l++) {
-            let qs_val = bitcast<u32>(vec2(block.qs[ib + l], 0.0));
+            let qs_offset = block_byte_base + 2 + (ib + l) * 2;
+            let qs_val = load_u32_at_src(qs_offset) & 0xFFFF;
             let ig = (qs_val & 511) * 8;
             let is = qs_val >> 9;
             let signs = get_byte(ksigns_iq2xs[is / 4], is % 4);
@@ -379,21 +409,23 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 
 #ifdef IQ2_S
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block = src[src_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src_base + offset) * 82; // Block stride: 82 bytes
+    let d = load_f16_as_f32_at_src(block_byte_base);
     var dst_i = dst_base + offset * 256;
+
     var qs_vals : array<u32, 16>;
     for (var i: u32 = 0; i < 16; i++) {
-        qs_vals[i] = bitcast<u32>(vec2(block.qs[i * 2], block.qs[i * 2 + 1]));
+        qs_vals[i] = load_u32_at_src(block_byte_base + 2 + i * 4);
     }
-    var qh_vals = array<u32, 2>(
-        bitcast<u32>(vec2(block.qh[0], block.qh[1])),
-        bitcast<u32>(vec2(block.qh[2], block.qh[3]))
-    );
-    var scale_vals = array<u32, 2>(
-        bitcast<u32>(vec2(block.scales[0], block.scales[1])),
-        bitcast<u32>(vec2(block.scales[2], block.scales[3]))
-    );
+
+    var qh_vals: array<u32, 2>;
+    qh_vals[0] = load_u32_at_src(block_byte_base + 66);
+    qh_vals[1] = load_u32_at_src(block_byte_base + 70);
+
+    var scale_vals: array<u32, 2>;
+    scale_vals[0] = load_u32_at_src(block_byte_base + 74);
+    scale_vals[1] = load_u32_at_src(block_byte_base + 78);
+
     for (var ib: u32 = 0; ib < 8; ib ++) {
         let s = get_byte(scale_vals[ib / 4], ib % 4);
         let db = array<f32, 2>(
@@ -419,16 +451,17 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 
 #ifdef IQ3_XXS
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block = src[src_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src_base + offset) * 98; // Block stride: 98 bytes
+    let d = load_f16_as_f32_at_src(block_byte_base);
     var dst_i = dst_base + offset * 256;
     for (var ib: u32 = 0; ib < 16; ib += 2) {
-        let sc_sign = bitcast<u32>(vec2(block.qs[ib + 32], block.qs[ib + 33]));
+        let sc_sign_offset = block_byte_base + 2 + (ib + 32) * 2;
+        let sc_sign = load_u32_at_src(sc_sign_offset);
         let db = d * (0.5 + f32(sc_sign >> 28)) * 0.5;
         for (var l: u32 = 0; l < 4; l++) {
             let is = (sc_sign >> (7 * l)) & 127;
             let signs = get_byte(ksigns_iq2xs[is / 4], is % 4);
-            let ig_val = bitcast<u32>(vec2(block.qs[ib * 2 + l], 0.0));
+            let ig_val = load_u32_at_src(block_byte_base + 2 + (ib * 2 + l) * 2) & 0xFFFF;
             let ig1 = get_byte(ig_val, 0);
             let ig2 = get_byte(ig_val, 1);
             for (var j: u32 = 0; j < 4; j++) {
@@ -448,18 +481,22 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 
 #ifdef IQ3_S
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block = src[src_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src_base + offset) * 110; // Block stride: 110 bytes
+    let d = load_f16_as_f32_at_src(block_byte_base);
     var dst_i = dst_base + offset * 256;
+
     var qh_vals = array<u32, 2>(
-        bitcast<u32>(vec2(block.qh[0], block.qh[1])),
-        bitcast<u32>(vec2(block.qh[2], block.qh[3]))
+        load_u32_at_src(block_byte_base + 66),
+        load_u32_at_src(block_byte_base + 70)
     );
+
     var sign_vals: array<u32, 8>;
     for (var i: u32 = 0; i < 8; i++) {
-        sign_vals[i] = bitcast<u32>(vec2(block.signs[i * 2], block.signs[i * 2 + 1]));
+        sign_vals[i] = load_u32_at_src(block_byte_base + 74 + i * 4);
     }
-    var scale_vals = bitcast<u32>(vec2(block.scales[0], block.scales[1]));
+
+    var scale_vals = load_u32_at_src(block_byte_base + 106);
+
     for (var ib: u32 = 0; ib < 4; ib++) {
         let s = get_byte(scale_vals, ib);
         let db = array<f32, 2>(
@@ -472,7 +509,7 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
             let sign_w = sign_vals[ib * 2 + k];
             for (var l: u32 = 0; l < 4; l++) {
                 let signs = get_byte(sign_w, l);
-                let ig_val = bitcast<u32>(vec2(block.qs[ib * 8 + k * 4 + l], 0.0));
+                let ig_val = load_u32_at_src(block_byte_base + 2 + (ib * 8 + k * 4 + l) * 2) & 0xFFFF;
                 let ig1 = get_byte(ig_val, 0) | ((qh_byte << ((8 - (2 * l)))) & 256);
                 let ig2 = get_byte(ig_val, 1) | ((qh_byte << ((7 - (2 * l)))) & 256);
                 for (var j: u32 = 0; j < 4; j++) {
@@ -493,14 +530,14 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 
 #ifdef IQ1_S
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block = src[src_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src_base + offset) * 50; // Block stride: 50 bytes
+    let d = load_f16_as_f32_at_src(block_byte_base);
     var dst_i = dst_base + offset * 256;
     for (var ib: u32 = 0; ib < 8; ib++) {
-        let qh = bitcast<u32>(vec2(block.qh[ib], 0.0));
-        let dl = d * (2 * f32((qh >> 12) & 7) + 1);
+        let qh = load_u32_at_src(block_byte_base + 34 + ib * 2) & 0xFFFF;
+        let dl = d * (2.0 * f32((qh >> 12) & 7) + 1.0);
         let delta = select(IQ1_DELTA, -IQ1_DELTA, (qh & 0x8000) != 0);
-        let qs_w = bitcast<u32>(vec2(block.qs[ib * 2], block.qs[ib * 2 + 1]));
+        let qs_w = load_u32_at_src(block_byte_base + 2 + ib * 4);
         for (var l: u32 = 0; l < 4; l++) {
             let ig = (get_byte(qs_w, l) | (((qh >> (3 * l)) & 7) << 8)) * 8;
             for (var j: u32 = 0; j < 8; j++) {
@@ -560,12 +597,12 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 
 #ifdef IQ4_NL
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
-    let block = src[src_base + offset];
-    let d = f32(block.d);
+    let block_byte_base = (src_base + offset) * 18; // Block stride: 18 bytes
+    let d = load_f16_as_f32_at_src(block_byte_base);
     var dst_i = dst_base + offset * 32;
     var qs: array<u32, 4>;
     for (var i: u32 = 0; i < 4; i++) {
-        qs[i] = bitcast<u32>(vec2(block.qs[i * 2], block.qs[i * 2 + 1]));
+        qs[i] = load_u32_at_src(block_byte_base + 2 + i * 4);
     }
     for (var j: u32 = 0; j < 16; j++) {
         let qsb = get_byte(qs[j / 4], j % 4);
@@ -579,8 +616,8 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 #ifdef IQ4_XS
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block = src[src_base + offset];
-    let d = f32(block.d);
-    let scales_h = bitcast<u32>(vec2(block.scales_h, 0.0));
+    let d = unpack2x16float(block.d_scales_h)[0];
+    let scales_h = block.d_scales_h >> 16;
     var dst_i = dst_base + offset * 256;
     for (var ib: u32 = 0; ib < 8; ib++) {
         let ls = ((get_byte(block.scales_l, ib / 2) >> (4 * (ib % 2))) & 0xF) | (((scales_h >> (2 * ib)) & 3) << 4);
@@ -640,6 +677,35 @@ var<uniform> params: Params;
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+#ifdef FLOAT_PARALLEL
+    let blocks_per_row = params.ne0 / BLOCK_SIZE;
+    let row_count = params.n_rows * params.ne2 * params.ne3;
+
+    if (gid.x >= blocks_per_row * row_count) {
+        return;
+    }
+
+    let block_idx = gid.x % blocks_per_row;
+    var row_idx = gid.x / blocks_per_row;
+    let i_dst3 = row_idx / (params.ne2 * params.n_rows);
+
+    row_idx = row_idx % (params.ne2 * params.n_rows);
+    let i_dst2 = row_idx / params.n_rows;
+    let i_dst1 = row_idx % params.n_rows;
+
+    let i_idx2 = i_dst3 % params.idx2;
+    let i_idx1 = i_dst2 % params.idx1;
+    let i_idx0 = i_dst1;
+
+    let i_idx = params.offset_idx + i_idx0 * params.stride_idx0 + i_idx1 * params.stride_idx1 + i_idx2 * params.stride_idx2;
+
+    let idx_val = u32(idx[i_idx]);
+
+    let i_src_row = params.offset_src + idx_val * params.stride_src1 + i_dst2 * params.stride_src2 + i_dst3 * params.stride_src3;
+    let i_dst_row = params.offset_dst + i_dst1 * params.stride_dst1 + i_dst2 * params.stride_dst2 + i_dst3 * params.stride_dst3;
+
+    copy_elements(i_src_row, i_dst_row, block_idx);
+#else
     if (gid.x >= params.n_rows * params.ne2 * params.ne3) {
         return;
     }
@@ -664,5 +730,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var i: u32 = 0; i < params.ne0/BLOCK_SIZE; i++) {
       copy_elements(i_src_row, i_dst_row, i);
     }
+#endif
 }
-

@@ -43,7 +43,7 @@ jobs:
       #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Setup ${{ matrix.sys }}
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@cafece8e6baf9247cf9b1bf95097b0b983cc558d # v2
         with:
           update: true
           msystem: ${{matrix.sys}}

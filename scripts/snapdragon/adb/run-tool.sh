@@ -21,9 +21,6 @@ device="HTP0"
 verbose=
 [ "$V" != "" ] && verbose="GGML_HEXAGON_VERBOSE=$V"
 
-experimental=
-[ "$E" != "" ] && experimental="GGML_HEXAGON_EXPERIMENTAL=$E"
-
 sched=
 [ "$SCHED" != "" ] && sched="GGML_SCHED_DEBUG=2" cli_opts="$cli_opts -v"
 
@@ -35,6 +32,9 @@ opmask=
 
 nhvx=
 [ "$NHVX" != "" ] && nhvx="GGML_HEXAGON_NHVX=$NHVX"
+
+hmx=
+[ "$HMX" != "" ] && hmx="GGML_HEXAGON_USE_HMX=$HMX"
 
 ndev=
 [ "$NDEV" != "" ] && ndev="GGML_HEXAGON_NDEV=$NDEV"
@@ -50,5 +50,5 @@ adb $adbserial $adbhost shell " \
   cd $basedir; ulimit -c unlimited;        \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \
-    $verbose $experimental $sched $opmask $profile $nhvx $ndev $hb ./$branch/bin/$tool $@ \
+    $verbose $sched $opmask $profile $nhvx $hmx $ndev $hb ./$branch/bin/$tool $@ \
 "

@@ -4,6 +4,7 @@
 	import remarkGfm from 'remark-gfm';
 	import remarkMath from 'remark-math';
 	import rehypeHighlight from 'rehype-highlight';
+	import { all as lowlightAll } from 'lowlight';
 	import remarkRehype from 'remark-rehype';
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
@@ -16,6 +17,7 @@
 	import { rehypeEnhanceLinks } from '$lib/markdown/enhance-links';
 	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
 	import { rehypeResolveAttachmentImages } from '$lib/markdown/resolve-attachment-images';
+	import { rehypeRtlSupport } from '$lib/markdown/rehype-rtl-support';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
 	import {
@@ -36,6 +38,7 @@
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { config } from '$lib/stores/settings.svelte';
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 
 	interface Props {
 		attachments?: DatabaseMessageExtra[];
@@ -94,12 +97,14 @@
 
 		return proc
 			.use(rehypeHighlight, {
+				languages: lowlightAll,
 				aliases: { [FileTypeText.XML]: [FileTypeText.SVELTE, FileTypeText.VUE] }
 			}) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
 			.use(rehypeResolveAttachmentImages, { attachments })
+			.use(rehypeRtlSupport) // Add bidirectional text support
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
 	});
 
@@ -598,7 +603,7 @@
 		: ''}"
 >
 	{#each renderedBlocks as block (block.id)}
-		<div class="markdown-block" data-block-id={block.id}>
+		<div class="markdown-block" data-block-id={block.id} use:fadeInView={{ skipIfVisible: true }}>
 			<!-- eslint-disable-next-line no-at-html-tags -->
 			{@html block.html}
 		</div>
@@ -651,7 +656,6 @@
 />
 
 <style>
-	.markdown-block,
 	.markdown-block--unstable {
 		display: contents;
 	}
@@ -781,19 +785,19 @@
 	/* Lists */
 	div :global(ul) {
 		list-style-type: disc;
-		margin-left: 1.5rem;
+		margin-inline-start: 1.5rem;
 		margin-bottom: 1rem;
 	}
 
 	div :global(ol) {
 		list-style-type: decimal;
-		margin-left: 1.5rem;
+		margin-inline-start: 1.5rem;
 		margin-bottom: 1rem;
 	}
 
 	div :global(li) {
 		margin-bottom: 0.25rem;
-		padding-left: 0.5rem;
+		padding-inline-start: 0.5rem;
 	}
 
 	div :global(li::marker) {
@@ -816,8 +820,8 @@
 	/* Task lists */
 	div :global(.task-list-item) {
 		list-style: none;
-		margin-left: 0;
-		padding-left: 0;
+		margin-inline-start: 0;
+		padding-inline-start: 0;
 	}
 
 	div :global(.task-list-item-checkbox) {

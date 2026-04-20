@@ -35,7 +35,7 @@ env:
 
 jobs:
   ubuntu-riscv64-native-sanitizer:
-    runs-on: RISCV64
+    runs-on: ubuntu-24.04-riscv
 
     continue-on-error: true
 
@@ -47,20 +47,9 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          sudo apt-get update
-
-          # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache git-lfs
-
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
-          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
-
-          # Install Rust stable version
-          rustup install stable
-          rustup default stable
 
           git lfs install
 
@@ -73,23 +62,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Setup ccache
-        run: |
-          # Unique cache directory per matrix combination
-          export CCACHE_DIR="$HOME/.ccache/sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}"
-          mkdir -p "$CCACHE_DIR"
-
-          # Configure ccache
-          ccache --set-config=max_size=5G
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache --set-config=cache_dir="$CCACHE_DIR"
-          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
-          ccache --set-config=hash_dir=false
-
-          # Export for subsequent steps
-          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
-          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+      - name: ccache
+        uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
+        with:
+          key: ubuntu-riscv64-native-sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build

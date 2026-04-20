@@ -2,7 +2,6 @@
 
 llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
-    const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
@@ -15,8 +14,8 @@ llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const ll
     cb(inpL, "inp_embd", -1);
 
     // embed layer norm
-    inpL = build_norm(inpL, model.tok_norm, nullptr, LLM_NORM, -1);
-    cb(inpL, "inp_norm", -1);
+    inpL = build_norm(inpL, model.tok_norm, nullptr, LLM_NORM, 0);
+    cb(inpL, "inp_norm", 0);
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -37,14 +36,8 @@ llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const ll
         }
 
         // self attention
-        cur = build_lora_mm(model.layers[il].wqkv, cur);
-        cb(cur, "wqkv", il);
-
-        const size_t type_size = ggml_type_size(cur->type);
-
-        ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head,    n_tokens, n_embd_head*type_size, cur->nb[1], 0*type_size*(n_embd));
-        ggml_tensor * Kcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*type_size, cur->nb[1], 1*type_size*(n_embd));
-        ggml_tensor * Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*type_size, cur->nb[1], 1*type_size*(n_embd + n_embd_gqa));
+        auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                n_embd_head, n_head, n_head_kv, il);
 
         // RoPE
         Qcur = ggml_rope_ext(
@@ -64,7 +57,7 @@ llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const ll
         cb(Vcur, "Vcur", il);
 
         cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr,
+                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         cb(cur, "kqv_out", il);
 

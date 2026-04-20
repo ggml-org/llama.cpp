@@ -36,22 +36,10 @@ llm_build_chameleon::llm_build_chameleon(const llama_model & model, const llm_gr
         // self-attention
         {
             // compute Q and K and RoPE them
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            cb(Qcur, "Qcur", il);
-
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            cb(Kcur, "Kcur", il);
-
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            cb(Vcur, "Vcur", il);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             if (model.layers[il].attn_q_norm) {
-                Qcur = ggml_view_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens,
-                        ggml_element_size(Qcur) * n_embd_head,
-                        ggml_element_size(Qcur) * n_embd_head * n_head,
-                        0);
-                cb(Qcur, "Qcur", il);
-
                 Qcur = build_norm(Qcur,
                         model.layers[il].attn_q_norm,
                         model.layers[il].attn_q_norm_b,
@@ -60,22 +48,12 @@ llm_build_chameleon::llm_build_chameleon(const llama_model & model, const llm_gr
             }
 
             if (model.layers[il].attn_k_norm) {
-                Kcur = ggml_view_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens,
-                        ggml_element_size(Kcur) * n_embd_head,
-                        ggml_element_size(Kcur) * n_embd_head * n_head_kv,
-                        0);
-                cb(Kcur, "Kcur", il);
-
                 Kcur = build_norm(Kcur,
                         model.layers[il].attn_k_norm,
                         model.layers[il].attn_k_norm_b,
                         LLM_NORM, il);
                 cb(Kcur, "Kcur", il);
             }
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
@@ -94,7 +72,7 @@ llm_build_chameleon::llm_build_chameleon(const llama_model & model, const llm_gr
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr,
+                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
 

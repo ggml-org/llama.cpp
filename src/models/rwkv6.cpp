@@ -8,7 +8,7 @@ llm_build_rwkv6::llm_build_rwkv6(const llama_model & model, const llm_graph_para
     ggml_tensor * inpL;
 
     inpL = build_inp_embd(model.tok_embd);
-    inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, -1);
+    inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, 0);
 
     auto * rs_inp = build_rs_inp();
 

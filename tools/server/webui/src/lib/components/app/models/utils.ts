@@ -13,7 +13,7 @@ export interface OrgGroup {
 
 export interface GroupedModelOptions {
 	loaded: ModelItem[];
-	favourites: ModelItem[];
+	favorites: ModelItem[];
 	available: OrgGroup[];
 }
 
@@ -32,7 +32,7 @@ export function filterModelOptions(options: ModelOption[], searchTerm: string): 
 
 export function groupModelOptions(
 	filteredOptions: ModelOption[],
-	favouriteIds: Set<string>,
+	favoriteIds: Set<string>,
 	isModelLoaded: (model: string) => boolean
 ): GroupedModelOptions {
 	// Loaded models
@@ -43,24 +43,24 @@ export function groupModelOptions(
 		}
 	}
 
-	// Favourites (excluding loaded)
+	// Favorites (excluding loaded)
 	const loadedModelIds = new Set(loaded.map((item) => item.option.model));
-	const favourites: ModelItem[] = [];
+	const favorites: ModelItem[] = [];
 	for (let i = 0; i < filteredOptions.length; i++) {
 		if (
-			favouriteIds.has(filteredOptions[i].model) &&
+			favoriteIds.has(filteredOptions[i].model) &&
 			!loadedModelIds.has(filteredOptions[i].model)
 		) {
-			favourites.push({ option: filteredOptions[i], flatIndex: i });
+			favorites.push({ option: filteredOptions[i], flatIndex: i });
 		}
 	}
 
-	// Available models grouped by org (excluding loaded and favourites)
+	// Available models grouped by org (excluding loaded and favorites)
 	const available: OrgGroup[] = [];
 	const orgGroups = new SvelteMap<string, ModelItem[]>();
 	for (let i = 0; i < filteredOptions.length; i++) {
 		const option = filteredOptions[i];
-		if (loadedModelIds.has(option.model) || favouriteIds.has(option.model)) continue;
+		if (loadedModelIds.has(option.model) || favoriteIds.has(option.model)) continue;
 
 		const key = option.parsedId?.orgName ?? '';
 		if (!orgGroups.has(key)) orgGroups.set(key, []);
@@ -71,5 +71,5 @@ export function groupModelOptions(
 		available.push({ orgName: orgName || null, items });
 	}
 
-	return { loaded, favourites, available };
+	return { loaded, favorites, available };
 }

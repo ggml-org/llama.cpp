@@ -25,14 +25,14 @@ static void top_k_cub(ggml_cuda_pool & pool,
     auto indexes_in = cuda::make_counting_iterator(0);
 
     size_t temp_storage_bytes = 0;
-    DeviceTopK::MaxPairs(nullptr, temp_storage_bytes, src, cuda::discard_iterator(), indexes_in, dst, ncols, k,
-                         env);
+    CUDA_CHECK(DeviceTopK::MaxPairs(nullptr, temp_storage_bytes, src, cuda::discard_iterator(), indexes_in, dst, ncols, k,
+                         env));
 
     ggml_cuda_pool_alloc<uint8_t> temp_storage_alloc(pool, temp_storage_bytes);
     void *                        d_temp_storage = temp_storage_alloc.get();
 
-    DeviceTopK::MaxPairs(d_temp_storage, temp_storage_bytes, src, cuda::discard_iterator(), indexes_in, dst,
-                         ncols, k, env);
+    CUDA_CHECK(DeviceTopK::MaxPairs(d_temp_storage, temp_storage_bytes, src, cuda::discard_iterator(), indexes_in, dst,
+                         ncols, k, env));
 }
 
 #elif defined(GGML_CUDA_USE_CUB)  // CUB_TOP_K_AVAILABLE

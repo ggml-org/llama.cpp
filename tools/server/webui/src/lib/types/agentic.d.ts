@@ -2,6 +2,7 @@ import type { MessageRole } from '$lib/enums';
 import { ToolCallType } from '$lib/enums';
 import type {
 	ApiChatCompletionRequest,
+	ApiChatCompletionToolCall,
 	ApiChatMessageContentPart,
 	ApiChatMessageData
 } from './api';
@@ -40,6 +41,7 @@ export type AgenticMessage =
 	| {
 			role: MessageRole.ASSISTANT;
 			content?: string | ApiChatMessageContentPart[];
+			reasoning_content?: string;
 			tool_calls?: AgenticToolCallPayload[];
 	  }
 	| {
@@ -70,22 +72,48 @@ export interface AgenticSession {
 }
 
 /**
- * Callbacks for agentic flow execution
+ * Callbacks for agentic flow execution.
+ *
+ * The agentic loop creates separate DB messages for each turn:
+ * - assistant messages (one per LLM turn, with tool_calls if any)
+ * - tool result messages (one per tool call execution)
+ *
+ * The first assistant message is created by the caller before starting the flow.
+ * Subsequent messages are created via createToolResultMessage / createAssistantMessage.
  */
 export interface AgenticFlowCallbacks {
+	/** Content chunk for the current assistant message */
 	onChunk?: (chunk: string) => void;
+	/** Reasoning content chunk for the current assistant message */
 	onReasoningChunk?: (chunk: string) => void;
-	onToolCallChunk?: (serializedToolCalls: string) => void;
-	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
+	/** Tool calls being streamed (partial, accumulating) for the current turn */
+	onToolCallsStreaming?: (toolCalls: ApiChatCompletionToolCall[]) => void;
+	/** Attachments extracted from tool results */
+	onAttachments?: (messageId: string, extras: DatabaseMessageExtra[]) => void;
+	/** Model name detected from response */
 	onModel?: (model: string) => void;
-	onComplete?: (
+	/** Current assistant turn's streaming is complete - save to DB */
+	onAssistantTurnComplete?: (
 		content: string,
-		reasoningContent?: string,
-		timings?: ChatMessageTimings,
-		toolCalls?: string
-	) => void;
+		reasoningContent: string | undefined,
+		timings: ChatMessageTimings | undefined,
+		toolCalls: ApiChatCompletionToolCall[] | undefined
+	) => Promise<void>;
+	/** Create a tool result message in the DB tree */
+	createToolResultMessage?: (
+		toolCallId: string,
+		content: string,
+		extras?: DatabaseMessageExtra[]
+	) => Promise<DatabaseMessage>;
+	/** Create a new assistant message for the next agentic turn */
+	createAssistantMessage?: () => Promise<DatabaseMessage>;
+	/** Entire agentic flow is complete */
+	onFlowComplete?: (timings?: ChatMessageTimings) => void;
+	/** Error during flow */
 	onError?: (error: Error) => void;
+	/** Timing updates during streaming */
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
+	/** An agentic turn (LLM + tool execution) completed - intermediate timing update */
 	onTurnComplete?: (intermediateTimings: ChatMessageTimings) => void;
 }
 

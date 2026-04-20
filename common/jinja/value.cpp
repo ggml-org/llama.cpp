@@ -1,4 +1,5 @@
 #include "runtime.h"
+#include "unicode.h"
 #include "value.h"
 
 // for converting from JSON to jinja values
@@ -154,6 +155,83 @@ static value test_compare_fn(const func_args & args) {
     return mk_val<value_bool>(value_compare(args.get_pos(0), args.get_pos(1), op));
 }
 
+static void append_codepoint_as_ascii_json_escape(std::string & out, uint32_t codepoint) {
+    auto append_u16 = [&out](uint32_t value) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned int>(value));
+        out += buf;
+    };
+
+    if (codepoint <= 0xFFFF) {
+        append_u16(codepoint);
+        return;
+    }
+
+    codepoint -= 0x10000;
+    append_u16(0xD800 + ((codepoint >> 10) & 0x3FF));
+    append_u16(0xDC00 + (codepoint & 0x3FF));
+}
+
+static std::string json_ensure_ascii_preserving_format(const std::string & json_str) {
+    std::string output;
+    output.reserve(json_str.size());
+
+    bool in_string = false;
+    bool escaped = false;
+
+    for (size_t pos = 0; pos < json_str.size();) {
+        const char ch = json_str[pos];
+        if (!in_string) {
+            output.push_back(ch);
+            if (ch == '"') {
+                in_string = true;
+            }
+            ++pos;
+            continue;
+        }
+
+        if (escaped) {
+            output.push_back(ch);
+            escaped = false;
+            ++pos;
+            continue;
+        }
+
+        if (ch == '\\') {
+            output.push_back(ch);
+            escaped = true;
+            ++pos;
+            continue;
+        }
+
+        if (ch == '"') {
+            output.push_back(ch);
+            in_string = false;
+            ++pos;
+            continue;
+        }
+
+        const unsigned char uch = static_cast<unsigned char>(ch);
+        if (uch < 0x80) {
+            output.push_back(ch);
+            ++pos;
+            continue;
+        }
+
+        auto parsed = common_parse_utf8_codepoint(json_str, pos);
+        if (parsed.status != utf8_parse_result::SUCCESS) {
+            output += "\\ufffd";
+            ++pos;
+            continue;
+        }
+
+        append_codepoint_as_ascii_json_escape(output, parsed.codepoint);
+        pos += parsed.bytes_consumed;
+    }
+
+    return output;
+}
+
 static value tojson(const func_args & args) {
     args.ensure_count(1, 5);
     value val_ascii      = args.get_kwarg_or_pos("ensure_ascii", 1);
@@ -169,16 +247,17 @@ static value tojson(const func_args & args) {
     if (is_val<value_int>(val_indent)) {
         indent = static_cast<int>(val_indent->as_int());
     }
-    if (val_ascii->as_bool()) { // undefined == false
-        throw not_implemented_exception("tojson ensure_ascii=true not implemented");
-    }
     if (val_sort->as_bool()) { // undefined == false
         throw not_implemented_exception("tojson sort_keys=true not implemented");
     }
+    const bool ensure_ascii = val_ascii->as_bool(); // undefined == false
     auto separators = (is_val<value_array>(val_separators) ? val_separators : mk_val<value_array>())->as_array();
     std::string item_sep = separators.size() > 0 ? separators[0]->as_string().str() : (indent < 0 ? ", " : ",");
     std::string key_sep = separators.size() > 1 ? separators[1]->as_string().str() : ": ";
     std::string json_str = value_to_json(args.get_pos(0), indent, item_sep, key_sep);
+    if (ensure_ascii) {
+        json_str = json_ensure_ascii_preserving_format(json_str);
+    }
     return mk_val<value_string>(json_str);
 }
 
@@ -460,13 +539,18 @@ const func_builtins & value_int_t::get_builtins() const {
             int64_t val = args.get_pos(0)->as_int();
             return mk_val<value_int>(val < 0 ? -val : val);
         }},
+        {"int", [](const func_args & args) -> value {
+            args.ensure_vals<value_int>();
+            return mk_val<value_int>(args.get_pos(0)->as_int());
+        }},
         {"float", [](const func_args & args) -> value {
             args.ensure_vals<value_int>();
             double val = static_cast<double>(args.get_pos(0)->as_int());
             return mk_val<value_float>(val);
         }},
-        {"tojson", tojson},
+        {"safe", tojson},
         {"string", tojson},
+        {"tojson", tojson},
     };
     return builtins;
 }
@@ -485,8 +569,13 @@ const func_builtins & value_float_t::get_builtins() const {
             int64_t val = static_cast<int64_t>(args.get_pos(0)->as_float());
             return mk_val<value_int>(val);
         }},
-        {"tojson", tojson},
+        {"float", [](const func_args & args) -> value {
+            args.ensure_vals<value_float>();
+            return mk_val<value_float>(args.get_pos(0)->as_float());
+        }},
+        {"safe", tojson},
         {"string", tojson},
+        {"tojson", tojson},
     };
     return builtins;
 }
@@ -771,6 +860,11 @@ const func_builtins & value_string_t::get_builtins() const {
 
 
 const func_builtins & value_bool_t::get_builtins() const {
+    static const func_handler tostring = [](const func_args & args) -> value {
+        args.ensure_vals<value_bool>();
+        bool val = args.get_pos(0)->as_bool();
+        return mk_val<value_string>(val ? "True" : "False");
+    };
     static const func_builtins builtins = {
         {"default", default_value},
         {"int", [](const func_args & args) -> value {
@@ -783,11 +877,8 @@ const func_builtins & value_bool_t::get_builtins() const {
             bool val = args.get_pos(0)->as_bool();
             return mk_val<value_float>(val ? 1.0 : 0.0);
         }},
-        {"string", [](const func_args & args) -> value {
-            args.ensure_vals<value_bool>();
-            bool val = args.get_pos(0)->as_bool();
-            return mk_val<value_string>(val ? "True" : "False");
-        }},
+        {"safe", tostring},
+        {"string", tostring},
         {"tojson", tojson},
     };
     return builtins;
@@ -1100,18 +1191,14 @@ const func_builtins & value_object_t::get_builtins() const {
 }
 
 const func_builtins & value_none_t::get_builtins() const {
+    static const func_handler tostring = [](const func_args &) -> value {
+        return mk_val<value_string>("None");
+    };
     static const func_builtins builtins = {
         {"default", default_value},
         {"tojson", tojson},
-        {"string", [](const func_args &) -> value {
-            return mk_val<value_string>("None");
-        }},
-        {"safe", [](const func_args &) -> value {
-            return mk_val<value_string>("None");
-        }},
-        {"strip", [](const func_args &) -> value {
-            return mk_val<value_string>("None");
-        }},
+        {"string", tostring},
+        {"safe", tostring},
         {"items", empty_value_fn<value_array>},
         {"map", empty_value_fn<value_array>},
         {"reject", empty_value_fn<value_array>},

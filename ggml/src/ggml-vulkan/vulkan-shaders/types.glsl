@@ -188,6 +188,22 @@ struct block_q8_0_packed16
 #define DATA_A_QUANT_LEGACY
 #endif
 
+#define QUANT_K_Q1_0 128
+#define QUANT_R_Q1_0 1
+
+struct block_q1_0
+{
+    float16_t d;
+    uint8_t qs[QUANT_K_Q1_0 / 8];
+};
+
+#if defined(DATA_A_Q1_0)
+#define QUANT_K QUANT_K_Q1_0
+#define QUANT_R QUANT_R_Q1_0
+#define QUANT_AUXF 1
+#define A_TYPE block_q1_0
+#endif
+
 #define QUANT_K_Q8_1 32
 #define QUANT_R_Q8_1 1
 
@@ -1676,6 +1692,7 @@ struct block_iq4_nl_packed16
 #if defined(DATA_A_IQ4_NL)
 #define QUANT_K QUANT_K_IQ4_NL
 #define QUANT_R QUANT_R_IQ4_NL
+#define QUANT_AUXF 1
 #define A_TYPE block_iq4_nl
 #define A_TYPE_PACKED16 block_iq4_nl_packed16
 #endif
@@ -1694,6 +1711,22 @@ struct block_mxfp4
 #define QUANT_R QUANT_R_MXFP4
 #define QUANT_AUXF 1
 #define A_TYPE block_mxfp4
+#endif
+
+#define QUANT_K_NVFP4 64
+#define QUANT_R_NVFP4 1
+
+struct block_nvfp4
+{
+    uint8_t d[QUANT_K_NVFP4 / 16];
+    uint8_t qs[QUANT_K_NVFP4 / 2];
+};
+
+#if defined(DATA_A_NVFP4)
+#define QUANT_K QUANT_K_NVFP4
+#define QUANT_R QUANT_R_NVFP4
+#define QUANT_AUXF 1
+#define A_TYPE block_nvfp4
 #endif
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
@@ -1715,13 +1748,31 @@ void init_iq_shmem(uvec3 wgsize)
 }
 #endif
 
-#if defined(DATA_A_MXFP4)
+#if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
 const int8_t kvalues_mxfp4_const[16] = {
     int8_t(0), int8_t(1), int8_t(2), int8_t(3), int8_t(4), int8_t(6), int8_t(8), int8_t(12),
     int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-12),
 };
 
 shared int8_t kvalues_mxfp4[16];
+
+#if defined(DATA_A_NVFP4)
+// UE4M3 scale in NVFP4 blocks use only 7 bits; sign (bit 7) is always zero.
+shared float ue4m3_fp32_lut[128];
+
+float ue4m3_to_fp32_build(uint u) {
+    if (u == 0u || u == 127u) {
+        return 0.0;
+    }
+    const uint exp = (u >> 3) & 15u;
+    const uint man = u & 7u;
+    if (exp == 0u) {
+        return float(man) * (1.0 / 512.0);
+    }
+    const uint bits = (exp + 120u) << 23 | (man << 20);
+    return uintBitsToFloat(bits);
+}
+#endif
 
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
@@ -1730,6 +1781,11 @@ void init_iq_shmem(uvec3 wgsize)
     for (uint i = gl_LocalInvocationIndex.x; i < kvalues_mxfp4.length(); i += wgsize.x) {
         kvalues_mxfp4[i] = kvalues_mxfp4_const[i];
     }
+#if defined(DATA_A_NVFP4)
+    for (uint i = gl_LocalInvocationIndex.x; i < 128u; i += wgsize.x) {
+        ue4m3_fp32_lut[i] = ue4m3_to_fp32_build(i);
+    }
+#endif
     barrier();
 }
 #endif
@@ -1765,6 +1821,12 @@ float e8m0_to_fp32(uint8_t x) {
 
     return uintBitsToFloat(bits);
 }
+
+#if defined(DATA_A_NVFP4)
+float ue4m3_to_fp32(uint8_t x) {
+    return ue4m3_fp32_lut[uint(x)];
+}
+#endif
 
 #if BDA
 

@@ -28,18 +28,20 @@ llm_build_cogvlm::llm_build_cogvlm(const llama_model & model, const llm_graph_pa
 
     for (int il = 0; il < n_layer; ++il) {
         // get either the text or image weight tensors
-        ggml_tensor *wqkv, *wo;
+        ggml_tensor *wqkv, *wo, *wo_s;
         ggml_tensor *ffn_gate, *ffn_down, *ffn_up;
 
         if (is_text) {
             wqkv     = model.layers[il].wqkv;
             wo       = model.layers[il].wo;
+            wo_s     = model.layers[il].wo_s;
             ffn_gate = model.layers[il].ffn_gate;
             ffn_down = model.layers[il].ffn_down;
             ffn_up   = model.layers[il].ffn_up;
         } else {
             wqkv     = model.layers[il].visexp_attn_wqkv;
             wo       = model.layers[il].visexp_attn_wo;
+            wo_s     = nullptr;
             ffn_gate = model.layers[il].visexp_ffn_gate;
             ffn_down = model.layers[il].visexp_ffn_down;
             ffn_up   = model.layers[il].visexp_ffn_up;
@@ -64,7 +66,7 @@ llm_build_cogvlm::llm_build_cogvlm(const llama_model & model, const llm_graph_pa
             Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, rope_type);
 
             cur = build_attn(inp_attn,
-                wo, nullptr,
+                wo, nullptr, wo_s,
                 Qcur, Kcur, Vcur,
                 nullptr, nullptr, nullptr,
                 kq_scale, il);
@@ -86,6 +88,10 @@ llm_build_cogvlm::llm_build_cogvlm(const llama_model & model, const llm_graph_pa
         cur = ggml_add(ctx0, cur, ffn_inp);
         cb(cur, "ffn_out", il);
 
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
+
+        // input for next layer
         inpL = cur;
     }
 
