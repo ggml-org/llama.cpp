@@ -68,60 +68,98 @@ static fs::path get_cache_directory() {
     return cache;
 }
 
-static bool is_valid_repo_id(const std::string & repo_id) {
-    // Basic validation: should contain exactly one slash and no invalid characters
-    size_t slash_count = std::count(repo_id.begin(), repo_id.end(), '/');
-    if (slash_count != 1) {
-        return false;
-    }
-    
-    // Check for invalid characters (simplified)
-    for (char c : repo_id) {
-        if (c == '\\' || c == '.' || c == '~') {
-             // Simple check, allowing dots in filenames usually but restricting path traversal
-             // The reference code checks for ".." as a substring which is better handled by logic below or just basic char check
-        }
-    }
-    
-    // More robust check for path traversal attempts
-    if (repo_id.find("..") != std::string::npos) {
-        return false;
-    }
-
-    return true;
+static bool is_alphanum(const char c) {
+    return (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9');
 }
 
-static nl::json api_get(const std::string & url) {
-    common_remote_params params;
-    params.timeout = 30; // 30 seconds timeout
+static bool is_special_char(char c) {
+    return c == '/' || c == '.' || c == '-';
+}
+
+static bool is_valid_repo_id(const std::string & repo_id) {
+    if (repo_id.empty() || repo_id.length() > 256) {
+        return false;
+    }
+    int slash = 0;
+    bool special = true;
+
+    for (const char c : repo_id) {
+        if (is_alphanum(c) || c == '_') {
+            special = false;
+        } else if (is_special_char(c)) {
+            if (special) {
+                return false;
+            }
+            slash += (c == '/');
+            special = true;
+        } else {
+            return false;
+        }
+    }
+    return !special && slash == 1;
+}
+
+static bool is_valid_subpath(const fs::path & base, const fs::path & subpath) {
+    if (subpath.is_absolute()) {
+        return false;
+    }
+    // Resolve both paths to absolute and normalize
+    std::error_code ec;
+    auto b = fs::absolute(base, ec).lexically_normal();
+    auto t = (b / subpath).lexically_normal();
     
-    auto [http_code, body_vec] = common_remote_get_content(url, params);
-    std::string body(body_vec.begin(), body_vec.end());
+    if (ec) return false;
+
+    // Check if t starts with b
+    auto [b_end, _] = std::mismatch(b.begin(), b.end(), t.begin(), t.end());
+    return b_end == b.end();
+}
+
+
+static nl::json api_get(const std::string & url, const std::string & token = "") {
+    auto [cli, parts] = common_http_client(url);
     
-    if (http_code != 200) {
+    httplib::Headers headers;
+    headers.emplace("User-Agent", "llama-cpp/" + build_info);
+    if (!token.empty()) {
+        headers.emplace("Cookie", "m_session_id=" + token);
+    }
+    
+    cli.set_read_timeout(30, 0); // 30 seconds timeout
+    cli.set_write_timeout(30, 0);
+    
+    auto res = cli.Get(parts.path, headers);
+    
+    if (!res || res->status != 200) {
+        std::string body = res ? res->body : "";
         if (!body.empty()) {
             try {
                 auto json_error = nl::json::parse(body);
                 if (json_error.contains("Message")) {
                     body = json_error["Message"].get<std::string>();
+                } else if (json_error.contains("msg")) {
+                    body = json_error["msg"].get<std::string>();
                 }
             } catch (...) {
-                // Keep original body if parsing fails
+                // Keep original body
             }
         }
+        long http_code = res ? res->status : -1;
         throw std::runtime_error("HTTP " + std::to_string(http_code) + ": " + body);
     }
     
-    return nl::json::parse(body);
+    return nl::json::parse(res->body);
 }
 
-static std::vector<ms_file> list_files(const std::string & repo_id) {
+static std::vector<ms_file> list_files(const std::string & repo_id, const std::string & token = "") {
     std::vector<ms_file> files;
     
     std::string api_url = "https://www.modelscope.cn/api/v1/models/" + repo_id + "/repo/files";
     
     try {
-        auto response = api_get(api_url);
+        auto response = api_get(api_url, token);
         
         // ModelScope API returns files in Data.Files array
         if (response.contains("Data") && response["Data"].contains("Files")) {
@@ -215,9 +253,18 @@ static std::string find_best_model(const std::vector<ms_file> & files, const std
 
 static std::string get_local_path(const ms_file & file) {
     fs::path cache_dir = get_cache_directory();
-    fs::path local_path = cache_dir / "hub" / "models" / file.repo_id / file.path;
+    fs::path base_path = cache_dir / "hub" / "models" / file.repo_id;
+    
+    // Security check against path traversal
+    if (!is_valid_subpath(base_path, file.path)) {
+        LOG_ERR("%s: security check failed for path: %s\n", __func__, file.path.c_str());
+        return "";
+    }
+
+    fs::path local_path = base_path / file.path;
     return local_path.string();
 }
+
 
 // ProgressBar class copied from download.cpp
 class ProgressBar {
@@ -309,7 +356,7 @@ public:
 };
 
 // Download function with progress bar
-static std::string download_file_with_progress(const ms_file & selected_file, const fs::path & local_path) {
+static std::string download_file_with_progress(const ms_file & selected_file, const fs::path & local_path, const std::string & token = "") {
     fs::create_directories(local_path.parent_path());
     
     std::ofstream ofs(local_path, std::ios::binary);
@@ -322,6 +369,9 @@ static std::string download_file_with_progress(const ms_file & selected_file, co
     
     httplib::Headers headers;
     headers.emplace("User-Agent", "llama-cpp/" + build_info);
+    if (!token.empty()) {
+        headers.emplace("Cookie", "m_session_id=" + token);
+    }
     
     cli.set_read_timeout(300, 0); // 5 minutes timeout
     cli.set_write_timeout(300, 0);
@@ -384,7 +434,7 @@ static std::string download_file_with_progress(const ms_file & selected_file, co
     return local_path.string();
 }
 
-std::string download_model(const std::string & clean_repo_id, const std::string & filename, bool offline, const std::string & quant_tag) {
+std::string download_model(const std::string & clean_repo_id, const std::string & filename, bool offline, const std::string & quant_tag, const std::string & token) {
     if (!is_valid_repo_id(clean_repo_id)) {
         LOG_ERR("%s: invalid repository: %s\n", __func__, clean_repo_id.c_str());
         return "";
@@ -420,7 +470,7 @@ std::string download_model(const std::string & clean_repo_id, const std::string 
         
         // Not in cache, need to download
         if (!offline) {
-            auto remote_files = list_files(clean_repo_id);
+            auto remote_files = list_files(clean_repo_id, token);
             for (const auto & remote_file : remote_files) {
                 if (remote_file.path == filename) {
                     ms_file selected_file = remote_file;
@@ -444,7 +494,7 @@ std::string download_model(const std::string & clean_repo_id, const std::string 
                         }
                     }
 
-                    return download_file_with_progress(selected_file, local_path);
+                    return download_file_with_progress(selected_file, local_path, token);
                 }
             }
             
@@ -456,7 +506,7 @@ std::string download_model(const std::string & clean_repo_id, const std::string 
                     LOG_ERR("  %s\n", file.path.c_str());
                 }
             }
-            auto remote_files_list = list_files(clean_repo_id);
+            auto remote_files_list = list_files(clean_repo_id, token);
             if (!remote_files_list.empty()) {
                 LOG_ERR("%s: available files in repository:\n", __func__);
                 for (const auto & file : remote_files_list) {
@@ -495,7 +545,7 @@ std::string download_model(const std::string & clean_repo_id, const std::string 
 
     // Not in cache or no good match, check remote
     if (!offline) {
-        auto remote_files = list_files(clean_repo_id);
+        auto remote_files = list_files(clean_repo_id, token);
         if (remote_files.empty()) {
             LOG_ERR("%s: no files found in ModelScope repository %s\n", __func__, clean_repo_id.c_str());
             return "";
@@ -535,7 +585,7 @@ std::string download_model(const std::string & clean_repo_id, const std::string 
                     }
                 }
                 
-                return download_file_with_progress(file, local_path);
+                return download_file_with_progress(file, local_path, token);
             }
         }
     }
