@@ -68,7 +68,7 @@ int main(int argc, char ** argv) {
         uint32_t hp_nct = 0; // hparams.n_ctx_train
         uint32_t hp_nex = 0; // hparams.n_expert
 
-        auto dmd = llama_get_device_memory_data(params.model.path.c_str(), &mparams, &cparams, devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
+        auto dmd = llama_get_device_memory_data(params.model.path.c_str(), &mparams, &cparams, devs, hp_ngl, hp_nct, hp_nex, params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
         GGML_ASSERT(dmd.size() == devs.size() + 1);
 
         LOG_INF("%s: printing estimated memory in MiB to stdout (device, model, context, compute) ...\n", __func__);
@@ -81,7 +81,7 @@ int main(int argc, char ** argv) {
             printf("%zu ", dmd[id].mb.compute/1024/1024);
             printf("\n");
         }
-        printf("host ");
+        printf("Host ");
         printf("%zu ", dmd.back().mb.model/1024/1024);
         printf("%zu ", dmd.back().mb.context/1024/1024);
         printf("%zu ", dmd.back().mb.compute/1024/1024);
