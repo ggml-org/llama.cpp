@@ -22,9 +22,13 @@
 
 	import {
 		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
-		AUTO_SCROLL_INTERVAL,
-		INITIAL_SCROLL_DELAY
+		AUTO_SCROLL_INTERVAL
 	} from '$lib/constants/auto-scroll';
+
+	// Note: this constant was previously in the constants/auto-scroll file above but was
+	// removed in the PR #20999
+	const INITIAL_SCROLL_DELAY = 50;
+
 	import { onMount } from 'svelte';
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
