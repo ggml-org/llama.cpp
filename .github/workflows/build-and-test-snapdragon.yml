@@ -6,7 +6,7 @@ on:
     branches:
       - master
     paths:
-      - '.github/workflows/build-and-test-hexagon.yml'
+      - '.github/workflows/build-and-test-snapdragon.yml'
       - 'ggml/include/ggml-hexagon.h'
       - 'ggml/src/ggml-hexagon/**'
       - 'docs/backend/snapdragon/**'
@@ -16,7 +16,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      - '.github/workflows/build-and-test-hexagon.yml'
+      - '.github/workflows/build-and-test-snapdragon.yml'
       - 'ggml/include/ggml-hexagon.h'
       - 'ggml/src/ggml-hexagon/**'
       - 'docs/backend/snapdragon/**'
