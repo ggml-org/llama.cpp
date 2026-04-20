@@ -436,34 +436,27 @@ static void htp_error_callback(dspqueue_t queue, int error, void * context) {
 struct profile_data {
     uint64_t usecs;
     uint64_t cycles;
-    uint64_t pkts;
     uint32_t pmu_counters[HEX_NUM_PMU_COUNTERS];
 };
 
 static inline void profile_start(struct profile_data * d) {
     d->usecs  = HAP_perf_get_qtimer_count();
     d->cycles = hex_get_cycles();
-    #if __HVX_ARCH__ >= 79
-        hex_get_pmu(d->pmu_counters);
-        d->pkts = d->pmu_counters[0];
-    #else
-        d->pkts   = hex_get_pktcnt();
-    #endif
+#if __HVX_ARCH__ >= 79
+    hex_get_pmu(d->pmu_counters);
+#endif
 }
 
 static inline void profile_stop(struct profile_data * d) {
     d->usecs  = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - d->usecs);
     d->cycles = hex_get_cycles() - d->cycles;
-    #if __HVX_ARCH__ >= 79
-        uint32_t pmu_counters_end[HEX_NUM_PMU_COUNTERS];
-        hex_get_pmu(pmu_counters_end);
-        for (int i = 0; i < HEX_NUM_PMU_COUNTERS; i++) {
-            d->pmu_counters[i] = pmu_counters_end[i] - d->pmu_counters[i];
-        }
-        d->pkts = d->pmu_counters[0];
-    #else
-        d->pkts   = hex_get_pktcnt() - d->pkts;
-    #endif
+#if __HVX_ARCH__ >= 79
+    uint32_t pmu_counters_end[HEX_NUM_PMU_COUNTERS];
+    hex_get_pmu(pmu_counters_end);
+    for (int i = 0; i < HEX_NUM_PMU_COUNTERS; i++) {
+        d->pmu_counters[i] = pmu_counters_end[i] - d->pmu_counters[i];
+    }
+#endif
 }
 
 static int execute_op(struct htp_ops_context * octx) {
@@ -743,26 +736,35 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
             continue;
         }
 
+        // Reset poll count for valid requests
+        poll_count = DSPQUEUE_POLL_COUNT;
+
         const uint32_t n_bufs = req.n_bufs;
         const uint32_t n_tens = req.n_tensors;
         const uint32_t n_ops  = req.n_ops;
 
-        const uint32_t b_size = sizeof(struct htp_buf_desc) * n_bufs;
-        const uint32_t t_size = sizeof(struct htp_tensor)   * n_tens;
-        const uint32_t o_size = sizeof(struct htp_op_desc)  * n_ops;
+        const uint32_t b_size = sizeof(struct htp_buf_desc)  * n_bufs;
+        const uint32_t t_size = sizeof(struct htp_tensor)    * n_tens;
+        const uint32_t o_size = sizeof(struct htp_op_desc)   * n_ops;
+        const uint32_t p_size = sizeof(struct htp_prof_desc) * n_ops;
 
         if (dbuf.size < b_size + t_size + o_size) {
             FARF(ERROR, "invalid opbatch memory block size %u", dbuf.size);
             break;
         }
 
-        // Reset poll count for valid requests
-        poll_count = DSPQUEUE_POLL_COUNT;
-
+        // Setup input descriptors
         uint8_t * m_ptr = dbuf.ptr;
-        struct htp_buf_desc* bufs = (struct htp_buf_desc*) m_ptr; m_ptr += b_size;
-        struct htp_tensor*   tens = (struct htp_tensor*)   m_ptr; m_ptr += t_size;
-        struct htp_op_desc*   ops = (struct htp_op_desc*)  m_ptr;
+        struct htp_buf_desc* bufs = (struct htp_buf_desc*)  m_ptr; m_ptr += b_size;
+        struct htp_tensor*   tens = (struct htp_tensor*)    m_ptr; m_ptr += t_size;
+        struct htp_op_desc*   ops = (struct htp_op_desc*)   m_ptr; m_ptr += o_size;
+
+        // Setup output descriptors
+        struct htp_prof_desc* pds = (struct htp_prof_desc*) m_ptr;
+        dbuf.ptr    = m_ptr;
+        dbuf.offset = dbuf.offset + b_size + t_size + o_size;
+        dbuf.size   = p_size;
+        dbuf.flags  = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
 
         FARF(HIGH, "processing opbatch: n-bufs %u n-tensors %u n-ops %u : m-size %u b-size %u t-size %u o-size %u",
                 n_bufs, n_tens, n_ops, dbuf.size, b_size, t_size, o_size);
@@ -782,23 +784,22 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
             proc_op_req(octx, tens, i, &ops[i]);
 
             profile_stop(&prof);
-            ops[i].prof_usecs  = prof.usecs;
-            ops[i].prof_cycles = prof.cycles;
-            ops[i].prof_pkts   = prof.pkts;
+
+            pds[i].opcode = ops[i].opcode;
+            pds[i].usecs  = prof.usecs;
+            pds[i].cycles = prof.cycles;
             for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
-                ops[i].pmu_counters[j] = prof.pmu_counters[j];
+                pds[i].pmu[j] = prof.pmu_counters[j];
             }
         }
 
         // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
 
         struct htp_opbatch_rsp rsp;
+        rsp.id        = req.id;
         rsp.status    = HTP_STATUS_OK;
-        rsp.n_bufs    = n_bufs;
-        rsp.n_tensors = n_tens;
         rsp.n_ops     = n_ops;
 
-        dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
         err = dspqueue_write(queue, 0, 1, &dbuf, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
         if (err != 0) {
             FARF(ERROR, "dspqueue_write failed: 0x%08x", (unsigned) err);

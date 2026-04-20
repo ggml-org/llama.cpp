@@ -134,21 +134,23 @@ enum htp_op_flags {
 
 // Op descriptor
 struct htp_op_desc {
-    uint32_t opcode;                             // GGML/HTP Op
-    uint32_t flags;                              // Op flags
-    int32_t  params[HTP_OP_MAX_PARAMS];          // Params for the op, e.g. epsilon of RMS norm
-    uint16_t src[HTP_OP_MAX_INPUTS];             // Input tensors indices
-    uint16_t dst;                                // Output tensor index
+    uint32_t opcode;                    // GGML/HTP Op
+    uint32_t flags;                     // Op flags
+    int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
+    uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
+    uint16_t dst;                       // Output tensor index
+};
 
-    // the rest is filled in-place by the NPU
-    uint32_t prof_usecs;                         // Number of usec per op
-    uint32_t prof_cycles;                        // Number of cycles per op
-    uint32_t prof_pkts;                          // Number of instruction packets per op
-    uint32_t pmu_counters[HEX_NUM_PMU_COUNTERS]; // PMU counters per op
-    uint8_t pad[4];                              // sizeof(htp_op_desc) must be multiple of 8
+// Profile descriptor
+struct htp_prof_desc {
+    uint32_t opcode;                    // GGML/HTP Op
+    uint32_t usecs;                     // Number of usec
+    uint32_t cycles;                    // Number of cycles
+    uint32_t pmu[HEX_NUM_PMU_COUNTERS]; // PMU counters
 };
 
 struct htp_opbatch_req {
+    uint32_t id;          // Batch id
     uint32_t n_bufs;      // Number of buffers
     uint32_t n_tensors;   // Number of tensors
     uint32_t n_ops;       // Number of ops
@@ -159,11 +161,10 @@ struct htp_opbatch_req {
 };
 
 struct htp_opbatch_rsp {
+    uint32_t id;         // Batch id
     uint32_t status;     // HTP_STATUS_...
-    uint32_t n_bufs;
-    uint32_t n_tensors;
-    uint32_t n_ops;
-    // struct htp_op_req ops[];     -- dspqueue buf 0
+    uint32_t n_ops;      // Number of op profile descriptors
+    // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 
 #endif /* HTP_OPS_H */
