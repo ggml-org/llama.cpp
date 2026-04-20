@@ -199,6 +199,28 @@ export { default as ChatFormActions } from './ChatForm/ChatFormActions/ChatFormA
 export { default as ChatFormActionSubmit } from './ChatForm/ChatFormActions/ChatFormActionSubmit.svelte';
 
 /**
+ * Dropdown submenu for managing tool permissions in the chat form.
+ *
+ * Displays a collapsible list of available tools organized by group (Built-in / JSON Schema).
+ * Each group can be expanded to show individual tools with checkboxes for enabling/disabling.
+ * Provides bulk enable/disable controls per group and shows enabled/total tool counts.
+ * Opens the tools panel on the server when the menu opens.
+ *
+ * Features:
+ * - Grouped tools with collapsible sections
+ * - Group favicon display (MCP server icons)
+ * - Per-group and per-tool toggle checkboxes
+ * - Loading/error states for tool discovery
+ * - Integration with toolsPanel for state management
+ *
+ * @example
+ * ```svelte
+ * <ChatFormActionToolsSubmenu />
+ * ```
+ */
+export { default as ChatFormActionToolsSubmenu } from './ChatForm/ChatFormActions/ChatFormActionToolsSubmenu.svelte';
+
+/**
  * Hidden file input element for programmatic file selection.
  */
 export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileInputInvisible.svelte';
@@ -691,13 +713,6 @@ export { default as ChatSettingsFooter } from './ChatSettings/ChatSettingsFooter
  * Handles validation, help text display, and parameter source indicators.
  */
 export { default as ChatSettingsFields } from './ChatSettings/ChatSettingsFields.svelte';
-
-/**
- * Import/export tab content for conversation data management. Provides buttons
- * to export all conversations as JSON file and import from JSON file.
- * Handles file download/upload and data validation.
- */
-export { default as ChatSettingsImportExportTab } from '../settings/SettingsImportExport.svelte';
 
 /**
  * Badge indicating parameter source for sampling settings. Shows one of:

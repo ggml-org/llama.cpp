@@ -1,10 +1,11 @@
 import type { Component } from 'svelte';
 import { MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
 import { FILE_TYPE_ICONS } from '$lib/constants/icons';
+import { AttachmentMenuItemId } from '$lib/enums';
 
 export interface AttachmentMenuItem {
 	/** Unique identifier for the item */
-	id: string;
+	id: AttachmentMenuItemId;
 	/** Display label */
 	label: string;
 	/** Lucide icon component */
@@ -29,7 +30,7 @@ export interface AttachmentMenuItem {
  */
 export const ATTACHMENT_FILE_ITEMS: AttachmentMenuItem[] = [
 	{
-		id: 'images',
+		id: AttachmentMenuItemId.IMAGES,
 		label: 'Images',
 		icon: FILE_TYPE_ICONS.image,
 		class: 'images-button',
@@ -38,7 +39,7 @@ export const ATTACHMENT_FILE_ITEMS: AttachmentMenuItem[] = [
 		action: 'onFileUpload'
 	},
 	{
-		id: 'audio',
+		id: AttachmentMenuItemId.AUDIO,
 		label: 'Audio Files',
 		icon: FILE_TYPE_ICONS.audio,
 		class: 'audio-button',
@@ -47,14 +48,14 @@ export const ATTACHMENT_FILE_ITEMS: AttachmentMenuItem[] = [
 		action: 'onFileUpload'
 	},
 	{
-		id: 'text',
+		id: AttachmentMenuItemId.TEXT,
 		label: 'Text Files',
 		icon: FILE_TYPE_ICONS.text,
 		enabledWhen: 'always',
 		action: 'onFileUpload'
 	},
 	{
-		id: 'pdf',
+		id: AttachmentMenuItemId.PDF,
 		label: 'PDF Files',
 		icon: FILE_TYPE_ICONS.pdf,
 		enabledWhen: 'always',
@@ -66,7 +67,7 @@ export const ATTACHMENT_FILE_ITEMS: AttachmentMenuItem[] = [
 
 export const ATTACHMENT_EXTRA_ITEMS: AttachmentMenuItem[] = [
 	{
-		id: 'system-message',
+		id: AttachmentMenuItemId.SYSTEM_MESSAGE,
 		label: 'System Message',
 		icon: MessageSquare,
 		enabledWhen: 'always',
@@ -77,7 +78,7 @@ export const ATTACHMENT_EXTRA_ITEMS: AttachmentMenuItem[] = [
 
 export const ATTACHMENT_MCP_ITEMS: AttachmentMenuItem[] = [
 	{
-		id: 'mcp-prompt',
+		id: AttachmentMenuItemId.MCP_PROMPT,
 		label: 'MCP Prompt',
 		icon: Zap,
 		enabledWhen: 'always',
@@ -85,7 +86,7 @@ export const ATTACHMENT_MCP_ITEMS: AttachmentMenuItem[] = [
 		visibleWhen: 'hasMcpPromptsSupport'
 	},
 	{
-		id: 'mcp-resources',
+		id: AttachmentMenuItemId.MCP_RESOURCES,
 		label: 'MCP Resources',
 		icon: FolderOpen,
 		enabledWhen: 'always',

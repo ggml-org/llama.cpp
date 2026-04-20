@@ -4,16 +4,6 @@ export enum ToolSource {
 	CUSTOM = 'custom'
 }
 
-export enum ToolGroupLabel {
-	BUILTIN = 'Built-in',
-	CUSTOM = 'JSON Schema'
-}
-
-export enum ToolServerLabel {
-	BUILTIN = 'Built-in Tools',
-	CUSTOM = 'Custom Tools'
-}
-
 export enum ToolPermissionDecision {
 	ALWAYS = 'always',
 	ALWAYS_SERVER = 'always_server',

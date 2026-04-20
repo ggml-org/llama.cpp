@@ -1,16 +1,13 @@
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import {
-	HealthCheckStatus,
-	JsonSchemaType,
-	ToolCallType,
-	ToolSource,
-	ToolGroupLabel,
-	ToolServerLabel
-} from '$lib/enums';
+import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
-import { DISABLED_TOOLS_LOCALSTORAGE_KEY } from '$lib/constants';
+import {
+	DISABLED_TOOLS_LOCALSTORAGE_KEY,
+	TOOL_GROUP_LABELS,
+	TOOL_SERVER_LABELS
+} from '$lib/constants';
 import { SvelteSet } from 'svelte/reactivity';
 
 class ToolsStore {
@@ -145,7 +142,7 @@ class ToolsStore {
 		if (this._builtinTools.length > 0) {
 			groups.push({
 				source: ToolSource.BUILTIN,
-				label: ToolGroupLabel.BUILTIN,
+				label: TOOL_GROUP_LABELS[ToolSource.BUILTIN],
 				tools: this._builtinTools
 			});
 		}
@@ -192,7 +189,7 @@ class ToolsStore {
 		if (custom.length > 0) {
 			groups.push({
 				source: ToolSource.CUSTOM,
-				label: ToolGroupLabel.CUSTOM,
+				label: TOOL_GROUP_LABELS[ToolSource.CUSTOM],
 				tools: custom
 			});
 		}
@@ -349,10 +346,10 @@ class ToolsStore {
 					return mcpStore.getServerDisplayName(entry.serverName);
 				}
 				if (entry.source === ToolSource.BUILTIN) {
-					return ToolServerLabel.BUILTIN;
+					return TOOL_SERVER_LABELS[ToolSource.BUILTIN];
 				}
 				if (entry.source === ToolSource.CUSTOM) {
-					return ToolServerLabel.CUSTOM;
+					return TOOL_SERVER_LABELS[ToolSource.CUSTOM];
 				}
 			}
 		}

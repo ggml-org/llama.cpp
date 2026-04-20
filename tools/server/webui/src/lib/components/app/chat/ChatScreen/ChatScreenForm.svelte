@@ -2,7 +2,7 @@
 	import { afterNavigate, beforeNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatFormHelperText, ChatForm } from '$lib/components/app';
-	import { draftsStore } from '$lib/stores/drafts.svelte';
+	import { draftMessagesStore } from '$lib/stores/draft-messages.svelte';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -64,7 +64,7 @@
 
 		message = '';
 		uploadedFiles = [];
-		draftsStore.clearDraft(chatId);
+		draftMessagesStore.clearDraftMessage(chatId);
 
 		chatFormRef?.resetTextareaHeight();
 
@@ -85,7 +85,7 @@
 	}
 
 	onMount(() => {
-		const draft = draftsStore.getDraft(chatId);
+		const draft = draftMessagesStore.getDraftMessage(chatId);
 
 		if ((draft.message || draft.files.length > 0) && !initialMessage) {
 			message = draft.message;
@@ -95,11 +95,11 @@
 	});
 
 	beforeNavigate(() => {
-		draftsStore.saveDraft(chatId, message, uploadedFiles);
+		draftMessagesStore.saveDraftMessage(chatId, message, uploadedFiles);
 	});
 
 	afterNavigate(() => {
-		const draft = draftsStore.getDraft(chatId);
+		const draft = draftMessagesStore.getDraftMessage(chatId);
 		message = draft.message;
 		uploadedFiles = draft.files;
 

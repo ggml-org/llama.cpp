@@ -8,8 +8,10 @@
 	import { fade } from 'svelte/transition';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { onMount, tick } from 'svelte';
 	import { setChatSettingsConfigContext } from '$lib/contexts';
 	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
+	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 
 	let { children } = $props();
 
@@ -23,9 +25,18 @@
 	);
 	let localConfig: SettingsConfigType = $state({ ...config() });
 
-	let canScrollLeft = $state(false);
-	let canScrollRight = $state(false);
-	let scrollContainer: HTMLDivElement | undefined = $state();
+	const carousel = useScrollCarousel();
+
+	// Scroll active tab into view on mount (e.g. after page refresh)
+	onMount(async () => {
+		await tick();
+		if (carousel.scrollContainer) {
+			const activeTab = carousel.scrollContainer.querySelector('[data-active="true"]');
+			if (activeTab instanceof HTMLElement) {
+				carousel.scrollToCenter(activeTab);
+			}
+		}
+	});
 
 	function handleThemeChange(newTheme: string) {
 		localConfig.theme = newTheme;
@@ -74,47 +85,10 @@
 		goto(settingsReferrer.url);
 	}
 
-	function scrollToCenter(element: HTMLElement) {
-		if (!scrollContainer) return;
-
-		const containerRect = scrollContainer.getBoundingClientRect();
-		const elementRect = element.getBoundingClientRect();
-
-		const elementCenter = elementRect.left + elementRect.width / 2;
-		const containerCenter = containerRect.left + containerRect.width / 2;
-		const scrollOffset = elementCenter - containerCenter;
-
-		scrollContainer.scrollBy({ left: scrollOffset, behavior: 'smooth' });
-	}
-
-	function scrollLeft() {
-		if (!scrollContainer) return;
-		scrollContainer.scrollBy({ left: -250, behavior: 'smooth' });
-	}
-
-	function scrollRight() {
-		if (!scrollContainer) return;
-		scrollContainer.scrollBy({ left: 250, behavior: 'smooth' });
-	}
-
-	function updateScrollButtons() {
-		if (!scrollContainer) return;
-
-		const { scrollLeft, scrollWidth, clientWidth } = scrollContainer;
-		canScrollLeft = scrollLeft > 0;
-		canScrollRight = scrollLeft < scrollWidth - clientWidth - 1;
-	}
-
 	export function reset() {
 		localConfig = { ...config() };
-		setTimeout(updateScrollButtons, 100);
+		setTimeout(carousel.updateScrollButtons, 100);
 	}
-
-	$effect(() => {
-		if (scrollContainer) {
-			updateScrollButtons();
-		}
-	});
 
 	setChatSettingsConfigContext({
 		get localConfig() {
@@ -162,10 +136,10 @@
 			<div class="border-b border-border/30 py-2">
 				<div class="relative flex items-center" style="scroll-padding: 1rem;">
 					<button
-						class="absolute left-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollLeft
+						class="absolute left-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {carousel.canScrollLeft
 							? 'opacity-100'
 							: 'pointer-events-none opacity-0'}"
-						onclick={scrollLeft}
+						onclick={carousel.scrollLeft}
 						aria-label="Scroll left"
 					>
 						<ChevronLeft class="h-4 w-4" />
@@ -173,8 +147,8 @@
 
 					<div
 						class="scrollbar-hide overflow-x-auto py-2"
-						bind:this={scrollContainer}
-						onscroll={updateScrollButtons}
+						bind:this={carousel.scrollContainer}
+						onscroll={carousel.updateScrollButtons}
 					>
 						<div class="flex min-w-max gap-2">
 							{#each settingSections as section (section.title)}
@@ -183,9 +157,10 @@
 									section.slug
 										? 'bg-accent text-accent-foreground'
 										: 'text-muted-foreground'}"
+									data-active={activeSlug === section.slug}
 									href="#/settings/chat/{section.slug}"
 									onclick={(e: MouseEvent) => {
-										scrollToCenter(e.currentTarget as HTMLElement);
+										carousel.scrollToCenter(e.currentTarget as HTMLElement);
 									}}
 								>
 									<section.icon class="h-4 w-4 flex-shrink-0" />
@@ -196,10 +171,10 @@
 					</div>
 
 					<button
-						class="absolute right-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollRight
+						class="absolute right-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {carousel.canScrollRight
 							? 'opacity-100'
 							: 'pointer-events-none opacity-0'}"
-						onclick={scrollRight}
+						onclick={carousel.scrollRight}
 						aria-label="Scroll right"
 					>
 						<ChevronRight class="h-4 w-4" />

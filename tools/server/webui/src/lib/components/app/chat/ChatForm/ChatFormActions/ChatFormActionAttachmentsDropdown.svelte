@@ -5,19 +5,19 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Switch } from '$lib/components/ui/switch';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_EXTRA_ITEMS,
 		ATTACHMENT_MCP_ITEMS,
-		ATTACHMENT_TOOLTIP_TEXT
-	} from '$lib/constants/attachment-menu';
-	import { McpLogo, DropdownMenuSearchable } from '$lib/components/app';
+		ATTACHMENT_TOOLTIP_TEXT,
+		TOOLTIP_DELAY_DURATION
+	} from '$lib/constants';
+	import { AttachmentMenuItemId } from '$lib/enums';
+	import { ChatFormActionToolsSubmenu, McpLogo, DropdownMenuSearchable } from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerSettingsEntry } from '$lib/types';
-	import ChatFormActionToolsSubmenu from './ChatFormActionToolsSubmenu.svelte';
 
 	interface Props {
 		class?: string;
@@ -194,7 +194,9 @@
 							class="flex cursor-pointer items-center gap-2"
 							onclick={() => callbacks.onFileUpload?.()}
 						>
-							{@const pdfItem = ATTACHMENT_FILE_ITEMS.find((i) => i.id === 'pdf')}
+							{@const pdfItem = ATTACHMENT_FILE_ITEMS.find(
+								(i) => i.id === AttachmentMenuItemId.PDF
+							)}
 							{#if pdfItem}
 								<pdfItem.icon class="h-4 w-4" />
 
@@ -212,7 +214,7 @@
 			<DropdownMenu.Separator />
 
 			{#each ATTACHMENT_EXTRA_ITEMS as item (item.id)}
-				{#if item.id === 'system-message'}
+				{#if item.id === AttachmentMenuItemId.SYSTEM_MESSAGE}
 					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 						<Tooltip.Trigger class="w-full">
 							<DropdownMenu.Item

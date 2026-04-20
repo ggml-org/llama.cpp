@@ -18,6 +18,7 @@
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { TruncatedText } from '$lib/components/app';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
+	import { AttachmentMenuItemId } from '$lib/enums';
 
 	interface Props {
 		class?: string;
@@ -147,7 +148,7 @@
 				{/each}
 
 				{#if !isItemEnabled('hasVisionModality')}
-					{@const pdfItem = ATTACHMENT_FILE_ITEMS.find((i) => i.id === 'pdf')}
+					{@const pdfItem = ATTACHMENT_FILE_ITEMS.find((i) => i.id === AttachmentMenuItemId.PDF)}
 					{#if pdfItem}
 						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 							<Tooltip.Trigger>
@@ -170,7 +171,7 @@
 				{/if}
 
 				{#each ATTACHMENT_EXTRA_ITEMS as item (item.id)}
-					{#if item.id === 'system-message'}
+					{#if item.id === AttachmentMenuItemId.SYSTEM_MESSAGE}
 						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 							<Tooltip.Trigger>
 								<button

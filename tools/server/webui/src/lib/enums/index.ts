@@ -1,4 +1,4 @@
-export { AttachmentType } from './attachment';
+export { AttachmentType, AttachmentMenuItemId } from './attachment';
 
 export { AgenticSectionType, ToolCallType } from './agentic';
 
@@ -52,10 +52,4 @@ export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } 
 
 export { KeyboardKey } from './keyboard';
 
-export {
-	ToolSource,
-	ToolGroupLabel,
-	ToolServerLabel,
-	ToolPermissionDecision,
-	ToolResponseField
-} from './tools';
+export { ToolSource, ToolPermissionDecision, ToolResponseField } from './tools';

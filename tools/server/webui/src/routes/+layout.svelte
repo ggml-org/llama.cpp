@@ -19,13 +19,13 @@
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
-	import { beforeNavigate, goto } from '$app/navigation';
+	import { beforeNavigate } from '$app/navigation';
 	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 
 	let { children } = $props();
 
@@ -71,30 +71,13 @@
 	});
 
 	// Global keyboard shortcuts
-	function handleKeydown(event: KeyboardEvent) {
-		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
-
-		if (isCtrlOrCmd && event.key === KeyboardKey.K_LOWER) {
-			event.preventDefault();
-			if (chatSidebar?.activateSearchMode) {
-				chatSidebar.activateSearchMode();
-				sidebarOpen = true;
-			}
+	const { handleKeydown } = useKeyboardShortcuts({
+		activateSearchMode: () => chatSidebar?.activateSearchMode?.(),
+		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
+		onSearchActivated: () => {
+			sidebarOpen = true;
 		}
-
-		if (isCtrlOrCmd && event.shiftKey && event.key === KeyboardKey.O_UPPER) {
-			event.preventDefault();
-			goto('?new_chat=true#/');
-		}
-
-		if (event.shiftKey && isCtrlOrCmd && event.key === KeyboardKey.E_UPPER) {
-			event.preventDefault();
-
-			if (chatSidebar?.editActiveConversation) {
-				chatSidebar.editActiveConversation();
-			}
-		}
-	}
+	});
 
 	function handleTitleUpdateCancel() {
 		titleUpdateDialogOpen = false;

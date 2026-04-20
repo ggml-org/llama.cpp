@@ -3,7 +3,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as ButtonGroup from '$lib/components/ui/button-group';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { ToolSource, ToolPermissionDecision, ToolServerLabel } from '$lib/enums';
+	import { ToolSource, ToolPermissionDecision } from '$lib/enums';
+	import { TOOL_SERVER_LABELS } from '$lib/constants';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import ChatMessageActionCard from './ChatMessageActionCard.svelte';
 
@@ -64,9 +65,9 @@
 					{@const source = toolsStore.getToolSource(toolName)}
 					{@const providerName =
 						source === ToolSource.BUILTIN
-							? ToolServerLabel.BUILTIN
+							? TOOL_SERVER_LABELS[ToolSource.BUILTIN]
 							: source === ToolSource.CUSTOM
-								? ToolServerLabel.CUSTOM
+								? TOOL_SERVER_LABELS[ToolSource.CUSTOM]
 								: 'MCP Tools'}
 					<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}>
 						Approve all tools from {providerName}
