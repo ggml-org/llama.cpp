@@ -251,16 +251,16 @@ build: 6a8cf8914 (6733)
 - `GGML_HEXAGON_PROFILE=1`
   Generates a host-side profile for the ggml-hexagon Ops.
 
-- `GGML_HEXAGON_OPMASK=0x0`
-  Allows enabling specific stages of the processing pipeline:
+- `GGML_HEXAGON_OPSTAGE=0x0`
+  Allows enabling specific stages of the Op processing pipeline:
 
   - `0x1` Enable Op Queue (i.e., queuing Ops into NPU)
   - `0x2` Enable Op Compute (MUL_MAT, etc.)
 
   Examples:
 
-      `GGML_HEXAGON_OPMASK=0x1 llama-completion ...` - Ops are enqueued but NPU-side processing is stubbed out
-      `GGML_HEXAGON_OPMASK=0x3 llama-completion ...` - Full queuing and processing of Ops (default)
+      `GGML_HEXAGON_OPSTAGE=0x1 llama-completion ...` - Ops are enqueued to the NPU but dma & compute are disabled
+      `GGML_HEXAGON_OPSTAGE=0x3 llama-completion ...` - Full queuing and processing of Ops (default)
 
 - `GGML_HEXAGON_OPFILTER=regex`
   Allows filtering (disabling) Ops that match the regex pattern:

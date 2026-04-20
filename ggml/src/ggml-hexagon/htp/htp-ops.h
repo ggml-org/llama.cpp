@@ -42,9 +42,9 @@ enum htp_data_type {
 
 // Mask to enable various stages of the Ops.
 // Used for debugging and profiling.
-enum htp_op_mask {
-    HTP_OPMASK_QUEUE    = (1 << 0),  // Enable Queueing (ie calls into the DSP)
-    HTP_OPMASK_COMPUTE  = (1 << 1),  // Enable Compute
+enum htp_op_stage {
+    HTP_OPSTAGE_QUEUE    = (1 << 0),  // Enable Queueing (ie calls into NPU)
+    HTP_OPSTAGE_COMPUTE  = (1 << 1),  // Enable Compute
 };
 
 // Do not reorder first 4 (used as an index)

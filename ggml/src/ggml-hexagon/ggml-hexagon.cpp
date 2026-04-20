@@ -52,8 +52,7 @@ static int    opt_hostbuf      = 1; // hostbuf ON by default
 static int    opt_use_hmx      = 1; // when set, enable HMX; when 0, use HVX only
 
 // Enable all stages by default
-static int opt_opmask   = HTP_OPMASK_QUEUE | HTP_OPMASK_COMPUTE;
-static int opt_opsync   = 0;  // synchronous ops
+static int opt_opstage  = HTP_OPSTAGE_QUEUE | HTP_OPSTAGE_COMPUTE;
 static int opt_opbatch  = 1024; // max number of ops in a batch
 static int opt_opqueue  = 16;   // max number of pending batches
 static std::regex* opt_opfilter = NULL; // regex of ops to not claim
@@ -1713,7 +1712,7 @@ struct ggml_hexagon_opbatch {
         o.opcode = opcode;
         o.flags  = 0;
 
-        if (!(opt_opmask & HTP_OPMASK_COMPUTE)) {
+        if (!(opt_opstage & HTP_OPSTAGE_COMPUTE)) {
             o.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
         }
 
@@ -2742,7 +2741,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * n = graph->nodes[i];
-        if (op_is_compute(n) && (opt_opmask & HTP_OPMASK_QUEUE)) {
+        if (op_is_compute(n) && (opt_opstage & HTP_OPSTAGE_QUEUE)) {
             sess->enqueue_op(op_remap_to_htp(n), n);
         }
     }
@@ -3395,8 +3394,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
 
     const char * str_verbose = getenv("GGML_HEXAGON_VERBOSE");
     const char * str_hostbuf = getenv("GGML_HEXAGON_HOSTBUF");
-    const char * str_opmask  = getenv("GGML_HEXAGON_OPMASK");
-    const char * str_opsync  = getenv("GGML_HEXAGON_OPSYNC");
+    const char * str_opstage = getenv("GGML_HEXAGON_OPSTAGE");
     const char * str_opbatch = getenv("GGML_HEXAGON_OPBATCH");
     const char * str_opqueue = getenv("GGML_HEXAGON_OPQUEUE");
     const char * str_opfilter= getenv("GGML_HEXAGON_OPFILTER");
@@ -3412,8 +3410,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_opfilter     = str_opfilter     ? new std::regex(str_opfilter, RE_ICASE) : NULL;
     opt_verbose      = str_verbose ? atoi(str_verbose) : 0;
     opt_hostbuf      = str_hostbuf ? atoi(str_hostbuf) : opt_hostbuf;
-    opt_opmask       = str_opmask  ? strtoul(str_opmask, NULL, 0)  : opt_opmask;
-    opt_opsync       = str_opsync  ? atoi(str_opsync)              : opt_opsync;
+    opt_opstage      = str_opstage ? strtoul(str_opstage, NULL, 0) : opt_opstage;
     opt_opbatch      = str_opbatch ? strtoul(str_opbatch, NULL, 0) : opt_opbatch;
     opt_opqueue      = str_opqueue ? strtoul(str_opqueue, NULL, 0) : opt_opqueue;
     opt_profile      = str_profile ? atoi(str_profile) : 0;
