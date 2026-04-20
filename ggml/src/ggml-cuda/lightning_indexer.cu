@@ -87,7 +87,7 @@ static __global__ void lightning_indexer_kernel(
     }
 }
 
-#define DECL_LIGHTNING_INDEXER_CASE(n_embd, n_head, type_K)                                   \
+#define DECL_LIGHTNING_INDEXER_CASE(n_embd, n_head, type_K)                     \
     template __global__ void lightning_indexer_kernel <n_embd, n_head, type_K>( \
         const float * src0, const char * src1, const float * src2, float * dst, \
         const float scale_embd, const float scale_heads,                        \
