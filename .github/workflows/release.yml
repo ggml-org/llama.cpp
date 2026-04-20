@@ -686,25 +686,12 @@ jobs:
 
       - uses: actions/checkout@v6
 
-      - name: add oneAPI to apt
+      - name: install intel-deep-learning-essentials
         shell: bash
         run: |
           cd /tmp
-          wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          rm GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          sudo add-apt-repository "deb https://apt.repos.intel.com/oneapi all main"
-
-      - name: install oneAPI dpcpp compiler
-        shell: bash
-        run: |
-          sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp libssl-dev ninja-build
-
-      - name: install oneAPI MKL library
-        shell: bash
-        run: |
-          sudo apt install intel-oneapi-mkl-devel
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
+          sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
 
       - name: Clone
         id: checkout
