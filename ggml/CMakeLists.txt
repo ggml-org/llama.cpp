@@ -6,7 +6,16 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 if (POLICY CMP0194)
     cmake_policy(SET CMP0194 NEW)
 endif()
-project("ggml" C CXX ASM)
+
+# Only call project() when ggml is the top-level build. When consumed as a
+# subdirectory (FetchContent, CPM, etc.), a second project() would re-run
+# toolchain detection and can clobber parent-project settings such as
+# CMAKE_OSX_ARCHITECTURES, CMAKE_OSX_SYSROOT or CMAKE_ASM_COMPILER during
+# cross-compilation (iOS, Android NDK, arm64/x86_64 hosts).
+# See: https://github.com/ggml-org/llama.cpp/issues/20415
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project("ggml" C CXX ASM)
+endif()
 
 ### GGML Version
 set(GGML_VERSION_MAJOR 0)

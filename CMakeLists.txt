@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit target directories.
-project("llama.cpp" C CXX)
+
+# Only call project() when llama.cpp is the top-level build. When consumed as
+# a subdirectory, a second project() would re-run toolchain detection and can
+# override parent-project settings. See:
+# https://github.com/ggml-org/llama.cpp/issues/20415
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project("llama.cpp" C CXX)
+endif()
+
 include(CheckIncludeFileCXX)
 
 #set(CMAKE_WARN_DEPRECATED YES)
