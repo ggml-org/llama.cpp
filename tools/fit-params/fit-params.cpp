@@ -28,10 +28,10 @@ int main(int argc, char ** argv) {
     auto cparams = common_context_params_to_llama(params);
 
     if (!params.fit_params_print) {
-        const common_params_fit_status status = common_params_fit(params.model.path.c_str(), &mparams, &cparams,
+        const common_params_fit_status status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
                 params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target.data(), params.fit_params_min_ctx,
                 params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
-        if (status != LLAMA_PARAMS_FIT_STATUS_SUCCESS) {
+        if (status != COMMON_PARAMS_FIT_STATUS_SUCCESS) {
             LOG_ERR("%s: failed to fit CLI arguments to free memory, exiting...\n", __func__);
             exit(1);
         }
@@ -64,29 +64,10 @@ int main(int argc, char ** argv) {
         }
         printf("%s\n", any_tbo ? "\"" : "");
     } else {
-        std::vector<ggml_backend_dev_t> devs;
-        uint32_t hp_ngl = 0; // hparams.n_gpu_layers
-        uint32_t hp_nct = 0; // hparams.n_ctx_train
-        uint32_t hp_nex = 0; // hparams.n_expert
-
-        auto dmd = llama_get_device_memory_data(params.model.path.c_str(), &mparams, &cparams, devs, hp_ngl, hp_nct, hp_nex, params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
-        GGML_ASSERT(dmd.size() == devs.size() + 1);
-
         LOG_INF("%s: printing estimated memory in MiB to stdout (device, model, context, compute) ...\n", __func__);
         common_log_flush(common_log_main());
 
-        for (size_t id = 0; id < devs.size(); id++) {
-            printf("%s ",  ggml_backend_dev_name(devs[id]));
-            printf("%zu ", dmd[id].mb.model/1024/1024);
-            printf("%zu ", dmd[id].mb.context/1024/1024);
-            printf("%zu ", dmd[id].mb.compute/1024/1024);
-            printf("\n");
-        }
-        printf("Host ");
-        printf("%zu ", dmd.back().mb.model/1024/1024);
-        printf("%zu ", dmd.back().mb.context/1024/1024);
-        printf("%zu ", dmd.back().mb.compute/1024/1024);
-        printf("\n");
+        common_fit_print(params.model.path.c_str(), &mparams, &cparams);
     }
 
     return 0;

@@ -1,12 +1,12 @@
 #pragma once
 
 // this is a staging header for new llama.cpp API
+// breaking changes and C++ are allowed. everything here should be considered WIP
 
 #include "llama.h"
 
-#include <cassert>
 #include <cstdint>
-#include <vector>
+#include <map>
 
 // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
 LLAMA_API struct ggml_cgraph * llama_graph_reserve(
@@ -79,12 +79,12 @@ struct llama_device_memory_data {
     llama_memory_breakdown_data mb;
 };
 
-std::vector<llama_device_memory_data> llama_get_device_memory_data(
-        const char * path_model,
-        const llama_model_params * mparams,
-        const llama_context_params * cparams,
-        std::vector<ggml_backend_dev_t> & devs,
-        uint32_t & hp_ngl,
-        uint32_t & hp_n_ctx_train,
-        uint32_t & hp_n_expert,
-        ggml_log_level log_level);
+// TODO: convert to C-style data structure
+using llama_memory_breakdown = std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data>;
+
+int32_t llama_model_n_expert (const struct llama_model * model);
+int32_t llama_model_n_devices(const struct llama_model * model);
+
+ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i);
+
+llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);

@@ -1525,9 +1525,6 @@ extern "C" {
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
 
-    // print a breakdown of per-device memory use via LLAMA_LOG:
-    LLAMA_API void llama_memory_breakdown_print(const struct llama_context * ctx);
-
     //
     // training
     //
