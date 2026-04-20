@@ -116,10 +116,10 @@ int ggml_cuda_get_device() {
     return id;
 }
 
-static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
+static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device, bool force_managed = false) {
     ggml_cuda_set_device(device);
     cudaError_t err;
-    if (getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr) {
+    if (force_managed || getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr) {
         err = cudaMallocManaged(ptr, size);
 #if defined(GGML_USE_HIP)
         if (err == hipSuccess) {
@@ -421,7 +421,23 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
         size_t look_ahead_size = (size_t) (1.05 * size);
         look_ahead_size = 256 * ((look_ahead_size + 255)/256);
         ggml_cuda_set_device(device);
-        CUDA_CHECK(ggml_cuda_device_malloc(&ptr, look_ahead_size, device));
+        static const bool pool_use_managed = getenv("GGML_CUDA_POOL_USE_MANAGED") != nullptr;
+        if (pool_use_managed) {
+            // Reached the growth path — every idle buffer in the pool is strictly smaller
+            // than this request. Under managed memory they live in system RAM and will
+            // never serve a request >= this size, so they're dead weight: they inflate
+            // pool_size and trigger PCIe page-faults during later TG. Release them now.
+            for (int i = 0; i < MAX_BUFFERS; ++i) {
+                ggml_cuda_buffer& b = buffer_pool[i];
+                if (b.ptr != nullptr) {
+                    cudaFree(b.ptr);
+                    pool_size -= b.size;
+                    b.ptr  = nullptr;
+                    b.size = 0;
+                }
+            }
+        }
+        CUDA_CHECK(ggml_cuda_device_malloc(&ptr, look_ahead_size, device, pool_use_managed));
         *actual_size = look_ahead_size;
         pool_size += look_ahead_size;
 #ifdef DEBUG_CUDA_MALLOC
@@ -758,10 +774,21 @@ static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_bac
     void * dev_ptr;
     cudaError_t err = ggml_cuda_device_malloc(&dev_ptr, size, buft_ctx->device);
     if (err != cudaSuccess) {
-        // clear the error
+        // On OOM, retry once with managed memory so the overflowing buffer (typically
+        // the KV cache at high context) can spill to system RAM instead of aborting.
+        // Buffers that fit in VRAM already landed on the device via the first attempt;
+        // only the one that overflowed uses managed memory. hipMallocManaged pages hot
+        // regions onto the device on demand, so the common TG working set stays on GPU.
         (void)cudaGetLastError();
-        GGML_LOG_ERROR("%s: allocating %.2f MiB on device %d: cudaMalloc failed: %s\n", __func__, size / 1024.0 / 1024.0, buft_ctx->device, cudaGetErrorString(err));
-        return nullptr;
+        GGML_LOG_WARN("%s: allocating %.2f MiB on device %d: cudaMalloc failed (%s); retrying with managed memory (will page to system RAM on demand)\n",
+                      __func__, size / 1024.0 / 1024.0, buft_ctx->device, cudaGetErrorString(err));
+        err = ggml_cuda_device_malloc(&dev_ptr, size, buft_ctx->device, /*force_managed=*/true);
+        if (err != cudaSuccess) {
+            (void)cudaGetLastError();
+            GGML_LOG_ERROR("%s: managed fallback also failed for %.2f MiB: %s\n",
+                           __func__, size / 1024.0 / 1024.0, cudaGetErrorString(err));
+            return nullptr;
+        }
     }
 
     ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, dev_ptr);
