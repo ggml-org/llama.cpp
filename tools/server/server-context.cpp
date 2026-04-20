@@ -5,7 +5,7 @@
 #include "server-task.h"
 #include "server-queue.h"
 
-#include "build-info.h"
+#include "common/build-info.h"
 #include "common.h"
 #include "llama.h"
 #include "log.h"

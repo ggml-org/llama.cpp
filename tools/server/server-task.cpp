@@ -1,6 +1,6 @@
 #include "server-task.h"
 
-#include "build-info.h"
+#include "common/build-info.h"
 #include "chat.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"

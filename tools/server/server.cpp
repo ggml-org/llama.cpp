@@ -5,7 +5,7 @@
 #include "server-tools.h"
 
 #include "arg.h"
-#include "build-info.h"
+#include "common/build-info.h"
 #include "common.h"
 #include "llama.h"
 #include "log.h"

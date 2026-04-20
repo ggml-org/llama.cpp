@@ -1,7 +1,7 @@
 #include "server-common.h"
 #include "server-models.h"
 
-#include "build-info.h"
+#include "common/build-info.h"
 #include "preset.h"
 #include "download.h"
 
