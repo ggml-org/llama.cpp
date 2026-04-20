@@ -1006,8 +1006,29 @@ void launch_fattn(
     const int cc  = ggml_cuda_info().devices[id].cc;
     const int nsm = ggml_cuda_info().devices[id].nsm;
 
+#ifdef GGML_USE_HIP
+    // HIP/ROCm: bypass the legacy pool for f16 FA temp buffers. The pool can retain
+    // peak-sized quantized-KV dequant buffers and erase the VRAM savings from KV compression.
+    struct hip_f16_alloc {
+        half * ptr = nullptr;
+        cudaStream_t stream;
+        explicit hip_f16_alloc(cudaStream_t s) : stream(s) {}
+        ~hip_f16_alloc() {
+            if (ptr) {
+                cudaStreamSynchronize(stream);
+                cudaFree(ptr);
+            }
+        }
+        void alloc(size_t nelements) {
+            CUDA_CHECK(cudaMalloc(&ptr, nelements * sizeof(half)));
+        }
+    };
+    hip_f16_alloc K_f16(main_stream);
+    hip_f16_alloc V_f16(main_stream);
+#else
     ggml_cuda_pool_alloc<half>   K_f16(pool);
     ggml_cuda_pool_alloc<half>   V_f16(pool);
+#endif
     ggml_cuda_pool_alloc<int>    KV_max(pool);
     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
