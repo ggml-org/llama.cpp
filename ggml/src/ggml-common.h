@@ -92,6 +92,8 @@ typedef sycl::half2 ggml_half2;
 #        define QK_IFAIRY                  QK_K
 #        define QK_IFAIRY_GROUPS_PER_BLOCK (QK_IFAIRY / 2)
 #        define QK_IFAIRY_QS_BYTES         (QK_IFAIRY / 4)
+#        define QK_IFAIRY64                64
+#        define QK_IFAIRY64_QS_BYTES       (QK_IFAIRY64 / 4)
 static_assert(QK_IFAIRY == 256, "ifairy packing currently assumes QK_IFAIRY=256");
 
 #        if defined(GGML_COMMON_DECL_CUDA) || defined(GGML_COMMON_DECL_HIP) || defined(GGML_COMMON_DECL_SYCL)
@@ -270,6 +272,13 @@ typedef struct {
 } block_ifairy;
 
 static_assert(sizeof(block_ifairy) == 2 * sizeof(ggml_half) + QK_IFAIRY_QS_BYTES, "wrong ifairy block size/padding");
+
+typedef struct {
+    uint8_t   qs[QK_IFAIRY64_QS_BYTES];  // 2 bits per element
+    ggml_half d_real, d_imag;
+} block_ifairy64;
+
+static_assert(sizeof(block_ifairy64) == 2 * sizeof(ggml_half) + QK_IFAIRY64_QS_BYTES, "wrong ifairy64 block size/padding");
 
 // 总大小: 64 + 2 + 2 = 68 字节
 // 存储 QK_IFAIRY 个复数 = 2*QK_IFAIRY 个 fp32 值

@@ -161,6 +161,68 @@ void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
     }
 }
 
+void quantize_row_ifairy64(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_IFAIRY64 == 0);
+    block_ifairy64 * GGML_RESTRICT y = vy;
+
+    const int64_t nb = k / QK_IFAIRY64;
+
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        float sum_real = 0.0f;
+        float sum_imag = 0.0f;
+        int   cnt_real = 0;
+        int   cnt_imag = 0;
+
+        for (int idx = 0; idx < QK_IFAIRY64; ++idx) {
+            const float * x_com = x + ib * QK_IFAIRY64 + idx;
+
+            const ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) x_com)[0];
+            const ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t *) x_com)[1];
+
+            const float x_real = GGML_BF16_TO_FP32(x_real_bf16);
+            const float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+            const float a_real = fabsf(x_real);
+            const float a_imag = fabsf(x_imag);
+
+            if (a_real > a_imag) {
+                sum_real += a_real;
+                cnt_real++;
+            } else {
+                sum_imag += a_imag;
+                cnt_imag++;
+            }
+        }
+
+        const float d_real = cnt_real > 0 ? sum_real / (float) cnt_real : 0.0f;
+        const float d_imag = cnt_imag > 0 ? sum_imag / (float) cnt_imag : 0.0f;
+
+        y[ib].d_real = GGML_FP32_TO_FP16(d_real);
+        y[ib].d_imag = GGML_FP32_TO_FP16(d_imag);
+
+        uint8_t packed[QK_IFAIRY64_QS_BYTES] = { 0 };
+
+        for (int part = 0; part < 4; ++part) {
+            for (int lane = 0; lane < 16; ++lane) {
+                const int     idx   = part * 16 + lane;
+                const float * x_com = x + ib * QK_IFAIRY64 + idx;
+
+                const ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) x_com)[0];
+                const ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t *) x_com)[1];
+
+                const float x_real = GGML_BF16_TO_FP32(x_real_bf16);
+                const float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+                const float a_real = fabsf(x_real);
+                const float a_imag = fabsf(x_imag);
+
+                const int code = a_real > a_imag ? (x_real >= 0.0f ? 1 : 0) : (x_imag >= 0.0f ? 3 : 2);
+                packed[lane] |= (uint8_t) (code << (2 * part));
+            }
+        }
+
+        memcpy(y[ib].qs, packed, sizeof(packed));
+    }
+}
+
 //===================================== Q8_K ==============================================
 
 void quantize_row_q8_K_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
@@ -572,6 +634,88 @@ void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
 
     sum_real_total = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
     sum_imag_total = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
+
+    ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
+    ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
+}
+
+void ggml_vec_dot_ifairy64_q16_K_generic(int                        n,
+                                         float * GGML_RESTRICT      s,
+                                         size_t                     bs,
+                                         const void * GGML_RESTRICT vx,
+                                         size_t                     bx,
+                                         const void * GGML_RESTRICT vy,
+                                         size_t                     by,
+                                         int                        nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_ifairy64 * GGML_RESTRICT    w = (const block_ifairy64 *) vx;
+    const block_ifairy_q16 * GGML_RESTRICT  x = (const block_ifairy_q16 *) vy;
+
+    GGML_ASSERT(n % QK_IFAIRY64 == 0);
+    GGML_ASSERT(n % QK_IFAIRY == 0);
+
+    const int nb = n / QK_IFAIRY64;
+
+    float sum_real_total = 0.0f;
+    float sum_imag_total = 0.0f;
+
+    for (int i = 0; i < nb; ++i) {
+        const block_ifairy_q16 * x_block = &x[i / 4];
+        const int                x_base  = (i % 4) * QK_IFAIRY64;
+
+        int32_t sum_ac = 0;
+        int32_t sum_ad = 0;
+        int32_t sum_bc = 0;
+        int32_t sum_bd = 0;
+
+        for (int part = 0; part < 4; ++part) {
+            for (int lane = 0; lane < 16; ++lane) {
+                const int     idx    = part * 16 + lane;
+                const uint8_t packed = w[i].qs[lane];
+                const uint8_t code   = (packed >> (2 * part)) & 0x3;
+
+                int wr = 0;
+                int wi = 0;
+                switch (code) {
+                    case 0:
+                        wr = -1;
+                        break;
+                    case 1:
+                        wr = 1;
+                        break;
+                    case 2:
+                        wi = -1;
+                        break;
+                    case 3:
+                        wi = 1;
+                        break;
+                    default:
+                        GGML_UNREACHABLE();
+                }
+
+                const int xr = (int) ((const int8_t *) x_block->x_real)[x_base + idx];
+                const int xi = (int) ((const int8_t *) x_block->x_imag)[x_base + idx];
+
+                sum_ac += xr * wr;
+                sum_ad += xi * wr;
+                sum_bc += xr * wi;
+                sum_bd += xi * wi;
+            }
+        }
+
+        const float w_real = GGML_CPU_FP16_TO_FP32(w[i].d_real);
+        const float w_imag = GGML_CPU_FP16_TO_FP32(w[i].d_imag);
+        const float x_real = GGML_CPU_FP16_TO_FP32(x_block->d_real);
+        const float x_imag = GGML_CPU_FP16_TO_FP32(x_block->d_imag);
+
+        sum_real_total += w_real * x_real * (float) sum_ac + w_imag * x_imag * (float) sum_bd;
+        sum_imag_total += w_imag * x_real * (float) sum_bc - w_real * x_imag * (float) sum_ad;
+    }
 
     ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
     ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
