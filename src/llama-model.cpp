@@ -1612,9 +1612,38 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
+                std::string quant_variant = "legacy";
+                ml.get_key("fairy2i.quant.variant", quant_variant, false);
+
+                if (quant_variant == "legacy") {
+                    fairy2i_quant_variant = LLAMA_FAIRY2I_QUANT_VARIANT_LEGACY;
+                } else if (quant_variant == "tile64_v2") {
+                    fairy2i_quant_variant = LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2;
+
+                    uint32_t tile_size = 0;
+                    ml.get_key("fairy2i.quant.tile_size", tile_size);
+                    if (tile_size != 64) {
+                        throw std::runtime_error(
+                            format("invalid FAIRY2I tile64_v2 tile size: %u, expected 64", tile_size));
+                    }
+
+                    std::string scale_stat;
+                    ml.get_key("fairy2i.quant.scale_stat", scale_stat);
+                    if (scale_stat != "dominant_mean_abs") {
+                        throw std::runtime_error(
+                            format("invalid FAIRY2I tile64_v2 scale stat: %s, expected dominant_mean_abs", scale_stat.c_str()));
+                    }
+                } else {
+                    throw std::runtime_error(
+                        format("unsupported FAIRY2I quant variant: %s", quant_variant.c_str()));
+                }
+
                 switch (hparams.n_layer) {
                     case 32:
                         type = LLM_TYPE_7B;
+                        break;
+                    case 64:
+                        type = LLM_TYPE_32B;
                         break;
                     default:
                         type = LLM_TYPE_UNKNOWN;
