@@ -182,8 +182,7 @@
 #define TN_CONV_NORM       "%s.blk.%d.conv_norm.%s"
 #define TN_CONV_PW1        "%s.blk.%d.conv_pw1.%s"
 #define TN_CONV_PW2        "%s.blk.%d.conv_pw2.%s"
-// granite_speech encoder
-#define TN_INP_PROJ              "a.enc_inp_linear.%s"
+#define TN_INP_PROJ              "a.input_projection.%s"
 #define TN_CTC_OUT               "a.enc_ctc_out.%s"
 #define TN_CTC_OUT_MID           "a.enc_ctc_out_mid.%s"
 #define TN_ATTN_REL_POS_EMB      "%s.blk.%d.attn_rel_pos_emb"

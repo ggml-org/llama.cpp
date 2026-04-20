@@ -155,6 +155,21 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_MSFA_NORM: (
             "model.vision_tower.timm_model.msfa.norm", # gemma3n
         ),
+        MODEL_TENSOR.A_CTC_OUT: (
+            "encoder.out",
+        ),
+        MODEL_TENSOR.A_CTC_OUT_MID: (
+            "encoder.out_mid",
+        ),
+        MODEL_TENSOR.A_QF_PROJ_QUERY: (
+            "projector.query",
+        ),
+        MODEL_TENSOR.A_QF_PROJ_NORM: (
+            "projector.qformer.layernorm",
+        ),
+        MODEL_TENSOR.A_QF_PROJ_LINEAR: (
+            "projector.linear",
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -1881,6 +1896,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_INP_PROJ: (
             "conformer.subsample_conv_projection.input_proj_linear", # gemma4
+            "encoder.input_linear",
         ),
 
         MODEL_TENSOR.A_ENC_CONV2D: (
@@ -2120,6 +2136,49 @@ class TensorNameMap:
         ),
         MODEL_TENSOR.A_MM_SOFT_EMB_NORM: (
             "model.embed_audio.soft_embedding_norm", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_REL_POS_EMB: (
+            "encoder.layers.{bid}.attn.rel_pos_emb.weight",
+        ),
+        MODEL_TENSOR.A_QF_SELF_ATTN_Q: (
+            "projector.qformer.encoder.layer.{bid}.attention.attention.query",
+        ),
+        MODEL_TENSOR.A_QF_SELF_ATTN_K: (
+            "projector.qformer.encoder.layer.{bid}.attention.attention.key",
+        ),
+        MODEL_TENSOR.A_QF_SELF_ATTN_V: (
+            "projector.qformer.encoder.layer.{bid}.attention.attention.value",
+        ),
+        MODEL_TENSOR.A_QF_SELF_ATTN_O: (
+            "projector.qformer.encoder.layer.{bid}.attention.output.dense",
+        ),
+        MODEL_TENSOR.A_QF_SELF_ATTN_NORM: (
+            "projector.qformer.encoder.layer.{bid}.attention.output.LayerNorm",
+        ),
+        MODEL_TENSOR.A_QF_CROSS_ATTN_Q: (
+            "projector.qformer.encoder.layer.{bid}.crossattention.attention.query",
+        ),
+        MODEL_TENSOR.A_QF_CROSS_ATTN_K: (
+            "projector.qformer.encoder.layer.{bid}.crossattention.attention.key",
+        ),
+        MODEL_TENSOR.A_QF_CROSS_ATTN_V: (
+            "projector.qformer.encoder.layer.{bid}.crossattention.attention.value",
+        ),
+        MODEL_TENSOR.A_QF_CROSS_ATTN_O: (
+            "projector.qformer.encoder.layer.{bid}.crossattention.output.dense",
+        ),
+        MODEL_TENSOR.A_QF_CROSS_ATTN_NORM: (
+            "projector.qformer.encoder.layer.{bid}.crossattention.output.LayerNorm",
+        ),
+        MODEL_TENSOR.A_QF_FFN_UP: (
+            "projector.qformer.encoder.layer.{bid}.intermediate_query.dense",
+        ),
+        MODEL_TENSOR.A_QF_FFN_DOWN: (
+            "projector.qformer.encoder.layer.{bid}.output_query.dense",
+        ),
+        MODEL_TENSOR.A_QF_FFN_NORM: (
+            "projector.qformer.encoder.layer.{bid}.output_query.LayerNorm",
         ),
 
         # NextN/MTP tensors
