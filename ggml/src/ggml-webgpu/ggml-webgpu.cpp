@@ -2618,19 +2618,18 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
 
 struct ggml_backend_webgpu_event_context {
     webgpu_global_context global_ctx;
-    wgpu::Future future;
-    bool recorded = false;
+    wgpu::Future          future;
+    bool                  recorded = false;
 };
 
 static ggml_backend_event_t ggml_backend_webgpu_device_event_new(ggml_backend_dev_t device) {
-    ggml_backend_webgpu_device_context * dev_ctx =
-        (ggml_backend_webgpu_device_context *) device->context;
-    
-    auto * event_ctx = new ggml_backend_webgpu_event_context();
+    ggml_backend_webgpu_device_context * dev_ctx = (ggml_backend_webgpu_device_context *) device->context;
+
+    auto * event_ctx      = new ggml_backend_webgpu_event_context();
     event_ctx->global_ctx = dev_ctx->webgpu_global_ctx;
 
-    auto * event = new ggml_backend_event;
-    event->device = device;
+    auto * event   = new ggml_backend_event;
+    event->device  = device;
     event->context = event_ctx;
     return event;
 }
@@ -2643,28 +2642,24 @@ static void ggml_backend_webgpu_device_event_free(ggml_backend_dev_t dev, ggml_b
 
 static void ggml_backend_webgpu_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
     GGML_UNUSED(dev);
-    ggml_backend_webgpu_event_context * event_ctx =
-        (ggml_backend_webgpu_event_context *) event->context;
+    ggml_backend_webgpu_event_context * event_ctx = (ggml_backend_webgpu_event_context *) event->context;
     if (!event_ctx->recorded) {
         return;
     }
     wgpu::WaitStatus status =
         event_ctx->global_ctx->instance.WaitAny(event_ctx->future, WEBGPU_RUNTIME_WAIT_TIMEOUT_NS);
     if (status == wgpu::WaitStatus::TimedOut) {
-        GGML_ABORT("ggml_webgpu: event_synchronize timed out after %u ms\n",
-                   WEBGPU_RUNTIME_WAIT_TIMEOUT_MS);
+        GGML_ABORT("ggml_webgpu: event_synchronize timed out after %u ms\n", WEBGPU_RUNTIME_WAIT_TIMEOUT_MS);
     }
     event_ctx->recorded = false;
 }
 
 static void ggml_backend_webgpu_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
-    ggml_backend_webgpu_context       * backend_ctx = (ggml_backend_webgpu_context *) backend->context;
-    ggml_backend_webgpu_event_context * event_ctx =
-        (ggml_backend_webgpu_event_context *) event->context;
+    ggml_backend_webgpu_context *       backend_ctx = (ggml_backend_webgpu_context *) backend->context;
+    ggml_backend_webgpu_event_context * event_ctx   = (ggml_backend_webgpu_event_context *) event->context;
 
     event_ctx->future = backend_ctx->webgpu_ctx->global_ctx->queue.OnSubmittedWorkDone(
-        wgpu::CallbackMode::AllowSpontaneous,
-        [](wgpu::QueueWorkDoneStatus, wgpu::StringView) {});
+        wgpu::CallbackMode::AllowSpontaneous, [](wgpu::QueueWorkDoneStatus, wgpu::StringView) {});
     event_ctx->recorded = true;
 }
 
@@ -2675,14 +2670,13 @@ static void ggml_backend_webgpu_event_wait(ggml_backend_t backend, ggml_backend_
     ggml_backend_webgpu_device_event_synchronize(nullptr, event);
 }
 
-static void ggml_backend_webgpu_set_tensor_async(
-        ggml_backend_t backend,
-        ggml_tensor * tensor, 
-        const void * data, size_t offset, size_t size) {            
+static void ggml_backend_webgpu_set_tensor_async(ggml_backend_t backend,
+                                                 ggml_tensor *  tensor,
+                                                 const void *   data,
+                                                 size_t         offset,
+                                                 size_t         size) {
     GGML_UNUSED(backend);
-    ggml_backend_webgpu_buffer_context * buf_ctx = 
-        (ggml_backend_webgpu_buffer_context * ) tensor->buffer->context;
-    
+    ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) tensor->buffer->context;
 
     size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
     // CopyBufferToBuffer requires 4 byte alignment on size
@@ -2692,18 +2686,18 @@ static void ggml_backend_webgpu_set_tensor_async(
     // Create a one-shot staging buffer
     // TODO(nikhil.jain) worthwhile to use a buffer arena for this?
     wgpu::BufferDescriptor desc{};
-    desc.size = aligned_size;
-    desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+    desc.size             = aligned_size;
+    desc.usage            = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
     // Allow CPU to write immediately upon buffer creation
     desc.mappedAtCreation = true;
-    desc.label = "set_tensor_async_scratch_buffer";
-    wgpu::Buffer staging = buf_ctx->global_ctx->device.CreateBuffer(&desc);
+    desc.label            = "set_tensor_async_scratch_buffer";
+    wgpu::Buffer staging  = buf_ctx->global_ctx->device.CreateBuffer(&desc);
 
     void * mapped = staging.GetMappedRange(0, aligned_size);
     std::memcpy(mapped, data, size);
     if (size < aligned_size) {
         // zero out extra padded space on align
-        std::memset(static_cast<uint8_t*>(mapped) + size, 0, aligned_size - size);
+        std::memset(static_cast<uint8_t *>(mapped) + size, 0, aligned_size - size);
     }
     staging.Unmap();
 
@@ -2717,7 +2711,6 @@ static void ggml_backend_webgpu_synchronize(ggml_backend_t backend) {
     ggml_backend_webgpu_context * backend_ctx = (ggml_backend_webgpu_context *) backend->context;
     ggml_backend_webgpu_wait_queue(backend_ctx->webgpu_ctx->global_ctx);
 }
-
 
 static ggml_backend_i ggml_backend_webgpu_i = {
     /* .get_name                = */ ggml_backend_webgpu_name,
