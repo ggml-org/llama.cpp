@@ -143,7 +143,6 @@ bool server_http_context::init(const common_params & params) {
             "/v1/health",
             "/models",
             "/v1/models",
-            "/api/tags",
             "/",
             "/index.html",
             "/bundle.js",

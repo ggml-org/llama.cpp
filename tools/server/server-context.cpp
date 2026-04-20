@@ -3653,34 +3653,6 @@ void server_routes::init_routes() {
         return res;
     };
 
-    this->get_api_show = [this](const server_http_req &) {
-        auto res = create_response();
-        std::string tmpl_default = common_chat_templates_source(meta->chat_params.tmpls.get(), "");
-        json data = {
-            {
-                "model_info", {
-                    { "llama.context_length", meta->slot_n_ctx },
-                }
-            },
-            {"modelfile", ""},
-            {"parameters", ""},
-            {"template", tmpl_default},
-            {"details", {
-                {"parent_model", ""},
-                {"format", "gguf"},
-                {"family", ""},
-                {"families", {""}},
-                {"parameter_size", ""},
-                {"quantization_level", ""}
-            }},
-            {"model_info", ""},
-            {"capabilities", meta->has_mtmd ? json({"completion","multimodal"}) : json({"completion"})}
-        };
-
-        res->ok(data);
-        return res;
-    };
-
     this->post_infill = [this](const server_http_req & req) {
         auto res = create_response();
         // check model compatibility
