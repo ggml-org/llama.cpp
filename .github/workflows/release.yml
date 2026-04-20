@@ -284,6 +284,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          repository: 'ggml-org/llama.cpp'
 
       - name: Determine tag name
         id: tag
