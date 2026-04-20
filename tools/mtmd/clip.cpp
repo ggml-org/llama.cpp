@@ -2434,12 +2434,12 @@ struct clip_model_loader {
                     hparams.n_layer = n_layer_orig;
                     model.layers.resize(hparams.n_layer);
 
-                    model.gs_inp_linear_w = get_tensor(string_format(TN_GS_INP_LINEAR, "weight"));
-                    model.gs_inp_linear_b = get_tensor(string_format(TN_GS_INP_LINEAR, "bias"));
-                    model.gs_ctc_out_w     = get_tensor(string_format(TN_GS_CTC_OUT,     "weight"));
-                    model.gs_ctc_out_b     = get_tensor(string_format(TN_GS_CTC_OUT,     "bias"));
-                    model.gs_ctc_out_mid_w = get_tensor(string_format(TN_GS_CTC_OUT_MID, "weight"));
-                    model.gs_ctc_out_mid_b = get_tensor(string_format(TN_GS_CTC_OUT_MID, "bias"));
+                    model.inp_proj_w     = get_tensor(string_format(TN_INP_PROJ,    "weight"));
+                    model.inp_proj_b     = get_tensor(string_format(TN_INP_PROJ,    "bias"));
+                    model.ctc_out_w      = get_tensor(string_format(TN_CTC_OUT,     "weight"));
+                    model.ctc_out_b      = get_tensor(string_format(TN_CTC_OUT,     "bias"));
+                    model.ctc_out_mid_w  = get_tensor(string_format(TN_CTC_OUT_MID, "weight"));
+                    model.ctc_out_mid_b  = get_tensor(string_format(TN_CTC_OUT_MID, "bias"));
 
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & layer = model.layers[il];
@@ -2449,7 +2449,7 @@ struct clip_model_loader {
                         layer.v_w = get_tensor(string_format(TN_ATTN_V, prefix, il, "weight"));
                         layer.o_w = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "weight"));
                         layer.o_b = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "bias"));
-                        layer.attn_rel_pos_emb = get_tensor(string_format(TN_GS_ATTN_REL_POS, prefix, il));
+                        layer.attn_rel_pos_emb = get_tensor(string_format(TN_ATTN_REL_POS_EMB, prefix, il));
 
                         layer.ln_1_w = get_tensor(string_format(TN_LN_1, prefix, il, "weight"));
                         layer.ln_1_b = get_tensor(string_format(TN_LN_1, prefix, il, "bias"));
@@ -2482,45 +2482,45 @@ struct clip_model_loader {
                         layer.conv_pw2_b  = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
 
-                    model.gs_proj_query    = get_tensor(TN_GS_PROJ_QUERY);
-                    model.gs_proj_norm_w   = get_tensor(string_format(TN_GS_PROJ_NORM, "weight"));
-                    model.gs_proj_norm_b   = get_tensor(string_format(TN_GS_PROJ_NORM, "bias"));
-                    model.gs_proj_linear_w = get_tensor(string_format(TN_GS_PROJ_LINEAR, "weight"));
-                    model.gs_proj_linear_b = get_tensor(string_format(TN_GS_PROJ_LINEAR, "bias"));
+                    model.qf_proj_query    = get_tensor(TN_QF_PROJ_QUERY);
+                    model.qf_proj_norm_w   = get_tensor(string_format(TN_QF_PROJ_NORM, "weight"));
+                    model.qf_proj_norm_b   = get_tensor(string_format(TN_QF_PROJ_NORM, "bias"));
+                    model.qf_proj_linear_w = get_tensor(string_format(TN_QF_PROJ_LINEAR, "weight"));
+                    model.qf_proj_linear_b = get_tensor(string_format(TN_QF_PROJ_LINEAR, "bias"));
 
                     const int n_proj_layers = 2;
-                    model.gs_proj_layers.resize(n_proj_layers);
+                    model.qf_proj_layers.resize(n_proj_layers);
                     for (int il = 0; il < n_proj_layers; ++il) {
-                        auto & pl = model.gs_proj_layers[il];
+                        auto & pl = model.qf_proj_layers[il];
 
-                        pl.self_attn_q_w    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_Q, il, "weight"));
-                        pl.self_attn_q_b    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_Q, il, "bias"));
-                        pl.self_attn_k_w    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_K, il, "weight"));
-                        pl.self_attn_k_b    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_K, il, "bias"));
-                        pl.self_attn_v_w    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_V, il, "weight"));
-                        pl.self_attn_v_b    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_V, il, "bias"));
-                        pl.self_attn_o_w    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_O, il, "weight"));
-                        pl.self_attn_o_b    = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_O, il, "bias"));
-                        pl.self_attn_norm_w = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_N, il, "weight"));
-                        pl.self_attn_norm_b = get_tensor(string_format(TN_GS_PROJ_SELF_ATTN_N, il, "bias"));
+                        pl.self_attn_q_w    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, il, "weight"));
+                        pl.self_attn_q_b    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, il, "bias"));
+                        pl.self_attn_k_w    = get_tensor(string_format(TN_QF_SELF_ATTN_K, il, "weight"));
+                        pl.self_attn_k_b    = get_tensor(string_format(TN_QF_SELF_ATTN_K, il, "bias"));
+                        pl.self_attn_v_w    = get_tensor(string_format(TN_QF_SELF_ATTN_V, il, "weight"));
+                        pl.self_attn_v_b    = get_tensor(string_format(TN_QF_SELF_ATTN_V, il, "bias"));
+                        pl.self_attn_o_w    = get_tensor(string_format(TN_QF_SELF_ATTN_O, il, "weight"));
+                        pl.self_attn_o_b    = get_tensor(string_format(TN_QF_SELF_ATTN_O, il, "bias"));
+                        pl.self_attn_norm_w = get_tensor(string_format(TN_QF_SELF_ATTN_N, il, "weight"));
+                        pl.self_attn_norm_b = get_tensor(string_format(TN_QF_SELF_ATTN_N, il, "bias"));
 
-                        pl.cross_attn_q_w    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_Q, il, "weight"));
-                        pl.cross_attn_q_b    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_Q, il, "bias"));
-                        pl.cross_attn_k_w    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_K, il, "weight"));
-                        pl.cross_attn_k_b    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_K, il, "bias"));
-                        pl.cross_attn_v_w    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_V, il, "weight"));
-                        pl.cross_attn_v_b    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_V, il, "bias"));
-                        pl.cross_attn_o_w    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_O, il, "weight"));
-                        pl.cross_attn_o_b    = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_O, il, "bias"));
-                        pl.cross_attn_norm_w = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_N, il, "weight"));
-                        pl.cross_attn_norm_b = get_tensor(string_format(TN_GS_PROJ_CROSS_ATTN_N, il, "bias"));
+                        pl.cross_attn_q_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_Q, il, "weight"));
+                        pl.cross_attn_q_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_Q, il, "bias"));
+                        pl.cross_attn_k_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_K, il, "weight"));
+                        pl.cross_attn_k_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_K, il, "bias"));
+                        pl.cross_attn_v_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_V, il, "weight"));
+                        pl.cross_attn_v_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_V, il, "bias"));
+                        pl.cross_attn_o_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_O, il, "weight"));
+                        pl.cross_attn_o_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_O, il, "bias"));
+                        pl.cross_attn_norm_w = get_tensor(string_format(TN_QF_CROSS_ATTN_N, il, "weight"));
+                        pl.cross_attn_norm_b = get_tensor(string_format(TN_QF_CROSS_ATTN_N, il, "bias"));
 
-                        pl.ffn_up_w   = get_tensor(string_format(TN_GS_PROJ_FFN_UP,   il, "weight"));
-                        pl.ffn_up_b   = get_tensor(string_format(TN_GS_PROJ_FFN_UP,   il, "bias"));
-                        pl.ffn_down_w = get_tensor(string_format(TN_GS_PROJ_FFN_DOWN, il, "weight"));
-                        pl.ffn_down_b = get_tensor(string_format(TN_GS_PROJ_FFN_DOWN, il, "bias"));
-                        pl.ffn_norm_w = get_tensor(string_format(TN_GS_PROJ_FFN_NORM, il, "weight"));
-                        pl.ffn_norm_b = get_tensor(string_format(TN_GS_PROJ_FFN_NORM, il, "bias"));
+                        pl.ffn_up_w   = get_tensor(string_format(TN_QF_FFN_UP,   il, "weight"));
+                        pl.ffn_up_b   = get_tensor(string_format(TN_QF_FFN_UP,   il, "bias"));
+                        pl.ffn_down_w = get_tensor(string_format(TN_QF_FFN_DOWN, il, "weight"));
+                        pl.ffn_down_b = get_tensor(string_format(TN_QF_FFN_DOWN, il, "bias"));
+                        pl.ffn_norm_w = get_tensor(string_format(TN_QF_FFN_NORM, il, "weight"));
+                        pl.ffn_norm_b = get_tensor(string_format(TN_QF_FFN_NORM, il, "bias"));
                     }
                 } break;
             default:
@@ -3995,7 +3995,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GEMMA4A:
             return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
-            return ctx->model.gs_proj_linear_w->ne[1];
+            return ctx->model.qf_proj_linear_w->ne[1];
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
         default:

@@ -292,7 +292,7 @@ struct yasa2_stage {
     std::vector<yasa2_block> blocks;
 };
 
-struct granite_speech_proj_layer {
+struct qformer_proj_layer {
     ggml_tensor * self_attn_q_w = nullptr;
     ggml_tensor * self_attn_q_b = nullptr;
     ggml_tensor * self_attn_k_w = nullptr;
@@ -549,19 +549,20 @@ struct clip_model {
     ggml_tensor * audio_out_proj_w = nullptr;
     ggml_tensor * audio_out_proj_b = nullptr;
 
-    // granite_speech encoder + projector
-    ggml_tensor * gs_inp_linear_w = nullptr;
-    ggml_tensor * gs_inp_linear_b = nullptr;
-    ggml_tensor * gs_ctc_out_w = nullptr;
-    ggml_tensor * gs_ctc_out_b = nullptr;
-    ggml_tensor * gs_ctc_out_mid_w = nullptr;
-    ggml_tensor * gs_ctc_out_mid_b = nullptr;
-    ggml_tensor * gs_proj_query = nullptr;
-    ggml_tensor * gs_proj_norm_w = nullptr;
-    ggml_tensor * gs_proj_norm_b = nullptr;
-    ggml_tensor * gs_proj_linear_w = nullptr;
-    ggml_tensor * gs_proj_linear_b = nullptr;
-    std::vector<granite_speech_proj_layer> gs_proj_layers;
+    // granite_speech encoder
+    ggml_tensor * inp_proj_w = nullptr;
+    ggml_tensor * inp_proj_b = nullptr;
+    ggml_tensor * ctc_out_w = nullptr;
+    ggml_tensor * ctc_out_b = nullptr;
+    ggml_tensor * ctc_out_mid_w = nullptr;
+    ggml_tensor * ctc_out_mid_b = nullptr;
+    // qformer projector
+    ggml_tensor * qf_proj_query = nullptr;
+    ggml_tensor * qf_proj_norm_w = nullptr;
+    ggml_tensor * qf_proj_norm_b = nullptr;
+    ggml_tensor * qf_proj_linear_w = nullptr;
+    ggml_tensor * qf_proj_linear_b = nullptr;
+    std::vector<qformer_proj_layer> qf_proj_layers;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
