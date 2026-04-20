@@ -1850,20 +1850,28 @@ class TextModel(ModelBase):
             with open(module_path, encoding="utf-8") as f:
                 modules = json.load(f)
             for mod in modules:
-                if mod["type"] == "sentence_transformers.models.Pooling":
+                if mod["type"].endswith("Pooling"):
                     pooling_path = mod["path"]
                     break
+
+        mode_mapping = {
+            "mean": gguf.PoolingType.MEAN,
+            "cls": gguf.PoolingType.CLS,
+            "lasttoken": gguf.PoolingType.LAST,
+        }
 
         # get pooling type
         if pooling_path is not None:
             with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
                 pooling = json.load(f)
-            if pooling["pooling_mode_mean_tokens"]:
+            if pooling.get("pooling_mode_mean_tokens"):
                 pooling_type = gguf.PoolingType.MEAN
-            elif pooling["pooling_mode_cls_token"]:
+            elif pooling.get("pooling_mode_cls_token"):
                 pooling_type = gguf.PoolingType.CLS
-            elif pooling["pooling_mode_lasttoken"]:
+            elif pooling.get("pooling_mode_lasttoken"):
                 pooling_type = gguf.PoolingType.LAST
+            elif (pooling_mode := pooling.get("pooling_mode")) in mode_mapping:
+                pooling_type = mode_mapping[pooling_mode]
             else:
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
@@ -7180,7 +7188,7 @@ class EmbeddingGemma(Gemma3Model):
                 with open(modules_file, encoding="utf-8") as modules_json_file:
                     mods = json.load(modules_json_file)
                 for mod in mods:
-                    if mod["type"] == "sentence_transformers.models.Dense":
+                    if mod["type"].endswith("Dense"):
                         mod_path = mod["path"]
                         # check if model.safetensors file for Dense layer exists
                         model_tensors_file = self.dir_model / mod_path / "model.safetensors"
@@ -10912,14 +10920,14 @@ class NemotronHModel(GraniteHybridModel):
         vocab_size = -(vocab_size // -pad_vocab) * pad_vocab
         self.hparams["vocab_size"] = vocab_size
 
-        assert max(tokenizer.vocab.values()) < vocab_size
+        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
-        added_vocab = tokenizer.get_added_vocab()
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
 
-        added_tokens_decoder = tokenizer.added_tokens_decoder
+        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -10930,7 +10938,7 @@ class NemotronHModel(GraniteHybridModel):
                 if token in added_vocab:
                     if not added_tokens_decoder[i].normalized:
                         previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[unresolved-attribute, invalid-assignment]
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 

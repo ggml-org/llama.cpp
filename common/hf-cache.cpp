@@ -230,7 +230,7 @@ static nl::json api_get(const std::string & url,
 static std::string get_repo_commit(const std::string & repo_id,
                                    const std::string & token) {
     try {
-        auto endpoint = get_model_endpoint();
+        auto endpoint = common_get_model_endpoint();
         auto json = api_get(endpoint + "api/models/" + repo_id + "/refs", token);
 
         if (!json.is_object() ||
@@ -308,7 +308,7 @@ hf_files get_repo_files(const std::string & repo_id,
     hf_files files;
 
     try {
-        auto endpoint = get_model_endpoint();
+        auto endpoint = common_get_model_endpoint();
         auto json = api_get(endpoint + "api/models/" + repo_id + "/tree/" + commit + "?recursive=true", token);
 
         if (!json.is_array()) {

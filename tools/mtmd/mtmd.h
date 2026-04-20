@@ -196,11 +196,13 @@ struct mtmd_decoder_pos {
     uint32_t t;
     uint32_t x;
     uint32_t y;
+    uint32_t z; // unused for now, reserved for future use
 };
 // get position for decoder attention, to be used by M-RoPE models
 // i is the index of the embedding token, ranging from 0 to mtmd_image_tokens_get_n_tokens() - 1
+// pos_0 is the absolute position of the first token
 // return relative position (for example, embedding 0 will have position (0, 0, 0); remember to adjust it to the current absolute position)
-MTMD_API struct mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, size_t i);
+MTMD_API struct mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i);
 
 // tokenize an input text prompt and a list of bitmaps (images/audio)
 // the prompt must have the input image marker (default: "<__media__>") in it
