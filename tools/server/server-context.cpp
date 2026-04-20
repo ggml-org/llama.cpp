@@ -987,13 +987,13 @@ private:
 
         metrics.init();
 
-        if (params_base.clear_idle) {
+        if (params_base.cache_idle_slots) {
             if (!params_base.kv_unified) {
-                SRV_WRN("%s: --clear-idle requires --kv-unified, disabling\n", __func__);
-                params_base.clear_idle = false;
+                SRV_WRN("%s: --cache-idle-slots requires --kv-unified, disabling\n", __func__);
+                params_base.cache_idle_slots = false;
             } else if (params_base.cache_ram_mib == 0) {
-                SRV_WRN("%s: --clear-idle requires --cache-ram, disabling\n", __func__);
-                params_base.clear_idle = false;
+                SRV_WRN("%s: --cache-idle-slots requires --cache-ram, disabling\n", __func__);
+                params_base.cache_idle_slots = false;
             } else {
                 SRV_INF("%s: idle slots will be saved to prompt cache and cleared upon starting a new task\n", __func__);
                 SRV_DBG("%s", "__TEST_TAG_CLEAR_IDLE_ENABLED__\n");
@@ -1886,7 +1886,7 @@ private:
                         break; // drop the task
                     }
 
-                    if (params_base.clear_idle) {
+                    if (params_base.cache_idle_slots) {
                         for (auto & s : slots) {
                             if (!s.is_processing()) {
                                 slot_save_and_clear(s);

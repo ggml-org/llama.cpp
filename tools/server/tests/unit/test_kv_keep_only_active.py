@@ -91,7 +91,7 @@ def test_clear_and_restore():
 
 def test_disabled_with_flag():
     global server
-    server.no_clear_idle = True
+    server.no_cache_idle_slots = True
     server.start()
     log = LogReader(server.log_path)
 
