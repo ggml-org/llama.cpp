@@ -1674,6 +1674,17 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                         if (ggml_backend_meta_get_split_state(next, false).axis != GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
                             break;
                         }
+                        
+                        bool all_srcs_mirrored = true;
+                        for (int s = 0; s < GGML_MAX_SRC; s++) {
+                            if (next->src[s] == nullptr) continue;
+                            if (ggml_backend_meta_get_split_state(next->src[s], false).axis
+                                    != GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+                                all_srcs_mirrored = false;
+                                break;
+                            }
+                        }
+                        if (!all_srcs_mirrored) break;
                         id++;
                     }
                 };
