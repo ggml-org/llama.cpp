@@ -292,7 +292,7 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
         hf_tag = "default";
     }
 
-    std::string model_endpoint = get_model_endpoint();
+    std::string model_endpoint = common_get_model_endpoint();
     auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
 
     // prepare local path for caching

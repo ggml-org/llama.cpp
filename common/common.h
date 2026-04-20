@@ -308,10 +308,9 @@ struct common_params_speculative {
 
     // ngram-based speculative decoding
 
-    uint16_t ngram_size_n     = 12; // ngram size for lookup
-    uint16_t ngram_size_m     = 48; // mgram size for speculative tokens
-    uint16_t ngram_min_hits   =  1; // minimum hits at ngram/mgram lookup for mgram to be proposed
-    bool     use_checkpoints  =  false; // use checkpoints to rewind in token history of recurrent models
+    uint16_t ngram_size_n   = 12; // ngram size for lookup
+    uint16_t ngram_size_m   = 48; // mgram size for speculative tokens
+    uint16_t ngram_min_hits = 1; // minimum hits at ngram/mgram lookup for mgram to be proposed
 
     std::shared_ptr<common_ngram_mod> ngram_mod;
 
@@ -847,7 +846,23 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_p
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
 
-std::string                   get_model_endpoint();
+// model endpoint from env
+std::string common_get_model_endpoint();
+
+//
+// Context utils
+//
+
+enum common_context_seq_rm_type {
+    COMMON_CONTEXT_SEQ_RM_TYPE_NO   = 0, // seq_rm not supported (e.g. no memory module)
+    COMMON_CONTEXT_SEQ_RM_TYPE_PART = 1, // can seq_rm partial sequences
+    COMMON_CONTEXT_SEQ_RM_TYPE_FULL = 2, // can seq_rm full sequences only
+};
+
+// check if the llama_context can remove sequences
+// note: clears the memory of the context
+common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx);
+
 
 //
 // Batch utils
