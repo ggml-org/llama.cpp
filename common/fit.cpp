@@ -4,10 +4,12 @@
 
 #include "../src/llama-ext.h"
 
+#include <array>
 #include <cassert>
 #include <stdexcept>
 #include <cinttypes>
 #include <set>
+#include <string>
 #include <vector>
 
 // this enum is only used in llama_params_fit_impl but needs to be defined outside of it to fix a Windows compilation issue
