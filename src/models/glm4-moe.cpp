@@ -38,27 +38,8 @@ llm_build_glm4_moe::llm_build_glm4_moe(const llama_model & model, const llm_grap
 
         // self-attention
         {
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            if (model.layers[il].bq) {
-                Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
-            }
-            cb(Qcur, "Qcur", il);
-
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            if (model.layers[il].bk) {
-                Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
-            }
-            cb(Kcur, "Kcur", il);
-
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            if (model.layers[il].bv) {
-                Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
-            }
-            cb(Vcur, "Vcur", il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             // Apply Q/K norm if available (GLM-4.5 355B variant)
             if (model.layers[il].attn_q_norm) {
@@ -94,7 +75,7 @@ llm_build_glm4_moe::llm_build_glm4_moe(const llama_model & model, const llm_grap
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL,
+                    model.layers[il].wo, NULL, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
         if (il == n_transformer_layers - 1 && inp_out_ids) {
