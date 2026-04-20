@@ -379,6 +379,18 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
         GGML_ASSERT(pool_size == 0);
     }
 
+    void clear_pool() {
+        for (int i = 0; i < MAX_BUFFERS; ++i) {
+            ggml_cuda_buffer & b = buffer_pool[i];
+            if (b.ptr != nullptr) {
+                CUDA_CHECK(cudaFree(b.ptr));
+                pool_size -= b.size;
+                b.ptr  = nullptr;
+                b.size = 0;
+            }
+        }
+    }
+
     void * alloc(size_t size, size_t * actual_size) override {
 #ifdef DEBUG_CUDA_MALLOC
         int nnz = 0;
@@ -421,7 +433,24 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
         size_t look_ahead_size = (size_t) (1.05 * size);
         look_ahead_size = 256 * ((look_ahead_size + 255)/256);
         ggml_cuda_set_device(device);
+#if defined(GGML_USE_MUSA)
         CUDA_CHECK(ggml_cuda_device_malloc(&ptr, look_ahead_size, device));
+#else
+        cudaError_t err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
+        if (err == cudaErrorMemoryAllocation) {
+            // only invoked from alloc() after ggml_cuda_set_device.
+            (void)cudaGetLastError();
+            const size_t cached_bytes = pool_size;
+            GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: alloc of %.2f MiB failed, flushing %.2f MiB of cached buffers and retrying\n",
+                           device, look_ahead_size/1024.0/1024.0, cached_bytes/1024.0/1024.0);
+            clear_pool();
+            err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
+            if (err == cudaSuccess) {
+                GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: retry succeeded\n", device);
+            }
+        }
+        CUDA_CHECK(err);
+#endif
         *actual_size = look_ahead_size;
         pool_size += look_ahead_size;
 #ifdef DEBUG_CUDA_MALLOC
