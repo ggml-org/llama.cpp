@@ -100,7 +100,52 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         }
     }
 
-    hex_set_pmu();
+    return AEE_SUCCESS;
+}
+
+AEEResult htp_iface_etm(remote_handle64 handle, uint32_t enable) {
+    int err = enable ? HAP_user_etm_enable() : HAP_user_etm_disable();
+    if (err) {
+        if (err == AEE_EVERSIONNOTSUPPORT) {
+            FARF(ERROR, "API HAP_user_etm_enable/disable is not supported\n");
+        } else {
+            FARF(ERROR, "Error executing HAP_user_etm_enable/disable with error code : 0x%x\n", err);
+        }
+    }
+    return err;
+}
+
+AEEResult htp_iface_profiler(remote_handle64 handle, uint32_t enable) {
+    struct htp_context * ctx = (struct htp_context *) handle;
+    if (!ctx) {
+        return AEE_EBADPARM;
+    }
+
+    // TODO: pass these from the host
+    uint32_t events[] = {0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C};
+
+    // Pack 4 event IDs (low 8 bits) into each 32-bit config register
+    uint32_t evtcfg = 0, evtcfg1 = 0, cfg = 0, i = 0;
+    for (; i < HEX_NUM_PMU_COUNTERS/2; i++) {
+        evtcfg  |= ((events[i + 0] & 0xFF) << (i * 8));
+        evtcfg1 |= ((events[i + 4] & 0xFF) << (i * 8));
+    }
+
+    // For events >255 pack high 2 bits of all 8 event IDs into cfg register
+    // 2 bits per counter: bits [1:0] for counter 0, [3:2] for counter 1, etc.
+    for (i = 0; i < HEX_NUM_PMU_COUNTERS; i++) {
+        cfg |= (((events[i] >> 8) & 3) << (i * 2));
+    }
+
+    FARF(ALWAYS, "Configuring PMU registers: evtcfg = 0x%x, evtcfg1 = 0x%x, pmucfg = 0x%x", evtcfg, evtcfg1, cfg);
+
+    // Configure PMU registers
+    qurt_pmu_set(QURT_PMUCFG,     cfg);
+    qurt_pmu_set(QURT_PMUEVTCFG,  evtcfg);
+    qurt_pmu_set(QURT_PMUEVTCFG1, evtcfg1);
+    qurt_pmu_enable(1);
+
+    ctx->profiler = true;
 
     return AEE_SUCCESS;
 }
@@ -131,32 +176,16 @@ AEEResult htp_iface_close(remote_handle64 handle) {
         }
     }
 
+    if (ctx->profiler) {
+        qurt_pmu_enable(1);
+    }
+
+    if (ctx->etm) {
+        HAP_user_etm_disable();
+    }
+
     free(ctx);
     return AEE_SUCCESS;
-}
-
-AEEResult htp_iface_enable_etm(remote_handle64 handle) {
-    int err = HAP_user_etm_enable();
-    if (err) {
-        if (err == AEE_EVERSIONNOTSUPPORT) {
-            FARF(ERROR, "API HAP_user_etm_enable is not supported\n");
-        } else {
-            FARF(ERROR, "Error executing HAP_user_etm_enable with error code : 0x%x\n", err);
-        }
-    }
-    return err;
-}
-
-AEEResult htp_iface_disable_etm(remote_handle64 handle) {
-    int err = HAP_user_etm_disable();
-    if (err) {
-        if (err == AEE_EVERSIONNOTSUPPORT) {
-            FARF(ERROR, "API HAP_user_etm_disable is not supported\n");
-        } else {
-            FARF(ERROR, "Error executing HAP_user_etm_disable with error code : 0x%x\n", err);
-        }
-    }
-    return err;
 }
 
 AEEResult htp_iface_mmap(remote_handle64 handle, int fd, uint32_t size, uint32_t pinned) {
@@ -770,17 +799,20 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
-            profile_start(&prof);
+
+            if (ctx->profiler) { profile_start(&prof); }
 
             proc_op_req(octx, tens, i, &ops[i]);
 
-            profile_stop(&prof);
+            if (ctx->profiler) {
+                profile_stop(&prof);
 
-            pds[i].opcode = ops[i].opcode;
-            pds[i].usecs  = prof.usecs;
-            pds[i].cycles = prof.cycles;
-            for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
-                pds[i].pmu[j] = prof.pmu_counters[j];
+                pds[i].opcode = ops[i].opcode;
+                pds[i].usecs  = prof.usecs;
+                pds[i].cycles = prof.cycles;
+                for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
+                    pds[i].pmu[j] = prof.pmu_counters[j];
+                }
             }
         }
 

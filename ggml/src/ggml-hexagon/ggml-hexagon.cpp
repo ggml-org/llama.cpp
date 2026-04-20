@@ -2069,25 +2069,30 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     }
 
     if (opt_etm) {
-        err = htp_iface_enable_etm(this->handle);
+        err = htp_iface_etm(this->handle, 1);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: failed to enable ETM tracing: 0x%08x\n", (unsigned) err);
         }
     }
 
-    // Start the DSP-side service. We need to pass the queue ID to the
-    // DSP in a FastRPC call; the DSP side will import the queue and start
-    // listening for packets in a callback.
+    if (opt_profile) {
+        err = htp_iface_profiler(this->handle, 1);
+        if (err != 0) {
+            GGML_LOG_ERROR("ggml-hex: failed to enable profiling: 0x%08x\n", (unsigned) err);
+        }
+    }
+
+    // Allocate buffers and state for op batching
+    this->op_batch = new ggml_hexagon_opbatch(this, opt_opbatch);
+    this->op_queue = new ggml_hexagon_opqueue(this, opt_opbatch, opt_opqueue);
+
+    // Start processing op batch requests
     err = htp_iface_start(this->handle, dev_id, this->queue_id, opt_nhvx, opt_use_hmx);
     if (err != 0) {
         GGML_LOG_ERROR("ggml-hex: failed to start session: 0x%08x\n", (unsigned) err);
         throw std::runtime_error("ggml-hex: iface start failed (see log for details)");
     }
     this->valid_iface = true;
-
-    // Allocate buffers and state for op batching
-    this->op_batch = new ggml_hexagon_opbatch(this, opt_opbatch);
-    this->op_queue = new ggml_hexagon_opqueue(this, opt_opbatch, opt_opqueue);
 }
 
 void ggml_hexagon_session::release() noexcept(true) {
@@ -2107,9 +2112,16 @@ void ggml_hexagon_session::release() noexcept(true) {
     }
 
     if (opt_etm) {
-        err = htp_iface_disable_etm(this->handle);
+        err = htp_iface_etm(this->handle, 0);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: warn : failed to disable ETM tracing: 0x%08x\n", (unsigned) err);
+        }
+    }
+
+    if (opt_profile) {
+        err = htp_iface_profiler(this->handle, 0);
+        if (err != 0) {
+            GGML_LOG_ERROR("ggml-hex: warn : failed to disable profiling: 0x%08x\n", (unsigned) err);
         }
     }
 
