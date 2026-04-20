@@ -114,10 +114,10 @@ llama_pos mtmd_helper_get_n_pos(const mtmd_input_chunks * chunks) {
     return n_pos;
 }
 
-void mtmd_helper_image_get_decoder_pos(const mtmd_image_tokens * chunks, mtmd_decoder_pos * out_pos) {
+void mtmd_helper_image_get_decoder_pos(const mtmd_image_tokens * chunks, llama_pos pos_0, mtmd_decoder_pos * out_pos) {
     size_t n_tokens = mtmd_image_tokens_get_n_tokens(chunks);
     for (size_t i = 0; i < n_tokens; i++) {
-        out_pos[i] = mtmd_image_tokens_get_decoder_pos(chunks, i);
+        out_pos[i] = mtmd_image_tokens_get_decoder_pos(chunks, pos_0, i);
     }
 }
 
@@ -163,15 +163,15 @@ struct decode_embd_batch {
     }
 
     // M-RoPE for image
-    void set_position_mrope_2d(llama_pos pos_0, const std::vector<mtmd_decoder_pos> & rel_pos, llama_seq_id seq_id) {
+    void set_position_mrope_2d(const std::vector<mtmd_decoder_pos> & rel_pos, llama_seq_id seq_id) {
         GGML_ASSERT(n_pos_per_embd == 4);
         GGML_ASSERT(!rel_pos.empty() && (int32_t)rel_pos.size() == batch.n_tokens);
         seq_id_0[0] = seq_id;
         for (int32_t i = 0; i < batch.n_tokens; i++) {
-            pos[i                     ] = pos_0 + rel_pos[i].t;
-            pos[i + batch.n_tokens    ] = pos_0 + rel_pos[i].y;
-            pos[i + batch.n_tokens * 2] = pos_0 + rel_pos[i].x;
-            pos[i + batch.n_tokens * 3] = 0; // last pos dim is unused
+            pos[i                     ] = rel_pos[i].t;
+            pos[i + batch.n_tokens    ] = rel_pos[i].y;
+            pos[i + batch.n_tokens * 2] = rel_pos[i].x;
+            pos[i + batch.n_tokens * 3] = rel_pos[i].z;
         }
         for (int i = 0; i < batch.n_tokens; i++) {
             batch.n_seq_id[i] = 1;
@@ -188,7 +188,7 @@ struct decode_embd_batch {
             pos[i                     ] = pos_0 + i;
             pos[i + batch.n_tokens    ] = pos_0 + i;
             pos[i + batch.n_tokens * 2] = pos_0 + i;
-            pos[i + batch.n_tokens * 3] = 0; // last pos dim is unused
+            pos[i + batch.n_tokens * 3] = pos_0 + i;
         }
         for (int i = 0; i < batch.n_tokens; i++) {
             batch.n_seq_id[i] = 1;
@@ -268,8 +268,8 @@ int32_t mtmd_helper_decode_image_chunk(
             }
             const auto n_tokens = mtmd_image_tokens_get_n_tokens(image_tokens);
             std::vector<mtmd_decoder_pos> rel_pos(n_tokens);
-            mtmd_helper_image_get_decoder_pos(image_tokens, rel_pos.data());
-            batch_embd.set_position_mrope_2d(n_past, rel_pos, seq_id);
+            mtmd_helper_image_get_decoder_pos(image_tokens, n_past, rel_pos.data());
+            batch_embd.set_position_mrope_2d(rel_pos, seq_id);
         } else if (chunk_type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
             batch_embd.set_position_mrope_1d(n_past, seq_id);
         } else {
