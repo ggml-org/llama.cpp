@@ -27,31 +27,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
 
-env:
-  GGML_NLOOP: 3
-  GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
-
 jobs:
-  check-snapdragon:
-    runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.filter.outputs.snapdragon }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            snapdragon:
-              - 'ggml/include/ggml-hexagon.h'
-              - 'ggml/src/ggml-hexagon/**'
-              - 'docs/backend/snapdragon/**'
-              - 'scripts/snapdragon/**'
-              - 'CMakePresets.json'
-
   android-ndk-snapdragon:
     runs-on: ubuntu-latest
     container:
@@ -62,7 +38,6 @@ jobs:
 
     steps:
       - name: Clone
-        id: checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -85,12 +60,8 @@ jobs:
 
   test-snapdragon-qdc:
     name: Test on QDC Android Device (${{ matrix.device }})
-    needs: [android-ndk-snapdragon, check-snapdragon]
-    # Run on Snapdragon path changes, or always when manually dispatched.
-    # Skip when QDC_API_KEY secret is not available (e.g., PRs from forks).
-    if: |
-      secrets.QDC_API_KEY != '' &&
-      (github.event_name == 'workflow_dispatch' || needs.check-snapdragon.outputs.changed == 'true')
+    needs: [android-ndk-snapdragon]
+    if: secrets.QDC_API_KEY != ''
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
