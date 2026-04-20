@@ -232,6 +232,8 @@
 				{/if}
 			{/each}
 
+			<ChatFormActionToolsSubmenu />
+
 			<DropdownMenu.Sub onOpenChange={handleMcpSubMenuOpen}>
 				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 					<McpLogo class="h-4 w-4" />
@@ -304,8 +306,6 @@
 					</DropdownMenuSearchable>
 				</DropdownMenu.SubContent>
 			</DropdownMenu.Sub>
-
-			<ChatFormActionToolsSubmenu />
 
 			{#each ATTACHMENT_MCP_ITEMS as item (item.id)}
 				{#if isItemVisible(item.visibleWhen)}

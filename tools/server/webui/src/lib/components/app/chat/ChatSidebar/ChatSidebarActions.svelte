@@ -78,6 +78,7 @@
 
 			<KeyboardShortcutInfo keys={['cmd', 'k']} />
 		</Button>
+
 		<Button
 			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isMcpActive
 				? 'bg-accent text-accent-foreground'
