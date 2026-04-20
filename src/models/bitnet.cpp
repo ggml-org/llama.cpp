@@ -57,8 +57,8 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
             cb(cur, "attn_sub_norm", il);
 
             cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
-            if (model.layers[il].bo) {
-                cur = ggml_add(ctx0, cur, model.layers[il].bo);
+            if (model.layers[il].wo_b) {
+                cur = ggml_add(ctx0, cur, model.layers[il].wo_b);
             }
             cb(cur, "attn_out", il);
         }
