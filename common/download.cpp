@@ -508,7 +508,7 @@ struct gguf_split_info {
 
 static gguf_split_info get_gguf_split_info(const std::string & path) {
     static const std::regex re_split("^(.+)-([0-9]{5})-of-([0-9]{5})$", std::regex::icase);
-    static const std::regex re_tag("[-.]([A-Z0-9_]+)$", std::regex::icase);
+    static const std::regex re_tag("[-.]((?:[A-Z]+-)?[A-Z][0-9][A-Z0-9_]*)$", std::regex::icase);
     std::smatch m;
 
     std::string prefix = path;
