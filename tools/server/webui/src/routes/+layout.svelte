@@ -19,7 +19,8 @@
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
-	import { goto } from '$app/navigation';
+	import { beforeNavigate, goto } from '$app/navigation';
+	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
@@ -46,6 +47,12 @@
 
 	let activePanel = $state<'chat' | 'settings' | 'mcp'>('chat');
 	let isSettingsRoute = $derived(!!page.route.id?.startsWith('/settings'));
+
+	beforeNavigate(({ to, from }) => {
+		if (to?.route?.id?.startsWith('/settings/chat') && !from?.route?.id?.startsWith('/settings/chat')) {
+			settingsReferrer.url = window.location.hash || '#/';
+		}
+	});
 	let chatSettingsRef: ChatSettings | undefined = $state();
 
 	$effect(() => {

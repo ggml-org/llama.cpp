@@ -9,6 +9,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { setChatSettingsConfigContext } from '$lib/contexts';
+	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
 
 	let { children } = $props();
 
@@ -70,7 +71,7 @@
 		}
 
 		settingsStore.updateMultipleConfig(processedConfig);
-		goto('#/');
+		goto(settingsReferrer.url);
 	}
 
 	function scrollToCenter(element: HTMLElement) {
