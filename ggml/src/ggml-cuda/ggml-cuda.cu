@@ -774,12 +774,20 @@ static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_bac
     void * dev_ptr;
     cudaError_t err = ggml_cuda_device_malloc(&dev_ptr, size, buft_ctx->device);
     if (err != cudaSuccess) {
-        // On OOM, retry once with managed memory so the overflowing buffer (typically
-        // the KV cache at high context) can spill to system RAM instead of aborting.
-        // Buffers that fit in VRAM already landed on the device via the first attempt;
-        // only the one that overflowed uses managed memory. hipMallocManaged pages hot
-        // regions onto the device on demand, so the common TG working set stays on GPU.
+        // Opt-in OOM fallback: retry once with managed memory so the overflowing buffer
+        // (typically the KV cache at high context) can spill to system RAM instead of
+        // aborting. Buffers that fit in VRAM already landed on the device via the first
+        // attempt; only the one that overflowed uses managed memory. hipMallocManaged
+        // pages hot regions onto the device on demand, so the common TG working set
+        // stays on GPU. Gated because ROCm doesn't spill by design — users opt in to
+        // trade raw throughput for not aborting.
+        static const bool alloc_fallback_managed = getenv("GGML_CUDA_ALLOC_FALLBACK_MANAGED") != nullptr;
         (void)cudaGetLastError();
+        if (!alloc_fallback_managed) {
+            GGML_LOG_ERROR("%s: allocating %.2f MiB on device %d: cudaMalloc failed: %s\n",
+                           __func__, size / 1024.0 / 1024.0, buft_ctx->device, cudaGetErrorString(err));
+            return nullptr;
+        }
         GGML_LOG_WARN("%s: allocating %.2f MiB on device %d: cudaMalloc failed (%s); retrying with managed memory (will page to system RAM on demand)\n",
                       __func__, size / 1024.0 / 1024.0, buft_ctx->device, cudaGetErrorString(err));
         err = ggml_cuda_device_malloc(&dev_ptr, size, buft_ctx->device, /*force_managed=*/true);
