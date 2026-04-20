@@ -3,6 +3,7 @@
 	import { ActionIcon } from '$lib/components/app';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { Send, Edit, Trash2 } from '@lucide/svelte';
+	import { getProcessingInfoContext } from '$lib/contexts';
 
 	interface Props {
 		class?: string;
@@ -10,7 +11,6 @@
 		onSendImmediately: () => void;
 		onEdit: (newContent: string) => void;
 		onDelete: () => void;
-		showProcessingInfo?: boolean;
 	}
 
 	let {
@@ -18,9 +18,11 @@
 		content,
 		onSendImmediately,
 		onEdit,
-		onDelete,
-		showProcessingInfo = false
+		onDelete
 	}: Props = $props();
+
+	const processingInfoCtx = getProcessingInfoContext();
+	let showProcessingInfo = $derived(processingInfoCtx.showProcessingInfo);
 
 	let isMultiline = $state(false);
 	let isEditing = $state(false);

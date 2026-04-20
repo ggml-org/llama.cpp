@@ -37,6 +37,8 @@
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
+	import { page } from '$app/state';
+	import { setProcessingInfoContext } from '$lib/contexts';
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -80,8 +82,14 @@
 	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
 
 	let showProcessingInfo = $derived(
-		isCurrentConversationLoading || config().keepStatsVisible || activeProcessingState() !== null
+		isCurrentConversationLoading || (config().keepStatsVisible && page.route.id !== '/') || activeProcessingState() !== null
 	);
+
+	setProcessingInfoContext({
+		get showProcessingInfo() {
+			return showProcessingInfo;
+		}
+	});
 
 	let isRouter = $derived(isRouterMode());
 
@@ -368,7 +376,6 @@
 						autoScroll.enable();
 						autoScroll.scrollToBottom();
 					}}
-					{showProcessingInfo}
 				/>
 			{/if}
 
@@ -389,7 +396,9 @@
 					</div>
 				{/if}
 
-				<ChatScreenProcessingInfo {showProcessingInfo} />
+				{#if page.route.id === '/(chat)/chat/[id]'}
+					<ChatScreenProcessingInfo />
+				{/if}				
 
 				{#if hasPropsError}
 					<div

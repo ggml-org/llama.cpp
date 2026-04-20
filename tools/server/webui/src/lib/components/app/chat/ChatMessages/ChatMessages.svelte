@@ -21,10 +21,9 @@
 	interface Props {
 		messages?: DatabaseMessage[];
 		onUserAction?: () => void;
-		showProcessingInfo?: boolean;
 	}
 
-	let { messages = [], onUserAction, showProcessingInfo = false }: Props = $props();
+	let { messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 	const currentConfig = config();
@@ -222,7 +221,6 @@
 			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
 			onEdit={(newContent) => agenticInjectSteeringMessage(convId, newContent)}
 			onDelete={() => agenticClearSteeringMessage(convId)}
-			{showProcessingInfo}
 		/>
 	{/if}
 {/if}

@@ -5,10 +5,12 @@
 	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { activeMessages, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { getProcessingInfoContext } from '$lib/contexts';
 
 	const processingState = useProcessingState();
+	const processingInfoCtx = getProcessingInfoContext();
 
-	let { showProcessingInfo = false } = $props();
+	let showProcessingInfo = $derived(processingInfoCtx.showProcessingInfo);
 
 	let isCurrentConversationLoading = $derived(isLoading());
 	let isStreaming = $derived(isChatStreaming());
