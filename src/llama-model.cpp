@@ -77,11 +77,23 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         const ggml_tensor * tensor_axis_0;
 
         uint32_t il;
-        size_t   rotation;
+        size_t   rotation; // when assigning tensor slices, rotate how the rounding is done for more even allocation
     };
 
     auto get_tensor_config_impl = [&](
                 const ggml_backend_meta_split_axis axis, const std::string & suffix = "", const std::string & suffix_fallback = "") -> tensor_config {
+        // the layers in a tensor can be inhomogeneous, if the pattern is cleanly divided by the number of GPUs there can be aliasing effects,
+        //     count only the same type of previous layers to avoid this
+        auto get_il_eff = [&](const size_t il){
+            size_t ret = 0;
+            const bool il_is_recurrent = hparams.is_recurrent(il);
+            const bool il_is_swa       = hparams.is_swa(il);
+            for (size_t il_prev = 0; il_prev < il; il_prev++) {
+                ret += hparams.is_recurrent(il_prev) == il_is_recurrent && hparams.is_swa(il_prev) == il_is_swa;
+            }
+            return ret;
+        };
+
         uint32_t il;
         std::string prefix;
         size_t rotation;
@@ -90,13 +102,13 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             GGML_ASSERT(length_prefix != std::string::npos);
             prefix = tensor_name.substr(0, length_prefix + 1);
             il = std::stoull(tensor_name.substr(4, length_prefix));
-            rotation = il % ud->n_devices;
+            rotation = get_il_eff(il) % ud->n_devices;
         } else if (tensor_name.substr(0, 6) == "cache_") {
             const size_t layer_index_start = tensor_name.find("_l", 6);
             GGML_ASSERT(layer_index_start != std::string::npos);
             il = std::stoull(tensor_name.substr(layer_index_start + 2));
             prefix = "blk." + std::to_string(il) + ".";
-            rotation = il % ud->n_devices;
+            rotation = get_il_eff(il) % ud->n_devices;
         } else {
             il = 0;
             rotation = hparams.n_layer % ud->n_devices;
