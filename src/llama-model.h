@@ -185,17 +185,6 @@ enum llama_fairy2i_quant_variant {
     LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2,
 };
 
-struct llama_widely_linear_fairy2i_tile64_stage {
-    struct ggml_tensor * codes      = nullptr;
-    struct ggml_tensor * scale_real = nullptr;
-    struct ggml_tensor * scale_imag = nullptr;
-};
-
-struct llama_widely_linear_fairy2i_tile64 {
-    std::array<llama_widely_linear_fairy2i_tile64_stage, 2> U;  // stage0, stage1
-    std::array<llama_widely_linear_fairy2i_tile64_stage, 2> W;  // stage0, stage1
-};
-
 struct llama_layer_nextn {
     struct ggml_tensor * eh_proj          = nullptr;
     struct ggml_tensor * embed_tokens     = nullptr;
@@ -249,10 +238,6 @@ struct llama_layer {
     llama_widely_linear_ifairy wk_fairy2i;
     llama_widely_linear_ifairy wv_fairy2i;
     llama_widely_linear_ifairy wo_fairy2i;
-    llama_widely_linear_fairy2i_tile64 wq_fairy2i_tile64;
-    llama_widely_linear_fairy2i_tile64 wk_fairy2i_tile64;
-    llama_widely_linear_fairy2i_tile64 wv_fairy2i_tile64;
-    llama_widely_linear_fairy2i_tile64 wo_fairy2i_tile64;
     struct ggml_tensor * wq_enc    = nullptr;
     struct ggml_tensor * wk_enc    = nullptr;
     struct ggml_tensor * wv_enc    = nullptr;
@@ -286,9 +271,6 @@ struct llama_layer {
     llama_widely_linear_ifairy ffn_gate_fairy2i;
     llama_widely_linear_ifairy ffn_down_fairy2i;
     llama_widely_linear_ifairy ffn_up_fairy2i;
-    llama_widely_linear_fairy2i_tile64 ffn_gate_fairy2i_tile64;
-    llama_widely_linear_fairy2i_tile64 ffn_down_fairy2i_tile64;
-    llama_widely_linear_fairy2i_tile64 ffn_up_fairy2i_tile64;
     struct ggml_tensor * ffn_gate_enc = nullptr;
     struct ggml_tensor * ffn_down_enc = nullptr;
     struct ggml_tensor * ffn_up_enc   = nullptr;
@@ -441,7 +423,6 @@ struct llama_model {
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
     llama_widely_linear_ifairy output_fairy2i;
-    llama_widely_linear_fairy2i_tile64 output_fairy2i_tile64;
     struct ggml_tensor * output_b        = nullptr;
     struct ggml_tensor * output_norm_enc = nullptr;
 

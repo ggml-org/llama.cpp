@@ -4597,59 +4597,39 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // Optional dense output for ablation/fallback.
                     output      = create_tensor(tn(LLM_TENSOR_OUTPUT), { n_embd * 2, n_vocab }, TENSOR_NOT_REQUIRED);
 
-                    auto tn_fairy2i = [&](llm_tensor tensor, const std::string & suffix, int bid) -> LLM_TN_IMPL {
-                        return bid >= 0 ? tn(tensor, suffix.c_str(), bid) : tn(tensor, suffix.c_str());
+                    auto create_fairy2i_stage = [&](ggml_tensor * & stage, llm_tensor tensor, const char * suffix, int bid,
+                                                    const std::initializer_list<int64_t> & ne, int flags) {
+                        const auto stage_tn = bid >= 0 ? tn(tensor, suffix, bid) : tn(tensor, suffix);
+                        const auto expected_type = fairy2i_quant_variant == LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2
+                            ? GGML_TYPE_IFAIRY64
+                            : GGML_TYPE_IFAIRY;
+
+                        const ggml_tensor * t_meta = ml.get_tensor_meta(stage_tn.str().c_str());
+                        if (t_meta && t_meta->type != expected_type) {
+                            throw std::runtime_error(
+                                format("invalid FAIRY2I tensor type for %s: expected %s, got %s",
+                                       stage_tn.str().c_str(),
+                                       ggml_type_name(expected_type),
+                                       ggml_type_name(t_meta->type)));
+                        }
+
+                        stage = create_tensor(stage_tn, ne, flags);
                     };
 
-                    auto create_fairy2i_tile64_linear = [&](llama_widely_linear_fairy2i_tile64 & linear, llm_tensor tensor,
-                                                             int bid, int64_t in_dim, int64_t out_dim, int flags) {
-                        if (in_dim % 64 != 0 || out_dim % 64 != 0) {
+                    auto create_fairy2i_linear = [&](llama_widely_linear_ifairy & linear, llm_tensor tensor, int bid,
+                                                     int64_t in_dim, int64_t out_dim, int flags) {
+                        if (fairy2i_quant_variant == LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2 &&
+                            (in_dim % 64 != 0 || out_dim % 64 != 0)) {
                             const std::string tensor_name = bid >= 0 ? tn(tensor, bid).str() : tn(tensor).str();
                             throw std::runtime_error(
                                 format("invalid FAIRY2I tile64_v2 dims for %s: in=%lld out=%lld, expected multiples of 64",
                                        tensor_name.c_str(), (long long) in_dim, (long long) out_dim));
                         }
 
-                        const int64_t codes_cols = in_dim / 4;
-                        const int64_t scale_cols = in_dim / 64;
-                        const int64_t scale_rows = out_dim / 64;
-
-                        auto create_stage = [&](llama_widely_linear_fairy2i_tile64_stage & stage, const char * uw_name,
-                                                int sid) {
-                            const std::string prefix = format("%s.s%d", uw_name, sid);
-                            stage.codes = create_tensor(
-                                tn_fairy2i(tensor, prefix + ".codes", bid),
-                                { codes_cols, out_dim }, flags);
-                            stage.scale_real = create_tensor(
-                                tn_fairy2i(tensor, prefix + ".scale_real", bid),
-                                { scale_cols, scale_rows }, flags);
-                            stage.scale_imag = create_tensor(
-                                tn_fairy2i(tensor, prefix + ".scale_imag", bid),
-                                { scale_cols, scale_rows }, flags);
-                        };
-
-                        create_stage(linear.U[0], "U", 0);
-                        create_stage(linear.U[1], "U", 1);
-                        create_stage(linear.W[0], "W", 0);
-                        create_stage(linear.W[1], "W", 1);
-                    };
-
-                    auto has_fairy2i_tile64_stage = [](const llama_widely_linear_fairy2i_tile64_stage & stage) {
-                        return stage.codes && stage.scale_real && stage.scale_imag;
-                    };
-
-                    auto has_fairy2i_tile64_linear = [&](const llama_widely_linear_fairy2i_tile64 & linear) {
-                        return has_fairy2i_tile64_stage(linear.U[0]) &&
-                               has_fairy2i_tile64_stage(linear.U[1]) &&
-                               has_fairy2i_tile64_stage(linear.W[0]) &&
-                               has_fairy2i_tile64_stage(linear.W[1]);
-                    };
-
-                    auto has_fairy2i_tile64_linear_any = [&](const llama_widely_linear_fairy2i_tile64 & linear) {
-                        return linear.U[0].codes || linear.U[0].scale_real || linear.U[0].scale_imag ||
-                               linear.U[1].codes || linear.U[1].scale_real || linear.U[1].scale_imag ||
-                               linear.W[0].codes || linear.W[0].scale_real || linear.W[0].scale_imag ||
-                               linear.W[1].codes || linear.W[1].scale_real || linear.W[1].scale_imag;
+                        create_fairy2i_stage(linear.U[0], tensor, "U.s0", bid, { in_dim, out_dim }, flags);
+                        create_fairy2i_stage(linear.U[1], tensor, "U.s1", bid, { in_dim, out_dim }, flags);
+                        create_fairy2i_stage(linear.W[0], tensor, "W.s0", bid, { in_dim, out_dim }, flags);
+                        create_fairy2i_stage(linear.W[1], tensor, "W.s1", bid, { in_dim, out_dim }, flags);
                     };
 
                     if (n_vocab % 2 != 0) {
@@ -4657,49 +4637,23 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             format("invalid FAIRY2I vocab size: %lld, expected even", (long long) n_vocab));
                     }
 
-                    if (fairy2i_quant_variant == LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2) {
-                        create_fairy2i_tile64_linear(output_fairy2i_tile64, LLM_TENSOR_OUTPUT, -1, n_embd, n_vocab / 2,
-                                                     TENSOR_NOT_REQUIRED);
+                    create_fairy2i_linear(output_fairy2i, LLM_TENSOR_OUTPUT, -1, n_embd, n_vocab / 2, TENSOR_NOT_REQUIRED);
 
-                        const bool has_output_fairy2i_tile64 = has_fairy2i_tile64_linear(output_fairy2i_tile64);
-                        const bool has_output_fairy2i_tile64_any = has_fairy2i_tile64_linear_any(output_fairy2i_tile64);
-                        if (has_output_fairy2i_tile64_any && !has_output_fairy2i_tile64) {
-                            throw std::runtime_error(
-                                "incomplete FAIRY2I tile64_v2 output tensor set: expected output.{U,W}.s{0,1}.{codes,scale_real,scale_imag}");
-                        }
-                        if (!has_output_fairy2i_tile64 && !output) {
-                            throw std::runtime_error(
-                                "FAIRY2I tile64_v2 requires either output.{U,W}.s{0,1}.{codes,scale_real,scale_imag} or dense output tensor");
-                        }
-                    } else {
-                        output_fairy2i.U[0] =
-                            create_tensor(tn(LLM_TENSOR_OUTPUT, "U.s0"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
-                        output_fairy2i.U[1] =
-                            create_tensor(tn(LLM_TENSOR_OUTPUT, "U.s1"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
-                        output_fairy2i.W[0] =
-                            create_tensor(tn(LLM_TENSOR_OUTPUT, "W.s0"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
-                        output_fairy2i.W[1] =
-                            create_tensor(tn(LLM_TENSOR_OUTPUT, "W.s1"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
-
-                        const bool has_output_fairy2i =
-                            output_fairy2i.U[0] && output_fairy2i.U[1] && output_fairy2i.W[0] && output_fairy2i.W[1];
-                        const bool has_output_fairy2i_any =
-                            output_fairy2i.U[0] || output_fairy2i.U[1] || output_fairy2i.W[0] || output_fairy2i.W[1];
-                        if (has_output_fairy2i_any && !has_output_fairy2i) {
-                            throw std::runtime_error("incomplete FAIRY2I output tensor set: expected output.{U,W}.s{0,1}");
-                        }
-                        if (!has_output_fairy2i && !output) {
-                            throw std::runtime_error("FAIRY2I requires either output.{U,W}.s{0,1} or dense output tensor");
-                        }
+                    const bool has_output_fairy2i =
+                        output_fairy2i.U[0] && output_fairy2i.U[1] && output_fairy2i.W[0] && output_fairy2i.W[1];
+                    const bool has_output_fairy2i_any =
+                        output_fairy2i.U[0] || output_fairy2i.U[1] || output_fairy2i.W[0] || output_fairy2i.W[1];
+                    if (has_output_fairy2i_any && !has_output_fairy2i) {
+                        throw std::runtime_error("incomplete FAIRY2I output tensor set: expected output.{U,W}.s{0,1}");
+                    }
+                    if (!has_output_fairy2i && !output) {
+                        throw std::runtime_error("FAIRY2I requires either output.{U,W}.s{0,1} or dense output tensor");
                     }
 
                     const char * force_dense_output_env = getenv("LLAMA_FAIRY2I_FORCE_DENSE_OUTPUT");
                     const bool   force_dense_output =
                         force_dense_output_env != nullptr && strcmp(force_dense_output_env, "0") != 0;
-                    if (force_dense_output &&
-                        !output &&
-                        fairy2i_quant_variant == LLAMA_FAIRY2I_QUANT_VARIANT_LEGACY &&
-                        output_fairy2i.U[0] && output_fairy2i.U[1] && output_fairy2i.W[0] && output_fairy2i.W[1]) {
+                    if (force_dense_output && !output && has_output_fairy2i) {
                         LLAMA_LOG_WARN(
                             "%s: LLAMA_FAIRY2I_FORCE_DENSE_OUTPUT is set, but dense output tensor is missing; "
                             "falling back to output.{U,W}.s{0,1}\n",
@@ -4718,75 +4672,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "bias", i), { n_embd_gqa }, TENSOR_NOT_REQUIRED);
                         layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), { n_embd * 2 }, TENSOR_NOT_REQUIRED);
 
-                        if (fairy2i_quant_variant == LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2) {
-                            create_fairy2i_tile64_linear(layer.wq_fairy2i_tile64, LLM_TENSOR_ATTN_Q, i, n_embd, n_embd, 0);
-                            create_fairy2i_tile64_linear(layer.wk_fairy2i_tile64, LLM_TENSOR_ATTN_K, i, n_embd, n_embd_gqa / 2, 0);
-                            create_fairy2i_tile64_linear(layer.wv_fairy2i_tile64, LLM_TENSOR_ATTN_V, i, n_embd, n_embd_gqa / 2, 0);
-                            create_fairy2i_tile64_linear(layer.wo_fairy2i_tile64, LLM_TENSOR_ATTN_OUT, i, n_embd, n_embd, 0);
-
-                            create_fairy2i_tile64_linear(layer.ffn_gate_fairy2i_tile64, LLM_TENSOR_FFN_GATE, i, n_embd, n_ff, 0);
-                            create_fairy2i_tile64_linear(layer.ffn_up_fairy2i_tile64, LLM_TENSOR_FFN_UP, i, n_embd, n_ff, 0);
-                            create_fairy2i_tile64_linear(layer.ffn_down_fairy2i_tile64, LLM_TENSOR_FFN_DOWN, i, n_ff, n_embd, 0);
-                        } else {
-                            layer.wq_fairy2i.U[0] = create_tensor(tn(LLM_TENSOR_ATTN_Q, "U.s0", i), { n_embd, n_embd }, 0);
-                            layer.wq_fairy2i.U[1] = create_tensor(tn(LLM_TENSOR_ATTN_Q, "U.s1", i), { n_embd, n_embd }, 0);
-                            layer.wq_fairy2i.W[0] = create_tensor(tn(LLM_TENSOR_ATTN_Q, "W.s0", i), { n_embd, n_embd }, 0);
-                            layer.wq_fairy2i.W[1] = create_tensor(tn(LLM_TENSOR_ATTN_Q, "W.s1", i), { n_embd, n_embd }, 0);
-
-                            layer.wk_fairy2i.U[0] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_K, "U.s0", i), { n_embd, n_embd_gqa / 2 }, 0);
-                            layer.wk_fairy2i.U[1] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_K, "U.s1", i), { n_embd, n_embd_gqa / 2 }, 0);
-                            layer.wk_fairy2i.W[0] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_K, "W.s0", i), { n_embd, n_embd_gqa / 2 }, 0);
-                            layer.wk_fairy2i.W[1] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_K, "W.s1", i), { n_embd, n_embd_gqa / 2 }, 0);
-
-                            layer.wv_fairy2i.U[0] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_V, "U.s0", i), { n_embd, n_embd_gqa / 2 }, 0);
-                            layer.wv_fairy2i.U[1] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_V, "U.s1", i), { n_embd, n_embd_gqa / 2 }, 0);
-                            layer.wv_fairy2i.W[0] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_V, "W.s0", i), { n_embd, n_embd_gqa / 2 }, 0);
-                            layer.wv_fairy2i.W[1] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_V, "W.s1", i), { n_embd, n_embd_gqa / 2 }, 0);
-
-                            layer.wo_fairy2i.U[0] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_OUT, "U.s0", i), { n_embd, n_embd }, 0);
-                            layer.wo_fairy2i.U[1] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_OUT, "U.s1", i), { n_embd, n_embd }, 0);
-                            layer.wo_fairy2i.W[0] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_OUT, "W.s0", i), { n_embd, n_embd }, 0);
-                            layer.wo_fairy2i.W[1] =
-                                create_tensor(tn(LLM_TENSOR_ATTN_OUT, "W.s1", i), { n_embd, n_embd }, 0);
-
-                            layer.ffn_gate_fairy2i.U[0] =
-                                create_tensor(tn(LLM_TENSOR_FFN_GATE, "U.s0", i), { n_embd, n_ff }, 0);
-                            layer.ffn_gate_fairy2i.U[1] =
-                                create_tensor(tn(LLM_TENSOR_FFN_GATE, "U.s1", i), { n_embd, n_ff }, 0);
-                            layer.ffn_gate_fairy2i.W[0] =
-                                create_tensor(tn(LLM_TENSOR_FFN_GATE, "W.s0", i), { n_embd, n_ff }, 0);
-                            layer.ffn_gate_fairy2i.W[1] =
-                                create_tensor(tn(LLM_TENSOR_FFN_GATE, "W.s1", i), { n_embd, n_ff }, 0);
-
-                            layer.ffn_up_fairy2i.U[0] =
-                                create_tensor(tn(LLM_TENSOR_FFN_UP, "U.s0", i), { n_embd, n_ff }, 0);
-                            layer.ffn_up_fairy2i.U[1] =
-                                create_tensor(tn(LLM_TENSOR_FFN_UP, "U.s1", i), { n_embd, n_ff }, 0);
-                            layer.ffn_up_fairy2i.W[0] =
-                                create_tensor(tn(LLM_TENSOR_FFN_UP, "W.s0", i), { n_embd, n_ff }, 0);
-                            layer.ffn_up_fairy2i.W[1] =
-                                create_tensor(tn(LLM_TENSOR_FFN_UP, "W.s1", i), { n_embd, n_ff }, 0);
-
-                            layer.ffn_down_fairy2i.U[0] =
-                                create_tensor(tn(LLM_TENSOR_FFN_DOWN, "U.s0", i), { n_ff, n_embd }, 0);
-                            layer.ffn_down_fairy2i.U[1] =
-                                create_tensor(tn(LLM_TENSOR_FFN_DOWN, "U.s1", i), { n_ff, n_embd }, 0);
-                            layer.ffn_down_fairy2i.W[0] =
-                                create_tensor(tn(LLM_TENSOR_FFN_DOWN, "W.s0", i), { n_ff, n_embd }, 0);
-                            layer.ffn_down_fairy2i.W[1] =
-                                create_tensor(tn(LLM_TENSOR_FFN_DOWN, "W.s1", i), { n_ff, n_embd }, 0);
-                        }
+                        create_fairy2i_linear(layer.wq_fairy2i, LLM_TENSOR_ATTN_Q, i, n_embd, n_embd, 0);
+                        create_fairy2i_linear(layer.wk_fairy2i, LLM_TENSOR_ATTN_K, i, n_embd, n_embd_gqa / 2, 0);
+                        create_fairy2i_linear(layer.wv_fairy2i, LLM_TENSOR_ATTN_V, i, n_embd, n_embd_gqa / 2, 0);
+                        create_fairy2i_linear(layer.wo_fairy2i, LLM_TENSOR_ATTN_OUT, i, n_embd, n_embd, 0);
+                        create_fairy2i_linear(layer.ffn_gate_fairy2i, LLM_TENSOR_FFN_GATE, i, n_embd, n_ff, 0);
+                        create_fairy2i_linear(layer.ffn_up_fairy2i, LLM_TENSOR_FFN_UP, i, n_embd, n_ff, 0);
+                        create_fairy2i_linear(layer.ffn_down_fairy2i, LLM_TENSOR_FFN_DOWN, i, n_ff, n_embd, 0);
                     }
                 }
                 break;
@@ -14061,11 +13953,6 @@ struct llm_build_fairy2i : public llm_graph_context {
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
         GGML_ASSERT(n_embd_head % 2 == 0);
-
-        if (model.fairy2i_quant_variant == LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2) {
-            throw std::runtime_error(
-                "FAIRY2I tile64_v2 tensors are loaded, but tile64_v2 runtime kernels are not implemented yet");
-        }
 
         ggml_tensor * inpL     = build_inp_embd(model.tok_embd);
         ggml_tensor * inp_pos  = build_inp_pos();
