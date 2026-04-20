@@ -38,11 +38,12 @@ OutputVector translate_rope(const NodeContext & context) {
     auto data_node = context.get_input(0).get_node_shared_ptr();
     auto output_shape = context.get_output_shape().to_shape();
     int32_t * op_params = context.get_output_op_params();
-    const int mode = op_params[2];
+    const int mode = (op_case & 0xFFFF0000) >> 16;
+    op_case = (op_case & 0x0000FFFF);
 
-    constexpr int ROPE_TYPE_NORMAL = 0;
-    constexpr int ROPE_TYPE_NEOX = 2;
-    constexpr int ROPE_TYPE_IMROPE = 40;
+    constexpr int TYPE_NORMAL = 0;
+    constexpr int TYPE_NEOX = 1;
+    constexpr int TYPE_IMROPE = 2;
 
     Output<Node> cos_theta_node;
     Output<Node> sin_theta_node;
@@ -55,7 +56,7 @@ OutputVector translate_rope(const NodeContext & context) {
         if (context.get_input_size() == 3) {
             rope_freqs_weight = context.get_input(2).get_node_shared_ptr();
         }
-        auto sin_cos = make_sin_cos(op_params, inp_pos, rope_freqs_weight, mode == ROPE_TYPE_IMROPE);
+        auto sin_cos = make_sin_cos(op_params, inp_pos, rope_freqs_weight, mode == TYPE_IMROPE);
         sin_theta_node = sin_cos.first;
         cos_theta_node = sin_cos.second;
     }
@@ -75,7 +76,7 @@ OutputVector translate_rope(const NodeContext & context) {
         }
     }
 
-    if (mode == ROPE_TYPE_NORMAL) {
+    if (mode == TYPE_NORMAL) {
         auto neg_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
@@ -103,7 +104,7 @@ OutputVector translate_rope(const NodeContext & context) {
         auto data_shape = ov::op::v0::Constant::create(
             ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
         res = std::make_shared<ov::op::v1::Reshape>(stack, data_shape, false);
-    } else if (mode == ROPE_TYPE_NEOX) {
+    } else if (mode == TYPE_NEOX) {
         auto data_split = std::make_shared<ov::op::v1::Split>(
             data_node, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {-1}), 2);
         Output<Node> slice_data_node_0 = data_split->outputs()[0];
@@ -118,7 +119,7 @@ OutputVector translate_rope(const NodeContext & context) {
             std::make_shared<ov::op::v1::Multiply>(slice_data_node_1, cos_theta_node));
 
         res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{first_half_node, second_half_node}, -1);
-    } else if (mode == ROPE_TYPE_IMROPE) {
+    } else if (mode == TYPE_IMROPE) {
         int64_t n_dims = data_node->get_shape()[3];
         auto cos_sin_shape = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{4}, std::vector<int64_t>{1,-1,1,(n_dims >> 1)});
         auto cos_reshaped = std::make_shared<ov::op::v1::Reshape>(cos_theta_node, cos_sin_shape, true);
