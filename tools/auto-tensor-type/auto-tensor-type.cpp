@@ -81,6 +81,7 @@ struct config {
     float bpw_tol_high         = 0.0f;   // can be up to this much above target
     float bpw_tol_low          = 0.2f;   // can be up to this much below target
     std::string test_data_path;           // optional test text file
+    int n_test_samples           = 1;     // number of samples per test size
     std::vector<int> test_sizes = {32, 128, 512};
     int64_t min_elements        = 40000;
     ggml_type output_tensor_type = GGML_TYPE_COUNT; // default: highest from list
@@ -692,7 +693,7 @@ static bool eval_mul_mat(ggml_type weight_type, const void * weight_data,
 
     // Set per-tensor levels if provided (needed for Q3_KPT, Q4_DPT, etc.)
     if (!quant_levels.empty()) {
-        w->quant_levels = (void *)quant_levels.data();
+        w->quant_levels = const_cast<void *>(static_cast<const void *>(quant_levels.data()));
     }
 
     // Create input tensor
@@ -1327,6 +1328,7 @@ static void print_usage(const char * prog) {
     LOG("  -o, --output PATH        Output tensor-type-file path (required)\n");
     LOG("  --bpw-tolerance HIGH,LOW BPW tolerance: +HIGH, -LOW from target (default: +0,-0.2)\n");
     LOG("  --test-data PATH         Text file for test inputs (optional, synthetic if not given)\n");
+    LOG("  --test-samples N         Number of samples per test size (default: 1)\n");
     LOG("  --test-sizes S1,S2,S3    Token counts for test inputs (default: 32,128,512)\n");
     LOG("  --min-elements N         Skip tensors with fewer elements (default: 40000)\n");
     LOG("  --output-tensor-type T   Quant type for output.weight (default: highest from list)\n");
@@ -1363,6 +1365,12 @@ static config parse_args(int argc, char ** argv) {
             }
         } else if (arg == "--test-data" && i + 1 < argc) {
             cfg.test_data_path = argv[++i];
+        } else if (arg == "--test-samples" && i + 1 < argc) {
+            cfg.n_test_samples = std::stoi(argv[++i]);
+            if (cfg.n_test_samples < 1) {
+                LOG_ERR("--test-samples must be >= 1\n");
+                exit(1);
+            }
         } else if (arg == "--test-sizes" && i + 1 < argc) {
             std::string sizes = argv[++i];
             std::istringstream ss(sizes);
@@ -1602,11 +1610,19 @@ int main(int argc, char ** argv) {
     const bool add_bos = llama_vocab_get_add_bos(vocab);
     const int n_vocab = llama_vocab_n_tokens(vocab);
 
-    // Prepare test tokens for each size
+    // Prepare test tokens for each (size, sample) combination.
+    // Tokens are taken as consecutive non-overlapping chunks from the file:
+    //   [size0_sample0][size0_sample1]...[size1_sample0][size1_sample1]...
+    // With --test-sizes 64,128 --test-samples 3, the layout is:
+    //   [64][64][64][128][128][128]  (6 consecutive chunks)
+    struct test_set_info {
+        int size;
+        int sample;
+    };
     std::vector<std::vector<llama_token>> test_token_sets;
+    std::vector<test_set_info> test_set_infos;
 
     if (!cfg.test_data_path.empty()) {
-        // Read test data file
         std::ifstream tf(cfg.test_data_path);
         if (!tf) {
             LOG_ERR("Failed to open test data file: %s\n", cfg.test_data_path.c_str());
@@ -1617,29 +1633,60 @@ int main(int argc, char ** argv) {
         auto all_tokens = common_tokenize(ctx, test_text, add_bos, false);
         LOG("Tokenized test data: %zu tokens\n", all_tokens.size());
 
+        size_t total_needed = 0;
         for (int size : cfg.test_sizes) {
-            int n = std::min(size, (int)all_tokens.size());
-            test_token_sets.push_back(std::vector<llama_token>(all_tokens.begin(), all_tokens.begin() + n));
+            total_needed += (size_t)size * cfg.n_test_samples;
+        }
+        if (all_tokens.size() < total_needed) {
+            LOG_ERR("Test data file too small: need %zu tokens (%d samples × %d sizes: ",
+                    total_needed, cfg.n_test_samples, (int)cfg.test_sizes.size());
+            for (size_t i = 0; i < cfg.test_sizes.size(); i++) {
+                if (i > 0) LOG_ERR(" + ");
+                LOG_ERR("%d×%d", cfg.n_test_samples, cfg.test_sizes[i]);
+            }
+            LOG_ERR("), but only %zu tokens available in '%s'\n",
+                    all_tokens.size(), cfg.test_data_path.c_str());
+            return 1;
+        }
+
+        size_t offset = 0;
+        for (int size : cfg.test_sizes) {
+            for (int sample = 0; sample < cfg.n_test_samples; sample++) {
+                test_token_sets.emplace_back(all_tokens.begin() + offset,
+                                             all_tokens.begin() + offset + size);
+                test_set_infos.push_back({size, sample});
+                offset += size;
+            }
+        }
+        LOG("Prepared %zu test sets from file (%zu tokens consumed):\n",
+            test_token_sets.size(), offset);
+        for (size_t i = 0; i < test_set_infos.size(); i++) {
+            LOG("  [%zu] size=%d, sample=%d, tokens=%zu\n",
+                i, test_set_infos[i].size, test_set_infos[i].sample + 1,
+                test_token_sets[i].size());
         }
     } else {
-        // Synthetic: random tokens
         LOG("Using synthetic test inputs\n");
         srand(42);
         for (int size : cfg.test_sizes) {
-            std::vector<llama_token> tokens;
-            if (add_bos) tokens.push_back(llama_vocab_bos(vocab));
-            while ((int)tokens.size() < size) {
-                tokens.push_back(rand() % n_vocab);
+            for (int sample = 0; sample < cfg.n_test_samples; sample++) {
+                std::vector<llama_token> tokens;
+                if (add_bos) tokens.push_back(llama_vocab_bos(vocab));
+                while ((int)tokens.size() < size) {
+                    tokens.push_back(rand() % n_vocab);
+                }
+                test_token_sets.push_back(tokens);
+                test_set_infos.push_back({size, sample});
             }
-            test_token_sets.push_back(tokens);
         }
     }
 
     // Run forward passes with the eval callback
     for (size_t si = 0; si < test_token_sets.size(); si++) {
         const auto & tokens = test_token_sets[si];
-        LOG("Running forward pass with %zu tokens (size %d)...\n",
-            tokens.size(), cfg.test_sizes[si]);
+        const auto & info   = test_set_infos[si];
+        LOG("Running forward pass %zu/%zu: size=%d, sample=%d, %zu tokens...\n",
+            si + 1, test_token_sets.size(), info.size, info.sample + 1, tokens.size());
 
         // Clear KV cache
         llama_memory_clear(llama_get_memory(ctx), true);
@@ -1677,6 +1724,7 @@ int main(int argc, char ** argv) {
     decltype(cap_state.weight_to_layer)().swap(cap_state.weight_to_layer);
     std::vector<uint8_t>().swap(cap_state.tmp_data);
     std::vector<std::vector<llama_token>>().swap(test_token_sets);
+    std::vector<test_set_info>().swap(test_set_infos);
 
     // ---- Phase 3: Build cost matrix ----
     LOG("\n--- Phase 3: Building cost matrix ---\n");
