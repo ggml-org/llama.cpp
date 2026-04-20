@@ -10728,11 +10728,6 @@ class GraniteModel(LlamaModel):
             self.gguf_writer.add_logit_scale(logits_scale)
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
 
-
-@ModelBase.register("GraniteSpeechForConditionalGeneration", ModelType.TEXT)
-class GraniteSpeechTextModel(GraniteModel):
-    model_arch = gguf.MODEL_ARCH.GRANITE
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith(("encoder.", "projector.")):
             return
@@ -13718,9 +13713,6 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # TODO: refactor this later to avoid adding exception here
     if model_type == ModelType.TEXT and arch == "StepVLForConditionalGeneration":
         return arch
-    if model_type == ModelType.TEXT and arch == "GraniteSpeechForConditionalGeneration":
-        return arch
-
     # if "architectures" is found in the sub-config, use that instead
     if model_type == ModelType.TEXT and text_config.get("architectures") is not None:
         arch = text_config["architectures"][0]
