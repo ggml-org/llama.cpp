@@ -1666,15 +1666,14 @@ struct clip_model_loader {
 
         model.position_embeddings = get_tensor(string_format(TN_POS_EMBD, prefix), false);
 
-        const int n_layer_orig = hparams.n_layer;
-        if (model.proj_type == PROJECTOR_TYPE_GEMMA3NV
-         || model.proj_type == PROJECTOR_TYPE_GRANITE_SPEECH) {
-            hparams.n_layer = 0; // these models do not use the generic layer structure
-        }
+        const bool has_standard_layers = (
+            model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
+            model.proj_type != PROJECTOR_TYPE_GRANITE_SPEECH);
 
         // layers
-        model.layers.resize(hparams.n_layer);
-        for (int il = 0; il < hparams.n_layer; ++il) {
+        const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
+        model.layers.resize(n_layers_to_load);
+        for (int il = 0; il < n_layers_to_load; ++il) {
             auto & layer = model.layers[il];
             layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"), false);
             layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"), false);
@@ -2431,7 +2430,6 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_GRANITE_SPEECH:
                 {
-                    hparams.n_layer = n_layer_orig;
                     model.layers.resize(hparams.n_layer);
 
                     model.inp_proj_w     = get_tensor(string_format(TN_INP_PROJ,    "weight"));
