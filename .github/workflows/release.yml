@@ -101,7 +101,7 @@ jobs:
 
       - name: Determine tag name
         id: tag
-        uses: ./.github/actions/get-tag-name
+        uses: lemonade-sdk/llama.cpp/.github/actions/get-tag-name@lemonade
 
       - name: Get ROCm short version
         run: echo "ROCM_VERSION_SHORT=$(echo '${{ matrix.ROCM_VERSION }}' | cut -d '.' -f 1,2)" >> $GITHUB_ENV
@@ -245,7 +245,7 @@ jobs:
 
       - name: Determine tag name
         id: tag
-        uses: ./.github/actions/get-tag-name
+        uses: lemonade-sdk/llama.cpp/.github/actions/get-tag-name@lemonade
 
       - name: Get ROCm short version
         run: |
@@ -288,7 +288,7 @@ jobs:
 
       - name: Determine tag name
         id: tag
-        uses: ./.github/actions/get-tag-name
+        uses: lemonade-sdk/llama.cpp/.github/actions/get-tag-name@lemonade
 
       - name: Download artifacts
         id: download-artifact
