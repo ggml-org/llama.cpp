@@ -1666,25 +1666,26 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 auto skip_unrelated = [&]() {
                     while (id + 1 < cgraph->n_nodes) {
                         ggml_tensor * next = cgraph->nodes[id+1];
-                        bool uses_node = false;
-                        for (int s = 0; s < GGML_MAX_SRC; s++) {
-                            if (next->src[s] == node) { uses_node = true; break; }
-                        }
-                        if (uses_node) break;
                         if (ggml_backend_meta_get_split_state(next, false).axis != GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
                             break;
                         }
-                        
-                        bool all_srcs_mirrored = true;
+                        bool safe = true;
                         for (int s = 0; s < GGML_MAX_SRC; s++) {
-                            if (next->src[s] == nullptr) continue;
-                            if (ggml_backend_meta_get_split_state(next->src[s], false).axis
-                                    != GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
-                                all_srcs_mirrored = false;
+                            if (next->src[s] == nullptr) {
+                                continue;
+                            }
+                            if (next->src[s] == node) {
+                                safe = false;
+                                break;
+                            }
+                            if (ggml_backend_meta_get_split_state(next->src[s], false).axis != GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+                                safe = false;
                                 break;
                             }
                         }
-                        if (!all_srcs_mirrored) break;
+                        if (!safe) {
+                            break;
+                        }
                         id++;
                     }
                 };
