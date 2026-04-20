@@ -211,13 +211,12 @@
 				{onSystemPromptClick}
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
+				onMcpSettingsClick={() => goto('/#/settings/mcp')}
 			/>
 		{/if}
 	</div>
 
 	<div class="ml-auto flex items-center gap-2">
-		<McpActiveServersAvatars onClick={() => goto('/#/settings/mcp')} />
-
 		{#if isMobile.current}
 			<ModelsSelectorSheet
 				disabled={disabled || isOffline}

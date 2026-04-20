@@ -5,6 +5,7 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
+	import McpLogo from './McpLogo.svelte';
 
 	interface Props {
 		class?: string;
@@ -39,7 +40,26 @@
 	);
 </script>
 
-{#if hasEnabledMcpServers && mcpFavicons.length > 0}
+{#if !hasEnabledMcpServers}
+	<button
+		class={cn(
+			'inline-flex cursor-pointer items-center gap-0.75 opacity-70 transition-opacity hover:opacity-100',
+			className,
+			'opacity-50 hover:opacity-100'
+		)}
+		onclick={onClick}
+	>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				<McpLogo class="h-4 w-4" />
+			</Tooltip.Trigger>
+
+			<Tooltip.Content>
+				<p>MCP Servers</p>
+			</Tooltip.Content>
+		</Tooltip.Root>
+	</button>
+{:else if mcpFavicons.length > 0}
 	<button class={cn('inline-flex items-center gap-0.75', className)} onclick={onClick}>
 		<div class="flex -space-x-1">
 			{#each mcpFavicons as favicon (favicon.id)}
