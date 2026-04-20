@@ -46,31 +46,12 @@ jobs:
             fp16: ON
 
     runs-on: ubuntu-24.04
+    container: intel/deep-learning-essentials:2025.3.3-0-devel-ubuntu24.04
 
     continue-on-error: true
 
     steps:
       - uses: actions/checkout@v6
-
-      - name: add oneAPI to apt
-        shell: bash
-        run: |
-          cd /tmp
-          wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          rm GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          sudo add-apt-repository "deb https://apt.repos.intel.com/oneapi all main"
-
-      - name: install oneAPI dpcpp compiler
-        shell: bash
-        run: |
-          sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp libssl-dev ninja-build
-
-      - name: install oneAPI MKL library
-        shell: bash
-        run: |
-          sudo apt install intel-oneapi-mkl-devel
 
       - name: Clone
         id: checkout
