@@ -162,7 +162,7 @@ common_chat_msg task_result_state::update_chat_msg(
         bool filter_tool_calls) {
     generated_text += text_added;
     auto msg_prv_copy = chat_msg;
-    SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
+    //SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
     auto new_msg = common_chat_parse(
         generated_text,
         is_partial,
@@ -303,6 +303,8 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);
     params.sampling.backend_sampling   = json_value(data, "backend_sampling",    defaults.sampling.backend_sampling);
     params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
+
+    params.speculative = defaults.speculative;
 
     params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
     params.speculative.n_max = json_value(data, "speculative.n_max", defaults.speculative.n_max);

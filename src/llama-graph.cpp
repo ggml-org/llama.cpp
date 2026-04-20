@@ -1077,9 +1077,9 @@ llm_graph_qkv llm_graph_context::build_qkv(
         // fused QKV path
         ggml_tensor * qkv = build_lora_mm(layer.wqkv, cur, layer.wqkv_s);
         cb(qkv, "wqkv", il);
-        if (layer.bqkv) {
-            qkv = ggml_add(ctx0, qkv, layer.bqkv);
-            cb(qkv, "bqkv", il);
+        if (layer.wqkv_b) {
+            qkv = ggml_add(ctx0, qkv, layer.wqkv_b);
+            cb(qkv, "wqkv_b", il);
         }
         if (hparams.f_clamp_kqv > 0.0f) {
             qkv = ggml_clamp(ctx0, qkv, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
@@ -1097,8 +1097,8 @@ llm_graph_qkv llm_graph_context::build_qkv(
         // separate Q/K/V path
         Qcur = build_lora_mm(layer.wq, cur, layer.wq_s);
         cb(Qcur, "Qcur", il);
-        if (layer.bq) {
-            Qcur = ggml_add(ctx0, Qcur, layer.bq);
+        if (layer.wq_b) {
+            Qcur = ggml_add(ctx0, Qcur, layer.wq_b);
             cb(Qcur, "Qcur", il);
         }
         if (hparams.f_clamp_kqv > 0.0f) {
@@ -1107,8 +1107,8 @@ llm_graph_qkv llm_graph_context::build_qkv(
         }
         Kcur = build_lora_mm(layer.wk, cur, layer.wk_s);
         cb(Kcur, "Kcur", il);
-        if (layer.bk) {
-            Kcur = ggml_add(ctx0, Kcur, layer.bk);
+        if (layer.wk_b) {
+            Kcur = ggml_add(ctx0, Kcur, layer.wk_b);
             cb(Kcur, "Kcur", il);
         }
         if (hparams.f_clamp_kqv > 0.0f) {
@@ -1117,8 +1117,8 @@ llm_graph_qkv llm_graph_context::build_qkv(
         }
         Vcur = build_lora_mm(layer.wv, cur, layer.wv_s);
         cb(Vcur, "Vcur", il);
-        if (layer.bv) {
-            Vcur = ggml_add(ctx0, Vcur, layer.bv);
+        if (layer.wv_b) {
+            Vcur = ggml_add(ctx0, Vcur, layer.wv_b);
             cb(Vcur, "Vcur", il);
         }
         if (hparams.f_clamp_kqv > 0.0f) {
