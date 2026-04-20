@@ -4,10 +4,17 @@
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import {
+		chatPendingMessageContent,
+		chatPendingMessageExtras,
+		chatClearPendingMessage,
+		chatInjectPendingMessage
+	} from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import {
 		agenticPendingSteeringMessageContent,
+		agenticPendingSteeringMessageExtras,
 		agenticClearSteeringMessage,
 		agenticInjectSteeringMessage
 	} from '$lib/stores/agentic.svelte';
@@ -218,9 +225,24 @@
 		<ChatMessageUserPending
 			class="mx-auto mt-12 w-full max-w-[48rem]"
 			content={pendingContent}
+			extras={agenticPendingSteeringMessageExtras(convId)}
 			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-			onEdit={(newContent) => agenticInjectSteeringMessage(convId, newContent)}
+			onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
 			onDelete={() => agenticClearSteeringMessage(convId)}
+		/>
+	{/if}
+{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}
+	{@const convId = activeConversation()!.id}
+	{@const pendingContent = chatPendingMessageContent(convId)}
+
+	{#if pendingContent}
+		<ChatMessageUserPending
+			class="mx-auto mt-12 w-full max-w-[48rem]"
+			content={pendingContent}
+			extras={chatPendingMessageExtras(convId)}
+			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+			onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
+			onDelete={() => chatClearPendingMessage(convId)}
 		/>
 	{/if}
 {/if}

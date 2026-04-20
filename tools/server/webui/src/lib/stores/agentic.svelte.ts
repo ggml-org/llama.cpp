@@ -140,10 +140,8 @@ class AgenticStore {
 	/** Non-reactive: stores resolve functions for pending continue Promises */
 	private _continueResolvers = new Map<string, (shouldContinue: boolean) => void>();
 
-	/** Non-reactive: queued steering messages to inject between turns */
-	private _steeringMessages = new Map<string, SteeringMessage>();
-	/** Reactive: whether a steering message is pending (for UI) */
-	private _pendingSteeringMessages = new SvelteMap<string, boolean>();
+	/** Reactive: queued steering messages to inject between turns */
+	private _steeringMessages = new SvelteMap<string, SteeringMessage>();
 
 	get isReady(): boolean {
 		return true;
@@ -232,12 +230,15 @@ class AgenticStore {
 	}
 
 	hasPendingSteeringMessage(conversationId: string): boolean {
-		return this._pendingSteeringMessages.get(conversationId) ?? false;
+		return this._steeringMessages.has(conversationId);
 	}
 
 	pendingSteeringMessageContent(conversationId: string): string | null {
-		if (!this._pendingSteeringMessages.get(conversationId)) return null;
 		return this._steeringMessages.get(conversationId)?.content ?? null;
+	}
+
+	pendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
+		return this._steeringMessages.get(conversationId)?.extras;
 	}
 
 	/**
@@ -250,7 +251,6 @@ class AgenticStore {
 		extras?: DatabaseMessageExtra[]
 	): void {
 		this._steeringMessages.set(conversationId, { content, extras });
-		this._pendingSteeringMessages.set(conversationId, true);
 	}
 
 	/**
@@ -258,7 +258,6 @@ class AgenticStore {
 	 */
 	clearSteeringMessage(conversationId: string): void {
 		this._steeringMessages.delete(conversationId);
-		this._pendingSteeringMessages.set(conversationId, false);
 	}
 
 	/**
@@ -269,7 +268,6 @@ class AgenticStore {
 		const msg = this._steeringMessages.get(conversationId);
 		if (!msg) return null;
 		this._steeringMessages.delete(conversationId);
-		this._pendingSteeringMessages.set(conversationId, false);
 		return msg;
 	}
 
@@ -385,7 +383,6 @@ class AgenticStore {
 		this._pendingContinueRequests.set(conversationId, false);
 		this._continueResolvers.delete(conversationId);
 		this._steeringMessages.delete(conversationId);
-		this._pendingSteeringMessages.set(conversationId, false);
 
 		// Ensure built-in tools are fetched before checking if agentic is enabled
 		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
@@ -1003,6 +1000,10 @@ export function agenticInjectSteeringMessage(
 
 export function agenticPendingSteeringMessageContent(conversationId: string) {
 	return agenticStore.pendingSteeringMessageContent(conversationId);
+}
+
+export function agenticPendingSteeringMessageExtras(conversationId: string) {
+	return agenticStore.pendingSteeringMessageExtras(conversationId);
 }
 
 export function agenticClearSteeringMessage(conversationId: string) {

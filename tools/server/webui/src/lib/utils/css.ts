@@ -4,5 +4,6 @@
 export function remToPx(rem: string): number {
 	const val = parseFloat(rem);
 	const fontSize = parseFloat(getComputedStyle(document.documentElement).fontSize);
+
 	return val * fontSize;
 }

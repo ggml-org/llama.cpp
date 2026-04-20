@@ -1,19 +1,29 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
-	import { ActionIcon } from '$lib/components/app';
+	import { ActionIcon, ChatAttachmentsList } from '$lib/components/app';
+	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { Send, Edit, Trash2 } from '@lucide/svelte';
-	import { getProcessingInfoContext } from '$lib/contexts';
+	import { getProcessingInfoContext, setMessageEditContext } from '$lib/contexts';
+	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
 
 	interface Props {
 		class?: string;
 		content: string;
+		extras?: DatabaseMessageExtra[];
 		onSendImmediately: () => void;
-		onEdit: (newContent: string) => void;
+		onEdit: (newContent: string, extras?: DatabaseMessageExtra[]) => void;
 		onDelete: () => void;
 	}
 
-	let { class: className = '', content, onSendImmediately, onEdit, onDelete }: Props = $props();
+	let {
+		class: className = '',
+		content,
+		extras = [],
+		onSendImmediately,
+		onEdit,
+		onDelete
+	}: Props = $props();
 
 	const processingInfoCtx = getProcessingInfoContext();
 	let showProcessingInfo = $derived(processingInfoCtx.showProcessingInfo);
@@ -21,8 +31,9 @@
 	let isMultiline = $state(false);
 	let isEditing = $state(false);
 	let editedContent = $state('');
+	let editedExtras = $state<DatabaseMessageExtra[]>([]);
+	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
 	let messageElement: HTMLElement | undefined = $state();
-	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
 	$effect(() => {
 		if (!messageElement || !content.trim()) return;
@@ -47,32 +58,26 @@
 		};
 	});
 
-	function autoResizeTextarea() {
-		if (!textareaElement) return;
-		textareaElement.style.height = 'auto';
-		textareaElement.style.height = `${textareaElement.scrollHeight}px`;
-	}
-
 	function handleEdit() {
 		editedContent = content;
+		editedExtras = [...extras];
+		editedUploadedFiles = [];
 		isEditing = true;
-		setTimeout(() => {
-			if (textareaElement) {
-				textareaElement.focus();
-				textareaElement.setSelectionRange(
-					textareaElement.value.length,
-					textareaElement.value.length
-				);
-				autoResizeTextarea();
-			}
-		}, 0);
 	}
 
-	function handleSaveEdit() {
+	async function handleSaveEdit() {
 		const trimmed = editedContent.trim();
-		if (trimmed) {
-			onEdit(trimmed);
+		if (!trimmed && editedExtras.length === 0 && editedUploadedFiles.length === 0) return;
+
+		let finalExtras: DatabaseMessageExtra[] = $state.snapshot(editedExtras);
+		if (editedUploadedFiles.length > 0) {
+			const plainFiles = $state.snapshot(editedUploadedFiles);
+			const result = await parseFilesToMessageExtras(plainFiles);
+			const newExtras = result?.extras || [];
+			finalExtras = [...finalExtras, ...newExtras];
 		}
+
+		onEdit(trimmed, finalExtras.length > 0 ? finalExtras : undefined);
 		isEditing = false;
 	}
 
@@ -80,15 +85,42 @@
 		isEditing = false;
 	}
 
-	function handleEditKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey) {
-			event.preventDefault();
-			handleSaveEdit();
-		} else if (event.key === 'Escape') {
-			event.preventDefault();
-			handleCancelEdit();
-		}
-	}
+	setMessageEditContext({
+		get isEditing() {
+			return isEditing;
+		},
+		get editedContent() {
+			return editedContent;
+		},
+		get editedExtras() {
+			return editedExtras;
+		},
+		get editedUploadedFiles() {
+			return editedUploadedFiles;
+		},
+		get originalContent() {
+			return content;
+		},
+		get originalExtras() {
+			return extras;
+		},
+		get showSaveOnlyOption() {
+			return false;
+		},
+		setContent: (c: string) => {
+			editedContent = c;
+		},
+		setExtras: (e: DatabaseMessageExtra[]) => {
+			editedExtras = e;
+		},
+		setUploadedFiles: (f: ChatUploadedFile[]) => {
+			editedUploadedFiles = f;
+		},
+		save: handleSaveEdit,
+		saveOnly: handleSaveEdit,
+		cancel: handleCancelEdit,
+		startEdit: handleEdit
+	});
 </script>
 
 <div
@@ -100,34 +132,14 @@
 	role="group"
 >
 	{#if isEditing}
-		<Card
-			class="w-full max-w-36 rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-2.5 text-muted-foreground backdrop-blur-md dark:bg-primary/8"
-			style="overflow-wrap: anywhere; word-break: break-word;"
-		>
-			<textarea
-				bind:this={textareaElement}
-				bind:value={editedContent}
-				onkeydown={handleEditKeydown}
-				oninput={autoResizeTextarea}
-				class="text-md w-full resize-none bg-transparent outline-none"
-				style="overflow: hidden;"
-			></textarea>
-			<div class="mt-2 flex justify-end gap-2">
-				<button
-					class="rounded-md px-3 py-1 text-xs text-muted-foreground hover:bg-muted"
-					onclick={handleCancelEdit}
-				>
-					Cancel
-				</button>
-				<button
-					class="rounded-md bg-primary/10 px-3 py-1 text-xs text-foreground hover:bg-primary/20"
-					onclick={handleSaveEdit}
-				>
-					Save
-				</button>
-			</div>
-		</Card>
+		<ChatMessageEditForm />
 	{:else}
+		{#if extras && extras.length > 0}
+			<div class="mb-2 max-w-[80%]">
+				<ChatAttachmentsList attachments={extras} readonly imageHeight="h-80" />
+			</div>
+		{/if}
+
 		{#if content.trim()}
 			<Card
 				class="max-w-[80%] overflow-y-auto rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-1.5 text-muted-foreground backdrop-blur-md data-[multiline]:py-2.5 dark:bg-primary/8"

@@ -73,6 +73,12 @@ class ChatStore {
 	private _pendingDraftMessage = $state<string>('');
 	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
 
+	/** Reactive: queued pending messages for non-agentic streaming */
+	private _pendingMessages = new SvelteMap<
+		string,
+		{ content: string; extras?: DatabaseMessageExtra[] }
+	>();
+
 	private setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);
 		if (loading) {
@@ -254,6 +260,35 @@ class ChatStore {
 
 	private isChatLoadingInternal(convId: string): boolean {
 		return this.chatStreamingStates.has(convId);
+	}
+
+	hasPendingMessage(convId: string): boolean {
+		return this._pendingMessages.has(convId);
+	}
+
+	pendingMessageContent(convId: string): string | null {
+		return this._pendingMessages.get(convId)?.content ?? null;
+	}
+
+	pendingMessageExtras(convId: string): DatabaseMessageExtra[] | undefined {
+		return this._pendingMessages.get(convId)?.extras;
+	}
+
+	injectPendingMessage(convId: string, content: string, extras?: DatabaseMessageExtra[]): void {
+		this._pendingMessages.set(convId, { content, extras });
+	}
+
+	clearPendingMessage(convId: string): void {
+		this._pendingMessages.delete(convId);
+	}
+
+	consumePendingMessage(
+		convId: string
+	): { content: string; extras?: DatabaseMessageExtra[] } | null {
+		const msg = this._pendingMessages.get(convId);
+		if (!msg) return null;
+		this._pendingMessages.delete(convId);
+		return msg;
 	}
 
 	private touchConversationState(convId: string): void {
@@ -482,7 +517,11 @@ class ChatStore {
 			return;
 		}
 
-		if (activeConv && this.isChatLoadingInternal(activeConv.id)) return;
+		// If non-agentic streaming is active, queue as a pending message to send after completion
+		if (activeConv && this.isChatLoadingInternal(activeConv.id)) {
+			this.injectPendingMessage(activeConv.id, content, extras);
+			return;
+		}
 
 		// Cancel any in-flight pre-encode request
 		this.cancelPreEncode();
@@ -767,10 +806,16 @@ class ChatStore {
 				this.setStreamingActive(false);
 				if (isAbortError(error)) {
 					cleanupStreamingState();
+					// If aborted with a pending message (e.g. "Send immediately"), re-send it
+					const pending = this.consumePendingMessage(convId);
+					if (pending) {
+						this.sendMessage(pending.content, pending.extras);
+					}
 					return;
 				}
 				console.error('Streaming error:', error);
 				cleanupStreamingState();
+				this.clearPendingMessage(convId);
 				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 				if (idx !== -1) {
 					const failedMessage = conversationsStore.removeMessageAtIndex(idx);
@@ -848,6 +893,12 @@ class ChatStore {
 					cleanupStreamingState();
 					if (onComplete) await onComplete(content);
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+
+					// Check if there's a pending message queued during streaming
+					const pending = this.consumePendingMessage(convId);
+					if (pending) {
+						await this.sendMessage(pending.content, pending.extras);
+					}
 				},
 				onError: streamCallbacks.onError
 			},
@@ -868,6 +919,7 @@ class ChatStore {
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);
 		this.setProcessingState(convId, null);
+		this.clearPendingMessage(convId);
 	}
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
 		const conversationId = convId || conversationsStore.activeConversation?.id;
@@ -1713,3 +1765,13 @@ export const isChatStreaming = () => chatStore.isStreaming();
 export const isEditing = () => chatStore.isEditing();
 export const isLoading = () => chatStore.isLoading;
 export const pendingEditMessageId = () => chatStore.pendingEditMessageId;
+export const chatHasPendingMessage = (convId: string) => chatStore.hasPendingMessage(convId);
+export const chatPendingMessageContent = (convId: string) =>
+	chatStore.pendingMessageContent(convId);
+export const chatPendingMessageExtras = (convId: string) => chatStore.pendingMessageExtras(convId);
+export const chatClearPendingMessage = (convId: string) => chatStore.clearPendingMessage(convId);
+export const chatInjectPendingMessage = (
+	convId: string,
+	content: string,
+	extras?: DatabaseMessageExtra[]
+) => chatStore.injectPendingMessage(convId, content, extras);
