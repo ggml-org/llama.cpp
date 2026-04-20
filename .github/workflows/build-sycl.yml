@@ -46,12 +46,18 @@ jobs:
             fp16: ON
 
     runs-on: ubuntu-24.04
-    container: intel/deep-learning-essentials:2025.3.3-0-devel-ubuntu24.04
 
     continue-on-error: true
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: install intel-deep-learning-essentials
+        shell: bash
+        run: |
+          cd /tmp
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh
+          sudo bash ./intel-deep-learning-essentials-2025.3.3.16_offline.sh -s -a --silent --eula accept
 
       - name: Clone
         id: checkout
