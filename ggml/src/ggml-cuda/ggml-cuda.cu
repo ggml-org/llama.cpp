@@ -4731,10 +4731,23 @@ static void ggml_backend_cuda_device_get_props(ggml_backend_dev_t dev, ggml_back
     };
 }
 
+static bool ggml_backend_cuda_params_disable_mmq_stream_k_default(const char * params) {
+    return params != nullptr && strstr(params, "disable_mmq_stream_k_default=1") != nullptr;
+}
+
+static bool ggml_backend_cuda_params_enable_mmq_cp_async_default(const char * params) {
+    return params != nullptr && strstr(params, "enable_mmq_cp_async_default=1") != nullptr;
+}
+
 static ggml_backend_t ggml_backend_cuda_device_init_backend(ggml_backend_dev_t dev, const char * params) {
-    GGML_UNUSED(params);
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
-    return ggml_backend_cuda_init(ctx->device);
+    ggml_backend_t backend = ggml_backend_cuda_init(ctx->device);
+    if (backend != nullptr) {
+        ggml_backend_cuda_context * backend_ctx = (ggml_backend_cuda_context *) backend->context;
+        backend_ctx->disable_mmq_stream_k_default = ggml_backend_cuda_params_disable_mmq_stream_k_default(params);
+        backend_ctx->enable_mmq_cp_async_default = ggml_backend_cuda_params_enable_mmq_cp_async_default(params);
+    }
+    return backend;
 }
 
 static ggml_backend_buffer_type_t ggml_backend_cuda_device_get_buffer_type(ggml_backend_dev_t dev) {
