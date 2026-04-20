@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <vector>
 #include <string>
+#include <cstring>
 
 #undef NDEBUG
 #include <cassert>
