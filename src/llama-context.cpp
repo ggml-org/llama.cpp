@@ -219,8 +219,10 @@ llama_context::llama_context(
 
     if (!hparams.vocab_only) {
         // GPU backends
+        const bool disable_mmq_stream_k_default = model.split_mode() == LLAMA_SPLIT_MODE_TENSOR && hparams.n_expert > 0;
+        const char * backend_params = disable_mmq_stream_k_default ? "disable_mmq_stream_k_default=1" : nullptr;
         for (const auto & dev : model.devices) {
-            ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
+            ggml_backend_t backend = ggml_backend_dev_init(dev.dev, backend_params);
             if (backend == nullptr) {
                 throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
             }
