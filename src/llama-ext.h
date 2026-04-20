@@ -1,7 +1,10 @@
 #pragma once
 
+// this is a staging header for new llama.cpp API
+
 #include "llama.h"
 
+#include <cassert>
 #include <cstdint>
 #include <vector>
 
@@ -55,7 +58,9 @@ LLAMA_API void llama_quant_compute_types(
         ggml_type * result_types,
         size_t n_tensors);
 
+//
 // device memory querying
+//
 
 // "memory" as in physical memory for a buffer type, in bytes
 struct llama_memory_breakdown_data {
