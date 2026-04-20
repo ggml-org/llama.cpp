@@ -1421,10 +1421,14 @@ static __device__ __forceinline__ float vec_dot_tq3_1s_q8_1(
 #endif
 
 static __device__ __forceinline__ float tq3_4s_ratio4s(const uint8_t byte) {
-    if (byte == 0) return 0.0f;
-    const int exp = (byte >> 5) - 9;
-    const float mantissa = 1.0f + (float) (byte & 31) / 32.0f;
-    return ldexpf(mantissa, exp);
+    if (byte == 0) {
+        return 0.0f;
+    }
+
+    // d encodes (1 + mant/32) * 2^(exp - 9), with exp in the high 3 bits.
+    // Build the exact FP32 representation directly and avoid ldexpf in the hot loop.
+    const uint32_t bits = (((uint32_t) (byte >> 5) + 118u) << 23) | ((uint32_t) (byte & 31u) << 18);
+    return __uint_as_float(bits);
 }
 
 static __device__ __forceinline__ float tq3_4s_dot_subgroup_q8_1(
