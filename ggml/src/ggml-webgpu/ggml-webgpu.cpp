@@ -2669,8 +2669,6 @@ static void ggml_backend_webgpu_event_record(ggml_backend_t backend, ggml_backen
 }
 
 static void ggml_backend_webgpu_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
-    // event_wait makes the GPU stream stall until the event fires (used by scheduler).
-    // WebGPU has one implicit queue so this is equivalent to synchronize on the CPU.
     GGML_UNUSED(backend);
     ggml_backend_webgpu_device_event_synchronize(nullptr, event);
 }
@@ -2690,7 +2688,6 @@ static void ggml_backend_webgpu_set_tensor_async(
     size_t aligned_size = (size + 3) & ~3ULL;
 
     // Create a one-shot staging buffer
-    // TODO(nikhil.jain) worthwhile to use a buffer arena for this?
     wgpu::BufferDescriptor desc{};
     desc.size = aligned_size;
     desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
