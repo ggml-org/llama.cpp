@@ -7,8 +7,8 @@ This script is intentionally separate from convert_fairy2i.py:
 - tokenizer export follows the Qwen2/GPT-2-style path used by convert_hf_to_gguf.py
 - RoPE base is read from config["rope_parameters"]["rope_theta"] when present
 - optional attention biases are exported so the GGUF can carry q/k/v bias tensors
-
-The Fairy2i weight decomposition and packing logic is reused from convert_fairy2i.py.
+- Qwen2-based Fairy2i 32B weights are exported with a tile64_v2 layout that matches
+  the training-side QAT kernel semantics
 """
 
 import argparse
@@ -32,6 +32,8 @@ QWEN2_PRETOKENIZER_HASHES = {
     "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c",
     "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea",
 }
+
+TILE64 = 64
 
 
 def round_up(x: int, base: int) -> int:
@@ -249,6 +251,169 @@ def pad_complex_matrix(mat: np.ndarray, out_dim: int, in_dim: int) -> np.ndarray
     return out
 
 
+def quantize_tile64_once(tile_real: np.ndarray, tile_imag: np.ndarray) -> tuple[np.ndarray, np.ndarray, float, float]:
+    abs_real = np.abs(tile_real)
+    abs_imag = np.abs(tile_imag)
+
+    is_real_dominant = abs_real > abs_imag
+    is_imag_dominant = ~is_real_dominant
+
+    real_count = int(np.count_nonzero(is_real_dominant))
+    imag_count = int(np.count_nonzero(is_imag_dominant))
+
+    if real_count > 0:
+        real_scale = float(np.sum(abs_real[is_real_dominant], dtype=np.float64) / real_count)
+    else:
+        real_scale = 0.0
+
+    if imag_count > 0:
+        imag_scale = float(np.sum(abs_imag[is_imag_dominant], dtype=np.float64) / imag_count)
+    else:
+        imag_scale = 0.0
+
+    q_real = np.zeros_like(tile_real, dtype=np.float32)
+    q_imag = np.zeros_like(tile_imag, dtype=np.float32)
+
+    if real_count > 0:
+        q_real[is_real_dominant] = np.where(tile_real[is_real_dominant] >= 0.0, real_scale, -real_scale)
+    if imag_count > 0:
+        q_imag[is_imag_dominant] = np.where(tile_imag[is_imag_dominant] >= 0.0, imag_scale, -imag_scale)
+
+    return q_real, q_imag, real_scale, imag_scale
+
+
+def quantize_matrix_tile64_v2(
+    w_real: np.ndarray, w_imag: np.ndarray
+) -> tuple[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    if w_real.shape != w_imag.shape:
+        raise ValueError(f"shape mismatch: {w_real.shape} vs {w_imag.shape}")
+    if w_real.shape[0] % TILE64 != 0 or w_real.shape[1] % TILE64 != 0:
+        raise ValueError(f"tile64 quantization requires dims divisible by {TILE64}, got {w_real.shape}")
+
+    rows, cols = w_real.shape
+    tile_rows = rows // TILE64
+    tile_cols = cols // TILE64
+
+    q0_real = np.zeros_like(w_real, dtype=np.float32)
+    q0_imag = np.zeros_like(w_imag, dtype=np.float32)
+    q1_real = np.zeros_like(w_real, dtype=np.float32)
+    q1_imag = np.zeros_like(w_imag, dtype=np.float32)
+
+    s0_real = np.zeros((tile_rows, tile_cols), dtype=np.float32)
+    s0_imag = np.zeros((tile_rows, tile_cols), dtype=np.float32)
+    s1_real = np.zeros((tile_rows, tile_cols), dtype=np.float32)
+    s1_imag = np.zeros((tile_rows, tile_cols), dtype=np.float32)
+
+    for tr in range(tile_rows):
+        row_slice = slice(tr * TILE64, (tr + 1) * TILE64)
+        for tc in range(tile_cols):
+            col_slice = slice(tc * TILE64, (tc + 1) * TILE64)
+
+            tile_real = w_real[row_slice, col_slice]
+            tile_imag = w_imag[row_slice, col_slice]
+
+            stage0_real, stage0_imag, scale0_real, scale0_imag = quantize_tile64_once(tile_real, tile_imag)
+            resid_real = tile_real - stage0_real
+            resid_imag = tile_imag - stage0_imag
+            stage1_real, stage1_imag, scale1_real, scale1_imag = quantize_tile64_once(resid_real, resid_imag)
+
+            q0_real[row_slice, col_slice] = stage0_real
+            q0_imag[row_slice, col_slice] = stage0_imag
+            q1_real[row_slice, col_slice] = stage1_real
+            q1_imag[row_slice, col_slice] = stage1_imag
+
+            s0_real[tr, tc] = scale0_real
+            s0_imag[tr, tc] = scale0_imag
+            s1_real[tr, tc] = scale1_real
+            s1_imag[tr, tc] = scale1_imag
+
+    return (q0_real, q0_imag, s0_real, s0_imag), (q1_real, q1_imag, s1_real, s1_imag)
+
+
+def encode_stage_codes(stage_real: np.ndarray, stage_imag: np.ndarray) -> np.ndarray:
+    if stage_real.shape != stage_imag.shape:
+        raise ValueError(f"shape mismatch: {stage_real.shape} vs {stage_imag.shape}")
+    if stage_real.shape[1] % TILE64 != 0:
+        raise ValueError(f"tile64 code packing requires cols divisible by {TILE64}, got {stage_real.shape[1]}")
+
+    abs_real = np.abs(stage_real)
+    abs_imag = np.abs(stage_imag)
+    choose_real = abs_real > abs_imag
+
+    codes = np.empty(stage_real.shape, dtype=np.uint8)
+    codes[choose_real] = np.where(stage_real[choose_real] >= 0.0, 1, 0)
+    codes[~choose_real] = np.where(stage_imag[~choose_real] >= 0.0, 3, 2)
+
+    rows, cols = codes.shape
+    n_blocks = cols // TILE64
+    codes = codes.reshape(rows, n_blocks, 4, 16)
+    packed = (
+        codes[:, :, 0, :]
+        | (codes[:, :, 1, :] << 2)
+        | (codes[:, :, 2, :] << 4)
+        | (codes[:, :, 3, :] << 6)
+    ).astype(np.uint8)
+    return packed.reshape(rows, n_blocks * 16)
+
+
+def quantize_linear_to_tile64_stage_tensors(weight: torch.Tensor, out_target: int, in_target: int) -> dict[str, dict[str, np.ndarray]]:
+    a = weight.to(torch.float32).cpu().numpy()
+    out_real, in_real = a.shape
+    if out_real % 2 != 0 or in_real % 2 != 0:
+        raise ValueError(f"linear weight shape must be even, got {a.shape}")
+
+    out_c = out_real // 2
+    in_c = in_real // 2
+
+    a11 = a[:out_c, :in_c]
+    a12 = a[:out_c, in_c:]
+    a21 = a[out_c:, :in_c]
+    a22 = a[out_c:, in_c:]
+
+    u_real = pad_complex_matrix(0.5 * (a11 + a22), out_target, in_target)
+    u_imag = pad_complex_matrix(0.5 * (a21 - a12), out_target, in_target)
+    w_real = pad_complex_matrix(0.5 * (a11 - a22), out_target, in_target)
+    w_imag = pad_complex_matrix(0.5 * (a12 + a21), out_target, in_target)
+
+    (u0_real, u0_imag, u0_s_real, u0_s_imag), (u1_real, u1_imag, u1_s_real, u1_s_imag) = quantize_matrix_tile64_v2(
+        u_real, u_imag
+    )
+    (w0_real, w0_imag, w0_s_real, w0_s_imag), (w1_real, w1_imag, w1_s_real, w1_s_imag) = quantize_matrix_tile64_v2(
+        w_real, w_imag
+    )
+
+    out = {
+        "U.s0": {
+            "codes": encode_stage_codes(u0_real, u0_imag),
+            "scale_real": u0_s_real,
+            "scale_imag": u0_s_imag,
+        },
+        "U.s1": {
+            "codes": encode_stage_codes(u1_real, u1_imag),
+            "scale_real": u1_s_real,
+            "scale_imag": u1_s_imag,
+        },
+        "W.s0": {
+            "codes": encode_stage_codes(w0_real, w0_imag),
+            "scale_real": w0_s_real,
+            "scale_imag": w0_s_imag,
+        },
+        "W.s1": {
+            "codes": encode_stage_codes(w1_real, w1_imag),
+            "scale_real": w1_s_real,
+            "scale_imag": w1_s_imag,
+        },
+    }
+
+    del a
+    del u_real, u_imag, w_real, w_imag
+    del u0_real, u0_imag, u1_real, u1_imag
+    del w0_real, w0_imag, w1_real, w1_imag
+    gc.collect()
+
+    return out
+
+
 def pack_ifairy_stage(stage_real: np.ndarray, stage_imag: np.ndarray, d_real: float, d_imag: float) -> np.ndarray:
     stage_real = np.ascontiguousarray(stage_real, dtype=np.float32)
     stage_imag = np.ascontiguousarray(stage_imag, dtype=np.float32)
@@ -323,7 +488,7 @@ def pack_ifairy_stage(stage_real: np.ndarray, stage_imag: np.ndarray, d_real: fl
     return out.reshape(rows, n_blocks * 68)
 
 
-def quantize_linear_to_ifairy_stages(weight: torch.Tensor, out_target: int, in_target: int) -> dict[str, np.ndarray]:
+def quantize_linear_to_ifairy_stages_legacy(weight: torch.Tensor, out_target: int, in_target: int) -> dict[str, np.ndarray]:
     a = weight.to(torch.float32).cpu().numpy()
     out_real, in_real = a.shape
     if out_real % 2 != 0 or in_real % 2 != 0:
@@ -372,6 +537,24 @@ def quantize_linear_to_ifairy_stages(weight: torch.Tensor, out_target: int, in_t
     gc.collect()
 
     return out
+
+
+def add_tile64_stage_tensors(writer: gguf.GGUFWriter, prefix: str, stage_data: dict[str, np.ndarray]) -> None:
+    writer.add_tensor(
+        f"{prefix}.codes",
+        stage_data["codes"].view(np.int8),
+        raw_dtype=gguf.GGMLQuantizationType.I8,
+    )
+    writer.add_tensor(
+        f"{prefix}.scale_real",
+        stage_data["scale_real"].astype(np.float32, copy=False),
+        raw_dtype=gguf.GGMLQuantizationType.F32,
+    )
+    writer.add_tensor(
+        f"{prefix}.scale_imag",
+        stage_data["scale_imag"].astype(np.float32, copy=False),
+        raw_dtype=gguf.GGMLQuantizationType.F32,
+    )
 
 
 def pack_token_embedding(embed: torch.Tensor, hidden_complex: int) -> np.ndarray:
@@ -430,6 +613,12 @@ def main() -> None:
         action="store_true",
         help="Do not export optional attention bias tensors even if present in the HF checkpoint",
     )
+    parser.add_argument(
+        "--quant-variant",
+        choices=["tile64_v2", "legacy"],
+        default="tile64_v2",
+        help="Quantization/export variant. tile64_v2 matches the training-side QAT kernel; legacy keeps the old 256-wide iFairy packing for comparison.",
+    )
     parser.add_argument("--verbose", action="store_true", help="Print conversion progress")
     args = parser.parse_args()
 
@@ -442,6 +631,7 @@ def main() -> None:
     output_layer_mode: str = args.output_layer
     do_qk_permute: bool = args.qk_permute
     export_attn_bias: bool = not args.no_attn_bias
+    quant_variant: str = args.quant_variant
 
     config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
 
@@ -462,6 +652,7 @@ def main() -> None:
         print(f"rope_theta={rope_theta}")
         print(f"output_layer_mode={output_layer_mode}, do_qk_permute={do_qk_permute}")
         print(f"export_attn_bias={export_attn_bias}")
+        print(f"quant_variant={quant_variant}")
 
     weight_map = load_weight_map(model_dir)
     reader = TensorReader(model_dir, weight_map)
@@ -476,10 +667,17 @@ def main() -> None:
     writer.add_head_count_kv(n_head_kv)
     writer.add_layer_norm_rms_eps(float(config["rms_norm_eps"]))
     writer.add_rope_freq_base(rope_theta)
-    writer.add_file_type(gguf.LlamaFileType.MOSTLY_IFAIRY)
+    if quant_variant == "legacy":
+        writer.add_file_type(gguf.LlamaFileType.MOSTLY_IFAIRY)
+    else:
+        writer.add_file_type(gguf.LlamaFileType.ALL_F32)
     writer.add_vocab_size(int(config["vocab_size"]))
     writer.add_uint32("fairy2i.quant.residual_steps", args.residual_steps)
     writer.add_string("fairy2i.quant.codebook", "{+/-1,+/-i}")
+    writer.add_string("fairy2i.quant.variant", quant_variant)
+    if quant_variant == "tile64_v2":
+        writer.add_uint32("fairy2i.quant.tile_size", TILE64)
+        writer.add_string("fairy2i.quant.scale_stat", "dominant_mean_abs")
 
     if verbose:
         print("adding token embedding")
@@ -502,13 +700,18 @@ def main() -> None:
             print("adding output projection (wide-linear ifairy)")
         output_out_c = output_w.shape[0] // 2
         output_in_c = output_w.shape[1] // 2
-        output_packed = quantize_linear_to_ifairy_stages(output_w, output_out_c, output_in_c)
-        for stage_name, stage_data in output_packed.items():
-            writer.add_tensor(
-                f"output.{stage_name}",
-                stage_data,
-                raw_dtype=gguf.GGMLQuantizationType.F16_I2,
-            )
+        if quant_variant == "tile64_v2":
+            output_packed = quantize_linear_to_tile64_stage_tensors(output_w, output_out_c, output_in_c)
+            for stage_name, stage_data in output_packed.items():
+                add_tile64_stage_tensors(writer, f"output.{stage_name}", stage_data)
+        else:
+            output_packed = quantize_linear_to_ifairy_stages_legacy(output_w, output_out_c, output_in_c)
+            for stage_name, stage_data in output_packed.items():
+                writer.add_tensor(
+                    f"output.{stage_name}",
+                    stage_data,
+                    raw_dtype=gguf.GGMLQuantizationType.F16_I2,
+                )
         del output_packed
 
     if output_layer_mode in ("dense", "both"):
@@ -562,13 +765,18 @@ def main() -> None:
             out_target = ff_complex_padded if out_c == ff_complex else out_c
             in_target = ff_complex_padded if in_c == ff_complex else in_c
 
-            packed = quantize_linear_to_ifairy_stages(w, out_target, in_target)
-            for stage_name, stage_data in packed.items():
-                writer.add_tensor(
-                    f"blk.{il}.{gguf_base}.{stage_name}",
-                    stage_data,
-                    raw_dtype=gguf.GGMLQuantizationType.F16_I2,
-                )
+            if quant_variant == "tile64_v2":
+                packed = quantize_linear_to_tile64_stage_tensors(w, out_target, in_target)
+                for stage_name, stage_data in packed.items():
+                    add_tile64_stage_tensors(writer, f"blk.{il}.{gguf_base}.{stage_name}", stage_data)
+            else:
+                packed = quantize_linear_to_ifairy_stages_legacy(w, out_target, in_target)
+                for stage_name, stage_data in packed.items():
+                    writer.add_tensor(
+                        f"blk.{il}.{gguf_base}.{stage_name}",
+                        stage_data,
+                        raw_dtype=gguf.GGMLQuantizationType.F16_I2,
+                    )
 
             del w, packed
             gc.collect()
