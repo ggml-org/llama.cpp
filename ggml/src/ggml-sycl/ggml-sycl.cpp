@@ -2178,6 +2178,8 @@ inline void ggml_sycl_op_mul_mat_sycl(
 #endif
     if ((src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && use_fp16 && ggml_is_contiguous(src0) &&
         row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT) {
+        // NOTE: Fused dequant+GEMM and MMQ/DPAS were both attempted (Steps 10-11
+        // in optimization-workbook.md) but are slower than dequant+oneDNN.
         ggml_sycl_pool_alloc<sycl::half> src0_as_f16(ctx.pool());
         if (src0->type != GGML_TYPE_F16) {
             scope_op_debug_print scope_dbg_print(__func__, "/to_fp16_sycl", dst, /*num_src=*/2,
@@ -3261,9 +3263,12 @@ enum class mul_mat_algo {
 };
 
 inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
-    // TODO: accuracy issues in MMQ
-    GGML_UNUSED(type);
-    return false;
+    // DPAS INT8 MMQ kernel exists in mmq.cpp but is slower than dequant+oneDNN.
+    // Disabled pending further optimization. See optimization-workbook.md Step 11.
+    switch (type) {
+        default:
+            return false;
+    }
 }
 
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
