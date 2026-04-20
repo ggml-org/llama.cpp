@@ -168,9 +168,7 @@
 
 <div class="flex h-full flex-col">
 	<ScrollArea class="h-full flex-1">
-		<Sidebar.Header
-			class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2"
-		>
+		<Sidebar.Header class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
 			<div class="flex items-center justify-between">
 				<a href="#/" onclick={handleMobileSidebarItemClick}>
 					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">{APP_NAME}</h1>
@@ -199,7 +197,7 @@
 		<Sidebar.Group class="mt-2 h-[calc(100vh-21rem)] space-y-2 p-0 px-3">
 			{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
 				<Sidebar.GroupLabel>
-					{isSearchModeActive ? 'Search results' : 'Conversations'}
+					{isSearchModeActive ? 'Search results' : 'Recent conversations'}
 				</Sidebar.GroupLabel>
 			{/if}
 
