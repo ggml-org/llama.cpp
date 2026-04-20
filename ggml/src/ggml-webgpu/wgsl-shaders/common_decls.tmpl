@@ -45,6 +45,13 @@ fn load_u16_at_src0(byte_offset: u32) -> u32 {
     return (word >> shift) & 0xFFFFu;
 }
 
+// Always reads the 4-byte-aligned word containing byte_offset.
+// Caller extracts the 16-bit half it needs via & 0xFFFFu or >> 16u.
+// this is used in k-quants for better performance
+fn load_u32_at_src0_aligned(byte_offset: u32) -> u32 {
+    return src0[(byte_offset & ~3u) / 4u];
+}
+
 fn load_u32_at_src0(byte_offset: u32) -> u32 {
     let word_idx = byte_offset / 4u;
     let shift = (byte_offset & 0x3u) * 8u;
