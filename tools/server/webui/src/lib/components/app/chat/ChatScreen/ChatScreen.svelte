@@ -82,7 +82,9 @@
 	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
 
 	let showProcessingInfo = $derived(
-		isCurrentConversationLoading || (config().keepStatsVisible && page.route.id !== '/') || activeProcessingState() !== null
+		isCurrentConversationLoading ||
+			(config().keepStatsVisible && page.route.id !== '/') ||
+			activeProcessingState() !== null
 	);
 
 	setProcessingInfoContext({
@@ -398,7 +400,7 @@
 
 				{#if page.route.id === '/(chat)/chat/[id]'}
 					<ChatScreenProcessingInfo />
-				{/if}				
+				{/if}
 
 				{#if hasPropsError}
 					<div

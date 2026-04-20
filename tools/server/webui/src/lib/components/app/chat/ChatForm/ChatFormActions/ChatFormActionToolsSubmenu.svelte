@@ -36,7 +36,10 @@
 					{@const { checked, indeterminate } = toolsPanel.getGroupCheckedState(group)}
 					{@const favicon = toolsPanel.getFavicon(group)}
 
-					<Collapsible.Root open={isExpanded} onOpenChange={() => toolsPanel.toggleGroupExpanded(group.label)}>
+					<Collapsible.Root
+						open={isExpanded}
+						onOpenChange={() => toolsPanel.toggleGroupExpanded(group.label)}
+					>
 						<div class="flex items-center gap-1">
 							<Collapsible.Trigger
 								class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"

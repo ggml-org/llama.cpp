@@ -49,7 +49,10 @@
 	let isSettingsRoute = $derived(!!page.route.id?.startsWith('/settings'));
 
 	beforeNavigate(({ to, from }) => {
-		if (to?.route?.id?.startsWith('/settings/chat') && !from?.route?.id?.startsWith('/settings/chat')) {
+		if (
+			to?.route?.id?.startsWith('/settings/chat') &&
+			!from?.route?.id?.startsWith('/settings/chat')
+		) {
 			settingsReferrer.url = window.location.hash || '#/';
 		}
 	});

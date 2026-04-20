@@ -6,7 +6,6 @@
 		ChatFormActionAttachmentsSheet,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		McpActiveServersAvatars,
 		ModelsSelectorDropdown,
 		ModelsSelectorSheet
 	} from '$lib/components/app';

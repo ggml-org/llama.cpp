@@ -13,13 +13,7 @@
 		onDelete: () => void;
 	}
 
-	let {
-		class: className = '',
-		content,
-		onSendImmediately,
-		onEdit,
-		onDelete
-	}: Props = $props();
+	let { class: className = '', content, onSendImmediately, onEdit, onDelete }: Props = $props();
 
 	const processingInfoCtx = getProcessingInfoContext();
 	let showProcessingInfo = $derived(processingInfoCtx.showProcessingInfo);
