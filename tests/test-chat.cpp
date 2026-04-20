@@ -1796,7 +1796,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "<function=special_function>\n"
                "<parameter=arg1>\n1\n</parameter>\n"
                "</function>\n"
-               "</tool_call>")
+               "</tool_call>\n")
             .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
@@ -1809,7 +1809,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "<function=special_function>\n"
                "<parameter=arg1>\n1\n</parameter>\n"
                "</function>\n"
-               "</tool_call>")
+               "</tool_call>\n")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
             .expect(message_assist_call_thoughts)
@@ -1826,7 +1826,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "<parameter=arg1>\n1\n</parameter>\n"
                "<parameter=arg2>\n2\n</parameter>\n"
                "</function>\n"
-               "</tool_call>")
+               "</tool_call>\n")
             .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .parallel_tool_calls(true)
@@ -1849,7 +1849,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "hello()\n"
                "</parameter>\n"
                "</function>\n"
-               "</tool_call>")
+               "</tool_call>\n")
             .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({
@@ -1892,7 +1892,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "hello()\n"
                "</parameter>\n"
                "</function>\n"
-               "</tool_call>"
+               "</tool_call>\n"
             )
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
@@ -1908,7 +1908,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "hello()\n"
                "</parameter>\n"
                "</function>\n"
-               "</tool_call>")
+               "</tool_call>\n")
             .expect_tool_calls({
                 { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
             })

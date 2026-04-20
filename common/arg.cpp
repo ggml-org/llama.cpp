@@ -292,7 +292,7 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
         hf_tag = "default";
     }
 
-    std::string model_endpoint = get_model_endpoint();
+    std::string model_endpoint = common_get_model_endpoint();
     auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
 
     // prepare local path for caching
@@ -1316,13 +1316,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BATCHED, LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
-        {"--clear-idle"},
-        {"--no-clear-idle"},
+        {"--cache-idle-slots"},
+        {"--no-cache-idle-slots"},
         "save and clear idle slots on new task (default: enabled, requires unified KV and cache-ram)",
         [](common_params & params, bool value) {
-            params.clear_idle = value;
+            params.cache_idle_slots = value;
         }
-    ).set_env("LLAMA_ARG_CLEAR_IDLE").set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_env("LLAMA_ARG_CACHE_IDLE_SLOTS").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
