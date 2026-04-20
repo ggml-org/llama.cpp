@@ -48,16 +48,7 @@
 	let sheetOpen = $state(false);
 	let hoveredGroup = $state<string | null>(null);
 
-	const {
-		expandedGroups,
-		groups,
-		totalToolCount,
-		getGroupCheckedState,
-		getFavicon,
-		isGroupDisabled,
-		toggleGroupExpanded,
-		handleOpen
-	} = useToolsPanel();
+	const toolsPanel = useToolsPanel();
 
 	const callbacks = $derived({
 		onFileUpload: () => closeAndCall(onFileUpload),
@@ -202,13 +193,13 @@
 
 				<div class="my-2 border-t"></div>
 
-				<button type="button" class={sheetItemClass} onclick={() => handleOpen()}>
+				<button type="button" class={sheetItemClass} onclick={() => toolsPanel.handleOpen()}>
 					<PencilRuler class="h-4 w-4 shrink-0" />
 
 					<span>Tools</span>
 				</button>
 
-				{#if totalToolCount === 0 && groups.length === 0}
+				{#if toolsPanel.totalToolCount === 0 && toolsPanel.groups.length === 0}
 					<div class="px-3 py-4 text-center text-sm text-muted-foreground">
 						{#if toolsStore.loading}
 							<Loader2 class="mx-auto mb-1 h-4 w-4 animate-spin" />
@@ -221,17 +212,17 @@
 					</div>
 				{:else}
 					<div class="max-h-80 overflow-y-auto p-2 pr-1">
-						{#each groups as group (group.label)}
-							{@const groupDisabled = isGroupDisabled(group)}
-							{@const isExpanded = expandedGroups.has(group.label)}
+						{#each toolsPanel.groups as group (group.label)}
+							{@const groupDisabled = toolsPanel.isGroupDisabled(group)}
+							{@const isExpanded = toolsPanel.expandedGroups.has(group.label)}
 							{@const { checked, indeterminate } = groupDisabled
 								? { checked: false, indeterminate: false }
-								: getGroupCheckedState(group)}
-							{@const favicon = getFavicon(group)}
+								: toolsPanel.getGroupCheckedState(group)}
+							{@const favicon = toolsPanel.getFavicon(group)}
 
 							<Collapsible.Root
 								open={isExpanded}
-								onOpenChange={() => toggleGroupExpanded(group.label)}
+								onOpenChange={() => toolsPanel.toggleGroupExpanded(group.label)}
 							>
 								<!-- svelte-ignore a11y_no_static_element_interactions -->
 								<div

@@ -7,20 +7,10 @@
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 
-	const {
-		expandedGroups,
-		groups,
-		activeGroups,
-		totalToolCount,
-		getGroupCheckedState,
-		getEnabledToolCount,
-		getFavicon,
-		toggleGroupExpanded,
-		handleOpen
-	} = useToolsPanel();
+	const toolsPanel = useToolsPanel();
 </script>
 
-<DropdownMenu.Sub onOpenChange={(open) => open && handleOpen()}>
+<DropdownMenu.Sub onOpenChange={(open) => open && toolsPanel.handleOpen()}>
 	<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 		<PencilRuler class="h-4 w-4" />
 
@@ -28,7 +18,7 @@
 	</DropdownMenu.SubTrigger>
 
 	<DropdownMenu.SubContent class="w-72 p-0">
-		{#if totalToolCount === 0 && groups.length === 0}
+		{#if toolsPanel.totalToolCount === 0 && toolsPanel.groups.length === 0}
 			<div class="px-3 py-4 text-center text-sm text-muted-foreground">
 				{#if toolsStore.loading}
 					<Loader2 class="mx-auto mb-1 h-4 w-4 animate-spin" />
@@ -41,12 +31,12 @@
 			</div>
 		{:else}
 			<div class="max-h-80 overflow-y-auto p-2 pr-1">
-				{#each activeGroups as group (group.label)}
-					{@const isExpanded = expandedGroups.has(group.label)}
-					{@const { checked, indeterminate } = getGroupCheckedState(group)}
-					{@const favicon = getFavicon(group)}
+				{#each toolsPanel.activeGroups as group (group.label)}
+					{@const isExpanded = toolsPanel.expandedGroups.has(group.label)}
+					{@const { checked, indeterminate } = toolsPanel.getGroupCheckedState(group)}
+					{@const favicon = toolsPanel.getFavicon(group)}
 
-					<Collapsible.Root open={isExpanded} onOpenChange={() => toggleGroupExpanded(group.label)}>
+					<Collapsible.Root open={isExpanded} onOpenChange={() => toolsPanel.toggleGroupExpanded(group.label)}>
 						<div class="flex items-center gap-1">
 							<Collapsible.Trigger
 								class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
@@ -73,7 +63,7 @@
 								</span>
 
 								<span class="ml-auto shrink-0 text-xs text-muted-foreground">
-									{getEnabledToolCount(group)}/{group.tools.length}
+									{toolsPanel.getEnabledToolCount(group)}/{group.tools.length}
 								</span>
 							</Collapsible.Trigger>
 
