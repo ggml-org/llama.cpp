@@ -5,6 +5,8 @@ find_package(Threads REQUIRED)
 
 llama_add_compile_flags()
 
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
 
 # disable warnings in 3rd party code
@@ -39,7 +41,7 @@ if (LLAMA_BUILD_BORINGSSL)
     set(FIPS OFF CACHE BOOL "Enable FIPS (BoringSSL)")
 
     set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
-    set(BORINGSSL_VERSION "0.20260327.0" CACHE STRING "BoringSSL version")
+    set(BORINGSSL_VERSION "0.20260413.0" CACHE STRING "BoringSSL version")
 
     message(STATUS "Fetching BoringSSL version ${BORINGSSL_VERSION}")
 

@@ -18,8 +18,9 @@
 #include <remote.h>
 #include <string.h>
 
-#include "hex-dma.h"
 #include "hex-utils.h"
+#include "hex-dma.h"
+#include "hmx-queue.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -117,7 +118,11 @@ AEEResult htp_iface_close(remote_handle64 handle) {
     // release the mmaps (if any)
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         if (ctx->mmap[i].size) {
+#if __HVX_ARCH__ > 73
             HAP_munmap2((void *) ctx->mmap[i].base, ctx->mmap[i].size);
+#else
+            HAP_munmap((void *) ctx->mmap[i].base, ctx->mmap[i].size);
+#endif
             ctx->mmap[i].size = 0;
             ctx->mmap[i].base = NULL;
             ctx->mmap[i].fd   = -1;
@@ -172,8 +177,16 @@ AEEResult htp_iface_mmap(remote_handle64 handle, int fd, uint32_t size, uint32_t
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
             FARF(HIGH, "mmap : fd %u size %u pinned %u", fd, size, pinned);
-
+#if __HVX_ARCH__ > 73
             void *va = HAP_mmap2(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
+#else
+            if (size > HTP_MMAP_MAX_VMEM) { // HAP_mmap has a size limit of 2GB
+                FARF(ERROR, "mmap failed : size %u exceeds 2GB limit for HAP_mmap", (uint32_t) size);
+                abort(); // can't do much else at this point
+            }
+
+            void *va = HAP_mmap(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
+#endif
             if (va == (void*)-1) {
                 FARF(ERROR, "mmap failed : va %p fd %u size %u", va, fd, (uint32_t) size);
                 return AEE_EFAILED;
@@ -201,7 +214,11 @@ AEEResult htp_iface_munmap(remote_handle64 handle, int fd) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (fd < 0 || m->fd == fd) {
             FARF(HIGH, "unmmap : base %p fd %u size %u", (void*) m->base, m->fd, (uint32_t) m->size);
+#if __HVX_ARCH__ > 73
             HAP_munmap2((void *) m->base, m->size);
+#else
+            HAP_munmap((void *) m->base, m->size);
+#endif
             m->size   = 0;
             m->base   = NULL;
             m->fd     = -1;
@@ -324,6 +341,14 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 
 #ifdef HTP_HAS_HMX
     ctx->hmx_enabled = use_hmx;
+    ctx->hmx_queue   = NULL;
+    if (use_hmx) {
+        ctx->hmx_queue = hmx_queue_create(16, ctx->vtcm_rctx);
+        if (!ctx->hmx_queue) {
+            FARF(ERROR, "hmx-queue-create failed");
+            ctx->hmx_enabled = false;
+        }
+    }
     FARF(HIGH, "HMX %s (use_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", use_hmx);
 #endif
 
@@ -389,7 +414,11 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     }
 
 #ifdef HTP_HAS_HMX
-    ctx->hmx_enabled = 0;
+    if (ctx->hmx_queue) {
+        hmx_queue_delete(ctx->hmx_queue);
+        ctx->hmx_queue = NULL;
+    }
+    ctx->hmx_enabled = false;
 #endif
 
     vtcm_free(ctx);
@@ -513,7 +542,11 @@ static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct 
 static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
     if (m->size && !m->pinned) {
         FARF(HIGH, "unmap : fd %u base %p size %u pinned %u", m->fd, (void*) m->base, (uint32_t) m->size, m->pinned);
+#if __HVX_ARCH__ > 73
         HAP_munmap2((void *) m->base, m->size);
+#else
+        HAP_munmap((void *) m->base, m->size);
+#endif
         m->size = 0;
         m->base = 0;
         m->fd   = -1;
@@ -527,7 +560,16 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
     for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
+#if __HVX_ARCH__ > 73
             void *va = HAP_mmap2(NULL, b->size, HAP_PROT_READ | HAP_PROT_WRITE, 0, b->fd, 0);
+#else
+            if (b->size > HTP_MMAP_MAX_VMEM) { // HAP_mmap has a size limit of 2GB
+                FARF(ERROR, "mmap failed : size %u exceeds 2GB limit for HAP_mmap", (uint32_t) b->size);
+                abort(); // can't do much else at this point
+            }
+
+            void *va = HAP_mmap(NULL, b->size, HAP_PROT_READ | HAP_PROT_WRITE, 0, b->fd, 0);
+#endif
             if (va == (void*)-1) {
                 FARF(ERROR, "mmap failed : va %p fd %u size %u", va, b->fd, (uint32_t) b->size);
                 abort(); // can't do much else at this point
