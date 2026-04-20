@@ -267,8 +267,7 @@ struct webgpu_context_struct {
 
     size_t memset_bytes_per_thread;
 
-    bool     disable_fusion;
-    uint32_t num_additional_fused_ops;
+    bool disable_fusion;
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
     wgpu::Buffer   profile_timestamp_dev_buf;
@@ -2500,11 +2499,40 @@ static webgpu_encoded_op ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor 
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
 }
 
+static bool ggml_webgpu_can_fuse_rms_norm_mul(webgpu_context & ctx, const struct ggml_cgraph * cgraph, int node_idx) {
+    if (ctx->disable_fusion || !ggml_can_fuse(cgraph, node_idx, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
+        return false;
+    }
+
+    // additional constraints specific to this fusion
+    const ggml_tensor * rms_norm = cgraph->nodes[node_idx];
+    const ggml_tensor * mul      = cgraph->nodes[node_idx + 1];
+
+    GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
+    // rms_norm only supports f32
+    if (mul->src[0]->type != GGML_TYPE_F32 || mul->src[1]->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32) {
+        return false;
+    }
+    // if rms_norm is the B operand, then we don't handle broadcast
+    if (rms_norm == mul->src[1] && !ggml_are_same_shape(mul->src[0], rms_norm)) {
+        return false;
+    }
+    // rms_norm shader assumes contiguous rows
+    if (!ggml_is_contiguous_rows(mul->src[0]) || !ggml_is_contiguous_rows(mul->src[1])) {
+        return false;
+    }
+
+    return true;
+}
+
 // Returns the encoded command, or std::nullopt if the operation is a no-op
-static std::optional<webgpu_encoded_op> ggml_webgpu_encode_node(webgpu_context ctx,
-                                                                ggml_tensor ** nodes,
-                                                                uint32_t       node_idx) {
-    ggml_tensor * node = nodes[node_idx];
+static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
+                                                           ggml_cgraph *  cgraph,
+                                                           int            node_idx,
+                                                           int &          num_encoded_ops) {
+    ggml_tensor ** nodes = cgraph->nodes;
+    ggml_tensor *  node  = nodes[node_idx];
 
     if (ggml_is_empty(node)) {
         return std::nullopt;
@@ -2512,7 +2540,7 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode_node(webgpu_context c
     if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
         return std::nullopt;
     }
-    WEBGPU_LOG_DEBUG("ggml_webgpu_encode_node(" << node << ", " << ggml_op_name(node->op) << ")");
+    WEBGPU_LOG_DEBUG("ggml_webgpu_encode(" << node << ", " << ggml_op_name(node->op) << ")");
 
     ggml_tensor * src0 = node->src[0];
     ggml_tensor * src1 = node->src[1];
@@ -2555,7 +2583,8 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode_node(webgpu_context c
         case GGML_OP_REPEAT:
             return ggml_webgpu_repeat(ctx, src0, node);
         case GGML_OP_RMS_NORM:
-            if (ctx->num_additional_fused_ops > 0) {
+            if (ggml_webgpu_can_fuse_rms_norm_mul(ctx, cgraph, node_idx)) {
+                num_encoded_ops        = 2;
                 ggml_tensor * mul_node = nodes[node_idx + 1];
                 return ggml_webgpu_rms_norm_mul(ctx, src0, node, mul_node->src[0], mul_node->src[1], mul_node);
             } else {
@@ -2603,45 +2632,6 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode_node(webgpu_context c
             return ggml_webgpu_sum_rows(ctx, src0, node);
         default:
             return std::nullopt;
-    }
-}
-
-static bool ggml_webgpu_can_fuse(const struct ggml_cgraph *          cgraph,
-                                 int                                 node_idx,
-                                 std::initializer_list<enum ggml_op> ops) {
-    if (!ggml_can_fuse(cgraph, node_idx, ops)) {
-        return false;
-    }
-
-    // RMS_NORM + MUL
-    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
-        // additional constraints specific to this fusion
-        const ggml_tensor * rms_norm = cgraph->nodes[node_idx];
-        const ggml_tensor * mul      = cgraph->nodes[node_idx + 1];
-
-        GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
-        GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
-        // rms_norm only supports f32
-        if (mul->src[0]->type != GGML_TYPE_F32 || mul->src[1]->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32) {
-            return false;
-        }
-        // if rms_norm is the B operand, then we don't handle broadcast
-        if (rms_norm == mul->src[1] && !ggml_are_same_shape(mul->src[0], rms_norm)) {
-            return false;
-        }
-        // rms_norm shader assumes contiguous rows
-        if (!ggml_is_contiguous_rows(mul->src[0]) || !ggml_is_contiguous_rows(mul->src[1])) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static bool ggml_webgpu_can_fuse_check(webgpu_context & ctx, const struct ggml_cgraph * cgraph, int node_idx) {
-    // RMS_NORM + MUL
-    if (ggml_webgpu_can_fuse(cgraph, node_idx, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
-        ctx->num_additional_fused_ops = 1;
     }
 }
 
@@ -2708,6 +2698,8 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     uint32_t num_inflight_batches = 0;
     bool     contains_set_rows    = false;
     bool     batch_compute_passes = true;
+    int      num_encoded_ops      = 1;
+    int      node_idx             = 0;
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
     ctx->profile_timestamp_query_count = 0;
@@ -2715,20 +2707,16 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     std::vector<std::string> profile_pipeline_names;
 #endif
 
-    ctx->active_command_encoder   = ctx->global_ctx->device.CreateCommandEncoder();
-    ctx->num_additional_fused_ops = 0;
+    ctx->active_command_encoder = ctx->global_ctx->device.CreateCommandEncoder();
     if (batch_compute_passes) {
         ctx->active_compute_pass = ctx->active_command_encoder.BeginComputePass();
     }
 
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        if (cgraph->nodes[i]->op == GGML_OP_SET_ROWS) {
+    while (node_idx < cgraph->n_nodes) {
+        if (cgraph->nodes[node_idx]->op == GGML_OP_SET_ROWS) {
             contains_set_rows = true;
         }
-        if (!ctx->disable_fusion) {
-            ggml_webgpu_can_fuse_check(ctx, cgraph, i);
-        }
-        if (auto cmd = ggml_webgpu_encode_node(ctx, cgraph->nodes, i)) {
+        if (auto cmd = ggml_webgpu_encode(ctx, cgraph, node_idx, num_encoded_ops)) {
             commands.push_back(*cmd);
             num_batched_kernels += cmd.value().num_kernels;
 #ifdef GGML_WEBGPU_GPU_PROFILE
@@ -2754,8 +2742,8 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
             commands.clear();
         }
 
-        i += ctx->num_additional_fused_ops;
-        ctx->num_additional_fused_ops = 0;
+        node_idx += num_encoded_ops;
+        num_encoded_ops = 1;
     }
 
     if (ctx->active_compute_pass) {
