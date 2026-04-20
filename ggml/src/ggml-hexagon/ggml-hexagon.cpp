@@ -116,7 +116,7 @@ static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const ggml_t
         // Include PMU counters
         pmu_ptr += sprintf(pmu_ptr, " : pmu [");
         unsigned int i;
-        for (i = 0; i < (HEX_NUM_PMU_COUNTERS-1); i++) {
+        for (i = 0; i < (HTP_PROF_PMU_NCNT-1); i++) {
             pmu_ptr += sprintf(pmu_ptr, "%u:%u,", i, pmu[i]);
         }
         sprintf(pmu_ptr, "%u:%u]", i, pmu[i]);
@@ -2076,7 +2076,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     }
 
     if (opt_profile) {
-        err = htp_iface_profiler(this->handle, 1);
+        err = htp_iface_profiler(this->handle, opt_profile);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: failed to enable profiling: 0x%08x\n", (unsigned) err);
         }

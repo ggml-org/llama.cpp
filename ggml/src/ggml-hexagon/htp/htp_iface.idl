@@ -11,7 +11,7 @@ interface htp_iface : remote_handle64 {
     AEEResult stop();
     AEEResult mmap(in uint32 fd, in uint32 size, in uint32 pinned);
     AEEResult munmap(in uint32 fd);
-    AEEResult profiler(in uint32 enable);
+    AEEResult profiler(in uint32 mode);
     AEEResult etm(in uint32 enable);
 };
 

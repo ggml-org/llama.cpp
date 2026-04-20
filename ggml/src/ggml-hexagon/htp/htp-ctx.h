@@ -68,8 +68,8 @@ struct htp_context {
     int                    thread_prio;
 
     bool                   hmx_enabled;
-    bool                   profiler;
     bool                   etm;
+    uint32_t               profiler;
 
     uint8_t *              vtcm_base;
     size_t                 vtcm_size;

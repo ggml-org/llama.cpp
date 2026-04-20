@@ -130,8 +130,6 @@ enum htp_op_flags {
     HTP_OPFLAGS_SKIP_COMPUTE  = (1U << 0), // Skip actual computation (used for profiling)
 };
 
-#define HEX_NUM_PMU_COUNTERS 8
-
 // Op descriptor
 struct htp_op_desc {
     uint32_t opcode;                    // GGML/HTP Op
@@ -141,13 +139,21 @@ struct htp_op_desc {
     uint16_t dst;                       // Output tensor index
 };
 
+enum htp_profiler_mode {
+    HTP_PROF_DISABLED = 0,
+    HTP_PROF_BASIC    = 1,
+    HTP_PROF_PMU      = 2
+};
+
+#define HTP_PROF_PMU_NCNT 8
+
 // Profile descriptor
 struct htp_prof_desc {
-    uint32_t opcode;                    // GGML/HTP Op
-    uint32_t usecs;                     // Number of usec
-    uint32_t cycles;                    // Number of cycles
-    uint32_t pad;                       // Unused
-    uint32_t pmu[HEX_NUM_PMU_COUNTERS]; // PMU counters
+    uint32_t opcode;                 // GGML/HTP Op
+    uint32_t usecs;                  // Number of usec
+    uint32_t cycles;                 // Number of cycles
+    uint32_t pad;                    // Unused
+    uint32_t pmu[HTP_PROF_PMU_NCNT]; // PMU counters
 };
 
 struct htp_opbatch_req {

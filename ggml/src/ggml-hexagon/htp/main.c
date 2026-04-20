@@ -115,37 +115,39 @@ AEEResult htp_iface_etm(remote_handle64 handle, uint32_t enable) {
     return err;
 }
 
-AEEResult htp_iface_profiler(remote_handle64 handle, uint32_t enable) {
+AEEResult htp_iface_profiler(remote_handle64 handle, uint32_t mode) {
     struct htp_context * ctx = (struct htp_context *) handle;
     if (!ctx) {
         return AEE_EBADPARM;
     }
 
-    // TODO: pass these from the host
-    uint32_t events[] = {0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C};
+    if (mode == HTP_PROF_PMU) {
+        // TODO: pass these from the host
+        uint32_t events[] = {0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C};
 
-    // Pack 4 event IDs (low 8 bits) into each 32-bit config register
-    uint32_t evtcfg = 0, evtcfg1 = 0, cfg = 0, i = 0;
-    for (; i < HEX_NUM_PMU_COUNTERS/2; i++) {
-        evtcfg  |= ((events[i + 0] & 0xFF) << (i * 8));
-        evtcfg1 |= ((events[i + 4] & 0xFF) << (i * 8));
+        // Pack 4 event IDs (low 8 bits) into each 32-bit config register
+        uint32_t evtcfg = 0, evtcfg1 = 0, cfg = 0, i = 0;
+        for (; i < HEX_NUM_PMU_COUNTERS/2; i++) {
+            evtcfg  |= ((events[i + 0] & 0xFF) << (i * 8));
+            evtcfg1 |= ((events[i + 4] & 0xFF) << (i * 8));
+        }
+
+        // For events >255 pack high 2 bits of all 8 event IDs into cfg register
+        // 2 bits per counter: bits [1:0] for counter 0, [3:2] for counter 1, etc.
+        for (i = 0; i < HEX_NUM_PMU_COUNTERS; i++) {
+            cfg |= (((events[i] >> 8) & 3) << (i * 2));
+        }
+
+        FARF(ALWAYS, "Configuring PMU registers: evtcfg = 0x%x, evtcfg1 = 0x%x, pmucfg = 0x%x", evtcfg, evtcfg1, cfg);
+
+        // Configure PMU registers
+        qurt_pmu_set(QURT_PMUCFG,     cfg);
+        qurt_pmu_set(QURT_PMUEVTCFG,  evtcfg);
+        qurt_pmu_set(QURT_PMUEVTCFG1, evtcfg1);
+        qurt_pmu_enable(1);
     }
 
-    // For events >255 pack high 2 bits of all 8 event IDs into cfg register
-    // 2 bits per counter: bits [1:0] for counter 0, [3:2] for counter 1, etc.
-    for (i = 0; i < HEX_NUM_PMU_COUNTERS; i++) {
-        cfg |= (((events[i] >> 8) & 3) << (i * 2));
-    }
-
-    FARF(ALWAYS, "Configuring PMU registers: evtcfg = 0x%x, evtcfg1 = 0x%x, pmucfg = 0x%x", evtcfg, evtcfg1, cfg);
-
-    // Configure PMU registers
-    qurt_pmu_set(QURT_PMUCFG,     cfg);
-    qurt_pmu_set(QURT_PMUEVTCFG,  evtcfg);
-    qurt_pmu_set(QURT_PMUEVTCFG1, evtcfg1);
-    qurt_pmu_enable(1);
-
-    ctx->profiler = true;
+    ctx->profiler = mode;
 
     return AEE_SUCCESS;
 }
@@ -468,20 +470,35 @@ struct profile_data {
     uint32_t pmu_counters[HEX_NUM_PMU_COUNTERS];
 };
 
-static inline void profile_start(struct profile_data * d) {
-    d->usecs  = HAP_perf_get_qtimer_count();
-    d->cycles = hex_get_cycles();
-    hex_get_pmu(d->pmu_counters);
+static inline void profile_start(uint32_t mode, struct profile_data * d) {
+    switch (mode) {
+        case HTP_PROF_PMU:
+            hex_get_pmu(d->pmu_counters);
+            // fallthrough
+        case HTP_PROF_BASIC:
+            d->usecs  = HAP_perf_get_qtimer_count();
+            d->cycles = hex_get_cycles();
+            break;
+        default:
+            break;
+    }
 }
 
-static inline void profile_stop(struct profile_data * d) {
-    d->usecs  = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - d->usecs);
-    d->cycles = hex_get_cycles() - d->cycles;
-
-    uint32_t pmu_counters_end[HEX_NUM_PMU_COUNTERS];
-    hex_get_pmu(pmu_counters_end);
-    for (int i = 0; i < HEX_NUM_PMU_COUNTERS; i++) {
-        d->pmu_counters[i] = pmu_counters_end[i] - d->pmu_counters[i];
+static inline void profile_stop(uint32_t mode, struct profile_data * d) {
+    uint32_t pmu_counters[HEX_NUM_PMU_COUNTERS];
+    switch (mode) {
+        case HTP_PROF_PMU:
+            hex_get_pmu(pmu_counters);
+            for (int i = 0; i < HEX_NUM_PMU_COUNTERS; i++) {
+                d->pmu_counters[i] = pmu_counters[i] - d->pmu_counters[i];
+            }
+            // fallthrough
+        case HTP_PROF_BASIC:
+            d->usecs  = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - d->usecs);
+            d->cycles = hex_get_cycles() - d->cycles;
+            break;
+        default:
+            break;
     }
 }
 
@@ -800,13 +817,13 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
 
-            if (ctx->profiler) { profile_start(&prof); }
+            profile_start(ctx->profiler, &prof);
 
             proc_op_req(octx, tens, i, &ops[i]);
 
-            if (ctx->profiler) {
-                profile_stop(&prof);
+            profile_stop(ctx->profiler, &prof);
 
+            if (ctx->profiler) {
                 pds[i].opcode = ops[i].opcode;
                 pds[i].usecs  = prof.usecs;
                 pds[i].cycles = prof.cycles;
