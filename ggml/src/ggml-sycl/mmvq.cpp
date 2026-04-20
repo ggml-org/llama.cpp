@@ -1200,13 +1200,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
     GGML_UNUSED(ctx);
 }
 
-// Fused MoE kernel for MMVQ non-reorder: one kernel launch handles all
-// n_experts_used expert matmuls. The kernel reads ids from device memory,
-// so no host sync is needed between expert dispatches. This cuts per-layer
-// kernel launches from n_experts_used to 1 for MoE TG paths.
-//
-// When src1_row_stride != 0 each expert has its own src1 row (down proj
-// pattern); when 0 all experts share the same src1 (gate/up proj pattern).
+// src1_row_stride: 0 for shared src1 (gate/up proj), else per-expert stride (down proj).
 template <int qk, int qi, typename block_q_t, int vdr, vec_dot_q_sycl_t vec_dot_q_sycl>
 static void mul_mat_vec_q_moe(
     const void * __restrict__ vx_base, const void * __restrict__ vy_base,
