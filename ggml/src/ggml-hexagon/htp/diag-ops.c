@@ -1,5 +1,3 @@
-#pragma clang diagnostic ignored "-Wunused-variable"
-#pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
 #include <HAP_farf.h>
@@ -10,7 +8,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "hvx-types.h"
-#include "hvx-utils.h"
+#include "hex-utils.h"
 #include "hvx-copy.h"
 #include "hex-dma.h"
 
@@ -18,22 +16,14 @@
     const struct htp_tensor * restrict src0 = octx->src[0]; \
     const struct htp_tensor * restrict dst  = octx->dst;    \
                                                      \
-    const uint32_t ne00 = src0->ne[0];               \
-    const uint32_t ne01 = src0->ne[1];               \
     const uint32_t ne02 = src0->ne[2];               \
-    const uint32_t ne03 = src0->ne[3];               \
                                                      \
     const uint32_t ne0 = dst->ne[0];                 \
     const uint32_t ne1 = dst->ne[1];                 \
-    const uint32_t ne2 = dst->ne[2];                 \
-    const uint32_t ne3 = dst->ne[3];                 \
                                                      \
-    const uint32_t nb00 = src0->nb[0];               \
-    const uint32_t nb01 = src0->nb[1];               \
     const uint32_t nb02 = src0->nb[2];               \
     const uint32_t nb03 = src0->nb[3];               \
                                                      \
-    const uint32_t nb0 = dst->nb[0];                 \
     const uint32_t nb1 = dst->nb[1];                 \
     const uint32_t nb2 = dst->nb[2];                 \
     const uint32_t nb3 = dst->nb[3];
@@ -51,8 +41,7 @@ struct htp_diag_context {
 #define htp_diag_preamble                                              \
     struct htp_diag_context * dctx = (struct htp_diag_context *) data; \
     struct htp_ops_context *  octx = dctx->octx;                       \
-    htp_diag_tensors_preamble;                                         \
-    dma_queue * dma_queue = octx->ctx->dma[ith];
+    htp_diag_tensors_preamble;
 
 static inline void hvx_diag_row_f32(const float * restrict src, float * restrict dst,
                                     uint32_t row_idx, uint32_t n) {
@@ -66,6 +55,7 @@ static inline void hvx_diag_row_f32(const float * restrict src, float * restrict
 
 static void diag_thread_f32_dma(unsigned int nth, unsigned int ith, void * data) {
     htp_diag_preamble;
+    dma_queue * dma_queue = octx->ctx->dma[ith];
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
