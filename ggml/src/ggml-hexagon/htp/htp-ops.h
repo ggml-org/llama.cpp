@@ -146,6 +146,7 @@ struct htp_prof_desc {
     uint32_t opcode;                    // GGML/HTP Op
     uint32_t usecs;                     // Number of usec
     uint32_t cycles;                    // Number of cycles
+    uint32_t pad;                       // Unused
     uint32_t pmu[HEX_NUM_PMU_COUNTERS]; // PMU counters
 };
 
@@ -155,6 +156,7 @@ struct htp_opbatch_req {
     uint32_t n_tensors;   // Number of tensors
     uint32_t n_ops;       // Number of ops
     uint32_t flags;       // unused
+    uint32_t pad;         // unused
     // struct htp_buf_desc  bufs[];    -- dspqueue buf 0
     // struct htp_tensor    tensors[]; -- dspqueue buf 0
     // struct htp_op_desc   ops[];     -- dspqueue buf 0
@@ -163,7 +165,10 @@ struct htp_opbatch_req {
 struct htp_opbatch_rsp {
     uint32_t id;         // Batch id
     uint32_t status;     // HTP_STATUS_...
+    uint32_t n_bufs;     // Number of buffers
+    uint32_t n_tensors;  // Number of tensors
     uint32_t n_ops;      // Number of op profile descriptors
+    uint32_t pad;        // unused
     // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 

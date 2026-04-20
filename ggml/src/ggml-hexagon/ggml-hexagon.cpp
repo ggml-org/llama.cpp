@@ -1723,48 +1723,6 @@ struct ggml_hexagon_opbatch {
         }
         o.dst = add_tensor(t);
     }
-
-    size_t flush(uint8_t * mem_addr, size_t mem_size) {
-        static_assert(sizeof(htp_buf_desc) % 8 == 0, "sizeof(htp_buf_desc) must be multiple of 8");
-        static_assert(sizeof(htp_tensor)   % 8 == 0, "sizeof(htp_tensor) must be multiple of 8");
-        static_assert(sizeof(htp_op_desc)  % 8 == 0, "sizeof(htp_op_desc) must be multiple of 8");
-
-        const size_t b_size = sizeof(htp_buf_desc) * n_bufs;
-        const size_t t_size = sizeof(htp_tensor)   * n_tens;
-        const size_t o_size = sizeof(htp_op_desc)  * n_ops;
-
-        const size_t m_size = b_size + t_size + o_size;
-        GGML_ASSERT(m_size <= mem_size);
-
-        uint8_t * b_ptr = (uint8_t *) mem_addr;
-        uint8_t * t_ptr = (uint8_t *) b_ptr + b_size;
-        uint8_t * o_ptr = (uint8_t *) t_ptr + t_size;
-
-        memcpy(b_ptr, (void *) h_bufs.data(), b_size);
-        memcpy(t_ptr, (void *) h_tens.data(), t_size);
-        memcpy(o_ptr, (void *) h_ops.data(),  o_size);
-
-        HEX_VERBOSE("ggml-hex: %s flush-opbatch : n-bufs %u n-tensors %u n-ops %u vmem %zu : b-size %zu t-size %zu o-size %zu\n",
-                sess->c_name(), n_bufs, n_tens, n_ops, b_vmem, b_size, t_size, o_size);
-
-        if (opt_verbose > 1) {
-            htp_buf_desc *b = (htp_buf_desc*) b_ptr;
-            for (unsigned int i=0; i < n_bufs; i++) {
-                GGML_LOG_DEBUG("ggml-hex: %s htp-buf #%u : fd %d base %p size %zu\n", sess->c_name(), i,
-                            b[i].fd, (void *) b[i].base, (size_t) b[i].size);
-            }
-            htp_tensor *t = (htp_tensor*) t_ptr;
-            for (unsigned int i=0; i < n_tens; i++) {
-                GGML_LOG_DEBUG("ggml-hex: %s htp-tensor #%u : bi %u offset %u size %u : %zu:%zu:%zu:%zu\n",
-                            sess->c_name(), i, t[i].bi, t[i].data, t[i].size,
-                            (size_t) t[i].ne[0], (size_t) t[i].ne[1], (size_t) t[i].ne[2], (size_t) t[i].ne[3]);
-            }
-        }
-
-        reset();
-
-        return m_size;
-    }
 };
 
 struct ggml_hexagon_opqueue {
@@ -1808,25 +1766,65 @@ struct ggml_hexagon_opqueue {
 
     // push new batch
     bool push(htp_opbatch_req& req, dspqueue_buffer& dbuf, ggml_hexagon_opbatch* op_batch) {
+        static_assert(sizeof(htp_opbatch_req) % 8 == 0, "sizeof(htp_opbatch_req) must be multiple of 8");
+        static_assert(sizeof(htp_opbatch_rsp) % 8 == 0, "sizeof(htp_opbatch_rsp) must be multiple of 8");
+        static_assert(sizeof(htp_buf_desc)    % 8 == 0, "sizeof(htp_buf_desc) must be multiple of 8");
+        static_assert(sizeof(htp_tensor)      % 8 == 0, "sizeof(htp_tensor) must be multiple of 8");
+        static_assert(sizeof(htp_op_desc)     % 8 == 0, "sizeof(htp_op_desc) must be multiple of 8");
+        static_assert(sizeof(htp_prof_desc)   % 8 == 0, "sizeof(htp_prof_desc) must be multiple of 8");
+
         if (done.empty()) { return false; }
 
-        unsigned int i = done.front(); done.pop(); // batch id
-
-        op_cache[i]   = op_batch->ops;
-        start_usec[i] = ggml_time_us();
-
-        req.id        = i;
+        req.id        = done.front(); done.pop(); // batch id
         req.n_bufs    = op_batch->n_bufs;
         req.n_tensors = op_batch->n_tens;
         req.n_ops     = op_batch->n_ops;
+
+        op_cache[req.id]   = op_batch->ops;
+        start_usec[req.id] = ggml_time_us();
+
+        const size_t b_size = sizeof(htp_buf_desc)  * req.n_bufs;
+        const size_t t_size = sizeof(htp_tensor)    * req.n_tensors;
+        const size_t o_size = sizeof(htp_op_desc)   * req.n_ops;
+        const size_t p_size = sizeof(htp_prof_desc) * req.n_ops;
 
         dbuf.ptr      = shm_buf->base + (req.id * shm_blk_size);
         dbuf.fd       = shm_buf->fd;
         dbuf.flags    = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
         dbuf.offset   = (uint8_t*) dbuf.ptr - (uint8_t*) shm_buf->base;
-        dbuf.size     = op_batch->flush((uint8_t*) dbuf.ptr, shm_blk_size);
+        dbuf.size     = b_size + t_size + o_size + p_size;
 
-        HEX_VERBOSE("ggml-hex: %s op-queue pushed batch #%u %p\n", shm_buf->sess->c_name(), req.id, (void*) dbuf.ptr);
+        GGML_ASSERT(dbuf.size <= shm_blk_size);
+
+        uint8_t * m_ptr = (uint8_t*) dbuf.ptr;
+        uint8_t * b_ptr = m_ptr; m_ptr += b_size;
+        uint8_t * t_ptr = m_ptr; m_ptr += t_size;
+        uint8_t * o_ptr = m_ptr;
+
+        memcpy(b_ptr, (void *) op_batch->h_bufs.data(), b_size);
+        memcpy(t_ptr, (void *) op_batch->h_tens.data(), t_size);
+        memcpy(o_ptr, (void *) op_batch->h_ops.data(),  o_size);
+
+        HEX_VERBOSE("ggml-hex: %s op-queue push batch #%u : n-bufs %u n-tensors %u n-ops %u vmem %zu : b-size %zu t-size %zu o-size %zu m-size %zu\n",
+                shm_buf->sess->c_name(), req.id, req.n_bufs, req.n_tensors, req.n_ops, op_batch->b_vmem,
+                b_size, t_size, o_size, (size_t) dbuf.size);
+
+        op_batch->reset();
+
+        if (opt_verbose > 1) {
+            htp_buf_desc *b = (htp_buf_desc*) b_ptr;
+            for (unsigned int i=0; i < req.n_bufs; i++) {
+                GGML_LOG_DEBUG("ggml-hex: %s htp-buf #%u : fd %d base %p size %zu\n", shm_buf->sess->c_name(), i,
+                            b[i].fd, (void *) b[i].base, (size_t) b[i].size);
+            }
+            htp_tensor *t = (htp_tensor*) t_ptr;
+            for (unsigned int i=0; i < req.n_tensors; i++) {
+                GGML_LOG_DEBUG("ggml-hex: %s htp-tensor #%u : bi %u offset %u size %u : %zu:%zu:%zu:%zu\n",
+                            shm_buf->sess->c_name(), i, t[i].bi, t[i].data, t[i].size,
+                            (size_t) t[i].ne[0], (size_t) t[i].ne[1], (size_t) t[i].ne[2], (size_t) t[i].ne[3]);
+            }
+        }
+
         return true;
     }
 
@@ -1835,7 +1833,20 @@ struct ggml_hexagon_opqueue {
 
         done.push(rsp.id);
 
-        HEX_VERBOSE("ggml-hex: %s op-queue popped batch #%u %p\n", shm_buf->sess->c_name(), rsp.id, (void*) dbuf.ptr);
+        const size_t b_size = sizeof(htp_buf_desc)  * rsp.n_bufs;
+        const size_t t_size = sizeof(htp_tensor)    * rsp.n_tensors;
+        const size_t o_size = sizeof(htp_op_desc)   * rsp.n_ops;
+        const size_t p_size = sizeof(htp_prof_desc) * rsp.n_ops;
+
+        const size_t m_size = b_size + t_size + o_size + p_size;
+        GGML_ASSERT(m_size <= shm_blk_size);
+
+        HEX_VERBOSE("ggml-hex: %s op-queue pop batch #%u : n-bufs %u n-tensors %u n-ops %u : m-size %zu b-size %zu t-size %zu o-size %zu\n",
+                shm_buf->sess->c_name(), rsp.id, rsp.n_bufs, rsp.n_tensors, rsp.n_ops,
+                (size_t) dbuf.size, b_size, t_size, o_size);
+
+        uint8_t * m_ptr = (uint8_t*) dbuf.ptr;
+        uint8_t * p_ptr = m_ptr + (b_size + t_size + o_size);
 
         if (opt_profile && rsp.n_ops > 0) {
             auto & ops = op_cache[rsp.id];
@@ -1845,7 +1856,7 @@ struct ggml_hexagon_opqueue {
 
             GGML_ASSERT(rsp.n_ops <= ops.size());
 
-            const htp_prof_desc * pd = (const htp_prof_desc *) dbuf.ptr;
+            const htp_prof_desc * pd = (const htp_prof_desc *) p_ptr;
             for (uint32_t i = 0; i < rsp.n_ops; i++) {
                 htp_usec += pd[i].usecs;
                 ggml_hexagon_dump_op_prof(shm_buf->sess->name, ops[i], pd[i].usecs, pd[i].cycles, pd[i].pmu);
@@ -1856,7 +1867,6 @@ struct ggml_hexagon_opqueue {
         }
     }
 };
-
 
 // Flush HTP response queue i.e wait for all outstanding requests to complete
 void ggml_hexagon_session::flush_pending(bool all) {
@@ -1899,8 +1909,8 @@ void ggml_hexagon_session::flush_pending(bool all) {
 void ggml_hexagon_session::flush_batch() {
     if (op_batch->empty()) { return; }
 
-    htp_opbatch_req req;
-    dspqueue_buffer dbuf;
+    htp_opbatch_req req {};
+    dspqueue_buffer dbuf{};
 
     if (!op_queue->push(req, dbuf, op_batch)) {
         flush_pending(false);
