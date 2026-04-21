@@ -1,3 +1,18 @@
+/**
+ * ModelScope Integration Module
+ *
+ * Handles model downloading and caching from ModelScope for llama.cpp.
+ * Key features:
+ * - Repository file listing & automatic model file selection based on tags
+ * - Download progress tracking & automatic local caching
+ *
+ * Configuration:
+ * - Endpoint: `MODEL_ENDPOINT` env var (default: https://modelscope.cn/)
+ * - Authentication: Provide token via `-hft` CLI flag or `MS_TOKEN` env var.
+ *
+ * Usage: llama-cli -ms <repo_id> -hff <model_file> -hft <ms_token>  (e.g., "Qwen/Qwen3-0.6B-GGUF")
+ */
+
 #include "ms.h"
 
 #include "common.h"
