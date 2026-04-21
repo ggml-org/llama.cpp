@@ -848,19 +848,6 @@ static void dequantize_row_tq3_4s_cuda(const void * vx, dst_t * y, const int64_t
     dequantize_block_tq3_4s<<<nb, 32, 0, stream>>>(vx, y, nb);
 }
 
-// 4-bit demoted scale lookup table (must match CPU TQ3_V_SCALE_TABLE)
-__constant__ static const float tq3_v_scale_table_cuda[16] = {
-    0.002f, 0.00289f, 0.004176f, 0.006034f, 0.008719f, 0.012599f, 0.018206f, 0.026307f,
-    0.038013f, 0.054928f, 0.07937f, 0.114688f, 0.165723f, 0.239466f, 0.346025f, 0.5f,
-};
-// 2-bit centroids
-__constant__ static const float tq3_v_c2_cuda[4] = { -1.5104f, -0.4528f, 0.4528f, 1.5104f };
-// 4-bit centroids
-__constant__ static const float tq3_v_c4_cuda[16] = {
-    -2.733f, -2.069f, -1.618f, -1.256f, -0.942f, -0.656f, -0.386f, -0.126f,
-     0.126f,  0.386f,  0.656f,  0.942f,  1.256f,  1.618f,  2.069f,  2.733f,
-};
-
 static __device__ __forceinline__ uint8_t tq3_idx_from_packed_cuda(const uint8_t * qp, int r) {
     switch (r) {
         case 0: return  qp[0]       & 7;
