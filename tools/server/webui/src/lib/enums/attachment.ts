@@ -24,3 +24,30 @@ export enum AttachmentMenuItemId {
 	MCP_PROMPT = 'mcp-prompt',
 	MCP_RESOURCES = 'mcp-resources'
 }
+
+/**
+ * Defines when an attachment menu item should be enabled.
+ */
+export enum AttachmentItemEnabledWhen {
+	ALWAYS = 'always',
+	HAS_VISION_MODALITY = 'hasVisionModality',
+	HAS_AUDIO_MODALITY = 'hasAudioModality'
+}
+
+/**
+ * Defines the callback action triggered when an attachment menu item is clicked.
+ */
+export enum AttachmentAction {
+	FILE_UPLOAD = 'onFileUpload',
+	SYSTEM_PROMPT_CLICK = 'onSystemPromptClick',
+	MCP_PROMPT_CLICK = 'onMcpPromptClick',
+	MCP_RESOURCES_CLICK = 'onMcpResourcesClick'
+}
+
+/**
+ * Visibility conditions for attachment menu items.
+ */
+export enum AttachmentItemVisibleWhen {
+	HAS_MCP_PROMPTS_SUPPORT = 'hasMcpPromptsSupport',
+	HAS_MCP_RESOURCES_SUPPORT = 'hasMcpResourcesSupport'
+}

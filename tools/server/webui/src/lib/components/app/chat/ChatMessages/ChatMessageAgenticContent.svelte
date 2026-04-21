@@ -267,7 +267,11 @@
 						<Loader2 class="h-3 w-3 animate-spin" />
 					{/if}
 				</div>
-				{#if section.toolResult}
+				{#if isPending}
+					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
+						Waiting for result...
+					</div>
+				{:else if section.toolResult}
 					<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
 						{#each section.parsedLines as line, i (i)}
 							<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">{line.text}</div>
@@ -281,9 +285,9 @@
 							{/if}
 						{/each}
 					</div>
-				{:else if isPending}
+				{:else}
 					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
-						Waiting for result...
+						No output
 					</div>
 				{/if}
 			</div>

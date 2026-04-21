@@ -1,4 +1,10 @@
-export { AttachmentType, AttachmentMenuItemId } from './attachment';
+export {
+	AttachmentType,
+	AttachmentMenuItemId,
+	AttachmentItemEnabledWhen,
+	AttachmentAction,
+	AttachmentItemVisibleWhen
+} from './attachment';
 
 export { AgenticSectionType, ToolCallType } from './agentic';
 
