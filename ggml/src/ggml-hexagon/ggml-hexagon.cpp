@@ -2632,6 +2632,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_ROPE:           return HTP_OP_ROPE;
         case GGML_OP_REPEAT:         return HTP_OP_REPEAT;
         case GGML_OP_CUMSUM:         return HTP_OP_CUMSUM;
+        case GGML_OP_FILL:           return HTP_OP_FILL;
 
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
@@ -3029,6 +3030,17 @@ static bool ggml_hexagon_supported_repeat(const struct ggml_hexagon_session * se
     return true;
 }
 
+static bool ggml_hexagon_supported_fill(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * dst = op;
+
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    GGML_UNUSED(sess);
+    return true;
+}
+
 static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
 
@@ -3157,6 +3169,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_CUMSUM:
             supp = ggml_hexagon_supported_cumsum(sess, op);
+            break;
+
+        case GGML_OP_FILL:
+            supp = ggml_hexagon_supported_fill(sess, op);
             break;
 
         default:
