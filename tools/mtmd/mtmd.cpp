@@ -1052,7 +1052,7 @@ bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk
 }
 
 bool mtmd_decode_use_mrope(const mtmd_context * ctx) {
-    return ctx->pos_type;
+    return ctx->pos_type == MTMD_POS_TYPE_MROPE;
 }
 
 bool mtmd_support_vision(const mtmd_context * ctx) {
