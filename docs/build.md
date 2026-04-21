@@ -281,6 +281,12 @@ Use `GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F` environment variable to force use FP16 
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted. In Windows this setting is available in the NVIDIA control panel as `System Memory Fallback`.
 
+### Peer Access
+
+The environment variable `GGML_CUDA_P2P` can be set to enable peer-to-peer access between multiple GPUs, allowing them to transfer data directly rather than to go through system memory.
+Requires driver support (usually restricted to workstation/datacenter GPUs).
+May cause crashes or corrupted outputs for some motherboards and BIOS settings (e.g. IOMMU).
+
 ### Performance Tuning
 
 The following compilation options are also available to tweak performance:

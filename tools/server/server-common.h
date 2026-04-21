@@ -92,6 +92,9 @@ std::string random_string();
 std::string gen_chatcmplid();
 std::string gen_tool_call_id();
 
+// get a random marker; note: each time the server restarts, the marker will be different
+const char * get_media_marker();
+
 //
 // lora utils
 //
@@ -187,7 +190,9 @@ public:
     void insert(const llama_tokens & inp_tokens);
 
     // for compatibility with speculative decoding, ctx shift, slot save/load
-    const llama_tokens & get_text_tokens() const;
+    const llama_tokens & get_tokens() const;
+
+    llama_tokens get_text_tokens() const;
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);

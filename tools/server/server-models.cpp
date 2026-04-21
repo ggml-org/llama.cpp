@@ -1,6 +1,7 @@
 #include "server-common.h"
 #include "server-models.h"
 
+#include "build-info.h"
 #include "preset.h"
 #include "download.h"
 
@@ -936,7 +937,7 @@ void server_models_routes::init_routes() {
                     {"n_ctx",  0},
                 }},
                 {"webui_settings", webui_settings},
-                {"build_info",     build_info},
+                {"build_info",     std::string(llama_build_info())},
             });
             return res;
         }
@@ -1146,7 +1147,7 @@ server_http_proxy::server_http_proxy(
 
     // setup Client
     cli->set_follow_location(true);
-    cli->set_connection_timeout(5, 0); // 5 seconds
+    cli->set_connection_timeout(timeout_read, 0); // use --timeout value instead of hardcoded 5 s
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response

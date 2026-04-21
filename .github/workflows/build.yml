@@ -267,6 +267,56 @@ jobs:
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
+  android-arm64:
+    runs-on: ubuntu-latest
+
+    env:
+      NDK_VERSION: "29.0.14206865"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: android-arm64
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: 17
+          distribution: temurin
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install NDK
+        run: |
+          sdkmanager "ndk;${{ env.NDK_VERSION }}"
+          echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DGGML_RPC=ON
+          time cmake --build build --config Release -j $(nproc)
+
   ubuntu-latest-rpc:
     runs-on: ubuntu-latest
 
@@ -606,86 +656,6 @@ jobs:
             -DGGML_SYCL_F16=ON
           time cmake --build build --config Release -j $(nproc)
 
-  ubuntu-24-openvino:
-      name: ubuntu-24-openvino-${{ matrix.openvino_device }}
-      strategy:
-        matrix:
-          include:
-            - variant: cpu
-              runner: '"ubuntu-24.04"'
-              openvino_device: "CPU"
-            - variant: gpu
-              runner: '["self-hosted","Linux","X64","Intel"]'
-              openvino_device: "GPU"
-
-      runs-on: ${{ fromJSON(matrix.runner) }}
-
-      env:
-        # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-        OPENVINO_VERSION_MAJOR: "2026.0"
-        OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
-
-      steps:
-        - name: Clone
-          id: checkout
-          uses: actions/checkout@v6
-
-        - name: ccache
-          if: runner.environment == 'github-hosted'
-          uses: ggml-org/ccache-action@v1.2.21
-          with:
-            key: ubuntu-24-openvino-${{ matrix.variant }}-no-preset-v1
-            evict-old-files: 1d
-            save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-        - name: Dependencies
-          id: depends
-          run: |
-            sudo apt-get update
-            sudo apt-get install -y build-essential libssl-dev libtbb12 cmake ninja-build python3-pip
-            sudo apt-get install -y ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
-
-        - name: Use OpenVINO Toolkit Cache
-          if: runner.environment == 'github-hosted'
-          uses: actions/cache@v5
-          id: cache-openvino
-          with:
-            path: ./openvino_toolkit
-            key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
-
-        - name: Setup OpenVINO Toolkit
-          if: steps.cache-openvino.outputs.cache-hit != 'true'
-          uses: ./.github/actions/linux-setup-openvino
-          with:
-            path: ./openvino_toolkit
-            version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
-            version_full: ${{ env.OPENVINO_VERSION_FULL }}
-
-        - name: Install OpenVINO dependencies
-          run: |
-            cd ./openvino_toolkit
-            chmod +x ./install_dependencies/install_openvino_dependencies.sh
-            echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
-
-        - name: Build
-          id: cmake_build
-          run: |
-            source ./openvino_toolkit/setupvars.sh
-            cmake -B build/ReleaseOV -G Ninja \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DGGML_OPENVINO=ON
-            time cmake --build build/ReleaseOV --config Release -j $(nproc)
-
-        - name: Test
-          id: cmake_test
-          # TODO: fix and re-enable the `test-llama-archs` test below
-          run: |
-            cd ${{ github.workspace }}
-            if [ "${{ matrix.openvino_device }}" = "GPU" ]; then
-              export GGML_OPENVINO_DEVICE=GPU
-            fi
-            ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 2000
-
   windows-latest:
     runs-on: windows-2025
 
@@ -1001,21 +971,13 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          sudo apt-get update
-
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 cmake build-essential libssl-dev wget git-lfs
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-
-          if ! which rustc; then
-            # Install Rust stable version
-            sudo apt-get install -y rustup
-            rustup install stable
-            rustup default stable
-          fi
 
           git lfs install
 
@@ -1032,13 +994,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      # FIXME: Enable when ggml-org/ccache-action works on riscv64
-      # - name: ccache
-      #   uses: ggml-org/ccache-action@v1.2.21
-      #   with:
-      #     key: ubuntu-cpu-riscv64-native
-      #     evict-old-files: 1d
-      #     save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      - name: ccache
+        uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
+        with:
+          key: ubuntu-cpu-riscv64-native
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build

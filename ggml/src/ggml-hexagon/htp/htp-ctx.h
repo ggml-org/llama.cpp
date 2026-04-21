@@ -2,6 +2,7 @@
 #define HTP_CTX_H
 
 #include "hex-dma.h"
+#include "hmx-queue.h"
 #include "htp-ops.h"
 #include "worker-pool.h"
 
@@ -29,6 +30,8 @@ struct htp_spad {
     uint32_t                  size;            // total size
     uint32_t                  size_per_thread; // size per thread
 };
+
+struct htp_context;
 
 // Context while processing an Op
 // TODO: fold this into the main context
@@ -72,6 +75,10 @@ struct htp_context {
     atomic_bool            vtcm_needs_release;
 
     struct htp_ops_context octx;
+
+#ifdef HTP_HAS_HMX
+    struct hmx_queue *     hmx_queue; // Async HMX queue for pipeline overlap
+#endif
 };
 
 int op_matmul(struct htp_ops_context * octx);
