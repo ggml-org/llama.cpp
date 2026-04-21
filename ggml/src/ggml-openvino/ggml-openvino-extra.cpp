@@ -6,6 +6,7 @@
 #include <cstring>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
+#include <openvino/runtime/properties.hpp>
 #include <optional>
 
 ov::Core & ov_singleton_core() {
@@ -42,11 +43,13 @@ void ggml_openvino_device_config::init() {
             {"NPUW_DQ",                           "YES"   },
             {"NPUW_DQ_FULL",                      "NO"    },
         };
-        if (cache_dir) {
+        if (cache_dir && strlen(cache_dir) > 0) {
             compile_config["NPUW_CACHE_DIR"] = cache_dir;
+            compile_config.insert(ov::cache_mode(ov::CacheMode::OPTIMIZE_SIZE));
         }
-    } else if (cache_dir) {
-        ov_singleton_core().set_property(ov::cache_dir(cache_dir));
+    } else if (cache_dir && strlen(cache_dir) > 0) {
+        compile_config.insert(ov::cache_dir(cache_dir));
+        compile_config.insert(ov::cache_mode(ov::CacheMode::OPTIMIZE_SIZE));
     }
 
     // Initialize remote context with queue sharing for GPU
@@ -259,10 +262,12 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
             layout.weights_size = layout.is_u4 ? (n_elements / 2) : n_elements;
             int64_t n_blocks = n_elements / layout.weights_per_block;
             layout.scales_size = n_blocks * sizeof(uint16_t);
-            // For symmetric quantization, we only need one zp value (not one per block)
-            // Zero points are stored in U4 or U8 format matching the weight type
-            size_t n_zp_elements = layout.is_symmetric ? 1 : n_blocks;
-            layout.zp_size = layout.is_u4 ? ((n_zp_elements + 1) / 2) : n_zp_elements;
+            // For symmetric quantization, no zp needed (weights stored as signed)
+            if (layout.is_symmetric) {
+                layout.zp_size = 0;
+            } else {
+                layout.zp_size = layout.is_u4 ? ((n_blocks + 1) / 2) : n_blocks;
+            }
 
             layout.weights_offset = 0;
             layout.scales_offset = ((layout.weights_size + alignment - 1) / alignment) * alignment;
@@ -313,10 +318,12 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     // Scales: F16 per block
     int64_t n_blocks = n_elements / layout.weights_per_block;
     layout.scales_size = n_blocks * sizeof(uint16_t);  // F16 = 2 bytes
-    // Zero points: U4 or U8 matching weight type
-    // For symmetric quantization, we only need one zp value (not one per block)
-    size_t n_zp_elements = layout.is_symmetric ? 1 : n_blocks;
-    layout.zp_size = layout.is_u4 ? ((n_zp_elements + 1) / 2) : n_zp_elements;
+    // For symmetric quantization, no zp needed (weights stored as signed)
+    if (layout.is_symmetric) {
+        layout.zp_size = 0;
+    } else {
+        layout.zp_size = layout.is_u4 ? ((n_blocks + 1) / 2) : n_blocks;
+    }
 
     // Layout in buffer: [weights | scales | zp] with alignment
     layout.weights_offset = 0;

@@ -19,7 +19,6 @@
 #include <iomanip>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <openvino/core/dimension.hpp>
 #include <openvino/core/except.hpp>
 #include <openvino/core/node.hpp>
@@ -207,8 +206,22 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         break;
     }
     case GGML_OP_ROPE: {
+        const int mode = node->op_params[2];
+        switch (mode) {
+       case GGML_ROPE_TYPE_NEOX: {
+            op_case = 0x00010000;
+            break;
+        }
+       case GGML_ROPE_TYPE_IMROPE: {
+            op_case = 0x00020000;
+            break;
+        }
+        default:
+            op_case = 0x00000000;
+            break;
+        }
         if (node->src[0]->op == GGML_OP_VIEW) {
-            op_case = 2;
+            op_case = (op_case | 0x00000002);
         }
         break;
     }
@@ -573,9 +586,6 @@ std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const
 }
 
 std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(ggml_cgraph * cgraph, bool naive) {
-    static std::mutex weights_mutex;
-    std::lock_guard<std::mutex> lock(weights_mutex);
-
     std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
     auto * nodes = cgraph->nodes;
     auto n_nodes = cgraph->n_nodes;
