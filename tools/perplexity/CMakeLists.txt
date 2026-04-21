@@ -1,6 +1,9 @@
 set(TARGET llama-perplexity)
 add_executable(${TARGET} perplexity.cpp)
-target_link_libraries(${TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS} rt)
+target_link_libraries(${TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS})
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(${TARGET} PRIVATE rt)
+endif()
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 if(LLAMA_TOOLS_INSTALL)
