@@ -1,3 +1,4 @@
+#include <cassert>
 #include <cstdio>
 #define CL_TARGET_OPENCL_VERSION GGML_OPENCL_TARGET_VERSION
 #define CL_USE_DEPRECATED_OPENCL_1_2_APIS
@@ -12861,6 +12862,118 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     }
 }
 
+static void moe_router_reoerder(ggml_backend_t backend, const ggml_tensor * src, int ne20) {
+    cl_int err;
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *)src->extra;
+    cl_ulong offset = extra->offset + src->view_offs;
+
+    const int ne21 = src->ne[1];
+    const int nb21 = src->nb[1];
+    const int ne02 = nb21 / src->nb[0];
+    const int n_tile_size = 32;
+    const int max_post_router_tile = (ne20 * ne21 / n_tile_size) + ne02;
+
+    cl_buffer_region region;
+    region.origin = offset;
+    region.size = nb21 * ne21;
+    cl_mem original_router_buf = clCreateSubBuffer(extra->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+    CL_CHECK(err);
+
+    backend_ctx->prealloc_post_router.allocate(backend_ctx->context, sizeof(int) * max_post_router_tile * n_tile_size);
+    region.origin = 0;
+    region.size = sizeof(int) * max_post_router_tile * n_tile_size;
+    cl_mem post_router_buf = clCreateSubBuffer(backend_ctx->prealloc_post_router.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+    CL_CHECK(err);
+
+    backend_ctx->prealloc_emap.allocate(backend_ctx->context, sizeof(short) * max_post_router_tile);
+    region.origin = 0;
+    region.size = sizeof(short) * max_post_router_tile;
+    cl_mem emap_buf = clCreateSubBuffer(backend_ctx->prealloc_emap.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+    CL_CHECK(err);
+
+    backend_ctx->prealloc_hist.allocate(backend_ctx->context, sizeof(int) * ne02);
+    region.origin = 0;
+    region.size = sizeof(int) * ne02;
+    cl_mem hist_buf = clCreateSubBuffer(backend_ctx->prealloc_hist.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+    CL_CHECK(err);
+
+    backend_ctx->prealloc_tile_offset.allocate(backend_ctx->context, sizeof(int) * ne02);
+    region.origin = 0;
+    region.size = sizeof(int) * ne02;
+    cl_mem tile_offset_buf = clCreateSubBuffer(backend_ctx->prealloc_tile_offset.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+    CL_CHECK(err);
+
+    backend_ctx->prealloc_slot_counter.allocate(backend_ctx->context, sizeof(int) * ne02);
+    region.origin = 0;
+    region.size = sizeof(int) * ne02;
+    cl_mem slot_counter_buf = clCreateSubBuffer(backend_ctx->prealloc_slot_counter.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+    CL_CHECK(err);
+
+    backend_ctx->prealloc_total_tiles.allocate(backend_ctx->context, sizeof(int));
+    region.origin = 0;
+    region.size = sizeof(int);
+    cl_mem total_tiles_buf = clCreateSubBuffer(backend_ctx->prealloc_total_tiles.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+    CL_CHECK(err);
+
+    // Histogram
+    cl_kernel kernel = backend_ctx->kernel_moe_histogram;
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &original_router_buf));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &hist_buf));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int), &ne21));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(int), &ne20));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int), &ne02));
+
+    size_t histogram_global_size[] = {(size_t)(((ne21 + 63) / 64) * 64), static_cast<size_t>(ne20), 1};
+    size_t histogram_local_size[] = {64, static_cast<size_t>(ne20), 1};
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, histogram_global_size, histogram_local_size, src);
+
+    // Scan
+    kernel = backend_ctx->kernel_moe_scan;
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &hist_buf));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &tile_offset_buf));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &total_tiles_buf));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &slot_counter_buf));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int), &n_tile_size));
+    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int), &ne02));
+
+    size_t scan_global_size[] = {1};
+    size_t scan_local_size[] = {1};
+    backend_ctx->enqueue_ndrange_kernel(kernel, 1, scan_global_size, scan_local_size, src);
+
+    // Fill
+    kernel = backend_ctx->kernel_moe_fill;
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &post_router_buf));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &total_tiles_buf));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int), &n_tile_size));
+
+    size_t fill_global_size[] = {(size_t)(((max_post_router_tile + 63) / 64) * 64), n_tile_size, 1};
+    size_t fill_local_size[] = {64, 1, 1};
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, fill_global_size, fill_local_size, src);
+    
+    // Scatter
+    kernel = backend_ctx->kernel_moe_scatter;
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &original_router_buf));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &post_router_buf));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &emap_buf));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &tile_offset_buf));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &slot_counter_buf));
+    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int), &ne21));
+    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int), &ne20));
+    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int), &ne02));
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, histogram_global_size, histogram_local_size, src);
+
+    CL_CHECK(clReleaseMemObject(original_router_buf));
+    CL_CHECK(clReleaseMemObject(hist_buf));
+    CL_CHECK(clReleaseMemObject(tile_offset_buf));
+    CL_CHECK(clReleaseMemObject(total_tiles_buf));
+    CL_CHECK(clReleaseMemObject(slot_counter_buf));
+    CL_CHECK(clReleaseMemObject(post_router_buf));
+    CL_CHECK(clReleaseMemObject(emap_buf));
+}
+
 static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -12936,7 +13049,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     int ndst  = 4;  // number of values produced by each subgroup
 
     const int n_tile_size = 32;
-    const int max_post_router_tile = (ne20 * ne21 / n_tile_size) + (nb21 / nb20);
+    const int max_post_router_tile = (ne20 * ne21 / n_tile_size) + ne02;
 
     cl_kernel kernel;
 
@@ -13122,12 +13235,17 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 } else { // for gemm
                     kernel = backend_ctx->kernel_gemm_moe_mxfp4_f32_ns;
 
+                    if (strstr(src0->name, "as") != NULL) {
+                        moe_router_reoerder(backend, src2, ne20);
+                    }
+
                     cl_mem sub_buf_src1_pre, buf_src1_reordered, image_src1_reordered, sub_buf_dst, buf_dst_image;
                     cl_mem buf_src2, buf_src2_emap;
 
                     cl_buffer_region region;
                     region.origin = 0;
                     region.size = sizeof(int) * max_post_router_tile * n_tile_size;
+                    GGML_ASSERT(backend_ctx->prealloc_post_router.buffer);
                     buf_src2 = clCreateSubBuffer(backend_ctx->prealloc_post_router.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
                     CL_CHECK(status);
 
@@ -14176,111 +14294,8 @@ static void ggml_cl_argsort(ggml_backend_t backend, const ggml_tensor * src0, co
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     const int ne21 = dst->ne[1];
     if ((strstr(src0->name, "_moe") != NULL) && (ne21 != 1)) {
-        cl_int err;
-
         const int ne20 = std::stoi(std::getenv("MOE_EXPERT_USED"));
-        const int ne02 = dst->ne[0];
-        const int nb21 = dst->nb[1];
-        const int n_tile_size = 32;
-        const int max_post_router_tile = (ne20 * ne21 / n_tile_size) + ne02;
-
-        cl_buffer_region region;
-        region.origin = offsetd;
-        region.size = nb21 * ne21;
-        cl_mem original_router_buf = clCreateSubBuffer(extrad->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
-
-        backend_ctx->prealloc_post_router.allocate(backend_ctx->context, sizeof(int) * max_post_router_tile * n_tile_size);
-        region.origin = 0;
-        region.size = sizeof(int) * max_post_router_tile * n_tile_size;
-        cl_mem post_router_buf = clCreateSubBuffer(backend_ctx->prealloc_post_router.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
-
-        backend_ctx->prealloc_emap.allocate(backend_ctx->context, sizeof(short) * max_post_router_tile);
-        region.origin = 0;
-        region.size = sizeof(short) * max_post_router_tile;
-        cl_mem emap_buf = clCreateSubBuffer(backend_ctx->prealloc_emap.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
-
-        backend_ctx->prealloc_hist.allocate(backend_ctx->context, sizeof(int) * ne02);
-        region.origin = 0;
-        region.size = sizeof(int) * ne02;
-        cl_mem hist_buf = clCreateSubBuffer(backend_ctx->prealloc_hist.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
-
-        backend_ctx->prealloc_tile_offset.allocate(backend_ctx->context, sizeof(int) * ne02);
-        region.origin = 0;
-        region.size = sizeof(int) * ne02;
-        cl_mem tile_offset_buf = clCreateSubBuffer(backend_ctx->prealloc_tile_offset.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
-
-        backend_ctx->prealloc_slot_counter.allocate(backend_ctx->context, sizeof(int) * ne02);
-        region.origin = 0;
-        region.size = sizeof(int) * ne02;
-        cl_mem slot_counter_buf = clCreateSubBuffer(backend_ctx->prealloc_slot_counter.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
-
-        backend_ctx->prealloc_total_tiles.allocate(backend_ctx->context, sizeof(int));
-        region.origin = 0;
-        region.size = sizeof(int);
-        cl_mem total_tiles_buf = clCreateSubBuffer(backend_ctx->prealloc_total_tiles.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
-        CL_CHECK(err);
-
-        // Histogram
-        kernel = backend_ctx->kernel_moe_histogram;
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &original_router_buf));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &hist_buf));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int), &ne21));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(int), &ne20));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int), &ne02));
-
-        size_t histogram_global_size[] = {(size_t)(((ne21 + 63) / 64) * 64), static_cast<size_t>(ne20), 1};
-        size_t histogram_local_size[] = {64, static_cast<size_t>(ne20), 1};
-        backend_ctx->enqueue_ndrange_kernel(kernel, 3, histogram_global_size, histogram_local_size, dst);
-
-        // Scan
-        kernel = backend_ctx->kernel_moe_scan;
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &hist_buf));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &tile_offset_buf));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &total_tiles_buf));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &slot_counter_buf));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int), &n_tile_size));
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int), &ne02));
-
-        size_t scan_global_size[] = {1};
-        size_t scan_local_size[] = {1};
-        backend_ctx->enqueue_ndrange_kernel(kernel, 1, scan_global_size, scan_local_size, dst);
-
-        // Fill
-        kernel = backend_ctx->kernel_moe_fill;
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &post_router_buf));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &total_tiles_buf));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int), &n_tile_size));
-
-        size_t fill_global_size[] = {(size_t)(((max_post_router_tile + 63) / 64) * 64), n_tile_size, 1};
-        size_t fill_local_size[] = {64, 1, 1};
-        backend_ctx->enqueue_ndrange_kernel(kernel, 3, fill_global_size, fill_local_size, dst);
-        
-        // Scatter
-        kernel = backend_ctx->kernel_moe_scatter;
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &original_router_buf));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &post_router_buf));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &emap_buf));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &tile_offset_buf));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &slot_counter_buf));
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int), &ne21));
-        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int), &ne20));
-        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int), &ne02));
-
-        backend_ctx->enqueue_ndrange_kernel(kernel, 3, histogram_global_size, histogram_local_size, dst);
-
-        CL_CHECK(clReleaseMemObject(original_router_buf));
-        CL_CHECK(clReleaseMemObject(hist_buf));
-        CL_CHECK(clReleaseMemObject(tile_offset_buf));
-        CL_CHECK(clReleaseMemObject(total_tiles_buf));
-        CL_CHECK(clReleaseMemObject(slot_counter_buf));
-        CL_CHECK(clReleaseMemObject(post_router_buf));
-        CL_CHECK(clReleaseMemObject(emap_buf));
+        moe_router_reoerder(backend, dst, ne20);
     }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 }
