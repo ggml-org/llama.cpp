@@ -339,6 +339,9 @@ class Keys:
         FEED_FORWARD_LENGTH = "clip.audio.feed_forward_length"
         PROJECTION_DIM      = "clip.audio.projection_dim"
         BLOCK_COUNT         = "clip.audio.block_count"
+        CHUNK_SIZE          = "clip.audio.chunk_size"
+        CONV_KERNEL_SIZE    = "clip.audio.conv_kernel_size"
+        MAX_POS_EMB         = "clip.audio.max_pos_emb"
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
@@ -346,6 +349,10 @@ class Keys:
 
         class Projector:
             STACK_FACTOR    = "clip.audio.projector.stack_factor"
+            WINDOW_SIZE     = "clip.audio.projector.window_size"
+            DOWNSAMPLE_RATE = "clip.audio.projector.downsample_rate"
+            HEAD_COUNT      = "clip.audio.projector.head_count"
+            LAYERNORM_EPS   = "clip.audio.projector.layer_norm_epsilon"
 
     class Diffusion:
         SHIFT_LOGITS        = "diffusion.shift_logits"

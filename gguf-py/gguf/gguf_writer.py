@@ -1260,6 +1260,27 @@ class GGUFWriter:
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
 
+    def add_audio_chunk_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.CHUNK_SIZE, value)
+
+    def add_audio_conv_kernel_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.CONV_KERNEL_SIZE, value)
+
+    def add_audio_max_pos_emb(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.MAX_POS_EMB, value)
+
+    def add_audio_projector_window_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Projector.WINDOW_SIZE, value)
+
+    def add_audio_projector_downsample_rate(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Projector.DOWNSAMPLE_RATE, value)
+
+    def add_audio_projector_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Projector.HEAD_COUNT, value)
+
+    def add_audio_projector_layernorm_eps(self, value: float) -> None:
+        self.add_float32(Keys.ClipAudio.Projector.LAYERNORM_EPS, value)
+
     def add_xielu_alpha_p(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.ALPHA_P, values)
 

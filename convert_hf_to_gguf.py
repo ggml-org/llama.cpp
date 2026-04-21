@@ -12611,6 +12611,15 @@ class GraniteSpeechMmprojModel(MmprojModel):
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE_SPEECH)
         self.gguf_writer.add_audio_num_mel_bins(a["input_dim"])
         self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+        self.gguf_writer.add_audio_chunk_size(a["context_size"])
+        self.gguf_writer.add_audio_conv_kernel_size(a["conv_kernel_size"])
+        self.gguf_writer.add_audio_max_pos_emb(a["max_pos_emb"])
+
+        p = self.global_config
+        self.gguf_writer.add_audio_projector_window_size(p["window_size"])
+        self.gguf_writer.add_audio_projector_downsample_rate(p["downsample_rate"])
+        self.gguf_writer.add_audio_projector_head_count(p["projector_config"]["num_attention_heads"])
+        self.gguf_writer.add_audio_projector_layernorm_eps(p["projector_config"]["layer_norm_eps"])
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if "encoder" in name or "projector" in name:

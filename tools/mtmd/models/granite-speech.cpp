@@ -2,9 +2,9 @@
 
 ggml_cgraph * clip_graph_granite_speech::build() {
     const int n_frames     = img.nx;
-    const int context_size = 200;
+    const int context_size = hparams.audio_chunk_size;
     const int ctc_layer    = n_layer / 2;
-    const int conv_kernel  = 15;
+    const int conv_kernel  = hparams.audio_conv_kernel_size;
     const int conv_pad     = conv_kernel / 2;
 
     const int num_blocks  = (n_frames + context_size - 1) / context_size;
@@ -185,12 +185,12 @@ ggml_cgraph * clip_graph_granite_speech::build() {
 
     // QFormer projector
     {
-        const int window_size     = 15;
-        const int num_queries     = 3;
-        const int proj_n_head     = 16;
+        const int window_size     = hparams.audio_proj_window_size;
+        const int num_queries     = window_size / hparams.audio_proj_downsample_rate;
+        const int proj_n_head     = hparams.audio_proj_head_count;
         const int proj_d_head     = n_embd / proj_n_head;
         const float proj_kq_scale = 1.0f / sqrtf((float)proj_d_head);
-        const float proj_eps      = 1e-12f;
+        const float proj_eps      = hparams.audio_proj_layernorm_eps;
         const int nblocks_proj    = (n_frames + window_size - 1) / window_size;
         const int padded_proj     = nblocks_proj * window_size;
 

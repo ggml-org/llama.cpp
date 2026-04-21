@@ -1514,6 +1514,13 @@ struct clip_model_loader {
                         hparams.audio_n_fft            = 512;
                         hparams.audio_window_len       = 400;
                         hparams.audio_hop_len          = 160;
+                        get_u32(KEY_A_CHUNK_SIZE,           hparams.audio_chunk_size);
+                        get_u32(KEY_A_CONV_KERNEL_SIZE,     hparams.audio_conv_kernel_size);
+                        get_u32(KEY_A_MAX_POS_EMB,          hparams.audio_max_pos_emb);
+                        get_u32(KEY_A_PROJ_WINDOW_SIZE,     hparams.audio_proj_window_size);
+                        get_u32(KEY_A_PROJ_DOWNSAMPLE_RATE, hparams.audio_proj_downsample_rate);
+                        get_u32(KEY_A_PROJ_HEAD_COUNT,      hparams.audio_proj_head_count);
+                        get_f32(KEY_A_PROJ_LAYERNORM_EPS,   hparams.audio_proj_layernorm_eps);
                     } break;
                 case PROJECTOR_TYPE_JANUS_PRO:
                     {
@@ -3213,7 +3220,9 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             {
-                n_patches = ((img->nx + 14) / 15) * 3;
+                const int ws = ctx->model.hparams.audio_proj_window_size;
+                const int ds = ctx->model.hparams.audio_proj_downsample_rate;
+                n_patches = ((img->nx + ws - 1) / ws) * (ws / ds);
             } break;
         default:
             GGML_ABORT("unsupported projector type");
@@ -3813,8 +3822,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             } break;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             {
-                const int context_size = 200;
-                const int max_pos_emb  = 512;
+                const int context_size = ctx->model.hparams.audio_chunk_size;
+                const int max_pos_emb  = ctx->model.hparams.audio_max_pos_emb;
 
                 std::vector<int32_t> dists(context_size * context_size);
                 for (int i = 0; i < context_size; i++) {
