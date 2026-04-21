@@ -785,7 +785,7 @@ static __global__ void dequantize_block_tq3_1s(const void * __restrict__ vx, dst
 
     float val = tq3_0_centroids_cuda[idx] * (j < 16 ? d0 : d1);
     for (int step = 1; step < 32; step <<= 1) {
-        float other = __shfl_xor_sync(0xFFFFFFFF, val, step);
+        float other = __shfl_xor_sync(0xFFFFFFFF, val, step, 32);
         if (j & step) {
             val = other - val;
         } else {
@@ -831,7 +831,7 @@ static __global__ void dequantize_block_tq3_4s(const void * __restrict__ vx, dst
 
     float val = tq3_0_centroids_cuda[idx] * ds[g];
     for (int step = 1; step < 32; step <<= 1) {
-        float other = __shfl_xor_sync(0xFFFFFFFF, val, step);
+        float other = __shfl_xor_sync(0xFFFFFFFF, val, step, 32);
         if (j & step) {
             val = other - val;
         } else {

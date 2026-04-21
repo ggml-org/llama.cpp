@@ -1390,8 +1390,8 @@ static __device__ __forceinline__ float tq3_1s_dot_subgroup_q8_1(
     const int a_lo = *(const int *)&bq8_1->qs[q8 + 0];
     const int a_hi = *(const int *)&bq8_1->qs[q8 + 4];
 
-    int sumi = __dp4a(w_lo, a_lo, 0);
-    sumi     = __dp4a(w_hi, a_hi, sumi);
+    int sumi = ggml_cuda_dp4a(w_lo, a_lo, 0);
+    sumi     = ggml_cuda_dp4a(w_hi, a_hi, sumi);
 
     const float d = (g < 2) ? __half2float(bq->d0) : __half2float(bq->d1);
     const float2 ds8 = __half22float2(bq8_1->ds);
@@ -1462,8 +1462,8 @@ static __device__ __forceinline__ float tq3_4s_dot_subgroup_q8_1(
     const int a_hi = *(const int *)&bq8_1->qs[q8 + 4];
 
     // dp4a: each does 4 int8 multiply-adds
-    int sumi = __dp4a(w_lo, a_lo, 0);
-    sumi     = __dp4a(w_hi, a_hi, sumi);
+    int sumi = ggml_cuda_dp4a(w_lo, a_lo, 0);
+    sumi     = ggml_cuda_dp4a(w_hi, a_hi, sumi);
 
     // Scale: d_weight * (centroid_scale / 127) * d_activation
     // centroids range [-2.1519, 2.1519], levels range [-127, 127]
