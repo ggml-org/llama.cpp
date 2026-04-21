@@ -363,6 +363,10 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
     ggml_cuda_buffer buffer_pool[MAX_BUFFERS] = {};
     size_t pool_size = 0;
 
+    // per-slot timestamp stamped on free(); older = longer uncollected, used for LRU-style reclaim on OOM
+    uint64_t clock = 0;
+    uint64_t buffer_pool_ts[MAX_BUFFERS] = {};
+
     explicit ggml_cuda_pool_leg(int device) :
         device(device) {
     }
@@ -381,11 +385,12 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
                 pool_size -= b.size;
                 b.ptr  = nullptr;
                 b.size = 0;
+                buffer_pool_ts[i] = 0;
             }
         }
     }
 
-    void * alloc(size_t size, size_t * actual_size) override {
+    void * alloc(size_t size, size_t * actual_size, bool overallocate) override {
 #ifdef DEBUG_CUDA_MALLOC
         int nnz = 0;
         size_t max_size = 0;
@@ -409,6 +414,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
                             *actual_size = b.size;
                             b.ptr = nullptr;
                             b.size = 0;
+                            buffer_pool_ts[i] = 0;
                             return ptr;
                         }
                     }
@@ -421,29 +427,41 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
             *actual_size = b.size;
             b.ptr = nullptr;
             b.size = 0;
+            buffer_pool_ts[ibest] = 0;
             return ptr;
         }
         void * ptr;
-        size_t look_ahead_size = (size_t) (1.05 * size);
-        look_ahead_size = 256 * ((look_ahead_size + 255)/256);
+        size_t look_ahead_size;
+        if (overallocate) {
+            look_ahead_size = (size > SIZE_MAX / 2) ? SIZE_MAX : 2 * size;
+        } else {
+            look_ahead_size = (size_t) (1.05 * size);
+        }
+        // 256-byte align, overflow-safe
+        look_ahead_size = (look_ahead_size > SIZE_MAX - 255)
+                              ? (SIZE_MAX & ~size_t(255))
+                              : 256 * ((look_ahead_size + 255)/256);
         ggml_cuda_set_device(device);
         cudaError_t err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
         if (err == cudaErrorMemoryAllocation && pool_size > 0) {
             (void)cudaGetLastError();
-            const size_t cached_bytes = pool_size;
-            GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: alloc of %.2f MiB failed, trying partial eviction from %.2f MiB cached\n",
-                           device, look_ahead_size/1024.0/1024.0, cached_bytes/1024.0/1024.0);
+            const size_t cached_bytes   = pool_size;
+            const size_t reclaim_target = (look_ahead_size > SIZE_MAX / 3)
+                                              ? SIZE_MAX
+                                              : 3 * look_ahead_size;
+            GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: alloc of %.2f MiB failed, trying LRU-style reclaim (target %.2f MiB) from %.2f MiB cached\n",
+                           device, look_ahead_size/1024.0/1024.0, reclaim_target/1024.0/1024.0, cached_bytes/1024.0/1024.0);
             CUDA_CHECK(cudaDeviceSynchronize());
 
             size_t freed = 0;
-            while (freed < look_ahead_size) {
-                int    victim      = -1;
-                size_t victim_size = 0;
+            while (freed < reclaim_target) {
+                int      victim = -1;
+                uint64_t oldest = UINT64_MAX;
                 for (int i = 0; i < MAX_BUFFERS; ++i) {
                     ggml_cuda_buffer & b = buffer_pool[i];
-                    if (b.ptr != nullptr && b.size > victim_size) {
-                        victim      = i;
-                        victim_size = b.size;
+                    if (b.ptr != nullptr && buffer_pool_ts[i] < oldest) {
+                        victim = i;
+                        oldest = buffer_pool_ts[i];
                     }
                 }
                 if (victim < 0) {
@@ -455,20 +473,23 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
                 pool_size -= b.size;
                 b.ptr  = nullptr;
                 b.size = 0;
+                buffer_pool_ts[victim] = 0;
             }
 
             err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
 
+            // terminal fallback if the 3x-bounded reclaim left cached buffers behind
             if (err == cudaErrorMemoryAllocation && pool_size > 0) {
                 (void)cudaGetLastError();
-                GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: partial eviction freed %.2f MiB, flushing remaining %.2f MiB cached\n",
+                GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: reclaim bounded at %.2f MiB, flushing remaining %.2f MiB cached\n",
                                device, freed/1024.0/1024.0, pool_size/1024.0/1024.0);
                 clear_pool();
                 err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
             }
 
             if (err == cudaSuccess) {
-                GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: retry succeeded after eviction\n", device);
+                GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: retry succeeded after reclaiming %.2f MiB\n",
+                               device, freed/1024.0/1024.0);
             }
         }
         CUDA_CHECK(err);
@@ -487,6 +508,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
             if (b.ptr == nullptr) {
                 b.ptr = ptr;
                 b.size = size;
+                buffer_pool_ts[i] = ++clock;
                 return;
             }
         }
@@ -530,7 +552,8 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
         }
     }
 
-    void * alloc(size_t size, size_t * actual_size) override {
+    void * alloc(size_t size, size_t * actual_size, [[maybe_unused]] bool overallocate) override {
+        // overallocate hint is ignored: VMM growth is already granularity-based
         // round up the allocation size to the alignment to ensure that all allocations are aligned for all data types
         const size_t alignment = 128;
         size = alignment * ((size + alignment - 1) / alignment);

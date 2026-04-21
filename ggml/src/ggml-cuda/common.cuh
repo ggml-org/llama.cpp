@@ -1105,7 +1105,7 @@ int ggml_cuda_get_device();
 struct ggml_cuda_pool {
     virtual ~ggml_cuda_pool() = default;
 
-    virtual void * alloc(size_t size, size_t * actual_size) = 0;
+    virtual void * alloc(size_t size, size_t * actual_size, bool overallocate = false) = 0;
     virtual void free(void * ptr, size_t size) = 0;
 };
 
@@ -1131,16 +1131,16 @@ struct ggml_cuda_pool_alloc {
     }
 
     // size is in number of elements
-    T * alloc(size_t size) {
+    T * alloc(size_t size, bool overallocate = false) {
         GGML_ASSERT(pool != nullptr);
         GGML_ASSERT(ptr == nullptr);
-        ptr = (T *) pool->alloc(size * sizeof(T), &this->actual_size);
+        ptr = (T *) pool->alloc(size * sizeof(T), &this->actual_size, overallocate);
         return ptr;
     }
 
-    T * alloc(ggml_cuda_pool & pool, size_t size) {
+    T * alloc(ggml_cuda_pool & pool, size_t size, bool overallocate = false) {
         this->pool = &pool;
-        return alloc(size);
+        return alloc(size, overallocate);
     }
 
     T * get() {
