@@ -211,16 +211,12 @@ struct webgpu_global_context_struct {
     wgpu::Buffer    memset_params_buf;
     webgpu_pipeline memset_pipeline;
 
+    // TODO: We should rework the CPU profiling time handling to make it more useful. ref: https://github.com/ggml-org/llama.cpp/pull/22050
 #ifdef GGML_WEBGPU_CPU_PROFILE
     // Profiling: labeled CPU time in ms (total)
     std::unordered_map<std::string, double> cpu_time_ms;
     // Profiling: detailed CPU time in ms
     std::unordered_map<std::string, double> cpu_detail_ms;
-#endif
-
-#ifdef GGML_WEBGPU_GPU_PROFILE
-    // Profiling: per-shader GPU time in ms
-    std::unordered_map<std::string, double> shader_gpu_time_ms;
 #endif
 
 #ifdef GGML_WEBGPU_DEBUG
@@ -268,10 +264,12 @@ struct webgpu_context_struct {
     size_t memset_bytes_per_thread;
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
-    wgpu::Buffer   profile_timestamp_dev_buf;
-    wgpu::Buffer   profile_timestamp_host_buf;
-    wgpu::QuerySet profile_timestamp_query_set;
-    uint32_t       profile_timestamp_query_count = 0;
+    // Profiling: per-shader GPU time in ms
+    std::unordered_map<std::string, double> shader_gpu_time_ms;
+    wgpu::Buffer                            profile_timestamp_dev_buf;
+    wgpu::Buffer                            profile_timestamp_host_buf;
+    wgpu::QuerySet                          profile_timestamp_query_set;
+    uint32_t                                profile_timestamp_query_count = 0;
 #endif
 
     ~webgpu_context_struct() {
@@ -713,12 +711,12 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
 #ifdef GGML_WEBGPU_GPU_PROFILE
     std::cout << "\n[ggml_webgpu gpu profiling summary]\n";
     double total_gpu = 0.0;
-    for (const auto & kv : ctx->webgpu_ctx->global_ctx->shader_gpu_time_ms) {
+    for (const auto & kv : ctx->webgpu_ctx->shader_gpu_time_ms) {
         total_gpu += kv.second;
     }
     std::cout << "ggml_webgpu: total gpu time (all shaders): " << total_gpu << " ms\n";
     std::cout << "\nggml_webgpu: gpu breakdown:\n";
-    for (const auto & kv : ctx->webgpu_ctx->global_ctx->shader_gpu_time_ms) {
+    for (const auto & kv : ctx->webgpu_ctx->shader_gpu_time_ms) {
         double pct = (total_gpu > 0.0) ? (kv.second / total_gpu * 100.0) : 0.0;
         std::cout << "ggml_webgpu:  " << kv.first << ": " << kv.second << " ms (" << std::fixed << std::setprecision(2)
                   << pct << "%)\n";
@@ -2511,7 +2509,7 @@ static void ggml_backend_webgpu_collect_profile_results(webgpu_context &        
     for (size_t i = 0; i < pipeline_names.size(); ++i) {
         // WebGPU timestamps are in ns; convert to ms.
         const double elapsed_ms = double(ts_data[2 * i + 1] - ts_data[2 * i]) * 1e-6;
-        ctx->global_ctx->shader_gpu_time_ms[pipeline_names[i]] += elapsed_ms;
+        ctx->shader_gpu_time_ms[pipeline_names[i]] += elapsed_ms;
     }
 
     ctx->profile_timestamp_host_buf.Unmap();
