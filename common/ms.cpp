@@ -4,6 +4,7 @@
 #include "log.h"
 #include "http.h"
 #include "download.h"
+#include "build-info.h"
 
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
@@ -117,12 +118,11 @@ static bool is_valid_subpath(const fs::path & base, const fs::path & subpath) {
     return b_end == b.end();
 }
 
-
 static nl::json api_get(const std::string & url, const std::string & token = "") {
     auto [cli, parts] = common_http_client(url);
     
     httplib::Headers headers;
-    headers.emplace("User-Agent", "llama-cpp/" + build_info);
+    headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
     if (!token.empty()) {
         headers.emplace("Cookie", "m_session_id=" + token);
     }
@@ -156,7 +156,17 @@ static nl::json api_get(const std::string & url, const std::string & token = "")
 static std::vector<ms_file> list_files(const std::string & repo_id, const std::string & token = "") {
     std::vector<ms_file> files;
     
-    std::string api_url = "https://www.modelscope.cn/api/v1/models/" + repo_id + "/repo/files";
+    // Get ModelScope endpoint
+    const char * model_endpoint_env = std::getenv("MODEL_ENDPOINT");
+    std::string modelscope_endpoint = "https://modelscope.cn/";
+    if (model_endpoint_env) {
+        modelscope_endpoint = model_endpoint_env;
+        if (modelscope_endpoint.back() != '/') {
+            modelscope_endpoint += '/';
+        }
+    }
+    
+    std::string api_url = modelscope_endpoint + "api/v1/models/" + repo_id + "/repo/files";
     
     try {
         auto response = api_get(api_url, token);
@@ -171,7 +181,7 @@ static std::vector<ms_file> list_files(const std::string & repo_id, const std::s
                 
                 if (!file.path.empty()) {
                     // Construct download URL using resolve endpoint
-                    file.url = "https://www.modelscope.cn/models/" + repo_id + "/resolve/master/" + file.path;
+                    file.url = modelscope_endpoint + "models/" + repo_id + "/resolve/master/" + file.path;
                     files.push_back(std::move(file));
                 }
             }
@@ -264,7 +274,6 @@ static std::string get_local_path(const ms_file & file) {
     fs::path local_path = base_path / file.path;
     return local_path.string();
 }
-
 
 // ProgressBar class copied from download.cpp
 class ProgressBar {
@@ -368,7 +377,7 @@ static std::string download_file_with_progress(const ms_file & selected_file, co
     auto [cli, parts] = common_http_client(selected_file.url);
     
     httplib::Headers headers;
-    headers.emplace("User-Agent", "llama-cpp/" + build_info);
+    headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
     if (!token.empty()) {
         headers.emplace("Cookie", "m_session_id=" + token);
     }
