@@ -30,17 +30,8 @@ llm_build_llada::llm_build_llada(const llama_model & model, const llm_graph_para
         // self-attention
         {
             // compute separate Q, K, V projections without bias, matching LLaDALlamaBlock
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                                     ext_factor, attn_factor, beta_fast, beta_slow);

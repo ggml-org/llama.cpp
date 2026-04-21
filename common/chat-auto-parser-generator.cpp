@@ -443,14 +443,14 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     if (!format.per_call_start.empty()) {
         auto wrapped_call = format.per_call_start + p.space() + tool_choice + p.space() + format.per_call_end;
         if (inputs.parallel_tool_calls) {
-            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call));
+            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call) + p.space());
         } else {
-            tool_calls = p.trigger_rule("tool-call", wrapped_call);
+            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.space());
         }
         if (!format.section_start.empty()) {
             tool_calls = p.trigger_rule("tool-calls",
                                         p.literal(format.section_start) + p.space() + tool_calls + p.space() +
-                                            (format.section_end.empty() ? p.end() : p.literal(format.section_end)));
+                                            (format.section_end.empty() ? p.end() : p.literal(format.section_end) + p.space()));
         }
     } else {
         std::string separator = ", ";  // Default

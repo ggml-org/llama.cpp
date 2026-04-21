@@ -112,20 +112,20 @@ MTMD_API void mtmd_free(mtmd_context * ctx);
 
 // whether we need to set non-causal mask before llama_decode
 // if chunk is nullptr, we assume the default case where chunk is an image chunk
-MTMD_API bool mtmd_decode_use_non_causal(mtmd_context * ctx, const mtmd_input_chunk * chunk);
+MTMD_API bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk);
 
 // whether the current model use M-RoPE for llama_decode
-MTMD_API bool mtmd_decode_use_mrope(mtmd_context * ctx);
+MTMD_API bool mtmd_decode_use_mrope(const mtmd_context * ctx);
 
 // whether the current model supports vision input
-MTMD_API bool mtmd_support_vision(mtmd_context * ctx);
+MTMD_API bool mtmd_support_vision(const mtmd_context * ctx);
 
 // whether the current model supports audio input
-MTMD_API bool mtmd_support_audio(mtmd_context * ctx);
+MTMD_API bool mtmd_support_audio(const mtmd_context * ctx);
 
 // get audio sample rate in Hz, for example 16000 for Whisper
 // return -1 if audio is not supported
-MTMD_API int mtmd_get_audio_sample_rate(mtmd_context * ctx);
+MTMD_API int mtmd_get_audio_sample_rate(const mtmd_context * ctx);
 
 // mtmd_bitmap
 //
@@ -196,11 +196,13 @@ struct mtmd_decoder_pos {
     uint32_t t;
     uint32_t x;
     uint32_t y;
+    uint32_t z; // unused for now, reserved for future use
 };
 // get position for decoder attention, to be used by M-RoPE models
 // i is the index of the embedding token, ranging from 0 to mtmd_image_tokens_get_n_tokens() - 1
+// pos_0 is the absolute position of the first token
 // return relative position (for example, embedding 0 will have position (0, 0, 0); remember to adjust it to the current absolute position)
-MTMD_API struct mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, size_t i);
+MTMD_API struct mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i);
 
 // tokenize an input text prompt and a list of bitmaps (images/audio)
 // the prompt must have the input image marker (default: "<__media__>") in it
