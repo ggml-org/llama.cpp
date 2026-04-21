@@ -403,7 +403,7 @@ static bool ggml_webgpu_flash_attn_use_vec(webgpu_global_context & global_ctx,
     const bool kv_vec_type_supported =
         K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_Q8_0;
 
-    return global_ctx->capabilities.supports_subgroup_matrix && (Q->ne[1] < 20) && (Q->ne[0] % 32 == 0) &&
+    return global_ctx->capabilities.supports_subgroups && (Q->ne[1] < 20) && (Q->ne[0] % 32 == 0) &&
            (V->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0) && kv_vec_type_supported &&
            (K->type != GGML_TYPE_F16 || f16_vec4_aligned) && (V->type == K->type);
 }
@@ -3821,7 +3821,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
 #ifndef __EMSCRIPTEN__
                 const bool kv_vec_type_supported =
                     src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_Q4_0 || src1->type == GGML_TYPE_Q8_0;
-                const bool use_vec = ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix &&
+                const bool use_vec = ctx->webgpu_global_ctx->capabilities.supports_subgroups &&
                                      (src0->ne[1] < 20) && (src0->ne[0] % 32 == 0) && (src2->ne[0] % 4 == 0) &&
                                      kv_vec_type_supported && src2->type == src1->type;
                 const bool use_tile =
@@ -3835,10 +3835,10 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 const bool   has_mask    = op->src[3] != nullptr;
                 if (use_vec) {
                     const bool kv_direct =
-                        src1->type == GGML_TYPE_F16 && (src0->ne[0] % ctx->webgpu_global_ctx->capabilities.sg_mat_k) == 0 &&
+                        src1->type == GGML_TYPE_F16 && (src0->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH) == 0 &&
                         (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
                     const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
-                        ctx->webgpu_global_ctx->capabilities.sg_mat_m, ctx->webgpu_global_ctx->capabilities.sg_mat_n,
+                        1u, 8u,
                         (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask, kv_direct);
                     if (min_bytes > limit_bytes) {
                         supports_op = false;

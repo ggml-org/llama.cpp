@@ -11,19 +11,15 @@ enable subgroups;
 #define HEAD_DIM_QK 64
 #define HEAD_DIM_V 64
 
-
-#define SG_MAT_M 8
-#define SG_MAT_N 8
-#define SG_MAT_K 8
-
-#define Q_TILE SG_MAT_M
+#define Q_TILE 1
+#define KV_GRANULARITY 8
 #define KV_TILE 16
 #define WG_SIZE 64
 #ifndef VEC_NE
 #define VEC_NE 4u
 #endif
 
-#define KV_BLOCKS (KV_TILE / SG_MAT_N)
+#define KV_BLOCKS (KV_TILE / KV_GRANULARITY)
 
 #define BLOCK_SIZE 32
 #define BLOCKS_K ((HEAD_DIM_QK + BLOCK_SIZE - 1) / BLOCK_SIZE)
