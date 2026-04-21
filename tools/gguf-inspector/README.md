@@ -5,7 +5,8 @@ header, KV metadata, tensor info table, padding, and tensor data blobs
 is colored and labeled, and hovering or clicking a byte tells you
 exactly what it is.
 
-> Demo video: _(link pending)_
+[Screencast_20260421_132111.webm](https://github.com/user-attachments/assets/913b23ea-7599-4f4d-9b3c-e263dea8d114)
+
 
 ## What it shows
 
