@@ -141,7 +141,6 @@ int main(int argc, char ** argv) {
         // note: routes.get_health stays the same
         routes.get_metrics                 = models_routes->proxy_get;
         routes.post_props                  = models_routes->proxy_post;
-        routes.get_api_show                = models_routes->proxy_get;
         routes.post_completions            = models_routes->proxy_post;
         routes.post_completions_oai        = models_routes->proxy_post;
         routes.post_chat_completions       = models_routes->proxy_post;
@@ -174,16 +173,13 @@ int main(int argc, char ** argv) {
     ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));
     ctx_http.get ("/props",                    ex_wrapper(routes.get_props));
     ctx_http.post("/props",                    ex_wrapper(routes.post_props));
-    ctx_http.post("/api/show",                 ex_wrapper(routes.get_api_show));
     ctx_http.get ("/models",                   ex_wrapper(routes.get_models)); // public endpoint (no API key check)
     ctx_http.get ("/v1/models",                ex_wrapper(routes.get_models)); // public endpoint (no API key check)
-    ctx_http.get ("/api/tags",                 ex_wrapper(routes.get_models)); // ollama specific endpoint. public endpoint (no API key check)
     ctx_http.post("/completion",               ex_wrapper(routes.post_completions)); // legacy
     ctx_http.post("/completions",              ex_wrapper(routes.post_completions));
     ctx_http.post("/v1/completions",           ex_wrapper(routes.post_completions_oai));
     ctx_http.post("/chat/completions",         ex_wrapper(routes.post_chat_completions));
     ctx_http.post("/v1/chat/completions",      ex_wrapper(routes.post_chat_completions));
-    ctx_http.post("/api/chat",                 ex_wrapper(routes.post_chat_completions)); // ollama specific endpoint
     ctx_http.post("/v1/responses",             ex_wrapper(routes.post_responses_oai));
     ctx_http.post("/responses",                ex_wrapper(routes.post_responses_oai));
     ctx_http.post("/v1/audio/transcriptions",  ex_wrapper(routes.post_transcriptions_oai));

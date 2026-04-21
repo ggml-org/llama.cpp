@@ -33,10 +33,16 @@ struct mtmd_bitmap {
     bool is_audio = false; // true if the bitmap is audio
 };
 
+// position indexing for decoder model
+enum mtmd_pos_type {
+    MTMD_POS_TYPE_NORMAL, // number of positions equals to number of tokens
+    MTMD_POS_TYPE_MROPE, // qwen-vl mrope style, each image takes max(t,h,w) position indexes
+};
+
 struct mtmd_image_tokens {
     uint32_t nx; // number of tokens in x direction
     uint32_t ny; // number of tokens in y direction
-    bool use_mrope_pos = false; // use M-RoPE position counting (the whole image is 1 temporal position)
+    mtmd_pos_type pos = MTMD_POS_TYPE_NORMAL;
     uint32_t n_tokens() const { return nx * ny; }
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
@@ -45,7 +51,7 @@ struct mtmd_image_tokens {
         return mtmd_image_tokens{
             nx,
             ny,
-            use_mrope_pos,
+            pos,
             batch_f32.clone(),
             id
         };
@@ -131,6 +137,7 @@ struct mtmd_context {
     int n_threads;
     std::string media_marker;
     const int n_embd_text;
+    mtmd_pos_type pos_type;
 
     // these are not token, but strings used to mark the beginning and end of image/audio embeddings
     std::string img_beg;
@@ -175,6 +182,22 @@ struct mtmd_context {
 
         if (media_marker.empty()) {
             throw std::runtime_error("media_marker must not be empty");
+        }
+
+        auto decoder_rope_type = llama_model_rope_type(text_model);
+        switch (decoder_rope_type) {
+            case LLAMA_ROPE_TYPE_NORM:
+            case LLAMA_ROPE_TYPE_NEOX:
+                {
+                    pos_type = MTMD_POS_TYPE_NORMAL;
+                } break;
+            case LLAMA_ROPE_TYPE_MROPE:
+            case LLAMA_ROPE_TYPE_IMROPE:
+                {
+                    pos_type = MTMD_POS_TYPE_MROPE;
+                } break;
+            default:
+                throw std::runtime_error(string_format("unsupported decoder rope type: %d\n", decoder_rope_type));
         }
 
         clip_context_params ctx_clip_params {
@@ -777,12 +800,12 @@ struct mtmd_tokenizer {
                     // for Qwen2VL, we need this information for M-RoPE decoding positions
                     image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
                     image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, batch_f32.entries[0].get());
-                    image_tokens->use_mrope_pos = true;
                 } else {
                     // other models, we only need the total number of tokens
                     image_tokens->nx = n_tokens;
                     image_tokens->ny = 1;
                 }
+                image_tokens->pos = ctx->pos_type;
                 image_tokens->batch_f32 = std::move(batch_f32);
                 image_tokens->id = bitmap->id; // optional
 
@@ -1014,7 +1037,7 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
     return ctx->image_embd_v.data();
 }
 
-bool mtmd_decode_use_non_causal(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
+bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk) {
     auto proj_type = ctx->proj_type_v();
     if (chunk && chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
         proj_type = ctx->proj_type_a();
@@ -1028,32 +1051,19 @@ bool mtmd_decode_use_non_causal(mtmd_context * ctx, const mtmd_input_chunk * chu
     }
 }
 
-bool mtmd_decode_use_mrope(mtmd_context * ctx) {
-    if (ctx->ctx_v == nullptr && ctx->proj_type_a() == PROJECTOR_TYPE_QWEN3A) {
-        // qwen3-asr
-        return true;
-    }
-    switch (ctx->proj_type_v()) {
-        case PROJECTOR_TYPE_QWEN2VL:
-        case PROJECTOR_TYPE_QWEN25VL:
-        case PROJECTOR_TYPE_QWEN3VL:
-        case PROJECTOR_TYPE_GLM4V:
-        case PROJECTOR_TYPE_PADDLEOCR:
-            return true;
-        default:
-            return false;
-    }
+bool mtmd_decode_use_mrope(const mtmd_context * ctx) {
+    return ctx->pos_type;
 }
 
-bool mtmd_support_vision(mtmd_context * ctx) {
+bool mtmd_support_vision(const mtmd_context * ctx) {
     return ctx->ctx_v != nullptr;
 }
 
-bool mtmd_support_audio(mtmd_context * ctx) {
+bool mtmd_support_audio(const mtmd_context * ctx) {
     return ctx->ctx_a != nullptr;
 }
 
-int mtmd_get_audio_sample_rate(mtmd_context * ctx) {
+int mtmd_get_audio_sample_rate(const mtmd_context * ctx) {
     if (!ctx->ctx_a) {
         return -1;
     }
@@ -1246,11 +1256,26 @@ size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
     return image_tokens->ny;
 }
 
-mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, size_t i) {
+mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i) {
     mtmd_decoder_pos pos;
-    pos.t = 0;
-    pos.x = i % image_tokens->nx;
-    pos.y = i / image_tokens->nx;
+    switch (image_tokens->pos) {
+        case MTMD_POS_TYPE_MROPE:
+            {
+                pos.t = pos_0;
+                pos.x = pos_0 + (i % image_tokens->nx);
+                pos.y = pos_0 + (i / image_tokens->nx);
+                pos.z = 0; // unused for now
+            } break;
+        case MTMD_POS_TYPE_NORMAL:
+            {
+                pos.t = pos_0 + i;
+                pos.x = pos_0 + i;
+                pos.y = pos_0 + i;
+                pos.z = pos_0 + i;
+            } break;
+        default:
+            GGML_ABORT("invalid position type");
+    }
     return pos;
 }
 
@@ -1259,12 +1284,14 @@ const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
 }
 
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
-    if (image_tokens->use_mrope_pos) {
-        // for M-RoPE, temporal dimension = max(t,h,w)
-        // t is omitted as we don't support video input
-        return std::max(image_tokens->nx, image_tokens->ny);
+    switch (image_tokens->pos) {
+        case MTMD_POS_TYPE_MROPE:
+            return std::max(image_tokens->nx, image_tokens->ny);
+        case MTMD_POS_TYPE_NORMAL:
+            return image_tokens->n_tokens();
+        default:
+            GGML_ABORT("invalid position type");
     }
-    return image_tokens->n_tokens();
 }
 
 // test function
