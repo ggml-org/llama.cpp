@@ -71,3 +71,25 @@ def test_responses_stream_with_openai_library():
             assert r.response.output[0].id.startswith("msg_")
             assert gathered_text == r.response.output_text
             assert match_regex("(Suddenly)+", r.response.output_text)
+
+@pytest.mark.parametrize("text_format,n_predicted,re_content", [
+    ({"type": "json_schema", "name": "test_schema", "schema": {"const": "foooooo"}}, 10, "\"foooooo\""),
+    ({"type": "json_object"}, 10, "(\\{|John)+"),
+])
+def test_responses_text_format(text_format: dict, n_predicted: int, re_content: str | None):
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "max_output_tokens": n_predicted,
+        "input": [
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write an example"},
+        ],
+        "text": {"format": text_format},
+    })
+
+
+    assert res.status_code == 200
+    output_text = res.body["output"][0]["content"][0]["text"]
+    assert match_regex(re_content, output_text)

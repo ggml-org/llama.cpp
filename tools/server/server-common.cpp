@@ -1452,6 +1452,35 @@ json convert_responses_to_chatcmpl(const json & response_body) {
         chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
     }
 
+    // Convert Responses API text.format to Chat Completions response_format
+    if (response_body.contains("text") && response_body.at("text").contains("format")) {
+        const json & text_format = response_body.at("text").at("format");
+        std::string format_type = json_value(text_format, "type", std::string());
+
+        if (format_type == "json_schema") {
+            json json_schema_wrapper = {
+                {"name",   json_value(text_format, "name", std::string("default"))},
+                {"schema", json_value(text_format, "schema", json::object())},
+            };
+            if (text_format.contains("strict")) {
+                json_schema_wrapper["strict"] = text_format.at("strict");
+            }
+            if (text_format.contains("description")) {
+                json_schema_wrapper["description"] = text_format.at("description");
+            }
+            chatcmpl_body["response_format"] = {
+                {"type",        "json_schema"},
+                {"json_schema", json_schema_wrapper},
+            };
+        } else if (format_type == "json_object") {
+            chatcmpl_body["response_format"] = {
+                {"type", "json_object"},
+            };
+        }
+
+        chatcmpl_body.erase("text");
+    }
+
     return chatcmpl_body;
 }
 
