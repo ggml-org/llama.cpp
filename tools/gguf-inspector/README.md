@@ -37,6 +37,32 @@ file without taking your eyes off the hex.
 The tool does **not** link against llama/common/ggml — it parses GGUF
 bytes directly, so it's fully self-contained.
 
+### Build dependencies by distro
+
+Fedora / RHEL (RPM spec):
+
+```rpm
+BuildRequires: gcc-c++
+BuildRequires: cmake >= 3.16
+BuildRequires: qt6-qtbase-devel >= 6.2
+BuildRequires: make
+
+Requires: qt6-qtbase
+Requires: qt6-qtbase-gui
+```
+
+Debian / Ubuntu:
+
+```
+Build-Depends: g++, cmake (>= 3.16), qt6-base-dev (>= 6.2), make
+```
+
+Arch:
+
+```
+makedepends=('gcc' 'cmake' 'qt6-base')
+```
+
 ## Build
 
 Standalone:
@@ -47,9 +73,6 @@ cmake -B build
 cmake --build build -j
 ./build/gguf-inspector path/to/model.gguf
 ```
-
-Fedora package names for the Qt dependency: `qt6-qtbase-devel`.
-Debian/Ubuntu: `qt6-base-dev`. Arch: `qt6-base`.
 
 ## Usage
 
