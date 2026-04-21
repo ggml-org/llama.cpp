@@ -267,8 +267,6 @@ struct webgpu_context_struct {
 
     size_t memset_bytes_per_thread;
 
-    bool disable_fusion;
-
 #ifdef GGML_WEBGPU_GPU_PROFILE
     wgpu::Buffer   profile_timestamp_dev_buf;
     wgpu::Buffer   profile_timestamp_host_buf;
@@ -1950,7 +1948,7 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_rms_norm_mul(webgpu_context 
         (uint32_t) dst->ne[1],
         (uint32_t) dst->ne[2],
         (uint32_t) dst->ne[3],
-        *(uint32_t *) rn_dst->op_params  // epsilon, treated as f32 in the shader
+        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(rn_dst, 0))  // epsilon, treated as f32 in the shader
     };
 
     std::vector<wgpu::BindGroupEntry> entries;
@@ -2499,8 +2497,8 @@ static webgpu_encoded_op ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor 
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
 }
 
-static bool ggml_webgpu_can_fuse_rms_norm_mul(webgpu_context & ctx, const struct ggml_cgraph * cgraph, int node_idx) {
-    if (ctx->disable_fusion || !ggml_can_fuse(cgraph, node_idx, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
+static bool ggml_webgpu_can_fuse_rms_norm_mul(const struct ggml_cgraph * cgraph, int node_idx) {
+    if (!ggml_can_fuse(cgraph, node_idx, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
         return false;
     }
 
@@ -2583,7 +2581,7 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
         case GGML_OP_REPEAT:
             return ggml_webgpu_repeat(ctx, src0, node);
         case GGML_OP_RMS_NORM:
-            if (ggml_webgpu_can_fuse_rms_norm_mul(ctx, cgraph, node_idx)) {
+            if (ggml_webgpu_can_fuse_rms_norm_mul(cgraph, node_idx)) {
                 num_encoded_ops        = 2;
                 ggml_tensor * mul_node = nodes[node_idx + 1];
                 return ggml_webgpu_rms_norm_mul(ctx, src0, node, mul_node->src[0], mul_node->src[1], mul_node);
@@ -3312,7 +3310,6 @@ static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
     webgpu_context                       webgpu_ctx = std::make_shared<webgpu_context_struct>();
     webgpu_ctx->global_ctx                          = dev_ctx->webgpu_global_ctx;
     webgpu_ctx->shader_lib     = std::make_unique<ggml_webgpu_shader_lib>(dev_ctx->webgpu_global_ctx->device);
-    webgpu_ctx->disable_fusion = getenv("GGML_WEBGPU_DISABLE_FUSION") != nullptr;
     webgpu_ctx->param_arena.init(
         webgpu_ctx->global_ctx->device, WEBGPU_PARAMS_BUF_SIZE_BYTES,
         webgpu_ctx->global_ctx->command_submit_batch_size + WEBGPU_NUM_PARAM_SLOT_SAFETY_MARGIN,
