@@ -13950,6 +13950,7 @@ struct llm_build_ifairy : public llm_graph_context {
 struct llm_build_fairy2i : public llm_graph_context {
     llm_build_fairy2i(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
+        const bool    use_tile64_real_attn = model.fairy2i_quant_variant == LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
         GGML_ASSERT(n_embd_head % 2 == 0);
@@ -13958,8 +13959,9 @@ struct llm_build_fairy2i : public llm_graph_context {
         ggml_tensor * inp_pos  = build_inp_pos();
         auto *        inp_attn = build_attn_inp_kv();
 
-        const float kq_scale =
-            hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head) / 2) : hparams.f_attention_scale;
+        const float kq_scale = hparams.f_attention_scale == 0.0f
+                                   ? 1.0f / sqrtf(float(use_tile64_real_attn ? n_embd_head : n_embd_head / 2))
+                                   : hparams.f_attention_scale;
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -14030,21 +14032,48 @@ struct llm_build_fairy2i : public llm_graph_context {
             ggml_tensor * Kcur = build_wide_linear(model.layers[il].wk_fairy2i, cur, cur_conj, model.layers[il].bk, il, "Kcur");
             ggml_tensor * Vcur = build_wide_linear(model.layers[il].wv_fairy2i, cur, cur_conj, model.layers[il].bv, il, "Vcur");
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head / 2, n_head, n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head / 2, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head / 2, n_head_kv, n_tokens);
+            if (use_tile64_real_attn) {
+                Qcur = ggml_ifairy_split(ctx0, Qcur);
+                Kcur = ggml_ifairy_split(ctx0, Kcur);
+                Vcur = ggml_ifairy_split(ctx0, Vcur);
+                cb(Qcur, "Qcur_split", il);
+                cb(Kcur, "Kcur_split", il);
+                cb(Vcur, "Vcur_split", il);
 
-            Qcur = ggml_ifairy_rope(ctx0, Qcur, inp_pos, n_rot, 0);
-            cb(Qcur, "Qcur_rope", il);
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-            Kcur = ggml_ifairy_rope(ctx0, Kcur, inp_pos, n_rot, 0);
-            cb(Kcur, "Kcur_rope", il);
+                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                                     ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(Qcur, "Qcur_rope", il);
 
-            Vcur = ggml_ifairy_split(ctx0, Vcur);
-            cb(Vcur, "Vcur_split", il);
+                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                                     ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(Kcur, "Kcur_rope", il);
 
-            cur = ifairy_build_attn(inp_attn, Qcur, Kcur, Vcur, kq_scale, il);
-            cb(cur, "attn_out", il);
+                cur = build_attn(inp_attn, nullptr, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+                cb(cur, "attn_out_split", il);
+
+                cur = ggml_ifairy_merge(ctx0, cur);
+                cb(cur, "attn_out", il);
+            } else {
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head / 2, n_head, n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head / 2, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head / 2, n_head_kv, n_tokens);
+
+                Qcur = ggml_ifairy_rope(ctx0, Qcur, inp_pos, n_rot, 0);
+                cb(Qcur, "Qcur_rope", il);
+
+                Kcur = ggml_ifairy_rope(ctx0, Kcur, inp_pos, n_rot, 0);
+                cb(Kcur, "Kcur_rope", il);
+
+                Vcur = ggml_ifairy_split(ctx0, Vcur);
+                cb(Vcur, "Vcur_split", il);
+
+                cur = ifairy_build_attn(inp_attn, Qcur, Kcur, Vcur, kq_scale, il);
+                cb(cur, "attn_out", il);
+            }
 
             ggml_tensor * cur_attn_conj = build_ifairy_conj(cur, il, "attn_out_conj");
             cur = build_wide_linear(model.layers[il].wo_fairy2i, cur, cur_attn_conj, model.layers[il].bo, il, "attn_proj");
