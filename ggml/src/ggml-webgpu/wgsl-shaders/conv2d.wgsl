@@ -76,7 +76,7 @@ fn store_output(idx: u32, val: f32) {
 
 fn ceil_div_u32(x: u32, y: u32) -> u32 {
     return (x + y - 1) / y;
-}   
+}
 
 // returns the first valid kernel index k such that base + k * step >= 0
 fn first_valid_k(base: i32, step: u32) -> u32 {
@@ -111,7 +111,7 @@ fn main(
     if (i_out >= n_out) {
         return;
     }
-    
+
     // Kernel layout: [KW, KH, IC, ..]
     // Input layout:  [IW, IH, .., ..]
     // Output layout: [OW, OH, OC, N]
