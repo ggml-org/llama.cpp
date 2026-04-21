@@ -2975,20 +2975,6 @@ size_t quantize_tq3_4s(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
 
             tq3_0_rht_forward(bx, rotated);
 
-            // Transform importance weights through WHT (squared weights → use abs of WHT)
-            // Approximation: use original-domain weights mapped to WHT groups
-            // Each WHT coefficient mixes all 32 inputs, so weight by sum of input weights
-            float group_weight[4];
-            for (int g = 0; g < 4; ++g) {
-                float sw = 0.0f;
-                for (int j = 0; j < 8; ++j) {
-                    // WHT coefficient g*8+j depends on all inputs, but primarily on nearby ones
-                    // Use the average imatrix weight for this group's input range
-                    sw += bw[g*8+j];
-                }
-                group_weight[g] = fmaxf(sw, 1e-10f);
-            }
-
             uint8_t all_idx[QK_TQ3_0];
             for (int g = 0; g < 4; ++g) {
                 float sum_sq = 0.0f;
@@ -3058,6 +3044,7 @@ static inline uint8_t tq3_v_choose_c4(float x) {
 
 static float tq3_v_quant_group(const float * vals, int n, const float * centroids, int nc,
                                 uint8_t (* choose)(float), float * out_scale, uint8_t * out_idx) {
+    GGML_UNUSED(nc);
     float sum_sq = 0.0f;
     for (int j = 0; j < n; j++) sum_sq += vals[j] * vals[j];
     float scale = fmaxf(sqrtf(sum_sq / n), 1e-10f);
