@@ -98,5 +98,6 @@ int op_repeat(struct htp_ops_context * octx);
 int op_argsort(struct htp_ops_context * octx);
 int op_ssm_conv(struct htp_ops_context * octx);
 int op_cumsum(struct htp_ops_context * octx);
+int op_diag(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */
