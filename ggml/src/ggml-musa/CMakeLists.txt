@@ -50,8 +50,12 @@ if (MUSAToolkit_FOUND)
     else()
         list(APPEND GGML_SOURCES_MUSA
             ../ggml-cuda/template-instances/fattn-vec-instance-f16-f16.cu
+            ../ggml-cuda/template-instances/fattn-vec-instance-f16-q8_0.cu
             ../ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu
+            ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-f16.cu
             ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu
+            ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-bf16.cu
+            ../ggml-cuda/template-instances/fattn-vec-instance-bf16-q8_0.cu
             ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu)
     endif()
 
