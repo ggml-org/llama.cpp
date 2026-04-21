@@ -204,6 +204,9 @@ struct common_chat_parser_params {
     common_chat_parser_params(const common_chat_params & chat_params) {
         format  = chat_params.format;
         generation_prompt = chat_params.generation_prompt;
+        if (!chat_params.parser.empty()) {
+            parser.load(chat_params.parser);
+        }
     }
 };
 
