@@ -1,4 +1,4 @@
-﻿#include "common_decls.tmpl"
+#include "common_decls.tmpl"
 enable f16;
 
 @group(0) @binding(0)
