@@ -1,6 +1,7 @@
 #include "common.h"
 #include "server-http.h"
 #include "server-common.h"
+#include <cctype>
 
 #include <cpp-httplib/httplib.h>
 
@@ -49,6 +50,18 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
 
     SRV_DBG("request:  %s\n", req.body.c_str());
     SRV_DBG("response: %s\n", res.body.c_str());
+}
+
+static std::string trim_copy(std::string value) {
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch) {
+        return !std::isspace(ch);
+    }));
+
+    value.erase(std::find_if(value.rbegin(), value.rend(), [](unsigned char ch) {
+        return !std::isspace(ch);
+    }).base(), value.end());
+
+    return value;
 }
 
 bool server_http_context::init(const common_params & params) {
@@ -129,6 +142,9 @@ bool server_http_context::init(const common_params & params) {
         auto key = params.api_keys[0];
         std::string substr = key.substr(std::max((int)(key.length() - 4), 0));
         LOG_INF("%s: api_keys: ****%s\n", __func__, substr.c_str());
+    } 
+    if (params.whitelist_ips.size() == 1) {
+        LOG_INF("%s: whitelist: 1 IP loaded\n", __func__);
     } else if (params.api_keys.size() > 1) {
         LOG_INF("%s: api_keys: %zu keys loaded\n", __func__, params.api_keys.size());
     }
@@ -136,6 +152,32 @@ bool server_http_context::init(const common_params & params) {
     //
     // Middlewares
     //
+
+    auto middleware_validate_whitelist = [whitelist_ips = params.whitelist_ips](const httplib::Request & req, httplib::Response & res) {
+        if (whitelist_ips.empty()) {
+            return true;
+        }
+
+        const std::string client_ip = trim_copy(req.remote_addr);
+
+        if (std::find(whitelist_ips.begin(), whitelist_ips.end(), client_ip) != whitelist_ips.end()) {
+            return true;
+        }
+
+        res.status = 403;
+        res.set_content(
+            safe_json_to_str(json {
+                {"error", {
+                    {"message", "Access Denied"},
+                    {"type", "permission_error"},
+                    {"code", 403}
+                }}
+            }),
+            "application/json; charset=utf-8"
+        );
+        LOG_WRN("Forbidden: IP not whitelisted: %s\n", client_ip.c_str());
+        return false;
+    };
 
     auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
         static const std::unordered_set<std::string> public_endpoints = {
@@ -226,7 +268,7 @@ bool server_http_context::init(const common_params & params) {
     };
 
     // register server middlewares
-    srv->set_pre_routing_handler([middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
+    srv->set_pre_routing_handler([middleware_validate_whitelist, middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {		    
         res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         // If this is OPTIONS request, skip validation because browsers don't include Authorization header
         if (req.method == "OPTIONS") {
@@ -239,7 +281,10 @@ bool server_http_context::init(const common_params & params) {
         if (!middleware_server_state(req, res)) {
             return httplib::Server::HandlerResponse::Handled;
         }
-        if (!middleware_validate_api_key(req, res)) {
+        if (!middleware_validate_whitelist(req, res)) {
+            return httplib::Server::HandlerResponse::Handled;
+        }
+	if (!middleware_validate_api_key(req, res)) {
             return httplib::Server::HandlerResponse::Handled;
         }
         return httplib::Server::HandlerResponse::Unhandled;
