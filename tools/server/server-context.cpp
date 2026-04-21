@@ -1456,7 +1456,8 @@ private:
             res->progress.time_ms   = (ggml_time_us() - slot.t_start_process_prompt) / 1000;
         } else {
             res->content = tkn.text_to_send;
-            res->tokens  = { tkn.tok };
+            res->tokens.clear();
+            res->tokens.push_back(tkn.tok);
         }
 
         res->n_decoded             = slot.n_decoded;
