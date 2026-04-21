@@ -2,6 +2,7 @@
 #include "common.h"
 #include "arg.h"
 #include "console.h"
+#include "fit.h"
 // #include "log.h"
 
 #include "server-common.h"
@@ -647,7 +648,7 @@ int main(int argc, char ** argv) {
 
     // bump the log level to display timings
     common_log_set_verbosity_thold(LOG_LEVEL_INFO);
-    llama_memory_breakdown_print(ctx_cli.ctx_server.get_llama_context());
+    common_memory_breakdown_print(ctx_cli.ctx_server.get_llama_context());
 
     return 0;
 }
