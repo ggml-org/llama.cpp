@@ -43,7 +43,7 @@ The following releases are verified and recommended:
 
 ### Ubuntu 24.04
 
-The release packages for Ubuntu 24.04 x64 (FP32/FP16) only include the binary files of the llama.cpp SYCL backend. They require the target machine to have pre-installed Intel GPU drivers and oneAPI packages that are the same version as the build package. Refer to release.yml: ubuntu-24-sycl -> install intel-deep-learning-essentials.
+The release packages for Ubuntu 24.04 x64 (FP32/FP16) only include the binary files of the llama.cpp SYCL backend. They require the target machine to have pre-installed Intel GPU drivers and oneAPI packages that are the same version as the build package. To get the version and installation info, refer to release.yml: ubuntu-24-sycl -> Download & Install oneAPI.
 
 It is recommended to use them with Intel Docker.
 
