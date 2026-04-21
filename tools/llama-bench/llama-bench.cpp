@@ -22,6 +22,7 @@
 #include "build-info.h"
 #include "common.h"
 #include "download.h"
+#include "fit.h"
 #include "ggml.h"
 #include "llama.h"
 
@@ -2225,7 +2226,7 @@ int main(int argc, char ** argv) {
                 prev_inst = nullptr;
             }
 
-            // use default n_gpu_layers and n_ctx so llama_params_fit can adjust them
+            // use default n_gpu_layers and n_ctx so common_fit_params can adjust them
             mparams.n_gpu_layers          = llama_model_default_params().n_gpu_layers;
             mparams.tensor_split          = fit_tensor_split.data();
             mparams.tensor_buft_overrides = fit_overrides.data();
@@ -2236,7 +2237,7 @@ int main(int argc, char ** argv) {
             uint32_t n_ctx_needed = inst.n_prompt + inst.n_gen + inst.n_depth;
             cparams.n_ctx = std::max(cparams.n_ctx, n_ctx_needed);
 
-            llama_params_fit(inst.model.c_str(), &mparams, &cparams,
+            common_fit_params(inst.model.c_str(), &mparams, &cparams,
                 fit_tensor_split.data(),
                 fit_overrides.data(),
                 margins.data(),

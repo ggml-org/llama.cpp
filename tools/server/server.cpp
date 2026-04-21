@@ -7,6 +7,7 @@
 #include "arg.h"
 #include "build-info.h"
 #include "common.h"
+#include "fit.h"
 #include "llama.h"
 #include "log.h"
 
@@ -344,7 +345,7 @@ int main(int argc, char ** argv) {
 
         auto * ll_ctx = ctx_server.get_llama_context();
         if (ll_ctx != nullptr) {
-            llama_memory_breakdown_print(ll_ctx);
+            common_memory_breakdown_print(ll_ctx);
         }
     }
 
