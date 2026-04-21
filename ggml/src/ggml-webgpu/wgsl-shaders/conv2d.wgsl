@@ -1,4 +1,4 @@
-#include "common_decls.tmpl"
+﻿#include "common_decls.tmpl"
 enable f16;
 
 @group(0) @binding(0)
@@ -147,18 +147,17 @@ fn main(
         let w_base_ic = ic * params.sw2 + weight_oc_base;
         let in_base = ic * params.si2 + input_n_base;
 
-       for (var kh: u32 = kh_begin; kh < kh_end; kh += 1)  {
-        let ih = u32(oh_base + i32(kh * params.d1));
-        let w_row_base = w_base_ic + kh * params.sw1;
-        let in_row_base = in_base + ih * params.si1;
-        for (var kw: u32 = kw_begin; kw < kw_end; kw += 1) {
-            let iw = u32(ow_base + i32(kw * params.d0));
-            let w_idx = w_row_base + kw * params.sw0;
-            let in_idx = in_row_base + iw * params.si0;
-
-            sum += load_weight(w_idx) * load_input(in_idx);
+        for (var kh: u32 = kh_begin; kh < kh_end; kh += 1) {
+            let ih = u32(oh_base + i32(kh * params.d1));
+            let w_row_base = w_base_ic + kh * params.sw1;
+            let in_row_base = in_base + ih * params.si1;
+            for (var kw: u32 = kw_begin; kw < kw_end; kw += 1) {
+                let iw = u32(ow_base + i32(kw * params.d0));
+                let w_idx = w_row_base + kw * params.sw0;
+                let in_idx = in_row_base + iw * params.si0;
+                sum += load_weight(w_idx) * load_input(in_idx);
+            }
         }
-       }
     }
 
     let out_idx = params.offset_o + ow * params.so0 + oh * params.so1 + oc * params.so2 + n * params.so3;
