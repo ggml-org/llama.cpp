@@ -402,8 +402,25 @@ static bool ggml_webgpu_flash_attn_use_vec(webgpu_global_context & global_ctx,
     const bool kv_vec_type_supported =
         K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_Q8_0;
 
-    return (Q->ne[1] < 20) && (Q->ne[0] % 32 == 0) && (V->ne[0] % 4 == 0) && kv_vec_type_supported &&
+    return global_ctx->capabilities.supports_subgroup_matrix && (Q->ne[1] < 20) && (Q->ne[0] % 32 == 0) &&
+           (V->ne[0] % 4 == 0) && kv_vec_type_supported &&
            (K->type != GGML_TYPE_F16 || f16_vec4_aligned) && (V->type == K->type);
+}
+
+static bool ggml_webgpu_flash_attn_use_tile(webgpu_global_context & global_ctx,
+                                            const ggml_tensor *     Q,
+                                            const ggml_tensor *     K,
+                                            const ggml_tensor *     V) {
+    const size_t   alignment = global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
+    const uint32_t k_offset_elems =
+        (uint32_t) ((ggml_webgpu_tensor_offset(K) & (alignment - 1)) / ggml_type_size(K->type));
+    const uint32_t v_offset_elems =
+        (uint32_t) ((ggml_webgpu_tensor_offset(V) & (alignment - 1)) / ggml_type_size(V->type));
+    const bool f16_vec4_aligned = (k_offset_elems % 4u == 0u) && (v_offset_elems % 4u == 0u);
+
+    return global_ctx->capabilities.supports_subgroups && !global_ctx->capabilities.supports_subgroup_matrix &&
+           K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 && f16_vec4_aligned &&
+           (Q->ne[0] % 4 == 0) && (V->ne[0] % 4 == 0) && (K->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
 }
 
 static size_t ggml_webgpu_tensor_align_offset(webgpu_context & ctx, const ggml_tensor * t) {
@@ -1638,6 +1655,8 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
     shader_lib_ctx.src3                           = mask;
     shader_lib_ctx.src4                           = sinks;
     shader_lib_ctx.dst                            = dst;
+    shader_lib_ctx.supports_subgroups             = ctx->global_ctx->capabilities.supports_subgroups;
+    shader_lib_ctx.supports_subgroup_matrix       = ctx->global_ctx->capabilities.supports_subgroup_matrix;
     shader_lib_ctx.max_wg_size        = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
     shader_lib_ctx.wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize;
     shader_lib_ctx.sg_mat_m           = ctx->global_ctx->capabilities.sg_mat_m;
@@ -1645,6 +1664,14 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
     shader_lib_ctx.sg_mat_k           = ctx->global_ctx->capabilities.sg_mat_k;
     shader_lib_ctx.max_subgroup_size  = ctx->global_ctx->capabilities.max_subgroup_size;
     const bool      use_vec           = ggml_webgpu_flash_attn_use_vec(ctx->global_ctx, Q, K, V);
+    const bool      use_tile          = ggml_webgpu_flash_attn_use_tile(ctx->global_ctx, Q, K, V);
+    if (use_tile) {
+        const auto tile_policy                  = ggml_webgpu_get_flash_attn_tile_policy(shader_lib_ctx.max_subgroup_size);
+        shader_lib_ctx.supports_subgroup_matrix = false;
+        shader_lib_ctx.sg_mat_m                 = tile_policy.q_tile;
+        shader_lib_ctx.sg_mat_n                 = tile_policy.kv_granularity;
+        shader_lib_ctx.sg_mat_k                 = tile_policy.kv_granularity;
+    }
     webgpu_pipeline pipeline          = use_vec ? ctx->shader_lib->get_flash_attn_vec_pipeline(shader_lib_ctx) :
                                                   ctx->shader_lib->get_flash_attn_pipeline(shader_lib_ctx);
 
@@ -3431,12 +3458,12 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     ctx->webgpu_global_ctx->capabilities.supports_subgroups =
         ctx->webgpu_global_ctx->adapter.HasFeature(wgpu::FeatureName::Subgroups);
 
+    bool valid_subgroup_matrix_config = false;
 #ifndef __EMSCRIPTEN__
     // Accept f16 subgroup matrix configurations (square or non-square).
     // NVIDIA GPUs typically report square configs (e.g. 16x16x16),
     // while Intel Xe2 GPUs report non-square configs (e.g. 8x16x16).
     // The shaders are already parameterized to handle any M/N/K dimensions.
-    bool valid_subgroup_matrix_config = false;
     if (ctx->webgpu_global_ctx->adapter.HasFeature(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix)) {
         for (size_t i = 0; i < subgroup_matrix_configs.configCount; i++) {
             const wgpu::SubgroupMatrixConfig config = subgroup_matrix_configs.configs[i];
@@ -3450,8 +3477,8 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
             }
         }
     }
-    ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix = valid_subgroup_matrix_config;
 #endif
+    ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix = valid_subgroup_matrix_config;
 
     // For subgroup matrix code to be the most efficient, we would like the subgroup size to be consistent and accurate.
     // Unfortunately, that is not possible, so we use the maximum subgroup size reported by the adapter.
@@ -3782,32 +3809,69 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
-#ifndef __EMSCRIPTEN__
-                if (!ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix) {
-                    break;
-                }
-                // Head dimensions must be divisible by subgroup matrix dimensions
-                if (src0->ne[0] % ctx->webgpu_global_ctx->capabilities.sg_mat_k != 0 ||
-                    src2->ne[0] % ctx->webgpu_global_ctx->capabilities.sg_mat_n != 0) {
-                    break;
-                }
-                // Head dimensions must fit in workgroup memory with minimum tile sizes
-                size_t     limit_bytes = ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize;
-                const bool has_mask    = op->src[3] != nullptr;
-                const bool kv_direct   = src1->type == GGML_TYPE_F16 &&
-                                       (src0->ne[0] % ctx->webgpu_global_ctx->capabilities.sg_mat_k) == 0 &&
-                                       (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
-                const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
-                    ctx->webgpu_global_ctx->capabilities.sg_mat_m, ctx->webgpu_global_ctx->capabilities.sg_mat_n,
-                    (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask, kv_direct);
-                if (min_bytes > limit_bytes) {
-                    break;
-                }
-
                 supports_op = src0->type == GGML_TYPE_F32 &&
                               (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 ||
                                src1->type == GGML_TYPE_Q4_0 || src1->type == GGML_TYPE_Q8_0) &&
                               src2->type == src1->type && op->type == GGML_TYPE_F32;
+                if (!supports_op) {
+                    break;
+                }
+#ifndef __EMSCRIPTEN__
+                const bool kv_vec_type_supported =
+                    src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_Q4_0 || src1->type == GGML_TYPE_Q8_0;
+                const bool use_vec = ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix &&
+                                     (src0->ne[1] < 20) && (src0->ne[0] % 32 == 0) && (src2->ne[0] % 4 == 0) &&
+                                     kv_vec_type_supported && src2->type == src1->type;
+                const bool use_tile =
+                    ctx->webgpu_global_ctx->capabilities.supports_subgroups &&
+                    src1->type == GGML_TYPE_F16 && src2->type == GGML_TYPE_F16 &&
+                    (src0->ne[0] % 4 == 0) && (src2->ne[0] % 4 == 0) &&
+                    (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0) &&
+                    !use_vec && !ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix;
+                const auto tile_policy =
+                    ggml_webgpu_get_flash_attn_tile_policy(ctx->webgpu_global_ctx->capabilities.max_subgroup_size);
+                const size_t limit_bytes = ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize;
+                const bool   has_mask    = op->src[3] != nullptr;
+                if (use_vec) {
+                    const bool kv_direct =
+                        src1->type == GGML_TYPE_F16 && (src0->ne[0] % ctx->webgpu_global_ctx->capabilities.sg_mat_k) == 0 &&
+                        (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
+                    const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
+                        ctx->webgpu_global_ctx->capabilities.sg_mat_m, ctx->webgpu_global_ctx->capabilities.sg_mat_n,
+                        (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask, kv_direct);
+                    if (min_bytes > limit_bytes) {
+                        supports_op = false;
+                    }
+                    break;
+                }
+
+                if (use_tile) {
+                    const bool kv_direct =
+                        src1->type == GGML_TYPE_F16 && (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
+                    const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
+                        tile_policy.q_tile, tile_policy.kv_granularity,
+                        (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask, kv_direct);
+                    if (min_bytes > limit_bytes) {
+                        supports_op = false;
+                    }
+                    break;
+                }
+
+                if (!ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix) {
+                    supports_op = false;
+                    break;
+                }
+                const bool kv_direct =
+                    src1->type == GGML_TYPE_F16 && (src0->ne[0] % ctx->webgpu_global_ctx->capabilities.sg_mat_k) == 0 &&
+                    (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
+                const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
+                    ctx->webgpu_global_ctx->capabilities.sg_mat_m, ctx->webgpu_global_ctx->capabilities.sg_mat_n,
+                    (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask, kv_direct);
+                if (min_bytes > limit_bytes) {
+                    supports_op = false;
+                }
+#else
+                supports_op = false;
 #endif
                 break;
             }

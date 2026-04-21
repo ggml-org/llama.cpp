@@ -1,8 +1,6 @@
-diagnostic(off, chromium.subgroup_matrix_uniformity);
 diagnostic(off, subgroup_uniformity);
 enable f16;
 enable subgroups;
-enable chromium_experimental_subgroup_matrix;
 
 #ifdef KV_F32
 #define KV_TYPE f32
