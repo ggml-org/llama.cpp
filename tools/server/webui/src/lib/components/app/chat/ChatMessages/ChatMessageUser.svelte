@@ -84,7 +84,7 @@
 	{:else}
 		{#if message.extra && message.extra.length > 0}
 			<div class="mb-2 max-w-[80%]">
-				<ChatAttachmentsList attachments={message.extra} readonly imageHeight="h-80" />
+				<ChatAttachmentsList attachments={message.extra} readonly imageHeight="h-40" />
 			</div>
 		{/if}
 
