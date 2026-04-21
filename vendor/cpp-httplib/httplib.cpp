@@ -872,7 +872,8 @@ bool write_websocket_frame(Stream &strm, ws::Opcode opcode,
     if (strm.write(reinterpret_cast<char *>(header), 2) < 0) { return false; }
     uint8_t ext[8];
     for (int i = 7; i >= 0; i--) {
-      ext[7 - i] = static_cast<uint8_t>((len >> (i * 8)) & 0xFF);
+      ext[7 - i] =
+          static_cast<uint8_t>((static_cast<uint64_t>(len) >> (i * 8)) & 0xFF);
     }
     if (strm.write(reinterpret_cast<char *>(ext), 8) < 0) { return false; }
   }
@@ -1034,9 +1035,14 @@ bool canonicalize_path(const char *path, std::string &resolved) {
   char buf[_MAX_PATH];
   if (_fullpath(buf, path, _MAX_PATH) == nullptr) { return false; }
   resolved = buf;
-#else
+#elif defined(PATH_MAX)
   char buf[PATH_MAX];
   if (realpath(path, buf) == nullptr) { return false; }
+  resolved = buf;
+#else
+  auto buf = realpath(path, nullptr);
+  auto guard = scope_exit([&]() { std::free(buf); });
+  if (buf == nullptr) { return false; }
   resolved = buf;
 #endif
   return true;
@@ -2765,6 +2771,35 @@ EncodingType encoding_type(const Request &req, const Response &res) {
   return best;
 }
 
+std::unique_ptr<compressor> make_compressor(EncodingType type) {
+#ifdef CPPHTTPLIB_ZLIB_SUPPORT
+  if (type == EncodingType::Gzip) {
+    return detail::make_unique<gzip_compressor>();
+  }
+#endif
+#ifdef CPPHTTPLIB_BROTLI_SUPPORT
+  if (type == EncodingType::Brotli) {
+    return detail::make_unique<brotli_compressor>();
+  }
+#endif
+#ifdef CPPHTTPLIB_ZSTD_SUPPORT
+  if (type == EncodingType::Zstd) {
+    return detail::make_unique<zstd_compressor>();
+  }
+#endif
+  (void)type;
+  return nullptr;
+}
+
+const char *encoding_name(EncodingType type) {
+  switch (type) {
+  case EncodingType::Gzip: return "gzip";
+  case EncodingType::Brotli: return "br";
+  case EncodingType::Zstd: return "zstd";
+  default: return "";
+  }
+}
+
 bool nocompressor::compress(const char *data, size_t data_length,
                                    bool /*last*/, Callback callback) {
   if (!data_length) { return true; }
@@ -3095,6 +3130,29 @@ const char *get_header_value(const Headers &headers,
   std::advance(it, static_cast<ssize_t>(id));
   if (it != rng.second) { return it->second.c_str(); }
   return def;
+}
+
+size_t get_header_value_count(const Headers &headers,
+                                     const std::string &key) {
+  auto r = headers.equal_range(key);
+  return static_cast<size_t>(std::distance(r.first, r.second));
+}
+
+template <typename Map>
+typename Map::mapped_type
+get_multimap_value(const Map &m, const std::string &key, size_t id) {
+  auto rng = m.equal_range(key);
+  auto it = rng.first;
+  std::advance(it, static_cast<ssize_t>(id));
+  if (it != rng.second) { return it->second; }
+  return typename Map::mapped_type();
+}
+
+void set_header(Headers &headers, const std::string &key,
+                       const std::string &val) {
+  if (fields::is_field_name(key) && fields::is_field_value(val)) {
+    headers.emplace(key, val);
+  }
 }
 
 bool read_headers(Stream &strm, Headers &headers) {
@@ -5791,16 +5849,12 @@ std::string Request::get_header_value(const std::string &key,
 }
 
 size_t Request::get_header_value_count(const std::string &key) const {
-  auto r = headers.equal_range(key);
-  return static_cast<size_t>(std::distance(r.first, r.second));
+  return detail::get_header_value_count(headers, key);
 }
 
 void Request::set_header(const std::string &key,
                                 const std::string &val) {
-  if (detail::fields::is_field_name(key) &&
-      detail::fields::is_field_value(val)) {
-    headers.emplace(key, val);
-  }
+  detail::set_header(headers, key, val);
 }
 
 bool Request::has_trailer(const std::string &key) const {
@@ -5809,11 +5863,7 @@ bool Request::has_trailer(const std::string &key) const {
 
 std::string Request::get_trailer_value(const std::string &key,
                                               size_t id) const {
-  auto rng = trailers.equal_range(key);
-  auto it = rng.first;
-  std::advance(it, static_cast<ssize_t>(id));
-  if (it != rng.second) { return it->second; }
-  return std::string();
+  return detail::get_multimap_value(trailers, key, id);
 }
 
 size_t Request::get_trailer_value_count(const std::string &key) const {
@@ -5827,11 +5877,7 @@ bool Request::has_param(const std::string &key) const {
 
 std::string Request::get_param_value(const std::string &key,
                                             size_t id) const {
-  auto rng = params.equal_range(key);
-  auto it = rng.first;
-  std::advance(it, static_cast<ssize_t>(id));
-  if (it != rng.second) { return it->second; }
-  return std::string();
+  return detail::get_multimap_value(params, key, id);
 }
 
 std::vector<std::string>
@@ -5886,11 +5932,7 @@ size_t MultipartFormData::get_field_count(const std::string &key) const {
 
 FormData MultipartFormData::get_file(const std::string &key,
                                             size_t id) const {
-  auto rng = files.equal_range(key);
-  auto it = rng.first;
-  std::advance(it, static_cast<ssize_t>(id));
-  if (it != rng.second) { return it->second; }
-  return FormData();
+  return detail::get_multimap_value(files, key, id);
 }
 
 std::vector<FormData>
@@ -5929,16 +5971,12 @@ std::string Response::get_header_value(const std::string &key,
 }
 
 size_t Response::get_header_value_count(const std::string &key) const {
-  auto r = headers.equal_range(key);
-  return static_cast<size_t>(std::distance(r.first, r.second));
+  return detail::get_header_value_count(headers, key);
 }
 
 void Response::set_header(const std::string &key,
                                  const std::string &val) {
-  if (detail::fields::is_field_name(key) &&
-      detail::fields::is_field_value(val)) {
-    headers.emplace(key, val);
-  }
+  detail::set_header(headers, key, val);
 }
 bool Response::has_trailer(const std::string &key) const {
   return trailers.find(key) != trailers.end();
@@ -5946,11 +5984,7 @@ bool Response::has_trailer(const std::string &key) const {
 
 std::string Response::get_trailer_value(const std::string &key,
                                                size_t id) const {
-  auto rng = trailers.equal_range(key);
-  auto it = rng.first;
-  std::advance(it, static_cast<ssize_t>(id));
-  if (it != rng.second) { return it->second; }
-  return std::string();
+  return detail::get_multimap_value(trailers, key, id);
 }
 
 size_t Response::get_trailer_value_count(const std::string &key) const {
@@ -6253,15 +6287,6 @@ void ThreadPool::worker(bool is_dynamic) {
 
     assert(true == static_cast<bool>(fn));
     fn();
-
-    // Dynamic thread: exit if queue is empty after task completion
-    if (is_dynamic) {
-      std::unique_lock<std::mutex> lock(mutex_);
-      if (jobs_.empty()) {
-        move_to_finished(std::this_thread::get_id());
-        break;
-      }
-    }
   }
 
 #if defined(CPPHTTPLIB_OPENSSL_SUPPORT) && !defined(OPENSSL_IS_BORINGSSL) &&   \
@@ -6791,61 +6816,51 @@ Server::make_matcher(const std::string &pattern) {
 }
 
 Server &Server::Get(const std::string &pattern, Handler handler) {
-  get_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return add_handler(get_handlers_, pattern, std::move(handler));
 }
 
 Server &Server::Post(const std::string &pattern, Handler handler) {
-  post_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return add_handler(post_handlers_, pattern, std::move(handler));
 }
 
 Server &Server::Post(const std::string &pattern,
                             HandlerWithContentReader handler) {
-  post_handlers_for_content_reader_.emplace_back(make_matcher(pattern),
-                                                 std::move(handler));
-  return *this;
+  return add_handler(post_handlers_for_content_reader_, pattern,
+                     std::move(handler));
 }
 
 Server &Server::Put(const std::string &pattern, Handler handler) {
-  put_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return add_handler(put_handlers_, pattern, std::move(handler));
 }
 
 Server &Server::Put(const std::string &pattern,
                            HandlerWithContentReader handler) {
-  put_handlers_for_content_reader_.emplace_back(make_matcher(pattern),
-                                                std::move(handler));
-  return *this;
+  return add_handler(put_handlers_for_content_reader_, pattern,
+                     std::move(handler));
 }
 
 Server &Server::Patch(const std::string &pattern, Handler handler) {
-  patch_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return add_handler(patch_handlers_, pattern, std::move(handler));
 }
 
 Server &Server::Patch(const std::string &pattern,
                              HandlerWithContentReader handler) {
-  patch_handlers_for_content_reader_.emplace_back(make_matcher(pattern),
-                                                  std::move(handler));
-  return *this;
+  return add_handler(patch_handlers_for_content_reader_, pattern,
+                     std::move(handler));
 }
 
 Server &Server::Delete(const std::string &pattern, Handler handler) {
-  delete_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return add_handler(delete_handlers_, pattern, std::move(handler));
 }
 
 Server &Server::Delete(const std::string &pattern,
                               HandlerWithContentReader handler) {
-  delete_handlers_for_content_reader_.emplace_back(make_matcher(pattern),
-                                                   std::move(handler));
-  return *this;
+  return add_handler(delete_handlers_for_content_reader_, pattern,
+                     std::move(handler));
 }
 
 Server &Server::Options(const std::string &pattern, Handler handler) {
-  options_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return add_handler(options_handlers_, pattern, std::move(handler));
 }
 
 Server &Server::WebSocket(const std::string &pattern,
@@ -7051,6 +7066,11 @@ Server &Server::set_idle_interval(time_t sec, time_t usec) {
 
 Server &Server::set_payload_max_length(size_t length) {
   payload_max_length_ = length;
+  return *this;
+}
+
+Server &Server::set_websocket_max_missed_pongs(int count) {
+  websocket_max_missed_pongs_ = count;
   return *this;
 }
 
@@ -7279,23 +7299,10 @@ Server::write_content_with_provider(Stream &strm, const Request &req,
     if (res.is_chunked_content_provider_) {
       auto type = detail::encoding_type(req, res);
 
-      std::unique_ptr<detail::compressor> compressor;
-      if (type == detail::EncodingType::Gzip) {
-#ifdef CPPHTTPLIB_ZLIB_SUPPORT
-        compressor = detail::make_unique<detail::gzip_compressor>();
-#endif
-      } else if (type == detail::EncodingType::Brotli) {
-#ifdef CPPHTTPLIB_BROTLI_SUPPORT
-        compressor = detail::make_unique<detail::brotli_compressor>();
-#endif
-      } else if (type == detail::EncodingType::Zstd) {
-#ifdef CPPHTTPLIB_ZSTD_SUPPORT
-        compressor = detail::make_unique<detail::zstd_compressor>();
-#endif
-      } else {
+      auto compressor = detail::make_compressor(type);
+      if (!compressor) {
         compressor = detail::make_unique<detail::nocompressor>();
       }
-      assert(compressor != nullptr);
 
       return detail::write_content_chunked(strm, res.content_provider_,
                                            is_shutting_down, *compressor);
@@ -7917,14 +7924,8 @@ void Server::apply_ranges(const Request &req, Response &res,
       if (res.content_provider_) {
         if (res.is_chunked_content_provider_) {
           res.set_header("Transfer-Encoding", "chunked");
-          if (type == detail::EncodingType::Gzip) {
-            res.set_header("Content-Encoding", "gzip");
-            res.set_header("Vary", "Accept-Encoding");
-          } else if (type == detail::EncodingType::Brotli) {
-            res.set_header("Content-Encoding", "br");
-            res.set_header("Vary", "Accept-Encoding");
-          } else if (type == detail::EncodingType::Zstd) {
-            res.set_header("Content-Encoding", "zstd");
+          if (type != detail::EncodingType::None) {
+            res.set_header("Content-Encoding", detail::encoding_name(type));
             res.set_header("Vary", "Accept-Encoding");
           }
         }
@@ -7955,27 +7956,7 @@ void Server::apply_ranges(const Request &req, Response &res,
     if (type != detail::EncodingType::None) {
       output_pre_compression_log(req, res);
 
-      std::unique_ptr<detail::compressor> compressor;
-      std::string content_encoding;
-
-      if (type == detail::EncodingType::Gzip) {
-#ifdef CPPHTTPLIB_ZLIB_SUPPORT
-        compressor = detail::make_unique<detail::gzip_compressor>();
-        content_encoding = "gzip";
-#endif
-      } else if (type == detail::EncodingType::Brotli) {
-#ifdef CPPHTTPLIB_BROTLI_SUPPORT
-        compressor = detail::make_unique<detail::brotli_compressor>();
-        content_encoding = "br";
-#endif
-      } else if (type == detail::EncodingType::Zstd) {
-#ifdef CPPHTTPLIB_ZSTD_SUPPORT
-        compressor = detail::make_unique<detail::zstd_compressor>();
-        content_encoding = "zstd";
-#endif
-      }
-
-      if (compressor) {
+      if (auto compressor = detail::make_compressor(type)) {
         std::string compressed;
         if (compressor->compress(res.body.data(), res.body.size(), true,
                                  [&](const char *data, size_t data_len) {
@@ -7983,7 +7964,7 @@ void Server::apply_ranges(const Request &req, Response &res,
                                    return true;
                                  })) {
           res.body.swap(compressed);
-          res.set_header("Content-Encoding", content_encoding);
+          res.set_header("Content-Encoding", detail::encoding_name(type));
           res.set_header("Vary", "Accept-Encoding");
         }
       }
@@ -8231,7 +8212,8 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
         {
           // Use WebSocket-specific read timeout instead of HTTP timeout
           strm.set_read_timeout(CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND, 0);
-          ws::WebSocket ws(strm, req, true, websocket_ping_interval_sec_);
+          ws::WebSocket ws(strm, req, true, websocket_ping_interval_sec_,
+                           websocket_max_missed_pongs_);
           entry.handler(req, ws);
         }
         return true;
@@ -10822,38 +10804,6 @@ void ClientImpl::enable_server_hostname_verification(bool enabled) {
 }
 #endif
 
-// ClientImpl::set_ca_cert_store is defined after TLS namespace (uses helpers)
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-X509_STORE *ClientImpl::create_ca_cert_store(const char *ca_cert,
-                                                    std::size_t size) const {
-  auto mem = BIO_new_mem_buf(ca_cert, static_cast<int>(size));
-  auto se = detail::scope_exit([&] { BIO_free_all(mem); });
-  if (!mem) { return nullptr; }
-
-  auto inf = PEM_X509_INFO_read_bio(mem, nullptr, nullptr, nullptr);
-  if (!inf) { return nullptr; }
-
-  auto cts = X509_STORE_new();
-  if (cts) {
-    for (auto i = 0; i < static_cast<int>(sk_X509_INFO_num(inf)); i++) {
-      auto itmp = sk_X509_INFO_value(inf, i);
-      if (!itmp) { continue; }
-
-      if (itmp->x509) { X509_STORE_add_cert(cts, itmp->x509); }
-      if (itmp->crl) { X509_STORE_add_crl(cts, itmp->crl); }
-    }
-  }
-
-  sk_X509_INFO_pop_free(inf, X509_INFO_free);
-  return cts;
-}
-
-void ClientImpl::set_server_certificate_verifier(
-    std::function<SSLVerifierResponse(SSL *ssl)> /*verifier*/) {
-  // Base implementation does nothing - SSLClient overrides this
-}
-#endif
-
 void ClientImpl::set_logger(Logger logger) {
   logger_ = std::move(logger);
 }
@@ -10927,10 +10877,10 @@ Client::Client(const std::string &scheme_host_port,
     cli_ = detail::make_unique<ClientImpl>(scheme_host_port, 80,
                                            client_cert_path, client_key_path);
   }
-} // namespace detail
+}
 
 Client::Client(const std::string &host, int port)
-    : cli_(detail::make_unique<ClientImpl>(host, port)) {}
+    : Client(host, port, std::string(), std::string()) {}
 
 Client::Client(const std::string &host, int port,
                       const std::string &client_cert_path,
@@ -11505,12 +11455,6 @@ void Client::set_follow_location(bool on) {
 
 void Client::set_path_encode(bool on) { cli_->set_path_encode(on); }
 
-[[deprecated("Use set_path_encode() instead. "
-             "This function will be removed by v1.0.0.")]]
-void Client::set_url_encode(bool on) {
-  cli_->set_path_encode(on);
-}
-
 void Client::set_compress(bool on) { cli_->set_compress(on); }
 
 void Client::set_decompress(bool on) { cli_->set_decompress(on); }
@@ -11893,24 +11837,31 @@ SSLClient::SSLClient(const std::string &host)
 SSLClient::SSLClient(const std::string &host, int port)
     : SSLClient(host, port, std::string(), std::string()) {}
 
+void SSLClient::init_ctx() {
+  ctx_ = tls::create_client_context();
+  if (ctx_) { tls::set_min_version(ctx_, tls::Version::TLS1_2); }
+}
+
+void SSLClient::reset_ctx_on_error() {
+  last_backend_error_ = tls::get_error();
+  tls::free_context(ctx_);
+  ctx_ = nullptr;
+}
+
 SSLClient::SSLClient(const std::string &host, int port,
                             const std::string &client_cert_path,
                             const std::string &client_key_path,
                             const std::string &private_key_password)
     : ClientImpl(host, port, client_cert_path, client_key_path) {
-  ctx_ = tls::create_client_context();
+  init_ctx();
   if (!ctx_) { return; }
-
-  tls::set_min_version(ctx_, tls::Version::TLS1_2);
 
   if (!client_cert_path.empty() && !client_key_path.empty()) {
     const char *password =
         private_key_password.empty() ? nullptr : private_key_password.c_str();
     if (!tls::set_client_cert_file(ctx_, client_cert_path.c_str(),
                                    client_key_path.c_str(), password)) {
-      last_backend_error_ = tls::get_error();
-      tls::free_context(ctx_);
-      ctx_ = nullptr;
+      reset_ctx_on_error();
     }
   }
 }
@@ -11918,17 +11869,13 @@ SSLClient::SSLClient(const std::string &host, int port,
 SSLClient::SSLClient(const std::string &host, int port,
                             const PemMemory &pem)
     : ClientImpl(host, port) {
-  ctx_ = tls::create_client_context();
+  init_ctx();
   if (!ctx_) { return; }
-
-  tls::set_min_version(ctx_, tls::Version::TLS1_2);
 
   if (pem.cert_pem && pem.key_pem) {
     if (!tls::set_client_cert_pem(ctx_, pem.cert_pem, pem.key_pem,
                                   pem.private_key_password)) {
-      last_backend_error_ = tls::get_error();
-      tls::free_context(ctx_);
-      ctx_ = nullptr;
+      reset_ctx_on_error();
     }
   }
 }
@@ -12479,41 +12426,6 @@ std::string Request::sni() const {
  * Group 8: TLS abstraction layer - OpenSSL backend
  */
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-// These wrappers forward to deprecated APIs that will be removed by v1.0.0.
-// Suppress C4996 / -Wdeprecated-declarations so that MSVC /sdl builds (which
-// promote C4996 to an error) compile cleanly even though the wrappers
-// themselves are also marked [[deprecated]].
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#elif defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-
-SSL_CTX *Client::ssl_context() const {
-  if (is_ssl_) { return static_cast<SSLClient &>(*cli_).ssl_context(); }
-  return nullptr;
-}
-
-void Client::set_server_certificate_verifier(
-    std::function<SSLVerifierResponse(SSL *ssl)> verifier) {
-  cli_->set_server_certificate_verifier(verifier);
-}
-
-long Client::get_verify_result() const {
-  if (is_ssl_) { return static_cast<SSLClient &>(*cli_).get_verify_result(); }
-  return -1; // NOTE: -1 doesn't match any of X509_V_ERR_???
-}
-
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#elif defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-#endif // CPPHTTPLIB_OPENSSL_SUPPORT
-
 /*
  * OpenSSL Backend Implementation
  */
@@ -12522,54 +12434,6 @@ long Client::get_verify_result() const {
 namespace tls {
 
 namespace impl {
-
-// OpenSSL-specific helpers for converting native types to PEM
-std::string x509_to_pem(X509 *cert) {
-  if (!cert) return {};
-  BIO *bio = BIO_new(BIO_s_mem());
-  if (!bio) return {};
-  if (PEM_write_bio_X509(bio, cert) != 1) {
-    BIO_free(bio);
-    return {};
-  }
-  char *data = nullptr;
-  long len = BIO_get_mem_data(bio, &data);
-  std::string pem(data, static_cast<size_t>(len));
-  BIO_free(bio);
-  return pem;
-}
-
-std::string evp_pkey_to_pem(EVP_PKEY *key) {
-  if (!key) return {};
-  BIO *bio = BIO_new(BIO_s_mem());
-  if (!bio) return {};
-  if (PEM_write_bio_PrivateKey(bio, key, nullptr, nullptr, 0, nullptr,
-                               nullptr) != 1) {
-    BIO_free(bio);
-    return {};
-  }
-  char *data = nullptr;
-  long len = BIO_get_mem_data(bio, &data);
-  std::string pem(data, static_cast<size_t>(len));
-  BIO_free(bio);
-  return pem;
-}
-
-std::string x509_store_to_pem(X509_STORE *store) {
-  if (!store) return {};
-  std::string pem;
-  auto objs = X509_STORE_get0_objects(store);
-  if (!objs) return {};
-  auto count = sk_X509_OBJECT_num(objs);
-  for (decltype(count) i = 0; i < count; i++) {
-    auto obj = sk_X509_OBJECT_value(objs, i);
-    if (X509_OBJECT_get_type(obj) == X509_LU_X509) {
-      auto cert = X509_OBJECT_get0_X509(obj);
-      if (cert) { pem += x509_to_pem(cert); }
-    }
-  }
-  return pem;
-}
 
 // Helper to map OpenSSL SSL_get_error to ErrorCode
 ErrorCode map_ssl_error(int ssl_error, int &out_errno) {
@@ -12603,50 +12467,13 @@ STACK_OF(X509_NAME) *
   X509 *cert = nullptr;
   while ((cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr)) !=
          nullptr) {
-    X509_NAME *name = X509_get_subject_name(cert);
-    if (name) { sk_X509_NAME_push(ca_list, X509_NAME_dup(name)); }
+    const X509_NAME *name = X509_get_subject_name(cert);
+    if (name) {
+      sk_X509_NAME_push(ca_list, X509_NAME_dup(const_cast<X509_NAME *>(name)));
+    }
     X509_free(cert);
   }
   BIO_free(bio);
-
-  return ca_list;
-}
-
-// Helper: Extract CA names from X509_STORE
-// Returns a new STACK_OF(X509_NAME)* or nullptr on failure
-// Caller takes ownership of returned list
-STACK_OF(X509_NAME) *
-    extract_client_ca_list_from_store(X509_STORE *store) {
-  if (!store) { return nullptr; }
-
-  auto ca_list = sk_X509_NAME_new_null();
-  if (!ca_list) { return nullptr; }
-
-  auto objs = X509_STORE_get0_objects(store);
-  if (!objs) {
-    sk_X509_NAME_free(ca_list);
-    return nullptr;
-  }
-
-  auto count = sk_X509_OBJECT_num(objs);
-  for (decltype(count) i = 0; i < count; i++) {
-    auto obj = sk_X509_OBJECT_value(objs, i);
-    if (X509_OBJECT_get_type(obj) == X509_LU_X509) {
-      auto cert = X509_OBJECT_get0_X509(obj);
-      if (cert) {
-        auto subject = X509_get_subject_name(cert);
-        if (subject) {
-          auto name_dup = X509_NAME_dup(subject);
-          if (name_dup) { sk_X509_NAME_push(ca_list, name_dup); }
-        }
-      }
-    }
-  }
-
-  if (sk_X509_NAME_num(ca_list) == 0) {
-    sk_X509_NAME_free(ca_list);
-    return nullptr;
-  }
 
   return ca_list;
 }
@@ -13086,6 +12913,9 @@ ssize_t read(session_t session, void *buf, size_t len, TlsError &err) {
 
   auto ssl_err = SSL_get_error(ssl, ret);
   err.code = impl::map_ssl_error(ssl_err, err.sys_errno);
+  if (err.code == ErrorCode::PeerClosed) {
+    return 0;
+  } // Gracefully handle the peer closed state.
   if (err.code == ErrorCode::Fatal) { err.backend_code = ERR_get_error(); }
   return -1;
 }
@@ -13523,163 +13353,7 @@ std::string verify_error_string(long error_code) {
   return str ? str : "unknown error";
 }
 
-namespace impl {
-
-// OpenSSL-specific helpers for public API wrappers
-ctx_t create_server_context_from_x509(X509 *cert, EVP_PKEY *key,
-                                             X509_STORE *client_ca_store,
-                                             int &out_error) {
-  out_error = 0;
-  auto cert_pem = x509_to_pem(cert);
-  auto key_pem = evp_pkey_to_pem(key);
-  if (cert_pem.empty() || key_pem.empty()) {
-    out_error = static_cast<int>(ERR_get_error());
-    return nullptr;
-  }
-
-  auto ctx = create_server_context();
-  if (!ctx) {
-    out_error = static_cast<int>(get_error());
-    return nullptr;
-  }
-
-  if (!set_server_cert_pem(ctx, cert_pem.c_str(), key_pem.c_str(), nullptr)) {
-    out_error = static_cast<int>(get_error());
-    free_context(ctx);
-    return nullptr;
-  }
-
-  if (client_ca_store) {
-    // Set cert store for verification (SSL_CTX_set_cert_store takes ownership)
-    SSL_CTX_set_cert_store(static_cast<SSL_CTX *>(ctx), client_ca_store);
-
-    // Extract and set client CA list directly from store (more efficient than
-    // PEM conversion)
-    auto ca_list = extract_client_ca_list_from_store(client_ca_store);
-    if (ca_list) {
-      SSL_CTX_set_client_CA_list(static_cast<SSL_CTX *>(ctx), ca_list);
-    }
-
-    set_verify_client(ctx, true);
-  }
-
-  return ctx;
-}
-
-void update_server_certs_from_x509(ctx_t ctx, X509 *cert, EVP_PKEY *key,
-                                          X509_STORE *client_ca_store) {
-  auto cert_pem = x509_to_pem(cert);
-  auto key_pem = evp_pkey_to_pem(key);
-
-  if (!cert_pem.empty() && !key_pem.empty()) {
-    update_server_cert(ctx, cert_pem.c_str(), key_pem.c_str(), nullptr);
-  }
-
-  if (client_ca_store) {
-    auto ca_pem = x509_store_to_pem(client_ca_store);
-    if (!ca_pem.empty()) { update_server_client_ca(ctx, ca_pem.c_str()); }
-    X509_STORE_free(client_ca_store);
-  }
-}
-
-ctx_t create_client_context_from_x509(X509 *cert, EVP_PKEY *key,
-                                             const char *password,
-                                             uint64_t &out_error) {
-  out_error = 0;
-  auto ctx = create_client_context();
-  if (!ctx) {
-    out_error = get_error();
-    return nullptr;
-  }
-
-  if (cert && key) {
-    auto cert_pem = x509_to_pem(cert);
-    auto key_pem = evp_pkey_to_pem(key);
-    if (cert_pem.empty() || key_pem.empty()) {
-      out_error = ERR_get_error();
-      free_context(ctx);
-      return nullptr;
-    }
-    if (!set_client_cert_pem(ctx, cert_pem.c_str(), key_pem.c_str(),
-                             password)) {
-      out_error = get_error();
-      free_context(ctx);
-      return nullptr;
-    }
-  }
-
-  return ctx;
-}
-
-} // namespace impl
-
 } // namespace tls
-
-// ClientImpl::set_ca_cert_store - defined here to use
-// tls::impl::x509_store_to_pem Deprecated: converts X509_STORE to PEM and
-// stores for redirect transfer
-void ClientImpl::set_ca_cert_store(X509_STORE *ca_cert_store) {
-  if (ca_cert_store) {
-    ca_cert_pem_ = tls::impl::x509_store_to_pem(ca_cert_store);
-  }
-}
-
-SSLServer::SSLServer(X509 *cert, EVP_PKEY *private_key,
-                            X509_STORE *client_ca_cert_store) {
-  ctx_ = tls::impl::create_server_context_from_x509(
-      cert, private_key, client_ca_cert_store, last_ssl_error_);
-}
-
-SSLServer::SSLServer(
-    const std::function<bool(SSL_CTX &ssl_ctx)> &setup_ssl_ctx_callback) {
-  // Use abstract API to create context
-  ctx_ = tls::create_server_context();
-  if (ctx_) {
-    // Pass to OpenSSL-specific callback (ctx_ is SSL_CTX* internally)
-    auto ssl_ctx = static_cast<SSL_CTX *>(ctx_);
-    if (!setup_ssl_ctx_callback(*ssl_ctx)) {
-      tls::free_context(ctx_);
-      ctx_ = nullptr;
-    }
-  }
-}
-
-SSL_CTX *SSLServer::ssl_context() const {
-  return static_cast<SSL_CTX *>(ctx_);
-}
-
-void SSLServer::update_certs(X509 *cert, EVP_PKEY *private_key,
-                                    X509_STORE *client_ca_cert_store) {
-  std::lock_guard<std::mutex> guard(ctx_mutex_);
-  tls::impl::update_server_certs_from_x509(ctx_, cert, private_key,
-                                           client_ca_cert_store);
-}
-
-SSLClient::SSLClient(const std::string &host, int port,
-                            X509 *client_cert, EVP_PKEY *client_key,
-                            const std::string &private_key_password)
-    : ClientImpl(host, port) {
-  const char *password =
-      private_key_password.empty() ? nullptr : private_key_password.c_str();
-  ctx_ = tls::impl::create_client_context_from_x509(
-      client_cert, client_key, password, last_backend_error_);
-}
-
-long SSLClient::get_verify_result() const { return verify_result_; }
-
-void SSLClient::set_server_certificate_verifier(
-    std::function<SSLVerifierResponse(SSL *ssl)> verifier) {
-  // Wrap SSL* callback into backend-independent session_verifier_
-  auto v = std::make_shared<std::function<SSLVerifierResponse(SSL *)>>(
-      std::move(verifier));
-  session_verifier_ = [v](tls::session_t session) {
-    return (*v)(static_cast<SSL *>(session));
-  };
-}
-
-SSL_CTX *SSLClient::ssl_context() const {
-  return static_cast<SSL_CTX *>(ctx_);
-}
 
 bool SSLClient::verify_host(X509 *server_cert) const {
   /* Quote from RFC2818 section 3.1 "Server Identity"
@@ -16194,7 +15868,11 @@ ReadResult WebSocket::read(std::string &msg) {
                                     payload.size(), true, !is_server_);
       continue;
     }
-    case Opcode::Pong: continue;
+    case Opcode::Pong: {
+      std::lock_guard<std::mutex> lock(ping_mutex_);
+      unacked_pings_ = 0;
+      continue;
+    }
     case Opcode::Close: {
       if (!closed_.exchange(true)) {
         // Echo close frame back
@@ -16228,7 +15906,11 @@ ReadResult WebSocket::read(std::string &msg) {
                 true, !is_server_);
             continue;
           }
-          if (cont_opcode == Opcode::Pong) { continue; }
+          if (cont_opcode == Opcode::Pong) {
+            std::lock_guard<std::mutex> lock(ping_mutex_);
+            unacked_pings_ = 0;
+            continue;
+          }
           if (cont_opcode == Opcode::Close) {
             if (!closed_.exchange(true)) {
               std::lock_guard<std::mutex> lock(write_mutex_);
@@ -16316,12 +15998,22 @@ void WebSocket::start_heartbeat() {
     while (!closed_) {
       ping_cv_.wait_for(lock, std::chrono::seconds(ping_interval_sec_));
       if (closed_) { break; }
+      // If the peer has failed to respond to the previous pings, give up.
+      // RFC 6455 does not define a pong-timeout mechanism; this is an
+      // opt-in liveness check controlled by max_missed_pongs_.
+      if (max_missed_pongs_ > 0 && unacked_pings_ >= max_missed_pongs_) {
+        lock.unlock();
+        close(CloseStatus::GoingAway, "pong timeout");
+        return;
+      }
       lock.unlock();
       if (!send_frame(Opcode::Ping, nullptr, 0)) {
+        lock.lock();
         closed_ = true;
         break;
       }
       lock.lock();
+      unacked_pings_++;
     }
   });
 }
@@ -16449,8 +16141,9 @@ bool WebSocketClient::connect() {
   Request req;
   req.method = "GET";
   req.path = path_;
-  ws_ = std::unique_ptr<WebSocket>(
-      new WebSocket(std::move(strm), req, false, websocket_ping_interval_sec_));
+  ws_ = std::unique_ptr<WebSocket>(new WebSocket(std::move(strm), req, false,
+                                                 websocket_ping_interval_sec_,
+                                                 websocket_max_missed_pongs_));
   return true;
 }
 
@@ -16492,6 +16185,10 @@ void WebSocketClient::set_write_timeout(time_t sec, time_t usec) {
 
 void WebSocketClient::set_websocket_ping_interval(time_t sec) {
   websocket_ping_interval_sec_ = sec;
+}
+
+void WebSocketClient::set_websocket_max_missed_pongs(int count) {
+  websocket_max_missed_pongs_ = count;
 }
 
 void WebSocketClient::set_tcp_nodelay(bool on) { tcp_nodelay_ = on; }

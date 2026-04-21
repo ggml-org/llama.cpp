@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.42.0"
-#define CPPHTTPLIB_VERSION_NUM "0x002a00"
+#define CPPHTTPLIB_VERSION "0.43.1"
+#define CPPHTTPLIB_VERSION_NUM "0x002b01"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -203,6 +203,10 @@
 
 #ifndef CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND
 #define CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND 30
+#endif
+
+#ifndef CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS
+#define CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS 0
 #endif
 
 /*
@@ -1720,6 +1724,8 @@ public:
   Server &set_websocket_ping_interval(
       const std::chrono::duration<Rep, Period> &duration);
 
+  Server &set_websocket_max_missed_pongs(int count);
+
   bool bind_to_port(const std::string &host, int port, int socket_flags = 0);
   int bind_to_any_port(const std::string &host, int socket_flags = 0);
   bool listen_after_bind();
@@ -1756,6 +1762,7 @@ protected:
   size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
   time_t websocket_ping_interval_sec_ =
       CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND;
+  int websocket_max_missed_pongs_ = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS;
 
 private:
   using Handlers =
@@ -1766,6 +1773,14 @@ private:
 
   static std::unique_ptr<detail::MatcherBase>
   make_matcher(const std::string &pattern);
+
+  template <typename H>
+  Server &add_handler(
+      std::vector<std::pair<std::unique_ptr<detail::MatcherBase>, H>> &handlers,
+      const std::string &pattern, H handler) {
+    handlers.emplace_back(make_matcher(pattern), std::move(handler));
+    return *this;
+  }
 
   Server &set_error_handler_core(HandlerWithResponse handler, std::true_type);
   Server &set_error_handler_core(Handler handler, std::false_type);
@@ -1927,15 +1942,6 @@ public:
 private:
   int ssl_error_ = 0;
   uint64_t ssl_backend_error_ = 0;
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-public:
-  [[deprecated("Use ssl_backend_error() instead. "
-               "This function will be removed by v1.0.0.")]]
-  uint64_t ssl_openssl_error() const {
-    return ssl_backend_error_;
-  }
 #endif
 };
 
@@ -2409,22 +2415,6 @@ protected:
   int last_ssl_error_ = 0;
   uint64_t last_backend_error_ = 0;
 #endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-public:
-  [[deprecated("Use load_ca_cert_store() instead. "
-               "This function will be removed by v1.0.0.")]]
-  void set_ca_cert_store(X509_STORE *ca_cert_store);
-
-  [[deprecated("Use tls::create_ca_store() instead. "
-               "This function will be removed by v1.0.0.")]]
-  X509_STORE *create_ca_cert_store(const char *ca_cert, std::size_t size) const;
-
-  [[deprecated("Use set_server_certificate_verifier(VerifyCallback) instead. "
-               "This function will be removed by v1.0.0.")]]
-  virtual void set_server_certificate_verifier(
-      std::function<SSLVerifierResponse(SSL *ssl)> verifier);
-#endif
 };
 
 class Client {
@@ -2599,7 +2589,6 @@ public:
   void set_follow_location(bool on);
 
   void set_path_encode(bool on);
-  void set_url_encode(bool on);
 
   void set_compress(bool on);
 
@@ -2647,22 +2636,6 @@ public:
 private:
   bool is_ssl_ = false;
 #endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-public:
-  [[deprecated("Use tls_context() instead. "
-               "This function will be removed by v1.0.0.")]]
-  SSL_CTX *ssl_context() const;
-
-  [[deprecated("Use set_session_verifier(session_t) instead. "
-               "This function will be removed by v1.0.0.")]]
-  void set_server_certificate_verifier(
-      std::function<SSLVerifierResponse(SSL *ssl)> verifier);
-
-  [[deprecated("Use Result::ssl_backend_error() instead. "
-               "This function will be removed by v1.0.0.")]]
-  long get_verify_result() const;
-#endif
 };
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
@@ -2708,29 +2681,6 @@ private:
   std::mutex ctx_mutex_;
 
   int last_ssl_error_ = 0;
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-public:
-  [[deprecated("Use SSLServer(PemMemory) or "
-               "SSLServer(ContextSetupCallback) instead. "
-               "This constructor will be removed by v1.0.0.")]]
-  SSLServer(X509 *cert, EVP_PKEY *private_key,
-            X509_STORE *client_ca_cert_store = nullptr);
-
-  [[deprecated("Use SSLServer(ContextSetupCallback) instead. "
-               "This constructor will be removed by v1.0.0.")]]
-  SSLServer(
-      const std::function<bool(SSL_CTX &ssl_ctx)> &setup_ssl_ctx_callback);
-
-  [[deprecated("Use tls_context() instead. "
-               "This function will be removed by v1.0.0.")]]
-  SSL_CTX *ssl_context() const;
-
-  [[deprecated("Use update_certs_pem() instead. "
-               "This function will be removed by v1.0.0.")]]
-  void update_certs(X509 *cert, EVP_PKEY *private_key,
-                    X509_STORE *client_ca_cert_store = nullptr);
-#endif
 };
 
 class SSLClient final : public ClientImpl {
@@ -2794,6 +2744,9 @@ private:
       Response &res, bool &success, Error &error);
   bool initialize_ssl(Socket &socket, Error &error);
 
+  void init_ctx();
+  void reset_ctx_on_error();
+
   bool load_certs();
 
   tls::ctx_t ctx_ = nullptr;
@@ -2811,42 +2764,6 @@ private:
   friend class ClientImpl;
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-public:
-  [[deprecated("Use SSLClient(host, port, PemMemory) instead. "
-               "This constructor will be removed by v1.0.0.")]]
-  explicit SSLClient(const std::string &host, int port, X509 *client_cert,
-                     EVP_PKEY *client_key,
-                     const std::string &private_key_password = std::string());
-
-  [[deprecated("Use Result::ssl_backend_error() instead. "
-               "This function will be removed by v1.0.0.")]]
-  long get_verify_result() const;
-
-  [[deprecated("Use tls_context() instead. "
-               "This function will be removed by v1.0.0.")]]
-  SSL_CTX *ssl_context() const;
-
-  // Override of a deprecated virtual in ClientImpl. Suppress C4996 /
-  // -Wdeprecated-declarations on the override declaration itself so that
-  // MSVC /sdl builds compile cleanly. Will be removed together with the
-  // base virtual by v1.0.0.
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#elif defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-  [[deprecated("Use set_session_verifier(session_t) instead. "
-               "This function will be removed by v1.0.0.")]]
-  void set_server_certificate_verifier(
-      std::function<SSLVerifierResponse(SSL *ssl)> verifier) override;
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#elif defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-
 private:
   bool verify_host(X509 *server_cert) const;
   bool verify_host_with_subject_alt_name(X509 *server_cert) const;
@@ -3818,17 +3735,21 @@ private:
 
   WebSocket(
       Stream &strm, const Request &req, bool is_server,
-      time_t ping_interval_sec = CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND)
+      time_t ping_interval_sec = CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND,
+      int max_missed_pongs = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS)
       : strm_(strm), req_(req), is_server_(is_server),
-        ping_interval_sec_(ping_interval_sec) {
+        ping_interval_sec_(ping_interval_sec),
+        max_missed_pongs_(max_missed_pongs) {
     start_heartbeat();
   }
 
   WebSocket(
       std::unique_ptr<Stream> &&owned_strm, const Request &req, bool is_server,
-      time_t ping_interval_sec = CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND)
+      time_t ping_interval_sec = CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND,
+      int max_missed_pongs = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS)
       : strm_(*owned_strm), owned_strm_(std::move(owned_strm)), req_(req),
-        is_server_(is_server), ping_interval_sec_(ping_interval_sec) {
+        is_server_(is_server), ping_interval_sec_(ping_interval_sec),
+        max_missed_pongs_(max_missed_pongs) {
     start_heartbeat();
   }
 
@@ -3840,6 +3761,8 @@ private:
   Request req_;
   bool is_server_;
   time_t ping_interval_sec_;
+  int max_missed_pongs_;
+  int unacked_pings_ = 0;
   std::atomic<bool> closed_{false};
   std::mutex write_mutex_;
   std::thread ping_thread_;
@@ -3869,6 +3792,7 @@ public:
   void set_read_timeout(time_t sec, time_t usec = 0);
   void set_write_timeout(time_t sec, time_t usec = 0);
   void set_websocket_ping_interval(time_t sec);
+  void set_websocket_max_missed_pongs(int count);
   void set_tcp_nodelay(bool on);
   void set_address_family(int family);
   void set_ipv6_v6only(bool on);
@@ -3900,6 +3824,7 @@ private:
   time_t write_timeout_usec_ = CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_USECOND;
   time_t websocket_ping_interval_sec_ =
       CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND;
+  int websocket_max_missed_pongs_ = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS;
   int address_family_ = AF_UNSPEC;
   bool tcp_nodelay_ = CPPHTTPLIB_TCP_NODELAY;
   bool ipv6_v6only_ = CPPHTTPLIB_IPV6_V6ONLY;
