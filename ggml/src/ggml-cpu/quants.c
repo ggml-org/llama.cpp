@@ -14,6 +14,8 @@
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
 
+#include<wasm_simd128.h> // for wasm simd
+
 #define GROUP_MAX_EPS 1e-15f
 #define GROUP_MAX_EPS_IQ3_XXS 1e-8f
 #define GROUP_MAX_EPS_IQ2_S 1e-8f
@@ -170,7 +172,6 @@ void ggml_vec_dot_q1_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-
 void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -207,7 +208,6 @@ void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-// TODO: add WASM SIMD
 void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_1;
     const int nb = n / qk;
@@ -225,6 +225,40 @@ void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     int ib = 0;
     float sumf = 0;
 
+#ifdef __wasm_simd128__
+    for (; ib < nb; ++ib) {
+        v128_t raw  = wasm_v128_load(x[ib].qs);
+        v128_t v0s  = wasm_v128_and(raw, wasm_i8x16_splat(0x0F));
+        v128_t v1s  = wasm_u8x16_shr(raw, 4);
+
+        v128_t ys_lo = wasm_v128_load(&y[ib].qs[0]);
+        v128_t ys_hi = wasm_v128_load(&y[ib].qs[16]);
+
+        v128_t v0s_l = wasm_u16x8_extend_low_u8x16(v0s);
+        v128_t v0s_h = wasm_u16x8_extend_high_u8x16(v0s);
+        v128_t ylo_l = wasm_i16x8_extend_low_i8x16(ys_lo);
+        v128_t ylo_h = wasm_i16x8_extend_high_i8x16(ys_lo);
+
+        v128_t acc = wasm_i32x4_dot_i16x8(v0s_l, ylo_l);
+        acc = wasm_i32x4_add(acc, wasm_i32x4_dot_i16x8(v0s_h, ylo_h));
+
+        v128_t v1s_l = wasm_u16x8_extend_low_u8x16(v1s);
+        v128_t v1s_h = wasm_u16x8_extend_high_u8x16(v1s);
+        v128_t yhi_l = wasm_i16x8_extend_low_i8x16(ys_hi);
+        v128_t yhi_h = wasm_i16x8_extend_high_i8x16(ys_hi);
+
+        acc = wasm_i32x4_add(acc, wasm_i32x4_dot_i16x8(v1s_l, yhi_l));
+        acc = wasm_i32x4_add(acc, wasm_i32x4_dot_i16x8(v1s_h, yhi_h));
+
+        int sumi = wasm_i32x4_extract_lane(acc, 0)
+                 + wasm_i32x4_extract_lane(acc, 1)
+                 + wasm_i32x4_extract_lane(acc, 2)
+                 + wasm_i32x4_extract_lane(acc, 3);
+
+        sumf += (GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d)) * sumi
+              + GGML_CPU_FP16_TO_FP32(x[ib].m)  * GGML_CPU_FP16_TO_FP32(y[ib].s);
+    }
+#else
     for (; ib < nb; ++ib) {
         int sumi0 = 0;
         int sumi1 = 0;
@@ -240,10 +274,10 @@ void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, c
         int sumi = sumi0 + sumi1;
         sumf += (GGML_CPU_FP16_TO_FP32(x[ib].d)*GGML_CPU_FP16_TO_FP32(y[ib].d))*sumi + GGML_CPU_FP16_TO_FP32(x[ib].m)*GGML_CPU_FP16_TO_FP32(y[ib].s);
     }
+#endif
 
     *s = sumf;
 }
-
 void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
