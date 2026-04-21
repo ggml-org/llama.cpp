@@ -749,6 +749,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
 
                     mod.reset();
                     n_low = 0;
+                    i_last = 0;
                 }
             } else {
                 n_low = 0;
