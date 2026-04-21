@@ -242,6 +242,15 @@
 #define TN_STD_BIAS              "v.std_bias"
 #define TN_STD_SCALE             "v.std_scale"
 
+// yasa2
+#define TN_YASA_PATCH_LN_W       "v.patch_ln.weight"
+#define TN_YASA_PATCH_LN_B       "v.patch_ln.bias"
+#define TN_YASA_BACKBONE_LN_W    "v.backbone_ln.weight"
+#define TN_YASA_BACKBONE_LN_B    "v.backbone_ln.bias"
+#define TN_YASA_POS_EMBD         "v.vision_pos_embed"
+#define TN_YASA_STAGE_DOWN_LN    "v.stage.%d.down.ln.%s"
+#define TN_YASA_STAGE_DOWN_CONV  "v.stage.%d.down.conv.%s"
+#define TN_YASA_STAGE_BLK        "v.stage.%d.blk.%d.%s.%s"
 
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
@@ -290,6 +299,7 @@ enum projector_type {
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
+    PROJECTOR_TYPE_YASA2,
     PROJECTOR_TYPE_KIMIK25,
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANOCR,
@@ -335,6 +345,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
+    { PROJECTOR_TYPE_YASA2,     "yasa2"},
     { PROJECTOR_TYPE_KIMIK25,   "kimik25"},
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
     { PROJECTOR_TYPE_HUNYUANOCR, "hunyuanocr"},

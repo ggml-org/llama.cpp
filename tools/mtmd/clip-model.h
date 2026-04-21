@@ -268,6 +268,27 @@ struct mobilenetv5_block {
     ggml_tensor * attn_norm_w   = nullptr;
 };
 
+struct yasa2_block {
+    ggml_tensor * dw_w  = nullptr;
+    ggml_tensor * dw_b  = nullptr;
+    ggml_tensor * ln_w  = nullptr;
+    ggml_tensor * ln_b  = nullptr;
+    ggml_tensor * pw1_w = nullptr;
+    ggml_tensor * pw1_b = nullptr;
+    ggml_tensor * grn_w = nullptr;
+    ggml_tensor * grn_b = nullptr;
+    ggml_tensor * pw2_w = nullptr;
+    ggml_tensor * pw2_b = nullptr;
+};
+
+struct yasa2_stage {
+    ggml_tensor * down_ln_w   = nullptr;
+    ggml_tensor * down_ln_b   = nullptr;
+    ggml_tensor * down_conv_w = nullptr;
+    ggml_tensor * down_conv_b = nullptr;
+    std::vector<yasa2_block> blocks;
+};
+
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -402,6 +423,15 @@ struct clip_model {
     ggml_tensor * msfa_ffn_expand_bn = nullptr;
     ggml_tensor * msfa_ffn_project_bn = nullptr;
 
+    // yasa2
+    ggml_tensor * yasa_patch_w = nullptr;
+    ggml_tensor * yasa_patch_b = nullptr;
+    ggml_tensor * yasa_patch_ln_w = nullptr;
+    ggml_tensor * yasa_patch_ln_b = nullptr;
+    ggml_tensor * yasa_backbone_ln_w = nullptr;
+    ggml_tensor * yasa_backbone_ln_b = nullptr;
+    ggml_tensor * yasa_vision_pos_embed = nullptr;
+    std::vector<yasa2_stage> yasa_stages;
 
     // pixtral, glm4v
     ggml_tensor * token_embd_img_break = nullptr;

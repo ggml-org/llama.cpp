@@ -40,6 +40,7 @@ add_library(mtmd
             models/deepseekocr.cpp
             models/mobilenetv5.cpp
             models/youtuvl.cpp
+            models/yasa2.cpp
             )
 
 set_target_properties(mtmd PROPERTIES

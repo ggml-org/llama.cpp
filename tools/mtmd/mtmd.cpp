@@ -316,6 +316,19 @@ struct mtmd_context {
                     img_end = "<|vision_end|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_youtuvl>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_YASA2:
+                {
+                    img_beg = "<image>";
+                    img_end = "</image>";
+                    // Currently only supprots single-tile preprocessing: any input is downscaled
+                    // to one image_size x image_size tile (64 output tokens via 8x8 adaptive avg
+                    // pool).
+                    // However, the model itself supports llava-uhd multi-tile tiling for high-res
+                    // images. This will be implemented in a future PR (dispatch on has_pinpoints
+                    // - see LDP/COGVLM branch above) and emit image_grid_pinpoints in the conversion
+                    // script.
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_fixed_size>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_GEMMA3:
             case PROJECTOR_TYPE_GEMMA3NV:
                 {
