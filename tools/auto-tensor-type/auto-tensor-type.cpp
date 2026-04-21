@@ -88,14 +88,11 @@ struct config {
     int max_iterations           = 100;
     std::string output_path;
     int n_threads                = 1;
-    // Imatrix-energy bias correction: per-role KLD is multiplied by
-    //   (geomean_energy / role_energy)^alpha
-    // to counter the local-KLD signal's systematic under-weighting of
-    // low-input-magnitude residual-path tensors (ffn_down, attn_output, ssm_out).
-    // alpha = 0 disables the correction; alpha = 1 is a full inverse-energy flip.
-    // Default chosen from empirical PPL sweeps on Qwen3.5-0.8B and Nanbeige-3B
-    // (see docs/auto-tensor-type.md); 0.5 was fragile on some architectures.
-    float importance_alpha       = 1.0f;
+    // Number of layer buckets per equivalence class. Captures/assignments are
+    // made per (role, bucket), so early/middle/late layers of the same role
+    // can get different quant types (matches hand-tuned recipes in llama-quant.cpp).
+    // Set to 1 to reproduce the older per-role-only behavior.
+    int n_layer_buckets          = 3;
 };
 
 struct tensor_info {
@@ -126,11 +123,44 @@ struct mul_mat_capture {
     int64_t ref_ne0, ref_ne1;      // [ne0=weight_ne1, ne1=n_tokens]
 };
 
-// Cost of assigning a specific quant type to a role
+// Cost of assigning a specific quant type to a (role, bucket)
 struct cost_entry {
-    double kld;   // average KLD across all captures for this role
+    double kld;   // average relative-L2 error across captures for this role-bucket
     double bpw;   // bits per weight for this quant type
 };
+
+// Key for the cost matrix: role + layer-bucket index.
+// Bucket -1 is reserved for globals (token_embd, output).
+// Encoded as "role\x01<bucket>" — \x01 is not a character that appears in tensor names.
+// Kept as std::string so existing std::map<std::string, ...> types are unaffected.
+static constexpr char RB_SEP = '\x01';
+static std::string make_rb_key(const std::string & role, int bucket) {
+    return role + RB_SEP + std::to_string(bucket);
+}
+static std::string rb_role(const std::string & key) {
+    auto p = key.find(RB_SEP);
+    return (p == std::string::npos) ? key : key.substr(0, p);
+}
+static int rb_bucket(const std::string & key) {
+    auto p = key.find(RB_SEP);
+    return (p == std::string::npos) ? 0 : std::stoi(key.substr(p + 1));
+}
+// Human-readable form for logs: "ffn_down[0]" or "output[G]"
+static std::string rb_display(const std::string & key) {
+    std::string r = rb_role(key);
+    int b = rb_bucket(key);
+    if (b < 0) return r + "[G]";
+    return r + "[" + std::to_string(b) + "]";
+}
+// Bucket index of a layer given its position within its equivalence class.
+// Returns a bucket in [0, n_buckets).
+static int compute_bucket(int pos_in_class, int n_in_class, int n_buckets) {
+    if (n_in_class <= 1 || n_buckets <= 1) return 0;
+    int b = (int)(((long long)n_buckets * pos_in_class) / n_in_class);
+    if (b >= n_buckets) b = n_buckets - 1;
+    if (b < 0) b = 0;
+    return b;
+}
 
 // ============================================================================
 // Section 3: Utility functions
@@ -234,59 +264,49 @@ static ggml_type closest_bpw_if(const std::vector<ggml_type> & types, float targ
     return best;
 }
 
-// Compute KLD between two rows treated as probability distributions (after softmax)
-// p = softmax(ref), q = softmax(quant)
-// KLD = sum(p * log(p/q))
+// Compute relative squared L2 error between two rows of size n:
+//   err = ||ref - quant||^2 / (||ref||^2 + eps)
+// Why this metric instead of softmax-KLD?
+// Softmax over an intermediate MUL_MAT output is not a real distribution, and
+// its peakedness depends on the row's absolute magnitude. Rows with large
+// magnitudes (attn_q/k/v read from the post-norm residual) produce near one-hot
+// softmaxes and dramatic KLDs; rows with small magnitudes (ffn_down/attn_output
+// write into the residual) produce flat softmaxes and tiny KLDs. The signal is
+// thus inversely correlated with the downstream cost of quantizing the tensor,
+// and the `importance_alpha` hack is a scalar fix for a metric-level problem.
+// Relative L2 is scale-free per-row: it measures fractional output perturbation
+// directly, which is a much better proxy for how the error propagates through
+// the residual stream.
 static double compute_kld_row(const float * ref, const float * quant, int64_t n) {
-    // Find max for numerical stability
-    float max_ref = -1e30f, max_qt = -1e30f;
+    double num = 0;
+    double den = 0;
     for (int64_t i = 0; i < n; i++) {
-        if (ref[i] > max_ref) max_ref = ref[i];
-        if (quant[i] > max_qt) max_qt = quant[i];
+        double r = (double)ref[i];
+        double d = r - (double)quant[i];
+        num += d * d;
+        den += r * r;
     }
-
-    // Compute softmax
-    std::vector<float> p(n), q(n);
-    double sum_p = 0, sum_q = 0;
-    for (int64_t i = 0; i < n; i++) {
-        p[i] = expf(ref[i] - max_ref);
-        q[i] = expf(quant[i] - max_qt);
-        sum_p += p[i];
-        sum_q += q[i];
+    // Guard rows whose reference is all-zero (degenerate, no signal to match).
+    if (den <= 1e-20) {
+        return num > 1e-20 ? 1.0 : 0.0;
     }
-    float inv_sum_p = 1.0f / (float)sum_p;
-    float inv_sum_q = 1.0f / (float)sum_q;
-    for (int64_t i = 0; i < n; i++) {
-        p[i] *= inv_sum_p;
-        q[i] *= inv_sum_q;
-    }
-
-    // KLD = sum(p * log(p/q))
-    const float eps = 1e-10f;
-    double kld = 0;
-    for (int64_t i = 0; i < n; i++) {
-        if (p[i] > eps) {
-            float q_clipped = std::max(q[i], eps);
-            kld += (double)p[i] * log((double)p[i] / (double)q_clipped);
-        }
-    }
-    return kld;
+    return num / den;
 }
 
-// Compute average KLD across all rows of two F32 matrices of the same shape [ne0, ne1]
+// Compute average relative-L2 across all rows of two F32 matrices of shape [ne0, ne1]
 static double compute_avg_kld(const float * ref, const float * quant, int64_t ne0, int64_t ne1) {
-    double total_kld = 0;
+    double total = 0;
     int64_t valid_rows = 0;
     for (int64_t row = 0; row < ne1; row++) {
         const float * ref_row   = ref   + row * ne0;
         const float * quant_row = quant + row * ne0;
-        double kld = compute_kld_row(ref_row, quant_row, ne0);
-        if (std::isfinite(kld)) {
-            total_kld += kld;
+        double e = compute_kld_row(ref_row, quant_row, ne0);
+        if (std::isfinite(e)) {
+            total += e;
             valid_rows++;
         }
     }
-    return valid_rows > 0 ? total_kld / valid_rows : 1e30;
+    return valid_rows > 0 ? total / valid_rows : 1e30;
 }
 
 // Read a tensor's raw data from the GGUF file and dequantize to F32
@@ -436,8 +456,10 @@ struct capture_state {
     std::unordered_map<std::string, std::string> weight_to_role;
     // Map from weight tensor name -> layer index
     std::unordered_map<std::string, int> weight_to_layer;
+    // Map from weight tensor name -> layer bucket (0..n_buckets-1, or -1 for globals)
+    std::unordered_map<std::string, int> weight_to_bucket;
 
-    // Captures, organized by role
+    // Captures, organized by rb_key = make_rb_key(role, bucket)
     std::unordered_map<std::string, std::vector<mul_mat_capture>> captures_by_role;
 
     // Temporary buffer for non-host tensor data
@@ -472,6 +494,8 @@ static bool capture_callback(ggml_tensor * t, bool ask, void * user_data) {
     cap.weight_type = t->src[0]->type;
     cap.weight_ne0  = t->src[0]->ne[0];
     cap.weight_ne1  = t->src[0]->ne[1];
+    const int cap_bucket = state->weight_to_bucket.count(weight_name)
+        ? state->weight_to_bucket[weight_name] : (cap.layer < 0 ? -1 : 0);
 
     // Capture input (src[1])
     {
@@ -511,7 +535,7 @@ static bool capture_callback(ggml_tensor * t, bool ask, void * user_data) {
         cap.ref_output_data.assign(src_ptr, src_ptr + (nbytes / sizeof(float)));
     }
 
-    state->captures_by_role[cap.role].push_back(std::move(cap));
+    state->captures_by_role[make_rb_key(cap.role, cap_bucket)].push_back(std::move(cap));
     state->captured++;
 
     return true;
@@ -824,8 +848,8 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
             caps_by_weight[cap.weight_name].push_back(&cap);
         }
 
-        LOG("Building cost matrix for role '%s' (%zu captures across %zu unique weights, %d parallel threads)...\n",
-            role.c_str(), captures.size(), caps_by_weight.size(), n_parallel);
+        LOG("Building cost matrix for %s (%zu captures across %zu unique weights, %d parallel threads)...\n",
+            rb_display(role).c_str(), captures.size(), caps_by_weight.size(), n_parallel);
 
         const size_t n_types = cfg.quant_types.size();
 
@@ -951,38 +975,45 @@ struct role_info {
     size_t n_bytes_orig; // original size in bytes
 };
 
-// Post-process the cost matrix: for fused roles, split KLD proportionally
-// among component roles (by element count). Component roles that already
-// have their own captures keep their directly-measured KLD.
+// Post-process the cost matrix: for fused roles, split the per-(role, bucket)
+// error proportionally among component roles (by element count) at the same
+// bucket. Component role-buckets that already have their own captures keep
+// their directly-measured value.
 static void split_fused_roles(
         std::map<std::string, std::map<ggml_type, cost_entry>> & cost_matrix,
         const std::map<std::string, role_info> & roles) {
 
-    for (const auto & [fused_role, components] : fusion_map) {
-        auto fused_it = cost_matrix.find(fused_role);
-        if (fused_it == cost_matrix.end()) continue;
+    // Collect rb_keys to split first — we'll mutate cost_matrix while iterating.
+    std::vector<std::string> fused_keys;
+    for (const auto & [k, _] : cost_matrix) {
+        std::string role = rb_role(k);
+        if (fusion_map.count(role)) fused_keys.push_back(k);
+    }
 
-        // Compute element counts for each component role
+    for (const auto & fused_key : fused_keys) {
+        std::string fused_role = rb_role(fused_key);
+        int bucket             = rb_bucket(fused_key);
+        const auto & components = fusion_map.at(fused_role);
+
+        // Element counts for each component role at THIS bucket.
         size_t total_comp_elements = 0;
         std::vector<size_t> comp_elems;
         for (const auto & comp : components) {
-            auto rit = roles.find(comp);
+            auto rit = roles.find(make_rb_key(comp, bucket));
             size_t ne = (rit != roles.end()) ? rit->second.n_elements : 0;
             comp_elems.push_back(ne);
             total_comp_elements += ne;
         }
         if (total_comp_elements == 0) continue;
 
-        // For each quant type, create proportional cost entries for component roles
-        for (const auto & [qtype, fused_entry] : fused_it->second) {
+        const auto fused_entries = cost_matrix[fused_key]; // copy — we'll be mutating
+
+        for (const auto & [qtype, fused_entry] : fused_entries) {
             for (size_t i = 0; i < components.size(); i++) {
                 double fraction = (double)comp_elems[i] / (double)total_comp_elements;
-
-                auto & comp_entries = cost_matrix[components[i]];
-                if (comp_entries.count(qtype)) {
-                    // Component already has its own measurement — keep it, don't overwrite
-                    continue;
-                }
+                std::string comp_key = make_rb_key(components[i], bucket);
+                auto & comp_entries = cost_matrix[comp_key];
+                if (comp_entries.count(qtype)) continue; // direct measurement wins
 
                 cost_entry comp_entry;
                 comp_entry.kld = fused_entry.kld * fraction;
@@ -991,11 +1022,12 @@ static void split_fused_roles(
             }
         }
 
-        LOG("Split fused role '%s' KLD into components:", fused_role.c_str());
+        LOG("Split fused %s error into components:\n", rb_display(fused_key).c_str());
         for (size_t i = 0; i < components.size(); i++) {
             double fraction = (double)comp_elems[i] / (double)total_comp_elements;
             LOG("  %s: %.1f%% (%zu elements)\n",
-                components[i].c_str(), fraction * 100, comp_elems[i]);
+                rb_display(make_rb_key(components[i], bucket)).c_str(),
+                fraction * 100, comp_elems[i]);
         }
     }
 }
@@ -1038,6 +1070,13 @@ static double compute_total_kld(
     return total;
 }
 
+// Exact multi-choice knapsack DP over per-(role, bucket) items.
+// Each item has a set of (qtype, bpw, error) choices; pick one per item,
+// minimize total error, constrained by total BPW in [target - tol_low, target + tol_high].
+//
+// Budget is discretized: 1 DP unit ≈ total_all_elements / N_UNITS bits. At
+// N_UNITS = 16384 on an 800M-param model, 1 unit ≈ 50K bits ≈ 0.00006 BPW,
+// well below any realistic tolerance. Table size is O(n_items × budget_units).
 static assignment optimize_assignment(
         const config & cfg,
         const std::map<std::string, std::map<ggml_type, cost_entry>> & cost_matrix,
@@ -1045,237 +1084,205 @@ static assignment optimize_assignment(
         size_t total_all_elements,
         double non_quantizable_bits) {
 
-    auto types_by_bpw = sorted_by_bpw(cfg.quant_types);
-    if (types_by_bpw.empty()) {
-        LOG_ERR("No quant types specified\n");
+    struct dp_choice { ggml_type qt; int units; double kld; };
+    struct dp_item   { std::string key; size_t n_elements; std::vector<dp_choice> choices; };
+
+    constexpr int N_UNITS = 16384;
+    const double bits_per_unit = (double)total_all_elements / (double)N_UNITS;
+
+    const double hi_bpw = cfg.target_bpw + cfg.bpw_tol_high;
+    const double lo_bpw = std::max(0.0, (double)cfg.target_bpw - (double)cfg.bpw_tol_low);
+    const int budget_hi = (int)std::ceil(hi_bpw * N_UNITS);
+    const int budget_lo = (int)std::floor(lo_bpw * N_UNITS);
+    const int non_quant_units =
+        (int)std::round(non_quantizable_bits / bits_per_unit);
+
+    // DP state axis is sized to allow up to 2 BPW of overshoot beyond the upper
+    // tolerance. This matters when the forced minimum (e.g. token_embd at Q6_K
+    // with tied embeddings) already overshoots the target — we still want to
+    // report the best achievable assignment rather than fail.
+    const int overshoot_cap = (int)std::ceil(2.0 * N_UNITS);
+    const int B = budget_hi + overshoot_cap + 1;
+
+    // Build items from the cost matrix (skip items with zero elements — they
+    // correspond to roles with no actual tensors, e.g. fused-role entries
+    // materialized only through split_fused_roles).
+    //
+    // Per-choice cost is element-weighted: n_elements * relative_L2. The raw
+    // per-row relative-L2 is dimensionless and treats all roles equally, which
+    // makes the DP happy to spend Q6_K on a tiny tensor (4M-param attn_output)
+    // while starving a 37M-param attn_qkv to IQ2_TQ — same bit cost per role,
+    // very different aggregate quality impact. Element-weighting aligns the
+    // objective with "total number of parameters perturbed, weighted by
+    // fractional output error" and keeps big tensors from being sacrificed.
+    std::vector<dp_item> items;
+    items.reserve(cost_matrix.size());
+    for (const auto & [key, row] : cost_matrix) {
+        auto rit = roles.find(key);
+        size_t ne = (rit != roles.end()) ? rit->second.n_elements : 0;
+        if (ne == 0) continue;
+        dp_item it;
+        it.key = key;
+        it.n_elements = ne;
+        for (auto qt : cfg.quant_types) {
+            auto cit = row.find(qt);
+            if (cit == row.end()) continue;
+            if (cit->second.kld >= 1e29) continue; // sentinel: forbidden choice
+            dp_choice c;
+            c.qt = qt;
+            c.units = (int)std::round((double)ne * compute_bpw(qt) / bits_per_unit);
+            if (c.units < 1) c.units = 1;
+            c.kld = cit->second.kld * (double)ne;
+            it.choices.push_back(c);
+        }
+        if (it.choices.empty()) continue;
+        items.push_back(std::move(it));
+    }
+    if (items.empty()) {
+        LOG_ERR("No optimization items — empty cost matrix?\n");
         return {};
     }
 
-    // Initialize: assign each role the lowest-BPW quant type (greedy fill)
-    // We start from the bottom and work up until we hit the BPW budget
-    std::map<std::string, ggml_type> current;
-    for (const auto & [role, info] : roles) {
-        // Start with the lowest-BPW type that has a valid KLD
-        auto it = cost_matrix.find(role);
-        if (it == cost_matrix.end()) continue;
-        ggml_type best = GGML_TYPE_COUNT;
-        for (auto qt : types_by_bpw) {
-            auto it2 = it->second.find(qt);
-            if (it2 != it->second.end() && it2->second.kld < 1e29) {
-                best = qt;
-                break;
-            }
-        }
-        if (best == GGML_TYPE_COUNT) continue;
-        current[role] = best;
-    }
+    const int n = (int)items.size();
+    constexpr double INF = 1e300;
 
-    // Greedily upgrade roles to higher-quality types until we hit the BPW budget
-    // For each role, find the "best value" upgrade (most KLD reduction per BPW increase)
-    bool improved = true;
-    while (improved) {
-        improved = false;
-        (void)0; // cur_bpw used only for debugging
+    std::vector<double> dp(B, INF);
+    std::vector<double> next_dp(B, INF);
+    // choice_taken[i][u] = which choice index was used at item i to reach state u
+    // prev_u[i][u]       = the u state this came from
+    std::vector<std::vector<int>> choice_taken(n, std::vector<int>(B, -1));
+    std::vector<std::vector<int>> prev_u(n, std::vector<int>(B, -1));
 
-        double best_ratio = 0;
-        std::string best_role;
-        ggml_type best_type = GGML_TYPE_COUNT;
+    if (non_quant_units >= 0 && non_quant_units < B) dp[non_quant_units] = 0.0;
 
-        for (const auto & [role, cur_type] : current) {
-            // Find next higher-BPW type
-            auto it = cost_matrix.find(role);
-            if (it == cost_matrix.end()) continue;
-
-            double cur_kld = it->second.count(cur_type) ? it->second.at(cur_type).kld : 1e30;
-
-            for (auto qt : types_by_bpw) {
-                if (compute_bpw(qt) <= compute_bpw(cur_type)) continue; // skip lower/same
-                auto it2 = it->second.find(qt);
-                if (it2 == it->second.end() || it2->second.kld >= 1e29) continue;
-
-                // Check if this upgrade would exceed BPW budget
-                auto test = current;
-                test[role] = qt;
-                double test_bpw = compute_total_bpw(test, roles, total_all_elements, non_quantizable_bits);
-                if (test_bpw > cfg.target_bpw + cfg.bpw_tol_high) continue;
-
-                // Compute improvement ratio (KLD reduction per BPW increase)
-                double kld_reduction = cur_kld - it2->second.kld;
-                double bpw_increase = compute_bpw(qt) - compute_bpw(cur_type);
-                if (bpw_increase <= 0) continue;
-                double ratio = kld_reduction / bpw_increase;
-
-                if (ratio > best_ratio) {
-                    best_ratio = ratio;
-                    best_role = role;
-                    best_type = qt;
+    for (int i = 0; i < n; i++) {
+        std::fill(next_dp.begin(), next_dp.end(), INF);
+        for (int u = 0; u < B; u++) {
+            if (dp[u] >= INF) continue;
+            for (int ci = 0; ci < (int)items[i].choices.size(); ci++) {
+                const auto & c = items[i].choices[ci];
+                int nu = u + c.units;
+                if (nu >= B) continue;
+                double nk = dp[u] + c.kld;
+                if (nk < next_dp[nu]) {
+                    next_dp[nu] = nk;
+                    choice_taken[i][nu] = ci;
+                    prev_u[i][nu] = u;
                 }
             }
         }
-
-        if (!best_role.empty() && best_type != GGML_TYPE_COUNT) {
-            current[best_role] = best_type;
-            improved = true;
-        }
+        dp.swap(next_dp);
     }
 
-    // Iterative improvement: try swapping roles up/down
-    std::set<std::vector<std::pair<std::string, ggml_type>>> visited;
-    auto make_key = [&](const std::map<std::string, ggml_type> & a) {
-        std::vector<std::pair<std::string, ggml_type>> v(a.begin(), a.end());
-        std::sort(v.begin(), v.end());
-        return v;
-    };
-
-    assignment best_assign;
-    best_assign.role_to_type = current;
-    best_assign.total_bpw = compute_total_bpw(current, roles, total_all_elements, non_quantizable_bits);
-    best_assign.total_kld = compute_total_kld(current, cost_matrix);
-    visited.insert(make_key(current));
-
-    for (int iter = 0; iter < cfg.max_iterations; iter++) {
-        bool found_improvement = false;
-
-        // Try upgrading each role and downgrading another to compensate
-        for (const auto & [role_up, cur_type_up] : best_assign.role_to_type) {
-            auto it_up = cost_matrix.find(role_up);
-            if (it_up == cost_matrix.end()) continue;
-
-            for (auto qt_up : types_by_bpw) {
-                if (compute_bpw(qt_up) <= compute_bpw(cur_type_up)) continue;
-                auto it2_up = it_up->second.find(qt_up);
-                if (it2_up == it_up->second.end() || it2_up->second.kld >= 1e29) continue;
-
-                (void)0; // bpw_increase no longer used directly
-                double kld_decrease_up = (it_up->second.count(cur_type_up) ?
-                    it_up->second.at(cur_type_up).kld : 1e30) - it2_up->second.kld;
-
-                // Try downgrading each other role to compensate
-                for (const auto & [role_dn, cur_type_dn] : best_assign.role_to_type) {
-                    if (role_dn == role_up) continue;
-                    auto it_dn = cost_matrix.find(role_dn);
-                    if (it_dn == cost_matrix.end()) continue;
-
-                    for (auto qt_dn : types_by_bpw) {
-                        if (compute_bpw(qt_dn) >= compute_bpw(cur_type_dn)) continue;
-                        auto it2_dn = it_dn->second.find(qt_dn);
-                        if (it2_dn == it_dn->second.end() || it2_dn->second.kld >= 1e29) continue;
-
-                        // Check BPW constraint
-                        auto test = best_assign.role_to_type;
-                        test[role_up] = qt_up;
-                        test[role_dn] = qt_dn;
-                        double test_bpw = compute_total_bpw(test, roles, total_all_elements, non_quantizable_bits);
-                        if (test_bpw > cfg.target_bpw + cfg.bpw_tol_high) continue;
-                        if (test_bpw < cfg.target_bpw - cfg.bpw_tol_low) continue;
-
-                        // Check if already visited
-                        auto key = make_key(test);
-                        if (visited.count(key)) continue;
-
-                        // Compute KLD change
-                        double kld_increase_dn = it2_dn->second.kld -
-                            (it_dn->second.count(cur_type_dn) ? it_dn->second.at(cur_type_dn).kld : 1e30);
-                        double net_kld_change = -kld_decrease_up + kld_increase_dn;
-
-                        if (net_kld_change < -1e-10) {
-                            // Improvement found!
-                            double new_kld = best_assign.total_kld + net_kld_change;
-                            visited.insert(key);
-
-                            best_assign.role_to_type = test;
-                            best_assign.total_bpw = test_bpw;
-                            best_assign.total_kld = new_kld;
-                            found_improvement = true;
-                            break;
-                        }
-                        visited.insert(key);
-                    }
-                    if (found_improvement) break;
-                }
-                if (found_improvement) break;
-            }
-            if (found_improvement) break;
+    // Preferred: best terminal state in [budget_lo, budget_hi].
+    int best_u = -1;
+    double best_kld = INF;
+    for (int u = std::max(0, budget_lo); u <= budget_hi && u < B; u++) {
+        if (dp[u] < best_kld) { best_kld = dp[u]; best_u = u; }
+    }
+    // Fallback 1: lower bound unreachable (e.g. almost everything overshoots
+    // the floor). Take any u in [0, budget_hi].
+    if (best_u < 0) {
+        for (int u = 0; u <= budget_hi && u < B; u++) {
+            if (dp[u] < best_kld) { best_kld = dp[u]; best_u = u; }
         }
-
-        if (!found_improvement) {
-            // Also try single-role upgrades (if BPW budget allows)
-            for (const auto & [role, cur_type] : best_assign.role_to_type) {
-                auto it = cost_matrix.find(role);
-                if (it == cost_matrix.end()) continue;
-
-                for (auto qt : types_by_bpw) {
-                    if (compute_bpw(qt) <= compute_bpw(cur_type)) continue;
-                    auto it2 = it->second.find(qt);
-                    if (it2 == it->second.end() || it2->second.kld >= 1e29) continue;
-
-                    auto test = best_assign.role_to_type;
-                    test[role] = qt;
-                    double test_bpw = compute_total_bpw(test, roles, total_all_elements, non_quantizable_bits);
-                    if (test_bpw > cfg.target_bpw + cfg.bpw_tol_high) continue;
-
-                    auto key = make_key(test);
-                    if (visited.count(key)) continue;
-
-                    double kld_change = it2->second.kld -
-                        (it->second.count(cur_type) ? it->second.at(cur_type).kld : 1e30);
-                    if (kld_change < -1e-10) {
-                        best_assign.role_to_type = test;
-                        best_assign.total_bpw = test_bpw;
-                        best_assign.total_kld += kld_change;
-                        visited.insert(key);
-                        found_improvement = true;
-                        break;
-                    }
-                    visited.insert(key);
-                }
-                if (found_improvement) break;
-            }
+    }
+    // Fallback 2: target itself is infeasible (common with small/tied-embedding
+    // models where token_embd at Q6_K alone exceeds the target). Report best
+    // overshoot — smallest u with finite dp, tie-break on lower KLD.
+    if (best_u < 0) {
+        int min_u = -1;
+        for (int u = 0; u < B; u++) {
+            if (dp[u] < INF) { min_u = u; break; }
         }
-
-        if (!found_improvement) break;
-
-        LOG("  Iteration %d: BPW=%.4f, total_KLD=%.6f\n",
-            iter, best_assign.total_bpw, best_assign.total_kld);
+        if (min_u >= 0) {
+            best_u = min_u;
+            best_kld = dp[min_u];
+            LOG("  [warning] target BPW %.4f is infeasible — falling back to lowest achievable at %.4f BPW\n",
+                cfg.target_bpw, (double)min_u / (double)N_UNITS);
+        }
+    }
+    if (best_u < 0) {
+        LOG_ERR("No feasible DP assignment at all — something is wrong with cost matrix\n");
+        return {};
     }
 
-    return best_assign;
+    // Reconstruct the assignment by walking back through the choice tables.
+    assignment out;
+    out.total_kld = best_kld;
+    int cur_u = best_u;
+    for (int i = n - 1; i >= 0; i--) {
+        int ci = choice_taken[i][cur_u];
+        if (ci < 0) {
+            LOG_ERR("DP reconstruction failed at item %d (u=%d)\n", i, cur_u);
+            return {};
+        }
+        out.role_to_type[items[i].key] = items[i].choices[ci].qt;
+        cur_u = prev_u[i][cur_u];
+    }
+    out.total_bpw = compute_total_bpw(out.role_to_type, roles, total_all_elements, non_quantizable_bits);
+
+    LOG("DP optimizer: %d items, budget units=[%d, %d] (step=%.6f bpw), "
+        "optimum at u=%d (bpw=%.4f, element-weighted error=%.3e)\n",
+        n, budget_lo, budget_hi, 1.0 / (double)N_UNITS, best_u,
+        (double)best_u / (double)N_UNITS, best_kld);
+
+    return out;
 }
 
 // ============================================================================
 // Section 8: Output
 // ============================================================================
 
+// Build a regex chunk like "(0|3|27)" from a sorted layer list.
+static std::string layer_alternation(const std::vector<int> & layers) {
+    std::string s = "(";
+    for (size_t i = 0; i < layers.size(); i++) {
+        if (i) s += "|";
+        s += std::to_string(layers[i]);
+    }
+    s += ")";
+    return s;
+}
+
 static bool write_tensor_type_file(const std::string & path,
                                    const std::map<std::string, ggml_type> & role_to_type,
                                    ggml_type output_tensor_type,
-                                   ggml_type token_embd_tensor_type) {
+                                   ggml_type token_embd_tensor_type,
+                                   const std::map<std::string, std::vector<int>> & bucket_layers) {
     std::ofstream file(path);
     if (!file) {
         LOG_ERR("Failed to open output file: %s\n", path.c_str());
         return false;
     }
 
-    // Write token_embd type — anchor with ^ so it only matches the global tensor,
-    // not e.g. some hypothetical "blk.X.something_token_embd.weight"
+    // Globals first. Anchored with ^ so they don't collide with layer tensors.
     if (token_embd_tensor_type != GGML_TYPE_COUNT) {
         file << "^token_embd=" << ggml_type_name(token_embd_tensor_type) << "\n";
     }
-
-    // Write output tensor type — anchor with ^ so "output" matches "output.weight"
-    // but NOT "blk.X.attn_output.weight"
     if (output_tensor_type != GGML_TYPE_COUNT) {
         file << "^output=" << ggml_type_name(output_tensor_type) << "\n";
     }
 
-    // Write per-role types (skip global tensors already written above).
-    // Use \.ROLE\. patterns so they match between dots, e.g.:
-    //   "ffn_down"  →  "\.ffn_down\."   matches blk.X.ffn_down.weight
-    //   "attn_q"    →  "\.attn_q\."     matches blk.X.attn_q.weight but NOT blk.X.attn_qkv.weight
-    //   "attn_qkv"  →  "\.attn_qkv\."   matches blk.X.attn_qkv.weight
-    for (const auto & [role, type] : role_to_type) {
+    // Per-(role, bucket) entries. For each entry we list the concrete layer
+    // indices from bucket_layers so the regex matches exactly the layers in
+    // this bucket:
+    //   blk\.(0|1|2)\.ffn_down\.=Q5_K
+    //   blk\.(3|4|...)\.ffn_down\.=Q4_K
+    //   blk\.(28|29|30|31)\.ffn_down\.=Q6_K
+    // If bucket_layers has no entry for a key (e.g. single-bucket fallback),
+    // we emit the role-only pattern as before.
+    for (const auto & [key, type] : role_to_type) {
+        std::string role = rb_role(key);
         if (role == "token_embd" || role == "output") continue;
-        file << "\\." << role << "\\.=" << ggml_type_name(type) << "\n";
+
+        auto bit = bucket_layers.find(key);
+        if (bit == bucket_layers.end() || bit->second.empty()) {
+            file << "\\." << role << "\\.=" << ggml_type_name(type) << "\n";
+        } else {
+            file << "blk\\." << layer_alternation(bit->second)
+                 << "\\." << role << "\\.=" << ggml_type_name(type) << "\n";
+        }
     }
 
     file.close();
@@ -1334,9 +1341,9 @@ static void print_usage(const char * prog) {
     LOG("  --output-tensor-type T   Quant type for output.weight (default: highest from list)\n");
     LOG("  --max-iterations N       Max optimization iterations (default: 100)\n");
     LOG("  --threads N              Number of threads (default: 1)\n");
-    LOG("  --importance-alpha A     Imatrix-energy bias for per-role KLD (default: 1.0)\n");
-    LOG("                           weight[r] = (geomean_energy / role_energy[r])^A\n");
-    LOG("                           0 = no bias, 1 = full inverse-energy reweighting\n");
+    LOG("  --layer-buckets N        Per-class layer buckets for independent quant assignment\n");
+    LOG("                           (default: 3 — first/middle/last third).\n");
+    LOG("                           1 reproduces the older per-role-only behavior.\n");
 }
 
 static config parse_args(int argc, char ** argv) {
@@ -1387,8 +1394,12 @@ static config parse_args(int argc, char ** argv) {
             cfg.max_iterations = std::stoi(argv[++i]);
         } else if (arg == "--threads" && i + 1 < argc) {
             cfg.n_threads = std::stoi(argv[++i]);
-        } else if (arg == "--importance-alpha" && i + 1 < argc) {
-            cfg.importance_alpha = std::stof(argv[++i]);
+        } else if (arg == "--layer-buckets" && i + 1 < argc) {
+            cfg.n_layer_buckets = std::stoi(argv[++i]);
+            if (cfg.n_layer_buckets < 1) {
+                LOG_ERR("--layer-buckets must be >= 1\n");
+                exit(1);
+            }
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argv[0]);
             exit(0);
@@ -1538,6 +1549,46 @@ int main(int argc, char ** argv) {
         LOG("], roles=[%s]\n", roles_str.c_str());
     }
 
+    // Compute per-layer bucket (0..n_layer_buckets-1) based on position within
+    // the layer's equivalence class. Layers outside any class (i.e. no quantizable
+    // weights) get bucket 0 — they won't be sampled anyway. Globals use -1.
+    std::map<int, int> layer_to_bucket;
+    for (const auto & lc : layer_classes) {
+        const int n = (int)lc.all_layers.size();
+        for (int i = 0; i < n; i++) {
+            layer_to_bucket[lc.all_layers[i]] = compute_bucket(i, n, cfg.n_layer_buckets);
+        }
+    }
+    // For each (role, bucket), list the concrete layer indices that belong to it
+    // (used at emission to write layer-alternation regexes).
+    std::map<std::string, std::vector<int>> bucket_layers;
+    for (const auto & ti : quantizable) {
+        if (ti.layer < 0) continue; // globals handled separately
+        auto bit = layer_to_bucket.find(ti.layer);
+        if (bit == layer_to_bucket.end()) continue;
+        std::string key = make_rb_key(ti.role, bit->second);
+        auto & v = bucket_layers[key];
+        if (std::find(v.begin(), v.end(), ti.layer) == v.end()) v.push_back(ti.layer);
+    }
+    for (auto & [k, v] : bucket_layers) std::sort(v.begin(), v.end());
+
+    if (cfg.n_layer_buckets > 1) {
+        LOG("Layer bucketing (n_buckets=%d):\n", cfg.n_layer_buckets);
+        for (const auto & lc : layer_classes) {
+            LOG("  Class %zu buckets:", lc.class_index);
+            for (int b = 0; b < cfg.n_layer_buckets; b++) {
+                std::string layers_str;
+                for (int L : lc.all_layers) {
+                    if (layer_to_bucket[L] != b) continue;
+                    if (!layers_str.empty()) layers_str += ",";
+                    layers_str += std::to_string(L);
+                }
+                if (!layers_str.empty()) LOG(" [%d]={%s}", b, layers_str.c_str());
+            }
+            LOG("\n");
+        }
+    }
+
     // Build set of target weight tensor names (for the eval callback)
     // NOTE: token_embd uses ggml_get_rows (embedding lookup), NOT ggml_mul_mat,
     // so it cannot be measured via MUL_MAT KLD. It gets the highest-BPW type as preset.
@@ -1583,6 +1634,13 @@ int main(int argc, char ** argv) {
             cap_state.target_weight_names.insert(ti.name);
             cap_state.weight_to_role[ti.name] = ti.role;
             cap_state.weight_to_layer[ti.name] = ti.layer;
+            if (ti.layer < 0) {
+                cap_state.weight_to_bucket[ti.name] = -1;
+            } else {
+                auto bit = layer_to_bucket.find(ti.layer);
+                cap_state.weight_to_bucket[ti.name] =
+                    (bit != layer_to_bucket.end()) ? bit->second : 0;
+            }
         }
     }
 
@@ -1709,8 +1767,8 @@ int main(int argc, char ** argv) {
     }
 
     LOG("Captured %d MUL_MAT operations\n", cap_state.captured);
-    for (const auto & [role, captures] : cap_state.captures_by_role) {
-        LOG("  Role '%s': %zu captures\n", role.c_str(), captures.size());
+    for (const auto & [rb, captures] : cap_state.captures_by_role) {
+        LOG("  %s: %zu captures\n", rb_display(rb).c_str(), captures.size());
     }
 
     // Free the llama model — we don't need it anymore
@@ -1722,6 +1780,7 @@ int main(int argc, char ** argv) {
     decltype(cap_state.target_weight_names)().swap(cap_state.target_weight_names);
     decltype(cap_state.weight_to_role)().swap(cap_state.weight_to_role);
     decltype(cap_state.weight_to_layer)().swap(cap_state.weight_to_layer);
+    decltype(cap_state.weight_to_bucket)().swap(cap_state.weight_to_bucket);
     std::vector<uint8_t>().swap(cap_state.tmp_data);
     std::vector<std::vector<llama_token>>().swap(test_token_sets);
     std::vector<test_set_info>().swap(test_set_infos);
@@ -1732,13 +1791,31 @@ int main(int argc, char ** argv) {
     auto cost_matrix = build_cost_matrix(cfg, quantizable, cap_state.captures_by_role,
                                          cfg.model_path, gguf_ctx, imatrix_data);
 
+    // Build preliminary role_info map (per-bucket) so split_fused_roles can
+    // apportion fused error by element count at the same bucket.
+    std::map<std::string, role_info> roles;
+    size_t total_quant_elements = 0;
+    for (const auto & ti : quantizable) {
+        int bucket = (ti.layer < 0) ? -1 :
+                     (layer_to_bucket.count(ti.layer) ? layer_to_bucket[ti.layer] : 0);
+        std::string key = make_rb_key(ti.role, bucket);
+        auto & ri = roles[key];
+        ri.role = key;
+        ri.n_elements += ti.n_elements;
+        ri.n_bytes_orig += ggml_nbytes(ggml_get_tensor(ggml_ctx, ti.name.c_str()));
+        total_quant_elements += ti.n_elements;
+    }
+
+    // Split fused-MUL_MAT captures (e.g. attn_qkv) into their component roles.
+    split_fused_roles(cost_matrix, roles);
+
     // Print cost matrix
-    LOG("\nCost matrix (avg KLD by role × quant type):\n");
-    LOG("%-16s", "Role");
+    LOG("\nCost matrix (avg relative-L2 error by role-bucket × quant type):\n");
+    LOG("%-20s", "Role[bucket]");
     for (auto qt : cfg.quant_types) LOG(" %10s", ggml_type_name(qt));
     LOG("\n");
-    for (const auto & [role, costs] : cost_matrix) {
-        LOG("%-16s", role.c_str());
+    for (const auto & [key, costs] : cost_matrix) {
+        LOG("%-20s", rb_display(key).c_str());
         for (auto qt : cfg.quant_types) {
             auto it = costs.find(qt);
             if (it != costs.end()) {
@@ -1781,31 +1858,22 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // Add global tensors to the cost matrix with their fixed types.
+    // Add global tensors (bucket -1) to the cost matrix with their fixed types.
     // KLD=0 since they're not optimized — we just need their BPW in the budget.
+    const std::string key_tok_embd = make_rb_key("token_embd", -1);
+    const std::string key_output   = make_rb_key("output",     -1);
     for (ggml_type qtype : cfg.quant_types) {
         cost_entry e;
         e.kld = (qtype == token_embd_type) ? 0.0 : 1e30;
         e.bpw = compute_bpw(qtype);
-        cost_matrix["token_embd"][qtype] = e;
+        cost_matrix[key_tok_embd][qtype] = e;
 
         e.kld = (qtype == output_type) ? 0.0 : 1e30;
-        cost_matrix["output"][qtype] = e;
+        cost_matrix[key_output][qtype] = e;
     }
     LOG("Global tensors: token_embd=%s (%.4f bpw), output=%s (%.4f bpw)\n",
         ggml_type_name(token_embd_type), compute_bpw(token_embd_type),
         ggml_type_name(output_type), compute_bpw(output_type));
-
-    // Build role info (n_elements, n_bytes per role) — include ALL quantizable tensors
-    std::map<std::string, role_info> roles;
-    size_t total_quant_elements = 0;
-    for (const auto & ti : quantizable) {
-        auto & ri = roles[ti.role];
-        ri.role = ti.role;
-        ri.n_elements += ti.n_elements;
-        ri.n_bytes_orig += ggml_nbytes(ggml_get_tensor(ggml_ctx, ti.name.c_str()));
-        total_quant_elements += ti.n_elements;
-    }
 
     // Small 2D .weight tensors below min_elements aren't measured for KLD, but
     // llama-quantize will still quantize them (to the fallback ftype passed on
@@ -1840,106 +1908,46 @@ int main(int argc, char ** argv) {
         LOG("Small matrix weights below --min-elements (%zu elements) assumed %s for BPW estimate\n",
             small_matrix_elements, ggml_type_name(small_matrix_type));
     }
-    for (const auto & [role, ri] : roles) {
-        LOG("  %s: %zu elements%s\n", role.c_str(), ri.n_elements,
-            cost_matrix.count(role) ? "" : " [NO CAPTURES]");
+    for (const auto & [key, ri] : roles) {
+        LOG("  %s: %zu elements%s\n", rb_display(key).c_str(), ri.n_elements,
+            cost_matrix.count(key) ? "" : " [NO CAPTURES]");
     }
 
-    // Warn about any quantizable roles that still have no captures.
-    // With proper layer equivalence class sampling, this should be rare,
-    // but can happen for tensors that don't appear as MUL_MAT in any layer type.
+    // Warn about any quantizable (role, bucket) pairs that still have no captures.
+    // With proper layer equivalence class sampling this should be rare, but can
+    // happen for tensors that don't appear as MUL_MAT in any layer type.
     {
-        for (const auto & [role, ri] : roles) {
-            if (cost_matrix.count(role)) continue;
-            LOG("  WARNING: Role '%s' has no captures — assigning KLD=0 for all types\n",
-                role.c_str());
+        for (const auto & [key, ri] : roles) {
+            if (cost_matrix.count(key)) continue;
+            LOG("  WARNING: %s has no captures — assigning error=0 for all types\n",
+                rb_display(key).c_str());
             for (ggml_type qtype : cfg.quant_types) {
                 cost_entry e;
                 e.kld = 0.0;
                 e.bpw = compute_bpw(qtype);
-                cost_matrix[role][qtype] = e;
+                cost_matrix[key][qtype] = e;
             }
         }
     }
-    // Imatrix-energy bias correction. Local MUL_MAT KLD systematically under-weights
-    // residual-path tensors with small-magnitude inputs (ffn_down, attn_output, ssm_out)
-    // because softmax over a small-output row is flatter. We compensate by scaling each
-    // role's KLD by (geomean_energy / role_energy)^alpha, computed from the imatrix.
-    std::map<std::string, double> role_weight;
-    if (cfg.importance_alpha > 0.0f && !imatrix_data.empty()) {
-        std::map<std::string, std::vector<double>> role_mean_by_tensor;
-        for (const auto & [tname, imat] : imatrix_data) {
-            if (imat.empty()) continue;
-            double s = 0;
-            for (float v : imat) s += v;
-            role_mean_by_tensor[extract_role(tname)].push_back(s / imat.size());
-        }
-
-        std::map<std::string, double> role_energy;
-        double log_sum = 0;
-        int n_energies = 0;
-        for (const auto & [role, vs] : role_mean_by_tensor) {
-            double sum = 0;
-            for (double v : vs) sum += v;
-            double mean = vs.empty() ? 0.0 : sum / vs.size();
-            role_energy[role] = mean;
-            if (mean > 1e-20) {
-                log_sum += std::log(mean);
-                n_energies++;
-            }
-        }
-
-        const double geo_mean = n_energies > 0 ? std::exp(log_sum / n_energies) : 1.0;
-        for (const auto & [role, e] : role_energy) {
-            role_weight[role] = e > 1e-20
-                ? std::pow(geo_mean / e, (double)cfg.importance_alpha)
-                : 1.0;
-        }
-
-        LOG("\nRole importance weights (alpha=%.2f, geomean_energy=%.4g):\n", cfg.importance_alpha, geo_mean);
-        for (const auto & [role, w] : role_weight) {
-            LOG("  %-16s  energy=%10.4g  weight=%6.3f\n", role.c_str(), role_energy[role], w);
-        }
-    }
-
-    // Apply weights to a cost-matrix copy used by the optimizer; preserve raw values
-    // for display and for the final KLD we report to the user.
-    auto weighted_cost = cost_matrix;
-    for (auto & [role, row] : weighted_cost) {
-        auto wit = role_weight.find(role);
-        if (wit == role_weight.end()) continue;
-        double w = wit->second;
-        for (auto & [qt, ce] : row) {
-            if (ce.kld < 1e29) ce.kld *= w;  // keep sentinels intact
-        }
-    }
-
-    auto result = optimize_assignment(cfg, weighted_cost, roles, total_all_elements, non_quantizable_bits);
+    auto result = optimize_assignment(cfg, cost_matrix, roles, total_all_elements, non_quantizable_bits);
 
     LOG("\nOptimal assignment:\n");
-    for (const auto & [role, type] : result.role_to_type) {
-        auto it = cost_matrix.find(role);
+    for (const auto & [key, type] : result.role_to_type) {
+        auto it = cost_matrix.find(key);
         double kld = (it != cost_matrix.end() && it->second.count(type)) ?
                       it->second.at(type).kld : -1;
-        LOG("  %-16s = %-10s  (KLD=%.6f, BPW=%.4f)\n",
-            role.c_str(), ggml_type_name(type), kld, compute_bpw(type));
+        LOG("  %-20s = %-10s  (error=%.6f, BPW=%.4f)\n",
+            rb_display(key).c_str(), ggml_type_name(type), kld, compute_bpw(type));
     }
     LOG("Total BPW: %.4f (target: %.2f +%.2f/-%.2f)\n",
         result.total_bpw, cfg.target_bpw, cfg.bpw_tol_high, cfg.bpw_tol_low);
-    // Raw total KLD is the unweighted sum from cost_matrix; the optimizer's
-    // result.total_kld is in weighted units when importance_alpha > 0.
-    double raw_total_kld = compute_total_kld(result.role_to_type, cost_matrix);
-    if (cfg.importance_alpha > 0.0f && !role_weight.empty()) {
-        LOG("Total KLD: %.6f raw  (%.6f weighted, used by optimizer)\n",
-            raw_total_kld, result.total_kld);
-    } else {
-        LOG("Total KLD: %.6f\n", raw_total_kld);
-    }
+    LOG("Total error (unweighted sum): %.6f\n",
+        compute_total_kld(result.role_to_type, cost_matrix));
 
     // ---- Phase 5: Output tensor-type-file ----
     LOG("\n--- Phase 5: Writing output ---\n");
     write_tensor_type_file(cfg.output_path, result.role_to_type,
-                           output_type, token_embd_type);
+                           output_type, token_embd_type, bucket_layers);
 
     // Cleanup
     gguf_free(gguf_ctx);
