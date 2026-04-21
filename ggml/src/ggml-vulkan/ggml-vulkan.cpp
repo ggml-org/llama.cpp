@@ -22,20 +22,29 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <vulkan/vulkan.hpp>
 
 // SPIR-V Headers: different SDK installations expose different include paths.
-// LunarG Vulkan SDK on Windows typically provides <spirv-headers/spirv.hpp>,
-// while Linux packages, MSYS2 and MinGW often use the Khronos layout
-// <spirv/unified1/spirv.hpp>. We prefer __has_include for better portability,
-// falling back to the original platform logic for maximum compatibility.
-#if __has_include(<spirv/unified1/spirv.hpp>)
-#    include <spirv/unified1/spirv.hpp>
-#elif __has_include(<spirv-headers/spirv.hpp>)
-#    include <spirv-headers/spirv.hpp>
-#elif __has_include(<spirv.hpp>)
-#    include <spirv.hpp>
-#elif defined(_WIN32) && !defined(__MINGW32__)
-#    include <spirv-headers/spirv.hpp>
+// LunarG Vulkan SDK on Windows typically provides <spirv-headers/spirv.hpp>.
+// Linux packages, MSYS2 and MinGW often use the Khronos layout <spirv/unified1/spirv.hpp>.
+// FreeBSD typically uses <spirv_cross/spirv.hpp>.
+#if defined(__has_include)
+#    if __has_include(<spirv/unified1/spirv.hpp>)
+#        include <spirv/unified1/spirv.hpp>
+#    elif __has_include(<spirv-headers/spirv.hpp>)
+#        include <spirv-headers/spirv.hpp>
+#    elif __has_include(<spirv_cross/spirv.hpp>)
+#        include <spirv_cross/spirv.hpp>
+#    elif __has_include(<spirv.hpp>)
+#        include <spirv.hpp>
+#    else
+// Fallback to let the compiler throw a standard "file not found" error
+#        include <spirv/unified1/spirv.hpp>
+#    endif
 #else
-#    include <spirv/unified1/spirv.hpp>
+// Fallback logic for older compilers that do not support __has_include
+#    if defined(_WIN32) && !defined(__MINGW32__)
+#        include <spirv-headers/spirv.hpp>
+#    else
+#        include <spirv/unified1/spirv.hpp>
+#    endif
 #endif
 
 #include <algorithm>
