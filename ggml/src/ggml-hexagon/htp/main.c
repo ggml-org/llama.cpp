@@ -514,6 +514,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_CUMSUM:
             return op_cumsum(octx);
 
+        case HTP_OP_FILL:
+            return op_fill(octx);
+
         case HTP_OP_DIAG:
             return op_diag(octx);
 
