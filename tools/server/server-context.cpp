@@ -2342,6 +2342,13 @@ private:
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
+                                // skip cache reuse when a seed is explicitly set to avoid non-deterministic
+                                // output from batch-size-dependent FP ordering in CUDA FA (see #2838)
+                                const bool deterministic_mode = slot.task->params.sampling.seed != LLAMA_DEFAULT_SEED;
+                                if (deterministic_mode) {
+                                    n_past = 0;
+                                }
+
                                 // if there is an alora invoked, don't cache after the invocation start
                                 if (slot.alora_invocation_start > 0) {
                                     SLT_DBG(slot, "only caching to alora invocation start (n_past = %d, alora_invocation_start = %d)\n", n_past, slot.alora_invocation_start);
@@ -2359,7 +2366,7 @@ private:
                                 }
 
                                 // reuse chunks from the cached prompt by shifting their KV cache in the new position
-                                if (can_cache_reuse && n_cache_reuse > 0) {
+                                if (can_cache_reuse && n_cache_reuse > 0 && !deterministic_mode) {
                                     GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
 
                                     size_t head_c = n_past; // cache
