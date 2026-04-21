@@ -2596,6 +2596,29 @@ static bool ggml_hexagon_supported_cumsum(const struct ggml_hexagon_session * se
     return true;
 }
 
+static bool ggml_hexagon_supported_diag(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    // diag only supports F32 currently
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // Input must have ne[1] == 1 (vector input)
+    if (src0->ne[1] != 1) {
+        return false;
+    }
+
+    // Output must be square in first two dimensions
+    if (dst->ne[0] != dst->ne[1] || dst->ne[0] != src0->ne[0]) {
+        return false;
+    }
+
+    GGML_UNUSED(sess);
+    return true;
+}
+
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     return sess->c_name();
@@ -2632,6 +2655,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_ROPE:           return HTP_OP_ROPE;
         case GGML_OP_REPEAT:         return HTP_OP_REPEAT;
         case GGML_OP_CUMSUM:         return HTP_OP_CUMSUM;
+        case GGML_OP_DIAG:           return HTP_OP_DIAG;
 
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
@@ -3157,6 +3181,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_CUMSUM:
             supp = ggml_hexagon_supported_cumsum(sess, op);
+            break;
+
+        case GGML_OP_DIAG:
+            supp = ggml_hexagon_supported_diag(sess, op);
             break;
 
         default:

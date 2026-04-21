@@ -80,6 +80,7 @@ enum htp_op_code {
     HTP_OP_SSM_CONV,
     HTP_OP_REPEAT,
     HTP_OP_CUMSUM,
+    HTP_OP_DIAG,
 
     HTP_OP_INVALID
 };
