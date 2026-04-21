@@ -145,10 +145,12 @@ struct common_log {
     }
 
     ~common_log() {
+        printf("log: Destructing: head: %zu, tail: %zu\n", head, tail);
         pause();
         if (file) {
             fclose(file);
         }
+        printf("log: Destructed\n");
     }
 
 private:
@@ -247,7 +249,6 @@ public:
 
             entries = std::move(new_entries);
         }
-
         cv.notify_one();
     }
 
@@ -261,17 +262,20 @@ public:
         running = true;
 
         thrd = std::thread([this]() {
+            printf("thread: Starting\n");
             while (true) {
                 {
                     std::unique_lock<std::mutex> lock(mtx);
+                    printf("thread: Waiting: this=%p\n", (void*)this);
                     cv.wait(lock, [this]() { return head != tail; });
-
+                    printf("thread: Got Item: head=%zu\n", head);
                     cur = entries[head];
 
                     head = (head + 1) % entries.size();
                 }
 
                 if (cur.is_end) {
+                    printf("thread: Breaking\n");
                     break;
                 }
 
@@ -281,10 +285,12 @@ public:
                     cur.print(file);
                 }
             }
+            printf("thread: Exiting\n");
         });
     }
 
     void pause() {
+        printf("log: Pausing\n");
         {
             std::lock_guard<std::mutex> lock(mtx);
 
@@ -301,14 +307,17 @@ public:
 
                 tail = (tail + 1) % entries.size();
             }
-
+            printf("log: notify head: %zu tail: %zu\n", head, tail);
             cv.notify_one();
         }
 
+        printf("log: Joining: this=%p\n", (void*)this);
         thrd.join();
+        printf("log: Joined: this=%p\n", (void*)this);
     }
 
     void set_file(const char * path) {
+        printf("log: set_file\n");
         pause();
 
         if (file) {
@@ -325,6 +334,7 @@ public:
     }
 
     void set_colors(bool colors) {
+        printf("log: set_colors\n");
         pause();
 
         if (colors) {
@@ -385,6 +395,7 @@ struct common_log * common_log_main() {
 }
 
 void common_log_pause(struct common_log * log) {
+    printf("log: common_log_pause\n");
     log->pause();
 }
 
@@ -431,6 +442,7 @@ void common_log_set_timestamps(struct common_log * log, bool timestamps) {
 }
 
 void common_log_flush(struct common_log * log) {
+    printf("log: common_log_flush\n");
     log->pause();
     log->resume();
 }
