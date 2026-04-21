@@ -639,6 +639,97 @@ void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
     ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
 }
 
+void ggml_vec_dot_ifairy64_q16_K(int                        n,
+                                 float * GGML_RESTRICT      s,
+                                 size_t                     bs,
+                                 const void * GGML_RESTRICT vx,
+                                 size_t                     bx,
+                                 const void * GGML_RESTRICT vy,
+                                 size_t                     by,
+                                 int                        nrc) {
+#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_ifairy64 * GGML_RESTRICT   w = (const block_ifairy64 *) vx;
+    const block_ifairy_q16 * GGML_RESTRICT x = (const block_ifairy_q16 *) vy;
+
+    GGML_ASSERT(n % QK_IFAIRY64 == 0);
+    GGML_ASSERT(n % QK_IFAIRY == 0);
+
+    const int nb = n / QK_IFAIRY64;
+
+    float sum_real_total = 0.0f;
+    float sum_imag_total = 0.0f;
+
+    static const int8_t lut_wr_data[16] = {
+        -1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    static const int8_t lut_wi_data[16] = {
+        0, 0, -1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+
+    const uint8x16_t v_mask = vdupq_n_u8(0x03);
+    const int8x16_t  v_lut_wr = vld1q_s8(lut_wr_data);
+    const int8x16_t  v_lut_wi = vld1q_s8(lut_wi_data);
+
+    for (int i = 0; i < nb; ++i) {
+        const block_ifairy_q16 * x_block = &x[i / 4];
+        const int                x_base  = (i % 4) * QK_IFAIRY64;
+
+        const int8_t * GGML_RESTRICT x_r_ptr = (const int8_t *) x_block->x_real + x_base;
+        const int8_t * GGML_RESTRICT x_i_ptr = (const int8_t *) x_block->x_imag + x_base;
+
+        const uint8x16_t packed = vld1q_u8(w[i].qs);
+
+        int32x4_t acc_ac = vdupq_n_s32(0);
+        int32x4_t acc_ad = vdupq_n_s32(0);
+        int32x4_t acc_bc = vdupq_n_s32(0);
+        int32x4_t acc_bd = vdupq_n_s32(0);
+
+#define GGML_IFAIRY64_DOT_PART(CODES, OFF)                                                         \
+    do {                                                                                            \
+        const int8x16_t  wr    = vqtbl1q_s8(v_lut_wr, CODES);                                      \
+        const int8x16_t  wi    = vqtbl1q_s8(v_lut_wi, CODES);                                      \
+        const int8x16_t  xr    = vld1q_s8(x_r_ptr + OFF);                                          \
+        const int8x16_t  xi    = vld1q_s8(x_i_ptr + OFF);                                          \
+        acc_ac                 = vdotq_s32(acc_ac, xr, wr);                                        \
+        acc_ad                 = vdotq_s32(acc_ad, xi, wr);                                        \
+        acc_bc                 = vdotq_s32(acc_bc, xr, wi);                                        \
+        acc_bd                 = vdotq_s32(acc_bd, xi, wi);                                        \
+    } while (0)
+
+        GGML_IFAIRY64_DOT_PART(vandq_u8(packed, v_mask), 0);
+        GGML_IFAIRY64_DOT_PART(vandq_u8(vshrq_n_u8(packed, 2), v_mask), 16);
+        GGML_IFAIRY64_DOT_PART(vandq_u8(vshrq_n_u8(packed, 4), v_mask), 32);
+        GGML_IFAIRY64_DOT_PART(vandq_u8(vshrq_n_u8(packed, 6), v_mask), 48);
+
+#undef GGML_IFAIRY64_DOT_PART
+
+        const int32_t sum_ac = vaddvq_s32(acc_ac);
+        const int32_t sum_ad = vaddvq_s32(acc_ad);
+        const int32_t sum_bc = vaddvq_s32(acc_bc);
+        const int32_t sum_bd = vaddvq_s32(acc_bd);
+
+        const float w_real = GGML_CPU_FP16_TO_FP32(w[i].d_real);
+        const float w_imag = GGML_CPU_FP16_TO_FP32(w[i].d_imag);
+        const float x_real = GGML_CPU_FP16_TO_FP32(x_block->d_real);
+        const float x_imag = GGML_CPU_FP16_TO_FP32(x_block->d_imag);
+
+        sum_real_total += w_real * x_real * (float) sum_ac + w_imag * x_imag * (float) sum_bd;
+        sum_imag_total += w_imag * x_real * (float) sum_bc - w_real * x_imag * (float) sum_ad;
+    }
+
+    ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
+    ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
+#else
+    ggml_vec_dot_ifairy64_q16_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
 void ggml_vec_dot_ifairy64_q16_K_generic(int                        n,
                                          float * GGML_RESTRICT      s,
                                          size_t                     bs,

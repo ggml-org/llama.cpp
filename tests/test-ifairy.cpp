@@ -29,6 +29,22 @@ void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
                                        const void * GGML_RESTRICT vy,
                                        size_t                     by,
                                        int                        nrc);
+void ggml_vec_dot_ifairy64_q16_K(int                        n,
+                                 float * GGML_RESTRICT      s,
+                                 size_t                     bs,
+                                 const void * GGML_RESTRICT vx,
+                                 size_t                     bx,
+                                 const void * GGML_RESTRICT vy,
+                                 size_t                     by,
+                                 int                        nrc);
+void ggml_vec_dot_ifairy64_q16_K_generic(int                        n,
+                                         float * GGML_RESTRICT      s,
+                                         size_t                     bs,
+                                         const void * GGML_RESTRICT vx,
+                                         size_t                     bx,
+                                         const void * GGML_RESTRICT vy,
+                                         size_t                     by,
+                                         int                        nrc);
 }
 
 #ifndef GGML_FP16_TO_FP32
@@ -943,6 +959,81 @@ static bool test_ifairy_vecdot_direct_compare(const char * argv0) {
     return ok;
 }
 
+static inline void set_ifairy64_code(block_ifairy64 & blk, int idx, uint8_t code) {
+    const int lane  = idx & 0x0F;
+    const int part  = idx >> 4;
+    const int shift = 2 * part;
+    blk.qs[lane]    = (uint8_t) ((blk.qs[lane] & ~(0x3u << shift)) | ((code & 0x3u) << shift));
+}
+
+static bool test_ifairy64_vecdot_compare() {
+    printf("\n=== Test 1.3: iFairy64 vec_dot direct compare ===\n");
+
+    const int k    = 1024;
+    const int nb64 = k / QK_IFAIRY64;
+    const int nbq  = k / QK_IFAIRY;
+    const int rows = 3;
+
+    std::mt19937                          rng(4049u);
+    std::uniform_int_distribution<int>    code_dist(0, 3);
+    std::uniform_int_distribution<int>    act_dist(-127, 127);
+    std::uniform_real_distribution<float> scale_dist(0.05f, 1.25f);
+
+    std::vector<block_ifairy64> w((size_t) rows * (size_t) nb64);
+    for (int r = 0; r < rows; ++r) {
+        for (int ib = 0; ib < nb64; ++ib) {
+            block_ifairy64 blk{};
+            blk.d_real = GGML_FP32_TO_FP16(scale_dist(rng));
+            blk.d_imag = GGML_FP32_TO_FP16(scale_dist(rng));
+            for (int j = 0; j < QK_IFAIRY64; ++j) {
+                set_ifairy64_code(blk, j, (uint8_t) code_dist(rng));
+            }
+            w[(size_t) r * (size_t) nb64 + (size_t) ib] = blk;
+        }
+    }
+
+    std::vector<block_ifairy_q16> x((size_t) nbq);
+    for (int ib = 0; ib < nbq; ++ib) {
+        x[ib].d_real = GGML_FP32_TO_FP16(scale_dist(rng));
+        x[ib].d_imag = GGML_FP32_TO_FP16(scale_dist(rng));
+
+        int8_t * xr = (int8_t *) x[ib].x_real;
+        int8_t * xi = (int8_t *) x[ib].x_imag;
+        for (int j = 0; j < QK_IFAIRY; ++j) {
+            xr[j] = (int8_t) act_dist(rng);
+            xi[j] = (int8_t) act_dist(rng);
+        }
+    }
+
+    bool ok = true;
+    for (int r = 0; r < rows; ++r) {
+        alignas(4) uint32_t out_ref = 0;
+        alignas(4) uint32_t out_opt = 0;
+
+        ggml_vec_dot_ifairy64_q16_K_generic(k, reinterpret_cast<float *>(&out_ref), 0,
+                                            w.data() + (size_t) r * (size_t) nb64, 0, x.data(), 0, 1);
+        ggml_vec_dot_ifairy64_q16_K(k, reinterpret_cast<float *>(&out_opt), 0,
+                                    w.data() + (size_t) r * (size_t) nb64, 0, x.data(), 0, 1);
+
+        if (out_ref != out_opt) {
+            const ggml_bf16_t rr{ (uint16_t) (out_ref & 0xFFFFu) };
+            const ggml_bf16_t ri{ (uint16_t) (out_ref >> 16) };
+            const ggml_bf16_t orr{ (uint16_t) (out_opt & 0xFFFFu) };
+            const ggml_bf16_t ori{ (uint16_t) (out_opt >> 16) };
+
+            fprintf(stderr,
+                    "ifairy64 vecdot mismatch: row=%d ref=(%.7g, %.7g) opt=(%.7g, %.7g) ref_word=0x%08x "
+                    "opt_word=0x%08x\n",
+                    r, GGML_BF16_TO_FP32(rr), GGML_BF16_TO_FP32(ri), GGML_BF16_TO_FP32(orr), GGML_BF16_TO_FP32(ori),
+                    out_ref, out_opt);
+            ok = false;
+        }
+    }
+
+    printf("  ifairy64 vec_dot compare - %s\n", ok ? "PASS" : "FAIL");
+    return ok;
+}
+
 // ============================================================================
 // 测试 3: ROPE 算子
 // ============================================================================
@@ -1839,6 +1930,11 @@ int main(int argc, char ** argv) {
 
         if (!test_ifairy_vecdot_direct_compare(argv[0])) {
             fprintf(stderr, "Test 1.2 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy64_vecdot_compare()) {
+            fprintf(stderr, "Test 1.3 FAILED\n");
             num_failed++;
         }
 
