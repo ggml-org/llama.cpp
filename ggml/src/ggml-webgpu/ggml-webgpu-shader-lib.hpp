@@ -2406,11 +2406,10 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_conv2d_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_conv2d_pipeline_key key = {
-            .weight_type = context.src0->type,
-            .input_type  = context.src1->type,
-            .output_type = context.dst->type,
-        };
+        ggml_webgpu_conv2d_pipeline_key key = {};
+        key.weight_type                     = context.src0->type;
+        key.input_type                      = context.src1->type;
+        key.output_type                     = context.dst->type;
 
         auto it = conv2d_pipelines.find(key);
         if (it != conv2d_pipelines.end()) {
