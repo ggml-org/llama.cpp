@@ -701,8 +701,8 @@ TRIP_PLAN_TEST = {
         }
     ],
     "mock_tool_responses": {
-        "search_flights":     lambda _: json.dumps(_FLIGHTS_RESULT),
-        "search_hotels":      lambda _: json.dumps(_HOTELS_RESULT),
+        "search_flights": lambda _: json.dumps(_FLIGHTS_RESULT),
+        "search_hotels": lambda _: json.dumps(_HOTELS_RESULT),
         "search_restaurants": lambda _: json.dumps(_RESTAURANTS_RESULT),
     },
     "expected_parallel": {
