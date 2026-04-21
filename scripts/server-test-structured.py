@@ -20,6 +20,7 @@ import argparse
 import json
 import requests
 import sys
+from typing import Any, cast
 
 # ---------------------------------------------------------------------------
 # Color / formatting helpers
@@ -551,9 +552,12 @@ def _validate_recipe(parsed):
     for i, ing in enumerate(ings):
         if not isinstance(ing, dict):
             return False, f"ingredient[{i}] is not an object: {ing!r}"
-        if "item" not in ing or "quantity" not in ing:
+        ing_d = cast(dict[str, Any], ing)
+        item_val = ing_d.get("item")
+        qty_val = ing_d.get("quantity")
+        if item_val is None or qty_val is None:
             return False, f"ingredient[{i}] missing item/quantity: {ing!r}"
-        if not isinstance(ing["item"], str) or not isinstance(ing["quantity"], str):
+        if not isinstance(item_val, str) or not isinstance(qty_val, str):
             return False, f"ingredient[{i}] fields must be strings: {ing!r}"
     steps = parsed["steps"]
     if not isinstance(steps, list) or len(steps) < 2:
@@ -720,20 +724,27 @@ def _validate_shop_comparison(parsed, tcs):
     if not isinstance(cands, list) or len(cands) < 2:
         return False, f"ranked_candidates must be >=2: {cands!r}"
     valid_ids = set(_SHOP_PRODUCT_DETAILS.keys())
+    candidate_pids: list = []
     for i, c in enumerate(cands):
         if not isinstance(c, dict):
             return False, f"candidate[{i}] not an object: {c!r}"
-        for k in ("product_id", "title", "score", "reason"):
-            if k not in c:
+        c_d = cast(dict[str, Any], c)
+        pid = c_d.get("product_id")
+        title = c_d.get("title")
+        score = c_d.get("score")
+        reason = c_d.get("reason")
+        for k, v in (("product_id", pid), ("title", title),
+                     ("score", score), ("reason", reason)):
+            if v is None:
                 return False, f"candidate[{i}] missing {k}: {c!r}"
-        if c["product_id"] not in valid_ids:
-            return False, f"candidate[{i}].product_id not in catalogue: {c['product_id']!r}"
-        if not isinstance(c["score"], (int, float)):
-            return False, f"candidate[{i}].score not numeric: {c['score']!r}"
-    if parsed["recommendation"] not in valid_ids and not any(
-        parsed["recommendation"] == c["product_id"] for c in cands
-    ):
-        return False, f"recommendation {parsed['recommendation']!r} not in candidates"
+        if pid not in valid_ids:
+            return False, f"candidate[{i}].product_id not in catalogue: {pid!r}"
+        if not isinstance(score, (int, float)):
+            return False, f"candidate[{i}].score not numeric: {score!r}"
+        candidate_pids.append(pid)
+    recommendation = parsed["recommendation"]
+    if recommendation not in valid_ids and recommendation not in candidate_pids:
+        return False, f"recommendation {recommendation!r} not in candidates"
     return True, (
         f"tools={names}; recommended={parsed['recommendation']}; "
         f"{len(cands)} ranked candidates"
