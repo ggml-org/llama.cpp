@@ -671,6 +671,7 @@ def main() -> None:
     writer.add_uint32("fairy2i.quant.residual_steps", args.residual_steps)
     writer.add_string("fairy2i.quant.codebook", "{+/-1,+/-i}")
     writer.add_string("fairy2i.quant.variant", quant_variant)
+    writer.add_string("fairy2i.attn.layout", "qwen2_real")
     if quant_variant == "tile64_v2":
         writer.add_uint32("fairy2i.quant.tile_size", TILE64)
         writer.add_string("fairy2i.quant.scale_stat", "dominant_mean_abs")
