@@ -3902,6 +3902,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
+    add_opt(common_arg(
+        {"--spec-default"},
+        string_format("enable default speculative decoding config"),
+        [](common_params & params) {
+            params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
+            params.speculative.ngram_size_n = 24;
+            params.speculative.n_min = 48;
+            params.speculative.n_max = 64;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
     return ctx_arg;
 }
 
