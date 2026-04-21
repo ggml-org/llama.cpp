@@ -32,6 +32,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "hvx-dump.h"
+#include "hvx-reduce.h"
 #include "hvx-utils.h"
 #include "worker-pool.h"
 
@@ -530,12 +531,9 @@ static void fa_phase_q_load(struct hmx_fa_context *   factx,
                              uint32_t q_start, uint32_t kv_head, uint32_t ib3,
                              size_t n_rows_g) {
     fa_q_load_args_t args = { factx, q, q_start, kv_head, ib3, n_rows_g };
-    // Require >= 2 row pairs per thread so partitioning is worthwhile.
-    if (factx->n_threads > 1 && n_rows_g >= (size_t)(factx->n_threads * 2)) {
-        worker_pool_run_func(factx->worker_pool, fa_q_load_thread, &args, factx->n_threads);
-    } else {
-        fa_q_load_thread(1, 0, &args);
-    }
+    // PENDING: multi-thread Q load has a race/coherency bug — HEAD ppl broken with
+    // multi-thread, correct with single-thread.  Force single-thread.
+    fa_q_load_thread(1, 0, &args);
 }
 
 // ============================================================================
@@ -579,8 +577,10 @@ static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
         const size_t q_idx = r / G;
         const size_t h_idx = r % G;
 
-        uint8_t * dst_row = (uint8_t *) dst->data + (q_start + q_idx) * dst->nb[1] +
-                            (kv_head * G + h_idx) * dst->nb[2] + ib3 * dst->nb[3];
+        // FIX(dst-indexing): ggml_flash_attn_ext() creates dst as permute(0,2,1,3) ->
+        // [DV, n_heads, n_tokens, n_seq], so head stride is nb[1] and token stride is nb[2].
+        uint8_t * dst_row = (uint8_t *) dst->data + (kv_head * G + h_idx) * dst->nb[1] +
+                            (q_start + q_idx) * dst->nb[2] + ib3 * dst->nb[3];
 
         size_t         r0            = r / HMX_FP16_TILE_N_ROWS;
         size_t         r1            = r % HMX_FP16_TILE_N_ROWS;
@@ -621,11 +621,8 @@ static void fa_phase_o_store(struct hmx_fa_context *   factx,
                               uint32_t q_start, uint32_t kv_head, uint32_t ib3,
                               size_t n_rows_g) {
     fa_o_store_args_t args = { factx, dst, o_tile_src, q_start, kv_head, ib3, n_rows_g };
-    if (factx->n_threads > 1 && n_rows_g >= (size_t)(factx->n_threads * 2)) {
-        worker_pool_run_func(factx->worker_pool, fa_o_store_thread, &args, factx->n_threads);
-    } else {
-        fa_o_store_thread(1, 0, &args);
-    }
+    // PENDING: multi-thread O store has a race/coherency bug.  Force single-thread.
+    fa_o_store_thread(1, 0, &args);
 }
 
 // ============================================================================
@@ -684,9 +681,20 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
 
     const HVX_Vector v_neg_inf = Q6_Vh_vsplat_R(0xfbff);
 
+    // FIX(#3): union-backed per-row accumulator, replaces vlalign/vror writeback.
+    // `Q6_V_vlalign_VVR(U, V, 0) = V` drops the r_vec_off=0 write in the old pattern.
+    union vec_u16 {
+        HVX_Vector v;
+        uint16_t   u[64];
+    };
+
     for (size_t r_vec_idx = vec_start; r_vec_idx < vec_end; ++r_vec_idx) {
-        HVX_Vector v_s_rowmax_local = v_neg_inf;
-        HVX_Vector v_p_rowsum_local = Q6_V_vzero();
+        union vec_u16 rowmax_acc;
+        union vec_u16 rowsum_acc;
+        union vec_u16 m_prev;
+        rowmax_acc.v = v_neg_inf;
+        rowsum_acc.v = Q6_V_vzero();
+        m_prev.v     = factx->vtcm_m_vec[r_vec_idx];
 
         for (int r_vec_off = 0; r_vec_off < 64; r_vec_off += 2) {
             int r = r_vec_idx * 64 + r_vec_off;
@@ -846,30 +854,33 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                 v_s_rowmax1 = Q6_Vhf_vmax_VhfVhf(v_s_rowmax1, my_row_buf1[ci]);
             }
 
-            // Reduce rowmax intra-vector
-            #pragma unroll
-            for (int s = 64; s >= 2; s >>= 1) {
-                v_s_rowmax0 =
-                    Q6_Vhf_vmax_VhfVhf(v_s_rowmax0, Q6_V_vlalign_VVR(v_s_rowmax0, v_neg_inf, s));
-                v_s_rowmax1 =
-                    Q6_Vhf_vmax_VhfVhf(v_s_rowmax1, Q6_V_vlalign_VVR(v_s_rowmax1, v_neg_inf, s));
-            }
+            // FIX(#3): broadcast-to-all-lanes reduce, then scalar extract + vsplat.
+            // Old vror+vlalign writeback had `vlalign(U,V,0)=V` dropping r_vec_off=0 writes.
+            // Also covers #2 (replaces the error-prone Q6_Wh_vlut16_VbVhR_nomatch R=0/R=2
+            // broadcast with a scalar fp16 extract + Q6_Vh_vsplat_R splat).
+            v_s_rowmax0 = hvx_vec_reduce_max_f16(v_s_rowmax0);
+            v_s_rowmax1 = hvx_vec_reduce_max_f16(v_s_rowmax1);
 
-            HVX_Vector v_s_rowmax_pack2 = Q6_V_hi_W(Q6_W_vshuff_VVR(v_s_rowmax1, v_s_rowmax0, -2));
-            HVX_Vector v_s_rowmax_pack2_rot =
-                Q6_V_vror_VR(v_s_rowmax_pack2, 128 - 2 * sizeof(__fp16));
-            HVX_Vector v_s_rowmax_local_rot =
-                Q6_V_vror_VR(v_s_rowmax_local, r_vec_off * sizeof(__fp16));
-            v_s_rowmax_local = Q6_V_vlalign_VVR(v_s_rowmax_pack2_rot, v_s_rowmax_local_rot,
-                                                r_vec_off * sizeof(__fp16));
+            union vec_u16 s0_view, s1_view;
+            s0_view.v = v_s_rowmax0;
+            s1_view.v = v_s_rowmax1;
+            uint16_t rowmax_r_bits  = s0_view.u[0];
+            uint16_t rowmax_r1_bits = s1_view.u[0];
+            rowmax_acc.u[r_vec_off]     = rowmax_r_bits;
+            rowmax_acc.u[r_vec_off + 1] = rowmax_r1_bits;
 
-            // Compute m_new = max(m_old, rowmax)
-            HVX_Vector v_m_cur = Q6_Vhf_vmax_VhfVhf(factx->vtcm_m_vec[r_vec_idx], v_s_rowmax_local);
-
-            // Broadcast m_0, m_1 using LUT
-            HVX_Vector v_m_lut  = Q6_V_vror_VR(v_m_cur, r_vec_off * sizeof(__fp16));
-            HVX_Vector v_dup_m0 = Q6_V_lo_W(Q6_Wh_vlut16_VbVhR_nomatch(Q6_V_vzero(), v_m_lut, 0));
-            HVX_Vector v_dup_m1 = Q6_V_lo_W(Q6_Wh_vlut16_VbVhR_nomatch(Q6_V_vzero(), v_m_lut, 2));
+            __fp16 rowmax_r_f16, rowmax_r1_f16, m_prev_r, m_prev_r1;
+            memcpy(&rowmax_r_f16,  &rowmax_r_bits,  2);
+            memcpy(&rowmax_r1_f16, &rowmax_r1_bits, 2);
+            memcpy(&m_prev_r,  &m_prev.u[r_vec_off],     2);
+            memcpy(&m_prev_r1, &m_prev.u[r_vec_off + 1], 2);
+            __fp16 m_new_r  = m_prev_r  > rowmax_r_f16  ? m_prev_r  : rowmax_r_f16;
+            __fp16 m_new_r1 = m_prev_r1 > rowmax_r1_f16 ? m_prev_r1 : rowmax_r1_f16;
+            uint16_t m_new_r_bits, m_new_r1_bits;
+            memcpy(&m_new_r_bits,  &m_new_r,  2);
+            memcpy(&m_new_r1_bits, &m_new_r1, 2);
+            HVX_Vector v_dup_m0 = Q6_Vh_vsplat_R((int) m_new_r_bits);
+            HVX_Vector v_dup_m1 = Q6_Vh_vsplat_R((int) m_new_r1_bits);
 
             // Compute P = exp(S - m_new), using HVX exp
             const HVX_Vector v_zero      = Q6_V_vzero();
@@ -920,7 +931,6 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                 *pv_p_out0               = Q6_V_lo_W(vp_p_dual);
                 *pv_p_out1               = Q6_V_hi_W(vp_p_dual);
 
-                // Rowsum reduction using qf32
                 HVX_VectorPair vp_p0 = hvx_vec_f16_to_f32_shuff(v_p_row0_hf);
                 HVX_VectorPair vp_p1 = hvx_vec_f16_to_f32_shuff(v_p_row1_hf);
 
@@ -930,27 +940,22 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                     v_p_rowsum1, Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(vp_p1), Q6_V_hi_W(vp_p1)));
             }
 
-            // Rowsum phase 2 reduction
-            #pragma unroll
-            for (int s = 64; s >= 4; s >>= 1) {
-                v_p_rowsum0 =
-                    Q6_Vqf32_vadd_Vqf32Vqf32(v_p_rowsum0, Q6_V_vlalign_VVR(v_p_rowsum0, v_zero, s));
-                v_p_rowsum1 =
-                    Q6_Vqf32_vadd_Vqf32Vqf32(v_p_rowsum1, Q6_V_vlalign_VVR(v_p_rowsum1, v_zero, s));
+            // FIX(#3): reduce rowsum to all lanes, scalar extract to union.
+            HVX_Vector rowsum0_sf = Q6_Vsf_equals_Vqf32(v_p_rowsum0);
+            HVX_Vector rowsum1_sf = Q6_Vsf_equals_Vqf32(v_p_rowsum1);
+            rowsum0_sf = hvx_vec_reduce_sum_f32(rowsum0_sf);
+            rowsum1_sf = hvx_vec_reduce_sum_f32(rowsum1_sf);
+            {
+                union vec_u16 rv0, rv1;
+                rv0.v = hvx_vec_f32_to_f16(rowsum0_sf, rowsum0_sf);
+                rv1.v = hvx_vec_f32_to_f16(rowsum1_sf, rowsum1_sf);
+                rowsum_acc.u[r_vec_off]     = rv0.u[0];
+                rowsum_acc.u[r_vec_off + 1] = rv1.u[0];
             }
-            HVX_Vector v_p_rowsum_pack2 =
-                Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(v_p_rowsum1, v_p_rowsum0));
-
-            HVX_Vector v_p_rowsum_pack2_rot =
-                Q6_V_vror_VR(v_p_rowsum_pack2, 128 - 2 * sizeof(__fp16));
-            HVX_Vector v_p_rowsum_local_rot =
-                Q6_V_vror_VR(v_p_rowsum_local, r_vec_off * sizeof(__fp16));
-            v_p_rowsum_local = Q6_V_vlalign_VVR(v_p_rowsum_pack2_rot, v_p_rowsum_local_rot,
-                                                r_vec_off * sizeof(__fp16));
         }
 
-        factx->vtcm_s_rowmax[r_vec_idx] = v_s_rowmax_local;
-        factx->vtcm_p_rowsum[r_vec_idx] = v_p_rowsum_local;
+        factx->vtcm_s_rowmax[r_vec_idx] = rowmax_acc.v;
+        factx->vtcm_p_rowsum[r_vec_idx] = rowsum_acc.v;
     }
 }
 
@@ -1000,19 +1005,12 @@ static void fa_ml_update_and_build_d(struct hmx_fa_context * factx,
 static void fa_phase_softmax_and_build_d(struct hmx_fa_context * factx,
                                           fa_softmax_args_t * sargs,
                                           size_t n_row_tiles, size_t n_row_tiles_g_br) {
-    const size_t n_row_vec_cnt = hmx_ceil_div(sargs->n_rows_g, 64);
-
-    // Multi-thread as long as we have at least 2 row vectors (2 × 64 = 128 rows)
-    // to split.  The original gate `n_row_vec_cnt >= n_threads` was too strict —
-    // with n_threads=8 it forced single-thread fallback any time n_rows_g < 512,
-    // even though softmax is the dominant 70% phase.  worker_pool uses the
-    // caller's count as an upper bound and skips workers with no rows to process.
-    if (factx->n_threads > 1 && n_row_vec_cnt >= 2) {
-        uint32_t n_use = (uint32_t) hex_smin((size_t) factx->n_threads, n_row_vec_cnt);
-        worker_pool_run_func(factx->worker_pool, fa_softmax_thread, sargs, n_use);
-    } else {
-        fa_softmax_thread(1, 0, sargs);
-    }
+    // PENDING: multi-thread softmax has a race/coherency bug — HEAD ppl breaks with
+    // multi-thread, correct with single-thread.  Force single-thread until the root
+    // cause in the worker-pool sharing of vtcm_m_vec / vtcm_s_rowmax / vtcm_p_rowsum
+    // (or the row_buf scratch) is identified.
+    (void) hmx_ceil_div(sargs->n_rows_g, 64);
+    fa_softmax_thread(1, 0, sargs);
     // barrier implicit in worker_pool_run_func return
 
     fa_ml_update_and_build_d(factx, sargs->n_rows_g, n_row_tiles, n_row_tiles_g_br);
@@ -1237,7 +1235,10 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const size_t g_br = hex_align_up(G * Br, HMX_FP16_TILE_N_ROWS);
 
     const uint32_t n_kv_blocks = (nek1 + Bc - 1) / Bc;
-    const bool     use_pipeline = (n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads >= 2);
+    // PENDING: pipeline and multi-thread Q/O/softmax paths still have race/coherency
+    // bugs (see hmx-flash-attn-prefill-ppl-bug.md).  Force single-thread fallback until
+    // they are independently verified.
+    const bool     use_pipeline = false;
 
     FARF(HIGH, "hmx_fa: neq1=%u nek1=%u DK=%u DV=%u G=%u Br=%zu Bc=%zu g_br=%zu n_kv_blocks=%u pipeline=%d vtcm=%zu",
          neq1, nek1, DK, DV, G, Br, Bc, g_br, n_kv_blocks, use_pipeline, vtcm_budget);
@@ -1553,7 +1554,10 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         DMA_PREFETCH_KV(kv_blk + 1);
 
                         TIMER_START(v_interleave);
-                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, buf_idx, n_col_tiles);
+                        // FIX(v-stride): use n_tiles_per_bc (block-invariant) as V tile layout
+                        // stride to match o_update's v_tile access.  Using per-block n_col_tiles
+                        // misplaces DV_tile 1..3 in the last partial KV block.
+                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, buf_idx, n_tiles_per_bc);
                         TIMER_STOP(v_interleave);
 
                         hmx_queue_pop(hmx_q);
@@ -1703,7 +1707,10 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                         // V interleave (multi-thread HVX)
                         TIMER_START(v_interleave);
-                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, buf_idx, n_col_tiles);
+                        // FIX(v-stride): use n_tiles_per_bc (block-invariant) as V tile layout
+                        // stride to match o_update's v_tile access.  Using per-block n_col_tiles
+                        // misplaces DV_tile 1..3 in the last partial KV block.
+                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, buf_idx, n_tiles_per_bc);
                         TIMER_STOP(v_interleave);
 
                         // O update (inline HMX on main thread)
