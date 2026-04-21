@@ -490,7 +490,6 @@ struct ggml_webgpu_flash_attn_vec_decisions {
 inline constexpr uint32_t GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH = 4u;
 
 inline uint32_t ggml_webgpu_flash_attn_pick_vec_ne(const ggml_webgpu_flash_attn_pipeline_key & key) {
-    // Keep conservative defaults unless this is the f16 vec-split shape family.
     if (key.path != GGML_WEBGPU_FLASH_ATTN_PATH_VEC || key.kv_type != GGML_TYPE_F16 ||
         key.head_dim_qk != key.head_dim_v) {
         return 1u;

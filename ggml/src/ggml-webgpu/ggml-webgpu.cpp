@@ -1588,7 +1588,6 @@ static webgpu_encoded_op ggml_webgpu_mul_mat_id(webgpu_context & ctx,
     return ggml_backend_webgpu_build_multi(ctx, dispatches);
 }
 
-#ifndef __EMSCRIPTEN__
 static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
                                                 ggml_tensor *    Q,
                                                 ggml_tensor *    K,
@@ -1849,7 +1848,6 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
 
     return ggml_backend_webgpu_build_multi(ctx, dispatches);
 }
-#endif  // __EMSCRIPTEN__
 
 static webgpu_encoded_op ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
     bool is_unary = dst->op == GGML_OP_UNARY;
@@ -2739,11 +2737,7 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
         case GGML_OP_MUL_MAT_ID:
             return ggml_webgpu_mul_mat_id(ctx, src0, src1, src2, node);
         case GGML_OP_FLASH_ATTN_EXT:
-#ifndef __EMSCRIPTEN__
             return ggml_webgpu_flash_attn(ctx, src0, src1, src2, node->src[3], node->src[4], node);
-#else
-            return std::nullopt;
-#endif
         case GGML_OP_ADD:
         case GGML_OP_SUB:
         case GGML_OP_MUL:
@@ -3818,7 +3812,6 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 if (!supports_op) {
                     break;
                 }
-#ifndef __EMSCRIPTEN__
                 const bool kv_vec_type_supported =
                     src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_Q4_0 || src1->type == GGML_TYPE_Q8_0;
                 const bool use_vec = ctx->webgpu_global_ctx->capabilities.supports_subgroups &&
@@ -3871,9 +3864,6 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 if (min_bytes > limit_bytes) {
                     supports_op = false;
                 }
-#else
-                supports_op = false;
-#endif
                 break;
             }
         case GGML_OP_RMS_NORM:
