@@ -1,6 +1,7 @@
 #include "llama-model.h"
 
 #include "llama-arch.h"
+#include "llama-ext.h"
 #include "llama-hparams.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
@@ -9448,4 +9449,19 @@ bool llama_model_is_diffusion(const llama_model * model) {
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
     return model->tensors_by_name;
+}
+
+int32_t llama_model_n_expert(const struct llama_model * model) {
+    return model->hparams.n_expert;
+}
+
+int32_t llama_model_n_devices(const struct llama_model * model) {
+    return (int32_t)model->devices.size();
+}
+
+ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i) {
+    if (i < 0 || i >= (int)model->devices.size()) {
+        return nullptr;
+    }
+    return model->devices[i].dev;
 }

@@ -81,6 +81,7 @@ enum htp_op_code {
     HTP_OP_REPEAT,
     HTP_OP_CUMSUM,
     HTP_OP_FILL,
+    HTP_OP_DIAG,
 
     HTP_OP_INVALID
 };

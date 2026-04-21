@@ -35,6 +35,7 @@ add_library(${HTP_LIB} SHARED
     ssm-conv.c
     cumsum-ops.c
     fill-ops.c
+    diag-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
