@@ -1275,61 +1275,6 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
     const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
     return d * sumi;
 }
-
-#define VDR_Q4_0_TQ_Q8_1_MMVQ 4
-
-static __device__ __forceinline__ float vec_dot_q4_0_tq_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
-    const block_q4_0_tq_v0 * bq = (const block_q4_0_tq_v0 *) vbq + kbx;
-    const int g = iqs / VDR_Q4_0_TQ_Q8_1_MMVQ; // group 0..3
-    const float scale0 = exp2f(((int) bq->s0 - 127) / 16.0f);
-    const float scale1 = scale0 * exp2f((float) bq->ds1 / 16.0f);
-    const float scale = g < 2 ? scale0 : scale1;
-    const float2 ds8 = __half22float2(bq8_1->ds);
-
-    const int8_t levels[8] = { -7, -5, -3, -1, 1, 3, 5, 7 };
-    const uint8_t * qp = bq->qs + g * 3;
-
-    float sum = 0.0f;
-    sum += (float) levels[ qp[0]        & 7] * (float) bq8_1->qs[g*8 + 0];
-    sum += (float) levels[(qp[0] >> 3)  & 7] * (float) bq8_1->qs[g*8 + 1];
-    sum += (float) levels[((qp[0] >> 6) | (qp[1] << 2)) & 7] * (float) bq8_1->qs[g*8 + 2];
-    sum += (float) levels[(qp[1] >> 1)  & 7] * (float) bq8_1->qs[g*8 + 3];
-    sum += (float) levels[(qp[1] >> 4)  & 7] * (float) bq8_1->qs[g*8 + 4];
-    sum += (float) levels[((qp[1] >> 7) | (qp[2] << 1)) & 7] * (float) bq8_1->qs[g*8 + 5];
-    sum += (float) levels[(qp[2] >> 2)  & 7] * (float) bq8_1->qs[g*8 + 6];
-    sum += (float) levels[(qp[2] >> 5)  & 7] * (float) bq8_1->qs[g*8 + 7];
-
-    return sum * scale * ds8.x;
-}
-
-#define VDR_Q4_0_TQ_V1_Q8_1_MMVQ 4
-
-static __device__ __forceinline__ float vec_dot_q4_0_tq_v1_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
-    const block_q4_0_tq_v1 * bq = (const block_q4_0_tq_v1 *) vbq + kbx;
-    const int g = iqs / VDR_Q4_0_TQ_V1_Q8_1_MMVQ; // group 0..3
-    const float scale = exp2f(((int) bq->scales[g] - 127) / 16.0f);
-    const float2 ds8 = __half22float2(bq8_1->ds);
-
-    const int8_t levels[8] = { -7, -5, -3, -1, 1, 3, 5, 7 };
-    const uint8_t * qp = bq->qs + g * 3;
-
-    float sum = 0.0f;
-    sum += (float) levels[ qp[0]        & 7] * (float) bq8_1->qs[g*8 + 0];
-    sum += (float) levels[(qp[0] >> 3)  & 7] * (float) bq8_1->qs[g*8 + 1];
-    sum += (float) levels[((qp[0] >> 6) | (qp[1] << 2)) & 7] * (float) bq8_1->qs[g*8 + 2];
-    sum += (float) levels[(qp[1] >> 1)  & 7] * (float) bq8_1->qs[g*8 + 3];
-    sum += (float) levels[(qp[1] >> 4)  & 7] * (float) bq8_1->qs[g*8 + 4];
-    sum += (float) levels[((qp[1] >> 7) | (qp[2] << 1)) & 7] * (float) bq8_1->qs[g*8 + 5];
-    sum += (float) levels[(qp[2] >> 2)  & 7] * (float) bq8_1->qs[g*8 + 6];
-    sum += (float) levels[(qp[2] >> 5)  & 7] * (float) bq8_1->qs[g*8 + 7];
-
-    return sum * scale * ds8.x;
-}
-
 // TQ3_0: dequant full block via warp-shuffle WHT, then dot with q8_1
 #define VDR_TQ3_0_Q8_1_MMVQ 4
 
@@ -1397,8 +1342,8 @@ static __device__ __forceinline__ float tq3_1s_dot_subgroup_q8_1(
     const int a_lo = *(const int *)&bq8_1->qs[q8 + 0];
     const int a_hi = *(const int *)&bq8_1->qs[q8 + 4];
 
-    int sumi = __dp4a(w_lo, a_lo, 0);
-    sumi     = __dp4a(w_hi, a_hi, sumi);
+    int sumi = ggml_cuda_dp4a(w_lo, a_lo, 0);
+    sumi     = ggml_cuda_dp4a(w_hi, a_hi, sumi);
 
     const float d = (g < 2) ? __half2float(bq->d0) : __half2float(bq->d1);
     const float2 ds8 = __half22float2(bq8_1->ds);
@@ -1428,10 +1373,14 @@ static __device__ __forceinline__ float vec_dot_tq3_1s_q8_1(
 #endif
 
 static __device__ __forceinline__ float tq3_4s_ratio4s(const uint8_t byte) {
-    if (byte == 0) return 0.0f;
-    const int exp = (byte >> 5) - 9;
-    const float mantissa = 1.0f + (float) (byte & 31) / 32.0f;
-    return ldexpf(mantissa, exp);
+    if (byte == 0) {
+        return 0.0f;
+    }
+
+    // d encodes (1 + mant/32) * 2^(exp - 9), with exp in the high 3 bits.
+    // Build the exact FP32 representation directly and avoid ldexpf in the hot loop.
+    const uint32_t bits = (((uint32_t) (byte >> 5) + 118u) << 23) | ((uint32_t) (byte & 31u) << 18);
+    return __uint_as_float(bits);
 }
 
 static __device__ __forceinline__ float tq3_4s_dot_subgroup_q8_1(
@@ -1465,8 +1414,8 @@ static __device__ __forceinline__ float tq3_4s_dot_subgroup_q8_1(
     const int a_hi = *(const int *)&bq8_1->qs[q8 + 4];
 
     // dp4a: each does 4 int8 multiply-adds
-    int sumi = __dp4a(w_lo, a_lo, 0);
-    sumi     = __dp4a(w_hi, a_hi, sumi);
+    int sumi = ggml_cuda_dp4a(w_lo, a_lo, 0);
+    sumi     = ggml_cuda_dp4a(w_hi, a_hi, sumi);
 
     // Scale: d_weight * (centroid_scale / 127) * d_activation
     // centroids range [-2.1519, 2.1519], levels range [-127, 127]

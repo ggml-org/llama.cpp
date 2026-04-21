@@ -1,11 +1,32 @@
 #pragma once
 
+#if defined(GGML_USE_HIP)
+#include <hip/hip_fp16.h>
+#include <hip/hip_runtime.h>
+#elif defined(GGML_USE_MUSA)
+#include <musa_fp16.h>
+#include <musa_runtime.h>
+#else
 #include <cuda_fp16.h>
+#include <cuda_runtime.h>
+#endif
 #include <stdint.h>
 
+#if defined(GGML_USE_HIP)
+#define GGML_COMMON_DECL_HIP
+#include "../ggml-common.h"
+#undef GGML_COMMON_DECL_HIP
+#elif defined(GGML_USE_MUSA)
+#define GGML_COMMON_DECL_CUDA
+#define GGML_COMMON_DECL_MUSA
+#include "../ggml-common.h"
+#undef GGML_COMMON_DECL_MUSA
+#undef GGML_COMMON_DECL_CUDA
+#else
 #define GGML_COMMON_DECL_CUDA
 #include "../ggml-common.h"
 #undef GGML_COMMON_DECL_CUDA
+#endif
 
 #ifndef QK_TQ3_0
 #define QK_TQ3_0 32
@@ -51,14 +72,14 @@ static __device__ __forceinline__ float vec_dot_tq3_0_q8_0_native_block(
         rms = __half2float(bq->d);
     }
 
-    packed = __shfl_sync(0xFFFFFFFF, packed, leader);
-    rms    = __shfl_sync(0xFFFFFFFF, rms, leader);
+    packed = __shfl_sync(0xFFFFFFFF, packed, leader, 32);
+    rms    = __shfl_sync(0xFFFFFFFF, rms, leader, 32);
 
     float val = ggml_cuda_tq3_centroid(ggml_cuda_tq3_unpack_idx(packed, r));
 
 #pragma unroll
     for (int step = 1; step < 32; step <<= 1) {
-        const float other = __shfl_xor_sync(0xFFFFFFFF, val, step);
+        const float other = __shfl_xor_sync(0xFFFFFFFF, val, step, 32);
         val = (lane & step) ? (other - val) : (other + val);
     }
 
@@ -67,7 +88,7 @@ static __device__ __forceinline__ float vec_dot_tq3_0_q8_0_native_block(
 
 #pragma unroll
     for (int step = 16; step > 0; step >>= 1) {
-        contrib += __shfl_xor_sync(0xFFFFFFFF, contrib, step);
+        contrib += __shfl_xor_sync(0xFFFFFFFF, contrib, step, 32);
     }
 
     return contrib;

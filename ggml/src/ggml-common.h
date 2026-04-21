@@ -96,7 +96,6 @@ typedef sycl::half2 ggml_half2;
 #define QI1_0 (QK1_0 / 32)
 #define QR1_0 1
 
-
 #define QI4_0 (QK4_0 / (4 * QR4_0))
 #define QR4_0 2
 
@@ -301,15 +300,6 @@ typedef struct {
     uint8_t   qs[QK_TQ3_0 * 3 / 8]; // 12 bytes: 32 × 3-bit packed indices
 } block_tq3_4s;
 static_assert(sizeof(block_tq3_4s) == 4 + QK_TQ3_0 * 3 / 8, "wrong tq3_4s block size/padding");
-typedef block_tq3_4s block_tq3_4sv;
-
-// TurboQuant 3-bit with four E3M5 scales + two u8 shifts (4.5 bpw)
-typedef struct {
-    uint8_t   d[4];                  // 4 × E3M5 scales for groups of 8
-    uint8_t   s[2];                  // 2 × u8 shifts for halves of 16
-    uint8_t   qs[QK_TQ3_0 * 3 / 8]; // 12 bytes
-} block_tq3_4se;
-static_assert(sizeof(block_tq3_4se) == 6 + QK_TQ3_0 * 3 / 8, "wrong tq3_4se block size/padding");
 
 // TurboQuant 3-bit with one promoted shared-shift block per 16 logical TQ3_1S blocks.
 // Fixed layout per 512 weights:
@@ -319,7 +309,6 @@ static_assert(sizeof(block_tq3_4se) == 6 + QK_TQ3_0 * 3 / 8, "wrong tq3_4se bloc
 //
 // This keeps the superblock size unchanged while removing mixed-stream pointer
 // walking from the hot decode path.
-#define QK_TQ3_1S_AP1 512
 typedef struct {
     ggml_half d0;
     ggml_half d1;
@@ -327,31 +316,6 @@ typedef struct {
     uint8_t qs[QK_TQ3_0 * 3 / 8];
 } block_tq3_1s_shift;
 static_assert(sizeof(block_tq3_1s_shift) == 3 * sizeof(ggml_half) + QK_TQ3_0 * 3 / 8, "wrong tq3_1s_shift block size/padding");
-
-typedef struct {
-    uint16_t mask;
-    uint8_t qs[258];
-} block_tq3_1s_ap1;
-static_assert(sizeof(block_tq3_1s_ap1) == 260, "wrong tq3_1s_ap1 block size/padding");
-
-// Q4_0_TQ prototype (3.5 bpw)
-// 32 values per block, direct-domain 3-bit levels + 2-byte local scale metadata
-#define QK_Q4_0_TQ_V0 32
-typedef struct {
-    uint8_t qs[QK_Q4_0_TQ_V0 * 3 / 8]; // 3-bit quant indices, packed (12 bytes)
-    uint8_t s0;                        // base scale code
-    int8_t  ds1;                       // signed half-block scale delta
-} block_q4_0_tq_v0;
-static_assert(sizeof(block_q4_0_tq_v0) == 14, "wrong q4_0_tq_v0 block size/padding");
-
-// Q4_0_TQ redesign candidate (4.0 bpw)
-// 32 values per block, direct-domain 3-bit levels + 4 explicit quarter-scale codes
-#define QK_Q4_0_TQ_V1 32
-typedef struct {
-    uint8_t qs[QK_Q4_0_TQ_V1 * 3 / 8]; // 3-bit quant indices, packed (12 bytes)
-    uint8_t scales[4];                 // one scale code per 8-value quarter
-} block_q4_0_tq_v1;
-static_assert(sizeof(block_q4_0_tq_v1) == 16, "wrong q4_0_tq_v1 block size/padding");
 
 //
 // Super-block quantization structures
@@ -621,7 +585,6 @@ GGML_TABLE_BEGIN(uint64_t, ksigns64, 128)
     0x00ffffffff000000, 0xffffffffff0000ff, 0xffffffffff00ff00, 0x00ffffffff00ffff,
     0xffffffffffff0000, 0x00ffffffffff00ff, 0x00ffffffffffff00, 0xffffffffffffffff,
 GGML_TABLE_END()
-
 
 GGML_TABLE_BEGIN(uint64_t, iq2xxs_grid, 256)
     0x0808080808080808, 0x080808080808082b, 0x0808080808081919, 0x0808080808082b08,
