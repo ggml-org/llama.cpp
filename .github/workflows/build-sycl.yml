@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-    ONEAPI_ROOT: /opt/intel/oneapi/
+      ONEAPI_ROOT: /opt/intel/oneapi/
       ONEAPI_INSTALLER_VERSION: "2025.3.3"
 
     continue-on-error: true
