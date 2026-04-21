@@ -511,15 +511,16 @@ inline ggml_webgpu_flash_attn_pipeline_key ggml_webgpu_flash_attn_make_pipeline_
     const ggml_webgpu_shader_lib_context & context) {
     const bool has_mask  = context.src3 != nullptr;
     const bool has_sinks = context.src4 != nullptr;
-    uint32_t kv_direct_align = GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH;
-    if (context.supports_subgroup_matrix) {
-        kv_direct_align = context.sg_mat_k;
-    } else if (context.tile_q_tile != 0) {
-        kv_direct_align = GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH;
+    bool kv_direct = false;
+    if (context.tile_q_tile == 0) {
+        uint32_t kv_direct_align = GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH;
+        if (context.supports_subgroup_matrix) {
+            kv_direct_align = context.sg_mat_k;
+        }
+        kv_direct = (context.src1->type == GGML_TYPE_F16) &&
+                    (context.src0->ne[0] % std::max(1u, kv_direct_align) == 0) &&
+                    (context.src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
     }
-    const bool kv_direct = (context.src1->type == GGML_TYPE_F16) &&
-                           (context.src0->ne[0] % std::max(1u, kv_direct_align) == 0) &&
-                           (context.src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
 
     ggml_webgpu_flash_attn_pipeline_key key = {};
     key.kv_type                             = context.src1->type;
@@ -2158,6 +2159,7 @@ class ggml_webgpu_shader_lib {
             wg_size                = GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE;
             shader_src             = wgsl_flash_attn_tile;
             defines.push_back("MAX_SUBGROUP_SIZE=" + std::to_string(context.max_subgroup_size));
+            defines.push_back("KV_STAGE_STRIDE=" + std::to_string(std::max(key.head_dim_qk, key.head_dim_v)));
             variant += "_tile";
         } else {
             defines.push_back(std::string("SG_MAT_M=") + std::to_string(context.sg_mat_m));

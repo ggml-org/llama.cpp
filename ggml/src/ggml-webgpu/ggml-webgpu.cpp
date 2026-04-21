@@ -420,11 +420,11 @@ static bool ggml_webgpu_flash_attn_use_tile(webgpu_global_context & global_ctx,
     const bool f16_vec4_aligned = (k_offset_elems % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0u) &&
                                   (v_offset_elems % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0u);
 
-    return global_ctx->capabilities.supports_subgroups && !global_ctx->capabilities.supports_subgroup_matrix &&
+    return global_ctx->capabilities.supports_subgroups &&
+           !global_ctx->capabilities.supports_subgroup_matrix &&
            K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 && f16_vec4_aligned &&
            (Q->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0) &&
-           (V->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0) &&
-           (K->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
+           (V->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0);
 }
 
 static size_t ggml_webgpu_tensor_align_offset(webgpu_context & ctx, const ggml_tensor * t) {
@@ -3840,8 +3840,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 }
 
                 if (use_tile) {
-                    const bool kv_direct =
-                        src1->type == GGML_TYPE_F16 && (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
+                    const bool kv_direct = false;
                     const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
                         4u, std::max(1u, ctx->webgpu_global_ctx->capabilities.max_subgroup_size),
                         (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask, kv_direct);
