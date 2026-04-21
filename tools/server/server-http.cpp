@@ -1,6 +1,7 @@
 #include "common.h"
 #include "server-http.h"
 #include "server-common.h"
+#include <arpa/inet.h>
 #include <cctype>
 
 #include <cpp-httplib/httplib.h>
@@ -62,6 +63,73 @@ static std::string trim_copy(std::string value) {
     }).base(), value.end());
 
     return value;
+}
+
+static bool ipv4_to_u32(const std::string & ip, uint32_t & out) {
+    struct in_addr addr;
+    if (inet_pton(AF_INET, ip.c_str(), &addr) != 1) {
+        return false;
+    }
+
+    out = ntohl(addr.s_addr);
+    return true;
+}
+
+static bool ip_in_cidr(const std::string & ip, const std::string & cidr) {
+    const size_t slash = cidr.find('/');
+    if (slash == std::string::npos) {
+        return false;
+    }
+
+    const std::string base_ip = trim_copy(cidr.substr(0, slash));
+    const std::string prefix_str = trim_copy(cidr.substr(slash + 1));
+
+    if (prefix_str.empty()) {
+        return false;
+    }
+
+    int prefix = 0;
+    try {
+        prefix = std::stoi(prefix_str);
+    } catch (...) {
+        return false;
+    }
+
+    if (prefix < 0 || prefix > 32) {
+        return false;
+    }
+
+    uint32_t ip_val = 0;
+    uint32_t base_val = 0;
+
+    if (!ipv4_to_u32(ip, ip_val) || !ipv4_to_u32(base_ip, base_val)) {
+        return false;
+    }
+
+    const uint32_t mask = (prefix == 0) ? 0 : (0xFFFFFFFFu << (32 - prefix));
+    return (ip_val & mask) == (base_val & mask);
+}
+
+static bool is_ip_allowed(const std::string & client_ip, const std::vector<std::string> & whitelist_ips) {
+    for (const auto & entry_raw : whitelist_ips) {
+        const std::string entry = trim_copy(entry_raw);
+
+        if (entry.empty()) {
+            continue;
+        }
+
+        if (entry.find('/') != std::string::npos) {
+            if (ip_in_cidr(client_ip, entry)) {
+                return true;
+            }
+        } else {
+            if (client_ip == entry) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 bool server_http_context::init(const common_params & params) {
@@ -160,7 +228,7 @@ bool server_http_context::init(const common_params & params) {
 
         const std::string client_ip = trim_copy(req.remote_addr);
 
-        if (std::find(whitelist_ips.begin(), whitelist_ips.end(), client_ip) != whitelist_ips.end()) {
+        if (is_ip_allowed(client_ip, whitelist_ips)) {
             return true;
         }
 
@@ -168,13 +236,14 @@ bool server_http_context::init(const common_params & params) {
         res.set_content(
             safe_json_to_str(json {
                 {"error", {
-                    {"message", "Access Denied"},
+                    {"message", "Access Denied."},
                     {"type", "permission_error"},
                     {"code", 403}
                 }}
             }),
             "application/json; charset=utf-8"
         );
+
         LOG_WRN("Forbidden: IP not whitelisted: %s\n", client_ip.c_str());
         return false;
     };
