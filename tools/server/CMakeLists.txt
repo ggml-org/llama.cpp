@@ -27,35 +27,24 @@ target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
-# llama-server-impl: server logic, reusable by app
 
-set(TARGET llama-server-impl)
+# llama-server executable
 
-add_library(${TARGET}
+set(TARGET llama-server)
+
+set(TARGET_SRCS
     server.cpp
     server-http.cpp
     server-http.h
     server-models.cpp
     server-models.h
 )
-set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(${TARGET} PRIVATE ../mtmd ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
-
-if(LLAMA_TOOLS_INSTALL)
-    install(TARGETS ${TARGET} LIBRARY)
-endif()
-
-# llama-server executable
-
-set(TARGET llama-server)
-
-add_executable(${TARGET} main.cpp)
+add_executable(${TARGET} ${TARGET_SRCS})
 install(TARGETS ${TARGET} RUNTIME)
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PRIVATE llama-server-impl ${CMAKE_DL_LIBS} rt)
+target_link_libraries(${TARGET} PRIVATE server-context llama-ui PUBLIC llama-common cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
+
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
