@@ -1015,8 +1015,8 @@ void launch_fattn(
         explicit hip_f16_alloc(cudaStream_t s) : stream(s) {}
         ~hip_f16_alloc() {
             if (ptr) {
-                cudaStreamSynchronize(stream);
-                cudaFree(ptr);
+                (void) cudaStreamSynchronize(stream);
+                (void) cudaFree(ptr);
             }
         }
         void alloc(size_t nelements) {
