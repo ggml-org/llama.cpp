@@ -6,6 +6,9 @@
 
 #ifdef GGML_CUDA_AR_WATCHDOG
 #include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
 #include <thread>
 #endif
 
@@ -23,8 +26,9 @@
 // ---------------------------------------------------------------------------
 
 static __device__ __forceinline__ void ggml_cuda_ar_signal_set(int * p) {
+    __threadfence_system();   // ensure all prior writes (D2H data) are globally visible
     *(volatile int *)p = 1;
-    __threadfence_system();
+    __threadfence_system();   // ensure the signal itself is globally visible
 }
 
 static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
@@ -32,7 +36,7 @@ static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
 }
 
 // ---------------------------------------------------------------------------
-// Single-phase AllReduce kernel — float32, 2 GPUs (production)
+// Single-kernel AllReduce — float32, 2 GPUs (production)
 //
 // Both GPUs run this kernel simultaneously in independent streams.  Each GPU:
 //
@@ -234,8 +238,17 @@ static constexpr size_t GGML_CUDA_AR_ARRIVAL_STRIDE = 128;
 //   3  reserved
 static constexpr int GGML_CUDA_AR_DEBUG_INTS = 4;
 
-// Host poll interval for the blocking watchdog loop.
-static constexpr int GGML_CUDA_AR_WDOG_POLL_MS = 20;
+// Background-thread poll interval.  This has no effect on dispatch latency
+// because the poll runs in a dedicated thread.
+static constexpr int GGML_CUDA_AR_WDOG_POLL_MS = 100;
+
+// One work item posted to the background watchdog thread per dispatch.
+struct ggml_cuda_ar_wdog_item {
+    int         slot;
+    int         n;
+    int         devices[GGML_CUDA_MAX_DEVICES];
+    cudaEvent_t ker_events[GGML_CUDA_MAX_DEVICES];
+};
 #endif
 
 struct ggml_cuda_ar_event_slot {
@@ -259,11 +272,18 @@ struct ggml_cuda_ar_pipeline {
     char * arrival;
 
 #ifdef GGML_CUDA_AR_WATCHDOG
-    // Pinned debug buffer written by the debug kernel, read by the host
-    // watchdog.  Layout: debug_buf[rank * GGML_CUDA_AR_DEBUG_INTS + field].
+    // Pinned debug buffer written by the debug kernel, read by the background
+    // watchdog thread.  Layout: debug_buf[rank * GGML_CUDA_AR_DEBUG_INTS + field].
     int * debug_buf;
-    int   wdog_timeout_ms;  // 0 = watchdog disabled (env: GGML_CUDA_AR_WATCHDOG)
-    int   wdog_max_spin;    // 0 = spin forever     (env: GGML_CUDA_AR_MAX_SPIN)
+    int   wdog_timeout_ms;  // 0 = disabled (env: GGML_CUDA_AR_WATCHDOG)
+    int   wdog_max_spin;    // 0 = no limit (env: GGML_CUDA_AR_MAX_SPIN)
+
+    // Background watchdog thread: polls kernel events without blocking dispatch.
+    std::mutex                          wdog_mtx;
+    std::condition_variable             wdog_cv;
+    std::deque<ggml_cuda_ar_wdog_item>  wdog_queue;
+    bool                                wdog_stop = false;
+    std::thread                         wdog_thr;
 #endif
 };
 
@@ -274,74 +294,78 @@ static int * ggml_cuda_ar_arrival_ptr(const ggml_cuda_ar_pipeline * p, int slot,
 }
 
 // ---------------------------------------------------------------------------
-// Watchdog poll — blocks the calling thread, polling ker events and reading
-// debug state from pinned host memory.  Only active when wdog_timeout_ms > 0.
+// Background watchdog thread — polls kernel events and debug state without
+// blocking the dispatch path.  One work item is posted per dispatch; the
+// thread logs any slot that doesn't complete within wdog_timeout_ms.
 //
-// Called after all kernels for the current slot have been queued.  The GPU
-// streams proceed independently; this function only observes via
-// cudaEventQuery and volatile reads of debug_buf.
-//
-// Output is deliberately sparse on the fast path: nothing is logged when
-// both kernels complete before the first poll tick.  If a kernel is still
-// running on the first tick, all subsequent ticks are logged (including the
-// final "done" tick) so the log captures the full timeline.
+// Output is sparse on the fast path: nothing is logged when a slot completes
+// before the first poll tick.  On slow or hanging slots every tick is logged,
+// including the final "done" tick, to capture the full timeline.
 // ---------------------------------------------------------------------------
 #ifdef GGML_CUDA_AR_WATCHDOG
-static void ggml_cuda_ar_watchdog_poll(
-        const ggml_cuda_ar_pipeline * p,
-        int slot, int n,
-        const cudaEvent_t * ker_events) {
-    if (p->wdog_timeout_ms <= 0) {
-        return;
-    }
-
-    int  elapsed_ms   = 0;
-    bool observed_busy = false;
-
-    while (elapsed_ms <= p->wdog_timeout_ms) {
-        // Query completion state of every GPU's kernel event.
-        bool          all_done = true;
-        cudaError_t   qstat[GGML_CUDA_MAX_DEVICES];
-        for (int i = 0; i < n; ++i) {
-            ggml_cuda_set_device(p->devices[i]);
-            qstat[i] = cudaEventQuery(ker_events[i]);
-            if (qstat[i] != cudaSuccess) {
-                all_done = false;
+static void ggml_cuda_ar_wdog_thread(ggml_cuda_ar_pipeline * p) {
+    while (true) {
+        ggml_cuda_ar_wdog_item item;
+        {
+            std::unique_lock<std::mutex> lk(p->wdog_mtx);
+            p->wdog_cv.wait(lk, [p] { return !p->wdog_queue.empty() || p->wdog_stop; });
+            if (p->wdog_stop && p->wdog_queue.empty()) {
+                break;
             }
+            item = p->wdog_queue.front();
+            p->wdog_queue.pop_front();
         }
 
-        if (!all_done) {
-            observed_busy = true;
+        if (p->wdog_timeout_ms <= 0) {
+            continue;  // watchdog disabled — drain queue, do nothing
         }
 
-        // Log on every tick that is either slow or the first "done" after slow.
-        if (!all_done || observed_busy) {
-            char msg[512];
-            int  pos = 0;
-            pos += snprintf(msg + pos, sizeof(msg) - pos,
-                            "ggml_cuda_ar watchdog +%dms slot=%d:",
-                            elapsed_ms, slot);
-            for (int i = 0; i < n; ++i) {
-                const int * dbg  = p->debug_buf + i * GGML_CUDA_AR_DEBUG_INTS;
-                int arr  = *(volatile int *)ggml_cuda_ar_arrival_ptr(p, slot, i);
-                int spin = *(volatile int *)&dbg[0];
-                int last = *(volatile int *)&dbg[1];
-                int wb   = *(volatile int *)&dbg[2];
+        int  elapsed_ms    = 0;
+        bool observed_busy = false;
+
+        while (elapsed_ms <= p->wdog_timeout_ms) {
+            bool        all_done = true;
+            cudaError_t qstat[GGML_CUDA_MAX_DEVICES];
+            for (int i = 0; i < item.n; ++i) {
+                ggml_cuda_set_device(item.devices[i]);
+                qstat[i] = cudaEventQuery(item.ker_events[i]);
+                if (qstat[i] != cudaSuccess) {
+                    all_done = false;
+                }
+            }
+
+            if (!all_done) {
+                observed_busy = true;
+            }
+
+            if (!all_done || observed_busy) {
+                char msg[512];
+                int  pos = 0;
                 pos += snprintf(msg + pos, sizeof(msg) - pos,
-                                " gpu%d[%s arr=%d spin=%d lastOther=%d wbMine=%d]",
-                                p->devices[i],
-                                qstat[i] == cudaSuccess ? "done" : "busy",
-                                arr, spin, last, wb);
+                                "ggml_cuda_ar watchdog +%dms slot=%d:",
+                                elapsed_ms, item.slot);
+                for (int i = 0; i < item.n; ++i) {
+                    const int * dbg = p->debug_buf + i * GGML_CUDA_AR_DEBUG_INTS;
+                    int arr  = *(volatile int *)ggml_cuda_ar_arrival_ptr(p, item.slot, i);
+                    int spin = *(volatile int *)&dbg[0];
+                    int last = *(volatile int *)&dbg[1];
+                    int wb   = *(volatile int *)&dbg[2];
+                    pos += snprintf(msg + pos, sizeof(msg) - pos,
+                                    " gpu%d[%s arr=%d spin=%d lastOther=%d wbMine=%d]",
+                                    item.devices[i],
+                                    qstat[i] == cudaSuccess ? "done" : "busy",
+                                    arr, spin, last, wb);
+                }
+                GGML_LOG_WARN("%s\n", msg);
             }
-            GGML_LOG_WARN("%s\n", msg);
-        }
 
-        if (all_done) {
-            break;
-        }
+            if (all_done) {
+                break;
+            }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(GGML_CUDA_AR_WDOG_POLL_MS));
-        elapsed_ms += GGML_CUDA_AR_WDOG_POLL_MS;
+            std::this_thread::sleep_for(std::chrono::milliseconds(GGML_CUDA_AR_WDOG_POLL_MS));
+            elapsed_ms += GGML_CUDA_AR_WDOG_POLL_MS;
+        }
     }
 }
 #endif // GGML_CUDA_AR_WATCHDOG
@@ -441,6 +465,9 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
         GGML_LOG_INFO("%s: AR watchdog enabled — timeout=%dms max_spin=%d "
                       "(set GGML_CUDA_AR_WATCHDOG=<ms> / GGML_CUDA_AR_MAX_SPIN=<n> to adjust)\n",
                       __func__, p->wdog_timeout_ms, p->wdog_max_spin);
+
+        // Start the background polling thread.
+        p->wdog_thr = std::thread(ggml_cuda_ar_wdog_thread, p);
     }
 #endif
 
@@ -528,6 +555,14 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
         cudaFreeHost(p->arrival);
     }
 #ifdef GGML_CUDA_AR_WATCHDOG
+    if (p->wdog_thr.joinable()) {
+        {
+            std::lock_guard<std::mutex> lk(p->wdog_mtx);
+            p->wdog_stop = true;
+        }
+        p->wdog_cv.notify_one();
+        p->wdog_thr.join();
+    }
     if (p->debug_buf) {
         cudaFreeHost(p->debug_buf);
     }
@@ -644,9 +679,19 @@ bool ggml_cuda_ar_allreduce(
     }
 
 #ifdef GGML_CUDA_AR_WATCHDOG
-    // Block the calling thread and poll until both kernels complete or the
-    // timeout expires.  The GPU streams continue independently.
-    ggml_cuda_ar_watchdog_poll(p, slot, n, ker_events);
+    // Post this slot to the background watchdog thread — non-blocking.
+    {
+        ggml_cuda_ar_wdog_item item;
+        item.slot = slot;
+        item.n    = n;
+        for (int i = 0; i < n; ++i) {
+            item.devices[i]    = p->devices[i];
+            item.ker_events[i] = ker_events[i];
+        }
+        std::lock_guard<std::mutex> lk(p->wdog_mtx);
+        p->wdog_queue.push_back(item);
+    }
+    p->wdog_cv.notify_one();
 #endif
 
     return true;
