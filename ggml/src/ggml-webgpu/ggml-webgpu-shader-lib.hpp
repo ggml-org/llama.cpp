@@ -516,7 +516,7 @@ inline uint32_t ggml_webgpu_flash_attn_max_kv_tile(const ggml_webgpu_shader_lib_
     const size_t q_tile       = context.sg_mat_m;
     const size_t base_q_bytes = (key.head_dim_qk + key.head_dim_v) * q_tile * GGML_WEBGPU_F16_SIZE_BYTES +
                                 2 * q_tile * GGML_WEBGPU_F32_SIZE_BYTES;
-    size_t bytes_per_kv = 0;
+    size_t       bytes_per_kv = 0;
     if (!key.kv_direct) {
         bytes_per_kv += std::max(key.head_dim_qk, key.head_dim_v);
     }
@@ -1832,10 +1832,9 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_rms_norm_mul_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_rms_norm_mul_pipeline_key key = {
-            .inplace     = context.inplace,
-            .src_overlap = context.src_overlap,
-        };
+        ggml_webgpu_rms_norm_mul_pipeline_key key = {};
+        key.inplace                               = context.inplace;
+        key.src_overlap                           = context.src_overlap;
 
         auto it = rms_norm_mul_pipelines.find(key);
         if (it != rms_norm_mul_pipelines.end()) {
@@ -1866,13 +1865,12 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_binary_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_binary_pipeline_key key = {
-            .type        = context.dst->type,
-            .op          = context.dst->op,
-            .inplace     = context.inplace,
-            .overlap     = context.overlap,
-            .src_overlap = context.src_overlap,
-        };
+        ggml_webgpu_binary_pipeline_key key = {};
+        key.type                            = context.dst->type;
+        key.op                              = context.dst->op;
+        key.inplace                         = context.inplace;
+        key.overlap                         = context.overlap;
+        key.src_overlap                     = context.src_overlap;
 
         auto it = binary_pipelines.find(key);
         if (it != binary_pipelines.end()) {
