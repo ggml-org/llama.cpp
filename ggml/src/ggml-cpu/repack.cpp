@@ -2908,7 +2908,6 @@ static block_q4_0x8 make_block_q4_0x8(block_q4_0 * in, unsigned int blck_size_in
     return out;
 }
 
-<<<<<<< HEAD
 static block_q4_0x16 make_block_q4_0x16(block_q4_0 * in, unsigned int blck_size_interleave) {
     block_q4_0x16 out;
 
@@ -2934,7 +2933,6 @@ static block_q4_0x16 make_block_q4_0x16(block_q4_0 * in, unsigned int blck_size_
     return out;
 }
 
-=======
 static block_q5_0x8 make_block_q5_0x8(block_q5_0 * in, unsigned int blck_size_interleave) {
     block_q5_0x8 out;
 
@@ -2961,7 +2959,6 @@ static block_q5_0x8 make_block_q5_0x8(block_q5_0 * in, unsigned int blck_size_in
 }
 
 
->>>>>>> b0a838b62 (Block interleaving implementation for Q5_0 nodes)
 static block_q4_Kx8 make_block_q4_Kx8(block_q4_K * in, unsigned int blck_size_interleave) {
     block_q4_Kx8 out;
     //Delta(scale) and dmin values of the eight Q4_K structures are copied onto the output interleaved structure
