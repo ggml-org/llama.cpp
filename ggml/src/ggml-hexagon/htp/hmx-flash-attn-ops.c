@@ -167,7 +167,11 @@ static int hmx_fa_find_chunk_size(size_t * Br_out,
                                   size_t   n_threads) {
     const size_t T       = HMX_FP16_TILE_N_ROWS;  // 32
     const size_t br_unit = hmx_ceil_div(T, gqa_factor);
-    const size_t bc_unit = HMX_FP16_TILE_N_COLS;  // 32
+    // Bc must be a multiple of 64 so that n_tiles_per_bc is even.  The softmax
+    // P-tile write uses a dual-tile pattern (vshuff + two stores 16 slots apart)
+    // that would race across r0 blocks if the last dual-tile is half-occupied.
+    // See .cursor/todos/hmx-flash-attn-bc-search-space.md for the perf trade-off.
+    const size_t bc_unit = HMX_FP16_TILE_N_COLS * 2;  // 64
     const size_t fp16    = sizeof(__fp16);
 
     // Approximate per-unit VTCM costs (without per-buffer alignment padding).
@@ -531,9 +535,12 @@ static void fa_phase_q_load(struct hmx_fa_context *   factx,
                              uint32_t q_start, uint32_t kv_head, uint32_t ib3,
                              size_t n_rows_g) {
     fa_q_load_args_t args = { factx, q, q_start, kv_head, ib3, n_rows_g };
-    // PENDING: multi-thread Q load has a race/coherency bug — HEAD ppl broken with
-    // multi-thread, correct with single-thread.  Force single-thread.
-    fa_q_load_thread(1, 0, &args);
+    // Require >= 2 row pairs per thread so partitioning is worthwhile.
+    if (factx->n_threads > 1 && n_rows_g >= (size_t)(factx->n_threads * 2)) {
+        worker_pool_run_func(factx->worker_pool, fa_q_load_thread, &args, factx->n_threads);
+    } else {
+        fa_q_load_thread(1, 0, &args);
+    }
 }
 
 // ============================================================================
@@ -621,8 +628,11 @@ static void fa_phase_o_store(struct hmx_fa_context *   factx,
                               uint32_t q_start, uint32_t kv_head, uint32_t ib3,
                               size_t n_rows_g) {
     fa_o_store_args_t args = { factx, dst, o_tile_src, q_start, kv_head, ib3, n_rows_g };
-    // PENDING: multi-thread O store has a race/coherency bug.  Force single-thread.
-    fa_o_store_thread(1, 0, &args);
+    if (factx->n_threads > 1 && n_rows_g >= (size_t)(factx->n_threads * 2)) {
+        worker_pool_run_func(factx->worker_pool, fa_o_store_thread, &args, factx->n_threads);
+    } else {
+        fa_o_store_thread(1, 0, &args);
+    }
 }
 
 // ============================================================================
@@ -1005,12 +1015,14 @@ static void fa_ml_update_and_build_d(struct hmx_fa_context * factx,
 static void fa_phase_softmax_and_build_d(struct hmx_fa_context * factx,
                                           fa_softmax_args_t * sargs,
                                           size_t n_row_tiles, size_t n_row_tiles_g_br) {
-    // PENDING: multi-thread softmax has a race/coherency bug — HEAD ppl breaks with
-    // multi-thread, correct with single-thread.  Force single-thread until the root
-    // cause in the worker-pool sharing of vtcm_m_vec / vtcm_s_rowmax / vtcm_p_rowsum
-    // (or the row_buf scratch) is identified.
-    (void) hmx_ceil_div(sargs->n_rows_g, 64);
-    fa_softmax_thread(1, 0, sargs);
+    const size_t n_row_vec_cnt = hmx_ceil_div(sargs->n_rows_g, 64);
+
+    if (factx->n_threads > 1 && n_row_vec_cnt >= 2) {
+        uint32_t n_use = (uint32_t) hex_smin((size_t) factx->n_threads, n_row_vec_cnt);
+        worker_pool_run_func(factx->worker_pool, fa_softmax_thread, sargs, n_use);
+    } else {
+        fa_softmax_thread(1, 0, sargs);
+    }
     // barrier implicit in worker_pool_run_func return
 
     fa_ml_update_and_build_d(factx, sargs->n_rows_g, n_row_tiles, n_row_tiles_g_br);
@@ -1235,10 +1247,7 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const size_t g_br = hex_align_up(G * Br, HMX_FP16_TILE_N_ROWS);
 
     const uint32_t n_kv_blocks = (nek1 + Bc - 1) / Bc;
-    // PENDING: pipeline and multi-thread Q/O/softmax paths still have race/coherency
-    // bugs (see hmx-flash-attn-prefill-ppl-bug.md).  Force single-thread fallback until
-    // they are independently verified.
-    const bool     use_pipeline = false;
+    const bool     use_pipeline = (n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads >= 2);
 
     FARF(HIGH, "hmx_fa: neq1=%u nek1=%u DK=%u DV=%u G=%u Br=%zu Bc=%zu g_br=%zu n_kv_blocks=%u pipeline=%d vtcm=%zu",
          neq1, nek1, DK, DV, G, Br, Bc, g_br, n_kv_blocks, use_pipeline, vtcm_budget);
