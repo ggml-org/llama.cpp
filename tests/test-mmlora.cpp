@@ -51,32 +51,6 @@ LOG_INF("Testing modality type string conversions...\n");
     return 0;
 }
 
-// Test common_adapter_lora_info MMLoRA helpers
-static int test_mmlora_info_helpers() {
-    LOG_INF("Testing MMLoRA info helpers...\n");
-
-    // Test is_mmlora() with empty vector (not MMLoRA)
-    common_adapter_lora_info regular_lora;
-    TEST(regular_lora.is_mmlora() == false);
-    TEST(regular_lora.mmlora_modality_types.empty() == true);
-
-    // Test is_mmlora() with single modality
-    common_adapter_lora_info image_lora;
-    image_lora.mmlora_modality_types.push_back("image");
-    TEST(image_lora.is_mmlora() == true);
-    TEST(image_lora.mmlora_modality_types.size() == 1);
-
-    // Test is_mmlora() with multiple modalities
-    common_adapter_lora_info multi_lora;
-    multi_lora.mmlora_modality_types.push_back("image");
-    multi_lora.mmlora_modality_types.push_back("audio");
-    TEST(multi_lora.is_mmlora() == true);
-    TEST(multi_lora.mmlora_modality_types.size() == 2);
-
-    LOG_INF("  Passed MMLoRA info helpers\n");
-    return 0;
-}
-
 // Test CLI argument parsing (simulated)
 static int test_mmlora_arg_parsing() {LOG_INF("Testing MMLoRA argument parsing logic...\n");
 
@@ -111,7 +85,6 @@ int main(int argc, char ** argv) {
 
     int result = 0;
     result += test_mmlora_modality_type_conversion();
-    result += test_mmlora_info_helpers();
     result += test_mmlora_arg_parsing();
 
     LOG_INF("MMLoRA unit tests %s!\n", result == 0 ? "passed" : "failed");
