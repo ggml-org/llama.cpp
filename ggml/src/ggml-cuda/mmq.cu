@@ -26,7 +26,7 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
             break;
         case GGML_TYPE_NVFP4:
             mul_mat_q_case<GGML_TYPE_NVFP4>(ctx, args, stream);
-            [[fallthrough]];
+            break;
         case GGML_TYPE_TQ3_0:
             mul_mat_q_case<GGML_TYPE_TQ3_0>(ctx, args, stream);
             break;
