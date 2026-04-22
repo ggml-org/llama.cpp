@@ -635,7 +635,7 @@ static bool test_ifairy64_lut_transform_pack() {
                 }
 
                 const block_ifairy64 & src = weights[(size_t) row * (size_t) blocks_per_row + (size_t) blk];
-                if (t->d_real[lane] != GGML_FP16_TO_FP32(src.d_real) || t->d_imag[lane] != GGML_FP16_TO_FP32(src.d_imag)) {
+                if (t->d_real[lane] != src.d_real || t->d_imag[lane] != src.d_imag) {
                     fprintf(stderr, "transform packed scale mismatch at row=%lld blk=%lld lane=%d\n", (long long) row,
                             (long long) blk, lane);
                     pass = false;

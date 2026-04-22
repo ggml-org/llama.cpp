@@ -43,6 +43,14 @@ static inline size_t ggml_ifairy_checked_add_size(size_t a, size_t b) {
     return a + b;
 }
 
+static inline float ggml_ifairy_lut_scale_to_f32(float v) {
+    return v;
+}
+
+static inline float ggml_ifairy_lut_scale_to_f32(ggml_half v) {
+    return GGML_FP16_TO_FP32(v);
+}
+
 namespace {
 struct ggml_ifairy_tl_buf {
     uint8_t * ptr = nullptr;
@@ -77,6 +85,15 @@ static inline float32x4_t ggml_ifairy_s16x4_to_f32(int16x4_t v) {
     return vcvtq_f32_s32(vmovl_s16(v));
 }
 
+static inline float32x4_t ggml_ifairy_lut_load_scale4_arm(const float * src) {
+    return vld1q_f32(src);
+}
+
+static inline float32x4_t ggml_ifairy_lut_load_scale4_arm(const ggml_half * src) {
+    const uint16x4_t v = vld1_u16((const uint16_t *) src);
+    return vcvt_f32_f16(vreinterpret_f16_u16(v));
+}
+
 template <typename wtile_type>
 static inline void ggml_ifairy_lut_apply_tile_sums_arm(const wtile_type * wt,
                                                        const float32x4_t  v_lr,
@@ -98,8 +115,8 @@ static inline void ggml_ifairy_lut_apply_tile_sums_arm(const wtile_type * wt,
                                                        float32x4_t &      acc_i2,
                                                        float32x4_t &      acc_i3) {
     {
-        const float32x4_t wr    = vld1q_f32(wt->d_real + 0);
-        const float32x4_t wi    = vld1q_f32(wt->d_imag + 0);
+        const float32x4_t wr    = ggml_ifairy_lut_load_scale4_arm(wt->d_real + 0);
+        const float32x4_t wi    = ggml_ifairy_lut_load_scale4_arm(wt->d_imag + 0);
         const float32x4_t lr_wr = vmulq_f32(v_lr, wr);
         const float32x4_t li_wi = vmulq_f32(v_li, wi);
         const float32x4_t lr_wi = vmulq_f32(v_lr, wi);
@@ -111,8 +128,8 @@ static inline void ggml_ifairy_lut_apply_tile_sums_arm(const wtile_type * wt,
         acc_i0 = vmlaq_f32(acc_i0, ggml_ifairy_s16x4_to_f32(vget_low_s16(sum_ad_0)), li_wr);
     }
     {
-        const float32x4_t wr    = vld1q_f32(wt->d_real + 4);
-        const float32x4_t wi    = vld1q_f32(wt->d_imag + 4);
+        const float32x4_t wr    = ggml_ifairy_lut_load_scale4_arm(wt->d_real + 4);
+        const float32x4_t wi    = ggml_ifairy_lut_load_scale4_arm(wt->d_imag + 4);
         const float32x4_t lr_wr = vmulq_f32(v_lr, wr);
         const float32x4_t li_wi = vmulq_f32(v_li, wi);
         const float32x4_t lr_wi = vmulq_f32(v_lr, wi);
@@ -124,8 +141,8 @@ static inline void ggml_ifairy_lut_apply_tile_sums_arm(const wtile_type * wt,
         acc_i1 = vmlaq_f32(acc_i1, ggml_ifairy_s16x4_to_f32(vget_high_s16(sum_ad_0)), li_wr);
     }
     {
-        const float32x4_t wr    = vld1q_f32(wt->d_real + 8);
-        const float32x4_t wi    = vld1q_f32(wt->d_imag + 8);
+        const float32x4_t wr    = ggml_ifairy_lut_load_scale4_arm(wt->d_real + 8);
+        const float32x4_t wi    = ggml_ifairy_lut_load_scale4_arm(wt->d_imag + 8);
         const float32x4_t lr_wr = vmulq_f32(v_lr, wr);
         const float32x4_t li_wi = vmulq_f32(v_li, wi);
         const float32x4_t lr_wi = vmulq_f32(v_lr, wi);
@@ -137,8 +154,8 @@ static inline void ggml_ifairy_lut_apply_tile_sums_arm(const wtile_type * wt,
         acc_i2 = vmlaq_f32(acc_i2, ggml_ifairy_s16x4_to_f32(vget_low_s16(sum_ad_1)), li_wr);
     }
     {
-        const float32x4_t wr    = vld1q_f32(wt->d_real + 12);
-        const float32x4_t wi    = vld1q_f32(wt->d_imag + 12);
+        const float32x4_t wr    = ggml_ifairy_lut_load_scale4_arm(wt->d_real + 12);
+        const float32x4_t wi    = ggml_ifairy_lut_load_scale4_arm(wt->d_imag + 12);
         const float32x4_t lr_wr = vmulq_f32(v_lr, wr);
         const float32x4_t li_wi = vmulq_f32(v_li, wi);
         const float32x4_t lr_wi = vmulq_f32(v_lr, wi);
@@ -191,6 +208,25 @@ static inline void ggml_ifairy_lut_store_tile_arm(int           tile,
             ((float *) out_base)[1] = out_i[lane];
         }
     }
+}
+#endif
+
+#if defined(__AVX2__)
+static inline __m256 ggml_ifairy_lut_load_scale8_avx2(const float * src) {
+    return _mm256_loadu_ps(src);
+}
+
+static inline __m256 ggml_ifairy_lut_load_scale8_avx2(const ggml_half * src) {
+#    if defined(__F16C__)
+    const __m128i v = _mm_loadu_si128((const __m128i *) src);
+    return _mm256_cvtph_ps(v);
+#    else
+    alignas(32) float tmp[8];
+    for (int i = 0; i < 8; ++i) {
+        tmp[i] = GGML_FP16_TO_FP32(src[i]);
+    }
+    return _mm256_load_ps(tmp);
+#    endif
 }
 #endif
 
@@ -844,8 +880,8 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t             blocks,
                 const wtile_type * wt = wtiles + (size_t) tile * (size_t) blocks + (size_t) blk;
                 const float        lr = scales[blk * 2 + 0];
                 const float        li = scales[blk * 2 + 1];
-                const float        wr = wt->d_real[lane];
-                const float        wi = wt->d_imag[lane];
+                const float        wr = ggml_ifairy_lut_scale_to_f32(wt->d_real[lane]);
+                const float        wi = ggml_ifairy_lut_scale_to_f32(wt->d_imag[lane]);
 
                 int sum_ac = 0;
                 int sum_bc = 0;
@@ -1124,10 +1160,10 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t             blocks,
                 const __m256 v_bd_hi =
                     _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_hi_s16));
 
-                const __m256 wr_lo = _mm256_loadu_ps(wt0->d_real + 0);
-                const __m256 wr_hi = _mm256_loadu_ps(wt0->d_real + 8);
-                const __m256 wi_lo = _mm256_loadu_ps(wt0->d_imag + 0);
-                const __m256 wi_hi = _mm256_loadu_ps(wt0->d_imag + 8);
+                const __m256 wr_lo = ggml_ifairy_lut_load_scale8_avx2(wt0->d_real + 0);
+                const __m256 wr_hi = ggml_ifairy_lut_load_scale8_avx2(wt0->d_real + 8);
+                const __m256 wi_lo = ggml_ifairy_lut_load_scale8_avx2(wt0->d_imag + 0);
+                const __m256 wi_hi = ggml_ifairy_lut_load_scale8_avx2(wt0->d_imag + 8);
 
 #    ifdef __FMA__
                 acc0_r_lo = _mm256_fmadd_ps(v_ac_lo, _mm256_mul_ps(v_lr, wr_lo), acc0_r_lo);
@@ -1189,10 +1225,10 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t             blocks,
                 const __m256 v_bd_hi =
                     _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_hi_s16));
 
-                const __m256 wr_lo = _mm256_loadu_ps(wt1->d_real + 0);
-                const __m256 wr_hi = _mm256_loadu_ps(wt1->d_real + 8);
-                const __m256 wi_lo = _mm256_loadu_ps(wt1->d_imag + 0);
-                const __m256 wi_hi = _mm256_loadu_ps(wt1->d_imag + 8);
+                const __m256 wr_lo = ggml_ifairy_lut_load_scale8_avx2(wt1->d_real + 0);
+                const __m256 wr_hi = ggml_ifairy_lut_load_scale8_avx2(wt1->d_real + 8);
+                const __m256 wi_lo = ggml_ifairy_lut_load_scale8_avx2(wt1->d_imag + 0);
+                const __m256 wi_hi = ggml_ifairy_lut_load_scale8_avx2(wt1->d_imag + 8);
 
 #    ifdef __FMA__
                 acc1_r_lo = _mm256_fmadd_ps(v_ac_lo, _mm256_mul_ps(v_lr, wr_lo), acc1_r_lo);
@@ -1254,10 +1290,10 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t             blocks,
                 const __m256 v_bd_hi =
                     _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_hi_s16));
 
-                const __m256 wr_lo = _mm256_loadu_ps(wt2->d_real + 0);
-                const __m256 wr_hi = _mm256_loadu_ps(wt2->d_real + 8);
-                const __m256 wi_lo = _mm256_loadu_ps(wt2->d_imag + 0);
-                const __m256 wi_hi = _mm256_loadu_ps(wt2->d_imag + 8);
+                const __m256 wr_lo = ggml_ifairy_lut_load_scale8_avx2(wt2->d_real + 0);
+                const __m256 wr_hi = ggml_ifairy_lut_load_scale8_avx2(wt2->d_real + 8);
+                const __m256 wi_lo = ggml_ifairy_lut_load_scale8_avx2(wt2->d_imag + 0);
+                const __m256 wi_hi = ggml_ifairy_lut_load_scale8_avx2(wt2->d_imag + 8);
 
 #    ifdef __FMA__
                 acc2_r_lo = _mm256_fmadd_ps(v_ac_lo, _mm256_mul_ps(v_lr, wr_lo), acc2_r_lo);
@@ -1319,10 +1355,10 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t             blocks,
                 const __m256 v_bd_hi =
                     _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_hi_s16));
 
-                const __m256 wr_lo = _mm256_loadu_ps(wt3->d_real + 0);
-                const __m256 wr_hi = _mm256_loadu_ps(wt3->d_real + 8);
-                const __m256 wi_lo = _mm256_loadu_ps(wt3->d_imag + 0);
-                const __m256 wi_hi = _mm256_loadu_ps(wt3->d_imag + 8);
+                const __m256 wr_lo = ggml_ifairy_lut_load_scale8_avx2(wt3->d_real + 0);
+                const __m256 wr_hi = ggml_ifairy_lut_load_scale8_avx2(wt3->d_real + 8);
+                const __m256 wi_lo = ggml_ifairy_lut_load_scale8_avx2(wt3->d_imag + 0);
+                const __m256 wi_hi = ggml_ifairy_lut_load_scale8_avx2(wt3->d_imag + 8);
 
 #    ifdef __FMA__
                 acc3_r_lo = _mm256_fmadd_ps(v_ac_lo, _mm256_mul_ps(v_lr, wr_lo), acc3_r_lo);
@@ -1680,8 +1716,8 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t             blocks,
 
             const float lr = scales[blk * 2 + 0];
             const float li = scales[blk * 2 + 1];
-            const float wr = wt->d_real[lane];
-            const float wi = wt->d_imag[lane];
+            const float wr = ggml_ifairy_lut_scale_to_f32(wt->d_real[lane]);
+            const float wi = ggml_ifairy_lut_scale_to_f32(wt->d_imag[lane]);
 
             int sum_ac = 0;
             int sum_bc = 0;

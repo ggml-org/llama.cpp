@@ -11,6 +11,10 @@
 #include "llama-mmap.h"
 #include "llama-model-loader.h"
 
+#ifdef GGML_IFAIRY_LUT_CPU
+#    include "../ggml/src/ggml-ifairy-lut.h"
+#endif
+
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
@@ -22,6 +26,13 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+
+#ifdef GGML_IFAIRY_LUT_CPU
+static bool llama_ifairy_lut_explicit_enabled() {
+    const char * env = getenv("GGML_IFAIRY_LUT");
+    return env && strcmp(env, "0") != 0;
+}
+#endif
 
 const char * llm_type_name(llm_type type) {
     switch (type) {
@@ -6164,6 +6175,37 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             return false;
         }
     }
+
+#ifdef GGML_IFAIRY_LUT_CPU
+    if (llama_ifairy_lut_explicit_enabled()) {
+        const int64_t t_lut_pack_us = ggml_time_us();
+        int           n_lut_tensors = 0;
+
+        for (auto & ctx : pimpl->ctxs) {
+            for (ggml_tensor * cur = ggml_get_first_tensor(ctx.get()); cur != NULL; cur = ggml_get_next_tensor(ctx.get(), cur)) {
+                if (cur->type != GGML_TYPE_IFAIRY64) {
+                    continue;
+                }
+
+                const ifairy_lut_extra * extra = (const ifairy_lut_extra *) cur->extra;
+                if (extra && extra->packed_w) {
+                    continue;
+                }
+
+                if (!ggml_ifairy_lut_transform_tensor(cur, NULL)) {
+                    throw std::runtime_error(format("%s: failed to prepack IFAIRY64 LUT tensor %s", __func__,
+                                                    ggml_get_name(cur)));
+                }
+                ++n_lut_tensors;
+            }
+        }
+
+        if (n_lut_tensors > 0) {
+            LLAMA_LOG_INFO("%s: eagerly prepared %d IFAIRY64 LUT tensors in %.3f sec\n", __func__, n_lut_tensors,
+                           (ggml_time_us() - t_lut_pack_us) / 1e6);
+        }
+    }
+#endif
 
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {

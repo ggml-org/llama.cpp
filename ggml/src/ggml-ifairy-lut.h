@@ -86,9 +86,10 @@ struct GGML_IFAIRY_LUT_ALIGN(GGML_IFAIRY_LUT_WTILE_ALIGNMENT) ifairy_lut_wtile_1
 
 struct GGML_IFAIRY_LUT_ALIGN(GGML_IFAIRY_LUT_WTILE_ALIGNMENT) ifairy64_lut_wtile_16 {
     uint8_t qs[QK_IFAIRY64_GROUPS_PER_BLOCK / 2][16];
-    float   d_real[16];
-    float   d_imag[16];
+    ggml_half d_real[16];
+    ggml_half d_imag[16];
 };
+static_assert(sizeof(struct ifairy64_lut_wtile_16) == 320, "wrong ifairy64_lut_wtile_16 size");
 
 // iFairy 2-weight LUT API
 //

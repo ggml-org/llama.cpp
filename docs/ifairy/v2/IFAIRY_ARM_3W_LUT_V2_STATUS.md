@@ -53,6 +53,26 @@ Status: Draft (2026-03-12)
 
 按日期追加（YYYY-MM-DD）：
 
+### 2026-04-22 (working tree; base build `abcaafef`)
+- 变更摘要：
+  - `IFAIRY64` 在 `GGML_IFAIRY_LUT=1` 时于模型加载阶段提前完成 LUT transform/prepack，避免 decode 首轮再做 transform。
+  - `IFAIRY64` 的 packed weight tile 不再把每 lane scale 展开成 `f32`，改为保留 `fp16` scale 并在 kernel 内按需转 `f32`，将 packed footprint 从 `384B/block-tile` 压回 `320B/block-tile`。
+- Correctness:
+  - `./build-rel-lut/bin/test-ifairy --ifairy-lut-only`: PASS
+- microbench（Machine: Mac16,12 / Apple M4）：
+  - `./build-rel-lut/bin/ifairy-microbench --type ifairy64 --mode fused --m 3456 --k 2560 --iters 200 --warmup 20`
+  - Result:
+    - `ns/iter=322370.0`
+- `llama-bench`（model=`~/fairy2i_32b/fairy2i_32b.gguf`; threads=4; `-dev none -ngl 0 -b 32 -ub 32 -fa 0 --no-warmup -p 0 -n 32 -r 1 -o md`）：
+  - vecdot baseline:
+    - `./build-rel-lut/bin/llama-bench -m ~/fairy2i_32b/fairy2i_32b.gguf ...`
+    - `tg32`: `2.22 ± 0.00 tok/s`
+  - explicit LUT:
+    - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut16 ./build-rel-lut/bin/llama-bench -m ~/fairy2i_32b/fairy2i_32b.gguf ...`
+    - `tg32`: `2.46 ± 0.00 tok/s`
+  - Delta vs vecdot:
+    - `tg32`: `+10.8%`
+
 ### 2026-03-12 (build `ac58bc67`; baseline `b12bfdb6`)
 - 变更摘要：
   - 将 x86 上的 2-weight merged LUT layout 迁移到 ARM LUT16 路径。
