@@ -4,7 +4,11 @@
 namespace utils {
 template<typename T>
 static constexpr bool is_arithmetic_v() {
-    return std::is_arithmetic_v<T> || std::is_same_v<T, sycl::half> || std::is_same_v<T, sycl::ext::oneapi::bfloat16>;
+    return std::is_arithmetic_v<T> || std::is_same_v<T, sycl::half>
+#ifdef GGML_SYCL_HAS_BF16
+        || std::is_same_v<T, sycl::ext::oneapi::bfloat16>
+#endif
+        ;
 }
 }
 
@@ -181,6 +185,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
                 stream
             );
             break;
+#ifdef GGML_SYCL_HAS_BF16
         case GGML_TYPE_BF16:
             set_rows_sycl<TIn, TIdx, sycl::ext::oneapi::bfloat16>(
                 src0_d, src1_d, (char *)dst->data,
@@ -193,6 +198,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
                 stream
             );
             break;
+#endif
         case GGML_TYPE_Q8_0:
             set_rows_sycl_q<TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(src0_d, src1_d, (block_q8_0 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
