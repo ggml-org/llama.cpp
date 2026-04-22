@@ -5,6 +5,7 @@ interface KeyboardShortcutsCallbacks {
 	activateSearchMode?: () => void;
 	editActiveConversation?: () => void;
 	onSearchActivated?: () => void;
+	deleteActiveConversation?: () => void;
 }
 
 export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
@@ -25,6 +26,15 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 		if (event.shiftKey && isCtrlOrCmd && event.key === KeyboardKey.E_UPPER) {
 			event.preventDefault();
 			callbacks.editActiveConversation?.();
+		}
+
+		if (
+			isCtrlOrCmd &&
+			event.shiftKey &&
+			(event.key === KeyboardKey.D_LOWER || event.key === KeyboardKey.D_UPPER)
+		) {
+			event.preventDefault();
+			callbacks.deleteActiveConversation?.();
 		}
 	}
 

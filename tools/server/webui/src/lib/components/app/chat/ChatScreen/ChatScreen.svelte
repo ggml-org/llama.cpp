@@ -11,8 +11,8 @@
 	} from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { KeyboardKey } from '$lib/enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
 		chatStore,
 		errorDialog,
@@ -222,20 +222,13 @@
 		processFiles(files);
 	}
 
-	function handleKeydown(event: KeyboardEvent) {
-		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
-
-		if (
-			isCtrlOrCmd &&
-			event.shiftKey &&
-			(event.key === KeyboardKey.D_LOWER || event.key === KeyboardKey.D_UPPER)
-		) {
-			event.preventDefault();
+	const { handleKeydown } = useKeyboardShortcuts({
+		deleteActiveConversation: () => {
 			if (activeConversation()) {
 				showDeleteDialog = true;
 			}
 		}
-	}
+	});
 
 	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
 		if (draft.message || draft.files.length > 0) {

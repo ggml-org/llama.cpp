@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { Database, Search, Settings, SquarePen } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { McpLogo, SearchInput } from '$lib/components/app';
+	import type { Component } from 'svelte';
+	import { SearchInput } from '$lib/components/app';
 	import { page } from '$app/state';
+	import { DESKTOP_ICON_STRIP_ICONS } from '$lib/constants/ui';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -22,9 +23,6 @@
 	}: Props = $props();
 
 	let searchInputRef = $state<HTMLInputElement | null>(null);
-	let isMcpActive = $derived(page.route.id === '/settings/mcp');
-	let isSettingsActive = $derived(!!page.route.id?.startsWith('/settings/chat'));
-	let isImportExportActive = $derived(page.route.id === '/settings/import-export');
 
 	function handleSearchModeDeactivate() {
 		isSearchModeActive = false;
@@ -39,6 +37,10 @@
 	}
 </script>
 
+{#snippet itemIcon(Icon: Component)}
+	<Icon class="h-4 w-4" />
+{/snippet}
+
 <div class="my-1 space-y-1">
 	{#if isSearchModeActive}
 		<SearchInput
@@ -50,78 +52,45 @@
 			{isCancelAlwaysVisible}
 		/>
 	{:else}
-		<Button
-			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
-			href="?new_chat=true#/"
-			onclick={handleMobileSidebarItemClick}
-			variant="ghost"
-		>
-			<div class="flex items-center gap-2">
-				<SquarePen class="h-4 w-4" />
+		{#each DESKTOP_ICON_STRIP_ICONS as item (item.route)}
+			{#if !item.route}
+				<Button
+					class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
+					onclick={activateSearch}
+					variant="ghost"
+				>
+					<div class="flex items-center gap-2">
+						{@render itemIcon(item.icon)}
 
-				New chat
-			</div>
+						{item.tooltip}
+					</div>
 
-			<KeyboardShortcutInfo keys={['shift', 'cmd', 'o']} />
-		</Button>
+					{#if item.keys}
+						<KeyboardShortcutInfo keys={item.keys} />
+					{/if}
+				</Button>
+			{:else}
+				<Button
+					class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {(item.activeRouteId &&
+						page.route.id === item.activeRouteId) ||
+					(item.activeRoutePrefix && page.route.id?.startsWith(item.activeRoutePrefix))
+						? 'bg-accent text-accent-foreground'
+						: ''}"
+					href={item.route}
+					onclick={handleMobileSidebarItemClick}
+					variant="ghost"
+				>
+					<div class="flex items-center gap-2">
+						{@render itemIcon(item.icon)}
 
-		<Button
-			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
-			onclick={activateSearch}
-			variant="ghost"
-		>
-			<div class="flex items-center gap-2">
-				<Search class="h-4 w-4" />
+						{item.tooltip}
+					</div>
 
-				Search
-			</div>
-
-			<KeyboardShortcutInfo keys={['cmd', 'k']} />
-		</Button>
-
-		<Button
-			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isMcpActive
-				? 'bg-accent text-accent-foreground'
-				: ''}"
-			href="#/settings/mcp"
-			onclick={handleMobileSidebarItemClick}
-			variant="ghost"
-		>
-			<div class="flex items-center gap-2">
-				<McpLogo class="h-4 w-4" />
-
-				MCP Servers
-			</div>
-		</Button>
-
-		<Button
-			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isImportExportActive
-				? 'bg-accent text-accent-foreground'
-				: ''}"
-			href="#/settings/import-export"
-			onclick={handleMobileSidebarItemClick}
-			variant="ghost"
-		>
-			<div class="flex items-center gap-2">
-				<Database class="h-4 w-4" />
-
-				Import / Export
-			</div>
-		</Button>
-
-		<Button
-			class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isSettingsActive
-				? 'bg-accent text-accent-foreground'
-				: ''}"
-			href="#/settings/chat/general"
-			onclick={handleMobileSidebarItemClick}
-			variant="ghost"
-		>
-			<div class="flex items-center gap-2">
-				<Settings class="h-4 w-4" />
-
-				Settings
-			</div>
-		</Button>
+					{#if item.keys}
+						<KeyboardShortcutInfo keys={item.keys} />
+					{/if}
+				</Button>
+			{/if}
+		{/each}
 	{/if}
 </div>

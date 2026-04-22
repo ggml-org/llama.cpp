@@ -15,11 +15,12 @@ export interface DesktopIconStripItem {
 	route?: string;
 	activeRouteId?: string;
 	activeRoutePrefix?: string;
+	keys?: string[];
 }
 
 export const DESKTOP_ICON_STRIP_ICONS: DesktopIconStripItem[] = [
-	{ icon: SquarePen, tooltip: 'New Chat', route: '?new_chat=true#/' },
-	{ icon: Search, tooltip: 'Search' },
+	{ icon: SquarePen, tooltip: 'New chat', route: '?new_chat=true#/', keys: ['shift', 'cmd', 'o'] },
+	{ icon: Search, tooltip: 'Search', keys: ['cmd', 'k'] },
 	{
 		icon: McpLogo,
 		tooltip: 'MCP Servers',

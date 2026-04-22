@@ -47,11 +47,7 @@
 
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
-		activateSearchMode: () => chatSidebar?.activateSearchMode?.(),
-		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
-		onSearchActivated: () => {
-			sidebarOpen = true;
-		}
+		editActiveConversation: () => chatSidebar?.editActiveConversation?.()
 	});
 
 	function handleTitleUpdateCancel() {
@@ -220,6 +216,7 @@
 						if (chatSidebar?.activateSearchMode) {
 							chatSidebar.activateSearchMode();
 						}
+
 						sidebarOpen = true;
 					}}
 				/>

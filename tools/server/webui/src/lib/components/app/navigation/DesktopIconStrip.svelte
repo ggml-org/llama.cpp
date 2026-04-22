@@ -11,26 +11,38 @@
 	import { fade } from 'svelte/transition';
 	import { circIn } from 'svelte/easing';
 	import { onMount } from 'svelte';
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 
 	interface Props {
 		sidebarOpen: boolean;
 		onSearchClick: () => void;
 	}
 
-	let { sidebarOpen, onSearchClick }: Props = $props();
+	let { sidebarOpen = false, onSearchClick }: Props = $props();
 
-	let mounted = $state(false);
-	onMount(() => (mounted = true));
+	const { handleKeydown } = useKeyboardShortcuts({ activateSearchMode: () => onSearchClick() });
 
-	let showIcons = $derived(mounted && !sidebarOpen);
+	let initialized = $state(false);
+	let showIcons = $derived(!sidebarOpen);
+
+	showIcons = false;
+
+	onMount(() => {
+		showIcons = !sidebarOpen;
+
+		setTimeout(() => {
+			initialized = true;
+		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * DESKTOP_ICON_STRIP_ICONS.length);
+	});
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div
 	class="hidden shrink-0 transition-[width] duration-200 ease-linear md:block {sidebarOpen
 		? 'w-0'
 		: 'w-[calc(var(--sidebar-width-icon)+1.5rem)]'}"
 ></div>
-
 <aside
 	class="fixed top-0 bottom-0 left-0 z-10 hidden w-[calc(var(--sidebar-width-icon)+1.5rem)] flex-col items-center justify-between py-3 transition-opacity duration-200 ease-linear md:flex {sidebarOpen
 		? 'pointer-events-none opacity-0'
@@ -48,8 +60,9 @@
 				<div
 					in:fade={{
 						duration: ICON_STRIP_TRANSITION_DURATION,
-						delay:
-							ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
+						delay: !initialized
+							? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
+							: 0,
 						easing: circIn
 					}}
 				>
