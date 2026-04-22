@@ -274,3 +274,11 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
         autoparser::generation_params & params);
+
+// specialized per-task preset
+struct common_chat_prompt_preset {
+    std::string system;
+    std::string user;
+};
+
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates);
