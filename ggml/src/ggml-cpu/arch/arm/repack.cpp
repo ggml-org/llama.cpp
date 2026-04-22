@@ -5027,11 +5027,11 @@ void ggml_gemm_q8_0_4x8_q8_0(int                        n,
     if (svcntb() * 8 == 256) {
         const block_q8_0x4 * b_ptr_base = (const block_q8_0x4 *) vx;
 
-        uint32_t idx_arr[8] = {0, 1, 4, 5, 2, 3, 6, 7};
+        static const uint32_t idx_arr[8] = {0, 1, 4, 5, 2, 3, 6, 7};
         svuint32_t idx = svld1(svptrue_b32(), idx_arr);
-        uint32_t idx_arr1[8] = {0, 1, 2, 3, 1, 2, 3, 0};
+        static const uint32_t idx_arr1[8] = {0, 1, 2, 3, 1, 2, 3, 0};
         svuint32_t idx_sc1 = svld1(svptrue_b32(), idx_arr1);
-        uint32_t idx_arr2[8] = {0, 1, 2, 3, 0, 1, 2, 3};
+        static const uint32_t idx_arr2[8] = {0, 1, 2, 3, 0, 1, 2, 3};
         svuint32_t idx_sc2 = svld1(svptrue_b32(), idx_arr2);
 
         for (int y = 0; y < nr; y += 4) {
