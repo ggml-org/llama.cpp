@@ -58,21 +58,13 @@ namespace fs = std::filesystem;
 
 static fs::path get_cache_directory() {
     static const fs::path cache = []() {
-        struct {
-            const char * var;
-            fs::path path;
-        } entries[] = {
-            {"LLAMA_CACHE",           fs::path()},
-            {"MODELSCOPE_CACHE",      fs::path()},
-            {"XDG_CACHE_HOME",        fs::path("modelscope")},
-            {HOME_DIR,                fs::path(".cache") / "modelscope"}
-        };
-        for (const auto & entry : entries) {
-            if (auto * p = std::getenv(entry.var); p && *p) {
-                fs::path base(p);
-                return entry.path.empty() ? base : base / entry.path;
-            }
+        if (auto * p = std::getenv("LLAMA_CACHE"); p && *p) return fs::path(p);
+        if (auto * p = std::getenv("MODELSCOPE_CACHE"); p && *p) return fs::path(p);
+
+        if (auto * p = std::getenv("XDG_CACHE_HOME"); p && *p) {
+            return fs::path(p) / "modelscope";
         }
+
 #ifndef _WIN32
         const struct passwd * pw = getpwuid(getuid());
         if (pw && pw->pw_dir && *pw->pw_dir) {
@@ -199,7 +191,6 @@ static std::vector<ms_file> list_files(const std::string & repo_id, const std::s
         }
     } catch (const std::exception & e) {
         std::string err_msg = e.what();
-        // 静默处理认证失败，依靠缓存降级
         if (err_msg.find("401") != std::string::npos || 
             err_msg.find("403") != std::string::npos || 
             err_msg.find("404") != std::string::npos) {
