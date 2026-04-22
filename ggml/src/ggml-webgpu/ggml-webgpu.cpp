@@ -1007,41 +1007,50 @@ static webgpu_encoded_op ggml_webgpu_im2col(webgpu_context & ctx,
                                             ggml_tensor *    src0,
                                             ggml_tensor *    src1,
                                             ggml_tensor *    dst) {
-    const int32_t s0 = ggml_get_op_params_i32(dst, 0);
-    const int32_t s1 = ggml_get_op_params_i32(dst, 1);
-    const int32_t p0 = ggml_get_op_params_i32(dst, 2);
-    const int32_t p1 = ggml_get_op_params_i32(dst, 3);
-    const int32_t d0 = ggml_get_op_params_i32(dst, 4);
-    const int32_t d1 = ggml_get_op_params_i32(dst, 5);
-    const bool is_2D = ggml_get_op_params_i32(dst, 6) == 1;
+    const int32_t s0    = ggml_get_op_params_i32(dst, 0);
+    const int32_t s1    = ggml_get_op_params_i32(dst, 1);
+    const int32_t p0    = ggml_get_op_params_i32(dst, 2);
+    const int32_t p1    = ggml_get_op_params_i32(dst, 3);
+    const int32_t d0    = ggml_get_op_params_i32(dst, 4);
+    const int32_t d1    = ggml_get_op_params_i32(dst, 5);
+    const bool    is_2D = ggml_get_op_params_i32(dst, 6) == 1;
 
-    const uint32_t IC = is_2D ? src0->ne[2] : src0->ne[1];
-    const uint32_t KH = is_2D ? src0->ne[1] : 1;
     const uint32_t KW = src0->ne[0];
+    const uint32_t KH = is_2D ? src0->ne[1] : 1;
+    const uint32_t IC = is_2D ? src0->ne[2] : src0->ne[1];
 
-    const uint32_t IH = is_2D ? src1->ne[1] : 1;
     const uint32_t IW = src1->ne[0];
+    const uint32_t IH = is_2D ? src1->ne[1] : 1;
     const uint32_t N  = is_2D ? src1->ne[3] : src1->ne[2];
 
-    const uint32_t OH = is_2D ? dst->ne[2] : 1;
     const uint32_t OW = dst->ne[1];
+    const uint32_t OH = is_2D ? dst->ne[2] : 1;
 
     const uint32_t si0 = (uint32_t) (src1->nb[0] / ggml_type_size(src1->type));
     const uint32_t si1 = is_2D ? (uint32_t) (src1->nb[1] / ggml_type_size(src1->type)) : 0;
-    const uint32_t si2 = is_2D ? (uint32_t) (src1->nb[2] / ggml_type_size(src1->type)) : (uint32_t) (src1->nb[1] / ggml_type_size(src1->type));
-    const uint32_t si3 = is_2D ? (uint32_t) (src1->nb[3] / ggml_type_size(src1->type)) : (uint32_t) (src1->nb[2] / ggml_type_size(src1->type));
+    const uint32_t si2 = is_2D ? (uint32_t) (src1->nb[2] / ggml_type_size(src1->type)) :
+                                 (uint32_t) (src1->nb[1] / ggml_type_size(src1->type));
+    const uint32_t si3 = is_2D ? (uint32_t) (src1->nb[3] / ggml_type_size(src1->type)) :
+                                 (uint32_t) (src1->nb[2] / ggml_type_size(src1->type));
 
     const uint32_t so0 = (uint32_t) (dst->nb[0] / ggml_type_size(dst->type));
     const uint32_t so1 = (uint32_t) (dst->nb[1] / ggml_type_size(dst->type));
     const uint32_t so2 = is_2D ? (uint32_t) (dst->nb[2] / ggml_type_size(dst->type)) : 0;
-    const uint32_t so3 = is_2D ? (uint32_t) (dst->nb[3] / ggml_type_size(dst->type)) : (uint32_t) (dst->nb[2] / ggml_type_size(dst->type));
+    const uint32_t so3 = is_2D ? (uint32_t) (dst->nb[3] / ggml_type_size(dst->type)) :
+                                 (uint32_t) (dst->nb[2] / ggml_type_size(dst->type));
 
     std::vector<uint32_t> params = {
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type)),
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
 
-        si0, si1, si2, si3,
-        so0, so1, so2, so3,
+        si0,
+        si1,
+        si2,
+        si3,
+        so0,
+        so1,
+        so2,
+        so3,
 
         KW,
         KH,
@@ -1063,14 +1072,8 @@ static webgpu_encoded_op ggml_webgpu_im2col(webgpu_context & ctx,
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
-        { .binding = 0,
-         .buffer  = ggml_webgpu_tensor_buf(src1),
-         .offset  = ggml_webgpu_tensor_align_offset(ctx, src1),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, src1) },
-        { .binding = 1,
-         .buffer  = ggml_webgpu_tensor_buf(dst),
-         .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  },
+        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src1),
+        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst),
     };
 
     uint32_t max_wg_size =
@@ -1078,12 +1081,11 @@ static webgpu_encoded_op ggml_webgpu_im2col(webgpu_context & ctx,
     uint32_t wg_size =
         std::min((uint32_t) ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup, max_wg_size);
 
-    ggml_webgpu_shader_lib_context shader_lib_ctx = {
-        .src0        = src0,
-        .src1        = src1,
-        .dst         = dst,
-        .max_wg_size = wg_size,
-    };
+    ggml_webgpu_shader_lib_context shader_lib_ctx = {};
+    shader_lib_ctx.src0                           = src0;
+    shader_lib_ctx.src1                           = src1;
+    shader_lib_ctx.dst                            = dst;
+    shader_lib_ctx.max_wg_size                    = wg_size;
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_im2col_pipeline(shader_lib_ctx);
 

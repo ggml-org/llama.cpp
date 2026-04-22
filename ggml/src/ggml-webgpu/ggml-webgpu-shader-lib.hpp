@@ -2467,10 +2467,9 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_im2col_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_im2col_pipeline_key key = {
-            .input_type  = context.src1->type,
-            .output_type = context.dst->type,
-        };
+        ggml_webgpu_im2col_pipeline_key key = {};
+        key.input_type                      = context.src1->type;
+        key.output_type                     = context.dst->type;
 
         auto it = im2col_pipelines.find(key);
         if (it != im2col_pipelines.end()) {

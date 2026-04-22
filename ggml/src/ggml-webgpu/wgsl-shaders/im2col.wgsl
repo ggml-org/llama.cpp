@@ -33,8 +33,7 @@ struct Params {
     p0: u32, p1: u32,
     // dilation
     d0: u32, d1: u32,
-
-}   
+}
 
 @group(0) @binding(2)
 var<uniform> params: Params;
@@ -64,7 +63,7 @@ fn main(
     let threads_per_group = u32(WG_SIZE);
     let i_out = gid.x + (num_wg.x * threads_per_group) * gid.y;
     let K = params.KW * params.KH * params.IC;
-    let M = params.OW * params.OH; 
+    let M = params.OW * params.OH;
     let total = K * M * params.N;
 
     if (i_out >= total) {
