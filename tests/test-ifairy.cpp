@@ -612,15 +612,11 @@ static bool test_ifairy64_lut_transform_pack() {
     }
 
     const ifairy_lut_extra * extra = (const ifairy_lut_extra *) w->extra;
-    if (!extra || !extra->indexes || !extra->packed_w || extra->size != expected) {
-        fprintf(stderr, "transform_tensor produced invalid iFairy64 extra (size=%zu expected=%zu)\n",
-                extra ? extra->size : 0, expected);
-        ggml_free(ctx);
-        return false;
-    }
-
-    if (memcmp(extra->indexes, indexes_ref.data(), expected) != 0) {
-        fprintf(stderr, "transform_tensor index buffer mismatch for iFairy64\n");
+    const size_t expected_packed =
+        (size_t) ((rows + 15) / 16) * (size_t) blocks_per_row * sizeof(ifairy64_lut_wtile_16);
+    if (!extra || !extra->packed_w || extra->packed_w_size != expected_packed) {
+        fprintf(stderr, "transform_tensor produced invalid iFairy64 extra (packed=%zu expected=%zu)\n",
+                extra ? extra->packed_w_size : 0, expected_packed);
         ggml_free(ctx);
         return false;
     }

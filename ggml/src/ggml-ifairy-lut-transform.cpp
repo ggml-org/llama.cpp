@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include <mutex>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -74,10 +75,11 @@ void ggml_ifairy_lut_free(void) {
     g_ifairy_lut_index_cache.clear();
     for (auto * e : g_ifairy_lut_extras) {
         if (e) {
-            if (e->indexes && e->index_tensor == NULL && e->index_buffer == NULL) {
+            if ((e->indexes || e->packed_w) && e->index_tensor == NULL && e->index_buffer == NULL) {
                 const size_t index_bytes_aligned = GGML_PAD(e->size, GGML_IFAIRY_LUT_WTILE_ALIGNMENT);
                 const size_t total_bytes         = index_bytes_aligned + e->packed_w_size;
-                ggml_aligned_free(e->indexes, total_bytes);
+                uint8_t *     base              = e->indexes ? e->indexes : (uint8_t *) e->packed_w;
+                ggml_aligned_free(base, total_bytes);
             }
             e->indexes       = NULL;
             e->size          = 0;
@@ -106,9 +108,10 @@ static bool ggml_ifairy_lut_transform_tensor_impl(
     }
 
     const bool dbg = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG");
+    const bool keep_indexes = !std::is_same_v<block_type, block_ifairy64>;
 
     ifairy_lut_extra * extra = (ifairy_lut_extra *) tensor->extra;
-    if (extra && extra->indexes) {
+    if (extra && extra->packed_w) {
         if (index_tensor_out) {
             *index_tensor_out = NULL;
         }
@@ -149,13 +152,13 @@ static bool ggml_ifairy_lut_transform_tensor_impl(
 
     // Layout within a single cached buffer:
     //   [indexes (padded to tile alignment)] [packed_wtiles]
-    const size_t index_bytes_aligned = GGML_PAD(index_bytes, GGML_IFAIRY_LUT_WTILE_ALIGNMENT);
+    const size_t index_bytes_aligned = keep_indexes ? GGML_PAD(index_bytes, GGML_IFAIRY_LUT_WTILE_ALIGNMENT) : 0;
     const size_t total_bytes         = index_bytes_aligned + packed_bytes;
 
     {
         std::lock_guard<std::mutex> lock(g_ifairy_lut_mutex);
         extra = (ifairy_lut_extra *) tensor->extra;
-        if (extra && extra->indexes && extra->packed_w) {
+        if (extra && extra->packed_w) {
             if (index_tensor_out) {
                 *index_tensor_out = NULL;
             }
@@ -170,8 +173,8 @@ static bool ggml_ifairy_lut_transform_tensor_impl(
                 g_ifairy_lut_extras.push_back(extra);
             }
 
-            extra->indexes       = it->second.base;
-            extra->size          = index_bytes;
+            extra->indexes       = keep_indexes ? it->second.base : NULL;
+            extra->size          = keep_indexes ? index_bytes : 0;
             extra->packed_w      = it->second.base + index_bytes_aligned;
             extra->packed_w_size = packed_bytes;
             extra->index_tensor  = NULL;
@@ -207,8 +210,14 @@ static bool ggml_ifairy_lut_transform_tensor_impl(
 
     memset(buf, 0, total_bytes);
 
-    uint8_t *    indexes  = buf;
-    wtile_type * packed_w = (wtile_type *) (buf + index_bytes_aligned);
+    std::vector<uint8_t> indexes_tmp;
+    uint8_t *            indexes  = keep_indexes ? buf : NULL;
+    wtile_type *         packed_w = (wtile_type *) (buf + index_bytes_aligned);
+
+    if (!keep_indexes) {
+        indexes_tmp.resize(index_bytes);
+        indexes = indexes_tmp.data();
+    }
 
     const bool ok = encode((const block_type *) tensor->data, k, rows, indexes, index_bytes);
     if (!ok) {
@@ -252,7 +261,7 @@ static bool ggml_ifairy_lut_transform_tensor_impl(
     {
         std::lock_guard<std::mutex> lock(g_ifairy_lut_mutex);
         extra = (ifairy_lut_extra *) tensor->extra;
-        if (extra && extra->indexes && extra->packed_w) {
+        if (extra && extra->packed_w) {
             // Another thread finished while we were encoding; discard our buffer.
             if (index_buffer) {
                 ggml_backend_buffer_free(index_buffer);
@@ -289,8 +298,8 @@ static bool ggml_ifairy_lut_transform_tensor_impl(
             g_ifairy_lut_extras.push_back(extra);
         }
 
-        extra->indexes       = buf;
-        extra->size          = index_bytes;
+        extra->indexes       = keep_indexes ? buf : NULL;
+        extra->size          = keep_indexes ? index_bytes : 0;
         extra->packed_w      = buf + index_bytes_aligned;
         extra->packed_w_size = packed_bytes;
         extra->index_tensor  = NULL;
