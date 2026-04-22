@@ -77,8 +77,8 @@ struct cli_context {
         // defaults.return_progress = true; // TODO: show progress
 
         verbose_prompt = params.verbose_prompt;
-        reasoning_budget = params.reasoning_budget;
-        reasoning_budget_message = params.reasoning_budget_message;
+        reasoning_budget = params.sampling.reasoning_budget_tokens;
+        reasoning_budget_message = params.sampling.reasoning_budget_message;
     }
 
     std::string generate_completion(result_timings & out_timings) {

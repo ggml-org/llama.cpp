@@ -1045,8 +1045,8 @@ private:
                 /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
-                /* reasoning_budget      */ params_base.reasoning_budget,
-                /* reasoning_budget_msg  */ params_base.reasoning_budget_message,
+                /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
+                /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
                 /* media_path            */ params_base.media_path,
                 /* force_pure_content    */ params_base.force_pure_content_parser
             };
