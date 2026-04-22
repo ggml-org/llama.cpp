@@ -195,6 +195,7 @@ struct mtmd_context {
 
         auto decoder_rope_type = llama_model_rope_type(text_model);
         switch (decoder_rope_type) {
+            case LLAMA_ROPE_TYPE_NONE:
             case LLAMA_ROPE_TYPE_NORM:
             case LLAMA_ROPE_TYPE_NEOX:
                 {
