@@ -2244,7 +2244,6 @@ class ggml_webgpu_shader_lib {
         defines.push_back(std::string("HEAD_DIM_V=") + std::to_string(key.head_dim_v));
         variant += std::string("_hsv") + std::to_string(key.head_dim_v);
 
-        defines.push_back("Q_TILE=1");
         defines.push_back("KV_GRANULARITY=8");
 
         auto decisions        = std::make_shared<ggml_webgpu_flash_attn_vec_decisions>();
