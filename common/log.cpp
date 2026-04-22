@@ -126,6 +126,7 @@ struct common_log {
     common_log() : common_log(256) {}
 
     common_log(size_t capacity) {
+        printf("log: Constructing: capacity: %zu\n", capacity);
         file = nullptr;
         prefix = false;
         timestamps = false;
@@ -253,6 +254,7 @@ public:
     }
 
     void resume() {
+        printf("log: Resuming\n");
         std::lock_guard<std::mutex> lock(mtx);
 
         if (running) {
@@ -400,6 +402,7 @@ void common_log_pause(struct common_log * log) {
 }
 
 void common_log_resume(struct common_log * log) {
+    printf("log: common_log_resume\n");
     log->resume();
 }
 
