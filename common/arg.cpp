@@ -2504,7 +2504,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "path to LoRA adapter (use comma-separated values to load multiple adapters)",
         [](common_params & params, const std::string & value) {
             for (const auto & item : parse_csv_row(value)) {
-                params.lora_adapters.push_back({ item, 1.0, "", "", nullptr, true, {} });
+                params.lora_adapters.push_back({ item, 1.0, {}, nullptr, true });
             }
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
@@ -2519,7 +2519,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 if (parts.size() != 2) {
                     throw std::invalid_argument("lora-scaled format: FNAME:SCALE");
                 }
-                params.lora_adapters.push_back({ parts[0], std::stof(parts[1]), "", "", nullptr, true, {} });
+                params.lora_adapters.push_back({ parts[0], std::stof(parts[1]), {}, nullptr, true });
             }
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
@@ -2556,8 +2556,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
 
             // Validate and store modality strings
             auto & lora_info = params.lora_adapters[adapter_idx];
-            lora_info.mmlora_modality_types.clear();
-
             for (auto mod_str : modality_strs) {
                 // Strip whitespace
                 const auto start_index = mod_str.find_first_not_of(" \t\r\n");
@@ -2569,7 +2567,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 if (mod_str != "image" && mod_str != "audio") {
                     throw std::invalid_argument("Invalid modality type: " + mod_str + " (must be 'image' or 'audio')");
                 }
-                lora_info.mmlora_modality_types.push_back(mod_str);
+                // NOTE: For modality tasks, no prompt prefix is given
+                lora_info.task_prompt_prefixes[mod_str] = "";
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));

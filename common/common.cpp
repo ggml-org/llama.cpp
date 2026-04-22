@@ -1175,22 +1175,15 @@ common_init_result::common_init_result(common_params & params) :
             return;
         }
 
+        // Set task_prompt_prefix from internal adapter metadata
         char buf[1024];
         la.ptr = lora.get();
         llama_adapter_meta_val_str(la.ptr, "adapter.lora.task_name", buf, sizeof(buf));
-        la.task_name = buf;
+        std::string task_name = buf;
         llama_adapter_meta_val_str(la.ptr, "adapter.lora.prompt_prefix", buf, sizeof(buf));
-        la.prompt_prefix = buf;
-
-        // Validate MMLoRA configuration
-        if (!la.mmlora_modality_types.empty()) {
-            // Check for aLoRA conflict
-            const uint64_t n_alora_tokens = llama_adapter_get_alora_n_invocation_tokens(la.ptr);
-            if (n_alora_tokens > 0) {
-                LOG_ERR("%s: adapter '%s' cannot be both MMLoRA and aLoRA\n", __func__, la.path.c_str());
-                pimpl->model.reset(model);
-                return;
-            }
+        std::string prompt_prefix = buf;
+        if (!task_name.empty()) {
+            la.task_prompt_prefixes[task_name] = prompt_prefix;
         }
 
         pimpl->lora.emplace_back(std::move(lora)); // copy to list of loaded adapters
