@@ -93,6 +93,7 @@ typedef sycl::half2 ggml_half2;
 #        define QK_IFAIRY_GROUPS_PER_BLOCK (QK_IFAIRY / 2)
 #        define QK_IFAIRY_QS_BYTES         (QK_IFAIRY / 4)
 #        define QK_IFAIRY64                64
+#        define QK_IFAIRY64_GROUPS_PER_BLOCK (QK_IFAIRY64 / 2)
 #        define QK_IFAIRY64_QS_BYTES       (QK_IFAIRY64 / 4)
 static_assert(QK_IFAIRY == 256, "ifairy packing currently assumes QK_IFAIRY=256");
 

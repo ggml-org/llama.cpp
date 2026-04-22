@@ -91,17 +91,7 @@ static inline int ggml_ifairy_u8_to_s8_int(uint8_t v) {
     return v < 128 ? (int) v : (int) v - 256;
 }
 
-// ===========================================================================
-// 终极优化 1：向量化 Preprocess（拯救 TG256 首Token延迟）
-// 修复了复数点乘的 LUT 构建逻辑，彻底解耦实部与虚部！
-// ===========================================================================
-static void ggml_ifairy_lut_preprocess_lut16_one(const block_ifairy_q16 * act_blocks,
-                                                 int64_t                  blocks,
-                                                 int64_t                  groups_per_block,
-                                                 float *                  scales_out,
-                                                 int8_t *                 lut_out,
-                                                 int64_t                  g0,
-                                                 int64_t                  gstep) {
+static inline void ggml_ifairy_lut_fill_group_lut16(int xr0, int xi0, int xr1, int xi1, int8_t * tbl) {
 #if defined(__AVX2__)
     const __m256i c0_ac_bc = _mm256_setr_epi8(-1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0,  // lower = c0_r
                                               0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1   // upper = c0_i
@@ -118,6 +108,116 @@ static void ggml_ifairy_lut_preprocess_lut16_one(const block_ifairy_q16 * act_bl
     );
 #endif
 
+    const int r0 = xr0;
+    const int r1 = xr1;
+    const int i0 = -xi0;
+    const int i1 = -xi1;
+
+#if defined(__AVX2__)
+    const __m256i v_r0 = _mm256_set1_epi8((char) r0);
+    const __m256i v_r1 = _mm256_set1_epi8((char) r1);
+    const __m256i v_i0 = _mm256_set1_epi8((char) i0);
+    const __m256i v_i1 = _mm256_set1_epi8((char) i1);
+
+    __m256i tbl_ac_bc = _mm256_adds_epi8(_mm256_sign_epi8(v_r0, c0_ac_bc), _mm256_sign_epi8(v_r1, c1_ac_bc));
+    __m256i tbl_bd_ad = _mm256_adds_epi8(_mm256_sign_epi8(v_i0, c0_bd_ad), _mm256_sign_epi8(v_i1, c1_bd_ad));
+
+    _mm_storeu_si128((__m128i *) (tbl + 0), _mm256_castsi256_si128(tbl_ac_bc));
+    _mm_storeu_si128((__m128i *) (tbl + 16), _mm256_castsi256_si128(tbl_bd_ad));
+    _mm_storeu_si128((__m128i *) (tbl + 32), _mm256_extracti128_si256(tbl_ac_bc, 1));
+    _mm_storeu_si128((__m128i *) (tbl + 48), _mm256_extracti128_si256(tbl_bd_ad, 1));
+#else
+    alignas(16) int8_t ac_tbl[16] = {
+        ggml_ifairy_lut_sat_s8(-r0 - r1),
+        ggml_ifairy_lut_sat_s8(+r0 - r1),
+        ggml_ifairy_lut_sat_s8(-r1),
+        ggml_ifairy_lut_sat_s8(-r1),
+        ggml_ifairy_lut_sat_s8(-r0 + r1),
+        ggml_ifairy_lut_sat_s8(+r0 + r1),
+        ggml_ifairy_lut_sat_s8(+r1),
+        ggml_ifairy_lut_sat_s8(+r1),
+        ggml_ifairy_lut_sat_s8(-r0),
+        ggml_ifairy_lut_sat_s8(+r0),
+        0,
+        0,
+        ggml_ifairy_lut_sat_s8(-r0),
+        ggml_ifairy_lut_sat_s8(+r0),
+        0,
+        0,
+    };
+    alignas(16) int8_t bd_tbl[16] = {
+        0,
+        0,
+        ggml_ifairy_lut_sat_s8(+i0),
+        ggml_ifairy_lut_sat_s8(-i0),
+        0,
+        0,
+        ggml_ifairy_lut_sat_s8(+i0),
+        ggml_ifairy_lut_sat_s8(-i0),
+        ggml_ifairy_lut_sat_s8(+i1),
+        ggml_ifairy_lut_sat_s8(+i1),
+        ggml_ifairy_lut_sat_s8(+i0 + i1),
+        ggml_ifairy_lut_sat_s8(-i0 + i1),
+        ggml_ifairy_lut_sat_s8(-i1),
+        ggml_ifairy_lut_sat_s8(-i1),
+        ggml_ifairy_lut_sat_s8(+i0 - i1),
+        ggml_ifairy_lut_sat_s8(-i0 - i1),
+    };
+    alignas(16) int8_t bc_tbl[16] = {
+        0,
+        0,
+        ggml_ifairy_lut_sat_s8(-r0),
+        ggml_ifairy_lut_sat_s8(+r0),
+        0,
+        0,
+        ggml_ifairy_lut_sat_s8(-r0),
+        ggml_ifairy_lut_sat_s8(+r0),
+        ggml_ifairy_lut_sat_s8(-r1),
+        ggml_ifairy_lut_sat_s8(-r1),
+        ggml_ifairy_lut_sat_s8(-r0 - r1),
+        ggml_ifairy_lut_sat_s8(+r0 - r1),
+        ggml_ifairy_lut_sat_s8(+r1),
+        ggml_ifairy_lut_sat_s8(+r1),
+        ggml_ifairy_lut_sat_s8(-r0 + r1),
+        ggml_ifairy_lut_sat_s8(+r0 + r1),
+    };
+    alignas(16) int8_t ad_tbl[16] = {
+        ggml_ifairy_lut_sat_s8(-i0 - i1),
+        ggml_ifairy_lut_sat_s8(+i0 - i1),
+        ggml_ifairy_lut_sat_s8(-i1),
+        ggml_ifairy_lut_sat_s8(-i1),
+        ggml_ifairy_lut_sat_s8(-i0 + i1),
+        ggml_ifairy_lut_sat_s8(+i0 + i1),
+        ggml_ifairy_lut_sat_s8(+i1),
+        ggml_ifairy_lut_sat_s8(+i1),
+        ggml_ifairy_lut_sat_s8(-i0),
+        ggml_ifairy_lut_sat_s8(+i0),
+        0,
+        0,
+        ggml_ifairy_lut_sat_s8(-i0),
+        ggml_ifairy_lut_sat_s8(+i0),
+        0,
+        0,
+    };
+    memcpy(tbl + 0, ac_tbl, 16);
+    memcpy(tbl + 16, bd_tbl, 16);
+    memcpy(tbl + 32, bc_tbl, 16);
+    memcpy(tbl + 48, ad_tbl, 16);
+#endif
+}
+
+// ===========================================================================
+// 终极优化 1：向量化 Preprocess（拯救 TG256 首Token延迟）
+// 修复了复数点乘的 LUT 构建逻辑，彻底解耦实部与虚部！
+// ===========================================================================
+static void ggml_ifairy_lut_preprocess_lut16_one(const block_ifairy_q16 * act_blocks,
+                                                 int64_t                  blocks,
+                                                 int64_t                  groups_per_block,
+                                                 float *                  scales_out,
+                                                 int8_t *                 lut_out,
+                                                 int64_t                  g0,
+                                                 int64_t                  gstep) {
+
     for (int64_t blk = 0; blk < blocks; ++blk) {
         scales_out[blk * 2 + 0] = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
         scales_out[blk * 2 + 1] = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
@@ -133,104 +233,39 @@ static void ggml_ifairy_lut_preprocess_lut16_one(const block_ifairy_q16 * act_bl
         int xr1 = ggml_ifairy_u8_to_s8_int(act_blocks[blk].x_real[base_off + 1]);
         int xi1 = ggml_ifairy_u8_to_s8_int(act_blocks[blk].x_imag[base_off + 1]);
 
-        const int r0 = xr0;
-        const int r1 = xr1;
-        const int i0 = -xi0;
-        const int i1 = -xi1;
-
         int8_t * tbl = lut_out + (size_t) g * k_ifairy_lut_group_bytes;
 
-#if defined(__AVX2__)
-        const __m256i v_r0 = _mm256_set1_epi8((char) r0);
-        const __m256i v_r1 = _mm256_set1_epi8((char) r1);
-        const __m256i v_i0 = _mm256_set1_epi8((char) i0);
-        const __m256i v_i1 = _mm256_set1_epi8((char) i1);
+        ggml_ifairy_lut_fill_group_lut16(xr0, xi0, xr1, xi1, tbl);
+    }
+}
 
-        __m256i tbl_ac_bc = _mm256_adds_epi8(_mm256_sign_epi8(v_r0, c0_ac_bc), _mm256_sign_epi8(v_r1, c1_ac_bc));
-        __m256i tbl_bd_ad = _mm256_adds_epi8(_mm256_sign_epi8(v_i0, c0_bd_ad), _mm256_sign_epi8(v_i1, c1_bd_ad));
+static void ggml_ifairy64_lut_preprocess_lut16_one(const block_ifairy_q16 * act_blocks,
+                                                   int64_t                  weight_blocks,
+                                                   float *                  scales_out,
+                                                   int8_t *                 lut_out,
+                                                   int64_t                  g0,
+                                                   int64_t                  gstep) {
+    for (int64_t blk = 0; blk < weight_blocks; ++blk) {
+        const block_ifairy_q16 & act_blk = act_blocks[blk / 4];
+        scales_out[blk * 2 + 0]          = GGML_FP16_TO_FP32(act_blk.d_real);
+        scales_out[blk * 2 + 1]          = GGML_FP16_TO_FP32(act_blk.d_imag);
+    }
 
-        _mm_storeu_si128((__m128i *) (tbl + 0), _mm256_castsi256_si128(tbl_ac_bc));
-        _mm_storeu_si128((__m128i *) (tbl + 16), _mm256_castsi256_si128(tbl_bd_ad));
-        _mm_storeu_si128((__m128i *) (tbl + 32), _mm256_extracti128_si256(tbl_ac_bc, 1));
-        _mm_storeu_si128((__m128i *) (tbl + 48), _mm256_extracti128_si256(tbl_bd_ad, 1));
-#else
-        alignas(16) int8_t ac_tbl[16] = {
-            ggml_ifairy_lut_sat_s8(-r0 - r1),
-            ggml_ifairy_lut_sat_s8(+r0 - r1),
-            ggml_ifairy_lut_sat_s8(-r1),
-            ggml_ifairy_lut_sat_s8(-r1),
-            ggml_ifairy_lut_sat_s8(-r0 + r1),
-            ggml_ifairy_lut_sat_s8(+r0 + r1),
-            ggml_ifairy_lut_sat_s8(+r1),
-            ggml_ifairy_lut_sat_s8(+r1),
-            ggml_ifairy_lut_sat_s8(-r0),
-            ggml_ifairy_lut_sat_s8(+r0),
-            0,
-            0,
-            ggml_ifairy_lut_sat_s8(-r0),
-            ggml_ifairy_lut_sat_s8(+r0),
-            0,
-            0,
-        };
-        alignas(16) int8_t bd_tbl[16] = {
-            0,
-            0,
-            ggml_ifairy_lut_sat_s8(+i0),
-            ggml_ifairy_lut_sat_s8(-i0),
-            0,
-            0,
-            ggml_ifairy_lut_sat_s8(+i0),
-            ggml_ifairy_lut_sat_s8(-i0),
-            ggml_ifairy_lut_sat_s8(+i1),
-            ggml_ifairy_lut_sat_s8(+i1),
-            ggml_ifairy_lut_sat_s8(+i0 + i1),
-            ggml_ifairy_lut_sat_s8(-i0 + i1),
-            ggml_ifairy_lut_sat_s8(-i1),
-            ggml_ifairy_lut_sat_s8(-i1),
-            ggml_ifairy_lut_sat_s8(+i0 - i1),
-            ggml_ifairy_lut_sat_s8(-i0 - i1),
-        };
-        alignas(16) int8_t bc_tbl[16] = {
-            0,
-            0,
-            ggml_ifairy_lut_sat_s8(-r0),
-            ggml_ifairy_lut_sat_s8(+r0),
-            0,
-            0,
-            ggml_ifairy_lut_sat_s8(-r0),
-            ggml_ifairy_lut_sat_s8(+r0),
-            ggml_ifairy_lut_sat_s8(-r1),
-            ggml_ifairy_lut_sat_s8(-r1),
-            ggml_ifairy_lut_sat_s8(-r0 - r1),
-            ggml_ifairy_lut_sat_s8(+r0 - r1),
-            ggml_ifairy_lut_sat_s8(+r1),
-            ggml_ifairy_lut_sat_s8(+r1),
-            ggml_ifairy_lut_sat_s8(-r0 + r1),
-            ggml_ifairy_lut_sat_s8(+r0 + r1),
-        };
-        alignas(16) int8_t ad_tbl[16] = {
-            ggml_ifairy_lut_sat_s8(-i0 - i1),
-            ggml_ifairy_lut_sat_s8(+i0 - i1),
-            ggml_ifairy_lut_sat_s8(-i1),
-            ggml_ifairy_lut_sat_s8(-i1),
-            ggml_ifairy_lut_sat_s8(-i0 + i1),
-            ggml_ifairy_lut_sat_s8(+i0 + i1),
-            ggml_ifairy_lut_sat_s8(+i1),
-            ggml_ifairy_lut_sat_s8(+i1),
-            ggml_ifairy_lut_sat_s8(-i0),
-            ggml_ifairy_lut_sat_s8(+i0),
-            0,
-            0,
-            ggml_ifairy_lut_sat_s8(-i0),
-            ggml_ifairy_lut_sat_s8(+i0),
-            0,
-            0,
-        };
-        memcpy(tbl + 0, ac_tbl, 16);
-        memcpy(tbl + 16, bd_tbl, 16);
-        memcpy(tbl + 32, bc_tbl, 16);
-        memcpy(tbl + 48, ad_tbl, 16);
-#endif
+    const int64_t groups = weight_blocks * QK_IFAIRY64_GROUPS_PER_BLOCK;
+    for (int64_t g = g0; g < groups; g += gstep) {
+        const int64_t blk64      = g / QK_IFAIRY64_GROUPS_PER_BLOCK;
+        const int64_t local_group = g - blk64 * QK_IFAIRY64_GROUPS_PER_BLOCK;
+        const int64_t act_block  = blk64 / 4;
+        const int64_t subblock   = blk64 & 0x3;
+        const int64_t base_off   = subblock * QK_IFAIRY64 + local_group * 2;
+
+        int xr0 = ggml_ifairy_u8_to_s8_int(act_blocks[act_block].x_real[base_off + 0]);
+        int xi0 = ggml_ifairy_u8_to_s8_int(act_blocks[act_block].x_imag[base_off + 0]);
+        int xr1 = ggml_ifairy_u8_to_s8_int(act_blocks[act_block].x_real[base_off + 1]);
+        int xi1 = ggml_ifairy_u8_to_s8_int(act_blocks[act_block].x_imag[base_off + 1]);
+
+        int8_t * tbl = lut_out + (size_t) g * k_ifairy_lut_group_bytes;
+        ggml_ifairy_lut_fill_group_lut16(xr0, xi0, xr1, xi1, tbl);
     }
 }
 
@@ -274,6 +309,45 @@ static void ggml_ifairy_lut_preprocess_lut16(int          m,
     }
 }
 
+static void ggml_ifairy64_lut_preprocess_lut16(int          m,
+                                               int          k,
+                                               int          n,
+                                               const void * act,
+                                               size_t       act_stride,
+                                               void *       lut_scales,
+                                               void *       lut_buf,
+                                               int          ith,
+                                               int          nth) {
+    (void) m;
+    if (!act || !lut_scales || !lut_buf) {
+        return;
+    }
+
+    nth = std::max(nth, 1);
+    if (ith < 0 || ith >= nth) {
+        return;
+    }
+
+    const int64_t K             = k;
+    const int64_t weight_blocks = K / QK_IFAIRY64;
+    const int64_t groups        = weight_blocks * QK_IFAIRY64_GROUPS_PER_BLOCK;
+    const bool    shard_by_col  = n >= nth;
+
+    const int     col_start = shard_by_col ? ith : 0;
+    const int     col_step  = shard_by_col ? nth : 1;
+    const int64_t g0        = shard_by_col ? 0 : ith;
+    const int64_t gstep     = shard_by_col ? 1 : (int64_t) nth;
+
+    for (int col = col_start; col < n; col += col_step) {
+        const uint8_t *          act_col_bytes = (const uint8_t *) act + (size_t) col * act_stride;
+        const block_ifairy_q16 * act_blocks    = (const block_ifairy_q16 *) act_col_bytes;
+        float *                  scales_out    = (float *) lut_scales + (size_t) col * (size_t) weight_blocks * 2u;
+        int8_t * lut_out = (int8_t *) ((uint8_t *) lut_buf + (size_t) col * (size_t) groups * k_ifairy_lut_group_bytes);
+
+        ggml_ifairy64_lut_preprocess_lut16_one(act_blocks, weight_blocks, scales_out, lut_out, g0, gstep);
+    }
+}
+
 void ggml_ifairy_lut_preprocess_ex_lut16(int          m,
                                          int          k,
                                          int          n,
@@ -296,6 +370,30 @@ void ggml_ifairy_lut_preprocess_ex_lut_c(int          m,
                                          int          ith,
                                          int          nth) {
     ggml_ifairy_lut_preprocess_lut16(m, k, n, act, act_stride, lut_scales, lut_buf, ith, nth);
+}
+
+void ggml_ifairy64_lut_preprocess_ex_lut16(int          m,
+                                           int          k,
+                                           int          n,
+                                           const void * act,
+                                           size_t       act_stride,
+                                           void *       lut_scales,
+                                           void *       lut_buf,
+                                           int          ith,
+                                           int          nth) {
+    ggml_ifairy64_lut_preprocess_lut16(m, k, n, act, act_stride, lut_scales, lut_buf, ith, nth);
+}
+
+void ggml_ifairy64_lut_preprocess_ex_lut_c(int          m,
+                                           int          k,
+                                           int          n,
+                                           const void * act,
+                                           size_t       act_stride,
+                                           void *       lut_scales,
+                                           void *       lut_buf,
+                                           int          ith,
+                                           int          nth) {
+    ggml_ifairy64_lut_preprocess_lut16(m, k, n, act, act_stride, lut_scales, lut_buf, ith, nth);
 }
 
 // 纯 4-bit 标量解码：无掩码，无标志位，直接查表命中真理
@@ -554,17 +652,18 @@ static inline void ggml_ifairy_lut_accumulate_tile_pair_avx2(const struct ifairy
 }
 #endif
 
-static void ggml_ifairy_lut_qgemm_lut16_one(int64_t                            blocks,
-                                            int64_t                            groups_per_block,
-                                            int64_t                            groups,
-                                            int                                m,
-                                            const struct ifairy_lut_wtile_16 * wtiles,
-                                            const int8_t *                     lut_col,
-                                            const float *                      scales,
-                                            uint8_t *                          dst_col,
-                                            size_t                             dst_row_stride,
-                                            bool                               pack_bf16,
-                                            bool                               add) {
+template <typename wtile_type>
+static void ggml_ifairy_lut_qgemm_lut16_one(int64_t             blocks,
+                                            int64_t             groups_per_block,
+                                            int64_t             groups,
+                                            int                 m,
+                                            const wtile_type *  wtiles,
+                                            const int8_t *      lut_col,
+                                            const float *       scales,
+                                            uint8_t *           dst_col,
+                                            size_t              dst_row_stride,
+                                            bool                pack_bf16,
+                                            bool                add) {
     (void) groups;
     const int tiles = (m + 15) / 16;
 
@@ -585,11 +684,11 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t                            b
             }
 
             for (int64_t blk = 0; blk < blocks; ++blk) {
-                const struct ifairy_lut_wtile_16 * wt = wtiles + (size_t) tile * (size_t) blocks + (size_t) blk;
-                const float                        lr = scales[blk * 2 + 0];
-                const float                        li = scales[blk * 2 + 1];
-                const float                        wr = wt->d_real[lane];
-                const float                        wi = wt->d_imag[lane];
+                const wtile_type * wt = wtiles + (size_t) tile * (size_t) blocks + (size_t) blk;
+                const float        lr = scales[blk * 2 + 0];
+                const float        li = scales[blk * 2 + 1];
+                const float        wr = wt->d_real[lane];
+                const float        wi = wt->d_imag[lane];
 
                 int sum_ac = 0;
                 int sum_bc = 0;
@@ -671,15 +770,15 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t                            b
         __m256 acc3_i_hi = _mm256_setzero_ps();
 
         for (int64_t blk = 0; blk < blocks; ++blk) {
-            const struct ifairy_lut_wtile_16 * wt0 =
+            const wtile_type * wt0 =
                 wtiles + (size_t) t0 * (size_t) blocks + (size_t) blk;
-            const struct ifairy_lut_wtile_16 * wt1 = has1
+            const wtile_type * wt1 = has1
                 ? wtiles + (size_t) t1 * (size_t) blocks + (size_t) blk
                 : nullptr;
-            const struct ifairy_lut_wtile_16 * wt2 = has2
+            const wtile_type * wt2 = has2
                 ? wtiles + (size_t) t2 * (size_t) blocks + (size_t) blk
                 : nullptr;
-            const struct ifairy_lut_wtile_16 * wt3 = has3
+            const wtile_type * wt3 = has3
                 ? wtiles + (size_t) t3 * (size_t) blocks + (size_t) blk
                 : nullptr;
 
@@ -1140,8 +1239,8 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t                            b
         float32x4_t acc_i3 = vdupq_n_f32(0.0f);
 
         for (int64_t blk = 0; blk < blocks; ++blk) {
-            const struct ifairy_lut_wtile_16 * wt      = wtiles + t * blocks + blk;
-            const int8_t *                     lut_ptr = lut_col + blk * groups_per_block * k_ifairy_lut_group_bytes;
+            const wtile_type * wt      = wtiles + t * blocks + blk;
+            const int8_t *     lut_ptr = lut_col + blk * groups_per_block * k_ifairy_lut_group_bytes;
 
             int16x8_t sum_ac_0 = vdupq_n_s16(0);
             int16x8_t sum_ac_1 = vdupq_n_s16(0);
@@ -1288,7 +1387,7 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t                            b
         float out_i = 0.0f;
 
         for (int64_t blk = 0; blk < blocks; ++blk) {
-            const struct ifairy_lut_wtile_16 * wt = wtiles + (size_t) tile * (size_t) blocks + (size_t) blk;
+            const wtile_type * wt = wtiles + (size_t) tile * (size_t) blocks + (size_t) blk;
 
             const float lr = scales[blk * 2 + 0];
             const float li = scales[blk * 2 + 1];
@@ -1339,6 +1438,69 @@ static void ggml_ifairy_lut_qgemm_lut16_one(int64_t                            b
     }
 }
 
+template <typename wtile_type>
+static void ggml_ifairy_lut_qgemm_fused_lut16_impl(int          m,
+                                                   int          k,
+                                                   int          n,
+                                                   const void * packed_wtiles,
+                                                   const void * act,
+                                                   size_t       act_stride,
+                                                   void *       lut_tmp,
+                                                   void *       lut_scales_tmp,
+                                                   float *      dst,
+                                                   size_t       dst_col_stride,
+                                                   size_t       dst_row_stride,
+                                                   bool         pack_bf16,
+                                                   bool         add,
+                                                   int64_t      block_k,
+                                                   int64_t      groups_per_block,
+                                                   void (*preprocess_ex)(int,
+                                                                         int,
+                                                                         int,
+                                                                         const void *,
+                                                                         size_t,
+                                                                         void *,
+                                                                         void *,
+                                                                         int,
+                                                                         int)) {
+    if (!packed_wtiles || !act || !lut_tmp || !lut_scales_tmp || !dst || m <= 0 || k <= 0 || n <= 0) {
+        if (!packed_wtiles || !act || !dst || m <= 0 || k <= 0 || n <= 0) {
+            return;
+        }
+    }
+
+    const uint8_t *           act_bytes = (const uint8_t *) act;
+    uint8_t *                 dst_bytes = (uint8_t *) dst;
+    const int64_t             blocks    = k / block_k;
+    const int64_t             groups    = blocks * groups_per_block;
+    const wtile_type *        wtiles    = (const wtile_type *) packed_wtiles;
+
+    uint8_t * scratch_base = NULL;
+    if (!lut_tmp || !lut_scales_tmp) {
+        const size_t lut_bytes         = (size_t) n * (size_t) groups * (size_t) k_ifairy_lut_group_bytes;
+        const size_t lut_bytes_aligned = GGML_PAD(lut_bytes, 64);
+        const size_t scale_bytes       = (size_t) n * (size_t) blocks * 2u * sizeof(float);
+        const size_t scratch_bytes     = ggml_ifairy_checked_add_size(lut_bytes_aligned, scale_bytes);
+
+        static thread_local ggml_ifairy_tl_buf tl_scratch;
+        scratch_base = ggml_ifairy_tl_reserve(tl_scratch, scratch_bytes);
+        if (!scratch_base) {
+            return;
+        }
+        lut_tmp        = scratch_base;
+        lut_scales_tmp = scratch_base + lut_bytes_aligned;
+    }
+
+    for (int col = 0; col < n; ++col) {
+        const void * act_col = act_bytes + (size_t) col * act_stride;
+        uint8_t *    dst_col = dst_bytes + (size_t) col * dst_col_stride;
+
+        preprocess_ex(m, k, 1, act_col, act_stride, lut_scales_tmp, lut_tmp, 0, 1);
+        ggml_ifairy_lut_qgemm_lut16_one(blocks, groups_per_block, groups, m, wtiles, (const int8_t *) lut_tmp,
+                                        (const float *) lut_scales_tmp, dst_col, dst_row_stride, pack_bf16, add);
+    }
+}
+
 void ggml_ifairy_lut_qgemm_lut16(int          m,
                                  int          k,
                                  int          n,
@@ -1380,45 +1542,58 @@ void ggml_ifairy_lut_qgemm_fused_lut16(int          m,
                                        size_t       dst_row_stride,
                                        bool         pack_bf16,
                                        bool         add) {
-    if (!packed_wtiles || !act || !lut_tmp || !lut_scales_tmp || !dst || m <= 0 || k <= 0 || n <= 0) {
-        if (!packed_wtiles || !act || !dst || m <= 0 || k <= 0 || n <= 0) {
-            return;
-        }
+    ggml_ifairy_lut_qgemm_fused_lut16_impl<ifairy_lut_wtile_16>(m, k, n, packed_wtiles, act, act_stride, lut_tmp,
+                                                                 lut_scales_tmp, dst, dst_col_stride, dst_row_stride,
+                                                                 pack_bf16, add, QK_IFAIRY, QK_IFAIRY_GROUPS_PER_BLOCK,
+                                                                 ggml_ifairy_lut_preprocess_ex_lut16);
+}
+
+void ggml_ifairy64_lut_qgemm_lut16(int          m,
+                                   int          k,
+                                   int          n,
+                                   const void * packed_wtiles,
+                                   const void * lut,
+                                   const void * lut_scales,
+                                   float *      dst,
+                                   size_t       dst_col_stride,
+                                   size_t       dst_row_stride,
+                                   bool         pack_bf16,
+                                   bool         add) {
+    if (!packed_wtiles || !dst || !lut || !lut_scales || m <= 0 || k <= 0 || n <= 0) {
+        return;
     }
 
-    const uint8_t *                    act_bytes        = (const uint8_t *) act;
-    uint8_t *                          dst_bytes        = (uint8_t *) dst;
-    const int64_t                      blocks           = k / QK_IFAIRY;
-    const int64_t                      groups_per_block = QK_IFAIRY_GROUPS_PER_BLOCK;
-    const int64_t                      groups           = blocks * groups_per_block;
-    const struct ifairy_lut_wtile_16 * wtiles           = (const struct ifairy_lut_wtile_16 *) packed_wtiles;
-
-    uint8_t * scratch_base = NULL;
-    if (!lut_tmp || !lut_scales_tmp) {
-        const size_t lut_bytes         = (size_t) n * (size_t) groups * (size_t) k_ifairy_lut_group_bytes;
-        const size_t lut_bytes_aligned = GGML_PAD(lut_bytes, 64);
-        const size_t scale_bytes       = (size_t) n * (size_t) blocks * 2u * sizeof(float);
-        const size_t scratch_bytes     = ggml_ifairy_checked_add_size(lut_bytes_aligned, scale_bytes);
-
-        static thread_local ggml_ifairy_tl_buf tl_scratch;
-        scratch_base = ggml_ifairy_tl_reserve(tl_scratch, scratch_bytes);
-        if (!scratch_base) {
-            return;
-        }
-        lut_tmp        = scratch_base;
-        lut_scales_tmp = scratch_base + lut_bytes_aligned;
-    }
-
+    const int64_t                        blocks           = k / QK_IFAIRY64;
+    const int64_t                        groups_per_block = QK_IFAIRY64_GROUPS_PER_BLOCK;
+    const int64_t                        groups           = blocks * groups_per_block;
+    const struct ifairy64_lut_wtile_16 * wtiles           = (const struct ifairy64_lut_wtile_16 *) packed_wtiles;
     for (int col = 0; col < n; ++col) {
-        const void *             act_col    = act_bytes + (size_t) col * act_stride;
-        uint8_t *                dst_col    = dst_bytes + (size_t) col * dst_col_stride;
-        const block_ifairy_q16 * act_blocks = (const block_ifairy_q16 *) act_col;
-
-        ggml_ifairy_lut_preprocess_lut16_one(act_blocks, blocks, groups_per_block, (float *) lut_scales_tmp,
-                                             (int8_t *) lut_tmp, 0, 1);
-        ggml_ifairy_lut_qgemm_lut16_one(blocks, groups_per_block, groups, m, wtiles, (const int8_t *) lut_tmp,
-                                        (const float *) lut_scales_tmp, dst_col, dst_row_stride, pack_bf16, add);
+        const int8_t * lut_col = (const int8_t *) lut + col * groups * k_ifairy_lut_group_bytes;
+        const float *  scales  = (const float *) lut_scales + col * blocks * 2u;
+        uint8_t *      dst_col = (uint8_t *) dst + col * dst_col_stride;
+        ggml_ifairy_lut_qgemm_lut16_one(blocks, groups_per_block, groups, m, wtiles, lut_col, scales, dst_col,
+                                        dst_row_stride, pack_bf16, add);
     }
+}
+
+void ggml_ifairy64_lut_qgemm_fused_lut16(int          m,
+                                         int          k,
+                                         int          n,
+                                         const void * packed_wtiles,
+                                         const void * act,
+                                         size_t       act_stride,
+                                         void *       lut_tmp,
+                                         void *       lut_scales_tmp,
+                                         float *      dst,
+                                         size_t       dst_col_stride,
+                                         size_t       dst_row_stride,
+                                         bool         pack_bf16,
+                                         bool         add) {
+    ggml_ifairy_lut_qgemm_fused_lut16_impl<ifairy64_lut_wtile_16>(m, k, n, packed_wtiles, act, act_stride, lut_tmp,
+                                                                   lut_scales_tmp, dst, dst_col_stride, dst_row_stride,
+                                                                   pack_bf16, add, QK_IFAIRY64,
+                                                                   QK_IFAIRY64_GROUPS_PER_BLOCK,
+                                                                   ggml_ifairy64_lut_preprocess_ex_lut16);
 }
 
 void ggml_ifairy_lut_qgemm_lut_c(int          m,
@@ -1436,6 +1611,21 @@ void ggml_ifairy_lut_qgemm_lut_c(int          m,
                                 add);
 }
 
+void ggml_ifairy64_lut_qgemm_lut_c(int          m,
+                                   int          k,
+                                   int          n,
+                                   const void * packed_wtiles,
+                                   const void * lut,
+                                   const void * lut_scales,
+                                   float *      dst,
+                                   size_t       dst_col_stride,
+                                   size_t       dst_row_stride,
+                                   bool         pack_bf16,
+                                   bool         add) {
+    ggml_ifairy64_lut_qgemm_lut16(m, k, n, packed_wtiles, lut, lut_scales, dst, dst_col_stride, dst_row_stride,
+                                  pack_bf16, add);
+}
+
 void ggml_ifairy_lut_qgemm_fused_lut_c(int          m,
                                        int          k,
                                        int          n,
@@ -1451,6 +1641,23 @@ void ggml_ifairy_lut_qgemm_fused_lut_c(int          m,
                                        bool         add) {
     ggml_ifairy_lut_qgemm_fused_lut16(m, k, n, packed_wtiles, act, act_stride, lut_tmp, lut_scales_tmp, dst,
                                       dst_col_stride, dst_row_stride, pack_bf16, add);
+}
+
+void ggml_ifairy64_lut_qgemm_fused_lut_c(int          m,
+                                         int          k,
+                                         int          n,
+                                         const void * packed_wtiles,
+                                         const void * act,
+                                         size_t       act_stride,
+                                         void *       lut_tmp,
+                                         void *       lut_scales_tmp,
+                                         float *      dst,
+                                         size_t       dst_col_stride,
+                                         size_t       dst_row_stride,
+                                         bool         pack_bf16,
+                                         bool         add) {
+    ggml_ifairy64_lut_qgemm_fused_lut16(m, k, n, packed_wtiles, act, act_stride, lut_tmp, lut_scales_tmp, dst,
+                                        dst_col_stride, dst_row_stride, pack_bf16, add);
 }
 
 void ggml_ifairy_lut_mul_mat_scalar(int          m,

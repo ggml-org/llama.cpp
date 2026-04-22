@@ -19,6 +19,7 @@
 #include <vector>
 
 static_assert(QK_IFAIRY == 256, "lut packing assumes QK_IFAIRY=256");
+static_assert(QK_IFAIRY64 == 64, "lut packing assumes QK_IFAIRY64=64");
 
 static std::vector<ifairy_lut_extra *> g_ifairy_lut_extras;
 static std::mutex                      g_ifairy_lut_mutex;
@@ -28,9 +29,10 @@ struct ifairy_lut_index_cache_key {
     size_t       nbytes;
     int64_t      k;
     int64_t      rows;
+    enum ggml_type type;
 
     bool operator==(const ifairy_lut_index_cache_key & other) const noexcept {
-        return data == other.data && nbytes == other.nbytes && k == other.k && rows == other.rows;
+        return data == other.data && nbytes == other.nbytes && k == other.k && rows == other.rows && type == other.type;
     }
 };
 
@@ -40,6 +42,7 @@ struct ifairy_lut_index_cache_key_hash {
         h ^= std::hash<size_t>{}(key.nbytes) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
         h ^= std::hash<int64_t>{}(key.k) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
         h ^= std::hash<int64_t>{}(key.rows) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}((int) key.type) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
         return h;
     }
 };
@@ -86,8 +89,16 @@ void ggml_ifairy_lut_free(void) {
     }
 }
 
-bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_tensor ** index_tensor_out) {
-    if (!tensor || tensor->type != GGML_TYPE_IFAIRY) {
+template <typename block_type, typename wtile_type>
+static bool ggml_ifairy_lut_transform_tensor_impl(
+    struct ggml_tensor * tensor,
+    struct ggml_tensor ** index_tensor_out,
+    int64_t               block_k,
+    int64_t               groups_per_block,
+    struct ggml_ifairy_2w_index_info (*get_index_info)(int64_t),
+    size_t (*get_index_buffer_size)(const struct ggml_ifairy_2w_index_info *, int64_t),
+    bool (*encode)(const block_type * GGML_RESTRICT, int64_t, int64_t, uint8_t * GGML_RESTRICT, size_t)) {
+    if (!tensor) {
         if (index_tensor_out) {
             *index_tensor_out = NULL;
         }
@@ -106,16 +117,16 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
 
     const int64_t k    = tensor->ne[0];
     const int64_t rows = tensor->ne[1];
-    if (k % QK_IFAIRY != 0 || rows <= 0) {
+    if (k % block_k != 0 || rows <= 0) {
         if (dbg) {
-            GGML_LOG_WARN("ifairy_lut: transform_tensor: invalid shape k=%lld rows=%lld QK_IFAIRY=%d\n", (long long) k,
-                          (long long) rows, QK_IFAIRY);
+            GGML_LOG_WARN("ifairy_lut: transform_tensor: invalid shape type=%s k=%lld rows=%lld block_k=%lld\n",
+                          ggml_type_name(tensor->type), (long long) k, (long long) rows, (long long) block_k);
         }
         return false;
     }
 
-    const struct ggml_ifairy_2w_index_info info        = ggml_ifairy_2w_get_index_info(k);
-    const size_t                           index_bytes = ggml_ifairy_2w_index_buffer_size(&info, rows);
+    const struct ggml_ifairy_2w_index_info info        = get_index_info(k);
+    const size_t                           index_bytes = get_index_buffer_size(&info, rows);
     if (index_bytes == 0) {
         if (dbg) {
             GGML_LOG_WARN("ifairy_lut: transform_tensor: index_bytes==0 (k=%lld rows=%lld)\n", (long long) k,
@@ -129,11 +140,12 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
         /* .nbytes = */ ggml_nbytes(tensor),
         /* .k      = */ k,
         /* .rows   = */ rows,
+        /* .type   = */ tensor->type,
     };
 
-    const int64_t blocks_per_row = k / QK_IFAIRY;
+    const int64_t blocks_per_row = k / block_k;
     const int64_t tiles          = (rows + 15) / 16;
-    const size_t  packed_bytes   = (size_t) tiles * (size_t) blocks_per_row * sizeof(struct ifairy_lut_wtile_16);
+    const size_t  packed_bytes   = (size_t) tiles * (size_t) blocks_per_row * sizeof(wtile_type);
 
     // Layout within a single cached buffer:
     //   [indexes (padded to tile alignment)] [packed_wtiles]
@@ -195,13 +207,14 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
 
     memset(buf, 0, total_bytes);
 
-    uint8_t *                    indexes  = buf;
-    struct ifairy_lut_wtile_16 * packed_w = (struct ifairy_lut_wtile_16 *) (buf + index_bytes_aligned);
+    uint8_t *    indexes  = buf;
+    wtile_type * packed_w = (wtile_type *) (buf + index_bytes_aligned);
 
-    const bool ok = ggml_ifairy_2w_encode((const block_ifairy *) tensor->data, k, rows, indexes, index_bytes);
+    const bool ok = encode((const block_type *) tensor->data, k, rows, indexes, index_bytes);
     if (!ok) {
         if (dbg) {
-            GGML_LOG_WARN("ifairy_lut: transform_tensor: ggml_ifairy_2w_encode failed (bytes=%zu)\n", index_bytes);
+            GGML_LOG_WARN("ifairy_lut: transform_tensor: encode failed type=%s (bytes=%zu)\n",
+                          ggml_type_name(tensor->type), index_bytes);
         }
         if (index_buffer) {
             ggml_backend_buffer_free(index_buffer);
@@ -213,23 +226,22 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
 
     // Build packed 16-lane weights from the per-row indexes.
     // 2-weight encoding: 4-bit pattern is the direct LUT index.
-    const block_ifairy * w_blocks = (const block_ifairy *) tensor->data;
+    const block_type * w_blocks = (const block_type *) tensor->data;
     for (int64_t row = 0; row < rows; ++row) {
         const int64_t tile = row >> 4;
         const int64_t lane = row & 15;
 
-        const uint8_t * row_indexes =
-            indexes + (size_t) row * (size_t) blocks_per_row * (size_t) QK_IFAIRY_GROUPS_PER_BLOCK;
+        const uint8_t * row_indexes = indexes + (size_t) row * (size_t) info.groups_per_row;
 
         for (int64_t blk = 0; blk < blocks_per_row; ++blk) {
-            struct ifairy_lut_wtile_16 * t = packed_w + (size_t) tile * (size_t) blocks_per_row + (size_t) blk;
+            wtile_type * t = packed_w + (size_t) tile * (size_t) blocks_per_row + (size_t) blk;
 
-            const block_ifairy * wb = w_blocks + (size_t) row * (size_t) blocks_per_row + (size_t) blk;
-            t->d_real[lane]         = GGML_FP16_TO_FP32(wb->d_real);
-            t->d_imag[lane]         = GGML_FP16_TO_FP32(wb->d_imag);
+            const block_type * wb = w_blocks + (size_t) row * (size_t) blocks_per_row + (size_t) blk;
+            t->d_real[lane]       = GGML_FP16_TO_FP32(wb->d_real);
+            t->d_imag[lane]       = GGML_FP16_TO_FP32(wb->d_imag);
 
-            const uint8_t * blk_idx = row_indexes + (size_t) blk * (size_t) QK_IFAIRY_GROUPS_PER_BLOCK;
-            for (int gi = 0; gi < QK_IFAIRY_GROUPS_PER_BLOCK; gi += 2) {
+            const uint8_t * blk_idx = row_indexes + (size_t) blk * (size_t) groups_per_block;
+            for (int64_t gi = 0; gi < groups_per_block; gi += 2) {
                 const uint8_t lo    = blk_idx[gi + 0] & 0x0fu;
                 const uint8_t hi    = blk_idx[gi + 1] & 0x0fu;
                 t->qs[gi / 2][lane] = lo | (uint8_t) (hi << 4);
@@ -289,4 +301,38 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
         *index_tensor_out = NULL;
     }
     return true;
+}
+
+static bool ggml_ifairy_lut_transform_tensor_ifairy(struct ggml_tensor * tensor, struct ggml_tensor ** index_tensor_out) {
+    return ggml_ifairy_lut_transform_tensor_impl<block_ifairy, ifairy_lut_wtile_16>(
+        tensor, index_tensor_out, QK_IFAIRY, QK_IFAIRY_GROUPS_PER_BLOCK, ggml_ifairy_2w_get_index_info,
+        ggml_ifairy_2w_index_buffer_size, ggml_ifairy_2w_encode);
+}
+
+static bool ggml_ifairy_lut_transform_tensor_ifairy64(struct ggml_tensor * tensor,
+                                                      struct ggml_tensor ** index_tensor_out) {
+    return ggml_ifairy_lut_transform_tensor_impl<block_ifairy64, ifairy64_lut_wtile_16>(
+        tensor, index_tensor_out, QK_IFAIRY64, QK_IFAIRY64_GROUPS_PER_BLOCK, ggml_ifairy64_2w_get_index_info,
+        ggml_ifairy64_2w_index_buffer_size, ggml_ifairy64_2w_encode);
+}
+
+bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_tensor ** index_tensor_out) {
+    if (!tensor) {
+        if (index_tensor_out) {
+            *index_tensor_out = NULL;
+        }
+        return false;
+    }
+
+    switch (tensor->type) {
+        case GGML_TYPE_IFAIRY:
+            return ggml_ifairy_lut_transform_tensor_ifairy(tensor, index_tensor_out);
+        case GGML_TYPE_IFAIRY64:
+            return ggml_ifairy_lut_transform_tensor_ifairy64(tensor, index_tensor_out);
+        default:
+            if (index_tensor_out) {
+                *index_tensor_out = NULL;
+            }
+            return false;
+    }
 }
