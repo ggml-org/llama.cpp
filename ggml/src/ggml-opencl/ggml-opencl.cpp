@@ -983,6 +983,33 @@ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, co
     return build_program_from_source_ex(ctx, dev, program_buffer, compile_opts, /*fatal=*/true);
 }
 
+static cl_program build_program_from_binary(cl_context ctx, cl_device_id dev, const char* program_buffer, const std::string &compile_opts, size_t bin_size = 0) {
+    cl_program p;
+    char *program_log;
+    size_t program_size;
+    size_t log_size;
+    int err;
+
+    p = clCreateProgramWithBinary(ctx, 1, &dev, &bin_size, (const unsigned char**)&program_buffer, NULL, &err);
+    if(err < 0) {
+        GGML_LOG_ERROR("OpenCL error creating program from binary");
+        exit(1);
+    }
+
+    err = clBuildProgram(p, 0, NULL, compile_opts.c_str(), NULL, NULL);
+    if(err < 0) {
+        clGetProgramBuildInfo(p, dev, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
+        program_log = (char*) malloc(log_size + 1);
+        program_log[log_size] = '\0';
+        clGetProgramBuildInfo(p, dev, CL_PROGRAM_BUILD_LOG, log_size + 1, program_log, NULL);
+        GGML_LOG_ERROR("ggml_opencl: kernel compile error:\n\n%s\n", program_log);
+        free(program_log);
+        exit(1);
+    }
+
+    return p;
+}
+
 static void load_cl_kernels_argsort(ggml_backend_opencl_context *backend_ctx) {
     // compiler options for general kernels
     auto opencl_c_std =
