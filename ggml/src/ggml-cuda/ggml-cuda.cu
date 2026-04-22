@@ -1177,7 +1177,7 @@ struct ggml_backend_cuda_comm_context {
 static ggml_cuda_allreduce_provider ggml_cuda_select_allreduce_provider(
         const std::vector<int> & device_ids) {
     const char * env = getenv("GGML_CUDA_ALLREDUCE");
-    if (env != nullptr) {
+    if (env != nullptr && env[0] != '\0') {
         if (strcmp(env, "internal") == 0) {
             return GGML_CUDA_ALLREDUCE_INTERNAL;
         }
