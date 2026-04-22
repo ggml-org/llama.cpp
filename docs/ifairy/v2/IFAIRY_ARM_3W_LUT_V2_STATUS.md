@@ -1,6 +1,6 @@
 # iFairy ARM 3W LUT (V2) — 状态 / 性能记录
 
-Status: Draft (2026-03-12)
+Status: Draft (2026-03-13)
 
 本文件用于替代旧的 `../legacy/IFAIRY_ARM_3W_LUT_STATUS.md` 的后续增量记录（旧文件不再修改）。
 
@@ -52,6 +52,71 @@ Status: Draft (2026-03-12)
 ## 变更记录（Changelog）
 
 按日期追加（YYYY-MM-DD）：
+
+### 2026-03-13 (build `8d73f59a`)
+- 变更摘要：
+  - 在 `src/llama-quant.cpp` 中补齐 `ifairy` bare `output` 张量的识别逻辑，使 `llama-quantize --output-tensor-type q6_k` 可以直接作用于 `ifairy.gguf` 的输出层，而不要求张量名必须是 `output.weight`。
+  - 将 `output -> q6_k` 保留为可用优化项；当前不建议将其与 LUT 一起无条件默认开启。
+- 输出层量化命令（仅量化 `output`，其余 `ifairy` 权重保持原型）：
+  - `./build-rel/bin/llama-quantize --allow-requantize --output-tensor-type q6_k models/Fairy-plus-minus-i-700M/ifairy.gguf tmp/bench-ifairy-output-q6k/ifairy-output-q6k.gguf IFairy $(sysctl -n hw.ncpu)`
+- 模型格式校验：
+  - 原模型：`output=F16`, `token_embd=F32`, blocks=`F16_I2`
+  - q6_k 模型：`output=Q6_K`, `token_embd=F32`, blocks=`F16_I2`
+  - 模型大小：`549 MiB -> 439 MiB`（约 `-20.1%`）
+- 精度评估（Machine: Mac16,12 / Apple M4；`GGML_IFAIRY_LUT=1`; `threads=4`; `wikitext-2` 子集 16 chunks / 32768 tokens）：
+  - 语料准备：
+    - `mkdir -p tmp/wikitext-2 && cd tmp/wikitext-2 && curl -L -o wikitext-2-raw-v1.zip https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip && unzip -o wikitext-2-raw-v1.zip`
+  - Baseline:
+    - `GGML_IFAIRY_LUT=1 ./build-rel/bin/llama-perplexity -m models/Fairy-plus-minus-i-700M/ifairy.gguf -f tmp/wikitext-2/wikitext-2-raw/wiki.test.raw -c 2048 --chunks 16 -t 4 -ngl 0 --device none --no-warmup`
+    - `PPL = 32.7540 +/- 1.05057`
+  - q6_k:
+    - `GGML_IFAIRY_LUT=1 ./build-rel/bin/llama-perplexity -m tmp/bench-ifairy-output-q6k/ifairy-output-q6k.gguf -f tmp/wikitext-2/wikitext-2-raw/wiki.test.raw -c 2048 --chunks 16 -t 4 -ngl 0 --device none --no-warmup`
+    - `PPL = 32.7137 +/- 1.04931`
+  - Delta:
+    - `-0.0403`（约 `-0.12%`，视为噪声级）
+  - 生成 smoke test：
+    - 英文事实型 prompt 下 baseline 与 q6_k 均可正确生成 `Paris`
+    - 中文事实型 prompt 下 baseline 与 q6_k 均回显 prompt，表现为模型自身能力限制，未观察到 q6_k 独有的退化
+  - Raw logs:
+    - `tmp/bench-ifairy-output-q6k/ppl16-baseline.txt`
+    - `tmp/bench-ifairy-output-q6k/ppl16-output-q6k.txt`
+    - `tmp/bench-ifairy-output-q6k/gen-debug-baseline.txt`
+    - `tmp/bench-ifairy-output-q6k/gen-debug-q6k.txt`
+    - `tmp/bench-ifairy-output-q6k/gen-fact-baseline.txt`
+    - `tmp/bench-ifairy-output-q6k/gen-fact-q6k.txt`
+- 性能评估（decode 优先；`build-rel/bin/llama-bench`; `-p 1 -n 512 -r 3`; 每次单项 benchmark 后 `sleep 60s` 冷却；`t=10` 测试被手动中断，不纳入结论）：
+  - Command template:
+    - `GGML_IFAIRY_LUT={0,1} ./build-rel/bin/llama-bench -m {model} -t {1,2,4,6,8} -ngl 0 --device none -p 1 -n 512 -r 3 -o jsonl`
+  - `tg512`（decode）结果：
+
+    | threads | LUT=0 baseline | LUT=0 q6_k | q6_k delta | LUT=1 baseline | LUT=1 q6_k | q6_k delta |
+    |---|---:|---:|---:|---:|---:|---:|
+    | 1 | 32.92 | 32.95 | +0.1% | 35.51 | 36.27 | +2.1% |
+    | 2 | 54.58 | 58.53 | +7.2% | 57.42 | 60.48 | +5.3% |
+    | 4 | 75.57 | 83.96 | +11.1% | 72.37 | 81.65 | +12.8% |
+    | 6 | 75.48 | 83.60 | +10.8% | 56.29 | 60.61 | +7.7% |
+    | 8 | 72.81 | 80.24 | +10.2% | 59.84 | 63.47 | +6.1% |
+
+  - LUT on/off 对比（`tg512`）：
+
+    | threads | baseline: LUT1 vs LUT0 | q6_k: LUT1 vs LUT0 |
+    |---|---:|---:|
+    | 1 | +7.9% | +10.1% |
+    | 2 | +5.2% | +3.3% |
+    | 4 | -4.2% | -2.8% |
+    | 6 | -25.4% | -27.5% |
+    | 8 | -17.8% | -20.9% |
+
+  - 结论：
+    - `output -> q6_k` 在已完成线程档位中是稳定正收益，decode 大致为 `+5%` 到 `+13%`
+    - 当前 Apple M4 + 本模型上，`GGML_IFAIRY_LUT=1` 仅在低线程（`t=1/2`）有优势
+    - 从 `t=4` 开始，no-LUT 路径反而更快；`t=6/8` 下 LUT 明显掉队
+    - 当前建议：
+      - 低线程（`1-2`）：`q6_k + LUT=1`
+      - 中高线程（`4-8`）：`q6_k + LUT=0`
+      - `q6_k` 保留为可用优化，但不应与 LUT 绑定为统一默认配置
+  - Raw logs:
+    - `tmp/bench-ifairy-output-q6k/matrix/*.jsonl`
 
 ### 2026-03-12 (build `ac58bc67`; baseline `b12bfdb6`)
 - 变更摘要：
