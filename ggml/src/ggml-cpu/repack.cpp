@@ -4768,6 +4768,7 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 default:   { return nullptr; }
             }
             #endif
+        }
     } else if (cur->type == GGML_TYPE_Q5_0) {
         if (ggml_cpu_has_avx2()) {
             if (cur->ne[1] % 8 == 0) {
