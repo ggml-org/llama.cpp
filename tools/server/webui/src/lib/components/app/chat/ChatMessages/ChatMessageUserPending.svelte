@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { Card } from '$lib/components/ui/card';
-	import { ActionIcon, ChatAttachmentsList } from '$lib/components/app';
+	import { ActionIcon } from '$lib/components/app';
 	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { Send, Edit, Trash2 } from '@lucide/svelte';
 	import { getProcessingInfoContext, setMessageEditContext } from '$lib/contexts';
 	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
+	import ChatMessageUserBubble from './ChatMessageUserBubble.svelte';
 
 	interface Props {
 		class?: string;
@@ -28,35 +28,10 @@
 	const processingInfoCtx = getProcessingInfoContext();
 	let showProcessingInfo = $derived(processingInfoCtx.showProcessingInfo);
 
-	let isMultiline = $state(false);
 	let isEditing = $state(false);
 	let editedContent = $state('');
 	let editedExtras = $state<DatabaseMessageExtra[]>([]);
 	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
-	let messageElement: HTMLElement | undefined = $state();
-
-	$effect(() => {
-		if (!messageElement || !content.trim()) return;
-
-		if (content.includes('\n')) {
-			isMultiline = true;
-			return;
-		}
-
-		const resizeObserver = new ResizeObserver((entries) => {
-			for (const entry of entries) {
-				const element = entry.target as HTMLElement;
-				const estimatedSingleLineHeight = 24;
-				isMultiline = element.offsetHeight > estimatedSingleLineHeight * 1.5;
-			}
-		});
-
-		resizeObserver.observe(messageElement);
-
-		return () => {
-			resizeObserver.disconnect();
-		};
-	});
 
 	function handleEdit() {
 		editedContent = content;
@@ -134,23 +109,13 @@
 	{#if isEditing}
 		<ChatMessageEditForm />
 	{:else}
-		{#if extras && extras.length > 0}
-			<div class="mb-2 max-w-[80%]">
-				<ChatAttachmentsList attachments={extras} readonly imageHeight="h-40" />
-			</div>
-		{/if}
-
-		{#if content.trim()}
-			<Card
-				class="max-w-[80%] overflow-y-auto rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-1.5 text-muted-foreground backdrop-blur-md data-[multiline]:py-2.5 dark:bg-primary/8"
-				data-multiline={isMultiline ? '' : undefined}
-				style="overflow-wrap: anywhere; word-break: break-word;"
-			>
-				<span bind:this={messageElement} class="text-md whitespace-pre-wrap">
-					{content}
-				</span>
-			</Card>
-		{/if}
+		<ChatMessageUserBubble
+			{content}
+			attachments={extras}
+			textColorClass="text-muted-foreground"
+			cardBgClass="dark:bg-primary/8"
+			maxHeightStyle="overflow-wrap: anywhere; word-break: break-word;"
+		/>
 
 		<div class="max-w-[80%]">
 			<div class="relative flex h-6 items-center justify-between">
