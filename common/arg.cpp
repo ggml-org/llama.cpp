@@ -2910,7 +2910,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_API_KEY"));
     add_opt(common_arg(
-        {"--whitelist"}, "IP1,IP2,...",
+        {"--whitelist"}, "IP1,IP2,CIDR...",
         "comma-separated list of allowed client IP addresses",
         [](common_params & params, const std::string & value) {
             params.whitelist_ips.clear();
