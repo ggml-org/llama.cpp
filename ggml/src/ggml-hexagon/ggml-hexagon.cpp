@@ -125,16 +125,16 @@ static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const ggml_t
 
     if (opt_profile > 1) {
         // Include PMU counters
-        pmu_ptr += sprintf(pmu_ptr, " : pmu [");
+        pmu_ptr += sprintf(pmu_ptr, " pmu [");
         unsigned int i;
         for (i = 0; i < (HTP_PROF_PMU_NCNT-1); i++) {
-            pmu_ptr += sprintf(pmu_ptr, "%u:%u,", i, pmu[i]);
+            pmu_ptr += sprintf(pmu_ptr, "%u,", pmu[i]);
         }
-        sprintf(pmu_ptr, "%u:%u]", i, pmu[i]);
+        sprintf(pmu_ptr, "%u]", pmu[i]);
     }
 
-    GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : %s : op-usec %u op-cycles %u%s\n", sess_name.c_str(),
-            ggml_op_desc(op), desc.names, desc.dims, desc.types, desc.strides, desc.buffs, op_usec, op_cycles, pmu_str);
+    GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : usec %u cycles %u%s\n", sess_name.c_str(),
+            ggml_op_desc(op), desc.names, desc.dims, desc.types, desc.strides, op_usec, op_cycles, pmu_str);
 }
 
 // ** backend sessions
