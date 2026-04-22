@@ -46,16 +46,16 @@ struct Params {
 @group(0) @binding(2) var<storage, read_write> V: array<vec4<f16>>;
 
 #if defined(MASK) && defined(SINKS)
-@group(0) @binding(3) var<storage, read> mask: array<f16>;
-@group(0) @binding(4) var<storage, read> sinks: array<f32>;
+@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
+@group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
 #define DST_BINDING 5
 #define PARAMS_BINDING 6
 #elif defined(MASK)
-@group(0) @binding(3) var<storage, read> mask: array<f16>;
+@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
 #define DST_BINDING 4
 #define PARAMS_BINDING 5
 #elif defined(SINKS)
-@group(0) @binding(3) var<storage, read> sinks: array<f32>;
+@group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
 #define DST_BINDING 4
 #define PARAMS_BINDING 5
 #else
