@@ -65,6 +65,11 @@ static __device__ __forceinline__ float op_sqr(float x) {
     return x * x;
 }
 
+static __device__ __forceinline__ float op_relu_sqr(float x) {
+    const float r = fmaxf(x, 0.0f);
+    return r * r;
+}
+
 static __device__ __forceinline__ float op_sqrt(float x) {
     return sqrtf(x);
 }
@@ -613,5 +618,23 @@ void ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary
             break;
         default:
             GGML_ABORT("Unsupported unary op for fused unary+mul");
+    }
+}
+
+/* fused relu + sqr */
+
+void ggml_cuda_op_relu_sqr(ggml_backend_cuda_context & ctx, ggml_tensor * relu_node, ggml_tensor * sqr_node) {
+    const ggml_tensor * src = relu_node->src[0];
+    cudaStream_t stream = ctx.stream();
+
+    GGML_ASSERT(ggml_is_contiguous(src));
+    GGML_ASSERT(src->type == GGML_TYPE_F32 || src->type == GGML_TYPE_F16);
+    GGML_ASSERT(src->type == sqr_node->type);
+
+    const int k = ggml_nelements(src);
+    if (src->type == GGML_TYPE_F16) {
+        unary_cuda<op_relu_sqr>((const half *)src->data, (half *)sqr_node->data, k, stream);
+    } else {
+        unary_cuda<op_relu_sqr>((const float *)src->data, (float *)sqr_node->data, k, stream);
     }
 }
