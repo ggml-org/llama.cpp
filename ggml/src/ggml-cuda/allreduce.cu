@@ -1,7 +1,13 @@
 #include "allreduce.cuh"
 #include "ggml-impl.h"
 
+#include <cstdlib>
 #include <cstring>
+
+#ifdef GGML_CUDA_AR_WATCHDOG
+#include <chrono>
+#include <thread>
+#endif
 
 // ---------------------------------------------------------------------------
 // Cross-GPU signal mechanism
@@ -12,8 +18,8 @@
 // __threadfence_system() provides the release ordering that makes the D2H
 // writes visible system-wide before the arrival flag is observed.
 //
-// atomicAdd_system() (mechanism 0 in the prototype) is broken on RTX 5090
-// (hostNativeAtomicSupported = 0), so we use the volatile path throughout.
+// atomicAdd_system() is broken on RTX 5090 (hostNativeAtomicSupported = 0),
+// so we use the volatile path throughout.
 // ---------------------------------------------------------------------------
 
 static __device__ __forceinline__ void ggml_cuda_ar_signal_set(int * p) {
@@ -26,7 +32,7 @@ static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
 }
 
 // ---------------------------------------------------------------------------
-// Single-phase AllReduce kernel — float32, 2 GPUs
+// Single-phase AllReduce kernel — float32, 2 GPUs (production)
 //
 // Both GPUs run this kernel simultaneously in independent streams.  Each GPU:
 //
@@ -60,20 +66,16 @@ static __global__ void ggml_cuda_ar_f32_kernel(
         for (int i = tid; i < count4; i += nt) {
             d4[i] = s4[i];
         }
-        // Scalar tail if count is not a multiple of 4.
         if (tid < count - tail) {
             host_mine[tail + tid] = sendbuf[tail + tid];
         }
     }
 
-    // Commit all host writes before signalling; __syncthreads() ensures
-    // every thread's stores are in flight before thread 0 writes the flag.
+    // Commit all host writes before signalling.
     __threadfence_system();
     __syncthreads();
 
-    // Phase 2: thread 0 signals this GPU's arrival, then spins until the
-    // peer signals back.  The spin uses __nanosleep to yield the SM to
-    // other work rather than burning cycles in a hot loop.
+    // Phase 2: thread 0 signals arrival, then spins for the peer.
     if (tid == 0) {
         ggml_cuda_ar_signal_set(arrival_mine);
         while (ggml_cuda_ar_signal_get(arrival_other) == 0) {
@@ -81,11 +83,11 @@ static __global__ void ggml_cuda_ar_f32_kernel(
         }
     }
 
-    // Broadcast "peer has arrived" and acquire the peer's host_other writes.
+    // Broadcast "peer has arrived" and acquire peer's host_other writes.
     __syncthreads();
     __threadfence_system();
 
-    // Phase 3: reduce — each thread handles its slice of the output.
+    // Phase 3: reduce.
     {
         const float4 * s4 = reinterpret_cast<const float4 *>(sendbuf);
         const float4 * o4 = reinterpret_cast<const float4 *>(host_other);
@@ -102,6 +104,116 @@ static __global__ void ggml_cuda_ar_f32_kernel(
 }
 
 // ---------------------------------------------------------------------------
+// Watchdog debug variant — compiled only when GGML_CUDA_AR_WATCHDOG is defined.
+//
+// Adds three extra parameters to the kernel and instruments Phase 2:
+//
+//   debug[0]  spin iteration count, updated every ~4096 iterations
+//             (-1 written on max_spin bailout as a sentinel)
+//   debug[1]  last value of arrival_other observed during the spin
+//   debug[2]  readback of arrival_mine immediately after signal_set;
+//             should always be 1 — if 0, the write did not reach host memory
+//   debug[3]  reserved (always 0)
+//
+//   max_spin  if > 0, the spin bails out after this many iterations and the
+//             kernel logs via printf before proceeding to Phase 3 with stale
+//             data.  Output will be numerically wrong, but the kernel exits
+//             rather than hanging, which is useful for post-mortem logging.
+//
+//   rank      this GPU's rank within the communicator (for printf output)
+// ---------------------------------------------------------------------------
+#ifdef GGML_CUDA_AR_WATCHDOG
+static __global__ void ggml_cuda_ar_f32_kernel_dbg(
+        const float * __restrict__ sendbuf,
+        float       * __restrict__ recvbuf,
+        float       * __restrict__ host_mine,
+        const float * __restrict__ host_other,
+        int                        count,
+        int *                      arrival_mine,
+        int *                      arrival_other,
+        int *                      debug,
+        int                        max_spin,
+        int                        rank) {
+
+    const int tid    = threadIdx.x;
+    const int nt     = blockDim.x;
+    const int count4 = count >> 2;
+    const int tail   = count4 << 2;
+
+    // Phase 1: D2H copy (identical to production kernel).
+    {
+        const float4 * s4 = reinterpret_cast<const float4 *>(sendbuf);
+        float4       * d4 = reinterpret_cast<float4 *>(host_mine);
+        for (int i = tid; i < count4; i += nt) {
+            d4[i] = s4[i];
+        }
+        if (tid < count - tail) {
+            host_mine[tail + tid] = sendbuf[tail + tid];
+        }
+    }
+
+    __threadfence_system();
+    __syncthreads();
+
+    // Phase 2: signal + instrumented spin.
+    if (tid == 0) {
+        ggml_cuda_ar_signal_set(arrival_mine);
+
+        // Readback: can this GPU see its own signal?  If writeback == 0 the
+        // write did not reach host-visible memory, which would explain why
+        // the peer never observes arrival.
+        int writeback = ggml_cuda_ar_signal_get(arrival_mine);
+        debug[2] = writeback;
+
+        int spin = 0;
+        int last = 0;
+        while ((last = ggml_cuda_ar_signal_get(arrival_other)) == 0) {
+            ++spin;
+            // Periodically expose progress so the host watchdog can read it.
+            if ((spin & 0xFFF) == 0) {
+                debug[0] = spin;
+                debug[1] = last;
+            }
+            if (max_spin > 0 && spin >= max_spin) {
+                debug[0] = -1;  // bailout sentinel
+                debug[1] = last;
+                printf("ggml_cuda_ar: rank=%d BAILOUT after %d spins; "
+                       "writeback_mine=%d arrival_other=%d "
+                       "(pm=%p po=%p)\n",
+                       rank, spin, writeback, last,
+                       (void *)arrival_mine, (void *)arrival_other);
+                break;
+            }
+            __nanosleep(100);
+        }
+        // Write final spin count, unless we already wrote the bailout sentinel.
+        if (debug[0] != -1) {
+            debug[0] = spin;
+            debug[1] = last;
+        }
+    }
+
+    // Phase 3: reduce (proceeds even after bailout; output will be wrong).
+    __syncthreads();
+    __threadfence_system();
+
+    {
+        const float4 * s4 = reinterpret_cast<const float4 *>(sendbuf);
+        const float4 * o4 = reinterpret_cast<const float4 *>(host_other);
+        float4       * r4 = reinterpret_cast<float4 *>(recvbuf);
+        for (int i = tid; i < count4; i += nt) {
+            float4 a = s4[i];
+            float4 b = o4[i];
+            r4[i] = make_float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
+        }
+        if (tid < count - tail) {
+            recvbuf[tail + tid] = sendbuf[tail + tid] + host_other[tail + tid];
+        }
+    }
+}
+#endif // GGML_CUDA_AR_WATCHDOG
+
+// ---------------------------------------------------------------------------
 // Pipeline structure
 // ---------------------------------------------------------------------------
 
@@ -109,10 +221,22 @@ static __global__ void ggml_cuda_ar_f32_kernel(
 // in-flight depth (single digits in practice) while keeping init cost low.
 static constexpr int GGML_CUDA_AR_POOL_SIZE = 128;
 
-// Byte spacing between adjacent arrival ints.  Two cache lines (128 bytes)
+// Byte spacing between adjacent arrival ints.  128 bytes (two cache lines)
 // ensures the arrival slots for the two GPUs never share a cache line,
 // preventing false-sharing stalls on the polling GPU.
 static constexpr size_t GGML_CUDA_AR_ARRIVAL_STRIDE = 128;
+
+#ifdef GGML_CUDA_AR_WATCHDOG
+// Ints per device in the debug buffer.  Layout (index → meaning):
+//   0  spin count, updated every ~4096 iterations (-1 = bailed out)
+//   1  last arrival_other value observed during the spin
+//   2  readback of arrival_mine after signal_set (should always be 1)
+//   3  reserved
+static constexpr int GGML_CUDA_AR_DEBUG_INTS = 4;
+
+// Host poll interval for the blocking watchdog loop.
+static constexpr int GGML_CUDA_AR_WDOG_POLL_MS = 20;
+#endif
 
 struct ggml_cuda_ar_event_slot {
     cudaEvent_t app = nullptr;  // upstream computation complete
@@ -126,13 +250,21 @@ struct ggml_cuda_ar_pipeline {
     uint64_t call_count;
 
     // Per-device resources.
-    float *               host_buf[GGML_CUDA_MAX_DEVICES];  // pinned staging
-    cudaStream_t          streams[GGML_CUDA_MAX_DEVICES];   // non-blocking kernel streams
-    ggml_cuda_ar_event_slot * ev_pool[GGML_CUDA_MAX_DEVICES]; // [device][slot]
+    float *                  host_buf[GGML_CUDA_MAX_DEVICES];  // pinned staging
+    cudaStream_t             streams[GGML_CUDA_MAX_DEVICES];   // non-blocking
+    ggml_cuda_ar_event_slot *ev_pool[GGML_CUDA_MAX_DEVICES];   // [device][slot]
 
     // Arrival ring: pinned, ARRIVAL_STRIDE bytes between adjacent ints.
-    // Index helper: use ggml_cuda_ar_arrival_ptr().
+    // Use ggml_cuda_ar_arrival_ptr() to index.
     char * arrival;
+
+#ifdef GGML_CUDA_AR_WATCHDOG
+    // Pinned debug buffer written by the debug kernel, read by the host
+    // watchdog.  Layout: debug_buf[rank * GGML_CUDA_AR_DEBUG_INTS + field].
+    int * debug_buf;
+    int   wdog_timeout_ms;  // 0 = watchdog disabled (env: GGML_CUDA_AR_WATCHDOG)
+    int   wdog_max_spin;    // 0 = spin forever     (env: GGML_CUDA_AR_MAX_SPIN)
+#endif
 };
 
 // Return a pointer to the arrival int for (slot, rank).
@@ -140,6 +272,79 @@ static int * ggml_cuda_ar_arrival_ptr(const ggml_cuda_ar_pipeline * p, int slot,
     const size_t offset = ((size_t)slot * p->n_devices + rank) * GGML_CUDA_AR_ARRIVAL_STRIDE;
     return reinterpret_cast<int *>(p->arrival + offset);
 }
+
+// ---------------------------------------------------------------------------
+// Watchdog poll — blocks the calling thread, polling ker events and reading
+// debug state from pinned host memory.  Only active when wdog_timeout_ms > 0.
+//
+// Called after all kernels for the current slot have been queued.  The GPU
+// streams proceed independently; this function only observes via
+// cudaEventQuery and volatile reads of debug_buf.
+//
+// Output is deliberately sparse on the fast path: nothing is logged when
+// both kernels complete before the first poll tick.  If a kernel is still
+// running on the first tick, all subsequent ticks are logged (including the
+// final "done" tick) so the log captures the full timeline.
+// ---------------------------------------------------------------------------
+#ifdef GGML_CUDA_AR_WATCHDOG
+static void ggml_cuda_ar_watchdog_poll(
+        const ggml_cuda_ar_pipeline * p,
+        int slot, int n,
+        const cudaEvent_t * ker_events) {
+    if (p->wdog_timeout_ms <= 0) {
+        return;
+    }
+
+    int  elapsed_ms   = 0;
+    bool observed_busy = false;
+
+    while (elapsed_ms <= p->wdog_timeout_ms) {
+        // Query completion state of every GPU's kernel event.
+        bool          all_done = true;
+        cudaError_t   qstat[GGML_CUDA_MAX_DEVICES];
+        for (int i = 0; i < n; ++i) {
+            ggml_cuda_set_device(p->devices[i]);
+            qstat[i] = cudaEventQuery(ker_events[i]);
+            if (qstat[i] != cudaSuccess) {
+                all_done = false;
+            }
+        }
+
+        if (!all_done) {
+            observed_busy = true;
+        }
+
+        // Log on every tick that is either slow or the first "done" after slow.
+        if (!all_done || observed_busy) {
+            char msg[512];
+            int  pos = 0;
+            pos += snprintf(msg + pos, sizeof(msg) - pos,
+                            "ggml_cuda_ar watchdog +%dms slot=%d:",
+                            elapsed_ms, slot);
+            for (int i = 0; i < n; ++i) {
+                const int * dbg  = p->debug_buf + i * GGML_CUDA_AR_DEBUG_INTS;
+                int arr  = *(volatile int *)ggml_cuda_ar_arrival_ptr(p, slot, i);
+                int spin = *(volatile int *)&dbg[0];
+                int last = *(volatile int *)&dbg[1];
+                int wb   = *(volatile int *)&dbg[2];
+                pos += snprintf(msg + pos, sizeof(msg) - pos,
+                                " gpu%d[%s arr=%d spin=%d lastOther=%d wbMine=%d]",
+                                p->devices[i],
+                                qstat[i] == cudaSuccess ? "done" : "busy",
+                                arr, spin, last, wb);
+            }
+            GGML_LOG_WARN("%s\n", msg);
+        }
+
+        if (all_done) {
+            break;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(GGML_CUDA_AR_WDOG_POLL_MS));
+        elapsed_ms += GGML_CUDA_AR_WDOG_POLL_MS;
+    }
+}
+#endif // GGML_CUDA_AR_WATCHDOG
 
 // ---------------------------------------------------------------------------
 // Init / free
@@ -160,6 +365,11 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
         p->streams[i]  = nullptr;
         p->ev_pool[i]  = nullptr;
     }
+#ifdef GGML_CUDA_AR_WATCHDOG
+    p->debug_buf      = nullptr;
+    p->wdog_timeout_ms = 0;
+    p->wdog_max_spin   = 0;
+#endif
 
     // Per-device streams and event pools.
     for (int i = 0; i < n_devices; ++i) {
@@ -211,11 +421,32 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
         memset(p->host_buf[i], 0, max_bytes);
     }
 
-    // Warmup: run the kernel N times at the expected tensor size to pay the
-    // first-use driver / PCIe / page-mapping cost during model load rather
-    // than during the first inference step, and to encourage the GPU clock
-    // governor to boost before timing begins.
-    // Currently limited to the 2-GPU case.
+#ifdef GGML_CUDA_AR_WATCHDOG
+    // Debug buffer: written by the instrumented kernel, polled by the host.
+    {
+        const size_t dbg_bytes = (size_t)n_devices * GGML_CUDA_AR_DEBUG_INTS * sizeof(int);
+        if (cudaHostAlloc(reinterpret_cast<void **>(&p->debug_buf), dbg_bytes,
+                          cudaHostAllocPortable) != cudaSuccess) {
+            GGML_LOG_ERROR("%s: cudaHostAlloc for debug buffer failed (%zu bytes)\n",
+                           __func__, dbg_bytes);
+            ggml_cuda_ar_pipeline_free(p);
+            return nullptr;
+        }
+        memset(p->debug_buf, 0, dbg_bytes);
+
+        const char * wdog_env = getenv("GGML_CUDA_AR_WATCHDOG");
+        const char * spin_env = getenv("GGML_CUDA_AR_MAX_SPIN");
+        p->wdog_timeout_ms = (wdog_env && wdog_env[0]) ? atoi(wdog_env) : 0;
+        p->wdog_max_spin   = (spin_env && spin_env[0]) ? atoi(spin_env) : 0;
+        GGML_LOG_INFO("%s: AR watchdog enabled — timeout=%dms max_spin=%d "
+                      "(set GGML_CUDA_AR_WATCHDOG=<ms> / GGML_CUDA_AR_MAX_SPIN=<n> to adjust)\n",
+                      __func__, p->wdog_timeout_ms, p->wdog_max_spin);
+    }
+#endif
+
+    // Warmup: run the kernel N times to pay first-use driver / PCIe /
+    // page-mapping costs during model load and encourage the GPU clock
+    // governor to boost before inference begins.
     if (n_devices == 2) {
         constexpr int    WARMUP_ITERS = 64;
         constexpr size_t WARMUP_COUNT = 8192;  // 32 KB of fp32
@@ -234,7 +465,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
         }
 
         if (warmup_ok) {
-            // Reuse slot 0 for every iteration, resetting arrival before each.
+            // Warmup always uses the production kernel (no debug overhead).
             for (int iter = 0; iter < WARMUP_ITERS; ++iter) {
                 for (int r = 0; r < 2; ++r) {
                     *ggml_cuda_ar_arrival_ptr(p, /*slot=*/0, r) = 0;
@@ -296,6 +527,11 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
     if (p->arrival) {
         cudaFreeHost(p->arrival);
     }
+#ifdef GGML_CUDA_AR_WATCHDOG
+    if (p->debug_buf) {
+        cudaFreeHost(p->debug_buf);
+    }
+#endif
     delete p;
 }
 
@@ -316,8 +552,7 @@ bool ggml_cuda_ar_allreduce(
         return false;
     }
 
-    // Only FP32 tensors are handled by the kernel; other types need a
-    // separate implementation.
+    // Only FP32 tensors are handled by the kernel.
     if (tensors[0]->type != GGML_TYPE_F32) {
         return false;
     }
@@ -330,15 +565,13 @@ bool ggml_cuda_ar_allreduce(
     }
 
     if (bytes > p->buf_bytes) {
-        // Staging buffers too small; the caller should fall back.
-        // TODO: reallocate or chunk for larger tensors.
         return false;
     }
 
     // Cycle through the event pool.  On the second pass through the ring,
     // synchronise on the slot's ker event before touching arrival ints —
-    // the event and arrival pools wrap in lock-step so this guarantees that
-    // the kernels which last used this slot have finished.
+    // the event and arrival pools wrap in lock-step so this guarantees the
+    // kernels which last used this slot have finished.
     const int  slot        = static_cast<int>(p->call_count % GGML_CUDA_AR_POOL_SIZE);
     const bool pool_lapped = p->call_count >= GGML_CUDA_AR_POOL_SIZE;
     p->call_count++;
@@ -355,12 +588,20 @@ bool ggml_cuda_ar_allreduce(
         *ggml_cuda_ar_arrival_ptr(p, slot, i) = 0;
     }
 
+#ifdef GGML_CUDA_AR_WATCHDOG
+    // Clear per-device debug state so the watchdog reads reflect only this call.
+    memset(p->debug_buf, 0, (size_t)n * GGML_CUDA_AR_DEBUG_INTS * sizeof(int));
+
+    // Collect ker events for the watchdog poll after the launch loop.
+    cudaEvent_t ker_events[GGML_CUDA_MAX_DEVICES];
+#endif
+
     // Insert the kernel into each GPU's existing compute stream via events:
-    //   record(app, compute_stream)        — capture "upstream done" point
-    //   wait(internal_stream, app)         — internal stream defers until then
+    //   record(app, compute_stream)       — capture "upstream done"
+    //   wait(internal_stream, app)        — internal stream defers until then
     //   launch kernel on internal_stream
-    //   record(ker, internal_stream)       — capture "kernel done" point
-    //   wait(compute_stream, ker)          — compute stream resumes after kernel
+    //   record(ker, internal_stream)      — capture "kernel done"
+    //   wait(compute_stream, ker)         — compute stream resumes after kernel
     for (int i = 0; i < n; ++i) {
         const int peer = 1 - i;  // valid for n == 2 only
         ggml_cuda_set_device(p->devices[i]);
@@ -370,6 +611,19 @@ bool ggml_cuda_ar_allreduce(
         CUDA_CHECK(cudaEventRecord(ev.app, cuda_ctx->stream()));
         CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], ev.app));
 
+#ifdef GGML_CUDA_AR_WATCHDOG
+        ggml_cuda_ar_f32_kernel_dbg<<<dim3(1), dim3(256), 0, p->streams[i]>>>(
+            static_cast<const float *>(tensors[i]->data),
+            static_cast<float *>(tensors[i]->data),
+            p->host_buf[i],
+            p->host_buf[peer],
+            static_cast<int>(ne),
+            ggml_cuda_ar_arrival_ptr(p, slot, i),
+            ggml_cuda_ar_arrival_ptr(p, slot, peer),
+            p->debug_buf + i * GGML_CUDA_AR_DEBUG_INTS,
+            p->wdog_max_spin,
+            i);
+#else
         ggml_cuda_ar_f32_kernel<<<dim3(1), dim3(256), 0, p->streams[i]>>>(
             static_cast<const float *>(tensors[i]->data),
             static_cast<float *>(tensors[i]->data),
@@ -378,11 +632,22 @@ bool ggml_cuda_ar_allreduce(
             static_cast<int>(ne),
             ggml_cuda_ar_arrival_ptr(p, slot, i),
             ggml_cuda_ar_arrival_ptr(p, slot, peer));
+#endif
         CUDA_CHECK(cudaGetLastError());
 
         CUDA_CHECK(cudaEventRecord(ev.ker, p->streams[i]));
         CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), ev.ker));
+
+#ifdef GGML_CUDA_AR_WATCHDOG
+        ker_events[i] = ev.ker;
+#endif
     }
+
+#ifdef GGML_CUDA_AR_WATCHDOG
+    // Block the calling thread and poll until both kernels complete or the
+    // timeout expires.  The GPU streams continue independently.
+    ggml_cuda_ar_watchdog_poll(p, slot, n, ker_events);
+#endif
 
     return true;
 }
