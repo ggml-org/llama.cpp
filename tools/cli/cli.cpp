@@ -59,8 +59,6 @@ struct cli_context {
     std::vector<raw_buffer> input_files;
     task_params defaults;
     bool verbose_prompt;
-    int reasoning_budget = -1;
-    std::string reasoning_budget_message;
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -77,8 +75,6 @@ struct cli_context {
         // defaults.return_progress = true; // TODO: show progress
 
         verbose_prompt = params.verbose_prompt;
-        reasoning_budget = params.sampling.reasoning_budget_tokens;
-        reasoning_budget_message = params.sampling.reasoning_budget_message;
     }
 
     std::string generate_completion(result_timings & out_timings) {
@@ -106,7 +102,7 @@ struct cli_context {
                 const llama_vocab * vocab = llama_model_get_vocab(
                     llama_get_model(ctx_server.get_llama_context()));
 
-                task.params.sampling.reasoning_budget_tokens = reasoning_budget;
+                task.params.sampling.reasoning_budget_tokens = defaults.sampling.reasoning_budget_tokens;
                 task.params.sampling.generation_prompt = chat_params.generation_prompt;
 
                 if (!chat_params.thinking_start_tag.empty()) {
@@ -116,7 +112,7 @@ struct cli_context {
                 task.params.sampling.reasoning_budget_end =
                     common_tokenize(vocab, chat_params.thinking_end_tag, false, true);
                 task.params.sampling.reasoning_budget_forced =
-                    common_tokenize(vocab, reasoning_budget_message + chat_params.thinking_end_tag, false, true);
+                    common_tokenize(vocab, defaults.sampling.reasoning_budget_message + chat_params.thinking_end_tag, false, true);
             }
 
             rd.post_task({std::move(task)});
