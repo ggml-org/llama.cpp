@@ -146,4 +146,4 @@ poetry.toml
 # emscripten
 a.out.*
 
-AGENTS.local
+AGENTS.local.md
