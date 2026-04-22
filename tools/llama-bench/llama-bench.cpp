@@ -2143,9 +2143,10 @@ static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
 }
 
 static void llama_null_log_callback(enum ggml_log_level level, const char * text, void * user_data) {
-    (void) level;
-    (void) text;
     (void) user_data;
+    if (level >= GGML_LOG_LEVEL_WARN) {
+        fputs(text, stderr);
+    }
 }
 
 static std::unique_ptr<printer> create_printer(output_formats format) {
