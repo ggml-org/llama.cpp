@@ -207,6 +207,8 @@ struct cli_context {
         auto meta = ctx_server.get_meta();
         auto & chat_params = meta.chat_params;
 
+        auto caps = common_chat_templates_get_caps(chat_params.tmpls.get());
+
         common_chat_templates_inputs inputs;
         inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
         inputs.tools                 = {}; // TODO
@@ -214,7 +216,7 @@ struct cli_context {
         inputs.json_schema           = ""; // TODO
         inputs.grammar               = ""; // TODO
         inputs.use_jinja             = chat_params.use_jinja;
-        inputs.parallel_tool_calls   = false;
+        inputs.parallel_tool_calls   = caps["supports_parallel_tool_calls"];
         inputs.add_generation_prompt = true;
         inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
         inputs.force_pure_content    = chat_params.force_pure_content;
