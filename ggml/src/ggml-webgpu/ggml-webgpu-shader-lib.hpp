@@ -240,6 +240,27 @@ struct ggml_webgpu_ssm_conv_pipeline_key {
     }
 };
 
+/** CONV 2D */
+struct ggml_webgpu_conv2d_pipeline_key {
+    ggml_type weight_type;
+    ggml_type input_type;
+    ggml_type output_type;
+
+    bool operator==(const ggml_webgpu_conv2d_pipeline_key & other) const {
+        return weight_type == other.weight_type && input_type == other.input_type && output_type == other.output_type;
+    }
+};
+
+struct ggml_webgpu_conv2d_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_conv2d_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.weight_type);
+        ggml_webgpu_hash_combine(seed, key.input_type);
+        ggml_webgpu_hash_combine(seed, key.output_type);
+        return seed;
+    }
+};
+
 /** Gated Delta Net **/
 struct ggml_webgpu_gated_delta_net_pipeline_key {
     int type;
@@ -789,6 +810,8 @@ class ggml_webgpu_shader_lib {
         rope_pipelines;
     std::unordered_map<ggml_webgpu_soft_max_pipeline_key, webgpu_pipeline, ggml_webgpu_soft_max_pipeline_key_hash>
         soft_max_pipelines;
+    std::unordered_map<ggml_webgpu_conv2d_pipeline_key, webgpu_pipeline, ggml_webgpu_conv2d_pipeline_key_hash>
+        conv2d_pipelines;
 
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
@@ -2380,6 +2403,46 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         soft_max_pipelines[key]  = pipeline;
         return soft_max_pipelines[key];
+    }
+
+    webgpu_pipeline get_conv2d_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_conv2d_pipeline_key key = {};
+        key.weight_type                     = context.src0->type;
+        key.input_type                      = context.src1->type;
+        key.output_type                     = context.dst->type;
+
+        auto it = conv2d_pipelines.find(key);
+        if (it != conv2d_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "conv_2d";
+
+        auto push_type_defines = [&](const char * prefix, ggml_type type) {
+            std::string s_prefix = prefix;
+            if (type == GGML_TYPE_F32) {
+                defines.push_back(s_prefix + "_F32");
+            } else if (type == GGML_TYPE_F16) {
+                defines.push_back(s_prefix + "_F16");
+            } else {
+                GGML_ABORT("Unsupported type for CONV_2D shader");
+            }
+        };
+
+        push_type_defines("WEIGHT", key.weight_type);
+        push_type_defines("INPUT", key.input_type);
+        push_type_defines("OUTPUT", key.output_type);
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_conv2d, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        conv2d_pipelines[key]    = pipeline;
+        return conv2d_pipelines[key];
     }
 
   private:

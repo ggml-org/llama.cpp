@@ -712,6 +712,11 @@ void server_models::unload(const std::string & name) {
         if (it->second.meta.is_running()) {
             SRV_INF("stopping model instance name=%s\n", name.c_str());
             stopping_models.insert(name);
+            if (it->second.meta.status == SERVER_MODEL_STATUS_LOADING) {
+                // special case: if model is in loading state, unloading means force-killing it
+                SRV_WRN("model name=%s is still loading, force-killing\n", name.c_str());
+                subprocess_terminate(it->second.subproc.get());
+            }
             cv_stop.notify_all();
             // status change will be handled by the managing thread
         } else {
