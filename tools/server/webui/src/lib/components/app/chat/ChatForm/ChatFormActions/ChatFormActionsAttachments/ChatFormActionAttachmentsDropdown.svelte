@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { page } from '$app/state';
 	import { Plus, Settings } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -18,6 +17,7 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerSettingsEntry } from '$lib/types';
+	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
 	interface Props {
 		class?: string;
@@ -46,8 +46,6 @@
 		onMcpSettingsClick,
 		onMcpResourcesClick
 	}: Props = $props();
-
-	let isNewChat = $derived(!page.params.id);
 
 	let dropdownOpen = $state(false);
 
@@ -88,48 +86,13 @@
 		onMcpSettingsClick?.();
 	}
 
-	const callbacks: Record<string, (() => void) | undefined> = {
-		onFileUpload: undefined,
-		onSystemPromptClick: undefined,
-		onMcpPromptClick: undefined,
-		onMcpResourcesClick: undefined
-	};
-
-	const modalityFlags = $derived({
-		hasVisionModality,
-		hasAudioModality,
-		hasMcpPromptsSupport,
-		hasMcpResourcesSupport
-	});
-
-	function isItemEnabled(enabledWhen: string | undefined): boolean {
-		if (!enabledWhen || enabledWhen === 'always') return true;
-		return !!modalityFlags[enabledWhen as keyof typeof modalityFlags];
-	}
-
-	function isItemVisible(visibleWhen: string | undefined): boolean {
-		if (!visibleWhen) return true;
-		return !!modalityFlags[visibleWhen as keyof typeof modalityFlags];
-	}
-
-	function getSystemMessageTooltip(): string {
-		return isNewChat
-			? 'Add custom system message for a new conversation'
-			: 'Inject custom system message at the beginning of the conversation';
-	}
-
-	$effect(() => {
-		callbacks.onFileUpload = onFileUpload;
-		callbacks.onSystemPromptClick = onSystemPromptClick;
-		callbacks.onMcpPromptClick = () => {
+	const attachmentMenu = useAttachmentMenu(
+		() => ({ hasVisionModality, hasAudioModality, hasMcpPromptsSupport, hasMcpResourcesSupport }),
+		() => ({ onFileUpload, onSystemPromptClick, onMcpPromptClick, onMcpResourcesClick }),
+		() => {
 			dropdownOpen = false;
-			onMcpPromptClick?.();
-		};
-		callbacks.onMcpResourcesClick = () => {
-			dropdownOpen = false;
-			onMcpResourcesClick?.();
-		};
-	});
+		}
+	);
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -157,11 +120,11 @@
 
 		<DropdownMenu.Content align="start" class="w-48">
 			{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
-				{@const enabled = isItemEnabled(item.enabledWhen)}
+				{@const enabled = attachmentMenu.isItemEnabled(item.enabledWhen)}
 				{#if enabled}
 					<DropdownMenu.Item
 						class="{item.class ?? ''} flex cursor-pointer items-center gap-2"
-						onclick={() => callbacks[item.action]?.()}
+						onclick={() => attachmentMenu.callbacks[item.action]()}
 					>
 						<item.icon class="h-4 w-4" />
 
@@ -187,12 +150,12 @@
 				{/if}
 			{/each}
 
-			{#if !isItemEnabled('hasVisionModality')}
+			{#if !attachmentMenu.isItemEnabled('hasVisionModality')}
 				<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 					<Tooltip.Trigger class="w-full">
 						<DropdownMenu.Item
 							class="flex cursor-pointer items-center gap-2"
-							onclick={() => callbacks.onFileUpload?.()}
+							onclick={attachmentMenu.callbacks.onFileUpload}
 						>
 							{@const pdfItem = ATTACHMENT_FILE_ITEMS.find(
 								(i) => i.id === AttachmentMenuItemId.PDF
@@ -219,7 +182,7 @@
 						<Tooltip.Trigger class="w-full">
 							<DropdownMenu.Item
 								class="flex cursor-pointer items-center gap-2"
-								onclick={() => callbacks[item.action]?.()}
+								onclick={() => attachmentMenu.callbacks[item.action]()}
 							>
 								<item.icon class="h-4 w-4" />
 
@@ -228,7 +191,7 @@
 						</Tooltip.Trigger>
 
 						<Tooltip.Content side="right">
-							<p>{getSystemMessageTooltip()}</p>
+							<p>{attachmentMenu.getSystemMessageTooltip()}</p>
 						</Tooltip.Content>
 					</Tooltip.Root>
 				{/if}
@@ -310,10 +273,10 @@
 			</DropdownMenu.Sub>
 
 			{#each ATTACHMENT_MCP_ITEMS as item (item.id)}
-				{#if isItemVisible(item.visibleWhen)}
+				{#if attachmentMenu.isItemVisible(item.visibleWhen)}
 					<DropdownMenu.Item
 						class="flex cursor-pointer items-center gap-2"
-						onclick={() => callbacks[item.action]?.()}
+						onclick={() => attachmentMenu.callbacks[item.action]()}
 					>
 						<item.icon class="h-4 w-4" />
 

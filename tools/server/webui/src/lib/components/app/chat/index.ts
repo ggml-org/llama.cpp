@@ -168,14 +168,14 @@ export { default as ChatForm } from './ChatForm/ChatForm.svelte';
  * Images, Text Files, and PDF Files. Each option filters the file picker to
  * appropriate types. Images option is disabled when model lacks vision modality.
  */
-export { default as ChatFormActionAttachmentsDropdown } from './ChatForm/ChatFormActions/ChatFormActionAttachmentsDropdown.svelte';
+export { default as ChatFormActionAttachmentsDropdown } from './ChatForm/ChatFormActions/ChatFormActionsAttachments/ChatFormActionAttachmentsDropdown.svelte';
 
 /**
  * Mobile sheet variant of the file attachment selector. Renders a bottom sheet
  * with the same options as ChatFormActionAttachmentsDropdown, optimized for
  * touch interaction on mobile devices.
  */
-export { default as ChatFormActionAttachmentsSheet } from './ChatForm/ChatFormActions/ChatFormActionAttachmentsSheet.svelte';
+export { default as ChatFormActionAttachmentsSheet } from './ChatForm/ChatFormActions/ChatFormActionsAttachments/ChatFormActionAttachmentsSheet.svelte';
 
 /**
  * Audio recording button with real-time recording indicator. Records audio

@@ -1,7 +1,12 @@
 import type { Component } from 'svelte';
 import { MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
 import { FILE_TYPE_ICONS } from '$lib/constants/icons';
-import { AttachmentAction, AttachmentItemEnabledWhen, AttachmentItemVisibleWhen, AttachmentMenuItemId } from '$lib/enums';
+import {
+	AttachmentAction,
+	AttachmentItemEnabledWhen,
+	AttachmentItemVisibleWhen,
+	AttachmentMenuItemId
+} from '$lib/enums';
 
 export interface AttachmentMenuItem {
 	/** Unique identifier for the item */

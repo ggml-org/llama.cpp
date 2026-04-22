@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { page } from '$app/state';
 	import { Plus, PencilRuler, ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -18,6 +17,7 @@
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { TruncatedText } from '$lib/components/app';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
+	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 	import { AttachmentMenuItemId } from '$lib/enums';
 
 	interface Props {
@@ -50,39 +50,16 @@
 	let hoveredGroup = $state<string | null>(null);
 
 	const toolsPanel = useToolsPanel();
-
-	const callbacks = $derived({
-		onFileUpload: () => closeAndCall(onFileUpload),
-		onSystemPromptClick: () => closeAndCall(onSystemPromptClick),
-		onMcpPromptClick: () => closeAndCall(onMcpPromptClick),
-		onMcpResourcesClick: () => closeAndCall(onMcpResourcesClick)
-	});
-
-	const modalityFlags = $derived({
-		hasVisionModality,
-		hasAudioModality,
-		hasMcpPromptsSupport,
-		hasMcpResourcesSupport
-	});
+	const attachmentMenu = useAttachmentMenu(
+		() => ({ hasVisionModality, hasAudioModality, hasMcpPromptsSupport, hasMcpResourcesSupport }),
+		() => ({ onFileUpload, onSystemPromptClick, onMcpPromptClick, onMcpResourcesClick }),
+		() => {
+			sheetOpen = false;
+		}
+	);
 
 	const sheetItemClass =
 		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
-
-	function isItemEnabled(enabledWhen: string | undefined): boolean {
-		if (!enabledWhen || enabledWhen === 'always') return true;
-		return !!modalityFlags[enabledWhen as keyof typeof modalityFlags];
-	}
-
-	function isItemVisible(visibleWhen: string | undefined): boolean {
-		if (!visibleWhen) return true;
-		return !!modalityFlags[visibleWhen as keyof typeof modalityFlags];
-	}
-
-	function getSystemMessageTooltip(): string {
-		return !page.params.id
-			? 'Add custom system message for a new conversation'
-			: 'Inject custom system message at the beginning of the conversation';
-	}
 
 	async function toggleServerForChat(serverId: string) {
 		const wasEnabled = conversationsStore.isMcpServerEnabledForChat(serverId);
@@ -90,11 +67,6 @@
 		if (!wasEnabled) {
 			toolsStore.enableAllToolsForServer(serverId);
 		}
-	}
-
-	function closeAndCall(fn?: () => void) {
-		sheetOpen = false;
-		fn?.();
 	}
 </script>
 
@@ -123,9 +95,13 @@
 
 			<div class="flex flex-col gap-1 px-1.5 pb-2">
 				{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
-					{@const enabled = isItemEnabled(item.enabledWhen)}
+					{@const enabled = attachmentMenu.isItemEnabled(item.enabledWhen)}
 					{#if enabled}
-						<button type="button" class={sheetItemClass} onclick={() => callbacks[item.action]()}>
+						<button
+							type="button"
+							class={sheetItemClass}
+							onclick={() => attachmentMenu.callbacks[item.action]()}
+						>
 							<item.icon class="h-4 w-4 shrink-0" />
 
 							<span>{item.label}</span>
@@ -147,7 +123,7 @@
 					{/if}
 				{/each}
 
-				{#if !isItemEnabled('hasVisionModality')}
+				{#if !attachmentMenu.isItemEnabled('hasVisionModality')}
 					{@const pdfItem = ATTACHMENT_FILE_ITEMS.find((i) => i.id === AttachmentMenuItemId.PDF)}
 					{#if pdfItem}
 						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
@@ -155,7 +131,7 @@
 								<button
 									type="button"
 									class={sheetItemClass}
-									onclick={() => callbacks[pdfItem.action]()}
+									onclick={() => attachmentMenu.callbacks[pdfItem.action]()}
 								>
 									<pdfItem.icon class="h-4 w-4 shrink-0" />
 
@@ -177,7 +153,7 @@
 								<button
 									type="button"
 									class={sheetItemClass}
-									onclick={() => callbacks[item.action]()}
+									onclick={() => attachmentMenu.callbacks[item.action]()}
 								>
 									<item.icon class="h-4 w-4 shrink-0" />
 
@@ -186,7 +162,7 @@
 							</Tooltip.Trigger>
 
 							<Tooltip.Content side="right">
-								<p>{getSystemMessageTooltip()}</p>
+								<p>{attachmentMenu.getSystemMessageTooltip()}</p>
 							</Tooltip.Content>
 						</Tooltip.Root>
 					{/if}
@@ -337,8 +313,12 @@
 				{/if}
 
 				{#each ATTACHMENT_MCP_ITEMS as item (item.id)}
-					{#if isItemVisible(item.visibleWhen)}
-						<button type="button" class={sheetItemClass} onclick={() => callbacks[item.action]()}>
+					{#if attachmentMenu.isItemVisible(item.visibleWhen)}
+						<button
+							type="button"
+							class={sheetItemClass}
+							onclick={() => attachmentMenu.callbacks[item.action]()}
+						>
 							<item.icon class="h-4 w-4 shrink-0" />
 
 							<span>{item.label}</span>
