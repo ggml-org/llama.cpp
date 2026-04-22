@@ -1,4 +1,3 @@
-diagnostic(off, subgroup_uniformity);
 enable f16;
 enable subgroups;
 
@@ -42,9 +41,9 @@ struct Params {
     m1: f32,
 };
 
-@group(0) @binding(0) var<storage, read> Q: array<f32>;
-@group(0) @binding(1) var<storage, read> K: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read> V: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read_write> Q: array<f32>;
+@group(0) @binding(1) var<storage, read_write> K: array<vec4<f16>>;
+@group(0) @binding(2) var<storage, read_write> V: array<vec4<f16>>;
 
 #if defined(MASK) && defined(SINKS)
 @group(0) @binding(3) var<storage, read> mask: array<f16>;
