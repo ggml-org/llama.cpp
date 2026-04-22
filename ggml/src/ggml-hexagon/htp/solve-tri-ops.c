@@ -63,10 +63,9 @@ static inline void solve_tri_row_scalar(const float * A_row,
 }
 
 static inline HVX_Vector hvx_load_partial_f32(const float * src, uint32_t n) {
-    HVX_VectorAlias tmp;
-    memset(&tmp, 0, sizeof(tmp));
-    memcpy(tmp.fp32, src, n * sizeof(float));
-    return tmp.v;
+    HVX_Vector v = *((const HVX_UVector *) src);
+    HVX_VectorPred mask = Q6_Q_vsetq2_R(n * sizeof(float));
+    return Q6_V_vmux_QVV(mask, v, Q6_V_vzero());
 }
 
 static inline void solve_tri_row_hvx(const float * A_row,
@@ -100,7 +99,6 @@ static inline void solve_tri_row_hvx(const float * A_row,
 }
 
 // Batch-level thread: each job is one full batch.
-// Processes all column chunks within each row for better A_row cache reuse.
 static void solve_tri_batch_thread_f32(unsigned int nth, unsigned int ith, void * data) {
     struct htp_solve_tri_context * sctx = (struct htp_solve_tri_context *) data;
     struct htp_ops_context *       octx = sctx->octx;
@@ -163,7 +161,6 @@ static void solve_tri_batch_thread_f32(unsigned int nth, unsigned int ith, void 
 }
 
 // Chunk-level thread: each job is one (batch, col_chunk) pair.
-// Used when there are fewer batches than threads to maintain parallelism.
 static void solve_tri_chunk_thread_f32(unsigned int nth, unsigned int ith, void * data) {
     struct htp_solve_tri_context * sctx = (struct htp_solve_tri_context *) data;
     struct htp_ops_context *       octx = sctx->octx;
