@@ -10,7 +10,7 @@
  * - Endpoint: `MODEL_ENDPOINT` env var (default: https://modelscope.cn/)
  * - Authentication: Provide token via `-hft` CLI flag or `MS_TOKEN` env var.
  *
- * Usage: llama-cli -ms <repo_id> -hff <model_file> -hft <ms_token>  (e.g., "Qwen/Qwen3-0.6B-GGUF")
+ * Usage: llama-cli -ms <repo_id> -hff <model_file> -hft <ms_token> (e.g., "Qwen/Qwen3-0.6B-GGUF")
  */
 
 #include "ms.h"
@@ -121,14 +121,12 @@ static bool is_valid_subpath(const fs::path & base, const fs::path & subpath) {
     if (subpath.is_absolute()) {
         return false;
     }
-    // Resolve both paths to absolute and normalize
     std::error_code ec;
     auto b = fs::absolute(base, ec).lexically_normal();
     auto t = (b / subpath).lexically_normal();
     
     if (ec) return false;
 
-    // Check if t starts with b
     auto [b_end, _] = std::mismatch(b.begin(), b.end(), t.begin(), t.end());
     return b_end == b.end();
 }
@@ -142,7 +140,7 @@ static nl::json api_get(const std::string & url, const std::string & token = "")
         headers.emplace("Cookie", "m_session_id=" + token);
     }
     
-    cli.set_read_timeout(30, 0); // 30 seconds timeout
+    cli.set_read_timeout(30, 0);
     cli.set_write_timeout(30, 0);
     
     auto res = cli.Get(parts.path, headers);
@@ -171,22 +169,21 @@ static nl::json api_get(const std::string & url, const std::string & token = "")
 static std::vector<ms_file> list_files(const std::string & repo_id, const std::string & token = "") {
     std::vector<ms_file> files;
     
-    // Get ModelScope endpoint
     const char * model_endpoint_env = std::getenv("MODEL_ENDPOINT");
-    std::string modelscope_endpoint = "https://modelscope.cn/";
+    std::string endpoint = "https://www.modelscope.cn";
+    
     if (model_endpoint_env) {
-        modelscope_endpoint = model_endpoint_env;
-        if (modelscope_endpoint.back() != '/') {
-            modelscope_endpoint += '/';
+        endpoint = model_endpoint_env;
+        if (!endpoint.empty() && endpoint.back() == '/') {
+            endpoint.pop_back();
         }
     }
     
-    std::string api_url = modelscope_endpoint + "api/v1/models/" + repo_id + "/repo/files";
+    std::string api_url = endpoint + "/api/v1/models/" + repo_id + "/repo/files";
     
     try {
         auto response = api_get(api_url, token);
         
-        // ModelScope API returns files in Data.Files array
         if (response.contains("Data") && response["Data"].contains("Files")) {
             for (const auto & file_json : response["Data"]["Files"]) {
                 ms_file file;
@@ -195,14 +192,26 @@ static std::vector<ms_file> list_files(const std::string & repo_id, const std::s
                 file.size = file_json.value("Size", 0ULL);
                 
                 if (!file.path.empty()) {
-                    // Construct download URL using resolve endpoint
-                    file.url = modelscope_endpoint + "models/" + repo_id + "/resolve/master/" + file.path;
+                    file.url = endpoint + "/models/" + repo_id + "/resolve/master/" + file.path;
                     files.push_back(std::move(file));
                 }
             }
         }
     } catch (const std::exception & e) {
-        LOG_ERR("%s: failed to list files for %s: %s\n", __func__, repo_id.c_str(), e.what());
+        std::string err_msg = e.what();
+        // 静默处理认证失败，依靠缓存降级
+        if (err_msg.find("401") != std::string::npos || 
+            err_msg.find("403") != std::string::npos || 
+            err_msg.find("404") != std::string::npos) {
+            
+            if (token.empty()) {
+                LOG_DBG("%s: remote list failed (no token), relying on cache.\n", __func__);
+            } else {
+                LOG_ERR("%s: auth failed or repo not found: %s\n", __func__, err_msg.c_str());
+            }
+        } else {
+            LOG_ERR("%s: failed to list files for %s: %s\n", __func__, repo_id.c_str(), err_msg.c_str());
+        }
     }
     
     return files;
@@ -227,7 +236,6 @@ static bool matches_quant_tag(const std::string & filename, const std::string & 
     std::string normalized_tag = normalize_quant_tag(quant_tag);
     std::string normalized_filename = normalize_quant_tag(filename);
     
-    // Try different patterns: model-Q8_0.gguf, model.Q8_0.gguf, etc.
     std::vector<std::string> patterns = {
         "-" + normalized_tag + ".",
         "." + normalized_tag + ".",
@@ -247,7 +255,7 @@ static std::string find_best_model(const std::vector<ms_file> & files, const std
     if (files.empty()) {
         return "";
     }
-    
+
     std::vector<std::string> preferred_quants = {
         "q4_k_m", "q4_0", "q5_k_m", "q5_0", "q6_k", "q8_0"
     };
@@ -261,14 +269,17 @@ static std::string find_best_model(const std::vector<ms_file> & files, const std
     for (const auto & tag : tags) {
         for (const auto & file : files) {
             if (string_contains(file.path, ".gguf") && matches_quant_tag(file.path, tag)) {
+                // LOG_INF 改为 LOG_DBG，或者完全移除，保持静默
+                LOG_DBG("%s: selected best model: %s\n", __func__, file.path.c_str());
                 return file.path;
             }
         }
     }
     
-    // Fallback: return first GGUF file
+    // Fallback
     for (const auto & file : files) {
         if (string_contains(file.path, ".gguf")) {
+            LOG_DBG("%s: selected fallback model: %s\n", __func__, file.path.c_str());
             return file.path;
         }
     }
@@ -280,7 +291,6 @@ static std::string get_local_path(const ms_file & file) {
     fs::path cache_dir = get_cache_directory();
     fs::path base_path = cache_dir / "hub" / "models" / file.repo_id;
     
-    // Security check against path traversal
     if (!is_valid_subpath(base_path, file.path)) {
         LOG_ERR("%s: security check failed for path: %s\n", __func__, file.path.c_str());
         return "";
@@ -290,7 +300,6 @@ static std::string get_local_path(const ms_file & file) {
     return local_path.string();
 }
 
-// ProgressBar class copied from download.cpp
 class ProgressBar {
     static inline std::mutex mutex;
     static inline std::map<const ProgressBar *, int> lines;
@@ -379,7 +388,6 @@ public:
     ProgressBar & operator=(const ProgressBar &) = delete;
 };
 
-// Download function with progress bar
 static std::string download_file_with_progress(const ms_file & selected_file, const fs::path & local_path, const std::string & token = "") {
     fs::create_directories(local_path.parent_path());
     
@@ -397,7 +405,7 @@ static std::string download_file_with_progress(const ms_file & selected_file, co
         headers.emplace("Cookie", "m_session_id=" + token);
     }
     
-    cli.set_read_timeout(300, 0); // 5 minutes timeout
+    cli.set_read_timeout(300, 0);
     cli.set_write_timeout(300, 0);
 
     size_t downloaded = 0;
@@ -458,13 +466,8 @@ static std::string download_file_with_progress(const ms_file & selected_file, co
     return local_path.string();
 }
 
-std::string download_model(const std::string & clean_repo_id, const std::string & filename, bool offline, const std::string & quant_tag, const std::string & token) {
-    if (!is_valid_repo_id(clean_repo_id)) {
-        LOG_ERR("%s: invalid repository: %s\n", __func__, clean_repo_id.c_str());
-        return "";
-    }
-
-    // Check cache first
+// Helper to scan local cache directory
+static std::vector<ms_file> scan_local_cache(const std::string & clean_repo_id) {
     std::vector<ms_file> cached_files;
     fs::path cache_dir = get_cache_directory() / "hub" / "models" / clean_repo_id;
     
@@ -481,141 +484,214 @@ std::string download_model(const std::string & clean_repo_id, const std::string 
             cached_files.push_back(std::move(file));
         }
     }
+    return cached_files;
+}
 
-    // If we have a specific filename, look for it directly
+std::string download_model(const std::string & clean_repo_id, const std::string & filename, bool offline, const std::string & quant_tag, const std::string & token) {
+    if (!is_valid_repo_id(clean_repo_id)) {
+        LOG_ERR("%s: invalid repository: %s\n", __func__, clean_repo_id.c_str());
+        return "";
+    }
+
+    // 1. Scan Local Cache First
+    std::vector<ms_file> cached_files = scan_local_cache(clean_repo_id);
+
+    // 2. If specific filename is requested
     if (!filename.empty()) {
-        // First check cache
+        // Check cache
         for (const auto & file : cached_files) {
             if (file.path == filename) {
-                LOG_DBG("%s: found file in cache: %s\n", __func__, file.local_path.c_str());
+                LOG_DBG("%s: found specified file in cache: %s\n", __func__, file.local_path.c_str());
                 return file.local_path;
             }
         }
         
-        // Not in cache, need to download
-        if (!offline) {
-            auto remote_files = list_files(clean_repo_id, token);
-            for (const auto & remote_file : remote_files) {
-                if (remote_file.path == filename) {
-                    ms_file selected_file = remote_file;
-                    std::string local_path = get_local_path(selected_file);
-                    if (local_path.empty()) {
-                        LOG_ERR("%s: failed to determine local path for %s\n", __func__, selected_file.path.c_str());
-                        return "";
-                    }
-                    
-                    // Check if file already exists with correct size
-                    if (fs::exists(local_path)) {
-                        try {
-                            uintmax_t file_size = fs::file_size(local_path);
-                            if (selected_file.size > 0 && file_size == selected_file.size) {
-                                LOG_DBG("%s: file already exists with correct size: %s\n", __func__, local_path.c_str());
-                                selected_file.local_path = local_path;
-                                return selected_file.local_path;
-                            }
-                        } catch (...) {
-                            // Ignore errors, will re-download
-                        }
-                    }
-
-                    return download_file_with_progress(selected_file, local_path, token);
-                }
-            }
-            
-            // File not found on remote
-            LOG_ERR("%s: file '%s' not found in ModelScope repository %s\n", __func__, filename.c_str(), clean_repo_id.c_str());
-            if (!cached_files.empty()) {
-                LOG_ERR("%s: available files in cache:\n", __func__);
-                for (const auto & file : cached_files) {
-                    LOG_ERR("  %s\n", file.path.c_str());
-                }
-            }
-            auto remote_files_list = list_files(clean_repo_id, token);
-            if (!remote_files_list.empty()) {
-                LOG_ERR("%s: available files in repository:\n", __func__);
-                for (const auto & file : remote_files_list) {
-                    if (string_contains(file.path, ".gguf")) {
-                        LOG_ERR("  %s\n", file.path.c_str());
-                    }
-                }
-            }
+        // Not in cache, must download
+        if (offline) {
+            LOG_ERR("%s: file '%s' not found in cache and offline mode is enabled\n", __func__, filename.c_str());
             return "";
         }
-        
-        // Offline mode and not in cache
-        LOG_ERR("%s: file '%s' not found in cache and offline mode is enabled\n", __func__, filename.c_str());
-        if (!cached_files.empty()) {
-            LOG_ERR("%s: available files in cache:\n", __func__);
-            for (const auto & file : cached_files) {
-                LOG_ERR("  %s\n", file.path.c_str());
+
+        auto remote_files = list_files(clean_repo_id, token);
+        for (const auto & remote_file : remote_files) {
+            if (remote_file.path == filename) {
+                std::string local_path = get_local_path(remote_file);
+                if (local_path.empty()) return "";
+
+                // Check size match
+                if (fs::exists(local_path)) {
+                    try {
+                        if (remote_file.size > 0 && fs::file_size(local_path) == remote_file.size) {
+                            return local_path;
+                        }
+                    } catch (...) {}
+                }
+                return download_file_with_progress(remote_file, local_path, token);
             }
         }
+        LOG_ERR("%s: file '%s' not found in remote repository\n", __func__, filename.c_str());
         return "";
     }
 
-    // No specific filename, find best match based on quantization preference
+    // 3. Auto-select Mode (No specific filename)
+    
+    // A. Try to find best match in CACHE first (Offline-first strategy)
     if (!cached_files.empty()) {
-        std::string selected_file_path = find_best_model(cached_files, quant_tag);
-        if (!selected_file_path.empty()) {
-            // Find the corresponding file object
+        std::string best_cached = find_best_model(cached_files, quant_tag);
+        if (!best_cached.empty()) {
             for (const auto & file : cached_files) {
-                if (file.path == selected_file_path) {
-                    LOG_DBG("%s: found best match in cache: %s\n", __func__, file.local_path.c_str());
+                if (file.path == best_cached) {
+                    LOG_DBG("%s: using cached model '%s' (skipping network request)\n", __func__, file.path.c_str());
                     return file.local_path;
                 }
             }
         }
     }
 
-    // Not in cache or no good match, check remote
+    // B. If cache miss or no good match, try Network
     if (!offline) {
         auto remote_files = list_files(clean_repo_id, token);
+        
+        // If network fails (e.g. private repo no token), fallback to ANY cached gguf if available
         if (remote_files.empty()) {
-            LOG_ERR("%s: no files found in ModelScope repository %s\n", __func__, clean_repo_id.c_str());
-            return "";
-        }
-
-        std::string selected_file_path = find_best_model(remote_files, quant_tag);
-        if (selected_file_path.empty()) {
-            LOG_ERR("%s: no suitable GGUF file found in ModelScope repository %s\n", __func__, clean_repo_id.c_str());
-            LOG_ERR("%s: available GGUF files:\n", __func__);
-            for (const auto & file : remote_files) {
-                if (string_contains(file.path, ".gguf")) {
-                    LOG_ERR("  %s\n", file.path.c_str());
-                }
-            }
-            return "";
-        }
-
-        // Find the selected file
-        for (const auto & file : remote_files) {
-            if (file.path == selected_file_path) {
-                std::string local_path = get_local_path(file);
-                if (local_path.empty()) {
-                    LOG_ERR("%s: failed to determine local path for %s\n", __func__, file.path.c_str());
-                    return "";
-                }
-                
-                // Check if file already exists with correct size
-                if (fs::exists(local_path)) {
-                    try {
-                        uintmax_t file_size = fs::file_size(local_path);
-                        if (file.size > 0 && file_size == file.size) {
-                            LOG_DBG("%s: file already exists with correct size: %s\n", __func__, local_path.c_str());
-                            return local_path;
-                        }
-                    } catch (...) {
-                        // Ignore errors, will re-download
+            if (!cached_files.empty()) {
+                for (const auto & file : cached_files) {
+                    if (string_contains(file.path, ".gguf")) {
+                        LOG_WRN("%s: remote list failed, using available cached file: %s\n", __func__, file.path.c_str());
+                        return file.local_path;
                     }
                 }
-                
+            }
+            LOG_ERR("%s: failed to list files and cache is empty/invalid\n", __func__);
+            return "";
+        }
+
+        std::string best_remote = find_best_model(remote_files, quant_tag);
+        if (best_remote.empty()) {
+            LOG_ERR("%s: no suitable GGUF file found in remote repository\n", __func__);
+            return "";
+        }
+
+        // Find the file object and download/check
+        for (const auto & file : remote_files) {
+            if (file.path == best_remote) {
+                std::string local_path = get_local_path(file);
+                if (local_path.empty()) return "";
+
+                if (fs::exists(local_path)) {
+                    try {
+                        if (file.size > 0 && fs::file_size(local_path) == file.size) {
+                            return local_path;
+                        }
+                    } catch (...) {}
+                }
                 return download_file_with_progress(file, local_path, token);
             }
         }
     }
 
-    LOG_ERR("%s: failed to find or download model from ModelScope repository %s\n", __func__, clean_repo_id.c_str());
+    LOG_ERR("%s: failed to find model in cache or remote\n", __func__);
     return "";
+}
+
+download_result download_model_with_mmproj(const std::string & clean_repo_id, const std::string & filename, bool offline, const std::string & quant_tag, const std::string & token) {
+    download_result result;
+
+    if (!is_valid_repo_id(clean_repo_id)) {
+        LOG_ERR("%s: invalid repository: %s\n", __func__, clean_repo_id.c_str());
+        return result;
+    }
+
+    // 1. Scan Local Cache
+    std::vector<ms_file> cached_files = scan_local_cache(clean_repo_id);
+
+    // 2. Determine Model Filename
+    std::string model_filename = filename;
+    
+    // A. Try to find in Cache first
+    if (model_filename.empty()) {
+        model_filename = find_best_model(cached_files, quant_tag);
+    }
+
+    // B. If not in cache, try Remote (Network)
+    if (model_filename.empty() && !offline) {
+        auto remote_files = list_files(clean_repo_id, token);
+        if (!remote_files.empty()) {
+            model_filename = find_best_model(remote_files, quant_tag);
+        }
+    }
+
+    // 3. Resolve Main Model Path (Download if necessary)
+    if (!model_filename.empty()) {
+        // Check if it's already in cache
+        bool found_in_cache = false;
+        for (const auto & f : cached_files) {
+            if (f.path == model_filename) {
+                found_in_cache = true;
+                result.model_path = f.local_path;
+                break;
+            }
+        }
+
+        // If not in cache, download it
+        if (!found_in_cache && !offline) {
+            result.model_path = download_model(clean_repo_id, model_filename, offline, quant_tag, token);
+        } else if (!found_in_cache && offline) {
+             LOG_ERR("%s: model '%s' not in cache and offline mode enabled\n", __func__, model_filename.c_str());
+        }
+    }
+
+    // 4. Find mmproj File
+    std::string mmproj_filename = "";
+    auto is_mmproj = [](const std::string & path) {
+        std::string lower = path;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        return (string_contains(lower, "mmproj") || string_contains(lower, "clip") || string_contains(lower, "vision")) &&
+               (string_contains(lower, ".gguf") || string_contains(lower, ".bin"));
+    };
+
+    // Search in Cache first
+    for (const auto & f : cached_files) {
+        if (is_mmproj(f.path) && f.path != model_filename) {
+            result.mmproj_path = f.local_path;
+            mmproj_filename = f.path;
+            break;
+        }
+    }
+
+    // If not in cache, try Remote
+    if (result.mmproj_path.empty() && !offline) {
+        auto remote_files = list_files(clean_repo_id, token);
+        for (const auto & f : remote_files) {
+            if (is_mmproj(f.path) && f.path != model_filename) {
+                mmproj_filename = f.path;
+                std::string local_path = get_local_path(f);
+                if (local_path.empty()) continue;
+
+                if (fs::exists(local_path)) {
+                    try {
+                        if (f.size > 0 && fs::file_size(local_path) == f.size) {
+                            result.mmproj_path = local_path;
+                            break;
+                        } else {
+                             fs::remove(local_path);
+                        }
+                    } catch (...) {}
+                }
+                
+                if (result.mmproj_path.empty()) {
+                    result.mmproj_path = download_file_with_progress(f, local_path, token);
+                }
+                break;
+            }
+        }
+    }
+
+    if (result.model_path.empty()) {
+        LOG_ERR("%s: no model file found\n", __func__);
+    }
+    
+    return result;
 }
 
 } // namespace ms

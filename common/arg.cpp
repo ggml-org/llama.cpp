@@ -382,7 +382,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
         // Handle ModelScope repository
         // Split the repo ID to extract clean repo and quantization tag
         auto [ms_repo, ms_tag] = common_download_split_repo_tag(model.ms_repo);
-<<<<<<< HEAD
 
         // Use the complete original value for model name
         model.name = model.ms_repo;
@@ -390,15 +389,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
         auto download_result = ms::download_model_with_mmproj(ms_repo, model.hf_file, offline, ms_tag, bearer_token);
 
         if (download_result.model_path.empty()) {
-=======
-        
-        // Use the complete original value for model name
-        model.name = model.ms_repo;
-        
-        std::string model_path = ms::download_model(ms_repo, model.hf_file, offline, ms_tag, bearer_token);
-        
-        if (model_path.empty()) {
->>>>>>> d292fd7c5 (update)
             LOG_ERR("error: failed to download model from ModelScope\n");
             exit(1);
         }
