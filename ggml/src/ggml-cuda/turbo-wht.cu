@@ -1,4 +1,4 @@
-#include "common.cuh"
+#include "turbo-wht.cuh"
 
 // Dynamic Walsh-Hadamard Transform — supports any power-of-2 group size
 // Group size = head_dim, passed via op_params[1]
