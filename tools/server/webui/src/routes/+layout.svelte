@@ -8,7 +8,6 @@
 	import { fade } from 'svelte/transition';
 	import {
 		ChatSidebar,
-		ChatSettings,
 		DesktopIconStrip,
 		DialogConversationTitleUpdate
 	} from '$lib/components/app';
@@ -19,13 +18,12 @@
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
-	import { beforeNavigate } from '$app/navigation';
-	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
 
 	let { children } = $props();
 
@@ -45,30 +43,7 @@
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
-	let activePanel = $state<'chat' | 'settings' | 'mcp'>('chat');
-	let isSettingsRoute = $derived(!!page.route.id?.startsWith('/settings'));
-
-	beforeNavigate(({ to, from }) => {
-		if (
-			to?.route?.id?.startsWith('/settings/chat') &&
-			!from?.route?.id?.startsWith('/settings/chat')
-		) {
-			settingsReferrer.url = window.location.hash || '#/';
-		}
-	});
-	let chatSettingsRef: ChatSettings | undefined = $state();
-
-	$effect(() => {
-		if (activePanel === 'settings' && chatSettingsRef) {
-			chatSettingsRef.reset();
-		}
-	});
-
-	// Return to chat when navigating to a new route
-	$effect(() => {
-		void page.url;
-		activePanel = 'chat';
-	});
+	const panelNav = useSettingsNavigation();
 
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
@@ -225,7 +200,7 @@
 				<ChatSidebar bind:this={chatSidebar} />
 			</Sidebar.Root>
 
-			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(isSettingsRoute && !isDesktop)}
+			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
 				{#if mounted}
 					<div in:fade={{ duration: 200 }}>
 						<Sidebar.Trigger

@@ -286,9 +286,7 @@
 						{/each}
 					</div>
 				{:else}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
-						No output
-					</div>
+					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">No output</div>
 				{/if}
 			</div>
 		</CollapsibleContentBlock>
