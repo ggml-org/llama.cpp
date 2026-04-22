@@ -49,7 +49,7 @@
 #include <unistd.h>
 #endif
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
 #include <sys/types.h>
 #include <pwd.h>
 #endif
@@ -969,7 +969,16 @@ std::string fs_get_cache_directory() {
 #endif /* defined(__linux__) */
         }
 #elif defined(__APPLE__)
-        cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
+        if (std::getenv("HOME")) {
+            cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
+        } else {
+            /* no $HOME is defined (e.g. LaunchDaemon context), fallback to getpwuid */
+            struct passwd *pw = getpwuid(getuid());
+            if ((!pw) || (!pw->pw_dir)) {
+                throw std::runtime_error("Failed to find $HOME directory");
+            }
+            cache_directory = std::string(pw->pw_dir) + std::string("/Library/Caches/");
+        }
 #elif defined(_WIN32)
         cache_directory = std::getenv("LOCALAPPDATA");
 #elif defined(__EMSCRIPTEN__)
