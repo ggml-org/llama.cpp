@@ -150,7 +150,7 @@
 #define TN_TOK_BOI         "v.boi"
 #define TN_TOK_EOI         "v.eoi"
 
-// hunyuanocr
+// hunyuanocr / hunyuanvl (shared GGUF tensor names)
 #define TN_MM_PRE_NORM     "mm.pre_norm.%s"
 #define TN_TOK_IMG_BEGIN   "mm.image_begin"
 #define TN_TOK_IMG_END     "mm.image_end"
@@ -303,6 +303,7 @@ enum projector_type {
     PROJECTOR_TYPE_KIMIK25,
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANOCR,
+    PROJECTOR_TYPE_HUNYUANVL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -349,6 +350,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_KIMIK25,   "kimik25"},
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
     { PROJECTOR_TYPE_HUNYUANOCR, "hunyuanocr"},
+    { PROJECTOR_TYPE_HUNYUANVL,  "hunyuanvl"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
