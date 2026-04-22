@@ -94,7 +94,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=icpx \
             -DLLAMA_OPENSSL=OFF \
             -DGGML_NATIVE=OFF \
-            -DGGML_SYCL_F16=${{ matrix.dtype }}
+            -DGGML_SYCL_F16=${{ matrix.fp16 }}
           time cmake --build build --config Release -j $(nproc)
 
   windows-latest-sycl:
