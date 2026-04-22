@@ -575,12 +575,9 @@ class ChatStore {
 				assistantMessage
 			);
 
-			if (config().titleGenerationUseLLM) {
-				const currentMessages = conversationsStore.activeMessages;
-				const assistantMessages = currentMessages.filter((m) => m.role === MessageRole.ASSISTANT);
-				if (assistantMessages.length === 1) {
-					const firstUserMessage = currentMessages.find((m) => m.role === MessageRole.USER);
-					if (firstUserMessage) {
+			if (config().titleGenerationUseLLM && isNewConversation) {
+				const firstUserMessage = conversationsStore.activeMessages.find((m) => m.role === MessageRole.USER);
+				if (firstUserMessage) {
 						const titlePrompt = `Based on the following interaction, generate a short, concise title (maximum 6-8 words) that captures the main topic. Return ONLY the title text, nothing else. Do not use quotes.
 
 User: ${firstUserMessage.content}
@@ -594,33 +591,41 @@ Title:`;
 						const effectiveModel =
 							isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
 
-						await ChatService.sendMessage(
-							[
-								{
-									id: 'title-gen',
-									convId: 'temp',
-									type: MessageType.TEXT,
-									role: MessageRole.USER,
-									content: titlePrompt,
-									timestamp: Date.now(),
-									toolCalls: '',
-									children: [],
-									extra: []
-								}
-							],
-							{
-								stream: true,
+						const titleHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+							if (config().apiKey) titleHeaders.Authorization = `Bearer ${config().apiKey}`;
+							const titleRes = await fetch('./v1/chat/completions', {
+								method: 'POST',
+								headers: titleHeaders,
+							body: JSON.stringify({
 								model: effectiveModel || undefined,
-								onChunk: (chunk: string) => {
-									titleResponse += chunk;
-								},
-								onError: (error: Error) => {
-									console.error('Title generation failed:', error);
+								messages: [{ role: 'user', content: titlePrompt }],
+								stream: true,
+								chat_template_kwargs: { enable_thinking: false }
+							}),
+							signal: titleAbort.signal
+						});
+
+						if (!titleRes.ok) {
+							console.error('Title generation failed:', titleRes.status);
+							return;
+						}
+
+						const reader = titleRes.body?.getReader();
+						const decoder = new TextDecoder();
+						while (true) {
+							const { done, value } = await reader?.read() ?? { done: true, value: undefined };
+							if (done) break;
+							const text = decoder.decode(value, { stream: true });
+							for (const line of text.split('\n').filter((l) => l.startsWith('data: '))) {
+								try {
+									const parsed = JSON.parse(line.slice(6));
+									const content = parsed.choices?.[0]?.delta?.content;
+									if (content) titleResponse += content;
+								} catch {
+									// skip
 								}
-							},
-							'title-gen',
-							titleAbort.signal
-						);
+							}
+						}
 
 						// Strip thinking blocks from the full output
 						let cleanTitle = titleResponse
@@ -643,7 +648,6 @@ Title:`;
 						if (cleanTitle && cleanTitle.length >= 3) {
 							await conversationsStore.updateConversationName(currentConv.id, cleanTitle);
 						}
-					}
 				}
 			}
 		} catch (error) {
