@@ -1945,15 +1945,28 @@ json server_task_result_get_lora::to_json() {
             {"id",            i},
             {"path",          lora.info.path},
             {"scale",         lora.info.scale},
-            {"task_name",     lora.info.task_name},
-            {"prompt_prefix", lora.info.prompt_prefix},
         };
+        // Handle tasks and prompt prefixes as follows for backwards compatibility:
+        // - if unset or single-valued, use top-level "task_name" / "prompt_prefix"
+        //   to maintain backwards compatibility
+        // - if multi-values, present a dict under "task_prompt_prefixes"
+        if (lora.info.task_prompt_prefixes.empty()) {
+            entry["task_name"] = "";
+            entry["prompt_prefix"] = "";
+        } else if (lora.info.task_prompt_prefixes.size() == 1) {
+            const auto & task_entry_pair = lora.info.task_prompt_prefixes.begin();
+            entry["task_name"] = task_entry_pair->first;
+            entry["prompt_prefix"] = task_entry_pair->second;
+        } else {
+            json task_prompt_prefixes = {};
+            for (const auto & task_entry_pair : lora.info.task_prompt_prefixes) {
+                task_prompt_prefixes[task_entry_pair.first] = task_entry_pair.second;
+            }
+            entry["task_prompt_prefixes"] = task_prompt_prefixes;
+        }
         if (!lora.alora_invocation_tokens.empty()) {
             entry["alora_invocation_string"] = lora.alora_invocation_string;
             entry["alora_invocation_tokens"] = lora.alora_invocation_tokens;
-        }
-        if (!lora.info.mmlora_modality_types.empty()) {
-            entry["mmlora_modality_types"] = lora.info.mmlora_modality_types;
         }
         result.push_back(std::move(entry));
     }

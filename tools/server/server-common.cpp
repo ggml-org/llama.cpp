@@ -344,26 +344,23 @@ const mtmd::input_chunk_ptr & server_tokens::find_chunk(size_t idx) const {
     throw std::runtime_error("Chunk not found");
 }
 
-bool server_tokens::has_modality_type(const std::string & modality_type) const {
-    if (!has_mtmd) {
-        return false;
-    }
-
-    enum mtmd_input_chunk_type target_type = mtmd_modality_type_from_str(modality_type.c_str());
-
+bool server_tokens::has_modality_type(const enum mtmd_input_chunk_type modality_type) const {
     for (const auto & [idx, chunk_ptr] : map_idx_to_media) {
         if (!chunk_ptr) continue;
         enum mtmd_input_chunk_type chunk_type = mtmd_input_chunk_get_type(chunk_ptr.get());
-        if (chunk_type == target_type) {
+        if (chunk_type == modality_type) {
             return true;
         }
     }
     return false;
 }
 
-bool server_tokens::has_any_modality_type(const std::vector<std::string> & modality_types) const {
-    for (const auto & mod_type : modality_types) {
-        if (has_modality_type(mod_type)) {
+bool server_tokens::has_any_modality_type(const std::unordered_map<std::string, std::string> & task_prompt_prefixes) const {
+    for (const auto & task_pair : task_prompt_prefixes) {
+        const auto & modality_type = mtmd_modality_type_from_str(task_pair.first.c_str());
+        if (modality_type != MTMD_INPUT_CHUNK_TYPE_UNKNOWN &&
+            modality_type != MTMD_INPUT_CHUNK_TYPE_TEXT &&
+            has_modality_type(modality_type)) {
             return true;
         }
     }

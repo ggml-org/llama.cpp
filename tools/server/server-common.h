@@ -179,8 +179,8 @@ public:
     const mtmd::input_chunk_ptr & find_chunk(size_t idx) const;
 
     // Check if request contains any of the specified modality types
-    bool has_modality_type(const std::string & modality_type) const;
-    bool has_any_modality_type(const std::vector<std::string> & modality_types) const;
+    bool has_modality_type(const enum mtmd_input_chunk_type modality_type) const;
+    bool has_any_modality_type(const std::unordered_map<std::string, std::string> & task_prompt_prefixes) const;
 
     void push_back(llama_token tok);
 

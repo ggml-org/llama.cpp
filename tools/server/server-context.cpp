@@ -1284,9 +1284,9 @@ private:
         for (size_t i = 0; i < slot.lora.size(); ++i) {
             auto & lora = slot.lora[i];
 
-            if (!lora.mmlora_modality_types.empty()) {
+            if (!lora.task_prompt_prefixes.empty()) {
                 // Check if request has any of the required modalities (OR logic)
-                const bool has_modality = task.tokens.has_any_modality_type(lora.mmlora_modality_types);
+                const bool has_modality = task.tokens.has_any_modality_type(lora.task_prompt_prefixes);
 
                 if (!has_modality) {
                     SLT_DBG(slot, "MMLoRA %zu requires modality but not found, deactivating\n", i);
