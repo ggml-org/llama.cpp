@@ -80,6 +80,8 @@ enum htp_op_code {
     HTP_OP_SSM_CONV,
     HTP_OP_REPEAT,
     HTP_OP_CUMSUM,
+    HTP_OP_FILL,
+    HTP_OP_DIAG,
 
     HTP_OP_INVALID
 };
@@ -91,7 +93,14 @@ enum htp_op_code {
 #define HTP_OP_MAX_BUFS    8
 #define HTP_OP_MAX_REQS    256
 #define HTP_OP_MAX_TENSORS (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
+
+#if __HVX_ARCH__ < 75
+#define HTP_OP_MAX_VMEM    (3167538380u)
+#else
 #define HTP_OP_MAX_VMEM    (3221225472u)
+#endif
+
+#define HTP_MMAP_MAX_VMEM  (2147483648u)
 
 enum htp_tensor_flags {
     HTP_TENSOR_COMPUTE = (1U << 0), // Tensor buffer temporal compute data (not weights)
