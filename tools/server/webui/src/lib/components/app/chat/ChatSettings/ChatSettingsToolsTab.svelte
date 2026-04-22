@@ -83,7 +83,10 @@
 						{#each group.tools as tool (tool.function.name)}
 							{@const toolName = tool.function.name}
 							{@const isEnabled = toolsStore.isToolEnabled(toolName)}
-							{@const isAlwaysAllowed = permissionsStore.isAlwaysAllowed(toolName)}
+							{@const permissionKey = toolsStore.getPermissionKey(toolName)}
+							{@const isAlwaysAllowed = permissionKey
+								? permissionsStore.hasTool(permissionKey)
+								: false}
 
 							<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
 								<TruncatedText text={toolName} class="min-w-0 flex-1 truncate" showTooltip={true} />
@@ -101,9 +104,9 @@
 										checked={isAlwaysAllowed}
 										onCheckedChange={() => {
 											if (isAlwaysAllowed) {
-												permissionsStore.revokeAlwaysAllow(toolName);
+												permissionsStore.revokeTool(permissionKey!);
 											} else {
-												permissionsStore.alwaysAllow(toolName);
+												permissionsStore.allowTool(permissionKey!);
 											}
 										}}
 										class="h-4 w-4"

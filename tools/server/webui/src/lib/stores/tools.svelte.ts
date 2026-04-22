@@ -98,6 +98,7 @@ class ToolsStore {
 					entries.push({
 						source: ToolSource.MCP,
 						serverName,
+						serverId,
 						definition: {
 							type: ToolCallType.FUNCTION,
 							function: {
@@ -110,11 +111,12 @@ class ToolsStore {
 				}
 			}
 		} else {
-			for (const { serverName, tools } of this.getMcpToolsFromHealthChecks()) {
+			for (const { serverId, serverName, tools } of this.getMcpToolsFromHealthChecks()) {
 				for (const tool of tools) {
 					entries.push({
 						source: ToolSource.MCP,
 						serverName,
+						serverId,
 						definition: {
 							type: ToolCallType.FUNCTION,
 							function: {
@@ -354,6 +356,28 @@ class ToolsStore {
 			}
 		}
 		return '';
+	}
+
+	/** Build a permission key with category prefix, e.g. "mcp-<serverId>:tool_name" */
+	getPermissionKey(toolName: string): string | null {
+		for (const entry of this.allTools) {
+			if (entry.definition.function.name === toolName) {
+				switch (entry.source) {
+					case ToolSource.BUILTIN:
+						return `builtin:${toolName}`;
+					case ToolSource.CUSTOM:
+						return `custom:${toolName}`;
+					case ToolSource.MCP:
+						if (entry.serverId) {
+							return `mcp-${entry.serverId}:${toolName}`;
+						}
+						return `mcp:${toolName}`;
+					default:
+						return null;
+				}
+			}
+		}
+		return null;
 	}
 
 	/** Check if there are any enabled tools available (builtin, MCP, or custom). */

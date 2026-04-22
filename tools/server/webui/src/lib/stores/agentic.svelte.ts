@@ -299,7 +299,8 @@ class AgenticStore {
 		serverLabel: string,
 		signal?: AbortSignal
 	): Promise<ToolPermissionDecision> {
-		if (permissionsStore.isAlwaysAllowed(toolName)) {
+		const permissionKey = toolsStore.getPermissionKey(toolName);
+		if (permissionKey && permissionsStore.hasTool(permissionKey)) {
 			return ToolPermissionDecision.ONCE;
 		}
 
@@ -314,17 +315,18 @@ class AgenticStore {
 
 			this._permissionResolvers.set(conversationId, (decision) => {
 				this._pendingPermissions.set(conversationId, null);
-				if (decision === ToolPermissionDecision.ALWAYS) {
-					permissionsStore.alwaysAllow(toolName);
+				if (decision === ToolPermissionDecision.ALWAYS && permissionKey) {
+					permissionsStore.allowTool(permissionKey);
 				} else if (decision === ToolPermissionDecision.ALWAYS_SERVER) {
-					const serverTools = toolsStore.allTools
+					const serverToolKeys = toolsStore.allTools
 						.filter((t) =>
 							t.serverName
 								? t.serverName === serverLabel
 								: toolsStore.getToolServerLabel(t.definition.function.name) === serverLabel
 						)
-						.map((t) => t.definition.function.name);
-					permissionsStore.alwaysAllowServer(serverTools);
+						.map((t) => toolsStore.getPermissionKey(t.definition.function.name)!)
+						.filter((k): k is string => k !== null);
+					permissionsStore.allowTools(serverToolKeys);
 				}
 				resolve(decision);
 			});
