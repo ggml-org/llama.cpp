@@ -98,10 +98,12 @@
 		draftMessagesStore.saveDraftMessage(chatId, message, uploadedFiles);
 	});
 
-	afterNavigate(() => {
-		const draft = draftMessagesStore.getDraftMessage(chatId);
-		message = draft.message;
-		uploadedFiles = draft.files;
+	afterNavigate((navigation) => {
+		if (navigation?.from != null) {
+			const draft = draftMessagesStore.getDraftMessage(chatId);
+			message = draft.message;
+			uploadedFiles = draft.files;
+		}
 
 		setTimeout(() => chatFormRef?.focus(), 10);
 	});
