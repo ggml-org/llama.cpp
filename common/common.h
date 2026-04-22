@@ -40,22 +40,19 @@ struct common_adapter_lora_info {
     std::string path;
     float scale;
 
-    std::string task_name;
-    std::string prompt_prefix;
+    // Each adapter may be qualified with one or more task names. Each task may
+    // have a prompt prefix used to stimulate the task's behavior.
+    //
+    // A task name may also map to a well-known modality enum
+    // (mtmd.h:mtmd_input_chunk_type) through the mtmd_modality_type_from_str
+    // mapping. Modality names will trigger special logic to auto-enable
+    // adapters in the presence of tokens for the given modality.
+    std::unordered_map<std::string, std::string> task_prompt_prefixes;
 
     struct llama_adapter_lora * ptr;
 
     // used to toggle on/off programmatically without changing scale
     bool enabled;
-
-    // Multi-Modal LoRA activation (MMLoRA)
-    // Empty vector = not an MMLoRA adapter (always active)
-    // Non-empty = MMLoRA adapter (activates if ANY specified modality present - OR logic)
-    // Modality types stored as strings: "image", "audio"
-    std::vector<std::string> mmlora_modality_types;
-
-    // Helper to check if this is an MMLoRA adapter
-    bool is_mmlora() const { return !mmlora_modality_types.empty(); }
 };
 
 using llama_tokens = std::vector<llama_token>;
