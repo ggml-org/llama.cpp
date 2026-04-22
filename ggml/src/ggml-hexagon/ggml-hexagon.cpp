@@ -120,17 +120,11 @@ static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const ggml_t
 
     op_desc desc(op);
 
-    char    pmu_str[256] = "";
-    char*   pmu_ptr = pmu_str;
-
+    char pmu_str[256] = "";
     if (opt_profile > 1) {
-        // Include PMU counters
-        pmu_ptr += sprintf(pmu_ptr, " pmu [");
-        unsigned int i;
-        for (i = 0; i < (HTP_PROF_PMU_NCNT-1); i++) {
-            pmu_ptr += sprintf(pmu_ptr, "%u,", pmu[i]);
-        }
-        sprintf(pmu_ptr, "%u]", pmu[i]);
+        static_assert(HTP_PROF_PMU_NCNT == 8, "current implementation assumes 8 PMU counters");
+        sprintf(pmu_str, " pmu [%u,%u,%u,%u,%u,%u,%u,%u]",
+                pmu[0], pmu[1], pmu[2], pmu[3], pmu[4], pmu[5], pmu[6], pmu[7]);
     }
 
     GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : usec %u cycles %u%s\n", sess_name.c_str(),
