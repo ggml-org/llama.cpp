@@ -2674,34 +2674,26 @@ static void ggml_backend_webgpu_set_tensor_async(ggml_backend_t backend,
                                                  size_t         offset,
                                                  size_t         size) {
     GGML_UNUSED(backend);
-    ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) tensor->buffer->context;
-
+    auto * buf_ctx      = (ggml_backend_webgpu_buffer_context *) tensor->buffer->context;
     size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
-    // CopyBufferToBuffer requires 4 byte alignment on size
-    // Round up size to a multiple of 4
-    size_t aligned_size = (size + 3) & ~3ULL;
 
-    // Create a one-shot staging buffer
-    wgpu::BufferDescriptor desc{};
-    desc.size             = aligned_size;
-    desc.usage            = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
-    // Allow CPU to write immediately upon buffer creation
-    desc.mappedAtCreation = true;
-    desc.label            = "set_tensor_async_scratch_buffer";
-    wgpu::Buffer staging  = buf_ctx->global_ctx->device.CreateBuffer(&desc);
+    // Write aligned portion
+    buf_ctx->global_ctx->queue.WriteBuffer(buf_ctx->buffer, total_offset, data, (size / 4) * 4);
 
-    void * mapped = staging.GetMappedRange(0, aligned_size);
-    std::memcpy(mapped, data, size);
-    if (size < aligned_size) {
-        // zero out extra padded space on align
-        std::memset(static_cast<uint8_t *>(mapped) + size, 0, aligned_size - size);
+    if (size % 4 != 0) {
+        // If size is not a multiple of 4, we need to memset the remaining bytes
+        size_t remaining_size = size % 4;
+
+        // pack the remaining bytes into a uint32_t
+        uint32_t val32 = 0;
+
+        for (size_t i = 0; i < remaining_size; i++) {
+            ((uint8_t *) &val32)[i] = ((const uint8_t *) data)[size - remaining_size + i];
+        }
+        // memset the remaining bytes
+        ggml_backend_webgpu_buffer_memset(buf_ctx->global_ctx, buf_ctx->buffer, val32,
+                                          total_offset + (size - remaining_size), remaining_size);
     }
-    staging.Unmap();
-
-    wgpu::CommandEncoder encoder = buf_ctx->global_ctx->device.CreateCommandEncoder();
-    encoder.CopyBufferToBuffer(staging, 0, buf_ctx->buffer, total_offset, aligned_size);
-    wgpu::CommandBuffer cmds = encoder.Finish();
-    buf_ctx->global_ctx->queue.Submit(1, &cmds);
 }
 
 static void ggml_backend_webgpu_synchronize(ggml_backend_t backend) {
