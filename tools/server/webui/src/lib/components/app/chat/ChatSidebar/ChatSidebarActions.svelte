@@ -4,7 +4,7 @@
 	import type { Component } from 'svelte';
 	import { SearchInput } from '$lib/components/app';
 	import { page } from '$app/state';
-	import { DESKTOP_ICON_STRIP_ICONS } from '$lib/constants/ui';
+	import { SIDEBAR_ACTIONS_ITEMS } from '$lib/constants/ui';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -52,7 +52,7 @@
 			{isCancelAlwaysVisible}
 		/>
 	{:else}
-		{#each DESKTOP_ICON_STRIP_ICONS as item (item.route)}
+		{#each SIDEBAR_ACTIONS_ITEMS as item (item.route)}
 			{#if !item.route}
 				<Button
 					class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"

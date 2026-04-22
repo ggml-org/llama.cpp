@@ -5,7 +5,7 @@
 	import {
 		ICON_STRIP_TRANSITION_DURATION,
 		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
-		DESKTOP_ICON_STRIP_ICONS
+		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
 	import { TooltipSide } from '$lib/enums';
 	import { fade } from 'svelte/transition';
@@ -32,7 +32,7 @@
 
 		setTimeout(() => {
 			initialized = true;
-		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * DESKTOP_ICON_STRIP_ICONS.length);
+		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * SIDEBAR_ACTIONS_ITEMS.length);
 	});
 </script>
 
@@ -49,7 +49,7 @@
 		: 'opacity-100'}"
 >
 	<div class="mt-12 flex flex-col items-center gap-1">
-		{#each DESKTOP_ICON_STRIP_ICONS as item, i (item.tooltip)}
+		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const onclick = item.route ? () => goto(item.route!) : onSearchClick}
 			{@const isActive = item.activeRouteId
 				? page.route.id === item.activeRouteId

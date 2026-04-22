@@ -18,7 +18,7 @@ export interface DesktopIconStripItem {
 	keys?: string[];
 }
 
-export const DESKTOP_ICON_STRIP_ICONS: DesktopIconStripItem[] = [
+export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{ icon: SquarePen, tooltip: 'New chat', route: '?new_chat=true#/', keys: ['shift', 'cmd', 'o'] },
 	{ icon: Search, tooltip: 'Search', keys: ['cmd', 'k'] },
 	{

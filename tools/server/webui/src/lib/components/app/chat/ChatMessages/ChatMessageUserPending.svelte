@@ -2,9 +2,9 @@
 	import { ActionIcon } from '$lib/components/app';
 	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
-	import { Send, Edit, Trash2 } from '@lucide/svelte';
-	import { getProcessingInfoContext, setMessageEditContext } from '$lib/contexts';
-	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
+	import { ArrowUp, Edit, Trash2 } from '@lucide/svelte';
+	import { getProcessingInfoContext } from '$lib/contexts';
+	import { useMessageEditContext } from '$lib/hooks/use-message-edit-context.svelte';
 	import ChatMessageUserBubble from './ChatMessageUserBubble.svelte';
 
 	interface Props {
@@ -28,73 +28,10 @@
 	const processingInfoCtx = getProcessingInfoContext();
 	let showProcessingInfo = $derived(processingInfoCtx.showProcessingInfo);
 
-	let isEditing = $state(false);
-	let editedContent = $state('');
-	let editedExtras = $state<DatabaseMessageExtra[]>([]);
-	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
-
-	function handleEdit() {
-		editedContent = content;
-		editedExtras = [...extras];
-		editedUploadedFiles = [];
-		isEditing = true;
-	}
-
-	async function handleSaveEdit() {
-		const trimmed = editedContent.trim();
-		if (!trimmed && editedExtras.length === 0 && editedUploadedFiles.length === 0) return;
-
-		let finalExtras: DatabaseMessageExtra[] = $state.snapshot(editedExtras);
-		if (editedUploadedFiles.length > 0) {
-			const plainFiles = $state.snapshot(editedUploadedFiles);
-			const result = await parseFilesToMessageExtras(plainFiles);
-			const newExtras = result?.extras || [];
-			finalExtras = [...finalExtras, ...newExtras];
-		}
-
-		onEdit(trimmed, finalExtras.length > 0 ? finalExtras : undefined);
-		isEditing = false;
-	}
-
-	function handleCancelEdit() {
-		isEditing = false;
-	}
-
-	setMessageEditContext({
-		get isEditing() {
-			return isEditing;
-		},
-		get editedContent() {
-			return editedContent;
-		},
-		get editedExtras() {
-			return editedExtras;
-		},
-		get editedUploadedFiles() {
-			return editedUploadedFiles;
-		},
-		get originalContent() {
-			return content;
-		},
-		get originalExtras() {
-			return extras;
-		},
-		get showSaveOnlyOption() {
-			return false;
-		},
-		setContent: (c: string) => {
-			editedContent = c;
-		},
-		setExtras: (e: DatabaseMessageExtra[]) => {
-			editedExtras = e;
-		},
-		setUploadedFiles: (f: ChatUploadedFile[]) => {
-			editedUploadedFiles = f;
-		},
-		save: handleSaveEdit,
-		saveOnly: handleSaveEdit,
-		cancel: handleCancelEdit,
-		startEdit: handleEdit
+	const editCtx = useMessageEditContext({
+		getContent: () => content,
+		getExtras: () => extras,
+		onSave: (content, extras) => onEdit(content, extras)
 	});
 </script>
 
@@ -106,7 +43,7 @@
 		: 'bottom-32'}"
 	role="group"
 >
-	{#if isEditing}
+	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
 		<ChatMessageUserBubble
@@ -123,9 +60,9 @@
 					<div
 						class="pointer-events-auto inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:opacity-100"
 					>
-						<ActionIcon icon={Edit} tooltip="Edit" onclick={handleEdit} />
+						<ActionIcon icon={Edit} tooltip="Edit" onclick={editCtx.handleEdit} />
 						<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />
-						<ActionIcon icon={Send} tooltip="Send immediately" onclick={onSendImmediately} />
+						<ActionIcon icon={ArrowUp} tooltip="Send immediately" onclick={onSendImmediately} />
 					</div>
 				</div>
 			</div>

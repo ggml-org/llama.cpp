@@ -478,6 +478,8 @@ export { default as ChatMessage } from './ChatMessages/ChatMessage.svelte';
  * ```
  */
 export { default as ChatMessageAgenticContent } from './ChatMessages/ChatMessageAgenticContent.svelte';
+export { default as ChatMessagePermissionRequest } from './ChatMessages/ChatMessagePermissionRequest.svelte';
+export { default as ChatMessageContinueRequest } from './ChatMessages/ChatMessageContinueRequest.svelte';
 
 /**
  * Action buttons toolbar for messages. Displays copy, edit, delete, and regenerate
@@ -650,55 +652,6 @@ export { default as ChatScreenProcessingInfo } from './ChatScreen/ChatScreenProc
  * The `ChatSettingsParameterSourceIndicator` badge shows which source is active.
  *
  */
-
-/**
- * **ChatSettings** - Application settings panel
- *
- * Comprehensive settings interface with categorized sections. Manages all
- * user preferences and sampling parameters. Integrates with config store
- * for persistence and ParameterSyncService for server synchronization.
- *
- * **Architecture:**
- * - Uses tabbed navigation with category sections
- * - Maintains local form state, commits on save
- * - Tracks user overrides vs server defaults for sampling params
- * - Exposes reset() method for dialog close without save
- *
- * **Categories:**
- * - **General**: API key, system message, show system messages toggle
- * - **Display**: Theme selection, message actions visibility, model info badge
- * - **Sampling**: Temperature, top_p, top_k, min_p, repeat_penalty, etc.
- * - **Penalties**: Frequency penalty, presence penalty, repeat last N
- * - **Import/Export**: Conversation backup and restore
- * - **MCP**: MCP server management (opens DialogChatSettings with MCP tab)
- * - **Developer**: Debug options, disable auto-scroll
- *
- * **Parameter Sync:**
- * - Fetches defaults from server `/props` endpoint
- * - Shows source indicator badge (Custom/Server Props/Default)
- * - Real-time badge updates as user types
- * - Tracks which parameters user has explicitly overridden
- *
- * **Features:**
- * - Mobile-responsive layout with horizontal scrolling tabs
- * - Form validation with error messages
- * - Secure API key storage (masked input)
- * - Import/export conversations as JSON
- * - Reset to defaults option per parameter
- *
- * **Exported API:**
- * - `reset()` - Reset form fields to currently saved values (for cancel action)
- *
- * @example
- * ```svelte
- * <ChatSettings
- *   bind:this={settingsRef}
- *   onSave={() => dialogOpen = false}
- *   onCancel={() => { settingsRef.reset(); dialogOpen = false; }}
- * />
- * ```
- */
-export { default as ChatSettings } from '../settings/SettingsChat.svelte';
 
 /**
  * Footer with save/cancel buttons for settings panel. Positioned at bottom

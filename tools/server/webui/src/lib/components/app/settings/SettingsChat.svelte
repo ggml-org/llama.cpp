@@ -1,52 +1,49 @@
 <script lang="ts">
-	import { Settings, ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
 		ChatSettingsFields,
 		ChatSettingsToolsTab
 	} from '$lib/components/app';
+	import {
+		SettingsChatDesktopSidebar,
+		SettingsChatMobileHeader
+	} from '$lib/components/app/settings';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
-		SETTINGS_SECTION_TITLES,
-		type SettingsSectionTitle,
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
-		SETTINGS_CHAT_SECTIONS
+		SETTINGS_CHAT_SECTIONS,
+		SETTINGS_SECTION_TITLES,
+		type SettingsSection
 	} from '$lib/constants';
 	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui';
 	import { fade } from 'svelte/transition';
-	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import { setChatSettingsConfigContext } from '$lib/contexts';
+	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
 
 	interface Props {
-		class?: string;
-		onSave?: () => void;
-		initialSection?: SettingsSectionTitle;
+		initialSection?: string;
+		getSectionHref?: (section: SettingsSection) => string;
 	}
 
-	let { class: className, onSave, initialSection }: Props = $props();
+	let { initialSection, getSectionHref }: Props = $props();
 
-	const settingSections = SETTINGS_CHAT_SECTIONS;
-
-	let activeSection = $derived<SettingsSectionTitle>(
-		initialSection ?? SETTINGS_SECTION_TITLES.GENERAL
+	let activeSlug = $derived(
+		initialSection ?? (page.params as Record<string, string | undefined>).section ?? 'general'
 	);
 	let currentSection = $derived(
-		settingSections.find((section) => section.title === activeSection) || settingSections[0]
+		SETTINGS_CHAT_SECTIONS.find((section) => section.slug === activeSlug) ||
+			SETTINGS_CHAT_SECTIONS[0]
 	);
 	let localConfig: SettingsConfigType = $state({ ...config() });
 
-	const carousel = useScrollCarousel();
-
-	$effect(() => {
-		if (initialSection) {
-			activeSection = initialSection;
-		}
-	});
+	let mobileHeader: | {updateCarousel: () => void; } | undefined;
 
 	function handleThemeChange(newTheme: string) {
 		localConfig.theme = newTheme;
-
 		setMode(newTheme as ColorMode);
 	}
 
@@ -56,8 +53,8 @@
 
 	function handleReset() {
 		localConfig = { ...config() };
-
 		setMode(localConfig.theme as ColorMode);
+		mobileHeader?.updateCarousel();
 	}
 
 	function handleSave() {
@@ -71,7 +68,6 @@
 			}
 		}
 
-		// Convert numeric strings to numbers for numeric fields
 		const processedConfig = { ...localConfig };
 
 		for (const field of NUMERIC_FIELDS) {
@@ -91,105 +87,45 @@
 		}
 
 		settingsStore.updateMultipleConfig(processedConfig);
-		onSave?.();
+		goto(settingsReferrer.url);
 	}
 
 	export function reset() {
 		localConfig = { ...config() };
-
-		setTimeout(carousel.updateScrollButtons, 100);
 	}
+
+	setChatSettingsConfigContext({
+		get localConfig() {
+			return localConfig;
+		},
+		handleConfigChange,
+		handleThemeChange
+	});
 </script>
 
-<div class="flex h-full flex-col overflow-y-auto {className} w-full" in:fade={{ duration: 150 }}>
+<div
+	class="mx-auto flex h-full max-h-[100dvh] w-full flex-col overflow-y-auto md:pl-8"
+	in:fade={{ duration: 150 }}
+>
 	<div class="flex flex-1 flex-col gap-4 md:flex-row">
-		<!-- Desktop Sidebar -->
-		<div class="sticky top-0 hidden w-64 flex-col self-start bg-background pt-8 pb-4 md:flex">
-			<div class="flex items-center gap-2 pb-8">
-				<Settings class="h-6 w-6" />
-				<h1 class="text-2xl font-semibold">Settings</h1>
-			</div>
-			<nav class="space-y-1">
-				{#each settingSections as section (section.title)}
-					<button
-						class="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent {activeSection ===
-						section.title
-							? 'bg-accent text-accent-foreground'
-							: 'text-muted-foreground'}"
-						onclick={() => (activeSection = section.title)}
-					>
-						<section.icon class="h-4 w-4" />
+		<SettingsChatDesktopSidebar
+			sections={SETTINGS_CHAT_SECTIONS}
+			isActive={(section: SettingsSection) => section.slug === activeSlug}
+			getHref={getSectionHref ?? ((section: SettingsSection) => `#/settings/chat/${section.slug}`)}
+		/>
 
-						<span class="ml-2">{section.title}</span>
-					</button>
-				{/each}
-			</nav>
-		</div>
-
-		<!-- Mobile Header with Horizontal Scrollable Menu -->
-		<div class="sticky top-0 z-10 flex flex-col bg-background md:hidden">
-			<div class="flex items-center gap-2 px-4 pt-4 pb-2 md:pt-6">
-				<Settings class="h-5 w-5 md:h-6 md:w-6" />
-
-				<h1 class="text-xl font-semibold md:text-2xl">Settings</h1>
-			</div>
-
-			<div class="border-b border-border/30 py-2">
-				<!-- Horizontal Scrollable Category Menu with Navigation -->
-				<div class="relative flex items-center" style="scroll-padding: 1rem;">
-					<button
-						class="absolute left-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {carousel.canScrollLeft
-							? 'opacity-100'
-							: 'pointer-events-none opacity-0'}"
-						onclick={carousel.scrollLeft}
-						aria-label="Scroll left"
-					>
-						<ChevronLeft class="h-4 w-4" />
-					</button>
-
-					<div
-						class="scrollbar-hide overflow-x-auto py-2"
-						bind:this={carousel.scrollContainer}
-						onscroll={carousel.updateScrollButtons}
-					>
-						<div class="flex min-w-max gap-2">
-							{#each settingSections as section (section.title)}
-								<button
-									class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors first:ml-4 last:mr-4 hover:bg-accent {activeSection ===
-									section.title
-										? 'bg-accent text-accent-foreground'
-										: 'text-muted-foreground'}"
-									onclick={(e: MouseEvent) => {
-										activeSection = section.title;
-										carousel.scrollToCenter(e.currentTarget as HTMLElement);
-									}}
-								>
-									<section.icon class="h-4 w-4 flex-shrink-0" />
-									<span>{section.title}</span>
-								</button>
-							{/each}
-						</div>
-					</div>
-
-					<button
-						class="absolute right-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {carousel.canScrollRight
-							? 'opacity-100'
-							: 'pointer-events-none opacity-0'}"
-						onclick={carousel.scrollRight}
-						aria-label="Scroll right"
-					>
-						<ChevronRight class="h-4 w-4" />
-					</button>
-				</div>
-			</div>
-		</div>
+		<SettingsChatMobileHeader
+			sections={SETTINGS_CHAT_SECTIONS}
+			isActive={(section: SettingsSection) => section.slug === activeSlug}
+			getHref={getSectionHref ?? ((section: SettingsSection) => `#/settings/chat/${section.slug}`)}
+			bind:this={mobileHeader}
+		/>
 
 		<div class="mx-auto max-w-3xl flex-1">
 			<div class="space-y-6 p-4 md:p-6 md:pt-28">
 				<div class="grid">
 					<div class="mb-6 flex items-center gap-2 border-b border-border/30 pb-6 md:flex">
 						<currentSection.icon class="h-5 w-5" />
-
 						<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 					</div>
 

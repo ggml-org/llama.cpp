@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { afterNavigate, beforeNavigate } from '$app/navigation';
+	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatFormHelperText, ChatForm } from '$lib/components/app';
-	import { draftMessagesStore } from '$lib/stores/draft-messages.svelte';
 	import { onMount } from 'svelte';
+	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
 	interface Props {
 		class?: string;
@@ -39,7 +39,15 @@
 	let previousIsLoading = $derived(isLoading);
 	let previousInitialMessage = $derived(initialMessage);
 
-	// Sync message when initialMessage prop changes (e.g., after draft restoration)
+	const { clearDraft } = useDraftMessages({
+		getChatId: () => chatId,
+		getMessage: () => message,
+		getFiles: () => uploadedFiles,
+		setMessage: (m) => (message = m),
+		setFiles: (f) => (uploadedFiles = f),
+		getInitialMessage: () => initialMessage
+	});
+
 	$effect(() => {
 		if (initialMessage !== previousInitialMessage) {
 			message = initialMessage;
@@ -64,7 +72,7 @@
 
 		message = '';
 		uploadedFiles = [];
-		draftMessagesStore.clearDraftMessage(chatId);
+		clearDraft();
 
 		chatFormRef?.resetTextareaHeight();
 
@@ -85,24 +93,12 @@
 	}
 
 	onMount(() => {
-		const draft = draftMessagesStore.getDraftMessage(chatId);
-
-		if ((draft.message || draft.files.length > 0) && !initialMessage) {
-			message = draft.message;
-			uploadedFiles = draft.files;
-		}
 		setTimeout(() => chatFormRef?.focus(), 10);
-	});
-
-	beforeNavigate(() => {
-		draftMessagesStore.saveDraftMessage(chatId, message, uploadedFiles);
 	});
 
 	afterNavigate((navigation) => {
 		if (navigation?.from != null) {
-			const draft = draftMessagesStore.getDraftMessage(chatId);
-			message = draft.message;
-			uploadedFiles = draft.files;
+			setTimeout(() => chatFormRef?.focus(), 10);
 		}
 
 		setTimeout(() => chatFormRef?.focus(), 10);

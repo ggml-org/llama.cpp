@@ -4,10 +4,10 @@
 		ChatMessageStatistics,
 		CollapsibleContentBlock,
 		MarkdownContent,
-		SyntaxHighlightedCode
+		SyntaxHighlightedCode,
+		ChatMessagePermissionRequest,
+		ChatMessageContinueRequest
 	} from '$lib/components/app';
-	import ChatMessagePermissionRequest from './ChatMessagePermissionRequest.svelte';
-	import ChatMessageContinueRequest from './ChatMessageContinueRequest.svelte';
 
 	import {
 		AgenticSectionType,
