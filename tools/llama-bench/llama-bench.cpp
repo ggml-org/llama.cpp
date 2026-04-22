@@ -335,7 +335,7 @@ struct cmd_params {
     std::vector<int>                 n_gpu_layers;
     std::vector<int>                 n_cpu_moe;
     std::vector<llama_split_mode>    split_mode;
-    std::vector<std::string>         allreduce;
+    std::vector<std::string>         reduction_provider;
     std::vector<int>                 main_gpu;
     std::vector<bool>                no_kv_offload;
     std::vector<bool>                flash_attn;
@@ -380,7 +380,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_gpu_layers         */ { 99 },
     /* n_cpu_moe            */ { 0 },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
-    /* allreduce            */ { "auto" },
+    /* reduction_provider   */ { "auto" },
     /* main_gpu             */ { 0 },
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { false },
@@ -451,7 +451,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ngl, --n-gpu-layers <n>                    (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  -ncmoe, --n-cpu-moe <n>                     (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
     printf("  -sm, --split-mode <none|layer|row|tensor>   (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
-    printf("  --allreduce <auto|nccl|internal>            allreduce provider for tensor split mode (default: %s)\n", join(cmd_params_defaults.allreduce, ",").c_str());
+    printf("  -rp, --reduction-provider <auto|nccl|internal>  allreduce provider for tensor split mode (default: %s)\n", join(cmd_params_defaults.reduction_provider, ",").c_str());
     printf("  -mg, --main-gpu <i>                         (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>                (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>                     (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
@@ -762,7 +762,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.split_mode.insert(params.split_mode.end(), modes.begin(), modes.end());
-            } else if (arg == "--allreduce") {
+            } else if (arg == "-rp" || arg == "--reduction-provider") {
                 if (++i >= argc) {
                     invalid_param = true;
                     break;
@@ -777,7 +777,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 if (invalid_param) {
                     break;
                 }
-                params.allreduce.insert(params.allreduce.end(), p.begin(), p.end());
+                params.reduction_provider.insert(params.reduction_provider.end(), p.begin(), p.end());
             } else if (arg == "-mg" || arg == "--main-gpu") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1084,8 +1084,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.split_mode.empty()) {
         params.split_mode = cmd_params_defaults.split_mode;
     }
-    if (params.allreduce.empty()) {
-        params.allreduce = cmd_params_defaults.allreduce;
+    if (params.reduction_provider.empty()) {
+        params.reduction_provider = cmd_params_defaults.reduction_provider;
     }
     if (params.main_gpu.empty()) {
         params.main_gpu = cmd_params_defaults.main_gpu;
@@ -1158,7 +1158,7 @@ struct cmd_params_instance {
     int                n_gpu_layers;
     int                n_cpu_moe;
     llama_split_mode   split_mode;
-    std::string        allreduce;
+    std::string        reduction_provider;
     int                main_gpu;
     bool               no_kv_offload;
     bool               flash_attn;
@@ -1228,7 +1228,7 @@ struct cmd_params_instance {
 
     bool equal_mparams(const cmd_params_instance & other) const {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
-               split_mode == other.split_mode && allreduce == other.allreduce &&
+               split_mode == other.split_mode && reduction_provider == other.reduction_provider &&
                main_gpu == other.main_gpu && tensor_split == other.tensor_split &&
                use_mmap == other.use_mmap && use_direct_io == other.use_direct_io &&
                devices == other.devices &&
@@ -1265,7 +1265,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & nl : params.n_gpu_layers)
     for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & sm : params.split_mode)
-    for (const auto & ar : params.allreduce)
+    for (const auto & rp : params.reduction_provider)
     for (const auto & mg : params.main_gpu)
     for (const auto & devs : params.devices)
     for (const auto & ts : params.tensor_split)
@@ -1306,7 +1306,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_gpu_layers = */ nl,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
-                /* .allreduce    = */ ar,
+                /* .reduction_provider = */ rp,
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
@@ -1344,7 +1344,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_gpu_layers = */ nl,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
-                /* .allreduce    = */ ar,
+                /* .reduction_provider = */ rp,
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
@@ -1382,7 +1382,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_gpu_layers = */ nl,
                 /* .n_cpu_moe    = */ ncmoe,
                 /* .split_mode   = */ sm,
-                /* .allreduce    = */ ar,
+                /* .reduction_provider = */ rp,
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
@@ -1425,7 +1425,7 @@ struct test {
     int                      n_gpu_layers;
     int                      n_cpu_moe;
     llama_split_mode         split_mode;
-    std::string              allreduce;
+    std::string              reduction_provider;
     int                      main_gpu;
     bool                     no_kv_offload;
     bool                     flash_attn;
@@ -1466,7 +1466,7 @@ struct test {
         n_gpu_layers   = inst.n_gpu_layers;
         n_cpu_moe      = inst.n_cpu_moe;
         split_mode     = inst.split_mode;
-        allreduce      = inst.allreduce;
+        reduction_provider = inst.reduction_provider;
         main_gpu       = inst.main_gpu;
         no_kv_offload  = inst.no_kv_offload;
         flash_attn     = inst.flash_attn;
@@ -1535,7 +1535,7 @@ struct test {
             "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
-            "allreduce",      "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
+            "reduction_provider", "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "use_mmap",      "use_direct_io",  "embeddings",
             "no_op_offload",  "no_host",        "fit_target",     "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_depth",
@@ -1621,7 +1621,7 @@ struct test {
                                             std::to_string(n_gpu_layers),
                                             std::to_string(n_cpu_moe),
                                             split_mode_str(split_mode),
-                                            allreduce,
+                                            reduction_provider,
                                             std::to_string(main_gpu),
                                             std::to_string(no_kv_offload),
                                             std::to_string(flash_attn),
@@ -2275,9 +2275,9 @@ int main(int argc, char ** argv) {
                 params.verbose ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
        }
 
-        // set allreduce provider env var before model load (comm_init reads it)
+        // set reduction provider env var before model load (comm_init reads it)
         {
-            const char * ar_val = (inst.allreduce == "auto") ? "" : inst.allreduce.c_str();
+            const char * ar_val = (inst.reduction_provider == "auto") ? "" : inst.reduction_provider.c_str();
 #ifdef _WIN32
             _putenv_s("GGML_CUDA_ALLREDUCE", ar_val);
 #else
