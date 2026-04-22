@@ -27,6 +27,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-ops.h"
+#include "htp_iface.h"
 #include "worker-pool.h"
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
@@ -115,15 +116,14 @@ AEEResult htp_iface_etm(remote_handle64 handle, uint32_t enable) {
     return err;
 }
 
-AEEResult htp_iface_profiler(remote_handle64 handle, uint32_t mode) {
+AEEResult htp_iface_profiler(remote_handle64 handle, uint32_t mode, const htp_iface_pmu_conf* pmu_conf) {
     struct htp_context * ctx = (struct htp_context *) handle;
     if (!ctx) {
         return AEE_EBADPARM;
     }
 
     if (mode == HTP_PROF_PMU) {
-        // TODO: pass these from the host
-        uint32_t events[] = {0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C};
+        const uint32_t* events = pmu_conf->events;
 
         // Pack 4 event IDs (low 8 bits) into each 32-bit config register
         uint32_t evtcfg = 0, evtcfg1 = 0, cfg = 0, i = 0;
@@ -190,7 +190,7 @@ AEEResult htp_iface_close(remote_handle64 handle) {
     return AEE_SUCCESS;
 }
 
-AEEResult htp_iface_mmap(remote_handle64 handle, int fd, uint32_t size, uint32_t pinned) {
+AEEResult htp_iface_mmap(remote_handle64 handle, uint32 fd, uint32 size, uint32 pinned) {
     struct htp_context * ctx = (struct htp_context *) handle;
     if (!ctx) {
         return AEE_EBADPARM;
@@ -237,7 +237,7 @@ AEEResult htp_iface_mmap(remote_handle64 handle, int fd, uint32_t size, uint32_t
     return AEE_ENOMEMORY;
 }
 
-AEEResult htp_iface_munmap(remote_handle64 handle, int fd) {
+AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
     struct htp_context * ctx = (struct htp_context *) handle;
     if (!ctx) {
         return AEE_EBADPARM;

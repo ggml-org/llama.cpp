@@ -12,6 +12,8 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <sstream>
+#include <iomanip>
 #include <unordered_set>
 #include <unordered_map>
 #include <regex>
@@ -42,14 +44,23 @@
 #include "htp_iface.h"
 #include "htp-drv.h"
 
+using intvec  = std::vector<int>;
+using uintvec = std::vector<unsigned int>;
+using u32vec  = std::vector<uint32_t>;
+
 static size_t opt_ndev         = 1;
 static size_t opt_nhvx         = 0; // use all
 static int    opt_arch         = 0; // autodetect
 static int    opt_etm          = 0;
 static int    opt_verbose      = 0;
-static int    opt_profile      = 0;
+static int    opt_profile      = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
 static int    opt_hostbuf      = 1; // hostbuf ON by default
 static int    opt_use_hmx      = 1; // when set, enable HMX; when 0, use HVX only
+
+// Default PMU events, if profiling with PMU (mode=2) is enabled
+// See https://docs.qualcomm.com/doc/80-N2040-60/topic/pmu-events.html
+//     https://docs.qualcomm.com/doc/80-N2040-61/topic/hvx-pmu-events.html
+static u32vec opt_pmu_evt { 0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C };
 
 // Enable all stages by default
 static int opt_opstage  = HTP_OPSTAGE_QUEUE | HTP_OPSTAGE_COMPUTE;
@@ -2076,7 +2087,10 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     }
 
     if (opt_profile) {
-        err = htp_iface_profiler(this->handle, opt_profile);
+        htp_iface_pmu_conf pmu_conf{};
+        std::copy(opt_pmu_evt.begin(), opt_pmu_evt.end(), pmu_conf.events);
+
+        err = htp_iface_profiler(this->handle, opt_profile, &pmu_conf);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: failed to enable profiling: 0x%08x\n", (unsigned) err);
         }
@@ -2119,7 +2133,8 @@ void ggml_hexagon_session::release() noexcept(true) {
     }
 
     if (opt_profile) {
-        err = htp_iface_profiler(this->handle, 0);
+        htp_iface_pmu_conf pmu_conf{};
+        err = htp_iface_profiler(this->handle, 0, &pmu_conf);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: warn : failed to disable profiling: 0x%08x\n", (unsigned) err);
         }
@@ -3403,6 +3418,26 @@ static void * ggml_backend_hexagon_get_proc_address(ggml_backend_reg_t reg, cons
     return NULL;
 }
 
+template<typename T> std::vector<T> str_to_vec(const char* str) {
+    std::stringstream ss(str);
+    std::vector<T> v;
+    std::string    t;
+
+    while (std::getline(ss, t, ',')) {
+        v.push_back(std::stoul(t, nullptr, 0));
+    }
+
+    return v;
+}
+
+template<typename T, int BASE=10> std::string vec_to_str(std::vector<T> v) {
+    std::stringstream ss;
+    ss << std::setbase(BASE) << std::showbase;
+    for (auto i : v) { ss << i << ','; }
+    auto str = ss.str(); str.pop_back(); // drop last comma
+    return str;
+}
+
 static void ggml_hexagon_init(ggml_backend_reg * reg) {
     // Basic sanity checks to make sure definitions match
     static_assert((unsigned int) HTP_TYPE_Q4_0 == (unsigned int) GGML_TYPE_Q4_0,
@@ -3429,18 +3464,30 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
 
     auto RE_ICASE = std::regex_constants::icase;
 
-    opt_opfilter     = str_opfilter     ? new std::regex(str_opfilter, RE_ICASE) : NULL;
-    opt_verbose      = str_verbose ? atoi(str_verbose) : 0;
-    opt_hostbuf      = str_hostbuf ? atoi(str_hostbuf) : opt_hostbuf;
-    opt_opstage      = str_opstage ? strtoul(str_opstage, NULL, 0) : opt_opstage;
-    opt_opbatch      = str_opbatch ? strtoul(str_opbatch, NULL, 0) : opt_opbatch;
-    opt_opqueue      = str_opqueue ? strtoul(str_opqueue, NULL, 0) : opt_opqueue;
-    opt_profile      = str_profile ? atoi(str_profile) : 0;
-    opt_etm          = str_etm     ? atoi(str_etm)     : 0;
-    opt_nhvx         = str_nhvx    ? strtoul(str_nhvx, NULL, 0) : opt_nhvx;
-    opt_use_hmx      = str_use_hmx ? atoi(str_use_hmx) : opt_use_hmx;
-    opt_ndev         = str_ndev    ? strtoul(str_ndev, NULL, 0) : opt_ndev;
-    opt_hostbuf      = str_hostbuf ? atoi(str_hostbuf) : opt_hostbuf;
+    opt_opfilter     = str_opfilter ? new std::regex(str_opfilter, RE_ICASE) : NULL;
+    opt_verbose      = str_verbose  ? atoi(str_verbose)             : 0;
+    opt_hostbuf      = str_hostbuf  ? atoi(str_hostbuf)             : opt_hostbuf;
+    opt_opstage      = str_opstage  ? strtoul(str_opstage, NULL, 0) : opt_opstage;
+    opt_opbatch      = str_opbatch  ? strtoul(str_opbatch, NULL, 0) : opt_opbatch;
+    opt_opqueue      = str_opqueue  ? strtoul(str_opqueue, NULL, 0) : opt_opqueue;
+    opt_etm          = str_etm      ? atoi(str_etm)                 : 0;
+    opt_nhvx         = str_nhvx     ? strtoul(str_nhvx, NULL, 0)    : opt_nhvx;
+    opt_use_hmx      = str_use_hmx  ? atoi(str_use_hmx)             : opt_use_hmx;
+    opt_ndev         = str_ndev     ? strtoul(str_ndev, NULL, 0)    : opt_ndev;
+    opt_hostbuf      = str_hostbuf  ? atoi(str_hostbuf)             : opt_hostbuf;
+
+    if (str_profile) {
+        opt_pmu_evt = [&]() -> std::vector<uint32_t> {
+            auto v  = str_to_vec<uint32_t>(str_profile);
+            switch (v.size()) {
+                case 1:  opt_profile = v[0]; return opt_pmu_evt; // mode with default pmu events
+                case 8:  opt_profile = 2;    return v;           // mode with custom  pmu events
+                default: opt_profile = 0;    return {};          // garbage input
+            }}();
+        if (opt_profile == 1) opt_pmu_evt = {};
+        GGML_LOG_INFO("ggml-hex: Profiling mode %u : pmu-evt [ %s ]\n", opt_profile,
+                vec_to_str<uint32_t, 16>(opt_pmu_evt).c_str());
+    }
 
     if (opt_ndev > GGML_HEXAGON_MAX_SESSIONS) {
         opt_ndev = GGML_HEXAGON_MAX_SESSIONS;
