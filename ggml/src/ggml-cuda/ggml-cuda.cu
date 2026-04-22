@@ -3567,7 +3567,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         const ggml_tensor * unary = cgraph->nodes[node_idx];
         const ggml_tensor * sqr   = cgraph->nodes[node_idx+1];
 
-        if (ggml_get_unary_op(unary) != unary_ops.begin()[0]) {
+        if (ggml_get_unary_op(unary) != GGML_UNARY_OP_RELU) {
             return false;
         }
 
