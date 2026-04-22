@@ -165,10 +165,6 @@ var<workgroup> mask_shmem: array<f16, KV_TILE>;
 var<workgroup> inter_shmem: array<f16, KV_TILE>;
 
 // Storage for row max and exp sum during online softmax
-var<workgroup> row_max_shmem: f32;
-var<workgroup> exp_sum_shmem: f32;
-var<workgroup> blk_state_wg: u32;
-
 fn calc_softmax_term(kv_idx: u32, slope: f32, has_bias: bool, apply_mask: bool) -> f32 {
     var v = select(FLOAT_MIN,
                    f32(inter_shmem[kv_idx]) * params.scale,
@@ -192,12 +188,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     @builtin(subgroup_size) subgroup_size: u32,
     @builtin(num_subgroups) num_subgroups: u32,
     @builtin(subgroup_invocation_id) sg_inv_id: u32) {
-
-    // Vec path processes exactly one query row per workgroup.
-    if (local_id.x == 0u) {
-        row_max_shmem = FLOAT_MIN;
-        exp_sum_shmem = 0.0;
-    }
+    // Vec path processes exactly one query row per workgroup, so subgroup 0 can
+    // keep the running softmax state in private storage.
+    var row_max = FLOAT_MIN;
+    var exp_sum = 0.0;
 
     for (var i = local_id.x; i < HEAD_DIM_V; i += WG_SIZE) {
         o_shmem[i] = 0.0;
@@ -260,11 +254,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 #else
         let blk_state_local = 1u;
 #endif
-        if (local_id.x == 0u) {
-            blk_state_wg = blk_state_local;
-        }
-        workgroupBarrier();
-        let blk_state = blk_state_wg;
+        let blk_state = blk_state_local;
         let skip_tile = blk_state == 0u;
         for (var elem_idx = local_id.x; elem_idx < KV_TILE; elem_idx += WG_SIZE) {
             inter_shmem[elem_idx] = f16(0.0);
@@ -420,7 +410,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
       // online softmax
       if (!skip_tile && subgroup_id == 0u && q_row_start < params.seq_len_q) {
-          var prev_max = row_max_shmem;
+          var prev_max = row_max;
           var final_max = prev_max;
           // pass 1: compute final max across the full KV tile in chunks
           for (var kv_offset = 0u; kv_offset < KV_TILE; kv_offset += subgroup_size) {
@@ -448,10 +438,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           let cur_exp = exp(prev_max - final_max);
 
-          if (sg_inv_id == 0u) {
-              row_max_shmem = final_max;
-              exp_sum_shmem = exp_sum_shmem * cur_exp + total_exp_term;
-          }
+          row_max = final_max;
+          exp_sum = exp_sum * cur_exp + total_exp_term;
 
           for (var elem_idx = sg_inv_id; elem_idx < HEAD_DIM_V; elem_idx += subgroup_size) {
               o_shmem[elem_idx] = f16(f32(o_shmem[elem_idx]) * cur_exp);
@@ -607,7 +595,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 #ifdef SINKS
     // Sinks are global terms and must be applied exactly once across split workgroups.
     if (iwg == 0u && subgroup_id == 0u && q_row_start < params.seq_len_q) {
-        var prev_max = row_max_shmem;
+        var prev_max = row_max;
 
         // for non-sink threads, exp(FLOAT_MIN) effectively zeroes out their contribution to the sum
         let sink_val = select(FLOAT_MIN, sinks[params.offset_sinks + head_idx], sg_inv_id == 0u);
@@ -617,10 +605,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
         let sink_exp_sum = subgroupAdd(sink_exp);
 
-        if (sg_inv_id == 0u) {
-            row_max_shmem = new_max;
-            exp_sum_shmem = exp_sum_shmem * max_exp + sink_exp_sum;
-        }
+        row_max = new_max;
+        exp_sum = exp_sum * max_exp + sink_exp_sum;
 
         for (var elem_idx = sg_inv_id; elem_idx < HEAD_DIM_V; elem_idx += subgroup_size) {
             o_shmem[elem_idx] = f16(f32(o_shmem[elem_idx]) * max_exp);
@@ -631,7 +617,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let rows_per_batch = params.n_heads * params.seq_len_q;
     if (subgroup_id == 0u && q_row_start < params.seq_len_q) {
         if (params.nwg == 1u) {
-            let exp_sum = exp_sum_shmem;
             let scale = select(0.0, 1.0 / exp_sum, exp_sum != 0.0);
             let row_base: u32 = params.offset_dst + batch_idx * dst3_stride + q_row_start * dst2_stride +
                                 head_idx * HEAD_DIM_V;
@@ -664,8 +649,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             }
 
             if (sg_inv_id == 0u) {
-                tmp[tmp_row_stats_base + 0u] = exp_sum_shmem;
-                tmp[tmp_row_stats_base + 1u] = row_max_shmem;
+                tmp[tmp_row_stats_base + 0u] = exp_sum;
+                tmp[tmp_row_stats_base + 1u] = row_max;
             }
         }
     }
