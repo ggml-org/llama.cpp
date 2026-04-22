@@ -16,6 +16,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	showMessageStats: true,
 	askForTitleConfirmation: false,
 	titleGenerationUseFirstLine: false,
+	titleGenerationUseLLM: false,
 	pasteLongTextToFileLen: 2500,
 	copyTextAttachmentsAsPlainText: false,
 	pdfAsImage: false,
@@ -121,6 +122,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Ask for confirmation before automatically changing conversation title when editing the first message.',
 	titleGenerationUseFirstLine:
 		'Use only the first non-empty line of the prompt to generate the conversation title.',
+	titleGenerationUseLLM:
+		'Use the LLM to automatically generate conversation titles based on the first message exchange.',
 	pdfAsImage:
 		'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
 	disableAutoScroll:

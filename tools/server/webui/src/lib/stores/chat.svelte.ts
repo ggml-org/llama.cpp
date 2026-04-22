@@ -574,6 +574,78 @@ class ChatStore {
 				conversationsStore.activeMessages.slice(0, -1),
 				assistantMessage
 			);
+
+			if (config().titleGenerationUseLLM) {
+				const currentMessages = conversationsStore.activeMessages;
+				const assistantMessages = currentMessages.filter((m) => m.role === MessageRole.ASSISTANT);
+				if (assistantMessages.length === 1) {
+					const firstUserMessage = currentMessages.find((m) => m.role === MessageRole.USER);
+					if (firstUserMessage) {
+						const titlePrompt = `Based on the following interaction, generate a short, concise title (maximum 6-8 words) that captures the main topic. Return ONLY the title text, nothing else. Do not use quotes.
+
+User: ${firstUserMessage.content}
+
+Assistant: ${assistantMessage.content}
+
+Title:`;
+
+						let titleResponse = '';
+						const titleAbort = new AbortController();
+						const effectiveModel =
+							isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
+
+						await ChatService.sendMessage(
+							[
+								{
+									id: 'title-gen',
+									convId: 'temp',
+									type: MessageType.TEXT,
+									role: MessageRole.USER,
+									content: titlePrompt,
+									timestamp: Date.now(),
+									toolCalls: '',
+									children: [],
+									extra: []
+								}
+							],
+							{
+								stream: true,
+								model: effectiveModel || undefined,
+								onChunk: (chunk: string) => {
+									titleResponse += chunk;
+								},
+								onError: (error: Error) => {
+									console.error('Title generation failed:', error);
+								}
+							},
+							'title-gen',
+							titleAbort.signal
+						);
+
+						// Strip thinking blocks from the full output
+						let cleanTitle = titleResponse
+							.replace(/<think>[^]*?<\/think>/gi, '')
+							.replace(/<thinking[^]*?<\/thinking>/gi, '')
+							.trim();
+						cleanTitle = cleanTitle
+							.replace(/^(Title:|Subject:|Topic:)\s*/i, '')
+							.replace(/^["]|["]$/g, '')
+							.trim();
+						if (cleanTitle.length > 60) {
+							cleanTitle = cleanTitle.substring(0, 57) + '...';
+						}
+						if (!cleanTitle || cleanTitle.length < 3) {
+							const firstLine = firstUserMessage.content
+								.split('\n')
+								.find((l) => l.trim().length > 0);
+							cleanTitle = firstLine ? firstLine.trim().substring(0, 60) : 'New Chat';
+						}
+						if (cleanTitle && cleanTitle.length >= 3) {
+							await conversationsStore.updateConversationName(currentConv.id, cleanTitle);
+						}
+					}
+				}
+			}
 		} catch (error) {
 			if (isAbortError(error)) {
 				this.setChatLoading(currentConv.id, false);
