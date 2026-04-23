@@ -221,6 +221,27 @@ export { default as ChatFormActionSubmit } from './ChatForm/ChatFormActions/Chat
 export { default as ChatFormActionToolsSubmenu } from './ChatForm/ChatFormActions/ChatFormActionToolsSubmenu.svelte';
 
 /**
+ * Dropdown submenu for managing MCP servers in the chat form.
+ *
+ * Displays a searchable list of enabled MCP servers with toggle switches
+ * to enable/disable each server for chat. Shows server favicon, health status,
+ * and a "Manage MCP Servers" settings link.
+ *
+ * Features:
+ * - Search/filter servers by name or URL
+ * - Per-server toggle to enable/disable for chat
+ * - Health check indicator (shows "Error" badge for failed servers)
+ * - Server favicon display
+ * - Settings link to manage MCP server configuration
+ *
+ * @example
+ * ```svelte
+ * <ChatFormActionMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
+ * ```
+ */
+export { default as ChatFormActionMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionMcpServersSubmenu.svelte';
+
+/**
  * Hidden file input element for programmatic file selection.
  */
 export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileInputInvisible.svelte';

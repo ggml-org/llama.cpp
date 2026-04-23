@@ -197,6 +197,7 @@
 				{onFileUpload}
 				{onSystemPromptClick}
 				{onMcpPromptClick}
+				onMcpSettingsClick={() => goto('#/settings/mcp')}
 				{onMcpResourcesClick}
 			/>
 		{:else}

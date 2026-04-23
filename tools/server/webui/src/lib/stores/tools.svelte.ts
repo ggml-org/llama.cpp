@@ -15,6 +15,7 @@ class ToolsStore {
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
 	private _disabledTools = $state(new SvelteSet<string>());
+	private _toolsEndpointUnreachable = $state(false);
 
 	constructor() {
 		try {
@@ -249,6 +250,10 @@ class ToolsStore {
 		return this._error;
 	}
 
+	get isToolsEndpointUnreachable(): boolean {
+		return this._toolsEndpointUnreachable;
+	}
+
 	get disabledTools(): SvelteSet<string> {
 		return this._disabledTools;
 	}
@@ -390,12 +395,18 @@ class ToolsStore {
 
 		this._loading = true;
 		this._error = null;
+		this._toolsEndpointUnreachable = false;
 
 		try {
 			const toolInfos = await ToolsService.list();
 			this._builtinTools = toolInfos.map((info) => info.definition);
 		} catch (err) {
-			this._error = err instanceof Error ? err.message : String(err);
+			const errorMessage = err instanceof Error ? err.message : String(err);
+			this._error = errorMessage;
+			// 404 from /tools means the server was started without --tools
+			if (errorMessage.includes('404') || errorMessage.toLowerCase().includes('not found')) {
+				this._toolsEndpointUnreachable = true;
+			}
 			console.error('[ToolsStore] Failed to fetch built-in tools:', err);
 		} finally {
 			this._loading = false;

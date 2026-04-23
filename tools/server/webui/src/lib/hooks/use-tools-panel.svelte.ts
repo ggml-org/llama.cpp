@@ -10,6 +10,7 @@ export interface UseToolsPanelReturn {
 	readonly groups: ToolGroup[];
 	readonly activeGroups: ToolGroup[];
 	readonly totalToolCount: number;
+	readonly noToolsInfoMessage: string | null;
 	getGroupCheckedState(group: ToolGroup): { checked: boolean; indeterminate: boolean };
 	getEnabledToolCount(group: ToolGroup): number;
 	getFavicon(group: { source: ToolSource; label: string }): string | null;
@@ -38,6 +39,17 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		)
 	);
 	const totalToolCount = $derived(activeGroups.reduce((n, g) => n + g.tools.length, 0));
+	const noToolsInfoMessage = $derived.by(() => {
+		if (toolsStore.loading) return null;
+		if (toolsStore.toolGroups.length > 0) return null;
+		// Tools endpoint is unreachable (404) — server started without --tools
+		if (toolsStore.isToolsEndpointUnreachable) {
+			return 'To enable Built-In Tools you need to run llama-server with --tools all or --tools <name> flag. To see MCP Tools you need to add / enable MCP Server(s).';
+		}
+		// Other errors — return null so UI shows "Failed to load tools"
+		if (toolsStore.error) return null;
+		return 'To enable Built-In Tools you need to run llama-server with --tools all or --tools <name> flag. To see MCP Tools you need to add / enable MCP Server(s).';
+	});
 
 	function getGroupCheckedState(group: ToolGroup): { checked: boolean; indeterminate: boolean } {
 		return {
@@ -95,6 +107,9 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		},
 		get totalToolCount() {
 			return totalToolCount;
+		},
+		get noToolsInfoMessage() {
+			return noToolsInfoMessage;
 		},
 		getGroupCheckedState,
 		getEnabledToolCount,

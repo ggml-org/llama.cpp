@@ -8,7 +8,10 @@
 	import { DialogMcpServerAddNew } from '$lib/components/app/dialogs';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { fade } from 'svelte/transition';
+	import { onMount } from 'svelte';
 	import McpLogo from '../mcp/McpLogo.svelte';
+	import { page } from '$app/state';
+	import { replaceState } from '$app/navigation';
 
 	interface Props {
 		class?: string;
@@ -19,6 +22,18 @@
 	let servers = $derived(mcpStore.getServersSorted());
 
 	let initialLoadComplete = $state(false);
+	let isAddingServer = $state(false);
+
+	onMount(() => {
+		if (page.url.searchParams.has('add')) {
+			isAddingServer = true;
+
+			const newUrl = new URL(page.url);
+			newUrl.searchParams.delete('add');
+
+			replaceState(newUrl, {});
+		}
+	});
 
 	$effect(() => {
 		if (initialLoadComplete) return;
@@ -37,8 +52,6 @@
 			initialLoadComplete = true;
 		}
 	});
-
-	let isAddingServer = $state(false);
 </script>
 
 <div in:fade={{ duration: 150 }} class="max-h-full overflow-auto">

@@ -1,13 +1,15 @@
 <script lang="ts">
-	import { PencilRuler, ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte';
+	import { PencilRuler, ChevronDown, ChevronRight, Loader2, Info } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 
 	const toolsPanel = useToolsPanel();
+	const hasMcpServersAvailable = $derived(mcpStore.getServersSorted().length > 0);
 </script>
 
 <DropdownMenu.Sub onOpenChange={(open) => open && toolsPanel.handleOpen()}>
@@ -18,17 +20,43 @@
 	</DropdownMenu.SubTrigger>
 
 	<DropdownMenu.SubContent class="w-72 p-0">
-		{#if toolsPanel.totalToolCount === 0 && toolsPanel.groups.length === 0}
-			<div class="px-3 py-4 text-center text-sm text-muted-foreground">
-				{#if toolsStore.loading}
+		{#if toolsPanel.totalToolCount === 0}
+			{#if toolsStore.loading}
+				<div class="px-3 py-4 text-center text-sm text-muted-foreground">
 					<Loader2 class="mx-auto mb-1 h-4 w-4 animate-spin" />
 					Loading tools...
-				{:else if toolsStore.error}
-					Failed to load tools
-				{:else}
-					No tools available
-				{/if}
-			</div>
+				</div>
+			{:else if toolsStore.isToolsEndpointUnreachable}
+				<div class="grid gap-2.5 px-3 py-4 text-sm text-muted-foreground">
+					<span class="flex gap-2">
+						<Info class="mt-0.5 h-4 w-4 shrink-0" />
+
+						<span
+							>Run llama-server with <code>--tools</code> flag to enable
+							<strong>Built-in Tools</strong>.</span
+						>
+					</span>
+
+					<span class="flex gap-2">
+						<Info class="mt-0.5 h-4 w-4 shrink-0" />
+
+						<span
+							>{hasMcpServersAvailable ? 'Enable' : 'Add'} MCP Server(s) to access
+							<strong>MCP Tools</strong>.</span
+						>
+					</span>
+				</div>
+			{:else if toolsStore.error}
+				<div class="px-3 py-4 text-center text-sm text-muted-foreground">Failed to load tools</div>
+			{:else if toolsPanel.noToolsInfoMessage}
+				<div class="flex gap-2 px-3 py-4 text-sm text-muted-foreground">
+					<Info class="mt-0.5 h-4 w-4 shrink-0" />
+
+					<span>{toolsPanel.noToolsInfoMessage}</span>
+				</div>
+			{:else}
+				<div class="px-3 py-4 text-center text-sm text-muted-foreground">No tools available</div>
+			{/if}
 		{:else}
 			<div class="max-h-80 overflow-y-auto p-2 pr-1">
 				{#each toolsPanel.activeGroups as group (group.label)}
