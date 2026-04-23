@@ -249,7 +249,16 @@ build: 6a8cf8914 (6733)
   ```
 
 - `GGML_HEXAGON_PROFILE=1`
-  Generates a host-side profile for the ggml-hexagon Ops.
+  Enables Op profiling:
+
+  - `1` Basic profile with per-op `usecs` and `cycles` counters
+  - `2` Extended profile with per-op `usecs`, `cycles` and default PMU counter data
+  - `0x1,...,0x8` Extended profile with per-op `usecs`, `cycles` and custom PMU counter data
+
+  The logging output can be either saved into a file for post-processing or it can be piped directly into the post-processing tool to generate the report.
+  Examples:
+
+      `GGML_HEXAGON_PROFILE=1 llama-completion ... |& ./scripts/snapdragon/ggml-hexagon-profile.py -`
 
 - `GGML_HEXAGON_OPSTAGE=0x0`
   Allows enabling specific stages of the Op processing pipeline:
