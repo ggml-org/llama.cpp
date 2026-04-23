@@ -69,7 +69,7 @@ struct context {
 
     context(const context & parent) : context() {
         // inherit variables (for example, when entering a new scope)
-        auto & pvar = parent.env->as_ordered_object();
+        const auto & pvar = parent.env->as_ordered_object();
         for (const auto & pair : pvar) {
             set_val(pair.first, pair.second);
         }
@@ -107,7 +107,12 @@ struct statement {
     virtual ~statement() = default;
     virtual std::string type() const { return "Statement"; }
     // execute_impl must be overridden by derived classes
-    virtual value execute_impl(context &) { throw std::runtime_error("cannot exec " + type()); }
+    virtual value execute_impl(context & /* ctx */) {
+        if ((false)) {
+            return {};
+        }
+        throw std::runtime_error("cannot exec " + type());
+    }
     // execute is the public method to execute a statement with error handling
     value execute(context &);
 };
@@ -143,7 +148,7 @@ struct program : public statement {
     program() = default;
     explicit program(statements && body) : body(std::move(body)) {}
     std::string type() const override { return "Program"; }
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context & /* ctx */) override {
         throw std::runtime_error("Cannot execute program directly, use jinja::runtime instead");
     }
 };
@@ -195,7 +200,7 @@ struct break_statement : public statement {
         }
     };
 
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context & /* ctx */) override {
         throw break_statement::signal();
     }
 };
@@ -209,7 +214,7 @@ struct continue_statement : public statement {
         }
     };
 
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context & /* ctx */) override {
         throw continue_statement::signal();
     }
 };
@@ -217,7 +222,7 @@ struct continue_statement : public statement {
 // do nothing
 struct noop_statement : public statement {
     std::string type() const override { return "Noop"; }
-    value execute_impl(context &) override {
+    value execute_impl(context & /* ctx */) override {
         return mk_val<value_undefined>();
     }
 };
@@ -245,7 +250,9 @@ struct macro_statement : public statement {
     macro_statement(statement_ptr && name, statements && args, statements && body)
         : name(std::move(name)), args(std::move(args)), body(std::move(body)) {
         chk_type<identifier>(this->name);
-        for (const auto& arg : this->args) chk_type<expression>(arg);
+        for (const auto & arg : this->args) {
+            chk_type<expression>(arg);
+        }
     }
 
     std::string type() const override { return "Macro"; }
@@ -256,7 +263,7 @@ struct comment_statement : public statement {
     std::string val;
     explicit comment_statement(const std::string & v) : val(v) {}
     std::string type() const override { return "Comment"; }
-    value execute_impl(context &) override {
+    value execute_impl(context & /* ctx */) override {
         return mk_val<value_undefined>();
     }
 };
@@ -266,7 +273,7 @@ struct comment_statement : public statement {
 // Represents an omitted expression in a computed member, e.g. `a[]`.
 struct blank_expression : public expression {
     std::string type() const override { return "BlankExpression"; }
-    value execute_impl(context &) override {
+    value execute_impl(context & /* ctx */) override {
         return mk_val<value_undefined>();
     }
 };
@@ -292,7 +299,9 @@ struct call_expression : public expression {
     call_expression(statement_ptr && callee, statements && args)
         : callee(std::move(callee)), args(std::move(args)) {
         chk_type<expression>(this->callee);
-        for (const auto& arg : this->args) chk_type<expression>(arg);
+        for (const auto & arg : this->args) {
+            chk_type<expression>(arg);
+        }
     }
     std::string type() const override { return "CallExpression"; }
     value execute_impl(context & ctx) override;
@@ -314,7 +323,7 @@ struct integer_literal : public expression {
     int64_t val;
     explicit integer_literal(int64_t val) : val(val) {}
     std::string type() const override { return "IntegerLiteral"; }
-    value execute_impl(context &) override {
+    value execute_impl(context & /* ctx */) override {
         return mk_val<value_int>(val);
     }
 };
@@ -323,7 +332,7 @@ struct float_literal : public expression {
     double val;
     explicit float_literal(double val) : val(val) {}
     std::string type() const override { return "FloatLiteral"; }
-    value execute_impl(context &) override {
+    value execute_impl(context & /* ctx */) override {
         return mk_val<value_float>(val);
     }
 };
@@ -332,7 +341,7 @@ struct string_literal : public expression {
     std::string val;
     explicit string_literal(const std::string & val) : val(val) {}
     std::string type() const override { return "StringLiteral"; }
-    value execute_impl(context &) override {
+    value execute_impl(context & /* ctx */) override {
         return mk_val<value_string>(val);
     }
 };
@@ -340,7 +349,9 @@ struct string_literal : public expression {
 struct array_literal : public expression {
     statements val;
     explicit array_literal(statements && val) : val(std::move(val)) {
-        for (const auto& item : this->val) chk_type<expression>(item);
+        for (const auto & item : this->val) {
+            chk_type<expression>(item);
+        }
     }
     std::string type() const override { return "ArrayLiteral"; }
     value execute_impl(context & ctx) override {
@@ -355,7 +366,9 @@ struct array_literal : public expression {
 struct tuple_literal : public expression {
     statements val;
     explicit tuple_literal(statements && val) : val(std::move(val)) {
-        for (const auto& item : this->val) chk_type<expression>(item);
+        for (const auto & item : this->val) {
+            chk_type<expression>(item);
+        }
     }
     std::string type() const override { return "TupleLiteral"; }
     value execute_impl(context & ctx) override {
@@ -363,7 +376,7 @@ struct tuple_literal : public expression {
         for (const auto & item_stmt : val) {
             arr->push_back(item_stmt->execute(ctx));
         }
-        return mk_val<value_tuple>(std::move(arr->as_array()));
+        return mk_val<value_tuple>(arr->as_array());
     }
 };
 
@@ -509,7 +522,7 @@ struct slice_expression : public expression {
         chk_type<expression>(this->step_expr);
     }
     std::string type() const override { return "SliceExpression"; }
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context & /* ctx */) override {
         throw std::runtime_error("must be handled by MemberExpression");
     }
 };
@@ -543,7 +556,9 @@ struct call_statement : public statement {
     call_statement(statement_ptr && call, statements && caller_args, statements && body)
         : call(std::move(call)), caller_args(std::move(caller_args)), body(std::move(body)) {
         chk_type<call_expression>(this->call);
-        for (const auto & arg : this->caller_args) chk_type<expression>(arg);
+        for (const auto & arg : this->caller_args) {
+            chk_type<expression>(arg);
+        }
     }
     std::string type() const override { return "CallStatement"; }
 };

@@ -852,6 +852,7 @@ const func_builtins & value_string_t::get_builtins() const {
             return res;
         }},
         {"join", [](const func_args &) -> value {
+            if ((false)) return {};
             throw not_implemented_exception("String join builtin not implemented");
         }},
     };
@@ -1085,6 +1086,7 @@ const func_builtins & value_array_t::get_builtins() const {
             return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
         {"unique", [](const func_args &) -> value {
+            if ((false)) return {};
             throw not_implemented_exception("Array unique builtin not implemented");
         }},
     };
@@ -1184,6 +1186,7 @@ const func_builtins & value_object_t::get_builtins() const {
             return result;
         }},
         {"join", [](const func_args &) -> value {
+            if ((false)) return {};
             throw not_implemented_exception("object join not implemented");
         }},
     };
