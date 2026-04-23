@@ -946,6 +946,9 @@ static void fa_phase_softmax_and_build_d(struct hmx_fa_context * factx,
     // barrier implicit in worker_pool_run_func return
 
     fa_ml_update_and_build_d(factx, sargs->n_rows_g, n_row_tiles, n_row_tiles_g_br);
+
+    // TODO: Can we find a lighter barrier?
+    __asm__ __volatile__("" ::: "memory");
 }
 
 // ============================================================================
