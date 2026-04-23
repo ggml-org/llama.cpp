@@ -2,7 +2,6 @@
 	import { FolderOpen, ChevronDown, ChevronRight, Loader2, Braces } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -126,11 +125,11 @@
 			{/if}
 
 			<button
-				class={cn(
+				class={[
 					'flex flex-1 items-center gap-2 rounded px-2 py-1 text-left text-sm transition-colors',
 					'hover:bg-muted/50',
 					isSelected && 'bg-muted'
-				)}
+				]}
 				onclick={(e: MouseEvent) => handleResourceClick(resource, e)}
 				title={resourceDisplayName}
 			>
@@ -213,11 +212,11 @@
 
 					{#each templateInfos as template (template.uriTemplate)}
 						<button
-							class={cn(
+							class={[
 								'flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm transition-colors',
 								'hover:bg-muted/50',
 								selectedTemplateUri === template.uriTemplate && 'bg-muted'
-							)}
+							]}
 							onclick={() => onTemplateSelect(template)}
 							title={template.uriTemplate}
 						>

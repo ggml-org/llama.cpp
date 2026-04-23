@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpResources, mcpResourcesLoading } from '$lib/stores/mcp-resources.svelte';
 	import type { MCPServerResources, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
@@ -121,7 +120,7 @@
 	}
 </script>
 
-<div class={cn('flex flex-col gap-2', className)}>
+<div class={['flex flex-col gap-2', className]}>
 	<McpResourceBrowserHeader
 		{isLoading}
 		onRefresh={handleRefresh}

@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { Loader2, AlertCircle } from '@lucide/svelte';
-	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import type { MCPResourceAttachment } from '$lib/types';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -34,12 +33,12 @@
 	<Tooltip.Trigger>
 		<button
 			type="button"
-			class={cn(
+			class={[
 				'flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.75 text-sm transition-colors',
 				getStatusClass(attachment),
 				onclick && 'cursor-pointer hover:bg-muted/50',
 				className
-			)}
+			]}
 			{onclick}
 			disabled={!onclick}
 		>

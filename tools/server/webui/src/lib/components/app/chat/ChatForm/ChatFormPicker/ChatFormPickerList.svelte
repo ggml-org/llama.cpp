@@ -60,8 +60,7 @@
 
 	<div
 		bind:this={listContainer}
-		class="{CHAT_FORM_POPOVER_MAX_HEIGHT} p-2"
-		class:pt-13={showSearchInput}
+		class={[`${CHAT_FORM_POPOVER_MAX_HEIGHT} p-2`, showSearchInput && 'pt-13']}
 	>
 		{#if isLoading}
 			{#if skeleton}

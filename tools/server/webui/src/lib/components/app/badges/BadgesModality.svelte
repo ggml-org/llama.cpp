@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { Eye, Mic } from '@lucide/svelte';
 	import { ModelModality } from '$lib/enums';
-	import { cn } from '$lib/components/ui/utils';
 
 	interface Props {
 		modalities: ModelModality[];
@@ -13,7 +12,12 @@
 
 {#each modalities as modality (modality)}
 	{#if modality === ModelModality.VISION || modality === ModelModality.AUDIO}
-		<span class={cn('inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs font-medium', className)}>
+		<span
+			class={[
+				'inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs font-medium',
+				className
+			]}
+		>
 			{#if modality === ModelModality.VISION}
 				<Eye class="h-3 w-3" />
 				Vision
