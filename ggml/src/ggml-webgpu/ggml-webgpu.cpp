@@ -2805,7 +2805,10 @@ static void ggml_backend_webgpu_collect_profile_results(webgpu_context &        
 }
 #endif
 
+// Don't bother checking set_rows index overflow for now, since practically the WebGPU doesn't need to support
+// models that would require it right now.
 static void ggml_backend_webgpu_check_set_rows(webgpu_context & ctx, uint32_t & num_inflight_batches) {
+#ifdef GGML_WEBGPU_CHECK_SET_ROWS
     wgpu::CommandEncoder encoder = ctx->global_ctx->device.CreateCommandEncoder();
     encoder.CopyBufferToBuffer(ctx->set_rows_dev_error_buf, 0, ctx->set_rows_host_error_buf, 0,
                                ctx->set_rows_host_error_buf.GetSize());
@@ -2818,6 +2821,10 @@ static void ggml_backend_webgpu_check_set_rows(webgpu_context & ctx, uint32_t & 
         GGML_ABORT("ggml_webgpu: SET_ROWS index > 2^32, unsupported.");
     }
     ctx->set_rows_host_error_buf.Unmap();
+#else
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(num_inflight_batches);
+#endif
 }
 
 static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
@@ -2902,8 +2909,6 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     if (contains_set_rows) {
         ggml_backend_webgpu_check_set_rows(ctx, num_inflight_batches);
     }
-
-    ggml_backend_webgpu_wait_queue(ctx->global_ctx);
 
     WEBGPU_CPU_PROFILE_TOTAL_END(graph_compute, ctx->global_ctx);
     return GGML_STATUS_SUCCESS;
