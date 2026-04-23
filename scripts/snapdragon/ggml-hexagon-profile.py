@@ -60,7 +60,7 @@ def parse_log(file_path, pmu_index=None):
             'pmu_val': pmu_val
         })
     f.close()
-    
+
     return all_ops
 
 def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
@@ -124,7 +124,7 @@ def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
 
         if target_width == 0:
             continue
-        
+
         final_headers.append(header_text)
         final_keys.append(data_key)
         final_widths.append(target_width)
@@ -152,7 +152,7 @@ def main():
     parser.add_argument("--sort", type=str, default="max-usec", choices=list(COL_MAP.keys()))
     parser.add_argument("--pmu-index", type=int)
     parser.add_argument("--pmu-name", type=str)
-    parser.add_argument("--width", action='append', help="Override column width, e.g. --width dims:50")
+    parser.add_argument("--width", action='append', default=['dims:40'], help="Override column width, e.g. --width dims:50")
     
     args = parser.parse_args()
 
