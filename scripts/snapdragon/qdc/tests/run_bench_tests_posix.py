@@ -1,7 +1,3 @@
-# ---------------------------------------------------------------------
-# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
-# SPDX-License-Identifier: BSD-3-Clause
-# ---------------------------------------------------------------------
 """
 On-device bench and completion test runner for llama.cpp (CPU, GPU, NPU backends).
 

@@ -1,7 +1,3 @@
-# ---------------------------------------------------------------------
-# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
-# SPDX-License-Identifier: BSD-3-Clause
-# ---------------------------------------------------------------------
 """Run llama.cpp Hexagon Android tests in a single QDC Appium job.
 
 Bundles test scripts into one artifact and submits a single QDC job:

@@ -1,7 +1,3 @@
-# ---------------------------------------------------------------------
-# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
-# SPDX-License-Identifier: BSD-3-Clause
-# ---------------------------------------------------------------------
 """
 On-device test-backend-ops runner for llama.cpp (HTP0 backend).
 

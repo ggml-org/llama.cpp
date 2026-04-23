@@ -1,7 +1,3 @@
-# ---------------------------------------------------------------------
-# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
-# SPDX-License-Identifier: BSD-3-Clause
-# ---------------------------------------------------------------------
 """Shared pytest fixtures for QDC on-device test runners."""
 
 import os
