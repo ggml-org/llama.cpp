@@ -30,9 +30,7 @@
 // ---------------------------------------------------------------------------
 
 static __device__ __forceinline__ void ggml_cuda_ar_signal_set(int * p) {
-    __threadfence_system();   // ensure all prior writes (D2H data) are globally visible
     *(volatile int *)p = 1;
-    __threadfence_system();   // ensure the signal itself is globally visible
 }
 static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
     return *(const volatile int *)p;
@@ -129,6 +127,8 @@ static __global__ void ggml_cuda_ar_f32_kernel(
     // Phase 2: thread 0 signals arrival, then spins for the peer.
     if (tid == 0) {
         ggml_cuda_ar_signal_set(arrival_mine);
+
+        __threadfence_system(); // ensure the signal itself is visible across all GPUs
 
 #if GGML_CUDA_AR_WATCHDOG
         int writeback = ggml_cuda_ar_signal_get(arrival_mine);
