@@ -177,7 +177,7 @@ def main():
                 name, val = w.split(':')
                 overrides[name.lower()] = int(val)
             except ValueError:
-                logger.warn(f"Invalid width format '{w}'")
+                logger.warning(f"Invalid width format '{w}'")
 
     final_pmu_name = (args.pmu_name or f"#{args.pmu_index}") if args.pmu_index is not None else None
     ops = parse_log(args.logfile, pmu_index=args.pmu_index)
