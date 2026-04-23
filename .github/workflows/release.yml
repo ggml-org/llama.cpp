@@ -697,7 +697,11 @@ jobs:
       ONEAPI_INSTALLER_VERSION: "2025.3.3"
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Use oneAPI Installation Cache
         uses: actions/cache@v5
@@ -713,10 +717,6 @@ jobs:
           cd /tmp
           wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
           sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
