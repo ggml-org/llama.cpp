@@ -96,6 +96,7 @@ jobs:
             -DGGML_HIP=ON \
             -DHIP_PLATFORM=amd \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
+            -DGGML_OPENMP=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
