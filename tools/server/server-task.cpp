@@ -1111,7 +1111,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
 json server_task_result_cmpl_final::to_json_oaicompat_asr() {
     json event = json {
         {"type",  "transcript.text.done"},
-        {"text",  content},
+        {"text",  oaicompat_msg.content},
         {"usage", json {
             {"type",         "tokens"},
             {"input_tokens",  n_prompt_tokens},
