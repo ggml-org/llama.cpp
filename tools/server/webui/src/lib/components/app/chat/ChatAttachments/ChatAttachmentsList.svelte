@@ -145,7 +145,7 @@
 						<ChatAttachmentMcpResource
 							class="flex-shrink-0 {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
 							attachment={toMcpResourceAttachment(mcpResource, item.id)}
-							onClick={() => openMcpResourcePreview(mcpResource)}
+							onclick={() => openMcpResourcePreview(mcpResource)}
 						/>
 					{:else if item.isImage && item.preview}
 						<ChatAttachmentThumbnailImage
@@ -158,7 +158,7 @@
 							height={imageHeight}
 							width={imageWidth}
 							{imageClass}
-							onClick={(event) => openPreview(item, event)}
+							onclick={(event) => openPreview(item, event)}
 						/>
 					{:else}
 						<ChatAttachmentThumbnailFile
@@ -171,7 +171,7 @@
 							textContent={item.textContent}
 							attachment={item.attachment}
 							uploadedFile={item.uploadedFile}
-							onClick={(event) => openPreview(item, event)}
+							onclick={(event) => openPreview(item, event)}
 						/>
 					{/if}
 				{/each}
@@ -223,7 +223,7 @@
 
 						<ChatAttachmentMcpResource
 							attachment={toMcpResourceAttachment(mcpResource, item.id)}
-							onClick={() => openMcpResourcePreview(mcpResource)}
+							onclick={() => openMcpResourcePreview(mcpResource)}
 						/>
 					{:else if item.isImage && item.preview}
 						<ChatAttachmentThumbnailImage
@@ -236,7 +236,7 @@
 							height={imageHeight}
 							width={imageWidth}
 							{imageClass}
-							onClick={(event) => openPreview(item, event)}
+							onclick={(event) => openPreview(item, event)}
 						/>
 					{:else}
 						<ChatAttachmentThumbnailFile
@@ -249,7 +249,7 @@
 							textContent={item.textContent}
 							attachment={item.attachment}
 							uploadedFile={item.uploadedFile}
-							onClick={(event?: MouseEvent) => openPreview(item, event)}
+							onclick={(event?: MouseEvent) => openPreview(item, event)}
 						/>
 					{/if}
 				{/each}

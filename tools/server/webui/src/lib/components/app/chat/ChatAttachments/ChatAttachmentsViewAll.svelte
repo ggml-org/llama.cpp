@@ -70,7 +70,7 @@
 							textContent={item.textContent}
 							attachment={item.attachment}
 							uploadedFile={item.uploadedFile}
-							onClick={(event?: MouseEvent) => openPreview(item, event)}
+							onclick={(event?: MouseEvent) => openPreview(item, event)}
 						/>
 					{/each}
 				</div>
@@ -93,7 +93,7 @@
 								height={imageHeight}
 								width={imageWidth}
 								{imageClass}
-								onClick={(event) => openPreview(item, event)}
+								onclick={(event) => openPreview(item, event)}
 							/>
 						{/if}
 					{/each}

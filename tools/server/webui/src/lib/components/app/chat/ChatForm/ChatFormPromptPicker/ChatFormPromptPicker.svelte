@@ -408,7 +408,7 @@
 				<ChatFormPickerListItem
 					dataIndex={index}
 					{isSelected}
-					onClick={() => handlePromptClick(prompt)}
+					onclick={() => handlePromptClick(prompt)}
 				>
 					<ChatFormPickerItemHeader
 						{server}

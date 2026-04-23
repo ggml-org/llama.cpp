@@ -186,7 +186,7 @@
 			<ChatFormPickerListItem
 				dataIndex={index}
 				{isSelected}
-				onClick={() => handleResourceClick(resource)}
+				onclick={() => handleResourceClick(resource)}
 			>
 				<ChatFormPickerItemHeader
 					{server}

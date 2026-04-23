@@ -33,7 +33,7 @@
 					class={i === 0 ? 'ml-3' : ''}
 					{attachment}
 					onRemove={handleRemove}
-					onClick={() => handleResourceClick(attachment.resource.uri)}
+					onclick={() => handleResourceClick(attachment.resource.uri)}
 				/>
 			{/each}
 		</HorizontalScrollCarousel>

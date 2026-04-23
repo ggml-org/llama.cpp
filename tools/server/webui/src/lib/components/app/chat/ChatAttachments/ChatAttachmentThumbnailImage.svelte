@@ -7,7 +7,7 @@
 		preview: string;
 		readonly?: boolean;
 		onRemove?: (id: string) => void;
-		onClick?: (event?: MouseEvent) => void;
+		onclick?: (event?: MouseEvent) => void;
 		class?: string;
 		// Customizable size props
 		width?: string;
@@ -21,7 +21,7 @@
 		preview,
 		readonly = false,
 		onRemove,
-		onClick,
+		onclick,
 		class: className = '',
 		// Default to small size for form previews
 		width = 'w-auto',
@@ -33,11 +33,11 @@
 <div
 	class="group relative overflow-hidden rounded-lg bg-muted shadow-lg dark:border dark:border-muted {className}"
 >
-	{#if onClick}
+	{#if onclick}
 		<button
 			type="button"
 			class="block h-full w-full rounded-lg focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:outline-none"
-			onclick={onClick}
+			{onclick}
 			aria-label="Preview {name}"
 		>
 			<img

@@ -6,7 +6,7 @@
 	interface Props {
 		class?: string;
 		id: string;
-		onClick?: (event?: MouseEvent) => void;
+		onclick?: (event?: MouseEvent) => void;
 		onRemove?: (id: string) => void;
 		name: string;
 		readonly?: boolean;
@@ -20,7 +20,7 @@
 	let {
 		class: className = '',
 		id,
-		onClick,
+		onclick,
 		onRemove,
 		name,
 		readonly = false,
@@ -65,7 +65,7 @@
 		<!-- Readonly mode (ChatMessage) -->
 		<button
 			class="cursor-pointer rounded-lg border border-border bg-muted p-3 transition-shadow hover:shadow-md {className} w-full max-w-2xl"
-			onclick={onClick}
+			{onclick}
 			aria-label={`Preview ${name}`}
 			type="button"
 		>
@@ -101,7 +101,7 @@
 			class="group relative rounded-lg border border-border bg-muted p-3 {className} {textContent
 				? 'max-h-24 max-w-72'
 				: 'max-w-36'} cursor-pointer text-left"
-			onclick={onClick}
+			{onclick}
 		>
 			<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
 				<ActionIconRemove {id} {onRemove} />
@@ -132,7 +132,7 @@
 {:else}
 	<button
 		class="group flex items-center gap-3 rounded-lg border border-border bg-muted p-3 {className} relative"
-		onclick={onClick}
+		{onclick}
 	>
 		<div
 			class="flex h-8 w-8 items-center justify-center rounded bg-primary/10 text-xs font-medium text-primary"

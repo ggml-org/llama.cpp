@@ -5,15 +5,15 @@
 	import { TooltipSide } from '$lib/enums';
 
 	interface Props {
-		icon: Component;
-		tooltip: string;
-		variant?: ButtonVariant;
-		size?: ButtonSize;
-		iconSize?: string;
+		'aria-label'?: string;
 		class?: string;
 		disabled?: boolean;
+		icon: Component;
+		iconSize?: string;
 		onclick: (e?: MouseEvent) => void;
-		'aria-label'?: string;
+		size?: ButtonSize;
+		tooltip: string;
+		variant?: ButtonVariant;
 		tooltipSide?: TooltipSide;
 	}
 

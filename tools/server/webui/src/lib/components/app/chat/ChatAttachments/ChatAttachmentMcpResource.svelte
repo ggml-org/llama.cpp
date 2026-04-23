@@ -10,11 +10,11 @@
 	interface Props {
 		attachment: MCPResourceAttachment;
 		onRemove?: (attachmentId: string) => void;
-		onClick?: () => void;
+		onclick?: () => void;
 		class?: string;
 	}
 
-	let { attachment, onRemove, onClick, class: className }: Props = $props();
+	let { attachment, onRemove, onclick, class: className }: Props = $props();
 
 	function getStatusClass(attachment: MCPResourceAttachment): string {
 		if (attachment.error) return 'border-red-500/50 bg-red-500/10';
@@ -36,11 +36,11 @@
 			class={cn(
 				'flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.75 text-sm transition-colors',
 				getStatusClass(attachment),
-				onClick && 'cursor-pointer hover:bg-muted/50',
+				onclick && 'cursor-pointer hover:bg-muted/50',
 				className
 			)}
-			onclick={onClick}
-			disabled={!onClick}
+			{onclick}
+			disabled={!onclick}
 		>
 			{#if attachment.loading}
 				<Loader2 class="h-3 w-3 animate-spin text-muted-foreground" />
