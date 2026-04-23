@@ -71,6 +71,14 @@ static fs::path get_cache_directory() {
             return fs::path(pw->pw_dir) / ".cache" / "modelscope";
         }
 #endif
+
+#if defined(_WIN32)
+        // 4. Windows 用户目录
+        if (auto * p = std::getenv("USERPROFILE"); p && *p) {
+            return fs::path(p) / ".cache" / "modelscope";
+        }
+#endif
+
         return fs::current_path() / ".cache" / "modelscope";
     }();
     return cache;
