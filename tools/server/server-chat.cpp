@@ -514,7 +514,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
     }
 
     // Pass through common params
-    for (const auto & key : {"temperature", "top_p", "top_k", "stream"}) {
+    for (const auto & key : {"temperature", "top_p", "top_k", "stream", "chat_template_kwargs"}) {
         if (body.contains(key)) {
             oai_body[key] = body.at(key);
         }
