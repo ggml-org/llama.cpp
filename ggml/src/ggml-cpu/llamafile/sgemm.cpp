@@ -3195,7 +3195,7 @@ class tinyBLAS_PPC {
     }
 
     void matmul(int64_t m, int64_t n) {
-        # if defined(_AIX) || defined(__BIG_ENDIAN__)
+        #if defined(_AIX) || defined(__BIG_ENDIAN__)
             mnpack(0, m, 0, n);
         #else
             int64_t mc = 256; int64_t nc = 256; int64_t kc = 256;
