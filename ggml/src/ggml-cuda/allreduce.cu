@@ -37,7 +37,7 @@ static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
 }
 
 // ---------------------------------------------------------------------------
-// Single-kernel AllReduce — float32, 2 GPUs
+// Single-kernel AllReduce — 2 GPUs, supports float, half, and bfloat16.
 //
 // Both GPUs run this kernel simultaneously in independent streams.  Each GPU:
 //
@@ -78,30 +78,68 @@ struct ggml_cuda_ar_debug_ring {
 };
 #endif // GGML_CUDA_AR_WATCHDOG
 
-static __global__ void ggml_cuda_ar_f32_kernel(
-        const float * __restrict__ sendbuf,
-        float       * __restrict__ recvbuf,
-        float       * __restrict__ host_mine,
-        const float * __restrict__ host_other,
-        int                        count,
-        int *                      arrival_mine,
-        int *                      arrival_other
+// ---------------------------------------------------------------------------
+// Vectorised add helpers for Phase 3 reduction.  All types use float4
+// (16 bytes) as the vector load unit for maximum PCIe throughput.
+// ---------------------------------------------------------------------------
+template <typename T>
+static __device__ __forceinline__ float4 ggml_cuda_ar_vec_add(float4 a, float4 b);
+
+template <>
+__device__ __forceinline__ float4 ggml_cuda_ar_vec_add<float>(float4 a, float4 b) {
+    return make_float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
+}
+
+template <>
+__device__ __forceinline__ float4 ggml_cuda_ar_vec_add<half>(float4 a, float4 b) {
+    float4 r;
+    half2 * ha = reinterpret_cast<half2 *>(&a);
+    half2 * hb = reinterpret_cast<half2 *>(&b);
+    half2 * hr = reinterpret_cast<half2 *>(&r);
+    #pragma unroll
+    for (int k = 0; k < 4; ++k) { hr[k] = ha[k] + hb[k]; }
+    return r;
+}
+
+template <>
+__device__ __forceinline__ float4 ggml_cuda_ar_vec_add<__nv_bfloat16>(float4 a, float4 b) {
+    float4 r;
+    __nv_bfloat162 * ba = reinterpret_cast<__nv_bfloat162 *>(&a);
+    __nv_bfloat162 * bb = reinterpret_cast<__nv_bfloat162 *>(&b);
+    __nv_bfloat162 * br = reinterpret_cast<__nv_bfloat162 *>(&r);
+    #pragma unroll
+    for (int k = 0; k < 4; ++k) { br[k] = ba[k] + bb[k]; }
+    return r;
+}
+
+template <typename T>
+static __global__ void ggml_cuda_ar_kernel(
+        const T * __restrict__ sendbuf,
+        T       * __restrict__ recvbuf,
+        T       * __restrict__ host_mine,
+        const T * __restrict__ host_other,
+        int                    count,
+        int *                  arrival_mine,
+        int *                  arrival_other
 #if GGML_CUDA_AR_WATCHDOG
-       ,ggml_cuda_ar_debug_ring *  ring,
-        int                        max_spin,
-        int                        rank,
-        int                        ar_slot
+       ,ggml_cuda_ar_debug_ring * ring,
+        int                    max_spin,
+        int                    rank,
+        int                    ar_slot
 #endif
         ) {
+
+    // Number of elements of T per float4 vector (16 bytes).
+    constexpr int ELEMS_PER_VEC = 16 / sizeof(T);
 
 #if GGML_CUDA_AR_WATCHDOG
     __shared__ int bail;
 #endif
 
-    const int tid    = threadIdx.x;
-    const int nt     = blockDim.x;
-    const int count4 = count >> 2;
-    const int tail   = count4 << 2;
+    const int tid       = threadIdx.x;
+    const int nt        = blockDim.x;
+    const int count_vec = count / ELEMS_PER_VEC;
+    const int tail      = count_vec * ELEMS_PER_VEC;
 
 #if GGML_CUDA_AR_WATCHDOG
     if (tid == 0) { bail = 0; }
@@ -112,7 +150,7 @@ static __global__ void ggml_cuda_ar_f32_kernel(
     {
         const float4 * s4 = reinterpret_cast<const float4 *>(sendbuf);
         float4       * d4 = reinterpret_cast<float4 *>(host_mine);
-        for (int i = tid; i < count4; i += nt) {
+        for (int i = tid; i < count_vec; i += nt) {
             d4[i] = s4[i];
         }
         if (tid < count - tail) {
@@ -137,7 +175,6 @@ static __global__ void ggml_cuda_ar_f32_kernel(
         while ((last = ggml_cuda_ar_signal_get(arrival_other)) == 0) {
             ++spin;
             if (max_spin > 0 && spin >= max_spin) {
-                // Acquire a ring slot via atomicAdd (single-GPU host atomics OK).
                 int ri = atomicAdd(&ring->head, 1) % GGML_CUDA_AR_RING_SIZE;
                 ggml_cuda_ar_debug_record * rec = &ring->records[ri];
 
@@ -148,9 +185,9 @@ static __global__ void ggml_cuda_ar_f32_kernel(
                 rec->arrival_other = last;
                 rec->count         = count;
 
-                __threadfence_system();  // ensure fields visible before completion flag
+                __threadfence_system();
                 rec->complete = 1;
-                __threadfence_system();  // ensure completion flag visible to host
+                __threadfence_system();
 
                 bail = 1;
                 break;
@@ -167,7 +204,7 @@ static __global__ void ggml_cuda_ar_f32_kernel(
     __syncthreads();
 #if GGML_CUDA_AR_WATCHDOG
     if (bail) {
-        return;  // all threads exit — skip Phase 3
+        return;
     }
 #endif
 
@@ -179,10 +216,8 @@ static __global__ void ggml_cuda_ar_f32_kernel(
         const float4 * s4 = reinterpret_cast<const float4 *>(sendbuf);
         const float4 * o4 = reinterpret_cast<const float4 *>(host_other);
         float4       * r4 = reinterpret_cast<float4 *>(recvbuf);
-        for (int i = tid; i < count4; i += nt) {
-            float4 a = s4[i];
-            float4 b = o4[i];
-            r4[i] = make_float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
+        for (int i = tid; i < count_vec; i += nt) {
+            r4[i] = ggml_cuda_ar_vec_add<T>(s4[i], o4[i]);
         }
         if (tid < count - tail) {
             recvbuf[tail + tid] = sendbuf[tail + tid] + host_other[tail + tid];
@@ -220,7 +255,7 @@ struct ggml_cuda_ar_pipeline {
     uint64_t call_count;
 
     // Per-device resources.
-    float *                  host_buf[GGML_CUDA_MAX_DEVICES];  // pinned staging
+    char *                   host_buf[GGML_CUDA_MAX_DEVICES];  // pinned staging
     cudaStream_t             streams[GGML_CUDA_MAX_DEVICES];   // non-blocking
     ggml_cuda_ar_event_slot *ev_pool[GGML_CUDA_MAX_DEVICES];   // [device][slot]
 
@@ -348,8 +383,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
     // Per-device pinned staging buffers.
     p->buf_bytes = max_bytes;
     for (int i = 0; i < n_devices; ++i) {
-        if (cudaHostAlloc(reinterpret_cast<void **>(&p->host_buf[i]), max_bytes,
-                          cudaHostAllocPortable) != cudaSuccess) {
+        if (cudaHostAlloc(&p->host_buf[i], max_bytes, cudaHostAllocPortable) != cudaSuccess) {
             GGML_LOG_ERROR("%s: cudaHostAlloc for staging failed (%zu bytes)\n",
                            __func__, max_bytes);
             ggml_cuda_ar_pipeline_free(p);
@@ -410,17 +444,17 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
         }
 
         if (warmup_ok) {
-            // Warmup always uses the production kernel (no debug overhead).
+            // Warmup uses float kernel.
             for (int iter = 0; iter < WARMUP_ITERS; ++iter) {
                 for (int r = 0; r < 2; ++r) {
                     *ggml_cuda_ar_arrival_ptr(p, /*slot=*/0, r) = 0;
                 }
                 for (int r = 0; r < 2; ++r) {
                     ggml_cuda_set_device(p->devices[r]);
-                    ggml_cuda_ar_f32_kernel<<<dim3(1), dim3(256), 0, p->streams[r]>>>(
+                    ggml_cuda_ar_kernel<float><<<dim3(1), dim3(256), 0, p->streams[r]>>>(
                         dev_buf[r], dev_buf[r],
-                        p->host_buf[r],
-                        p->host_buf[1 - r],
+                        reinterpret_cast<float *>(p->host_buf[r]),
+                        reinterpret_cast<const float *>(p->host_buf[1 - r]),
                         static_cast<int>(WARMUP_COUNT),
                         ggml_cuda_ar_arrival_ptr(p, /*slot=*/0, r),
                         ggml_cuda_ar_arrival_ptr(p, /*slot=*/0, 1 - r)
@@ -528,13 +562,16 @@ bool ggml_cuda_ar_allreduce(
         return false;
     }
 
-    // Only FP32 tensors are handled by the kernel.
-    if (tensors[0]->type != GGML_TYPE_F32) {
+    const ggml_type type      = tensors[0]->type;
+    const size_t    type_size = ggml_type_size(type);
+
+    // Only float, half, and bfloat16 tensors are handled by the kernel.
+    if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && type != GGML_TYPE_BF16) {
         return false;
     }
 
     const int64_t ne    = ggml_nelements(tensors[0]);
-    const size_t  bytes = (size_t)ne * sizeof(float);
+    const size_t  bytes = (size_t)ne * type_size;
 
     if (ne == 0) {
         return true;
@@ -580,21 +617,32 @@ bool ggml_cuda_ar_allreduce(
         CUDA_CHECK(cudaEventRecord(ev.app, cuda_ctx->stream()));
         CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], ev.app));
 
-        ggml_cuda_ar_f32_kernel<<<dim3(1), dim3(256), 0, p->streams[i]>>>(
-            static_cast<const float *>(tensors[i]->data),
-            static_cast<float *>(tensors[i]->data),
-            p->host_buf[i],
-            p->host_buf[peer],
-            static_cast<int>(ne),
-            ggml_cuda_ar_arrival_ptr(p, slot, i),
-            ggml_cuda_ar_arrival_ptr(p, slot, peer)
 #if GGML_CUDA_AR_WATCHDOG
-           ,p->debug_ring[i],
-            p->wdog_max_spin,
-            i,
-            slot
+#define GGML_CUDA_AR_WDOG_EXTRA_ARGS , p->debug_ring[i], p->wdog_max_spin, i, slot
+#else
+#define GGML_CUDA_AR_WDOG_EXTRA_ARGS
 #endif
-            );
+
+#define LAUNCH_AR_KERNEL(T) \
+        ggml_cuda_ar_kernel<T><<<dim3(1), dim3(256), 0, p->streams[i]>>>( \
+            static_cast<const T *>(tensors[i]->data), \
+            static_cast<T *>(tensors[i]->data), \
+            reinterpret_cast<T *>(p->host_buf[i]), \
+            reinterpret_cast<const T *>(p->host_buf[peer]), \
+            static_cast<int>(ne), \
+            ggml_cuda_ar_arrival_ptr(p, slot, i), \
+            ggml_cuda_ar_arrival_ptr(p, slot, peer) \
+            GGML_CUDA_AR_WDOG_EXTRA_ARGS)
+
+        switch (type) {
+            case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float);           break;
+            case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half);            break;
+            case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(__nv_bfloat16);   break;
+            default: GGML_ASSERT(false);
+        }
+
+#undef LAUNCH_AR_KERNEL
+#undef GGML_CUDA_AR_WDOG_EXTRA_ARGS
         CUDA_CHECK(cudaGetLastError());
 
         CUDA_CHECK(cudaEventRecord(ev.ker, p->streams[i]));
