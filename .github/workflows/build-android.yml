@@ -1,26 +1,24 @@
 name: CI (android)
 
 on:
-  workflow_dispatch: # allows manual triggering
+  workflow_dispatch:
   push:
     branches:
       - master
-    paths: [
-      '.github/workflows/build-android.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp'
-    ]
+    paths:
+      - '.github/workflows/build-android.yml'
+      - '**/CMakeLists.txt'
+      - '**/.cmake'
+      - '**/*.h'
+      - '**/*.hpp'
+      - '**/*.c'
+      - '**/*.cpp'
 
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/build-android.yml',
-      'examples/llama.android/**'
-    ]
+    paths:
+      - '.github/workflows/build-android.yml'
+      - 'examples/llama.android/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -67,35 +65,24 @@ jobs:
     defaults:
       run:
         shell: bash
-    strategy:
-      matrix:
-        include:
-          - build: 'arm64-cpu'
-            defines: '-D ANDROID_ABI=arm64-v8a -D ANDROID_PLATFORM=android-31 -D CMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake -D GGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm -G Ninja -D LLAMA_OPENSSL=OFF -D GGML_OPENMP=OFF'
-          - build: 'arm64-snapdragon'
-            defines: '--preset arm64-android-snapdragon-release'
 
     steps:
       - name: Clone
-        id: checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           lfs: false
 
-      - name: Build Llama.CPP for Hexagon Android
-        id: build_llama_cpp_hexagon_android
+      - name: Build
+        id: ndk_build
         run: |
-          if [[ "${{ matrix.build }}" == "arm64-snapdragon" ]]; then
-            cp docs/backend/snapdragon/CMakeUserPresets.json .
-          fi
-          cmake ${{ matrix.defines }} -B build
+          cmake -D ANDROID_ABI=arm64-v8a -D ANDROID_PLATFORM=android-31 -D CMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake -D GGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm -G Ninja -D LLAMA_OPENSSL=OFF -D GGML_OPENMP=OFF -B build
           cmake --build build
           cmake --install build --prefix pkg-adb/llama.cpp
 
-      - name: Upload Llama.CPP Hexagon Android Build Artifact
-        if: ${{ always() && steps.build_llama_cpp_hexagon_android.outcome == 'success' }}
+      - name: Upload Android Build Artifact
+        if: ${{ always() && steps.ndk_build.outcome == 'success' }}
         uses: actions/upload-artifact@v6
         with:
-          name: llama-cpp-android-${{ matrix.build }}
+          name: llama-cpp-android-arm64-cpu
           path: pkg-adb/llama.cpp
