@@ -38,12 +38,25 @@ add_library(${HTP_LIB} SHARED
     diag-ops.c
     solve-tri-ops.c
 )
+option(GGML_HEXAGON_PROFILE_TIMERS "Enable fine-grained HMX profiling timers (FARF per-phase logs)" OFF)
+option(GGML_HEXAGON_FA_EXP2_HF "Use FP16 exp2 polynomial in FA softmax instead of F32 exp round-trip" OFF)
 
 target_compile_definitions(${HTP_LIB} PRIVATE
     $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,HTP_DEBUG=1,NDEBUG=1>
     $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>
     FP32_QUANTIZE_GROUP_SIZE=${GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE})
 
+# FARF(HIGH, ...) is preprocessed out unless FARF_HIGH=1 is defined at compile time.
+# Profile timers emit at HIGH level, so force FARF_HIGH=1 whenever profiling is on.
+if (GGML_HEXAGON_PROFILE_TIMERS)
+    message(STATUS "ggml-htp: ENABLE_PROFILE_TIMERS=1 + FARF_HIGH=1 (per-phase FARF logs)")
+    target_compile_definitions(${HTP_LIB} PRIVATE FARF_HIGH=1  ENABLE_PROFILE_TIMERS=1)
+endif()
+
+if (GGML_HEXAGON_FA_EXP2_HF)
+    message(STATUS "ggml-htp: HMX_FA_USE_EXP2_HF=1 (use FP16 exp2 polynomial in FA softmax)")
+    target_compile_definitions(${HTP_LIB} PRIVATE HMX_FA_USE_EXP2_HF=1)
+endif()
 # HMX acceleration: available on v73+ architectures
 set(HTP_HMX_VERSIONS v73 v75 v79 v81)
 list(FIND HTP_HMX_VERSIONS ${DSP_VERSION} _hmx_idx)

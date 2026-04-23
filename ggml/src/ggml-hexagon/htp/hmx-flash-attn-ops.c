@@ -106,6 +106,48 @@ static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV,
 // Algorithm: sweep Br from max down, analytically solve for Bc_max at each Br.
 // The D matrix's O(g_br²) cost naturally limits g_br without a hardcoded cap.
 // Exact VTCM check via hmx_fa_compute_vtcm_usage() guards against alignment error.
+// ============================================================================
+// FP16 exp2 polynomial (ported from htp-ops-lib/include/dsp/hvx_math.h)
+// ============================================================================
+// 5th-order Horner polynomial for exp2(x) in qf16/hf16 domain.  Input must be
+// ≤ 0 (safe softmax invariant — overflow handling omitted).  ~18 ALU ops per
+// 64 fp16 lanes, fully parallel across HVX threads (no scatter/gather engine).
+// Replaces the F32 round-trip (qf16→f32→exp→f32→f16, ~44 ops for 2×32 lanes).
+static inline HVX_Vector hvx_exp2_hf(HVX_Vector x_v) {
+    const HVX_Vector zero_v    = Q6_V_vzero();
+    const HVX_Vector half_hf_v = Q6_Vh_vsplat_R(0x3800);  // fp16 0.5
+
+    // k = round_toward_neg_inf(x);  f = (float)k;  frac = x - f
+    HVX_Vector x_minus_half = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vsub_VhfVhf(x_v, half_hf_v));
+    HVX_Vector k_v = Q6_Vh_equals_Vhf(x_minus_half);   // truncate to int16
+    HVX_Vector f_v = Q6_Vhf_equals_Vh(k_v);             // back to fp16
+
+    HVX_Vector x_qf16 = Q6_Vqf16_vsub_VhfVhf(x_v, f_v);  // fractional part in qf16
+
+    // Horner: y = ((((E5*x + E4)*x + E3)*x + E2)*x + E1)*x + E0
+    HVX_Vector y = Q6_Vqf16_vmpy_Vqf16Vqf16(Q6_Vh_vsplat_R(0x5082), x_qf16);  // E5*x
+    y = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x157d));  // + E4
+    y = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
+    y = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x20ed));  // + E3
+    y = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
+    y = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x2b1b));  // + E2
+    y = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
+    y = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x33b0));  // + E1
+    y = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
+    y = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x398c));  // + E0
+    // y = y * x + 1.0
+    y = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
+    y = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x3c00));  // + 1.0
+
+    // Combine polynomial (mantissa) with integer part (exponent): result = y * 2^k
+    y = Q6_Vhf_equals_Vqf16(y);
+    HVX_Vector y_exp = Q6_Vuh_vlsr_VuhR(Q6_Vh_vasl_VhR(y, 1), 11);
+    y_exp = Q6_Vh_vadd_VhVh(k_v, y_exp);
+    HVX_VectorPred q_underflow = Q6_Q_vcmp_gt_VhVh(zero_v, y_exp);
+    y = Q6_Vh_vaslacc_VhVhR(y, k_v, 10);
+    return Q6_V_vmux_QVV(q_underflow, zero_v, y);
+}
+
 #define FA_MIN_KV_BLOCKS 3
 
 static int hmx_fa_find_chunk_size(size_t * Br_out,
@@ -832,6 +874,24 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
             HVX_Vector       v_p_rowsum0 = v_zero;
             HVX_Vector       v_p_rowsum1 = v_zero;
 
+#ifdef HMX_FA_USE_EXP2_HF
+            // FP16 exp2 polynomial path (matches htp-ops-lib flash_attn.c):
+            // P = exp2(S - m_new).  Base-2 throughout — fa_ml_update_and_build_d's
+            // m_diff correction must also use exp2 to keep online-softmax consistent.
+            // ~22 ALU ops for 64 lanes vs ~44 for the F32 round-trip path.
+            // Output layout = input layout (pure per-lane), same as htp-ops-lib; the
+            // downstream tile write (Q6_W_vshuff_VVR) takes row0/row1 in my_row_buf
+            // layout directly — no extra shuff needed.
+            for (size_t c = 0; c < kv_rows; c += 64) {
+                size_t     ci           = c / 64;
+                HVX_Vector v_s_minus_m0 = Q6_Vqf16_vsub_VhfVhf(my_row_buf0[ci], v_dup_m0);
+                HVX_Vector v_s_minus_m1 = Q6_Vqf16_vsub_VhfVhf(my_row_buf1[ci], v_dup_m1);
+
+                HVX_Vector v_p_row0_hf = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_s_minus_m0));
+                HVX_Vector v_p_row1_hf = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_s_minus_m1));
+#else
+            // F32 exp path: qf16 → f32 → exp → f32 → f16.  Higher precision,
+            // ~44 ops for 2×32 lanes (each exp_f32 call is ~20 ops).
             for (size_t c = 0; c < kv_rows; c += 64) {
                 size_t     ci           = c / 64;
                 HVX_Vector v_s_minus_m0 = Q6_Vqf16_vsub_VhfVhf(my_row_buf0[ci], v_dup_m0);
@@ -846,8 +906,10 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                 HVX_Vector     p1_lo = hvx_vec_exp_f32(Q6_V_lo_W(vp1));
                 HVX_Vector     p1_hi = hvx_vec_exp_f32(Q6_V_hi_W(vp1));
                 HVX_Vector     v_p_row1_hf = hvx_vec_f32_to_f16_shuff(p1_lo, p1_hi);
-
-                // Write P to tile format
+#endif
+                // Write P to tile format.  Dual-tile pattern assumes Bc is a
+                // multiple of 64 (enforced by bc_unit=64 in hmx_fa_find_chunk_size),
+                // so both tile halves are always in the current r0 block.
                 __fp16 *     out_dual_tile = p_st_base + (c / 64) * HMX_FP16_TILE_N_ELMS * 2;
                 HVX_Vector * pv_p_out0     = ((HVX_Vector *) out_dual_tile) + r1 / 2;
                 HVX_Vector * pv_p_out1     = pv_p_out0 + 16;
@@ -902,10 +964,15 @@ static void fa_ml_update_and_build_d(struct hmx_fa_context * factx,
         HVX_Vector v_m_curr = Q6_Vhf_vmax_VhfVhf(v_m_prev, factx->vtcm_s_rowmax[i]);
         HVX_Vector v_m_diff = Q6_Vqf16_vsub_VhfVhf(v_m_prev, v_m_curr);
 
+#ifdef HMX_FA_USE_EXP2_HF
+        // Base-2 path: must match P = exp2(S - m_new) in fa_softmax_thread.
+        HVX_Vector v_exp_m_diff = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_m_diff));
+#else
         HVX_VectorPair vp_diff      = hvx_vec_f16_to_f32_shuff(Q6_Vhf_equals_Vqf16(v_m_diff));
         HVX_Vector     exp_lo       = hvx_vec_exp_f32(Q6_V_lo_W(vp_diff));
         HVX_Vector     exp_hi       = hvx_vec_exp_f32(Q6_V_hi_W(vp_diff));
         HVX_Vector     v_exp_m_diff = hvx_vec_f32_to_f16_shuff(exp_lo, exp_hi);
+#endif
 
         HVX_Vector v_l_curr = Q6_Vqf16_vmpy_Vqf16Vhf(factx->vtcm_l_vec[i], v_exp_m_diff);
         v_l_curr            = Q6_Vqf16_vadd_Vqf16Vhf(v_l_curr, factx->vtcm_p_rowsum[i]);
@@ -1210,6 +1277,13 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
     if (logit_softcap != 0.0f) {
         scale /= logit_softcap;
     }
+
+#ifdef HMX_FA_USE_EXP2_HF
+    // Pre-bake log2(e) into qk_scale so HMX-produced S tiles are in log2(e)-scaled
+    // space.  Then exp2(S - m) in the softmax equals base-e exp((S - m) / log2(e)),
+    // preserving ggml's base-e softmax semantics.  Matches htp-ops-lib flash_attn.c.
+    scale *= 1.44269504f;  // log2(e)
+#endif
 
     factx.scale         = scale;
     factx.max_bias      = max_bias;
