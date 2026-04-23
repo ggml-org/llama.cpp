@@ -417,7 +417,8 @@ extern "C" {
         GGML_TYPE_MXFP4      = 39,  // MXFP4 (1 block)
         GGML_TYPE_IFAIRY     = 40,  // complex type used for the ifairy model weight
         GGML_TYPE_IFAIRY_Q16 = 41,  // complex type used for the ifairy model in activation
-        GGML_TYPE_COUNT      = 42,
+        GGML_TYPE_IFAIRY64   = 42,  // complex type used for Fairy2i tile64_v2 weights
+        GGML_TYPE_COUNT      = 43,
     };
 
     // precision

@@ -84,6 +84,13 @@ struct GGML_IFAIRY_LUT_ALIGN(GGML_IFAIRY_LUT_WTILE_ALIGNMENT) ifairy_lut_wtile_1
     float   d_imag[16];
 };
 
+struct GGML_IFAIRY_LUT_ALIGN(GGML_IFAIRY_LUT_WTILE_ALIGNMENT) ifairy64_lut_wtile_16 {
+    uint8_t qs[QK_IFAIRY64_GROUPS_PER_BLOCK / 2][16];
+    ggml_half d_real[16];
+    ggml_half d_imag[16];
+};
+static_assert(sizeof(struct ifairy64_lut_wtile_16) == 320, "wrong ifairy64_lut_wtile_16 size");
+
 // iFairy 2-weight LUT API
 //
 // Current state:
@@ -128,6 +135,24 @@ void   ggml_ifairy_lut_preprocess_ex_lut_c(int          m,
                                            void *       lut_buf,
                                            int          ith,
                                            int          nth);
+void   ggml_ifairy64_lut_preprocess_ex_lut16(int          m,
+                                             int          k,
+                                             int          n,
+                                             const void * act,
+                                             size_t       act_stride,
+                                             void *       lut_scales,
+                                             void *       lut_buf,
+                                             int          ith,
+                                             int          nth);
+void   ggml_ifairy64_lut_preprocess_ex_lut_c(int          m,
+                                             int          k,
+                                             int          n,
+                                             const void * act,
+                                             size_t       act_stride,
+                                             void *       lut_scales,
+                                             void *       lut_buf,
+                                             int          ith,
+                                             int          nth);
 void   ggml_ifairy_lut_qgemm_lut16(int          m,
                                    int          k,
                                    int          n,
@@ -152,6 +177,30 @@ void   ggml_ifairy_lut_qgemm_fused_lut16(int          m,
                                          size_t       dst_row_stride,
                                          bool         pack_bf16,
                                          bool         add);
+void   ggml_ifairy64_lut_qgemm_lut16(int          m,
+                                     int          k,
+                                     int          n,
+                                     const void * packed_wtiles,
+                                     const void * lut,
+                                     const void * lut_scales,
+                                     float *      dst,
+                                     size_t       dst_col_stride,
+                                     size_t       dst_row_stride,
+                                     bool         pack_bf16,
+                                     bool         add);
+void   ggml_ifairy64_lut_qgemm_fused_lut16(int          m,
+                                           int          k,
+                                           int          n,
+                                           const void * packed_wtiles,
+                                           const void * act,
+                                           size_t       act_stride,
+                                           void *       lut_tmp,
+                                           void *       lut_scales_tmp,
+                                           float *      dst,
+                                           size_t       dst_col_stride,
+                                           size_t       dst_row_stride,
+                                           bool         pack_bf16,
+                                           bool         add);
 void   ggml_ifairy_lut_qgemm_lut_c(int          m,
                                    int          k,
                                    int          n,
@@ -176,6 +225,30 @@ void   ggml_ifairy_lut_qgemm_fused_lut_c(int          m,
                                          size_t       dst_row_stride,
                                          bool         pack_bf16,
                                          bool         add);
+void   ggml_ifairy64_lut_qgemm_lut_c(int          m,
+                                     int          k,
+                                     int          n,
+                                     const void * packed_wtiles,
+                                     const void * lut,
+                                     const void * lut_scales,
+                                     float *      dst,
+                                     size_t       dst_col_stride,
+                                     size_t       dst_row_stride,
+                                     bool         pack_bf16,
+                                     bool         add);
+void   ggml_ifairy64_lut_qgemm_fused_lut_c(int          m,
+                                           int          k,
+                                           int          n,
+                                           const void * packed_wtiles,
+                                           const void * act,
+                                           size_t       act_stride,
+                                           void *       lut_tmp,
+                                           void *       lut_scales_tmp,
+                                           float *      dst,
+                                           size_t       dst_col_stride,
+                                           size_t       dst_row_stride,
+                                           bool         pack_bf16,
+                                           bool         add);
 void   ggml_ifairy_lut_mul_mat_scalar(int          m,
                                       int          k,
                                       int          n,

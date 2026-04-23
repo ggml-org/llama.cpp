@@ -7,6 +7,7 @@ Status: Draft (2026-03-13)
 相关方案文档：
 - `IFAIRY_ARM_3W_LUT_V2_REFACTOR_PLAN.md`
 - `IFAIRY_ARM_3W_LUT_V2_LUT_C_INTEGRATION_PLAN.md`
+- `IFAIRY64_STATUS.md`（`IFAIRY64` 专项记录）
 
 ---
 
@@ -236,3 +237,5 @@ Status: Draft (2026-03-13)
 - 完整命令行（含 env）
 - 原始输出（tok/s）
 - 备注（M/K/N、线程数、模型）
+
+`IFAIRY64` 相关性能/变更记录已迁移到 `IFAIRY64_STATUS.md`，避免继续混在 ARM 3W LUT V2 状态文档中。

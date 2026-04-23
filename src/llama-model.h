@@ -180,6 +180,16 @@ struct llama_widely_linear_ifairy {
     std::array<ggml_tensor *, 2> W = { nullptr, nullptr };  // stage0, stage1
 };
 
+enum llama_fairy2i_quant_variant {
+    LLAMA_FAIRY2I_QUANT_VARIANT_LEGACY = 0,
+    LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2,
+};
+
+enum llama_fairy2i_attn_layout {
+    LLAMA_FAIRY2I_ATTN_LAYOUT_LEGACY_COMPLEX = 0,
+    LLAMA_FAIRY2I_ATTN_LAYOUT_QWEN2_REAL,
+};
+
 struct llama_layer_nextn {
     struct ggml_tensor * eh_proj          = nullptr;
     struct ggml_tensor * embed_tokens     = nullptr;
@@ -403,6 +413,8 @@ struct llama_model {
 
     llama_hparams hparams = {};
     llama_vocab   vocab;
+    llama_fairy2i_quant_variant fairy2i_quant_variant = LLAMA_FAIRY2I_QUANT_VARIANT_LEGACY;
+    llama_fairy2i_attn_layout   fairy2i_attn_layout   = LLAMA_FAIRY2I_ATTN_LAYOUT_LEGACY_COMPLEX;
 
     // for classifier models
     std::vector<std::string> classifier_labels;
@@ -417,6 +429,7 @@ struct llama_model {
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
     llama_widely_linear_ifairy output_fairy2i;
+    llama_widely_linear_ifairy output_fairy2i_merged;
     struct ggml_tensor * output_b        = nullptr;
     struct ggml_tensor * output_norm_enc = nullptr;
 

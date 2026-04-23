@@ -41,6 +41,10 @@ GGML_API void quantize_row_ifairy_ref(const float * GGML_RESTRICT  x_real,
                                       const float * GGML_RESTRICT  x_imag,
                                       block_ifairy * GGML_RESTRICT y,
                                       int64_t                      k);
+GGML_API void quantize_row_ifairy64_ref(const float * GGML_RESTRICT    x_real,
+                                        const float * GGML_RESTRICT    x_imag,
+                                        block_ifairy64 * GGML_RESTRICT y,
+                                        int64_t                        k);
 
 GGML_API void quantize_row_iq3_xxs_ref(const float * GGML_RESTRICT x, block_iq3_xxs * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_iq4_nl_ref (const float * GGML_RESTRICT x, block_iq4_nl  * GGML_RESTRICT y, int64_t k);
@@ -73,6 +77,10 @@ GGML_API void dequantize_row_ifairy(const block_ifairy * GGML_RESTRICT x,
                                     float * GGML_RESTRICT              y_real,
                                     float * GGML_RESTRICT              y_imag,
                                     int64_t                            k);
+GGML_API void dequantize_row_ifairy64(const block_ifairy64 * GGML_RESTRICT x,
+                                      float * GGML_RESTRICT                y_real,
+                                      float * GGML_RESTRICT                y_imag,
+                                      int64_t                              k);
 
 GGML_API void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_iq2_xs (const block_iq2_xs  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
@@ -125,6 +133,13 @@ GGML_API bool   ggml_ifairy_2w_encode(const block_ifairy * GGML_RESTRICT weights
                                       int64_t                            rows,
                                       uint8_t * GGML_RESTRICT            dst,
                                       size_t                             dst_size);
+GGML_API struct ggml_ifairy_2w_index_info ggml_ifairy64_2w_get_index_info(int64_t k);
+GGML_API size_t ggml_ifairy64_2w_index_buffer_size(const struct ggml_ifairy_2w_index_info * info, int64_t rows);
+GGML_API bool   ggml_ifairy64_2w_encode(const block_ifairy64 * GGML_RESTRICT weights,
+                                        int64_t                              k,
+                                        int64_t                              rows,
+                                        uint8_t * GGML_RESTRICT              dst,
+                                        size_t                               dst_size);
 
 GGML_API size_t quantize_tq2_1(const float * GGML_RESTRICT src,
                                void * GGML_RESTRICT        dst,

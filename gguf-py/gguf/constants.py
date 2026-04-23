@@ -2909,6 +2909,7 @@ class GGMLQuantizationType(IntEnum):
     MXFP4   = 39
     F16_I2  = 40 # newly added for ifairy，2-bit codes + fp16 scales
     IFAIRY  = 41 # newly added for ifairy
+    IFAIRY64 = 42 # tile64 Fairy2i weight format
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -3022,6 +3023,7 @@ class VisionProjectorType:
 # Items here are (block size, type size)
 QK_K = 256
 QK_IFAIRY = 256
+QK_IFAIRY64 = 64
 GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.F32:     (1, 4),
     GGMLQuantizationType.F16:     (1, 2),
@@ -3057,6 +3059,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.MXFP4:   (32, 1 + 16),
     GGMLQuantizationType.F16_I2:  (QK_IFAIRY, 4 + QK_IFAIRY // 4), # newly added for ifairy
     GGMLQuantizationType.IFAIRY:  (4, 1), # newly added for ifairy
+    GGMLQuantizationType.IFAIRY64:(QK_IFAIRY64, 4 + QK_IFAIRY64 // 4),
 }
 
 

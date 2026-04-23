@@ -31,6 +31,7 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
 void quantize_row_tq1_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+void quantize_row_ifairy64(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_ifairy_q16_lut_c(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
@@ -63,6 +64,14 @@ void ggml_vec_dot_ifairy_q16_K(int                        n,
                                const void * GGML_RESTRICT vy,
                                size_t                     by,
                                int                        nrc);
+void ggml_vec_dot_ifairy64_q16_K(int                        n,
+                                 float * GGML_RESTRICT      s,
+                                 size_t                     bs,
+                                 const void * GGML_RESTRICT vx,
+                                 size_t                     bx,
+                                 const void * GGML_RESTRICT vy,
+                                 size_t                     by,
+                                 int                        nrc);
 
 void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_iq2_xs_q8_K (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
@@ -96,6 +105,14 @@ void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
                                        const void * GGML_RESTRICT vy,
                                        size_t                     by,
                                        int                        nrc);
+void ggml_vec_dot_ifairy64_q16_K_generic(int                        n,
+                                         float * GGML_RESTRICT      s,
+                                         size_t                     bs,
+                                         const void * GGML_RESTRICT vx,
+                                         size_t                     bx,
+                                         const void * GGML_RESTRICT vy,
+                                         size_t                     by,
+                                         int                        nrc);
 
 void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_q3_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);

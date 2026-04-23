@@ -501,6 +501,26 @@ static void quantize_row_ifairy_from_float_ref(const float * GGML_RESTRICT x, vo
     free(tmp);
 }
 
+static void quantize_row_ifairy64_from_float_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    float * tmp = (float *) malloc(2 * (size_t) k * sizeof(float));
+    if (tmp == NULL) {
+        GGML_ABORT("out of memory");
+    }
+
+    float * real = tmp;
+    float * imag = tmp + k;
+
+    for (int64_t i = 0; i < k; ++i) {
+        ggml_bf16_t pair[2];
+        memcpy(pair, x + i, sizeof(pair));
+        real[i] = GGML_BF16_TO_FP32(pair[0]);
+        imag[i] = GGML_BF16_TO_FP32(pair[1]);
+    }
+
+    quantize_row_ifairy64_ref(real, imag, (block_ifairy64 *) vy, k);
+    free(tmp);
+}
+
 bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b) {
     return memcmp(guid_a, guid_b, sizeof(ggml_guid)) == 0;
 }
@@ -920,6 +940,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = QK_IFAIRY,
         .type_size                = sizeof(block_ifairy_q16),
         .is_quantized             = true,
+    },
+    [GGML_TYPE_IFAIRY64] = {
+        .type_name                = "ifairy64",
+        .blck_size                = QK_IFAIRY64,
+        .type_size                = sizeof(block_ifairy64),
+        .is_quantized             = true,
+        .to_float                 = NULL,
+        .from_float_ref           = quantize_row_ifairy64_from_float_ref,
     },
 };
 

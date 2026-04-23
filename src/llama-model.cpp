@@ -10,6 +10,11 @@
 #include "llama-memory-recurrent.h"
 #include "llama-mmap.h"
 #include "llama-model-loader.h"
+#include "../ggml/src/ggml-quants.h"
+
+#ifdef GGML_IFAIRY_LUT_CPU
+#    include "../ggml/src/ggml-ifairy-lut.h"
+#endif
 
 #include <algorithm>
 #include <cassert>
@@ -22,6 +27,18 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+
+#ifdef GGML_IFAIRY_LUT_CPU
+static bool llama_ifairy_lut_explicit_enabled() {
+    const char * env = getenv("GGML_IFAIRY_LUT");
+    return env && strcmp(env, "0") != 0;
+}
+#endif
+
+static bool llama_fairy2i_merged_output_enabled() {
+    const char * env = getenv("LLAMA_FAIRY2I_MERGED_OUTPUT");
+    return env != nullptr && strcmp(env, "0") != 0;
+}
 
 const char * llm_type_name(llm_type type) {
     switch (type) {
@@ -1612,9 +1629,52 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
+                std::string quant_variant = "legacy";
+                ml.get_key("fairy2i.quant.variant", quant_variant, false);
+
+                if (quant_variant == "legacy") {
+                    fairy2i_quant_variant = LLAMA_FAIRY2I_QUANT_VARIANT_LEGACY;
+                } else if (quant_variant == "tile64_v2") {
+                    fairy2i_quant_variant = LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2;
+
+                    uint32_t tile_size = 0;
+                    ml.get_key("fairy2i.quant.tile_size", tile_size);
+                    if (tile_size != 64) {
+                        throw std::runtime_error(
+                            format("invalid FAIRY2I tile64_v2 tile size: %u, expected 64", tile_size));
+                    }
+
+                    std::string scale_stat;
+                    ml.get_key("fairy2i.quant.scale_stat", scale_stat);
+                    if (scale_stat != "dominant_mean_abs") {
+                        throw std::runtime_error(
+                            format("invalid FAIRY2I tile64_v2 scale stat: %s, expected dominant_mean_abs", scale_stat.c_str()));
+                    }
+                } else {
+                    throw std::runtime_error(
+                        format("unsupported FAIRY2I quant variant: %s", quant_variant.c_str()));
+                }
+
+                std::string attn_layout = fairy2i_quant_variant == LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2
+                                              ? "qwen2_real"
+                                              : "legacy_complex";
+                ml.get_key("fairy2i.attn.layout", attn_layout, false);
+
+                if (attn_layout == "legacy_complex") {
+                    fairy2i_attn_layout = LLAMA_FAIRY2I_ATTN_LAYOUT_LEGACY_COMPLEX;
+                } else if (attn_layout == "qwen2_real") {
+                    fairy2i_attn_layout = LLAMA_FAIRY2I_ATTN_LAYOUT_QWEN2_REAL;
+                } else {
+                    throw std::runtime_error(
+                        format("unsupported FAIRY2I attention layout: %s", attn_layout.c_str()));
+                }
+
                 switch (hparams.n_layer) {
                     case 32:
                         type = LLM_TYPE_7B;
+                        break;
+                    case 64:
+                        type = LLM_TYPE_32B;
                         break;
                     default:
                         type = LLM_TYPE_UNKNOWN;
@@ -4568,19 +4628,47 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // Optional dense output for ablation/fallback.
                     output      = create_tensor(tn(LLM_TENSOR_OUTPUT), { n_embd * 2, n_vocab }, TENSOR_NOT_REQUIRED);
 
+                    auto create_fairy2i_stage = [&](ggml_tensor * & stage, llm_tensor tensor, const char * suffix, int bid,
+                                                    const std::initializer_list<int64_t> & ne, int flags) {
+                        const auto stage_tn = bid >= 0 ? tn(tensor, suffix, bid) : tn(tensor, suffix);
+                        const auto expected_type = fairy2i_quant_variant == LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2
+                            ? GGML_TYPE_IFAIRY64
+                            : GGML_TYPE_IFAIRY;
+
+                        const ggml_tensor * t_meta = ml.get_tensor_meta(stage_tn.str().c_str());
+                        if (t_meta && t_meta->type != expected_type) {
+                            throw std::runtime_error(
+                                format("invalid FAIRY2I tensor type for %s: expected %s, got %s",
+                                       stage_tn.str().c_str(),
+                                       ggml_type_name(expected_type),
+                                       ggml_type_name(t_meta->type)));
+                        }
+
+                        stage = create_tensor(stage_tn, ne, flags);
+                    };
+
+                    auto create_fairy2i_linear = [&](llama_widely_linear_ifairy & linear, llm_tensor tensor, int bid,
+                                                     int64_t in_dim, int64_t out_dim, int flags) {
+                        if (fairy2i_quant_variant == LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2 &&
+                            (in_dim % 64 != 0 || out_dim % 64 != 0)) {
+                            const std::string tensor_name = bid >= 0 ? tn(tensor, bid).str() : tn(tensor).str();
+                            throw std::runtime_error(
+                                format("invalid FAIRY2I tile64_v2 dims for %s: in=%lld out=%lld, expected multiples of 64",
+                                       tensor_name.c_str(), (long long) in_dim, (long long) out_dim));
+                        }
+
+                        create_fairy2i_stage(linear.U[0], tensor, "U.s0", bid, { in_dim, out_dim }, flags);
+                        create_fairy2i_stage(linear.U[1], tensor, "U.s1", bid, { in_dim, out_dim }, flags);
+                        create_fairy2i_stage(linear.W[0], tensor, "W.s0", bid, { in_dim, out_dim }, flags);
+                        create_fairy2i_stage(linear.W[1], tensor, "W.s1", bid, { in_dim, out_dim }, flags);
+                    };
+
                     if (n_vocab % 2 != 0) {
                         throw std::runtime_error(
                             format("invalid FAIRY2I vocab size: %lld, expected even", (long long) n_vocab));
                     }
 
-                    output_fairy2i.U[0] =
-                        create_tensor(tn(LLM_TENSOR_OUTPUT, "U.s0"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
-                    output_fairy2i.U[1] =
-                        create_tensor(tn(LLM_TENSOR_OUTPUT, "U.s1"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
-                    output_fairy2i.W[0] =
-                        create_tensor(tn(LLM_TENSOR_OUTPUT, "W.s0"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
-                    output_fairy2i.W[1] =
-                        create_tensor(tn(LLM_TENSOR_OUTPUT, "W.s1"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
+                    create_fairy2i_linear(output_fairy2i, LLM_TENSOR_OUTPUT, -1, n_embd, n_vocab / 2, TENSOR_NOT_REQUIRED);
 
                     const bool has_output_fairy2i =
                         output_fairy2i.U[0] && output_fairy2i.U[1] && output_fairy2i.W[0] && output_fairy2i.W[1];
@@ -4609,64 +4697,19 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, i), { n_embd * 2 }, 0);
                         layer.ffn_norm  = create_tensor(tn(LLM_TENSOR_FFN_NORM, i), { n_embd * 2 }, 0);
 
-                        layer.wq_fairy2i.U[0] = create_tensor(tn(LLM_TENSOR_ATTN_Q, "U.s0", i), { n_embd, n_embd }, 0);
-                        layer.wq_fairy2i.U[1] = create_tensor(tn(LLM_TENSOR_ATTN_Q, "U.s1", i), { n_embd, n_embd }, 0);
-                        layer.wq_fairy2i.W[0] = create_tensor(tn(LLM_TENSOR_ATTN_Q, "W.s0", i), { n_embd, n_embd }, 0);
-                        layer.wq_fairy2i.W[1] = create_tensor(tn(LLM_TENSOR_ATTN_Q, "W.s1", i), { n_embd, n_embd }, 0);
+                        // optional bias tensors from Qwen2-based Fairy2i checkpoints
+                        layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "bias", i), { n_embd * 2 }, TENSOR_NOT_REQUIRED);
+                        layer.bk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "bias", i), { n_embd_gqa }, TENSOR_NOT_REQUIRED);
+                        layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "bias", i), { n_embd_gqa }, TENSOR_NOT_REQUIRED);
+                        layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), { n_embd * 2 }, TENSOR_NOT_REQUIRED);
 
-                        layer.wk_fairy2i.U[0] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_K, "U.s0", i), { n_embd, n_embd_gqa / 2 }, 0);
-                        layer.wk_fairy2i.U[1] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_K, "U.s1", i), { n_embd, n_embd_gqa / 2 }, 0);
-                        layer.wk_fairy2i.W[0] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_K, "W.s0", i), { n_embd, n_embd_gqa / 2 }, 0);
-                        layer.wk_fairy2i.W[1] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_K, "W.s1", i), { n_embd, n_embd_gqa / 2 }, 0);
-
-                        layer.wv_fairy2i.U[0] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_V, "U.s0", i), { n_embd, n_embd_gqa / 2 }, 0);
-                        layer.wv_fairy2i.U[1] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_V, "U.s1", i), { n_embd, n_embd_gqa / 2 }, 0);
-                        layer.wv_fairy2i.W[0] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_V, "W.s0", i), { n_embd, n_embd_gqa / 2 }, 0);
-                        layer.wv_fairy2i.W[1] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_V, "W.s1", i), { n_embd, n_embd_gqa / 2 }, 0);
-
-                        layer.wo_fairy2i.U[0] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_OUT, "U.s0", i), { n_embd, n_embd }, 0);
-                        layer.wo_fairy2i.U[1] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_OUT, "U.s1", i), { n_embd, n_embd }, 0);
-                        layer.wo_fairy2i.W[0] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_OUT, "W.s0", i), { n_embd, n_embd }, 0);
-                        layer.wo_fairy2i.W[1] =
-                            create_tensor(tn(LLM_TENSOR_ATTN_OUT, "W.s1", i), { n_embd, n_embd }, 0);
-
-                        layer.ffn_gate_fairy2i.U[0] =
-                            create_tensor(tn(LLM_TENSOR_FFN_GATE, "U.s0", i), { n_embd, n_ff }, 0);
-                        layer.ffn_gate_fairy2i.U[1] =
-                            create_tensor(tn(LLM_TENSOR_FFN_GATE, "U.s1", i), { n_embd, n_ff }, 0);
-                        layer.ffn_gate_fairy2i.W[0] =
-                            create_tensor(tn(LLM_TENSOR_FFN_GATE, "W.s0", i), { n_embd, n_ff }, 0);
-                        layer.ffn_gate_fairy2i.W[1] =
-                            create_tensor(tn(LLM_TENSOR_FFN_GATE, "W.s1", i), { n_embd, n_ff }, 0);
-
-                        layer.ffn_up_fairy2i.U[0] =
-                            create_tensor(tn(LLM_TENSOR_FFN_UP, "U.s0", i), { n_embd, n_ff }, 0);
-                        layer.ffn_up_fairy2i.U[1] =
-                            create_tensor(tn(LLM_TENSOR_FFN_UP, "U.s1", i), { n_embd, n_ff }, 0);
-                        layer.ffn_up_fairy2i.W[0] =
-                            create_tensor(tn(LLM_TENSOR_FFN_UP, "W.s0", i), { n_embd, n_ff }, 0);
-                        layer.ffn_up_fairy2i.W[1] =
-                            create_tensor(tn(LLM_TENSOR_FFN_UP, "W.s1", i), { n_embd, n_ff }, 0);
-
-                        layer.ffn_down_fairy2i.U[0] =
-                            create_tensor(tn(LLM_TENSOR_FFN_DOWN, "U.s0", i), { n_ff, n_embd }, 0);
-                        layer.ffn_down_fairy2i.U[1] =
-                            create_tensor(tn(LLM_TENSOR_FFN_DOWN, "U.s1", i), { n_ff, n_embd }, 0);
-                        layer.ffn_down_fairy2i.W[0] =
-                            create_tensor(tn(LLM_TENSOR_FFN_DOWN, "W.s0", i), { n_ff, n_embd }, 0);
-                        layer.ffn_down_fairy2i.W[1] =
-                            create_tensor(tn(LLM_TENSOR_FFN_DOWN, "W.s1", i), { n_ff, n_embd }, 0);
+                        create_fairy2i_linear(layer.wq_fairy2i, LLM_TENSOR_ATTN_Q, i, n_embd, n_embd, 0);
+                        create_fairy2i_linear(layer.wk_fairy2i, LLM_TENSOR_ATTN_K, i, n_embd, n_embd_gqa / 2, 0);
+                        create_fairy2i_linear(layer.wv_fairy2i, LLM_TENSOR_ATTN_V, i, n_embd, n_embd_gqa / 2, 0);
+                        create_fairy2i_linear(layer.wo_fairy2i, LLM_TENSOR_ATTN_OUT, i, n_embd, n_embd, 0);
+                        create_fairy2i_linear(layer.ffn_gate_fairy2i, LLM_TENSOR_FFN_GATE, i, n_embd, n_ff, 0);
+                        create_fairy2i_linear(layer.ffn_up_fairy2i, LLM_TENSOR_FFN_UP, i, n_embd, n_ff, 0);
+                        create_fairy2i_linear(layer.ffn_down_fairy2i, LLM_TENSOR_FFN_DOWN, i, n_ff, n_embd, 0);
                     }
                 }
                 break;
@@ -6138,6 +6181,142 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             return false;
         }
     }
+
+    if (arch == LLM_ARCH_FAIRY2I && llama_fairy2i_merged_output_enabled()) {
+        const bool has_output_fairy2i = output_fairy2i.U[0] && output_fairy2i.U[1] &&
+                                        output_fairy2i.W[0] && output_fairy2i.W[1];
+        if (!has_output_fairy2i) {
+            LLAMA_LOG_WARN("%s: LLAMA_FAIRY2I_MERGED_OUTPUT is set, but output.{U,W}.s{0,1} is incomplete\n", __func__);
+        } else if (fairy2i_quant_variant != LLAMA_FAIRY2I_QUANT_VARIANT_TILE64_V2) {
+            LLAMA_LOG_WARN("%s: LLAMA_FAIRY2I_MERGED_OUTPUT currently requires FAIRY2I tile64_v2 weights\n", __func__);
+        } else {
+            const ggml_tensor * src_u0 = output_fairy2i.U[0];
+            const ggml_tensor * src_u1 = output_fairy2i.U[1];
+            const ggml_tensor * src_w0 = output_fairy2i.W[0];
+            const ggml_tensor * src_w1 = output_fairy2i.W[1];
+
+            GGML_ASSERT(src_u0->type == GGML_TYPE_IFAIRY64);
+            GGML_ASSERT(src_u1->type == GGML_TYPE_IFAIRY64);
+            GGML_ASSERT(src_w0->type == GGML_TYPE_IFAIRY64);
+            GGML_ASSERT(src_w1->type == GGML_TYPE_IFAIRY64);
+            GGML_ASSERT(src_u0->ne[0] == src_u1->ne[0] && src_u0->ne[1] == src_u1->ne[1]);
+            GGML_ASSERT(src_w0->ne[0] == src_w1->ne[0] && src_w0->ne[1] == src_w1->ne[1]);
+
+            const int64_t in_dim  = src_u0->ne[0];
+            const int64_t out_dim = src_u0->ne[1];
+            const size_t  row_size = ggml_row_size(GGML_TYPE_IFAIRY64, in_dim);
+            const int64_t t_merge_us = ggml_time_us();
+
+            ggml_init_params synth_params = {
+                /*.mem_size   =*/ ggml_tensor_overhead() * 8 + 1024,
+                /*.mem_buffer =*/ NULL,
+                /*.no_alloc   =*/ true,
+            };
+
+            ggml_context_ptr synth_ctx { ggml_init(synth_params) };
+            if (!synth_ctx) {
+                throw std::runtime_error(format("%s: failed to create merged output ctx", __func__));
+            }
+
+            ggml_tensor * merged_u = ggml_new_tensor_2d(synth_ctx.get(), GGML_TYPE_IFAIRY64, in_dim, out_dim);
+            ggml_tensor * merged_w = ggml_new_tensor_2d(synth_ctx.get(), GGML_TYPE_IFAIRY64, in_dim, out_dim);
+            if (!merged_u || !merged_w) {
+                throw std::runtime_error(format("%s: failed to create merged output tensors", __func__));
+            }
+
+            ggml_set_name(merged_u, "output.U.merged");
+            ggml_set_name(merged_w, "output.W.merged");
+
+            ggml_backend_buffer_ptr synth_buf {
+                ggml_backend_alloc_ctx_tensors_from_buft(synth_ctx.get(), ggml_backend_cpu_buffer_type())
+            };
+            if (!synth_buf) {
+                throw std::runtime_error(format("%s: failed to allocate merged output buffer", __func__));
+            }
+            ggml_backend_buffer_set_usage(synth_buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+            const int64_t blocks_per_row = in_dim / QK_IFAIRY64;
+            std::vector<block_ifairy64> row_a((size_t) blocks_per_row);
+            std::vector<block_ifairy64> row_b((size_t) blocks_per_row);
+            std::vector<block_ifairy64> row_out((size_t) blocks_per_row);
+            std::vector<float> tmp_a_real((size_t) in_dim);
+            std::vector<float> tmp_a_imag((size_t) in_dim);
+            std::vector<float> tmp_b_real((size_t) in_dim);
+            std::vector<float> tmp_b_imag((size_t) in_dim);
+            std::vector<float> tmp_sum_real((size_t) in_dim);
+            std::vector<float> tmp_sum_imag((size_t) in_dim);
+
+            auto merge_stage_pair = [&](ggml_tensor * dst, const ggml_tensor * stage0, const ggml_tensor * stage1) {
+                for (int64_t row = 0; row < out_dim; ++row) {
+                    const size_t row_off = (size_t) row * stage0->nb[1];
+
+                    ggml_backend_tensor_get(stage0, row_a.data(), row_off, row_size);
+                    ggml_backend_tensor_get(stage1, row_b.data(), row_off, row_size);
+
+                    dequantize_row_ifairy64(row_a.data(), tmp_a_real.data(), tmp_a_imag.data(), in_dim);
+                    dequantize_row_ifairy64(row_b.data(), tmp_b_real.data(), tmp_b_imag.data(), in_dim);
+
+                    for (int64_t i = 0; i < in_dim; ++i) {
+                        tmp_sum_real[(size_t) i] = tmp_a_real[(size_t) i] + tmp_b_real[(size_t) i];
+                        tmp_sum_imag[(size_t) i] = tmp_a_imag[(size_t) i] + tmp_b_imag[(size_t) i];
+                    }
+
+                    quantize_row_ifairy64_ref(tmp_sum_real.data(), tmp_sum_imag.data(), row_out.data(), in_dim);
+                    ggml_backend_tensor_set(dst, row_out.data(), (size_t) row * dst->nb[1], row_size);
+                }
+            };
+
+            merge_stage_pair(merged_u, src_u0, src_u1);
+            merge_stage_pair(merged_w, src_w0, src_w1);
+
+            output_fairy2i_merged.U[0] = merged_u;
+            output_fairy2i_merged.U[1] = nullptr;
+            output_fairy2i_merged.W[0] = merged_w;
+            output_fairy2i_merged.W[1] = nullptr;
+
+            for (auto * cur = ggml_get_first_tensor(synth_ctx.get()); cur != NULL; cur = ggml_get_next_tensor(synth_ctx.get(), cur)) {
+                tensors_by_name.emplace_back(ggml_get_name(cur), cur);
+            }
+
+            pimpl->bufs.emplace_back(std::move(synth_buf));
+            pimpl->ctxs.emplace_back(std::move(synth_ctx));
+
+            LLAMA_LOG_INFO("%s: prepared merged FAIRY2I output weights in %.3f sec (2 x %.2f MiB)\n", __func__,
+                           (ggml_time_us() - t_merge_us) / 1e6,
+                           ggml_backend_buffer_get_size(pimpl->bufs.back().get()) / 1024.0 / 1024.0 / 2.0);
+        }
+    }
+
+#ifdef GGML_IFAIRY_LUT_CPU
+    if (llama_ifairy_lut_explicit_enabled()) {
+        const int64_t t_lut_pack_us = ggml_time_us();
+        int           n_lut_tensors = 0;
+
+        for (auto & ctx : pimpl->ctxs) {
+            for (ggml_tensor * cur = ggml_get_first_tensor(ctx.get()); cur != NULL; cur = ggml_get_next_tensor(ctx.get(), cur)) {
+                if (cur->type != GGML_TYPE_IFAIRY64) {
+                    continue;
+                }
+
+                const ifairy_lut_extra * extra = (const ifairy_lut_extra *) cur->extra;
+                if (extra && extra->packed_w) {
+                    continue;
+                }
+
+                if (!ggml_ifairy_lut_transform_tensor(cur, NULL)) {
+                    throw std::runtime_error(format("%s: failed to prepack IFAIRY64 LUT tensor %s", __func__,
+                                                    ggml_get_name(cur)));
+                }
+                ++n_lut_tensors;
+            }
+        }
+
+        if (n_lut_tensors > 0) {
+            LLAMA_LOG_INFO("%s: eagerly prepared %d IFAIRY64 LUT tensors in %.3f sec\n", __func__, n_lut_tensors,
+                           (ggml_time_us() - t_lut_pack_us) / 1e6);
+        }
+    }
+#endif
 
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
@@ -13938,6 +14117,7 @@ struct llm_build_ifairy : public llm_graph_context {
 struct llm_build_fairy2i : public llm_graph_context {
     llm_build_fairy2i(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
+        const bool    use_real_attn = model.fairy2i_attn_layout == LLAMA_FAIRY2I_ATTN_LAYOUT_QWEN2_REAL;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
         GGML_ASSERT(n_embd_head % 2 == 0);
@@ -13947,7 +14127,8 @@ struct llm_build_fairy2i : public llm_graph_context {
         auto *        inp_attn = build_attn_inp_kv();
 
         const float kq_scale =
-            hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head) / 2) : hparams.f_attention_scale;
+            hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(use_real_attn ? n_embd_head : n_embd_head / 2))
+                                              : hparams.f_attention_scale;
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -13977,19 +14158,30 @@ struct llm_build_fairy2i : public llm_graph_context {
             return x_merge;
         };
 
+        auto build_ifairy_bias = [&](ggml_tensor * x, ggml_tensor * bias, int il, const char * name) -> ggml_tensor * {
+            if (!bias) {
+                return x;
+            }
+
+            ggml_tensor * x_split = ggml_ifairy_split(ctx0, x);
+            ggml_tensor * x_bias  = ggml_add(ctx0, x_split, bias);
+            ggml_tensor * x_merge = ggml_ifairy_merge(ctx0, x_bias);
+            cb(x_merge, name, il);
+            return x_merge;
+        };
+
         auto build_wide_linear = [&](const llama_widely_linear_ifairy & linear, ggml_tensor * x, ggml_tensor * x_conj,
-                                     int il, const char * name) -> ggml_tensor * {
-            GGML_ASSERT(linear.U[0] && linear.U[1] && linear.W[0] && linear.W[1]);
+                                     ggml_tensor * bias, int il, const char * name) -> ggml_tensor * {
+            GGML_ASSERT(linear.U[0] && linear.W[0]);
 
             ggml_tensor * u0 = build_lora_mm(linear.U[0], x_conj);
-            ggml_tensor * u1 = build_lora_mm(linear.U[1], x_conj);
-            ggml_tensor * u  = ggml_ifairy_add(ctx0, u0, u1);
+            ggml_tensor * u  = linear.U[1] ? ggml_ifairy_add(ctx0, u0, build_lora_mm(linear.U[1], x_conj)) : u0;
 
             ggml_tensor * w0 = build_lora_mm(linear.W[0], x);
-            ggml_tensor * w1 = build_lora_mm(linear.W[1], x);
-            ggml_tensor * w  = ggml_ifairy_add(ctx0, w0, w1);
+            ggml_tensor * w  = linear.W[1] ? ggml_ifairy_add(ctx0, w0, build_lora_mm(linear.W[1], x)) : w0;
 
             ggml_tensor * y = ggml_ifairy_add(ctx0, u, w);
+            y = build_ifairy_bias(y, bias, il, "wide_linear_bias");
             cb(y, name, il);
             return y;
         };
@@ -14001,28 +14193,55 @@ struct llm_build_fairy2i : public llm_graph_context {
 
             ggml_tensor * cur_conj = build_ifairy_conj(cur, il, "attn_norm_conj");
 
-            ggml_tensor * Qcur = build_wide_linear(model.layers[il].wq_fairy2i, cur, cur_conj, il, "Qcur");
-            ggml_tensor * Kcur = build_wide_linear(model.layers[il].wk_fairy2i, cur, cur_conj, il, "Kcur");
-            ggml_tensor * Vcur = build_wide_linear(model.layers[il].wv_fairy2i, cur, cur_conj, il, "Vcur");
+            ggml_tensor * Qcur = build_wide_linear(model.layers[il].wq_fairy2i, cur, cur_conj, model.layers[il].bq, il, "Qcur");
+            ggml_tensor * Kcur = build_wide_linear(model.layers[il].wk_fairy2i, cur, cur_conj, model.layers[il].bk, il, "Kcur");
+            ggml_tensor * Vcur = build_wide_linear(model.layers[il].wv_fairy2i, cur, cur_conj, model.layers[il].bv, il, "Vcur");
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head / 2, n_head, n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head / 2, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head / 2, n_head_kv, n_tokens);
+            if (use_real_attn) {
+                Qcur = ggml_ifairy_split(ctx0, Qcur);
+                Kcur = ggml_ifairy_split(ctx0, Kcur);
+                Vcur = ggml_ifairy_split(ctx0, Vcur);
+                cb(Qcur, "Qcur_split", il);
+                cb(Kcur, "Kcur_split", il);
+                cb(Vcur, "Vcur_split", il);
 
-            Qcur = ggml_ifairy_rope(ctx0, Qcur, inp_pos, n_rot, 0);
-            cb(Qcur, "Qcur_rope", il);
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-            Kcur = ggml_ifairy_rope(ctx0, Kcur, inp_pos, n_rot, 0);
-            cb(Kcur, "Kcur_rope", il);
+                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                                     ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(Qcur, "Qcur_rope", il);
 
-            Vcur = ggml_ifairy_split(ctx0, Vcur);
-            cb(Vcur, "Vcur_split", il);
+                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                                     ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(Kcur, "Kcur_rope", il);
 
-            cur = ifairy_build_attn(inp_attn, Qcur, Kcur, Vcur, kq_scale, il);
-            cb(cur, "attn_out", il);
+                cur = build_attn(inp_attn, nullptr, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+                cb(cur, "attn_out_split", il);
+
+                cur = ggml_ifairy_merge(ctx0, cur);
+                cb(cur, "attn_out", il);
+            } else {
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head / 2, n_head, n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head / 2, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head / 2, n_head_kv, n_tokens);
+
+                Qcur = ggml_ifairy_rope(ctx0, Qcur, inp_pos, n_rot, 0);
+                cb(Qcur, "Qcur_rope", il);
+
+                Kcur = ggml_ifairy_rope(ctx0, Kcur, inp_pos, n_rot, 0);
+                cb(Kcur, "Kcur_rope", il);
+
+                Vcur = ggml_ifairy_split(ctx0, Vcur);
+                cb(Vcur, "Vcur_split", il);
+
+                cur = ifairy_build_attn(inp_attn, Qcur, Kcur, Vcur, kq_scale, il);
+                cb(cur, "attn_out", il);
+            }
 
             ggml_tensor * cur_attn_conj = build_ifairy_conj(cur, il, "attn_out_conj");
-            cur = build_wide_linear(model.layers[il].wo_fairy2i, cur, cur_attn_conj, il, "attn_proj");
+            cur = build_wide_linear(model.layers[il].wo_fairy2i, cur, cur_attn_conj, model.layers[il].bo, il, "attn_proj");
 
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
@@ -14038,8 +14257,8 @@ struct llm_build_fairy2i : public llm_graph_context {
 
             ggml_tensor * cur_ffn_conj = build_ifairy_conj(cur, il, "ffn_norm_conj");
             ggml_tensor * gate =
-                build_wide_linear(model.layers[il].ffn_gate_fairy2i, cur, cur_ffn_conj, il, "ffn_gate");
-            ggml_tensor * up = build_wide_linear(model.layers[il].ffn_up_fairy2i, cur, cur_ffn_conj, il, "ffn_up");
+                build_wide_linear(model.layers[il].ffn_gate_fairy2i, cur, cur_ffn_conj, nullptr, il, "ffn_gate");
+            ggml_tensor * up = build_wide_linear(model.layers[il].ffn_up_fairy2i, cur, cur_ffn_conj, nullptr, il, "ffn_up");
 
             ggml_tensor * gate_s = ggml_ifairy_split(ctx0, gate);
             ggml_tensor * up_s   = ggml_ifairy_split(ctx0, up);
@@ -14049,7 +14268,7 @@ struct llm_build_fairy2i : public llm_graph_context {
             ggml_tensor * mul   = ggml_ifairy_merge(ctx0, mul_s);
 
             ggml_tensor * mul_conj = build_ifairy_conj(mul, il, "ffn_mul_conj");
-            cur = build_wide_linear(model.layers[il].ffn_down_fairy2i, mul, mul_conj, il, "ffn_down");
+            cur = build_wide_linear(model.layers[il].ffn_down_fairy2i, mul, mul_conj, nullptr, il, "ffn_down");
 
             cur = ggml_ifairy_add(ctx0, cur, ffn_inp);
             cb(cur, "ffn_res", il);
@@ -14062,12 +14281,17 @@ struct llm_build_fairy2i : public llm_graph_context {
 
         const bool has_output_fairy2i = model.output_fairy2i.U[0] && model.output_fairy2i.U[1] &&
                                         model.output_fairy2i.W[0] && model.output_fairy2i.W[1];
+        const bool has_output_fairy2i_merged = model.output_fairy2i_merged.U[0] && model.output_fairy2i_merged.W[0];
         const char * force_dense_output_env = getenv("LLAMA_FAIRY2I_FORCE_DENSE_OUTPUT");
         const bool   force_dense_output = force_dense_output_env != nullptr && strcmp(force_dense_output_env, "0") != 0;
 
-        if (has_output_fairy2i && (!force_dense_output || !model.output)) {
+        if (has_output_fairy2i_merged && (!force_dense_output || !model.output)) {
             ggml_tensor * cur_conj = build_ifairy_conj(cur, -1, "result_norm_conj");
-            cur                    = build_wide_linear(model.output_fairy2i, cur, cur_conj, -1, "result_output_wide");
+            cur = build_wide_linear(model.output_fairy2i_merged, cur, cur_conj, nullptr, -1, "result_output_wide_merged");
+            cur = ggml_ifairy_split(ctx0, cur);
+        } else if (has_output_fairy2i && (!force_dense_output || !model.output)) {
+            ggml_tensor * cur_conj = build_ifairy_conj(cur, -1, "result_norm_conj");
+            cur                    = build_wide_linear(model.output_fairy2i, cur, cur_conj, nullptr, -1, "result_output_wide");
             cur                    = ggml_ifairy_split(ctx0, cur);
         } else if (model.output) {
             cur = ggml_ifairy_split(ctx0, cur);
