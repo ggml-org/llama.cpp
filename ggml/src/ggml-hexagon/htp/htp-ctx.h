@@ -10,6 +10,7 @@
 #include <dspqueue.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #define HTP_MAX_NTHREADS 10
 #define HTP_MAX_MMAPS    16
@@ -66,7 +67,9 @@ struct htp_context {
     int                    thread_id;
     int                    thread_prio;
 
-    int                    hmx_enabled;
+    bool                   hmx_enabled;
+    bool                   etm;
+    uint32_t               profiler;
 
     uint8_t *              vtcm_base;
     size_t                 vtcm_size;
