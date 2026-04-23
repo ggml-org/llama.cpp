@@ -1,8 +1,12 @@
 <script lang="ts">
+	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
 	import { afterNavigate } from '$app/navigation';
+	import { page } from '$app/state';
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatScreenForm,
 		ChatMessages,
+		ChatScreenDragOverlay,
 		ChatScreenProcessingInfo,
 		DialogEmptyFileAlert,
 		DialogChatError,
@@ -11,6 +15,8 @@
 	} from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import { setProcessingInfoContext } from '$lib/contexts';
+	import { ErrorDialogType } from '$lib/enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
@@ -32,13 +38,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
-	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
-	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
-	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
-	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
-	import { page } from '$app/state';
-	import { setProcessingInfoContext } from '$lib/contexts';
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -428,7 +428,6 @@
 						onSend={handleSendMessage}
 						onStop={() => chatStore.stopGeneration()}
 						onSystemPromptAdd={handleSystemPromptAdd}
-						showHelperText={false}
 						bind:uploadedFiles
 					/>
 				</div>

@@ -3,7 +3,9 @@
 	import { page } from '$app/state';
 	import { Trash2, Pencil, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { ChatSidebarConversationItem, DialogConfirmation } from '$lib/components/app';
+	import { DialogConfirmation } from '$lib/components/app';
+	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
+	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
@@ -16,7 +18,6 @@
 	} from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { getPreviewText } from '$lib/utils';
-	import ChatSidebarActions from './ChatSidebarActions.svelte';
 	import { APP_NAME } from '$lib/constants';
 
 	const sidebar = Sidebar.useSidebar();
@@ -185,7 +186,7 @@
 				</Button>
 			</div>
 
-			<ChatSidebarActions
+			<SidebarNavigationActions
 				bind:this={chatSidebarActions}
 				{handleMobileSidebarItemClick}
 				bind:isSearchModeActive
@@ -205,7 +206,7 @@
 				<Sidebar.Menu>
 					{#each conversationTree as { conversation, depth } (conversation.id)}
 						<Sidebar.MenuItem class="mb-1 p-0">
-							<ChatSidebarConversationItem
+							<SidebarNavigationConversationItem
 								conversation={{
 									id: conversation.id,
 									name: conversation.name,

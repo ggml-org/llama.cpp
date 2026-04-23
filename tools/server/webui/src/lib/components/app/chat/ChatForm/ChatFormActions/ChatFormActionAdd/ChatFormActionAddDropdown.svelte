@@ -1,17 +1,15 @@
 <script lang="ts">
-	import { Plus } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import type { Snippet } from 'svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_EXTRA_ITEMS,
 		ATTACHMENT_MCP_ITEMS,
-		ATTACHMENT_TOOLTIP_TEXT,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
 	import { AttachmentMenuItemId } from '$lib/enums';
-	import { ChatFormActionToolsSubmenu, ChatFormActionMcpServersSubmenu } from '$lib/components/app';
+	import { ChatFormActionAddToolsSubmenu, ChatFormActionAddMcpServersSubmenu } from '$lib/components/app';
 
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
@@ -27,6 +25,7 @@
 		onMcpPromptClick?: () => void;
 		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
+		trigger: Snippet<[{ disabled: boolean }]>;
 	}
 
 	let {
@@ -40,7 +39,8 @@
 		onSystemPromptClick,
 		onMcpPromptClick,
 		onMcpSettingsClick,
-		onMcpResourcesClick
+		onMcpResourcesClick,
+		trigger
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
@@ -62,24 +62,7 @@
 <div class="flex items-center gap-1 {className}">
 	<DropdownMenu.Root bind:open={dropdownOpen}>
 		<DropdownMenu.Trigger name="Attach files" {disabled}>
-			<Tooltip.Root>
-				<Tooltip.Trigger class="w-full">
-					<Button
-						class="file-upload-button h-8 w-8 rounded-full p-0"
-						{disabled}
-						variant="secondary"
-						type="button"
-					>
-						<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
-
-						<Plus class="h-4 w-4" />
-					</Button>
-				</Tooltip.Trigger>
-
-				<Tooltip.Content>
-					<p>{ATTACHMENT_TOOLTIP_TEXT}</p>
-				</Tooltip.Content>
-			</Tooltip.Root>
+			{@render trigger({ disabled })}
 		</DropdownMenu.Trigger>
 
 		<DropdownMenu.Content align="start" class="w-48">
@@ -161,9 +144,9 @@
 				{/if}
 			{/each}
 
-			<ChatFormActionToolsSubmenu />
+			<ChatFormActionAddToolsSubmenu />
 
-			<ChatFormActionMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
+			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
 
 			{#each ATTACHMENT_MCP_ITEMS as item (item.id)}
 				{#if attachmentMenu.isItemVisible(item.visibleWhen)}

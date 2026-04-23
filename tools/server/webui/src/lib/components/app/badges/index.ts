@@ -6,9 +6,6 @@
  *
  */
 
-/** Badge displaying chat statistics (tokens, timing). */
-export { default as BadgeChatStatistic } from './BadgeChatStatistic.svelte';
-
 /** Generic info badge with optional tooltip and click handler. */
 export { default as BadgeInfo } from './BadgeInfo.svelte';
 

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Clock, Gauge, WholeWord, BookOpenText, Sparkles, Wrench, Layers } from '@lucide/svelte';
-	import { BadgeChatStatistic } from '$lib/components/app';
+	import { ChatMessageStatisticsBadge } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ChatMessageStatsView } from '$lib/enums';
 	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
@@ -215,84 +215,84 @@
 
 	<div class="flex items-center gap-1 px-2">
 		{#if activeView === ChatMessageStatsView.GENERATION && hasGenerationStats}
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={WholeWord}
 				value="{predictedTokens?.toLocaleString()} tokens"
 				tooltipLabel="Generated tokens"
 			/>
 
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
 				value={formattedTime}
 				tooltipLabel="Generation time"
 			/>
 
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Gauge}
 				value="{tokensPerSecond.toFixed(2)} t/s"
 				tooltipLabel="Generation speed"
 			/>
 		{:else if activeView === ChatMessageStatsView.TOOLS && hasAgenticStats}
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Wrench}
 				value="{agenticTimings!.toolCallsCount} calls"
 				tooltipLabel="Tool calls executed"
 			/>
 
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
 				value={formattedAgenticToolsTime}
 				tooltipLabel="Tool execution time"
 			/>
 
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Gauge}
 				value="{agenticToolsPerSecond.toFixed(2)} calls/s"
 				tooltipLabel="Tool execution rate"
 			/>
 		{:else if activeView === ChatMessageStatsView.SUMMARY && hasAgenticStats}
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Layers}
 				value="{agenticTimings!.turns} turns"
 				tooltipLabel="Agentic turns (LLM calls)"
 			/>
 
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={WholeWord}
 				value="{agenticTimings!.llm.predicted_n.toLocaleString()} tokens"
 				tooltipLabel="Total tokens generated"
 			/>
 
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
 				value={formattedAgenticTotalTime}
 				tooltipLabel="Total time (LLM + tools)"
 			/>
 		{:else if hasPromptStats}
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={WholeWord}
 				value="{promptTokens} tokens"
 				tooltipLabel="Prompt tokens"
 			/>
 
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
 				value={formattedPromptTime ?? '0s'}
 				tooltipLabel="Prompt processing time"
 			/>
 
-			<BadgeChatStatistic
+			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Gauge}
 				value="{promptTokensPerSecond!.toFixed(2)} tokens/s"

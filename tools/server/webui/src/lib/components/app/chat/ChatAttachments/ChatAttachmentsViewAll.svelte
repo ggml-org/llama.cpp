@@ -1,7 +1,7 @@
 <script lang="ts">
 	import {
-		ChatAttachmentThumbnailImage,
-		ChatAttachmentThumbnailFile,
+		ChatAttachmentsListItemThumbnailImage,
+		ChatAttachmentsListItemThumbnailFile,
 		DialogChatAttachmentPreview
 	} from '$lib/components/app';
 	import { getAttachmentDisplayItems } from '$lib/utils';
@@ -60,7 +60,7 @@
 				<h3 class="mb-3 text-sm font-medium text-foreground">Files ({fileItems.length})</h3>
 				<div class="flex flex-wrap items-start gap-3">
 					{#each fileItems as item (item.id)}
-						<ChatAttachmentThumbnailFile
+						<ChatAttachmentsListItemThumbnailFile
 							class="cursor-pointer"
 							id={item.id}
 							name={item.name}
@@ -83,7 +83,7 @@
 				<div class="flex flex-wrap items-start gap-3">
 					{#each imageItems as item (item.id)}
 						{#if item.preview}
-							<ChatAttachmentThumbnailImage
+							<ChatAttachmentsListItemThumbnailImage
 								class="cursor-pointer"
 								id={item.id}
 								name={item.name}

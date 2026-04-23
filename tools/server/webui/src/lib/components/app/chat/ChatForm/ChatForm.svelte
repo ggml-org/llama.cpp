@@ -1,11 +1,11 @@
 <script lang="ts">
 	import {
 		ChatAttachmentsList,
-		ChatAttachmentMcpResources,
 		ChatFormActions,
 		ChatFormFileInputInvisible,
-		ChatFormPromptPicker,
-		ChatFormResourcePicker,
+		ChatFormPickerMcpPrompts,
+		ChatFormMcpResourcesList,
+		ChatFormPickerMcpResources,
 		ChatFormTextarea
 	} from '$lib/components/app';
 	import { DialogMcpResources } from '$lib/components/app/dialogs';
@@ -97,8 +97,8 @@
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
-	let promptPickerRef: ChatFormPromptPicker | undefined = $state(undefined);
-	let resourcePickerRef: ChatFormResourcePicker | undefined = $state(undefined);
+	let promptPickerRef: ChatFormPickerMcpPrompts | undefined = $state(undefined);
+	let resourcePickerRef: ChatFormPickerMcpResources | undefined = $state(undefined);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
 
 	// Audio Recording State
@@ -559,7 +559,7 @@
 		onSubmit?.();
 	}}
 >
-	<ChatFormPromptPicker
+	<ChatFormPickerMcpPrompts
 		bind:this={promptPickerRef}
 		isOpen={isPromptPickerOpen}
 		searchQuery={promptSearchQuery}
@@ -569,7 +569,7 @@
 		onPromptLoadError={handlePromptLoadError}
 	/>
 
-	<ChatFormResourcePicker
+	<ChatFormPickerMcpResources
 		bind:this={resourcePickerRef}
 		isOpen={isInlineResourcePickerOpen}
 		searchQuery={resourceSearchQuery}
@@ -612,7 +612,7 @@
 			/>
 
 			{#if mcpHasResourceAttachments()}
-				<ChatAttachmentMcpResources
+				<ChatFormMcpResourcesList
 					class="mb-3"
 					onResourceClick={(uri) => {
 						preSelectedResourceUri = uri;

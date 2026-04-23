@@ -11,9 +11,9 @@
 		ChatFormPickerList,
 		ChatFormPickerListItem,
 		ChatFormPickerItemHeader,
-		ChatFormPickerListItemSkeleton,
-		ChatFormPromptPickerArgumentForm
+		ChatFormPickerListItemSkeleton
 	} from '$lib/components/app/chat';
+	import ChatFormPromptPickerArgumentForm from './ChatFormPromptPickerArgumentForm.svelte';
 
 	interface Props {
 		class?: string;
@@ -97,7 +97,7 @@
 
 			prompts = await mcpStore.getAllPrompts();
 		} catch (error) {
-			console.error('[ChatFormPromptPicker] Failed to load prompts:', error);
+			console.error('[ChatFormPickerMcpPrompts] Failed to load prompts:', error);
 			prompts = [];
 		} finally {
 			isLoading = false;
@@ -163,7 +163,7 @@
 		}
 
 		if (import.meta.env.DEV) {
-			console.log('[ChatFormPromptPicker] Fetching completions for:', {
+			console.log('[ChatFormPickerMcpPrompts] Fetching completions for:', {
 				serverName: selectedPrompt.serverName,
 				promptName: selectedPrompt.name,
 				argName,
@@ -182,7 +182,7 @@
 			);
 
 			if (import.meta.env.DEV) {
-				console.log('[ChatFormPromptPicker] Autocomplete result:', {
+				console.log('[ChatFormPickerMcpPrompts] Autocomplete result:', {
 					argName,
 					value,
 					result,
@@ -205,7 +205,7 @@
 				suggestions[argName] = [];
 			}
 		} catch (error) {
-			console.error('[ChatFormPromptPicker] Failed to fetch completions:', error);
+			console.error('[ChatFormPickerMcpPrompts] Failed to fetch completions:', error);
 			suggestions[argName] = [];
 		} finally {
 			loadingSuggestions[argName] = false;

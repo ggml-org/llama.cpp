@@ -1,12 +1,12 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatSidebar from '$lib/components/app/chat/ChatSidebar/ChatSidebar.svelte';
+	import SidebarNavigation from '$lib/components/app/navigation/SidebarNavigation/SidebarNavigation.svelte';
 	import { waitFor } from 'storybook/test';
 	import { screen } from 'storybook/test';
 
 	const { Story } = defineMeta({
-		title: 'Components/ChatSidebar',
-		component: ChatSidebar,
+		title: 'Components/SidebarNavigation',
+		component: SidebarNavigation,
 		parameters: {
 			layout: 'centered'
 		}
@@ -66,7 +66,7 @@
 >
 	<Sidebar.Provider bind:open={sidebarOpen}>
 		<div class="flex-column h-full h-screen w-72 bg-background">
-			<ChatSidebar />
+			<SidebarNavigation />
 		</div>
 	</Sidebar.Provider>
 </Story>
@@ -87,7 +87,7 @@
 >
 	<Sidebar.Provider bind:open={sidebarOpen}>
 		<div class="flex-column h-full h-screen w-72 bg-background">
-			<ChatSidebar />
+			<SidebarNavigation />
 		</div>
 	</Sidebar.Provider>
 </Story>
@@ -103,7 +103,7 @@
 >
 	<Sidebar.Provider bind:open={sidebarOpen}>
 		<div class="flex-column h-full h-screen w-72 bg-background">
-			<ChatSidebar />
+			<SidebarNavigation />
 		</div>
 	</Sidebar.Provider>
 </Story>

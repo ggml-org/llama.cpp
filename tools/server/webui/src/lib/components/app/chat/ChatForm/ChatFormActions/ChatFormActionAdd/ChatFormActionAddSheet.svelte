@@ -1,18 +1,18 @@
 <script lang="ts">
-	import { Plus } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import type { Snippet } from 'svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_EXTRA_ITEMS,
-		ATTACHMENT_MCP_ITEMS,
-		ATTACHMENT_TOOLTIP_TEXT
+		ATTACHMENT_MCP_ITEMS
 	} from '$lib/constants/attachment-menu';
-	import { ChatFormActionToolsSubmenu, ChatFormActionMcpServersSubmenu } from '$lib/components/app';
+	import { ChatFormActionAddToolsSubmenu, ChatFormActionAddMcpServersSubmenu, McpLogo } from '$lib/components/app';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 	import { AttachmentMenuItemId } from '$lib/enums';
+	import ChatFormActionAddButton from './ChatFormActionAddButton.svelte';
+	import { PencilRuler } from '@lucide/svelte';
 
 	interface Props {
 		class?: string;
@@ -26,6 +26,7 @@
 		onMcpPromptClick?: () => void;
 		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
+		trigger: Snippet<[{ disabled: boolean; onclick?: () => void; }]>;
 	}
 
 	let {
@@ -39,7 +40,8 @@
 		onSystemPromptClick,
 		onMcpPromptClick,
 		onMcpSettingsClick,
-		onMcpResourcesClick
+		onMcpResourcesClick,
+		trigger
 	}: Props = $props();
 
 	let sheetOpen = $state(false);
@@ -63,17 +65,8 @@
 
 <div class="flex items-center gap-1 {className}">
 	<Sheet.Root bind:open={sheetOpen}>
-		<Button
-			class="file-upload-button h-8 w-8 rounded-full p-0"
-			{disabled}
-			variant="secondary"
-			type="button"
-			onclick={() => (sheetOpen = true)}
-		>
-			<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
-
-			<Plus class="h-4 w-4" />
-		</Button>
+		{@render trigger({ disabled, onclick: () => (sheetOpen = true) })}
+		 <!-- <ChatFormActionAddButton {disabled} onclick={() => (sheetOpen = true)} /> -->
 
 		<Sheet.Content side="bottom" class="max-h-[85vh] gap-0 overflow-y-auto">
 			<Sheet.Header>
@@ -161,9 +154,17 @@
 
 				<div class="my-2 border-t"></div>
 
-				<ChatFormActionToolsSubmenu />
+				<a href="#/settings/mcp" class="px-3 py-2 flex gap-3 items-center">
+					<McpLogo class="inline h-4 w-4" />
 
-				<ChatFormActionMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
+					<span class="text-sm">MCP Servers</span>
+				</a>
+
+				<a href="#/settings/chat/tools" class="px-3 py-2 flex gap-3 items-center">
+					<PencilRuler class="inline h-4 w-4" />
+
+					<span class="text-sm">Tools</span>
+				</a>
 
 				{#each ATTACHMENT_MCP_ITEMS as item (item.id)}
 					{#if attachmentMenu.isItemVisible(item.visibleWhen)}

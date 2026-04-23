@@ -4,7 +4,7 @@
 		mcpResourceAttachments,
 		mcpHasResourceAttachments
 	} from '$lib/stores/mcp-resources.svelte';
-	import { ChatAttachmentMcpResource, HorizontalScrollCarousel } from '$lib/components/app';
+	import { ChatAttachmentsListItemMcpResource, HorizontalScrollCarousel } from '$lib/components/app';
 
 	interface Props {
 		class?: string;
@@ -29,7 +29,7 @@
 	<div class={className}>
 		<HorizontalScrollCarousel gapSize="2">
 			{#each attachments as attachment, i (attachment.id)}
-				<ChatAttachmentMcpResource
+				<ChatAttachmentsListItemMcpResource
 					class={i === 0 ? 'ml-3' : ''}
 					{attachment}
 					onRemove={handleRemove}

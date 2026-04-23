@@ -79,7 +79,7 @@
 			await mcpStore.fetchAllResources();
 			resources = mcpResourceStore.getAllResourceInfos();
 		} catch (error) {
-			console.error('[ChatFormResourcePicker] Failed to load resources:', error);
+			console.error('[ChatFormPickerMcpResources] Failed to load resources:', error);
 			resources = [];
 		} finally {
 			isLoading = false;

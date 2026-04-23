@@ -7,9 +7,9 @@
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import {
-		ChatSidebar,
 		DesktopIconStrip,
-		DialogConversationTitleUpdate
+		DialogConversationTitleUpdate,
+		SidebarNavigation
 	} from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
@@ -193,7 +193,7 @@
 	<Sidebar.Provider bind:open={sidebarOpen}>
 		<div class="flex h-screen w-full" style:height="{innerHeight}px">
 			<Sidebar.Root variant="floating" class="h-full">
-				<ChatSidebar bind:this={chatSidebar} />
+				<SidebarNavigation bind:this={chatSidebar} />
 			</Sidebar.Root>
 
 			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}

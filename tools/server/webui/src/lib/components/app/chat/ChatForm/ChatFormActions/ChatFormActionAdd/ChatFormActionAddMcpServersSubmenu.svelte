@@ -56,7 +56,8 @@
 	}
 </script>
 
-<DropdownMenu.Sub onOpenChange={handleMcpSubMenuOpen}>
+<DropdownMenu.Root>
+	<DropdownMenu.Sub onOpenChange={handleMcpSubMenuOpen}>
 	<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 		<McpLogo class="h-4 w-4" />
 
@@ -145,3 +146,4 @@
 		{/if}
 	</DropdownMenu.SubContent>
 </DropdownMenu.Sub>
+</DropdownMenu.Root>
