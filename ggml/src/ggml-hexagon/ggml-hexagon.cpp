@@ -2406,6 +2406,21 @@ static bool ggml_hexagon_supported_add_id(const struct ggml_hexagon_session * se
     return true;
 }
 
+// Variant of ggml_hexagon_supported_unary that allows non-contiguous src0.
+// Used for ops (like L2_NORM) whose DMA loop handles strides explicitly.
+static bool ggml_hexagon_supported_unary_nc(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32) return false;
+    if (dst->type  != GGML_TYPE_F32) return false;
+    if (!ggml_are_same_shape(src0, dst)) return false;
+    // dst must be contiguous; src0 may be non-contiguous
+    if (!ggml_is_contiguous(dst)) return false;
+
+    return true;
+}
+
 static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
@@ -2791,6 +2806,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_SET_ROWS:       return HTP_OP_SET_ROWS;
         case GGML_OP_SUM_ROWS:       return HTP_OP_SUM_ROWS;
         case GGML_OP_ARGSORT:        return HTP_OP_ARGSORT;
+        case GGML_OP_L2_NORM:        return HTP_OP_L2_NORM;
         case GGML_OP_RMS_NORM:       return HTP_OP_RMS_NORM;
         case GGML_OP_SCALE:          return HTP_OP_SCALE;
         case GGML_OP_SQR:            return HTP_OP_SQR;
@@ -3251,6 +3267,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_ADD_ID:
             supp = ggml_hexagon_supported_add_id(sess, op);
+            break;
+
+        case GGML_OP_L2_NORM:
+            supp = ggml_hexagon_supported_unary_nc(sess, op);
             break;
 
         case GGML_OP_RMS_NORM:
