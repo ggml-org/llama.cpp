@@ -5,6 +5,7 @@ import os
 import re
 import argparse
 import statistics
+import logging
 
 from collections import defaultdict
 
@@ -26,14 +27,17 @@ op_pattern = re.compile(
     r"profile-op\s+(?P<op_name>[A-Z_0-9]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+.*?\s+usec\s+(?P<usec>\d+)\s+cycles\s+(?P<cycles>\d+)(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?"
 )
 
+logger = logging.getLogger("ggml-hexagon-profile")
+
+
 def parse_log(file_path, pmu_index=None):
     try:
         if file_path != "-":
             f = open(file_path, 'r', encoding='utf-8', errors='ignore')
         else:
-            f = os.fdopen(0, 'r', encoding='utf-8', errors='ignore');
+            f = os.fdopen(0, 'r', encoding='utf-8', errors='ignore')
     except FileNotFoundError:
-        print(f"Error: File '{file_path}' not found.")
+        logger.error(f"file '{file_path}' not found.")
         sys.exit(1)
 
     all_ops = []
@@ -59,13 +63,15 @@ def parse_log(file_path, pmu_index=None):
             'cycles':  int(match.group('cycles')),
             'pmu_val': pmu_val
         })
+
     f.close()
 
     return all_ops
 
+
 def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
     if not ops:
-        print("No valid records found.")
+        logger.info("No valid records found.")
         return
 
     grouped = defaultdict(list)
@@ -78,7 +84,7 @@ def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
         usecs = [o['usec'] for o in group_ops]
         cycles = [o['cycles'] for o in group_ops]
         pmu_vals = [o['pmu_val'] for o in group_ops if o['pmu_val'] is not None]
-        
+
         group_stats.append({
             'op':               name,
             'dims':             dims,
@@ -130,20 +136,21 @@ def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
         final_widths.append(target_width)
 
     # Print Report
-    print(f"\n# Profile Report (Top {top_n} Ops sorted by {sort_col})\n")
+    logger.info(f"\n# Profile Report (Top {top_n} Ops sorted by {sort_col})\n")
     header_line = "| " + " | ".join(f"{h:<{final_widths[i]}}" for i, h in enumerate(final_headers)) + " |"
-    sep_line = "| " + " | ".join("-" * final_widths[i] for i in range(len(final_headers))) + " |"
-    print(header_line)
-    print(sep_line)
+    sep_line    = "| " + " | ".join("-" * final_widths[i] for i in range(len(final_headers))) + " |"
+    logger.info(header_line)
+    logger.info(sep_line)
 
     for group in sorted_groups:
         row_vals = []
         for i, key in enumerate(final_keys):
             val = group[key]
             if len(val) > final_widths[i]:
-                val = val[:final_widths[i]-3] + "..."
+                val = val[:final_widths[i] - 3] + "..."
             row_vals.append(f"{val:<{final_widths[i]}}")
-        print("| " + " | ".join(row_vals) + " |")
+        logger.info("| " + " | ".join(row_vals) + " |")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Post-process Op profile info.")
@@ -153,12 +160,14 @@ def main():
     parser.add_argument("--pmu-index", type=int)
     parser.add_argument("--pmu-name", type=str)
     parser.add_argument("--width", action='append', default=['dims:40'], help="Override column width, e.g. --width dims:50")
-    
+
     args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
 
     # Sort validation: can't sort by PMU if index isn't provided
     if "pmu" in args.sort and args.pmu_index is None:
-        print(f"Error: Cannot sort by '{args.sort}' without --pmu-index.")
+        logger.error(f"Cannot sort by '{args.sort}' without --pmu-index.")
         sys.exit(1)
 
     overrides = {}
@@ -168,11 +177,12 @@ def main():
                 name, val = w.split(':')
                 overrides[name.lower()] = int(val)
             except ValueError:
-                print(f"Warning: Invalid width format '{w}'")
+                logger.warn(f"Invalid width format '{w}'")
 
     final_pmu_name = (args.pmu_name or f"#{args.pmu_index}") if args.pmu_index is not None else None
     ops = parse_log(args.logfile, pmu_index=args.pmu_index)
     generate_report(ops, args.top, overrides, args.sort, pmu_name=final_pmu_name)
+
 
 if __name__ == "__main__":
     main()
