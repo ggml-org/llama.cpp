@@ -4,7 +4,13 @@
 #include <cstdlib>
 #include <cstring>
 
-#ifdef GGML_CUDA_AR_WATCHDOG
+// Set to 1 to enable the AllReduce spin-limit watchdog (development only).
+// When enabled, the debug kernel bails out after GGML_CUDA_AR_MAX_SPIN
+// iterations and writes a record to a per-GPU ring buffer that the
+// background watchdog thread prints.
+#define GGML_CUDA_AR_WATCHDOG 0
+
+#if GGML_CUDA_AR_WATCHDOG
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -123,7 +129,7 @@ static __global__ void ggml_cuda_ar_f32_kernel(
 // and then sets the completion flag so the host watchdog thread can safely
 // read the record.
 // ---------------------------------------------------------------------------
-#ifdef GGML_CUDA_AR_WATCHDOG
+#if GGML_CUDA_AR_WATCHDOG
 
 // One debug record written by the kernel on spin-limit bailout.
 struct ggml_cuda_ar_debug_record {
@@ -254,7 +260,7 @@ static constexpr int GGML_CUDA_AR_POOL_SIZE = 128;
 // preventing false-sharing stalls on the polling GPU.
 static constexpr size_t GGML_CUDA_AR_ARRIVAL_STRIDE = 128;
 
-#ifdef GGML_CUDA_AR_WATCHDOG
+#if GGML_CUDA_AR_WATCHDOG
 // Watchdog poll interval in milliseconds.
 static constexpr int GGML_CUDA_AR_WDOG_POLL_MS = 1;
 #endif
@@ -279,7 +285,7 @@ struct ggml_cuda_ar_pipeline {
     // Use ggml_cuda_ar_arrival_ptr() to index.
     char * arrival;
 
-#ifdef GGML_CUDA_AR_WATCHDOG
+#if GGML_CUDA_AR_WATCHDOG
     // Per-GPU debug ring buffers in pinned host memory.  Written by the debug
     // kernel on spin-limit bailout, read by the background watchdog thread.
     ggml_cuda_ar_debug_ring * debug_ring[GGML_CUDA_MAX_DEVICES];
@@ -301,7 +307,7 @@ static int * ggml_cuda_ar_arrival_ptr(const ggml_cuda_ar_pipeline * p, int slot,
 // this thread polls the ring head counters every 1ms and prints any new
 // complete records.  Zero overhead on the dispatch path (no queue, no events).
 // ---------------------------------------------------------------------------
-#ifdef GGML_CUDA_AR_WATCHDOG
+#if GGML_CUDA_AR_WATCHDOG
 static void ggml_cuda_ar_wdog_thread(ggml_cuda_ar_pipeline * p) {
     int last_seen[GGML_CUDA_MAX_DEVICES] = {};
 
@@ -352,7 +358,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
         p->streams[i]  = nullptr;
         p->ev_pool[i]  = nullptr;
     }
-#ifdef GGML_CUDA_AR_WATCHDOG
+#if GGML_CUDA_AR_WATCHDOG
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         p->debug_ring[i] = nullptr;
     }
@@ -409,7 +415,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
         memset(p->host_buf[i], 0, max_bytes);
     }
 
-#ifdef GGML_CUDA_AR_WATCHDOG
+#if GGML_CUDA_AR_WATCHDOG
     // Per-GPU debug ring buffers: written by the kernel on spin-limit bailout,
     // polled by the background watchdog thread.  Each ring is pinned host
     // memory accessed only by its owning GPU (single-GPU host atomics OK).
@@ -507,7 +513,7 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
         return;
     }
 
-#ifdef GGML_CUDA_AR_WATCHDOG
+#if GGML_CUDA_AR_WATCHDOG
     // Stop the watchdog thread first — it only reads pinned host memory,
     // no GPU resources, so this is safe and returns within ~1ms.
     p->wdog_stop.store(true);
@@ -544,7 +550,7 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
     if (p->arrival) {
         cudaFreeHost(p->arrival);
     }
-#ifdef GGML_CUDA_AR_WATCHDOG
+#if GGML_CUDA_AR_WATCHDOG
     for (int i = 0; i < p->n_devices; ++i) {
         if (p->debug_ring[i]) {
             cudaFreeHost(p->debug_ring[i]);
@@ -624,7 +630,7 @@ bool ggml_cuda_ar_allreduce(
         CUDA_CHECK(cudaEventRecord(ev.app, cuda_ctx->stream()));
         CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], ev.app));
 
-#ifdef GGML_CUDA_AR_WATCHDOG
+#if GGML_CUDA_AR_WATCHDOG
         ggml_cuda_ar_f32_kernel_dbg<<<dim3(1), dim3(256), 0, p->streams[i]>>>(
             static_cast<const float *>(tensors[i]->data),
             static_cast<float *>(tensors[i]->data),

@@ -194,10 +194,6 @@ if (CUDAToolkit_FOUND)
         endif()
     endif()
 
-    if (GGML_CUDA_AR_WATCHDOG)
-        add_compile_definitions(GGML_CUDA_AR_WATCHDOG)
-    endif()
-
     set(CUDA_CXX_FLAGS "")
 
     set(CUDA_FLAGS -use_fast_math -extended-lambda)

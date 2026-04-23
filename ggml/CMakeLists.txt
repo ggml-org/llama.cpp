@@ -209,7 +209,6 @@ option(GGML_CUDA_FA_ALL_QUANTS              "ggml: compile all quants for FlashA
 option(GGML_CUDA_GRAPHS                     "ggml: use CUDA graphs (llama.cpp only)"          ${GGML_CUDA_GRAPHS_DEFAULT})
 option(GGML_CUDA_NCCL                       "ggml: use NVIDIA Collective Comm. Library"       ON)
 option(GGML_CUDA_NCCL_STATIC               "ggml: link NCCL statically (ON) or dynamically (OFF)" OFF)
-option(GGML_CUDA_AR_WATCHDOG               "ggml: enable internal AllReduce hang watchdog (debug)" OFF)
 set   (GGML_CUDA_COMPRESSION_MODE "size" CACHE STRING
                                             "ggml: cuda link binary compression mode; requires cuda 12.8+")
 set_property(CACHE GGML_CUDA_COMPRESSION_MODE PROPERTY STRINGS "none;speed;balance;size")
