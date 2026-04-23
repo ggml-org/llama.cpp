@@ -747,6 +747,11 @@ inline bool string_starts_with(std::string_view str, std::string_view prefix) {
 }
 
 // remove when moving to c++20
+inline bool string_starts_with(std::string_view str, char prefix) {
+    return !str.empty() && str.front() == prefix;
+}
+
+// remove when moving to c++20
 inline bool string_ends_with(std::string_view str, std::string_view suffix) {
     return str.size() >= suffix.size() &&
            str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
