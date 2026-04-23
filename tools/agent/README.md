@@ -551,7 +551,7 @@ curl -X POST http://localhost:8081/v1/agent/session/sess_00000001/delete
 
 ## Acknowledgments
 
-Light harness inspired by [Pi](https://github.com/anthropics/pi) by Mario Zechner.
+Light harness inspired by [Pi](https://github.com/badlogic/pi-mono) by Mario Zechner.
 
 ## License
 
