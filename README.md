@@ -184,6 +184,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - Java: [kherud/java-llama.cpp](https://github.com/kherud/java-llama.cpp)
 - Java: [QuasarByte/llama-cpp-jna](https://github.com/QuasarByte/llama-cpp-jna)
 - Zig: [deins/llama.cpp.zig](https://github.com/Deins/llama.cpp.zig)
+- D: [kassane/llama-cpp-d](https://github.com/kassane/llama-cpp-d) ([Dub](https://code.dlang.org/packages/llama-cpp-d))
 - Flutter/Dart: [netdur/llama_cpp_dart](https://github.com/netdur/llama_cpp_dart)
 - Flutter: [xuegao-tzx/Fllama](https://github.com/xuegao-tzx/Fllama)
 - PHP (API bindings and features built on top of llama.cpp): [distantmagic/resonance](https://github.com/distantmagic/resonance) [(more info)](https://github.com/ggml-org/llama.cpp/pull/6326)
