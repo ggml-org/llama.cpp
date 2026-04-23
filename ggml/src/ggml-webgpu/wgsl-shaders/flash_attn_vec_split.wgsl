@@ -90,6 +90,14 @@ struct Params {
 };
 
 @group(0) @binding(0) var<storage, read_write> Q: array<f32>;
+#ifdef KV_OVERLAP
+#if defined(KV_Q4_0) || defined(KV_Q8_0)
+@group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
+#else
+@group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
+#endif
+#define V K
+#else
 #if defined(KV_Q4_0) || defined(KV_Q8_0)
 @group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
 #else
@@ -100,7 +108,22 @@ struct Params {
 #else
 @group(0) @binding(2) var<storage, read_write> V: array<vec4<KV_TYPE>>;
 #endif
+#endif
 #if defined(MASK) && defined(SINKS)
+#ifdef KV_OVERLAP
+@group(0) @binding(2) var<storage, read_write> mask: array<f16>;
+@group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
+#ifdef BLK
+#define BLK_BINDING 4
+#define TMP_BINDING 5
+#define DST_BINDING 6
+#define PARAMS_BINDING 7
+#else
+#define TMP_BINDING 4
+#define DST_BINDING 5
+#define PARAMS_BINDING 6
+#endif
+#else
 @group(0) @binding(3) var<storage, read_write> mask: array<f16>;
 @group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
 #ifdef BLK
@@ -113,7 +136,21 @@ struct Params {
 #define DST_BINDING 6
 #define PARAMS_BINDING 7
 #endif
+#endif
 #elif defined(MASK)
+#ifdef KV_OVERLAP
+@group(0) @binding(2) var<storage, read_write> mask: array<f16>;
+#ifdef BLK
+#define BLK_BINDING 3
+#define TMP_BINDING 4
+#define DST_BINDING 5
+#define PARAMS_BINDING 6
+#else
+#define TMP_BINDING 3
+#define DST_BINDING 4
+#define PARAMS_BINDING 5
+#endif
+#else
 @group(0) @binding(3) var<storage, read_write> mask: array<f16>;
 #ifdef BLK
 #define BLK_BINDING 4
@@ -125,15 +162,29 @@ struct Params {
 #define DST_BINDING 5
 #define PARAMS_BINDING 6
 #endif
+#endif
 #elif defined(SINKS)
+#ifdef KV_OVERLAP
+@group(0) @binding(2) var<storage, read_write> sinks: array<f32>;
+#define TMP_BINDING 3
+#define DST_BINDING 4
+#define PARAMS_BINDING 5
+#else
 @group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
 #define TMP_BINDING 4
 #define DST_BINDING 5
 #define PARAMS_BINDING 6
+#endif
+#else
+#ifdef KV_OVERLAP
+#define TMP_BINDING 2
+#define DST_BINDING 3
+#define PARAMS_BINDING 4
 #else
 #define TMP_BINDING 3
 #define DST_BINDING 4
 #define PARAMS_BINDING 5
+#endif
 #endif
 
 #ifdef BLK

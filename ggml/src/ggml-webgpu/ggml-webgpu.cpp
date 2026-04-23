@@ -1567,13 +1567,29 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
     float m0          = powf(2.0f, -(max_bias) / n_head_log2);
     float m1          = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    const int has_mask  = (mask != nullptr);
-    const int has_sinks = (sinks != nullptr);
+    const int  has_mask   = (mask != nullptr);
+    const int  has_sinks  = (sinks != nullptr);
+    const bool kv_overlap = ggml_webgpu_tensor_overlap(K, V) && K->type == V->type;
+
+    uint32_t offset_k       = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, K) / ggml_type_size(K->type));
+    uint32_t offset_v       = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, V) / ggml_type_size(V->type));
+    size_t   kv_bind_offset = 0;
+    size_t   kv_bind_size   = 0;
+    if (kv_overlap) {
+        const size_t k_bind_offset = ggml_webgpu_tensor_align_offset(ctx, K);
+        const size_t v_bind_offset = ggml_webgpu_tensor_align_offset(ctx, V);
+        const size_t k_bind_end    = k_bind_offset + ggml_webgpu_tensor_binding_size(ctx, K);
+        const size_t v_bind_end    = v_bind_offset + ggml_webgpu_tensor_binding_size(ctx, V);
+        kv_bind_offset             = std::min(k_bind_offset, v_bind_offset);
+        kv_bind_size               = std::max(k_bind_end, v_bind_end) - kv_bind_offset;
+        offset_k = (uint32_t) ((ggml_webgpu_tensor_offset(K) - kv_bind_offset) / ggml_type_size(K->type));
+        offset_v = (uint32_t) ((ggml_webgpu_tensor_offset(V) - kv_bind_offset) / ggml_type_size(V->type));
+    }
 
     std::vector<uint32_t> params = {
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, Q) / ggml_type_size(Q->type)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, K) / ggml_type_size(K->type)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, V) / ggml_type_size(V->type)),
+        offset_k,
+        offset_v,
         has_mask ? (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, mask) / ggml_type_size(mask->type)) : 0,
         has_sinks ? (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, sinks) / ggml_type_size(sinks->type)) : 0,
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
@@ -1601,10 +1617,15 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
     };
     std::vector<wgpu::BindGroupEntry> entries = {
         ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, Q),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, K),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, V),
     };
-    uint32_t binding_index = 3;
+    if (kv_overlap) {
+        entries.push_back(
+            ggml_webgpu_make_bind_group_entry(1, ggml_webgpu_tensor_buf(K), kv_bind_offset, kv_bind_size));
+    } else {
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, K));
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, V));
+    }
+    uint32_t binding_index = kv_overlap ? 2u : 3u;
     if (has_mask) {
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, binding_index++, mask));
     }
@@ -1620,6 +1641,7 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
     shader_lib_ctx.src3                           = mask;
     shader_lib_ctx.src4                           = sinks;
     shader_lib_ctx.dst                            = dst;
+    shader_lib_ctx.src_overlap                    = kv_overlap;
     shader_lib_ctx.supports_subgroups             = ctx->global_ctx->capabilities.supports_subgroups;
     shader_lib_ctx.supports_subgroup_matrix       = ctx->global_ctx->capabilities.supports_subgroup_matrix;
     shader_lib_ctx.max_wg_size        = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
@@ -1728,12 +1750,19 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
     std::vector<wgpu::BindGroupEntry> split_entries = {
         ggml_webgpu_make_bind_group_entry(0, ggml_webgpu_tensor_buf(Q), ggml_webgpu_tensor_align_offset(ctx, Q),
                                           ggml_webgpu_tensor_binding_size(ctx, Q)),
-        ggml_webgpu_make_bind_group_entry(1, ggml_webgpu_tensor_buf(K), ggml_webgpu_tensor_align_offset(ctx, K),
-                                          ggml_webgpu_tensor_binding_size(ctx, K)),
-        ggml_webgpu_make_bind_group_entry(2, ggml_webgpu_tensor_buf(V), ggml_webgpu_tensor_align_offset(ctx, V),
-                                          ggml_webgpu_tensor_binding_size(ctx, V)),
     };
-    uint32_t split_binding_index = 3;
+    if (kv_overlap) {
+        split_entries.push_back(
+            ggml_webgpu_make_bind_group_entry(1, ggml_webgpu_tensor_buf(K), kv_bind_offset, kv_bind_size));
+    } else {
+        split_entries.push_back(ggml_webgpu_make_bind_group_entry(1, ggml_webgpu_tensor_buf(K),
+                                                                  ggml_webgpu_tensor_align_offset(ctx, K),
+                                                                  ggml_webgpu_tensor_binding_size(ctx, K)));
+        split_entries.push_back(ggml_webgpu_make_bind_group_entry(2, ggml_webgpu_tensor_buf(V),
+                                                                  ggml_webgpu_tensor_align_offset(ctx, V),
+                                                                  ggml_webgpu_tensor_binding_size(ctx, V)));
+    }
+    uint32_t split_binding_index = kv_overlap ? 2u : 3u;
     if (has_mask) {
         split_entries.push_back(ggml_webgpu_make_bind_group_entry(split_binding_index++, ggml_webgpu_tensor_buf(mask),
                                                                   ggml_webgpu_tensor_align_offset(ctx, mask),

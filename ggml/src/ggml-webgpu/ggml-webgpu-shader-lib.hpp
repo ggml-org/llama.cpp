@@ -447,6 +447,7 @@ struct ggml_webgpu_flash_attn_pipeline_key {
     uint32_t  head_dim_qk;
     uint32_t  head_dim_v;
     bool      kv_direct;
+    bool      kv_overlap;
     bool      has_mask;
     bool      has_sinks;
     bool      uses_logit_softcap;
@@ -454,8 +455,8 @@ struct ggml_webgpu_flash_attn_pipeline_key {
 
     bool operator==(const ggml_webgpu_flash_attn_pipeline_key & other) const {
         return kv_type == other.kv_type && head_dim_qk == other.head_dim_qk && head_dim_v == other.head_dim_v &&
-               kv_direct == other.kv_direct && has_mask == other.has_mask && has_sinks == other.has_sinks &&
-               uses_logit_softcap == other.uses_logit_softcap && path == other.path;
+               kv_direct == other.kv_direct && kv_overlap == other.kv_overlap && has_mask == other.has_mask &&
+               has_sinks == other.has_sinks && uses_logit_softcap == other.uses_logit_softcap && path == other.path;
     }
 };
 
@@ -466,6 +467,7 @@ struct ggml_webgpu_flash_attn_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.head_dim_qk);
         ggml_webgpu_hash_combine(seed, key.head_dim_v);
         ggml_webgpu_hash_combine(seed, key.kv_direct);
+        ggml_webgpu_hash_combine(seed, key.kv_overlap);
         ggml_webgpu_hash_combine(seed, key.has_mask);
         ggml_webgpu_hash_combine(seed, key.has_sinks);
         ggml_webgpu_hash_combine(seed, key.uses_logit_softcap);
@@ -524,6 +526,7 @@ inline ggml_webgpu_flash_attn_pipeline_key ggml_webgpu_flash_attn_make_pipeline_
     key.head_dim_qk                         = (uint32_t) context.src0->ne[0];
     key.head_dim_v                          = (uint32_t) context.src2->ne[0];
     key.kv_direct                           = kv_direct;
+    key.kv_overlap                          = context.src_overlap;
     key.has_mask                            = has_mask;
     key.has_sinks                           = has_sinks;
     key.uses_logit_softcap                  = ggml_get_op_params_f32(context.dst, 2) != 0.0f;
@@ -2205,6 +2208,10 @@ class ggml_webgpu_shader_lib {
         if (key.kv_direct) {
             defines.push_back("KV_DIRECT");
             variant += "_kvdirect";
+        }
+        if (key.kv_overlap) {
+            defines.push_back("KV_OVERLAP");
+            variant += "_kv_overlap";
         }
 
         defines.push_back(std::string("HEAD_DIM_QK=") + std::to_string(key.head_dim_qk));
