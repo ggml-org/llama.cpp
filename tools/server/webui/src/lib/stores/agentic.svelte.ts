@@ -104,11 +104,19 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 			return {
 				role: MessageRole.ASSISTANT,
 				content: message.content,
+				reasoning_content: message.reasoning_content,
 				tool_calls: message.tool_calls.map((call, index) => ({
 					id: call.id ?? `call_${index}`,
 					type: (call.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION,
 					function: { name: call.function?.name ?? '', arguments: call.function?.arguments ?? '' }
 				}))
+			} satisfies AgenticMessage;
+		}
+		if (message.role === MessageRole.ASSISTANT) {
+			return {
+				role: MessageRole.ASSISTANT,
+				content: message.content,
+				reasoning_content: message.reasoning_content
 			} satisfies AgenticMessage;
 		}
 		if (message.role === MessageRole.TOOL && message.tool_call_id) {
