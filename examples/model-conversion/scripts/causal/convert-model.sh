@@ -26,7 +26,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-../../models}"
 TYPE="${OUTTYPE:-f16}"
 METADATA_OVERRIDE="${METADATA_OVERRIDE:-}"
 if [[ -n "$MMPROJ" ]]; then
-    CONVERTED_MODEL="${OUTPUT_DIR}/mmproj-$(basename "${CONVERTED_MODEL}")"
+    CONVERTED_MODEL="${OUTPUT_DIR}/mmproj-${MODEL_NAME}.gguf"
 else
     CONVERTED_MODEL="${OUTPUT_DIR}/${MODEL_NAME}.gguf"
 fi
