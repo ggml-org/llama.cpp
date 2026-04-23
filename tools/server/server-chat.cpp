@@ -281,6 +281,42 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     return chatcmpl_body;
 }
 
+// Edits the cch section of an "x-anthropic-billing-header" system prompt.
+// Does nothing to any other prompt.
+//
+// This is a claude message with a "cch=ef01a" attribute that breaks prefix caching.
+// The cch stamp is a whitebox end-to-end integrity hint. It's not meaningful as a
+// system prompt data, particularly to llama.cpp, but its presence means the prefix
+// cache will not get past it: It changes on each request.
+//
+// Reference: https://github.com/ggml-org/llama.cpp/pull/21793
+// Example header:
+// ```
+// x-anthropic-billing-header: cc_version=2.1.101.e51; cc_entrypoint=cli; cch=a5145;You are Claude Code, Anthropic's official CLI for Claude.
+//                                                                            ^^^^^
+// ```
+static void normalize_anthropic_billing_header(std::string & system_text) {
+    if (system_text.rfind("x-anthropic-billing-header:", 0) != 0) {
+        return;
+    }
+
+    const size_t header_prefix_length = strlen("x-anthropic-billing-header:");
+    const size_t cch_length = 5;
+    const size_t index_cch = system_text.find("cch=", header_prefix_length);
+    if (index_cch == std::string::npos) {
+        return;
+    }
+
+    const size_t index_replace = index_cch + 4;
+    if (index_replace + cch_length < system_text.length() && system_text[index_replace + cch_length] == ';') {
+        for (size_t i = 0; i < cch_length; ++i) {
+            system_text[index_replace + i] = 'f';
+        }
+    } else {
+        LOG_ERR("anthropic string not as expected: %s", system_text.c_str());
+    }
+}
+
 json server_chat_convert_anthropic_to_oai(const json & body) {
     json oai_body;
 
@@ -292,10 +328,13 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
 
         if (system_param.is_string()) {
             system_content = system_param.get<std::string>();
+            normalize_anthropic_billing_header(system_content);
         } else if (system_param.is_array()) {
             for (const auto & block : system_param) {
                 if (json_value(block, "type", std::string()) == "text") {
-                    system_content += json_value(block, "text", std::string());
+                    auto system_text = json_value(block, "text", std::string());
+                    normalize_anthropic_billing_header(system_text);
+                    system_content += system_text;
                 }
             }
         }
