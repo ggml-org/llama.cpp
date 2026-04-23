@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
+import sys
+import os
 import re
 import argparse
-from collections import defaultdict
 import statistics
-import sys
+
+from collections import defaultdict
 
 # Mapping of cli-friendly names to (internal_data_key, Display Header, numeric_sort_key)
 COL_MAP = {
@@ -20,39 +22,45 @@ COL_MAP = {
     "avg-pmu":    ("avg_pmu",    "Avg PMU",    "_sort_avg_pmu"),
 }
 
+op_pattern = re.compile(
+    r"profile-op\s+(?P<op_name>[A-Z_0-9]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+.*?\s+usec\s+(?P<usec>\d+)\s+cycles\s+(?P<cycles>\d+)(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?"
+)
+
 def parse_log(file_path, pmu_index=None):
-    op_pattern = re.compile(
-        r"profile-op\s+(?P<op_name>[A-Z_0-9]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+.*?\s+usec\s+(?P<usec>\d+)\s+cycles\s+(?P<cycles>\d+)(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?"
-    )
-
-    all_ops = []
     try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                if "profile-op" in line:
-                    match = op_pattern.search(line)
-                    if match:
-                        pmu_raw = match.group('pmu')
-                        pmu_val = None
-                        if pmu_raw and pmu_index is not None:
-                            try:
-                                pmu_list = [int(x.strip()) for x in pmu_raw.split(',')]
-                                if len(pmu_list) > pmu_index:
-                                    pmu_val = pmu_list[pmu_index]
-                            except (ValueError, IndexError):
-                                pmu_val = None
-
-                        all_ops.append({
-                            'name': match.group('op_name'),
-                            'dims': match.group('dims').strip(),
-                            'types': match.group('types').strip(),
-                            'usec': int(match.group('usec')),
-                            'cycles': int(match.group('cycles')),
-                            'pmu_val': pmu_val
-                        })
+        if file_path != "-":
+            f = open(file_path, 'r', encoding='utf-8', errors='ignore')
+        else:
+            f = os.fdopen(0, 'r', encoding='utf-8', errors='ignore');
     except FileNotFoundError:
         print(f"Error: File '{file_path}' not found.")
         sys.exit(1)
+
+    all_ops = []
+    for line in f:
+        match = op_pattern.search(line)
+        if not match: continue
+
+        pmu_raw = match.group('pmu')
+        pmu_val = None
+        if pmu_raw and pmu_index is not None:
+            try:
+                pmu_list = [int(x.strip()) for x in pmu_raw.split(',')]
+                if len(pmu_list) > pmu_index:
+                    pmu_val = pmu_list[pmu_index]
+            except (ValueError, IndexError):
+                pmu_val = None
+
+        all_ops.append({
+            'name':    match.group('op_name'),
+            'dims':    match.group('dims').strip(),
+            'types':   match.group('types').strip(),
+            'usec':    int(match.group('usec')),
+            'cycles':  int(match.group('cycles')),
+            'pmu_val': pmu_val
+        })
+    f.close()
+    
     return all_ops
 
 def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
