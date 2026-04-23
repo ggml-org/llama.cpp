@@ -368,9 +368,9 @@ struct common_log * common_log_init() {
 }
 
 struct common_log * common_log_main() {
-    // We are intentially leaking (not deleting) the logger singleton because
+    // We intentionally leak (i.e. do not delete) the logger singleton because
     // common_log destructor called at DLL teardown phase will cause hanging on Windows.
-    // Resources will be released by the OS anyway so it should not be a big issue,
+    // OS will release resources anyway so it should not be a significant issue,
     // though this design may cause logs to be lost if not flushed before the program exits.
     // Refer to https://github.com/ggml-org/llama.cpp/issues/22142 for details.
     static struct common_log* log;
