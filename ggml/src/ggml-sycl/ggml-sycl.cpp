@@ -3707,10 +3707,13 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
 
     if (!g_ggml_sycl_prioritize_dmmv && ((should_reorder_tensor(ctx, dst) &&
                                           ggml_sycl_supports_reorder_mmvq(src0->type)))) {
-        //Arc770 get benefit with Q4_0 by skipping it.
-        if (ggml_sycl_info().devices[ctx.device].hw_info.arch != gpu_arch::intel_gpu_acm_g10) {
-            use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
-        }
+      // Arc770 get benefit with Q4_0 by skipping it.
+      if (!(ggml_sycl_info().devices[ctx.device].hw_info.arch ==
+                gpu_arch::intel_gpu_acm_g10 &&
+            src0->type == GGML_TYPE_Q4_0)) {
+        use_dequantize_mul_mat_vec =
+            use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
+      }
     }
 
     if (!split && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
