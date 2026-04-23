@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
 	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -119,7 +118,7 @@
 			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
-				goto(`${base}/`);
+				goto(`#/`);
 			}
 
 			return;
@@ -139,7 +138,7 @@
 			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
-				goto(`${base}/`);
+				goto(`#/`);
 			}
 		} else {
 			chatActions.delete(message);
@@ -201,7 +200,7 @@
 				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 				isEditing = false;
 				if (conversationDeleted) {
-					goto(`${base}/`);
+					goto(`#/`);
 				}
 				return;
 			}

@@ -210,7 +210,7 @@
 				{onSystemPromptClick}
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
-				onMcpSettingsClick={() => goto('/#/settings/mcp')}
+				onMcpSettingsClick={() => goto('#/settings/mcp')}
 			/>
 		{/if}
 	</div>

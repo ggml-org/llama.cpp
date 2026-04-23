@@ -40,7 +40,7 @@
 	);
 	let localConfig: SettingsConfigType = $state({ ...config() });
 
-	let mobileHeader: | {updateCarousel: () => void; } | undefined;
+	let mobileHeader: { updateCarousel: () => void } | undefined;
 
 	function handleThemeChange(newTheme: string) {
 		localConfig.theme = newTheme;

@@ -83,7 +83,7 @@
 
 	let showProcessingInfo = $derived(
 		isCurrentConversationLoading ||
-			(config().keepStatsVisible && page.route.id !== '/') ||
+			(config().keepStatsVisible && !!page.params.id) ||
 			activeProcessingState() !== null
 	);
 
@@ -391,7 +391,7 @@
 					</div>
 				{/if}
 
-				{#if page.route.id === '/(chat)/chat/[id]'}
+				{#if page.params.id}
 					<ChatScreenProcessingInfo />
 				{/if}
 

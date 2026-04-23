@@ -100,8 +100,6 @@
 		if (navigation?.from != null) {
 			setTimeout(() => chatFormRef?.focus(), 10);
 		}
-
-		setTimeout(() => chatFormRef?.focus(), 10);
 	});
 
 	$effect(() => {
