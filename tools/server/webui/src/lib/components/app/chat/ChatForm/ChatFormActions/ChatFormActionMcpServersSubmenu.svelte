@@ -109,7 +109,7 @@
 							<Switch
 								checked={isEnabledForChat}
 								disabled={hasError}
-								onclick={(e: MouseEvent) => e.stopPropagation()}
+								onclick={(e) => e.stopPropagation()}
 								onCheckedChange={() => toggleServerForChat(server.id)}
 							/>
 						</button>

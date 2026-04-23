@@ -34,7 +34,7 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { ActionIconsCodeBlock, DialogCodePreview } from '$lib/components/app';
+	import { CodeBlockActions, DialogCodePreview } from '$lib/components/app';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { config } from '$lib/stores/settings.svelte';
@@ -620,7 +620,7 @@
 		<div class="code-block-wrapper streaming-code-block relative">
 			<div class="code-block-header">
 				<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
-				<ActionIconsCodeBlock
+				<CodeBlockActions
 					code={incompleteCodeBlock.code}
 					language={incompleteCodeBlock.language || 'text'}
 					disabled

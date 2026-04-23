@@ -4,7 +4,8 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import type { MCPResourceAttachment } from '$lib/types';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ActionIconRemove } from '$lib/components/app';
+	import { ActionIcon } from '$lib/components/app';
+	import { X } from '@lucide/svelte';
 	import { getResourceIcon, getResourceDisplayName } from '$lib/utils';
 
 	interface Props {
@@ -55,11 +56,13 @@
 			</span>
 
 			{#if onRemove}
-				<ActionIconRemove
+				<ActionIcon
+					icon={X}
+					tooltip="Remove"
+					stopPropagationOnClick
 					class="-my-2 -mr-1.5 bg-transparent"
-					iconSize={2}
-					id={attachment.id}
-					{onRemove}
+					iconSize="h-2 w-2"
+					onclick={() => onRemove?.(attachment.id)}
 				/>
 			{/if}
 		</button>

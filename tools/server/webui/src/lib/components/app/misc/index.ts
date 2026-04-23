@@ -43,3 +43,11 @@ export { default as TruncatedText } from './TruncatedText.svelte';
  * Supports special keys like shift, cmd, and custom text.
  */
 export { default as KeyboardShortcutInfo } from './KeyboardShortcutInfo.svelte';
+
+/**
+ * **CodeBlockActions** - Actions bar for code blocks (copy, preview)
+ *
+ * Displays copy-to-clipboard and preview buttons for code blocks.
+ * Preview button is shown only for HTML code blocks.
+ */
+export { default as CodeBlockActions } from './CodeBlockActions.svelte';

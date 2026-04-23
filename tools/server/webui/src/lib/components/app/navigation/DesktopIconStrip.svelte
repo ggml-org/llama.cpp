@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ActionIcon } from '$lib/components/app/actions';
+	import { ActionIcon } from '$lib/components/app';
 	import {
 		ICON_STRIP_TRANSITION_DURATION,
 		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,

@@ -120,15 +120,14 @@
 			<div class="flex w-4 items-center justify-center">
 				<CircleAlert class="h-3.5 w-3.5 text-red-500 group-hover:hidden" />
 
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<!-- svelte-ignore a11y_click_events_have_key_events -->
-				<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
+				<div class="hidden group-hover:flex">
 					<ActionIcon
 						iconSize="h-2.5 w-2.5"
 						icon={RotateCw}
 						tooltip="Retry loading model"
 						class="h-3 w-3 text-red-500 hover:text-foreground"
 						onclick={() => modelsStore.loadModel(option.model)}
+						stopPropagationOnClick
 					/>
 				</div>
 			</div>
@@ -153,15 +152,14 @@
 			<div class="flex w-4 items-center justify-center">
 				<span class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden"></span>
 
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<!-- svelte-ignore a11y_click_events_have_key_events -->
-				<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
+				<div class="hidden group-hover:flex">
 					<ActionIcon
 						iconSize="h-2.5 w-2.5"
 						icon={PowerOff}
 						tooltip="Unload model"
 						class="h-3 w-3 text-red-500 hover:text-red-600"
 						onclick={() => modelsStore.unloadModel(option.model)}
+						stopPropagationOnClick
 					/>
 				</div>
 			</div>
@@ -169,15 +167,14 @@
 			<div class="flex w-4 items-center justify-center">
 				<span class="h-2 w-2 rounded-full bg-muted-foreground/50 group-hover:hidden"></span>
 
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<!-- svelte-ignore a11y_click_events_have_key_events -->
-				<div class="hidden group-hover:flex" onclick={(e) => e.stopPropagation()}>
+				<div class="hidden group-hover:flex">
 					<ActionIcon
 						iconSize="h-2.5 w-2.5"
 						icon={Power}
 						tooltip="Load model"
 						class="h-3 w-3"
 						onclick={() => modelsStore.loadModel(option.model)}
+						stopPropagationOnClick
 					/>
 				</div>
 			</div>

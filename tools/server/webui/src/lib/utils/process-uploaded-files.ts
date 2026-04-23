@@ -103,7 +103,7 @@ export async function processFilesToChatUploaded(
 						duration: 8000,
 						action: {
 							label: 'Enable PDF as Images',
-							onclick: () => {
+							onClick: () => {
 								settingsStore.updateConfig('pdfAsImage', true);
 								toast.success('PDF parsing as images enabled!', {
 									duration: 3000

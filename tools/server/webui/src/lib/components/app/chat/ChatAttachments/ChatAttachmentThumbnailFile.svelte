@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { ActionIconRemove } from '$lib/components/app';
+	import { ActionIcon } from '$lib/components/app';
+	import { X } from '@lucide/svelte';
 	import { formatFileSize, getFileTypeLabel, getPreviewText, isTextFile } from '$lib/utils';
 	import { AttachmentType } from '$lib/enums';
 
@@ -104,7 +105,12 @@
 			{onclick}
 		>
 			<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
-				<ActionIconRemove {id} {onRemove} />
+				<ActionIcon
+					icon={X}
+					tooltip="Remove"
+					stopPropagationOnClick
+					onclick={() => onRemove?.(id)}
+				/>
 			</div>
 
 			<div class="pr-8">
@@ -158,7 +164,12 @@
 
 		{#if !readonly}
 			<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
-				<ActionIconRemove {id} {onRemove} />
+				<ActionIcon
+					icon={X}
+					tooltip="Remove"
+					stopPropagationOnClick
+					onclick={() => onRemove?.(id)}
+				/>
 			</div>
 		{/if}
 	</button>
