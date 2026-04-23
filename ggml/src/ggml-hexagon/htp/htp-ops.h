@@ -142,7 +142,7 @@ struct htp_op_desc {
 enum htp_profiler_mode {
     HTP_PROF_DISABLED = 0,
     HTP_PROF_BASIC    = 1,
-    HTP_PROF_PMU      = 2
+    HTP_PROF_PMU      = 2,
 };
 
 #define HTP_PROF_PMU_NCNT 8
