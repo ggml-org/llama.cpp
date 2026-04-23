@@ -1676,10 +1676,12 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
         tmp_bind_size   = tmp_size_bytes;
         scratch_offset  = ROUNDUP_POW2(scratch_offset + tmp_size_bytes, align_bytes);
     } else {
-        // nwg==1 writes final dst directly in vec-split; keep tmp binding valid without extra allocation.
+        // nwg==1 writes final dst directly in vec-split; bind tmp to a tiny non-overlapping scratch region.
+        tmp_size_bytes   = WEBGPU_STORAGE_BUF_BINDING_MULT;
         tmp_buf         = ggml_webgpu_tensor_buf(dst);
-        tmp_bind_offset = ggml_webgpu_tensor_align_offset(ctx, dst);
-        tmp_bind_size   = ggml_webgpu_tensor_binding_size(ctx, dst);
+        tmp_bind_offset = scratch_offset;
+        tmp_bind_size   = tmp_size_bytes;
+        scratch_offset  = ROUNDUP_POW2(scratch_offset + tmp_size_bytes, align_bytes);
     }
 
     webgpu_pipeline                   blk_pipeline;
@@ -3266,6 +3268,8 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                             const size_t   tmp_size_bytes  = ROUNDUP_POW2(
                                 (tmp_data_elems + tmp_stats_elems) * sizeof(float), WEBGPU_STORAGE_BUF_BINDING_MULT);
                             res += tmp_size_bytes + align;
+                        } else {
+                            res += WEBGPU_STORAGE_BUF_BINDING_MULT + align;
                         }
                         if (mask != nullptr) {
                             const uint32_t blk_nblk0       = CEIL_DIV((uint32_t) K->ne[1], kv_tile);
@@ -3482,12 +3486,12 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     // Enable Dawn-specific toggles to increase native performance
     // TODO: Maybe WebGPU needs a "fast" mode where you can request compilers skip adding checks like these,
     //       only for native performance?
-    const char * const deviceEnabledToggles[]  = { "skip_validation", "disable_robustness", "disable_workgroup_init",
+    const char * const deviceEnabledToggles[]  = {"disable_robustness", "disable_workgroup_init",
                                                    "disable_polyfills_on_integer_div_and_mod" };
     const char * const deviceDisabledToggles[] = { "timestamp_quantization" };
     wgpu::DawnTogglesDescriptor deviceTogglesDesc;
     deviceTogglesDesc.enabledToggles      = deviceEnabledToggles;
-    deviceTogglesDesc.enabledToggleCount  = 4;
+    deviceTogglesDesc.enabledToggleCount  = 3;
     deviceTogglesDesc.disabledToggles     = deviceDisabledToggles;
     deviceTogglesDesc.disabledToggleCount = 1;
 
