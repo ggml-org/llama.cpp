@@ -1168,12 +1168,9 @@ struct ggml_backend_cuda_comm_context {
 //
 // Priority:
 //   1. GGML_CUDA_ALLREDUCE env var ("nccl" or "internal") — explicit override.
-//   2. NCCL when compiled in (GGML_USE_NCCL defined).
-//   3. Internal otherwise.
-//
-// Future: inspect NVLink topology via cudaDeviceGetP2PAttribute() with
-// cudaDevP2PAttrNativeAtomicSupported to prefer INTERNAL on PCIe-only systems
-// where host-staged reduction can beat NCCL for small tensors.
+//   2. Internal for 2 GPUs (the optimised path).
+//   3. NCCL as fallback for >2 GPUs when compiled in (GGML_USE_NCCL defined).
+//   4. Internal otherwise.
 static ggml_cuda_allreduce_provider ggml_cuda_select_allreduce_provider(
         const std::vector<int> & device_ids) {
     const char * env = getenv("GGML_CUDA_ALLREDUCE");
@@ -1192,11 +1189,15 @@ static ggml_cuda_allreduce_provider ggml_cuda_select_allreduce_provider(
         GGML_LOG_WARN("%s: unknown GGML_CUDA_ALLREDUCE value '%s', using default\n", __func__, env);
     }
 
+    // Internal provider is the default for 2-GPU configurations.
+    if (device_ids.size() <= 2) {
+        return GGML_CUDA_ALLREDUCE_INTERNAL;
+    }
+
+    // >2 GPUs: fall back to NCCL if available, otherwise internal.
 #ifdef GGML_USE_NCCL
-    GGML_UNUSED(device_ids);
     return GGML_CUDA_ALLREDUCE_NCCL;
 #else
-    GGML_UNUSED(device_ids);
     return GGML_CUDA_ALLREDUCE_INTERNAL;
 #endif
 }
