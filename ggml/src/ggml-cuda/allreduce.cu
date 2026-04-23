@@ -30,10 +30,17 @@ static __device__ __forceinline__ void ggml_cuda_ar_signal_set(int * p) {
     *(volatile int *)p = 1;
     __threadfence_system();   // ensure the signal itself is globally visible
 }
-
+#if 1
 static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
     return *(const volatile int *)p;
 }
+#else
+static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int* addr) {
+    int val;
+    asm("ld.global.cv.b32 %0, [%1];" : "=r"(val) : "l"(addr));
+    return val;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Single-kernel AllReduce — float32, 2 GPUs (production)
@@ -82,7 +89,12 @@ static __global__ void ggml_cuda_ar_f32_kernel(
     // Phase 2: thread 0 signals arrival, then spins for the peer.
     if (tid == 0) {
         ggml_cuda_ar_signal_set(arrival_mine);
+        
+        // ensure all GPUs have access to the arrival signal
+        __threadfence_system();
+        
         while (ggml_cuda_ar_signal_get(arrival_other) == 0) {
+            //__threadfence_system();
             __nanosleep(100);
         }
     }
@@ -169,9 +181,13 @@ static __global__ void ggml_cuda_ar_f32_kernel_dbg(
         int writeback = ggml_cuda_ar_signal_get(arrival_mine);
         debug[2] = writeback;
 
+        // ensure all GPUs have access to the arrival signal
+        __threadfence_system();
+
         int spin = 0;
         int last = 0;
         while ((last = ggml_cuda_ar_signal_get(arrival_other)) == 0) {
+            //printf("ggml_cuda_ar: just testing\n");
             ++spin;
             // Periodically expose progress so the host watchdog can read it.
             if ((spin & 0xFFF) == 0) {
@@ -198,8 +214,13 @@ static __global__ void ggml_cuda_ar_f32_kernel_dbg(
     }
 
     // Phase 3: reduce (proceeds even after bailout; output will be wrong).
+    // debug[3] breadcrumbs: 1 = entering syncthreads, 2 = past syncthreads,
+    //                       3 = past threadfence, 4 = phase 3 complete.
+    if (tid == 0) { debug[3] = 1; }
     __syncthreads();
+    if (tid == 0) { debug[3] = 2; }
     __threadfence_system();
+    if (tid == 0) { debug[3] = 3; }
 
     {
         const float4 * s4 = reinterpret_cast<const float4 *>(sendbuf);
@@ -214,6 +235,7 @@ static __global__ void ggml_cuda_ar_f32_kernel_dbg(
             recvbuf[tail + tid] = sendbuf[tail + tid] + host_other[tail + tid];
         }
     }
+    if (tid == 0) { debug[3] = 4; }
 }
 #endif // GGML_CUDA_AR_WATCHDOG
 
@@ -309,8 +331,8 @@ static void ggml_cuda_ar_wdog_thread(ggml_cuda_ar_pipeline * p) {
         {
             std::unique_lock<std::mutex> lk(p->wdog_mtx);
             p->wdog_cv.wait(lk, [p] { return !p->wdog_queue.empty() || p->wdog_stop; });
-            if (p->wdog_stop && p->wdog_queue.empty()) {
-                break;
+            if (p->wdog_stop) {
+                break;  // exit immediately — don't drain remaining items
             }
             item = p->wdog_queue.front();
             p->wdog_queue.pop_front();
@@ -320,10 +342,20 @@ static void ggml_cuda_ar_wdog_thread(ggml_cuda_ar_pipeline * p) {
             continue;  // watchdog disabled — drain queue, do nothing
         }
 
-        int  elapsed_ms    = 0;
-        bool observed_busy = false;
+        int elapsed_ms = 0;
 
         while (elapsed_ms <= p->wdog_timeout_ms) {
+            // Sleep first — give the kernel time to complete before checking.
+            // On the fast path the kernel finishes during this sleep and we
+            // never log anything.
+            std::this_thread::sleep_for(std::chrono::milliseconds(GGML_CUDA_AR_WDOG_POLL_MS));
+            elapsed_ms += GGML_CUDA_AR_WDOG_POLL_MS;
+
+            // Check for shutdown during the poll loop so join() returns promptly.
+            if (p->wdog_stop) {
+                break;
+            }
+
             bool        all_done = true;
             cudaError_t qstat[GGML_CUDA_MAX_DEVICES];
             for (int i = 0; i < item.n; ++i) {
@@ -334,37 +366,30 @@ static void ggml_cuda_ar_wdog_thread(ggml_cuda_ar_pipeline * p) {
                 }
             }
 
-            if (!all_done) {
-                observed_busy = true;
-            }
-
-            if (!all_done || observed_busy) {
-                char msg[512];
-                int  pos = 0;
-                pos += snprintf(msg + pos, sizeof(msg) - pos,
-                                "ggml_cuda_ar watchdog +%dms slot=%d:",
-                                elapsed_ms, item.slot);
-                for (int i = 0; i < item.n; ++i) {
-                    const int * dbg = p->debug_buf + i * GGML_CUDA_AR_DEBUG_INTS;
-                    int arr  = *(volatile int *)ggml_cuda_ar_arrival_ptr(p, item.slot, i);
-                    int spin = *(volatile int *)&dbg[0];
-                    int last = *(volatile int *)&dbg[1];
-                    int wb   = *(volatile int *)&dbg[2];
-                    pos += snprintf(msg + pos, sizeof(msg) - pos,
-                                    " gpu%d[%s arr=%d spin=%d lastOther=%d wbMine=%d]",
-                                    item.devices[i],
-                                    qstat[i] == cudaSuccess ? "done" : "busy",
-                                    arr, spin, last, wb);
-                }
-                GGML_LOG_WARN("%s\n", msg);
-            }
-
             if (all_done) {
                 break;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(GGML_CUDA_AR_WDOG_POLL_MS));
-            elapsed_ms += GGML_CUDA_AR_WDOG_POLL_MS;
+            // Kernel still running after the grace period — log diagnostics.
+            char msg[512];
+            int  pos = 0;
+            pos += snprintf(msg + pos, sizeof(msg) - pos,
+                            "ggml_cuda_ar watchdog +%dms slot=%d:",
+                            elapsed_ms, item.slot);
+            for (int i = 0; i < item.n; ++i) {
+                const int * dbg = p->debug_buf + i * GGML_CUDA_AR_DEBUG_INTS;
+                int arr   = *(volatile int *)ggml_cuda_ar_arrival_ptr(p, item.slot, i);
+                int spin  = *(volatile int *)&dbg[0];
+                int last  = *(volatile int *)&dbg[1];
+                int wb    = *(volatile int *)&dbg[2];
+                int phase = *(volatile int *)&dbg[3];
+                pos += snprintf(msg + pos, sizeof(msg) - pos,
+                                " gpu%d[%s arr=%d spin=%d lastOther=%d wbMine=%d ph=%d]",
+                                item.devices[i],
+                                qstat[i] == cudaSuccess ? "done" : "busy",
+                                arr, spin, last, wb, phase);
+            }
+            GGML_LOG_WARN("%s\n", msg);
         }
     }
 }
@@ -379,6 +404,8 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
     GGML_ASSERT(n_devices >= 2 && n_devices <= GGML_CUDA_MAX_DEVICES);
 
     auto * p = new ggml_cuda_ar_pipeline{};
+    printf("ggml_cuda_ar_pipeline_init: p=%p\n", p);
+    
     p->n_devices  = n_devices;
     p->buf_bytes  = 0;
     p->call_count = 0;
@@ -471,10 +498,13 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
     }
 #endif
 
+#if 0
     // Warmup: run the kernel N times to pay first-use driver / PCIe /
     // page-mapping costs during model load and encourage the GPU clock
     // governor to boost before inference begins.
     if (n_devices == 2) {
+        printf("ggml_cuda_ar_pipeline_init warmup\n");
+        
         constexpr int    WARMUP_ITERS = 64;
         constexpr size_t WARMUP_COUNT = 8192;  // 32 KB of fp32
         constexpr size_t WARMUP_BYTES = WARMUP_COUNT * sizeof(float);
@@ -522,18 +552,48 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
                 cudaFree(dev_buf[i]);
             }
         }
+        
+        printf("ggml_cuda_ar_pipeline_init warmup finished\n");
     }
-
+#endif
     GGML_LOG_INFO("%s: initialized AllReduce pipeline: %d GPUs, "
                   "%zu KB staging per GPU\n",
                   __func__, n_devices, max_bytes >> 10);
+                  
+    printf("ggml_cuda_ar_pipeline_init finished\n");
+    
     return p;
 }
 
 void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
+    printf("ggml_cuda_ar_pipeline_free: p=%p\n", p);
     if (!p) {
         return;
     }
+
+#ifdef GGML_CUDA_AR_WATCHDOG
+    // Stop the watchdog thread FIRST, before destroying any GPU resources.
+    // Otherwise it polls cudaEventQuery on destroyed events → spurious "busy."
+    if (p->wdog_thr.joinable()) {
+        printf("ggml_cuda_ar_pipeline_free stopping watchdog\n");
+        {
+            std::lock_guard<std::mutex> lk(p->wdog_mtx);
+            p->wdog_stop = true;
+        }
+        p->wdog_cv.notify_one();
+        p->wdog_thr.join();
+        printf("ggml_cuda_ar_pipeline_free watchdog joined\n");
+    }
+#endif
+
+    // Drain all in-flight kernels before tearing down resources.
+    for (int i = 0; i < p->n_devices; ++i) {
+        if (p->streams[i]) {
+            ggml_cuda_set_device(p->devices[i]);
+            cudaStreamSynchronize(p->streams[i]);
+        }
+    }
+
     for (int i = 0; i < p->n_devices; ++i) {
         if (p->host_buf[i]) {
             cudaFreeHost(p->host_buf[i]);
@@ -555,14 +615,6 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
         cudaFreeHost(p->arrival);
     }
 #ifdef GGML_CUDA_AR_WATCHDOG
-    if (p->wdog_thr.joinable()) {
-        {
-            std::lock_guard<std::mutex> lk(p->wdog_mtx);
-            p->wdog_stop = true;
-        }
-        p->wdog_cv.notify_one();
-        p->wdog_thr.join();
-    }
     if (p->debug_buf) {
         cudaFreeHost(p->debug_buf);
     }
@@ -578,6 +630,7 @@ bool ggml_cuda_ar_allreduce(
         ggml_cuda_ar_pipeline * p,
         ggml_backend_t        * backends,
         ggml_tensor           ** tensors) {
+    //printf("ggml_cuda_ar_allreduce\n");
     GGML_ASSERT(p != nullptr);
 
     const int n = p->n_devices;
