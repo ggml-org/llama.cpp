@@ -1,4 +1,4 @@
-#ifdef INPLACE
+#ifdef OVERLAP
 
 @group(0) @binding(0)
 var<storage, read_write> rn_src: array<f32>;
@@ -11,6 +11,21 @@ var<uniform> params: Params;
 
 fn update(rn_src_offset: u32, dst_offset: u32, scale: f32, mul_src_offset: u32) {
     mul_src[dst_offset] = scale * rn_src[rn_src_offset] * mul_src[mul_src_offset];
+}
+
+#elif INPLACE
+
+@group(0) @binding(0)
+var<storage, read_write> rn_src: array<f32>;
+
+@group(0) @binding(1)
+var<storage, read_write> mul_src: array<f32>;
+
+@group(0) @binding(2)
+var<uniform> params: Params;
+
+fn update(rn_src_offset: u32, dst_offset: u32, scale: f32, mul_src_offset: u32) {
+    rn_src[dst_offset] = scale * rn_src[rn_src_offset] * mul_src[mul_src_offset];
 }
 
 #elif SRC_OVERLAP

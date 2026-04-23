@@ -197,11 +197,12 @@ struct ggml_webgpu_row_norm_pipeline_key_hash {
 /** RMS_NORM + MUL **/
 
 struct ggml_webgpu_rms_norm_mul_pipeline_key {
-    bool inplace;
-    bool src_overlap;
+    bool inplace;      // rn_src == dst
+    bool overlap;      // mul_src == dst
+    bool src_overlap;  // rn_src == mul_src
 
     bool operator==(const ggml_webgpu_rms_norm_mul_pipeline_key & other) const {
-        return inplace == other.inplace && src_overlap == other.src_overlap;
+        return inplace == other.inplace && overlap == other.overlap && src_overlap == other.src_overlap;
     }
 };
 
@@ -209,6 +210,7 @@ struct ggml_webgpu_rms_norm_mul_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_rms_norm_mul_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.inplace);
+        ggml_webgpu_hash_combine(seed, key.overlap);
         ggml_webgpu_hash_combine(seed, key.src_overlap);
         return seed;
     }
@@ -556,7 +558,7 @@ inline uint32_t ggml_webgpu_flash_attn_max_kv_tile(const ggml_webgpu_shader_lib_
     const size_t q_tile       = context.sg_mat_m;
     const size_t base_q_bytes = (key.head_dim_qk + key.head_dim_v) * q_tile * GGML_WEBGPU_F16_SIZE_BYTES +
                                 2 * q_tile * GGML_WEBGPU_F32_SIZE_BYTES;
-    size_t       bytes_per_kv = 0;
+    size_t bytes_per_kv = 0;
     if (!key.kv_direct) {
         bytes_per_kv += std::max(key.head_dim_qk, key.head_dim_v);
     }
@@ -1878,6 +1880,7 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_rms_norm_mul_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_rms_norm_mul_pipeline_key key = {};
         key.inplace                               = context.inplace;
+        key.overlap                               = context.overlap;
         key.src_overlap                           = context.src_overlap;
 
         auto it = rms_norm_mul_pipelines.find(key);
@@ -1892,6 +1895,9 @@ class ggml_webgpu_shader_lib {
         if (key.inplace) {
             defines.push_back("INPLACE");
             variant += "_inplace";
+        } else if (key.overlap) {
+            defines.push_back("OVERLAP");
+            variant += "_overlap";
         } else if (key.src_overlap) {
             defines.push_back("SRC_OVERLAP");
             variant += "_src_overlap";
