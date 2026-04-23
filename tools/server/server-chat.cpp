@@ -535,6 +535,7 @@ json server_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {
 
 json convert_transcriptions_to_chatcmpl(
         const json & inp_body,
+        const common_chat_templates * tmpls,
         const std::map<std::string, raw_buffer> & in_files,
         std::vector<raw_buffer> & out_files) {
     // TODO @ngxson : this function may need to be improved in the future
@@ -548,27 +549,29 @@ json convert_transcriptions_to_chatcmpl(
     }
 
     // handle input data
-    std::string prompt = json_value(inp_body, "prompt", std::string());
-    std::string language = json_value(inp_body, "language", std::string());
+    std::string prompt          = json_value(inp_body, "prompt", std::string());
+    std::string language        = json_value(inp_body, "language", std::string());
     std::string response_format = json_value(inp_body, "response_format", std::string("json"));
     if (response_format != "json") {
         throw std::invalid_argument("Only 'json' response_format is supported for transcription");
     }
+    const common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls);
     if (prompt.empty()) {
-        prompt = "Transcribe audio to text";
+        prompt = preset.user;
     }
     if (!language.empty()) {
         prompt += string_format(" (language: %s)", language.c_str());
     }
     prompt += get_media_marker();
 
+    json messages = json::array();
+    if (!preset.system.empty()) {
+        messages.push_back({{"role", "system"}, {"content", preset.system}});
+    }
+    messages.push_back({{"role", "user"}, {"content", prompt}});
+
     json chatcmpl_body = inp_body; // copy all fields
-    chatcmpl_body["messages"] = json::array({
-        {
-            {"role", "user"},
-            {"content", prompt},
-        },
-    });
+    chatcmpl_body["messages"] = messages;
 
     // because input from form-data, everything is string, we need to correct the types here
     std::string stream = json_value(inp_body, "stream", std::string("false"));

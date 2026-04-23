@@ -544,6 +544,26 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
     return tmpls->has_explicit_template;
 }
 
+// LFM2 format detection: template uses <|tool_list_start|>[...]<|tool_list_end|> around the tool list
+// and <|tool_call_start|>[...]<|tool_call_end|> around each tool call
+static bool is_lfm2_template(const std::string & src) {
+    return src.find("<|tool_list_start|>") != std::string::npos &&
+           src.find("<|tool_list_end|>")   != std::string::npos;
+}
+
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates) {
+    common_chat_prompt_preset asr_preset;
+    asr_preset.system = "";
+    asr_preset.user   = "Transcribe audio to text";
+
+    if (chat_templates && chat_templates->template_default && is_lfm2_template(chat_templates->template_default->source())) {
+        asr_preset.system = "Perform ASR.";
+        asr_preset.user   = "";
+    }
+
+    return asr_preset;
+}
+
 std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant) {
     if (!variant.empty()) {
         if (variant == "tool_use") {
@@ -2053,10 +2073,7 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_kimi_k2(tmpl, params);
     }
 
-    // LFM2 format detection: template uses <|tool_list_start|>[...]<|tool_list_end|> around the tool list
-    // and <|tool_call_start|>[...]<|tool_call_end|> around each tool call
-    if (src.find("<|tool_list_start|>") != std::string::npos &&
-        src.find("<|tool_list_end|>") != std::string::npos) {
+    if (is_lfm2_template(src)) {
         LOG_DBG("Using specialized template: LFM2\n");
         return common_chat_params_init_lfm2(tmpl, params);
     }
@@ -2365,4 +2382,3 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     GGML_ASSERT(chat_templates->template_default != nullptr);
     return chat_templates->template_default->caps.to_map();
 }
-
