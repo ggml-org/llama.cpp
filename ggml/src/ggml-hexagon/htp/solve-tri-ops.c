@@ -19,32 +19,6 @@ struct htp_solve_tri_context {
     uint32_t                 col_block;
 };
 
-#if __HVX_ARCH__ > 75
-static inline HVX_Vector hvx_add_f32_vec(HVX_Vector a, HVX_Vector b) {
-    return Q6_Vsf_vadd_VsfVsf(a, b);
-}
-
-static inline HVX_Vector hvx_sub_f32_vec(HVX_Vector a, HVX_Vector b) {
-    return Q6_Vsf_vsub_VsfVsf(a, b);
-}
-
-static inline HVX_Vector hvx_mul_f32_vec(HVX_Vector a, HVX_Vector b) {
-    return Q6_Vsf_vmpy_VsfVsf(a, b);
-}
-#else
-static inline HVX_Vector hvx_add_f32_vec(HVX_Vector a, HVX_Vector b) {
-    return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(a, b));
-}
-
-static inline HVX_Vector hvx_sub_f32_vec(HVX_Vector a, HVX_Vector b) {
-    return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(a, b));
-}
-
-static inline HVX_Vector hvx_mul_f32_vec(HVX_Vector a, HVX_Vector b) {
-    return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(a, b));
-}
-#endif
-
 static inline void solve_tri_row_scalar(const float * A_row,
                                         const float * B_row,
                                         float *       X,
@@ -85,7 +59,7 @@ static inline void solve_tri_row_hvx(const float * A_row,
 
         HVX_Vector x_v = full ? *((const HVX_UVector *) x_row_col) : hvx_load_partial_f32(x_row_col, coln);
         HVX_Vector a_v = hvx_vec_splat_f32(a);
-        sum_v          = hvx_add_f32_vec(sum_v, hvx_mul_f32_vec(x_v, a_v));
+        sum_v          = hvx_vec_add_f32_f32(sum_v, hvx_vec_mul_f32_f32(x_v, a_v));
     }
 
     const float * b_row_col = B_row + col0;
@@ -94,7 +68,7 @@ static inline void solve_tri_row_hvx(const float * A_row,
     HVX_Vector b_v        = full ? *((const HVX_UVector *) b_row_col) : hvx_load_partial_f32(b_row_col, coln);
     HVX_Vector inv_diag_v = hvx_vec_splat_f32(inv_diag);
 
-    HVX_Vector out_v = hvx_mul_f32_vec(hvx_sub_f32_vec(b_v, sum_v), inv_diag_v);
+    HVX_Vector out_v = hvx_vec_mul_f32_f32(hvx_vec_sub_f32_f32(b_v, sum_v), inv_diag_v);
     hvx_vec_store_u((void *) x_out_col, coln * sizeof(float), out_v);
 }
 
