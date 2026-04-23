@@ -993,6 +993,7 @@ static void fa_ml_update_and_build_d(struct hmx_fa_context * factx,
         Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets,
                            v_content);
     }
+    (void) *(volatile HVX_Vector *) (factx->vtcm_d_tiles);
 }
 
 // Combined: multi-thread softmax -> barrier -> serial m/l update + build_D
@@ -1015,9 +1016,6 @@ static void fa_phase_softmax_and_build_d(struct hmx_fa_context * factx,
     // barrier implicit in worker_pool_run_func return
 
     fa_ml_update_and_build_d(factx, sargs->n_rows_g, n_row_tiles, n_row_tiles_g_br);
-
-    // TODO: Can we find a lighter barrier?
-    __asm__ __volatile__("" ::: "memory");
 }
 
 // ============================================================================
@@ -1775,6 +1773,8 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         __fp16 * out_base = factx.vtcm_d_tiles + i * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
                         Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
                     }
+
+                    (void) *(volatile HVX_Vector *) (factx.vtcm_d_tiles);
 
                     // HMX: O_final = diag(1/l) @ O_prev
                     if (factx.use_pipeline) {
