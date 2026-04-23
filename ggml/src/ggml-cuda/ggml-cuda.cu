@@ -445,51 +445,66 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
         cudaError_t err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
         if (err == cudaErrorMemoryAllocation && pool_size > 0) {
             (void)cudaGetLastError();
-            const size_t cached_bytes   = pool_size;
-            const size_t reclaim_target = (look_ahead_size > SIZE_MAX / 3)
-                                              ? SIZE_MAX
-                                              : 3 * look_ahead_size;
-            GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: alloc of %.2f MiB failed, trying LRU-style reclaim (target %.2f MiB) from %.2f MiB cached\n",
-                           device, look_ahead_size/1024.0/1024.0, reclaim_target/1024.0/1024.0, cached_bytes/1024.0/1024.0);
             CUDA_CHECK(cudaDeviceSynchronize());
 
-            size_t freed = 0;
-            while (freed < reclaim_target) {
-                int      victim = -1;
-                uint64_t oldest = UINT64_MAX;
-                for (int i = 0; i < MAX_BUFFERS; ++i) {
-                    ggml_cuda_buffer & b = buffer_pool[i];
-                    if (b.ptr != nullptr && buffer_pool_ts[i] < oldest) {
-                        victim = i;
-                        oldest = buffer_pool_ts[i];
-                    }
-                }
-                if (victim < 0) {
-                    break;
-                }
-                ggml_cuda_buffer & b = buffer_pool[victim];
-                CUDA_CHECK(cudaFree(b.ptr));
-                freed     += b.size;
-                pool_size -= b.size;
-                b.ptr  = nullptr;
-                b.size = 0;
-                buffer_pool_ts[victim] = 0;
-            }
-
-            err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
-
-            // terminal fallback if the 3x-bounded reclaim left cached buffers behind
-            if (err == cudaErrorMemoryAllocation && pool_size > 0) {
-                (void)cudaGetLastError();
-                GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: reclaim bounded at %.2f MiB, flushing remaining %.2f MiB cached\n",
-                               device, freed/1024.0/1024.0, pool_size/1024.0/1024.0);
+#if defined(GGML_USE_HIP)
+            // HIP multi-GPU: LRU timing amplifies ROCm/rocm-systems#4817; fall back to clear_pool.
+            if (ggml_backend_cuda_get_device_count() > 1) {
+                GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: HIP multi-GPU, flushing %.2f MiB of cached buffers and retrying\n",
+                               device, pool_size/1024.0/1024.0);
                 clear_pool();
                 err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
-            }
+                if (err == cudaSuccess) {
+                    GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: retry succeeded\n", device);
+                }
+            } else
+#endif
+            {
+                const size_t cached_bytes   = pool_size;
+                const size_t reclaim_target = (look_ahead_size > SIZE_MAX / 3)
+                                                  ? SIZE_MAX
+                                                  : 3 * look_ahead_size;
+                GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: alloc of %.2f MiB failed, trying LRU-style reclaim (target %.2f MiB) from %.2f MiB cached\n",
+                               device, look_ahead_size/1024.0/1024.0, reclaim_target/1024.0/1024.0, cached_bytes/1024.0/1024.0);
 
-            if (err == cudaSuccess) {
-                GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: retry succeeded after reclaiming %.2f MiB\n",
-                               device, freed/1024.0/1024.0);
+                size_t freed = 0;
+                while (freed < reclaim_target) {
+                    int      victim = -1;
+                    uint64_t oldest = UINT64_MAX;
+                    for (int i = 0; i < MAX_BUFFERS; ++i) {
+                        ggml_cuda_buffer & b = buffer_pool[i];
+                        if (b.ptr != nullptr && buffer_pool_ts[i] < oldest) {
+                            victim = i;
+                            oldest = buffer_pool_ts[i];
+                        }
+                    }
+                    if (victim < 0) {
+                        break;
+                    }
+                    ggml_cuda_buffer & b = buffer_pool[victim];
+                    CUDA_CHECK(cudaFree(b.ptr));
+                    freed     += b.size;
+                    pool_size -= b.size;
+                    b.ptr  = nullptr;
+                    b.size = 0;
+                    buffer_pool_ts[victim] = 0;
+                }
+
+                err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
+
+                // terminal fallback if the 3x-bounded reclaim left cached buffers behind
+                if (err == cudaErrorMemoryAllocation && pool_size > 0) {
+                    (void)cudaGetLastError();
+                    GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: reclaim bounded at %.2f MiB, flushing remaining %.2f MiB cached\n",
+                                   device, freed/1024.0/1024.0, pool_size/1024.0/1024.0);
+                    clear_pool();
+                    err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
+                }
+
+                if (err == cudaSuccess) {
+                    GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: retry succeeded after reclaiming %.2f MiB\n",
+                                   device, freed/1024.0/1024.0);
+                }
             }
         }
         CUDA_CHECK(err);
