@@ -27,11 +27,10 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * pipeline);
 // Execute an in-place AllReduce (sum) across tensors[0..n_devices-1].
 // tensors[i] must live on the device managed by backends[i] and be
 // contiguous F32, F16, or BF16.
-// Returns true on success.  Returns false when the tensor type or size is
+// Returns true on success. Returns false when the tensor type or size is
 // outside the currently supported range; the caller should fall back to
 // another provider (NCCL or the meta-backend CPU reduce).
 bool ggml_cuda_ar_allreduce(
     ggml_cuda_ar_pipeline * pipeline,
     ggml_backend_t        * backends,
     ggml_tensor           ** tensors);
-** tensors);

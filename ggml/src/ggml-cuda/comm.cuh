@@ -6,9 +6,9 @@
 // N GPUs and requires an AllReduce after each segment to sum the partial results.
 // This enum selects which implementation performs that reduction.
 //
-// The active provider is chosen once at communicator init time by
+// The preferred provider is chosen once at communicator init time by
 // ggml_cuda_select_allreduce_provider() and stored in
-// ggml_backend_cuda_comm_context::provider.
+// ggml_backend_cuda_comm_context::preferred_provider.
 enum ggml_cuda_allreduce_provider {
     // NVIDIA/AMD Collective Communications Library (NCCL/RCCL).
     // Optimal on NVLink/NVSwitch topologies; auto-selects the best transport.

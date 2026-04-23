@@ -1141,20 +1141,22 @@ static const ggml_backend_buffer_type_i ggml_backend_cuda_split_buffer_type_inte
 };
 
 // Communication context for multi-GPU AllReduce during tensor parallelism.
-// Created once per meta backend instance; provider is fixed at init time.
+// Created once per meta backend instance; the preferred provider is chosen at
+// init time, but per-call dispatch may fall back to another CUDA provider when
+// the preferred one does not support a tensor configuration.
 struct ggml_backend_cuda_comm_context {
-    ggml_cuda_allreduce_provider provider;
+    ggml_cuda_allreduce_provider preferred_provider;
     std::vector<ggml_backend_t>  backends;
 
 #ifdef GGML_USE_NCCL
-    std::vector<ncclComm_t>      comms;       // valid when provider == GGML_CUDA_ALLREDUCE_NCCL
+    std::vector<ncclComm_t>      comms;
 #endif
 
-    ggml_cuda_ar_pipeline *      ar_pipeline = nullptr;  // valid when provider == GGML_CUDA_ALLREDUCE_INTERNAL
+    ggml_cuda_ar_pipeline *      ar_pipeline = nullptr;
 
     ~ggml_backend_cuda_comm_context() {
 #ifdef GGML_USE_NCCL
-        if (provider == GGML_CUDA_ALLREDUCE_NCCL) {
+        if (!comms.empty()) {
             for (ncclComm_t comm : comms) {
                 NCCL_CHECK(ncclCommDestroy(comm));
             }
@@ -1225,7 +1227,7 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
     const ggml_cuda_allreduce_provider provider = ggml_cuda_select_allreduce_provider(dev_ids);
 
     auto * ret = new ggml_backend_cuda_comm_context;
-    ret->provider = provider;
+    ret->preferred_provider = provider;
     ret->backends.assign(backends, backends + n_backends);
 
     switch (provider) {
@@ -1248,6 +1250,10 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
                 delete ret;
                 return nullptr;
             }
+#ifdef GGML_USE_NCCL
+            ret->comms.resize(n_backends);
+            NCCL_CHECK(ncclCommInitAll(ret->comms.data(), (int) n_backends, dev_ids.data()));
+#endif
         } break;
     }
 
@@ -1336,18 +1342,115 @@ static bool ggml_backend_cuda_comm_allreduce_internal(
     return ggml_cuda_ar_allreduce(comm_ctx->ar_pipeline, comm_ctx->backends.data(), tensors);
 }
 
+enum ggml_cuda_comm_allreduce_result {
+    GGML_CUDA_COMM_ALLREDUCE_SUCCESS,
+    GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED,
+    GGML_CUDA_COMM_ALLREDUCE_FAILED,
+};
+
+static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_internal(
+        ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
+    if (comm_ctx->ar_pipeline == nullptr) {
+        return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
+    }
+
+    const size_t n_backends = comm_ctx->backends.size();
+    GGML_ASSERT(n_backends >= 1);
+    GGML_ASSERT(tensors[0] != nullptr);
+
+    const int64_t ne = ggml_nelements(tensors[0]);
+    const ggml_type type = tensors[0]->type;
+
+    if (n_backends != 2) {
+        return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
+    }
+
+    if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && type != GGML_TYPE_BF16) {
+        return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
+    }
+
+    if (ne == 0) {
+        return GGML_CUDA_COMM_ALLREDUCE_SUCCESS;
+    }
+
+    const size_t bytes = (size_t) ne * ggml_type_size(type);
+    if (bytes > GGML_CUDA_AR_MAX_BYTES) {
+        return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
+    }
+
+    for (size_t i = 0; i < n_backends; ++i) {
+        if (tensors[i] == nullptr) {
+            return GGML_CUDA_COMM_ALLREDUCE_FAILED;
+        }
+        if (ggml_nelements(tensors[i]) != ne || tensors[i]->type != type) {
+            return GGML_CUDA_COMM_ALLREDUCE_FAILED;
+        }
+    }
+
+    return ggml_backend_cuda_comm_allreduce_internal(comm_ctx, tensors)
+        ? GGML_CUDA_COMM_ALLREDUCE_SUCCESS
+        : GGML_CUDA_COMM_ALLREDUCE_FAILED;
+}
+
+#ifdef GGML_USE_NCCL
+static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_nccl(
+        ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
+    if (comm_ctx->comms.empty()) {
+        return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
+    }
+    return ggml_backend_cuda_comm_allreduce_nccl(comm_ctx, tensors)
+        ? GGML_CUDA_COMM_ALLREDUCE_SUCCESS
+        : GGML_CUDA_COMM_ALLREDUCE_FAILED;
+}
+#else
+static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_nccl(
+        ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
+    GGML_UNUSED_VARS(comm_ctx, tensors);
+    return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
+}
+#endif
+
 static bool ggml_backend_cuda_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tensor ** tensors) {
     if (comm_ctx_v == nullptr) {
         return false;
     }
     auto * comm_ctx = static_cast<ggml_backend_cuda_comm_context *>(comm_ctx_v);
-    switch (comm_ctx->provider) {
-#ifdef GGML_USE_NCCL
-        case GGML_CUDA_ALLREDUCE_NCCL:
-            return ggml_backend_cuda_comm_allreduce_nccl(comm_ctx, tensors);
-#endif
+
+    auto try_in_order = [&](ggml_cuda_allreduce_provider first) -> bool {
+        const ggml_cuda_allreduce_provider second =
+            first == GGML_CUDA_ALLREDUCE_INTERNAL
+                ? GGML_CUDA_ALLREDUCE_NCCL
+                : GGML_CUDA_ALLREDUCE_INTERNAL;
+        const ggml_cuda_allreduce_provider order[2] = { first, second };
+
+        for (ggml_cuda_allreduce_provider provider : order) {
+            ggml_cuda_comm_allreduce_result result = GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
+            switch (provider) {
+                case GGML_CUDA_ALLREDUCE_INTERNAL:
+                    result = ggml_backend_cuda_comm_try_allreduce_internal(comm_ctx, tensors);
+                    break;
+                case GGML_CUDA_ALLREDUCE_NCCL:
+                    result = ggml_backend_cuda_comm_try_allreduce_nccl(comm_ctx, tensors);
+                    break;
+                default:
+                    GGML_ASSERT(false);
+            }
+
+            if (result == GGML_CUDA_COMM_ALLREDUCE_SUCCESS) {
+                return true;
+            }
+            if (result == GGML_CUDA_COMM_ALLREDUCE_FAILED) {
+                return false;
+            }
+        }
+
+        return false;
+    };
+
+    switch (comm_ctx->preferred_provider) {
         case GGML_CUDA_ALLREDUCE_INTERNAL:
-            return ggml_backend_cuda_comm_allreduce_internal(comm_ctx, tensors);
+        case GGML_CUDA_ALLREDUCE_NCCL:
+            return try_in_order(comm_ctx->preferred_provider);
         default:
             return false;
     }
