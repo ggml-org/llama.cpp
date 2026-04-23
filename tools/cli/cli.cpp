@@ -228,7 +228,7 @@ struct cli_context {
 };
 
 // TODO?: Make this reusable, enums, docs
-static const std::array<const std::string, 7> cmds = {
+static const std::array<std::string_view, 7> cmds = {
     "/audio ",
     "/clear",
     "/exit",
@@ -242,19 +242,19 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
     std::vector<std::pair<std::string, size_t>> matches;
     std::string cmd;
 
-    if (line.length() > 1 && line[0] == '/' && !std::any_of(cmds.begin(), cmds.end(), [line](const std::string & prefix) {
+    if (line.length() > 1 && line.front() == '/' && !std::any_of(cmds.begin(), cmds.end(), [line](std::string_view prefix) {
         return string_starts_with(line, prefix);
     })) {
         auto it = cmds.begin();
 
-        while ((it = std::find_if(it, cmds.end(), [line](const std::string & cmd_line) {
+        while ((it = std::find_if(it, cmds.end(), [line](std::string_view cmd_line) {
             return string_starts_with(cmd_line, line);
         })) != cmds.end()) {
-            matches.emplace_back(*it, (*it).length());
+            matches.emplace_back(*it, it->length());
             ++it;
         }
     } else {
-        auto it = std::find_if(cmds.begin(), cmds.end(), [line](const std::string & prefix) {
+        auto it = std::find_if(cmds.begin(), cmds.end(), [line](std::string_view prefix) {
             return prefix.back() == ' ' && string_starts_with(line, prefix);
         });
 
@@ -271,18 +271,18 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
         std::string expanded_prefix = path_prefix;
 
 #if !defined(_WIN32)
-        if (string_starts_with(path_prefix, "~")) {
+        if (string_starts_with(path_prefix, '~')) {
             const char * home = std::getenv("HOME");
             if (home && home[0]) {
-                expanded_prefix = std::string(home) + path_prefix.substr(1);
+                expanded_prefix = home + path_prefix.substr(1);
             }
         }
-        if (string_starts_with(expanded_prefix, "/")) {
+        if (string_starts_with(expanded_prefix, '/')) {
 #else
         if (std::isalpha(expanded_prefix[0]) && expanded_prefix.find(':') == 1) {
 #endif
             cur_dir = std::filesystem::path(expanded_prefix).parent_path();
-            cur_dir_str = "";
+            cur_dir_str.clear();
         } else if (!path_prefix.empty()) {
             cur_dir /= std::filesystem::path(path_prefix).parent_path();
         }
@@ -305,7 +305,7 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
             }
 
             if (expanded_prefix.empty() || string_starts_with(path_entry, expanded_prefix)) {
-                std::string updated_line = cmd + path_entry;
+                const std::string updated_line = cmd + path_entry;
                 matches.emplace_back(updated_line + path_postfix, updated_line.length());
             }
 
@@ -315,7 +315,7 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
         }
 
         if (matches.empty()) {
-            std::string updated_line = cmd + path_prefix;
+            const std::string updated_line = cmd + path_prefix;
             matches.emplace_back(updated_line + path_postfix, updated_line.length());
         }
 
@@ -332,7 +332,7 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
                 len = std::min(len, static_cast<size_t>(cmp.first - match0.begin()));
             }
 
-            std::string updated_line = std::string(match0.substr(0, len));
+            const std::string updated_line = std::string(match0.substr(0, len));
             matches.emplace_back(updated_line + path_postfix, updated_line.length());
         }
 
@@ -569,10 +569,10 @@ int main(int argc, char ** argv) {
                 if (endpath != std::string::npos) {
                     std::string rel_pattern = pattern.substr(0, endpath);
 #if !defined(_WIN32)
-                    if (string_starts_with(rel_pattern, "~")) {
+                    if (string_starts_with(rel_pattern, '~')) {
                         const char * home = std::getenv("HOME");
                         if (home && home[0]) {
-                            rel_pattern = std::string(home) + rel_pattern.substr(1);
+                            rel_pattern = home + rel_pattern.substr(1);
                         }
                     }
 #endif
