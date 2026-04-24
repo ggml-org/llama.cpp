@@ -106,10 +106,16 @@ struct statement {
     size_t pos; // position in source, for debugging
     virtual ~statement() = default;
     virtual std::string type() const { return "Statement"; }
+
     // execute_impl must be overridden by derived classes
-    virtual value execute_impl(context &) { throw std::runtime_error("cannot exec " + type()); }
+    virtual value execute_impl(context &) { throw_exec_error(); }
     // execute is the public method to execute a statement with error handling
     value execute(context &);
+
+private:
+    [[noreturn]] void throw_exec_error() const {
+        throw std::runtime_error("cannot exec " + type());
+    }
 };
 
 // Type Checking Utilities
@@ -143,7 +149,7 @@ struct program : public statement {
     program() = default;
     explicit program(statements && body) : body(std::move(body)) {}
     std::string type() const override { return "Program"; }
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) override {
         throw std::runtime_error("Cannot execute program directly, use jinja::runtime instead");
     }
 };
@@ -195,7 +201,7 @@ struct break_statement : public statement {
         }
     };
 
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) override {
         throw break_statement::signal();
     }
 };
@@ -209,7 +215,7 @@ struct continue_statement : public statement {
         }
     };
 
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) override {
         throw continue_statement::signal();
     }
 };
@@ -509,7 +515,7 @@ struct slice_expression : public expression {
         chk_type<expression>(this->step_expr);
     }
     std::string type() const override { return "SliceExpression"; }
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) override {
         throw std::runtime_error("must be handled by MemberExpression");
     }
 };
