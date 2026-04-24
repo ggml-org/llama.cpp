@@ -143,7 +143,7 @@ static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t 
     desc->desc_size  = 0; // 1D mode
     desc->src_bypass = dma_src_l2_bypass_on;
     desc->dst_bypass = dma_dst_l2_bypass_on;
-    desc->order      = 1;
+    desc->order      = 0;
     desc->done       = 0;
     desc->src        = (void *) dptr.src;
     desc->dst        = (void *) dptr.dst;
@@ -151,8 +151,12 @@ static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t 
 
     q->dptr[q->push_idx] = dptr;
 
-    dmlink(q->tail, desc);
-    q->tail = (dma_descriptor_2d *) desc;
+    if (size) {
+        dmlink(q->tail, desc);
+        q->tail = (dma_descriptor_2d *) desc;
+    } else {
+        desc->done = 1;
+    }
 
     // FARF(ERROR, "dma-push: i %u row-size %u nrows %d dst %p src %p\n", q->push_idx, row_size, nrows, dptr.dst, dptr.src);
     q->push_idx = (q->push_idx + 1) & q->idx_mask;
@@ -175,7 +179,7 @@ static inline bool dma_queue_push_single_2d(dma_queue * q, dma_ptr dptr, size_t 
     desc->dst_bypass     = dma_dst_l2_bypass_on;
     desc->src_comp       = 0;
     desc->dst_comp       = 0;
-    desc->order          = 1;
+    desc->order          = 0;
     desc->done           = 0;
     desc->src_stride     = src_stride;
     desc->dst_stride     = dst_stride;
@@ -197,8 +201,12 @@ static inline bool dma_queue_push_single_2d(dma_queue * q, dma_ptr dptr, size_t 
 
     q->dptr[q->push_idx] = dptr;
 
-    dmlink(q->tail, desc);
-    q->tail = desc;
+    if (nrows) {
+        dmlink(q->tail, desc);
+        q->tail = desc;
+    } else {
+        desc->done = 1;
+    }
 
     // FARF(ERROR, "dma-push: i %u row-size %u nrows %d dst %p src %p\n", q->push_idx, row_size, nrows, dptr.dst, dptr.src);
     q->push_idx = (q->push_idx + 1) & q->idx_mask;
@@ -215,12 +223,9 @@ static inline dma_ptr dma_queue_pop(dma_queue * q) {
     dma_descriptor_2d * desc = &q->desc[q->pop_idx];
 
     // Wait for desc to complete
-    while (1) {
-        dmpoll();
-        if (desc->done) {
-            break;
-        }
+    while (!desc->done) {
         // FARF(ERROR, "dma-pop: waiting for DMA : %u\n", q->pop_idx);
+        dmpoll();
     }
 
     dptr = q->dptr[q->pop_idx];
@@ -310,6 +315,54 @@ static inline bool dma_queue_push_ddr_to_vtcm(dma_queue * q, dma_ptr dptr, size_
 
 static inline bool dma_queue_push_vtcm_to_ddr(dma_queue * q, dma_ptr dptr, size_t dst_row_size, size_t src_row_size, size_t nrows) {
     return dma_queue_push(q, dptr, dst_row_size, src_row_size, dst_row_size, nrows);
+}
+
+#define DMA_CACHE_MAX_SIZE 64U
+
+typedef struct {
+    uint8_t *base;
+    uint32_t line_size;
+    uint32_t capacity;
+    uint32_t src[DMA_CACHE_MAX_SIZE];
+    uint16_t age[DMA_CACHE_MAX_SIZE];
+} dma_cache;
+
+static inline void dma_cache_init(dma_cache *c, uint8_t *base, uint32_t line_size, uint32_t capacity)
+{
+    c->capacity  = (capacity > DMA_CACHE_MAX_SIZE) ? DMA_CACHE_MAX_SIZE : capacity;
+    c->base      = base;
+    c->line_size = line_size;
+
+    for (unsigned i=0; i < c->capacity; i++) {
+        c->src[i] = 0;
+        c->age[i] = 0;
+    }
+}
+
+static inline bool dma_cache_push(dma_queue *q, dma_cache *c, const uint8_t * src, uint32_t dst_stride, uint32_t src_stride, uint32_t row_size, uint32_t nrows)
+{
+    uint32_t o_idx = 0;
+    uint16_t o_age = 0;
+    uint8_t *  dst = 0;
+
+    for (unsigned i=0; i < c->capacity; i++) {
+        if (c->src[i] == (uint32_t) src) {
+            c->age[i] = 0;
+            dst = c->base + (i * c->line_size); nrows = 0; // dummy dma
+            // FARF(ERROR, "dma-cache: found %p", src);
+        } else {
+            c->age[i]++;
+            if (c->age[i] > o_age) { o_age = c->age[i]; o_idx = i; }
+        }
+    }
+    if (!dst) {
+        // FARF(ERROR, "dma-cache: replacing #%u : age %u %p -> %p", o_idx, c->age[o_idx], (void *) c->src[o_idx], src);
+        c->age[o_idx] = 0;
+        c->src[o_idx] = (uint32_t) src;
+        dst = c->base + o_idx * c->line_size; // normal nrows dma
+    }
+
+    return dma_queue_push(q, dma_make_ptr(dst, src), dst_stride, src_stride, row_size, nrows);
 }
 
 #ifdef __cplusplus

@@ -30,7 +30,7 @@
 {#snippet defaultOption(item: ModelItem, showOrgName: boolean)}
 	{@const { option } = item}
 	{@const isSelected = currentModel === option.model || activeId === option.id}
-	{@const isFav = modelsStore.favouriteModelIds.has(option.model)}
+	{@const isFav = modelsStore.favoriteModelIds.has(option.model)}
 
 	<ModelsSelectorOption
 		{option}
@@ -52,9 +52,9 @@
 	{/each}
 {/if}
 
-{#if groups.favourites.length > 0}
-	<p class={sectionHeaderClass}>Favourite models</p>
-	{#each groups.favourites as item (`fav-${item.option.id}`)}
+{#if groups.favorites.length > 0}
+	<p class={sectionHeaderClass}>Favorite models</p>
+	{#each groups.favorites as item (`fav-${item.option.id}`)}
 		{@render render(item, true)}
 	{/each}
 {/if}

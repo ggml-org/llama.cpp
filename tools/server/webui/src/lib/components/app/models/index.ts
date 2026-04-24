@@ -47,7 +47,7 @@ export { default as ModelsSelector } from './ModelsSelector.svelte';
 /**
  * **ModelsSelectorList** - Grouped model options list
  *
- * Renders grouped model options (loaded, favourites, available) with section
+ * Renders grouped model options (loaded, favorites, available) with section
  * headers and org subgroups. Shared between ModelsSelector and ModelsSelectorSheet
  * to avoid template duplication.
  *
@@ -59,7 +59,7 @@ export { default as ModelsSelectorList } from './ModelsSelectorList.svelte';
 /**
  * **ModelsSelectorOption** - Single model option row
  *
- * Renders a single model option with selection state, favourite toggle,
+ * Renders a single model option with selection state, favorite toggle,
  * load/unload actions, status indicators, and an info button.
  * Used inside ModelsSelectorList or directly in custom render snippets.
  */

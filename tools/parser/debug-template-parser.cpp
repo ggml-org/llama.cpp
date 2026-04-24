@@ -5,14 +5,14 @@
 #include "gguf.h"
 #include "jinja/runtime.h"
 #include "log.h"
+#include "nlohmann/json.hpp"
+#include "peg-parser.h"
 
 #include <fstream>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <string>
-
-#include "nlohmann/json.hpp"
-#include "peg-parser.h"
 
 using json = nlohmann::ordered_json;
 
@@ -34,14 +34,14 @@ enum class input_message_type {
 };
 
 struct debug_options {
-    std::string      template_path;
-    bool             with_tools        = true;
-    bool             generation_prompt = true;
-    bool             enable_reasoning  = true;
-    bool             debug_jinja       = false;
-    bool             force_tool_call   = false;
-    output_mode      mode              = output_mode::BOTH;
-    input_message_type input_message   = input_message_type::NONE;
+    std::string        template_path;
+    bool               with_tools        = true;
+    bool               generation_prompt = true;
+    bool               enable_reasoning  = true;
+    bool               debug_jinja       = false;
+    bool               force_tool_call   = false;
+    output_mode        mode              = output_mode::BOTH;
+    input_message_type input_message     = input_message_type::NONE;
 };
 
 static std::string read_file(const std::string & path) {
@@ -274,7 +274,7 @@ static void render_scenario(const common_chat_template & tmpl,
     json final_messages = messages;
     if (add_generation_prompt && !messages.empty() && messages.back().value("role", "") == "assistant") {
         final_messages.push_back(json{
-            { "role",    "user" },
+            { "role",    "user"                                       },
             { "content", "Now please continue with another response." }
         });
     }
@@ -305,7 +305,7 @@ static void render_all_scenarios(const common_chat_template & tmpl,
                                  const json &                 tools,
                                  bool                         add_generation_prompt,
                                  bool                         enable_thinking,
-                                 input_message_type             message_type) {
+                                 input_message_type           message_type) {
     json user_msg = build_user_message();
 
     auto render_if = [&](input_message_type type, const std::string & name, const json & assistant_msg) {
@@ -333,6 +333,24 @@ static void render_all_scenarios(const common_chat_template & tmpl,
         // With enable_thinking toggled
         render_scenario(tmpl, "generation_prompt_thinking_disabled", prompt_messages, tools, true, false);
     }
+}
+
+static autoparser::generation_params prepare_params(const debug_options & opts, const json & tools) {
+    autoparser::generation_params params;
+    params.messages         = json::array({ build_user_message() });
+    params.reasoning_format = opts.enable_reasoning ? COMMON_REASONING_FORMAT_DEEPSEEK : COMMON_REASONING_FORMAT_NONE;
+    params.enable_thinking  = opts.enable_reasoning;
+    params.add_generation_prompt = opts.generation_prompt;
+
+    if (opts.with_tools) {
+        params.tools       = tools;
+        params.tool_choice = opts.force_tool_call ? COMMON_CHAT_TOOL_CHOICE_REQUIRED : COMMON_CHAT_TOOL_CHOICE_AUTO;
+    } else {
+        params.tools       = json();
+        params.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+    }
+    params.parallel_tool_calls = false;
+    return params;
 }
 
 int main(int argc, char ** argv) {
@@ -369,49 +387,41 @@ int main(int argc, char ** argv) {
     try {
         common_chat_template chat_template(template_source, "", "");
 
-        // Build tools definition
         json tools = opts.with_tools ? build_tools_definition() : json();
 
-        // Render template scenarios if requested
-        if (opts.input_message != input_message_type::NONE &&
-            (opts.mode == output_mode::TEMPLATE || opts.mode == output_mode::BOTH)) {
+        autoparser::generation_params params = prepare_params(opts, tools);
+        common_chat_params            parser_data;
+        if (std::optional<common_chat_params> spec_tmpl =
+                common_chat_try_specialized_template(chat_template, template_source, params)) {
             LOG_ERR("\n");
-            LOG_ERR("================================================================================\n");
-            LOG_ERR("                         TEMPLATE RENDERING OUTPUT\n");
-            LOG_ERR("================================================================================\n");
+            LOG_ERR("This template uses a specialized parser, analysis results will not be available.");
+            parser_data = *spec_tmpl;
+        } else {
+            // Render template scenarios if requested
+            if (opts.input_message != input_message_type::NONE &&
+                (opts.mode == output_mode::TEMPLATE || opts.mode == output_mode::BOTH)) {
+                LOG_ERR("\n");
+                LOG_ERR("================================================================================\n");
+                LOG_ERR("                         TEMPLATE RENDERING OUTPUT\n");
+                LOG_ERR("================================================================================\n");
 
-            render_all_scenarios(chat_template, tools, opts.generation_prompt, opts.enable_reasoning,
-                                 opts.input_message);
-        }
-
-        // Output analysis if requested
-        if (opts.mode == output_mode::ANALYSIS || opts.mode == output_mode::BOTH) {
-            LOG_ERR("\n");
-            LOG_ERR("================================================================================\n");
-            LOG_ERR("                           TEMPLATE ANALYSIS\n");
-            LOG_ERR("================================================================================\n");
-
-            autoparser::autoparser analysis;
-            analysis.analyze_template(chat_template);
-
-            // Generate Parser
-            autoparser::generation_params params;
-            params.messages = json::array({ build_user_message() });
-            params.reasoning_format =
-                opts.enable_reasoning ? COMMON_REASONING_FORMAT_DEEPSEEK : COMMON_REASONING_FORMAT_NONE;
-            params.enable_thinking       = opts.enable_reasoning;
-            params.add_generation_prompt = opts.generation_prompt;
-
-            if (opts.with_tools) {
-                params.tools       = tools;
-                params.tool_choice = opts.force_tool_call ? COMMON_CHAT_TOOL_CHOICE_REQUIRED : COMMON_CHAT_TOOL_CHOICE_AUTO;
-            } else {
-                params.tools       = json();
-                params.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+                render_all_scenarios(chat_template, tools, opts.generation_prompt, opts.enable_reasoning,
+                                     opts.input_message);
             }
-            params.parallel_tool_calls = false;
 
-            auto parser_data = autoparser::peg_generator::generate_parser(chat_template, params, analysis);
+            // Output analysis if requested
+            if (opts.mode == output_mode::ANALYSIS || opts.mode == output_mode::BOTH) {
+                LOG_ERR("\n");
+                LOG_ERR("================================================================================\n");
+                LOG_ERR("                           TEMPLATE ANALYSIS\n");
+                LOG_ERR("================================================================================\n");
+
+                autoparser::autoparser analysis;
+                analysis.analyze_template(chat_template);
+
+                // Generate Parser
+                parser_data = autoparser::peg_generator::generate_parser(chat_template, params, analysis);
+            }
 
             LOG_ERR("\n=== Generated Parser ===\n");
             common_peg_arena arena;

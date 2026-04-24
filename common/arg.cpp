@@ -1,5 +1,6 @@
 #include "arg.h"
 
+#include "build-info.h"
 #include "chat.h"
 #include "common.h"
 #include "download.h"
@@ -291,14 +292,16 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
         hf_tag = "default";
     }
 
-    const bool offline = params.offline;
-    std::string model_endpoint = get_model_endpoint();
+    std::string model_endpoint = common_get_model_endpoint();
     auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
 
     // prepare local path for caching
     auto preset_fname = clean_file_name(hf_repo + "_preset.ini");
     auto preset_path = fs_get_cache_file(preset_fname);
-    const int status = common_download_file_single(preset_url, preset_path, params.hf_token, offline);
+    common_download_opts opts;
+    opts.bearer_token = params.hf_token;
+    opts.offline = params.offline;
+    const int status = common_download_file_single(preset_url, preset_path, opts);
     const bool has_preset = status >= 200 && status < 400;
 
     // remote preset is optional, so we don't error out if not found
@@ -341,10 +344,10 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.hf_file = model.path;
             model.path = "";
         }
-        common_download_model_opts opts;
-        opts.download_mmproj = true;
+        common_download_opts opts;
+        opts.bearer_token = bearer_token;
         opts.offline = offline;
-        auto download_result = common_download_model(model, bearer_token, opts);
+        auto download_result = common_download_model(model, opts, true);
 
         if (download_result.model_path.empty()) {
             LOG_ERR("error: failed to download model from Hugging Face\n");
@@ -365,9 +368,10 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
         }
 
-        common_download_model_opts opts;
+        common_download_opts opts;
+        opts.bearer_token = bearer_token;
         opts.offline = offline;
-        auto download_result = common_download_model(model, bearer_token, opts);
+        auto download_result = common_download_model(model, opts);
         if (download_result.model_path.empty()) {
             LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
             exit(1);
@@ -422,6 +426,9 @@ static bool parse_bool_value(const std::string & value) {
 
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
+
+    // setup log directly from params.verbosity: see tools/cli/cli.cpp
+    common_log_set_verbosity_thold(params.verbosity);
 
     std::unordered_map<std::string, std::pair<common_arg *, bool>> arg_to_options;
     for (auto & opt : ctx_arg.options) {
@@ -534,9 +541,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     } catch (const std::exception & e) {
         LOG_WRN("HF cache migration failed: %s\n", e.what());
     }
+    // export_graph_ops loads only metadata
+    const bool skip_model_download = ctx_arg.ex == LLAMA_EXAMPLE_EXPORT_GRAPH_OPS;
 
     // maybe handle remote preset
-    if (!params.model.hf_repo.empty()) {
+    if (!params.model.hf_repo.empty() && !skip_model_download) {
         std::string cli_hf_repo = params.model.hf_repo;
         bool has_preset = common_params_handle_remote_preset(params, ctx_arg.ex);
 
@@ -567,7 +576,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     }
 
     // handle model and download
-    {
+    if (!skip_model_download) {
         auto res = common_params_handle_model(params.model, params.hf_token, params.offline);
         if (params.no_mmproj) {
             params.mmproj = {};
@@ -588,7 +597,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // model is required (except for server)
     // TODO @ngxson : maybe show a list of available models in CLI in this case
-    if (params.model.path.empty() && ctx_arg.ex != LLAMA_EXAMPLE_SERVER && !params.usage && !params.completion) {
+    if (params.model.path.empty() && ctx_arg.ex != LLAMA_EXAMPLE_SERVER && !skip_model_download && !params.usage && !params.completion) {
         throw std::invalid_argument("error: --model is required\n");
     }
 
@@ -630,8 +639,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
         ));
     }
-
-    common_log_set_verbosity_thold(params.verbosity);
 
     return true;
 }
@@ -1038,8 +1045,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--version"},
         "show version and build info",
         [](common_params &) {
-            fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
-            fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+            fprintf(stderr, "version: %d (%s)\n", llama_build_number(), llama_commit());
+            fprintf(stderr, "built with %s for %s\n", llama_compiler(), llama_build_target());
             exit(0);
         }
     ));
@@ -1078,7 +1085,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.verbose_prompt = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL}));
     add_opt(common_arg(
         {"--display-prompt"},
         {"--no-display-prompt"},
@@ -1308,6 +1315,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.kv_unified = value;
         }
     ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BATCHED, LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
+    add_opt(common_arg(
+        {"--cache-idle-slots"},
+        {"--no-cache-idle-slots"},
+        "save and clear idle slots on new task (default: enabled, requires unified KV and cache-ram)",
+        [](common_params & params, bool value) {
+            params.cache_idle_slots = value;
+        }
+    ).set_env("LLAMA_ARG_CACHE_IDLE_SLOTS").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
@@ -2337,19 +2352,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_N_GPU_LAYERS"));
     add_opt(common_arg(
-        {"-sm", "--split-mode"}, "{none,layer,row}",
+        {"-sm", "--split-mode"}, "{none,layer,row,tensor}",
         "how to split the model across multiple GPUs, one of:\n"
         "- none: use one GPU only\n"
-        "- layer (default): split layers and KV across GPUs\n"
-        "- row: split rows across GPUs",
+        "- layer (default): split layers and KV across GPUs (pipelined)\n"
+        "- row: split weight across GPUs by rows (parallelized)\n"
+        "- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)",
         [](common_params & params, const std::string & value) {
-            std::string arg_next = value;
-            if (arg_next == "none") {
+            if (value == "none") {
                 params.split_mode = LLAMA_SPLIT_MODE_NONE;
-            } else if (arg_next == "layer") {
+            } else if (value == "layer") {
                 params.split_mode = LLAMA_SPLIT_MODE_LAYER;
-            } else if (arg_next == "row") {
+            } else if (value == "row") {
                 params.split_mode = LLAMA_SPLIT_MODE_ROW;
+            } else if (value == "tensor") {
+                params.split_mode = LLAMA_SPLIT_MODE_TENSOR;
             } else {
                 throw std::invalid_argument("invalid value");
             }
@@ -2409,6 +2426,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_FIT"));
+    add_opt(common_arg(
+        { "-fitp", "--fit-print" }, "[on|off]",
+        string_format("print the estimated required memory ('on' or 'off', default: '%s')", params.fit_params_print ? "on" : "off"),
+        [](common_params & params, const std::string & value) {
+            if (is_truthy(value)) {
+                params.fit_params_print = true;
+            } else if (is_falsey(value)) {
+                params.fit_params_print = false;
+            } else {
+                throw std::runtime_error(
+                    string_format("error: unknown value for --fit-print: '%s'\n", value.c_str()));
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_FIT_PARAMS}).set_env("LLAMA_ARG_FIT_ESTIMATE"));
     add_opt(common_arg(
         { "-fitt", "--fit-target" }, "MiB0,MiB1,MiB2,...",
         string_format("target margin per device for --fit, comma-separated list of values, "
@@ -2807,6 +2838,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PORT"));
     add_opt(common_arg(
+        {"--reuse-port"},
+        string_format("allow multiple sockets to bind to the same port (default: %s)", params.reuse_port ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.reuse_port = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_REUSE_PORT"));
+    add_opt(common_arg(
         {"--path"}, "PATH",
         string_format("path to serve static files from (default: %s)", params.public_path.c_str()),
         [](common_params & params, const std::string & value) {
@@ -2842,6 +2880,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.webui_mcp_proxy = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_MCP_PROXY"));
+    add_opt(common_arg(
+        {"--tools"}, "TOOL1,TOOL2,...",
+        "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
+        "specify \"all\" to enable all tools\n"
+        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff",
+        [](common_params & params, const std::string & value) {
+            params.server_tools = parse_csv_row(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
     add_opt(common_arg(
         {"--webui"},
         {"--no-webui"},
@@ -3075,14 +3122,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)",
         [](common_params & params, int value) {
             if (value < -1) { throw std::invalid_argument("invalid value"); }
-            params.reasoning_budget = value;
+            params.sampling.reasoning_budget_tokens = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET"));
     add_opt(common_arg(
         {"--reasoning-budget-message"}, "MESSAGE",
         "message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)",
         [](common_params & params, const std::string & value) {
-            params.reasoning_budget_message = value;
+            params.sampling.reasoning_budget_message = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_MESSAGE"));
     add_opt(common_arg(
@@ -3244,6 +3291,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",
         [](common_params & params) {
             params.verbosity = INT_MAX;
+            common_log_set_verbosity_thold(INT_MAX);
         }
     ));
     add_opt(common_arg(
@@ -3264,6 +3312,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             "(default: %d)\n", params.verbosity),
         [](common_params & params, int value) {
             params.verbosity = value;
+            common_log_set_verbosity_thold(value);
         }
     ).set_env("LLAMA_LOG_VERBOSITY"));
     add_opt(common_arg(
@@ -3850,6 +3899,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.port = 8014;
             params.n_ctx = 0;
             params.use_jinja = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--spec-default"},
+        string_format("enable default speculative decoding config"),
+        [](common_params & params) {
+            params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
+            params.speculative.ngram_size_n = 24;
+            params.speculative.n_min = 48;
+            params.speculative.n_max = 64;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 

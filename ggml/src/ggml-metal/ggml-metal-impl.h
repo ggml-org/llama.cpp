@@ -8,7 +8,6 @@
 //
 // TODO: for optimal performance, become function of the device and work size
 
-
 #define SZ_SIMDGROUP 16
 #define N_MM_NK 2
 #define N_MM_NK_TOTAL (SZ_SIMDGROUP * N_MM_NK)
@@ -18,6 +17,9 @@
 #define N_MM_SIMD_GROUP_X 2
 #define N_MM_SIMD_GROUP_Y 2
 #define N_THREADS_PER_SIMDGROUP 32
+
+#define N_R0_Q1_0 8
+#define N_SG_Q1_0 2
 
 #define N_R0_Q4_0 4
 #define N_SG_Q4_0 2
@@ -135,6 +137,7 @@
 #define OP_UNARY_NUM_CEIL        118
 #define OP_UNARY_NUM_ROUND       119
 #define OP_UNARY_NUM_TRUNC       120
+#define OP_UNARY_NUM_XIELU       121
 
 #define OP_SUM_ROWS_NUM_SUM_ROWS 10
 #define OP_SUM_ROWS_NUM_MEAN     11
@@ -1023,6 +1026,29 @@ typedef struct {
     int32_t  p0;
     int32_t  p1;
 } ggml_metal_kargs_pad_reflect_1d;
+
+typedef struct {
+    int64_t  ne00;
+    int64_t  ne01;
+    int64_t  ne02;
+    int64_t  ne03;
+    uint64_t nb00;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    int64_t  ne0;
+    int64_t  ne1;
+    int64_t  ne2;
+    int64_t  ne3;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    int32_t  s0;
+    int32_t  s1;
+    int32_t  s2;
+    int32_t  s3;
+} ggml_metal_kargs_roll;
 
 typedef struct {
     uint64_t nb1;

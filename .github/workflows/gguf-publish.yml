@@ -28,17 +28,17 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.9.x'
+        python-version: '3.11'
     - name: Install dependencies
       run: |
         cd gguf-py
-        python -m pip install poetry
+        python -m pip install poetry==2.3.2
         poetry install
 
     - name: Build package
       run: cd gguf-py && poetry build
     - name: Publish package
-      uses: pypa/gh-action-pypi-publish@release/v1
+      uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
         packages-dir: gguf-py/dist

@@ -90,11 +90,11 @@ int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMPLETION, print_usage)) {
         return 1;
     }
-
-    common_init();
 
     auto & sparams = params.sampling;
 
@@ -695,7 +695,7 @@ int main(int argc, char ** argv) {
                 if (!common_prompt_batch_decode(ctx, embd, n_past, params.n_batch, path_session, save_now)) {
                     return 1;
                 }
-                session_tokens.insert(session_tokens.end(), embd.begin(), embd.begin());
+                session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
                 n_session_consumed = session_tokens.size();
                 session_do_save = false;
 

@@ -22,14 +22,11 @@ device="HTP0"
 verbose=
 [ "$V" != "" ] && verbose="GGML_HEXAGON_VERBOSE=$V" cli_opts="$cli_opts -v"
 
-experimental=
-[ "$E" != "" ] && experimental="GGML_HEXAGON_EXPERIMENTAL=$E"
-
 profile=
-[ "$PROF" != "" ] && profile="GGML_HEXAGON_PROFILE=$PROF GGML_HEXAGON_OPSYNC=1" cli_opts="$cli_opts -v"
+[ "$PROF" != "" ] && profile="GGML_HEXAGON_PROFILE=$PROF" cli_opts="$cli_opts -v"
 
 opmask=
-[ "$OPMASK" != "" ] && opmask="GGML_HEXAGON_OPMASK=$OPMASK"
+[ "$OPSTAGE" != "" ] && opmask="GGML_HEXAGON_OPSTAGE=$OPSTAGE"
 
 nhvx=
 [ "$NHVX" != "" ] && nhvx="GGML_HEXAGON_NHVX=$NHVX"
@@ -46,7 +43,7 @@ adb $adbserial $adbhost shell " \
   cd $basedir;         \
   LD_LIBRARY_PATH=$basedir/$branch/lib   \
   ADSP_LIBRARY_PATH=$basedir/$branch/lib \
-    $ndev $nhvx $opmask $verbose $experimental $profile $hb ./$branch/bin/llama-bench --device $device --mmap 0 -m $basedir/../gguf/$model \
+    $ndev $nhvx $opmask $verbose $profile $hb ./$branch/bin/llama-bench --device $device --mmap 0 -m $basedir/../gguf/$model \
         --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 \
         --ubatch-size 256 -fa 1 -ngl 99 $cli_opts $@    \
 "

@@ -6,42 +6,42 @@
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
-	import { Wrench, Loader2, AlertTriangle, Brain } from '@lucide/svelte';
-	import { AgenticSectionType, AttachmentType, FileTypeText } from '$lib/enums';
+	import { Wrench, Loader2, Brain } from '@lucide/svelte';
+	import { AgenticSectionType, FileTypeText } from '$lib/enums';
 	import { formatJsonPretty } from '$lib/utils';
-	import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
-	import { parseAgenticContent, type AgenticSection } from '$lib/utils';
-	import type { DatabaseMessage, DatabaseMessageExtraImageFile } from '$lib/types/database';
+	import {
+		deriveAgenticSections,
+		parseToolResultWithImages,
+		type AgenticSection,
+		type ToolResultLine
+	} from '$lib/utils';
+	import type { DatabaseMessage } from '$lib/types/database';
 	import type { ChatMessageAgenticTimings, ChatMessageAgenticTurnStats } from '$lib/types/chat';
 	import { ChatMessageStatsView } from '$lib/enums';
 
 	interface Props {
-		message?: DatabaseMessage;
-		content: string;
+		message: DatabaseMessage;
+		toolMessages?: DatabaseMessage[];
 		isStreaming?: boolean;
 		highlightTurns?: boolean;
 	}
 
-	type ToolResultLine = {
-		text: string;
-		image?: DatabaseMessageExtraImageFile;
-	};
-
-	let { content, message, isStreaming = false, highlightTurns = false }: Props = $props();
+	let { message, toolMessages = [], isStreaming = false, highlightTurns = false }: Props = $props();
 
 	let expandedStates: Record<number, boolean> = $state({});
 
-	const sections = $derived(parseAgenticContent(content));
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
 
-	// Parse toolResults with images only when sections or message.extra change
+	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
+
+	// Parse tool results with images
 	const sectionsParsed = $derived(
 		sections.map((section) => ({
 			...section,
 			parsedLines: section.toolResult
-				? parseToolResultWithImages(section.toolResult, message?.extra)
-				: []
+				? parseToolResultWithImages(section.toolResult, section.toolResultExtras || message?.extra)
+				: ([] as ToolResultLine[])
 		}))
 	);
 
@@ -107,26 +107,6 @@
 		expandedStates[index] = !currentState;
 	}
 
-	function parseToolResultWithImages(
-		toolResult: string,
-		extras?: DatabaseMessage['extra']
-	): ToolResultLine[] {
-		const lines = toolResult.split(NEWLINE_SEPARATOR);
-
-		return lines.map((line) => {
-			const match = line.match(ATTACHMENT_SAVED_REGEX);
-			if (!match || !extras) return { text: line };
-
-			const attachmentName = match[1];
-			const image = extras.find(
-				(e): e is DatabaseMessageExtraImageFile =>
-					e.type === AttachmentType.IMAGE && e.name === attachmentName
-			);
-
-			return { text: line, image };
-		});
-	}
-
 	function buildTurnAgenticTimings(stats: ChatMessageAgenticTurnStats): ChatMessageAgenticTimings {
 		return {
 			turns: 1,
@@ -144,9 +124,8 @@
 			<MarkdownContent content={section.content} attachments={message?.extra} />
 		</div>
 	{:else if section.type === AgenticSectionType.TOOL_CALL_STREAMING}
-		{@const streamingIcon = isStreaming ? Loader2 : AlertTriangle}
-		{@const streamingIconClass = isStreaming ? 'h-4 w-4 animate-spin' : 'h-4 w-4 text-yellow-500'}
-		{@const streamingSubtitle = isStreaming ? '' : 'incomplete'}
+		{@const streamingIcon = isStreaming ? Loader2 : Loader2}
+		{@const streamingIconClass = isStreaming ? 'h-4 w-4 animate-spin' : 'h-4 w-4'}
 
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
@@ -154,7 +133,7 @@
 			icon={streamingIcon}
 			iconClass={streamingIconClass}
 			title={section.toolName || 'Tool call'}
-			subtitle={streamingSubtitle}
+			subtitle={isStreaming ? '' : 'incomplete'}
 			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
 		>

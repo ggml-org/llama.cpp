@@ -3,27 +3,34 @@
 		ChatMessageAgenticContent,
 		ChatMessageActions,
 		ChatMessageStatistics,
-		MarkdownContent,
 		ModelBadge,
 		ModelsSelector
 	} from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
-	import { autoResizeTextarea, copyToClipboard, isIMEComposing } from '$lib/utils';
+	import {
+		autoResizeTextarea,
+		copyToClipboard,
+		isIMEComposing,
+		deriveAgenticSections
+	} from '$lib/utils';
+	import { AgenticSectionType } from '$lib/enums';
+	import { REASONING_TAGS } from '$lib/constants/agentic';
 	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { AGENTIC_TAGS, INPUT_CLASSES, REASONING_TAGS } from '$lib/constants';
+	import { INPUT_CLASSES } from '$lib/constants';
 	import { MessageRole, KeyboardKey, ChatMessageStatsView } from '$lib/enums';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { ServerModelStatus } from '$lib/enums';
+
+	import { hasAgenticContent } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -35,12 +42,14 @@
 		} | null;
 		isLastAssistantMessage?: boolean;
 		message: DatabaseMessage;
+		toolMessages?: DatabaseMessage[];
 		messageContent: string | undefined;
 		onCopy: () => void;
 		onConfirmDelete: () => void;
 		onContinue?: () => void;
 		onDelete: () => void;
 		onEdit?: () => void;
+		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerate: (modelOverride?: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
@@ -54,12 +63,14 @@
 		deletionInfo,
 		isLastAssistantMessage = false,
 		message,
+		toolMessages = [],
 		messageContent,
 		onConfirmDelete,
 		onContinue,
 		onCopy,
 		onDelete,
 		onEdit,
+		onForkConversation,
 		onNavigateToSibling,
 		onRegenerate,
 		onShowDeleteDialogChange,
@@ -84,21 +95,56 @@
 		}
 	}
 
-	const hasAgenticMarkers = $derived(
-		messageContent?.includes(AGENTIC_TAGS.TOOL_CALL_START) ?? false
-	);
-	const hasStreamingToolCall = $derived(
-		isChatStreaming() && agenticStreamingToolCall(message.convId) !== null
-	);
-	const hasReasoningMarkers = $derived(messageContent?.includes(REASONING_TAGS.START) ?? false);
-	const isStructuredContent = $derived(
-		hasAgenticMarkers || hasReasoningMarkers || hasStreamingToolCall
-	);
+	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
+	const hasReasoning = $derived(!!message.reasoningContent);
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let showRawOutput = $state(false);
+
+	let rawOutputContent = $derived.by(() => {
+		const sections = deriveAgenticSections(message, toolMessages, [], false);
+		const parts: string[] = [];
+
+		for (const section of sections) {
+			switch (section.type) {
+				case AgenticSectionType.REASONING:
+				case AgenticSectionType.REASONING_PENDING:
+					parts.push(`${REASONING_TAGS.START}\n${section.content}\n${REASONING_TAGS.END}`);
+					break;
+
+				case AgenticSectionType.TEXT:
+					parts.push(section.content);
+					break;
+
+				case AgenticSectionType.TOOL_CALL:
+				case AgenticSectionType.TOOL_CALL_PENDING:
+				case AgenticSectionType.TOOL_CALL_STREAMING: {
+					const callObj: Record<string, unknown> = { name: section.toolName };
+
+					if (section.toolArgs) {
+						try {
+							callObj.arguments = JSON.parse(section.toolArgs);
+						} catch {
+							callObj.arguments = section.toolArgs;
+						}
+					}
+
+					parts.push(JSON.stringify(callObj, null, 2));
+
+					if (section.toolResult) {
+						parts.push(`[Tool Result]\n${section.toolResult}`);
+					}
+
+					break;
+				}
+			}
+		}
+
+		return parts.join('\n\n\n');
+	});
+
 	let activeStatsView = $state<ChatMessageStatsView>(ChatMessageStatsView.GENERATION);
 	let statsContainerEl: HTMLDivElement | undefined = $state();
 
@@ -151,7 +197,7 @@
 	}
 
 	let highlightAgenticTurns = $derived(
-		hasAgenticMarkers &&
+		isAgentic &&
 			(currentConfig.alwaysShowAgenticTurns || activeStatsView === ChatMessageStatsView.SUMMARY)
 	);
 
@@ -166,13 +212,14 @@
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
 			hasNoContent &&
+			!isAgentic &&
 			isLastAssistantMessage
 	);
 
 	let showProcessingInfoBottom = $derived(
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
-			!hasNoContent &&
+			(!hasNoContent || isAgentic) &&
 			isLastAssistantMessage
 	);
 
@@ -255,16 +302,14 @@
 		</div>
 	{:else if message.role === MessageRole.ASSISTANT}
 		{#if showRawOutput}
-			<pre class="raw-output">{messageContent || ''}</pre>
-		{:else if isStructuredContent}
+			<pre class="raw-output">{rawOutputContent || ''}</pre>
+		{:else}
 			<ChatMessageAgenticContent
-				content={messageContent || ''}
+				{message}
+				{toolMessages}
 				isStreaming={isChatStreaming()}
 				highlightTurns={highlightAgenticTurns}
-				{message}
 			/>
-		{:else}
-			<MarkdownContent content={messageContent || ''} attachments={message.extra} />
 		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">
@@ -352,9 +397,8 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
-			onContinue={currentConfig.enableContinueGeneration && !hasReasoningMarkers
-				? onContinue
-				: undefined}
+			onContinue={currentConfig.enableContinueGeneration && !hasReasoning ? onContinue : undefined}
+			{onForkConversation}
 			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}

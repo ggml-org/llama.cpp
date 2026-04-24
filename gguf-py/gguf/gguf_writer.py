@@ -799,6 +799,7 @@ class GGUFWriter:
     def add_shared_kv_layers(self, value: int) -> None:
         self.add_uint32(Keys.Attention.SHARED_KV_LAYERS.format(arch=self.arch), value)
 
+    # if input is array, true means SWA and false means full_attention for each layer
     def add_sliding_window_pattern(self, value: int | Sequence[bool]) -> None:
         key = Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch)
         if isinstance(value, int):
@@ -971,6 +972,9 @@ class GGUFWriter:
 
     def add_rope_scaling_factor(self, value: float) -> None:
         self.add_float32(Keys.Rope.SCALING_FACTOR.format(arch=self.arch), value)
+
+    def add_rope_scaling_alpha(self, value: float) -> None:
+        self.add_float32(Keys.Rope.SCALING_ALPHA.format(arch=self.arch), value)
 
     def add_rope_scaling_attn_factors(self, value: float) -> None:
         self.add_float32(Keys.Rope.SCALING_ATTN_FACTOR.format(arch=self.arch), value)
@@ -1217,6 +1221,15 @@ class GGUFWriter:
 
     def add_vision_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
+
+    def add_vision_sam_layers_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.SAM.BLOCK_COUNT, value)
+
+    def add_vision_sam_embedding_length(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.SAM.EMBEDDING_LENGTH, value)
+
+    def add_vision_sam_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.SAM.HEAD_COUNT, value)
 
     # audio models
 

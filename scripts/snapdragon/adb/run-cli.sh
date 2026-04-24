@@ -21,9 +21,6 @@ model="Llama-3.2-3B-Instruct-Q4_0.gguf"
 device="HTP0"
 [ "$D" != "" ] && device="$D"
 
-experimental=
-[ "$E" != "" ] && experimental="GGML_HEXAGON_EXPERIMENTAL=$E"
-
 verbose=
 [ "$V" != "" ] && verbose="GGML_HEXAGON_VERBOSE=$V" cli_opts="$cli_opts -v"
 
@@ -31,10 +28,10 @@ sched=
 [ "$SCHED" != "" ] && sched="GGML_SCHED_DEBUG=2" cli_opts="$cli_opts -v"
 
 profile=
-[ "$PROF" != "" ] && profile="GGML_HEXAGON_PROFILE=$PROF GGML_HEXAGON_OPSYNC=1" cli_opts="$cli_opts -v"
+[ "$PROF" != "" ] && profile="GGML_HEXAGON_PROFILE=$PROF" cli_opts="$cli_opts -v"
 
 opmask=
-[ "$OPMASK" != "" ] && opmask="GGML_HEXAGON_OPMASK=$OPMASK"
+[ "$OPSTAGE" != "" ] && opmask="GGML_HEXAGON_OPSTAGE=$OPSTAGE"
 
 nhvx=
 [ "$NHVX" != "" ] && nhvx="GGML_HEXAGON_NHVX=$NHVX"
@@ -48,13 +45,22 @@ ndev=
 hb=
 [ "$HB" != "" ] && hb="GGML_HEXAGON_HOSTBUF=$HB"
 
+opbatch=
+[ "$OB" != "" ] && opbatch="GGML_HEXAGON_OPBATCH=$OB"
+
+opqueue=
+[ "$OQ" != "" ] && opqueue="GGML_HEXAGON_OPQUEUE=$OQ"
+
+opflt=
+[ "$OF" != "" ] && opflt="GGML_HEXAGON_OPFILTER=$OF"
+
 set -x
 
 adb $adbserial $adbhost shell " \
   cd $basedir; ulimit -c unlimited;        \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \
-    $verbose $experimental $sched $opmask $profile $nhvx $hmx $ndev $hb \
+    $verbose $sched $opmask $profile $nhvx $hmx $ndev $hb $opbatch $opqueue $opflt \
       ./$branch/bin/llama-cli --no-mmap -m $basedir/../gguf/$model \
          --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1           \
          --ctx-size 8192 --ubatch-size 256 -fa on                  \
