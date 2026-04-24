@@ -61,7 +61,6 @@ jobs:
   test-snapdragon-qdc:
     name: Test on QDC Android Device (${{ matrix.device }})
     needs: [android-ndk-snapdragon]
-    if: ${{ secrets.QDC_API_KEY != '' }}
     runs-on: ubuntu-slim
     strategy:
       fail-fast: false
@@ -96,6 +95,7 @@ jobs:
           pip install qdc_sdk/qualcomm_device_cloud_sdk-0.2.3-py3-none-any.whl
 
       - name: Run QDC tests (${{ matrix.device }})
+        if: ${{ env.QDC_API_KEY != '' }}
         run: |
           python scripts/snapdragon/qdc/run_qdc_jobs.py \
               --test       all \
