@@ -947,7 +947,9 @@ json oaicompat_chat_params_parse(
         json response_format      = json_value(body, "response_format", json::object());
         std::string response_type = json_value(response_format, "type", std::string());
         if (response_type == "json_object") {
-            json_schema = json_value(response_format, "schema", json::object());
+            if (response_format.contains("schema") || json_schema.empty()) {
+                json_schema = json_value(response_format, "schema", json::object());
+            }
         } else if (response_type == "json_schema") {
             auto schema_wrapper = json_value(response_format, "json_schema", json::object());
             json_schema = json_value(schema_wrapper, "schema", json::object());
