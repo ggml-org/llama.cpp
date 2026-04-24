@@ -1230,34 +1230,35 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
     ret->preferred_provider = provider;
     ret->backends.assign(backends, backends + n_backends);
 
-    switch (provider) {
-        case GGML_CUDA_ALLREDUCE_NCCL: {
-#ifdef GGML_USE_NCCL
-            ret->comms.resize(n_backends);
-            NCCL_CHECK(ncclCommInitAll(ret->comms.data(), (int) n_backends, dev_ids.data()));
-#else
-            // Unreachable: ggml_cuda_select_allreduce_provider() only returns
-            // GGML_CUDA_ALLREDUCE_NCCL when GGML_USE_NCCL is defined.
-            GGML_ABORT("NCCL provider selected but NCCL not compiled in");
-#endif
-        } break;
+    GGML_ASSERT(provider == GGML_CUDA_ALLREDUCE_INTERNAL || provider == GGML_CUDA_ALLREDUCE_NCCL);
 
-        case GGML_CUDA_ALLREDUCE_INTERNAL: {
-            ret->ar_pipeline = ggml_cuda_ar_pipeline_init(
-                dev_ids.data(), static_cast<int>(n_backends), GGML_CUDA_AR_MAX_BYTES);
-            if (ret->ar_pipeline == nullptr) {
-                GGML_LOG_ERROR("%s: internal AllReduce pipeline init failed\n", __func__);
-                delete ret;
-                return nullptr;
-            }
+    if (provider == GGML_CUDA_ALLREDUCE_INTERNAL) {
+        ret->ar_pipeline = ggml_cuda_ar_pipeline_init(
+            dev_ids.data(), static_cast<int>(n_backends), GGML_CUDA_AR_MAX_BYTES);
+        if (ret->ar_pipeline != nullptr) {
+            return ret;
+        }
+
+        GGML_LOG_ERROR("%s: internal AllReduce pipeline init failed\n", __func__);
 #ifdef GGML_USE_NCCL
-            ret->comms.resize(n_backends);
-            NCCL_CHECK(ncclCommInitAll(ret->comms.data(), (int) n_backends, dev_ids.data()));
+        ret->preferred_provider = GGML_CUDA_ALLREDUCE_NCCL;
+#else
+        delete ret;
+        return nullptr;
 #endif
-        } break;
     }
 
-    return ret;
+    if (ret->preferred_provider == GGML_CUDA_ALLREDUCE_NCCL) {
+#ifdef GGML_USE_NCCL
+        ret->comms.resize(n_backends);
+        NCCL_CHECK(ncclCommInitAll(ret->comms.data(), (int) n_backends, dev_ids.data()));
+        return ret;
+#else
+        GGML_ABORT("NCCL provider selected but NCCL not compiled in");
+#endif
+    }
+
+    GGML_ABORT("unexpected AllReduce provider");
 }
 
 #ifdef GGML_USE_NCCL
