@@ -49,7 +49,7 @@ enum common_log_col : int {
 };
 
 // disable colors by default
-static std::vector<const char *> g_col = {
+static const char* g_col[] = {
     "",
     "",
     "",
@@ -338,7 +338,7 @@ public:
             g_col[COMMON_LOG_COL_CYAN]    = LOG_COL_CYAN;
             g_col[COMMON_LOG_COL_WHITE]   = LOG_COL_WHITE;
         } else {
-            for (size_t i = 0; i < g_col.size(); i++) {
+            for (size_t i = 0; i < std::size(g_col); i++) {
                 g_col[i] = "";
             }
         }
