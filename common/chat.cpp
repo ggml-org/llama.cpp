@@ -1116,7 +1116,8 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         }
 
         auto consume_empty_channels = p.gbnf(p.zero_or_more(p.literal("<|channel>") + p.negate(p.literal("thought"))), "");
-        auto thought = (p.peek(p.literal("<|channel>")) + consume_empty_channels + p.ref("thought")) | p.negate(p.literal("<|channel>"));
+        auto resumed_thought = p.rule("thought", p.content(p.until_one_of({"<|channel>", "<channel|>"}) + p.literal("<channel|>")));
+        auto thought = (p.peek(p.literal("<|channel>")) + consume_empty_channels + p.ref("thought")) | resumed_thought | p.negate(p.literal("<|channel>"));
 
         if (has_response_format) {
             auto response_format = p.literal("```json") <<
