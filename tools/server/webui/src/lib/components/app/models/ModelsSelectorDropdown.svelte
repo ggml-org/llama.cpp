@@ -120,14 +120,14 @@
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
 				<DropdownMenu.Trigger
 					class={[
-						`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
+						`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 						!ms.isCurrentModelInCache
 							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 							: forceForegroundText
 								? 'text-foreground'
 								: ms.isHighlightedCurrentModelActive
 									? 'text-foreground'
-									: 'text-muted-foreground',
+									: 'text-foreground',
 						isOpen && 'text-foreground',
 						'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
 					]}
@@ -237,14 +237,14 @@
 		{:else}
 			<button
 				class={[
-					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
+					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 					!ms.isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
 							: ms.isHighlightedCurrentModelActive
 								? 'text-foreground'
-								: 'text-muted-foreground',
+								: 'text-foreground',
 					isOpen && 'text-foreground'
 				]}
 				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
