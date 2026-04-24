@@ -48,7 +48,7 @@ def test_clear_and_restore():
     log = LogReader(server.log_path)
 
     # verify feature is enabled
-    assert "__TEST_TAG_CLEAR_IDLE_ENABLED__" in log.drain()
+    assert "__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__" in log.drain()
 
     res = server.make_request("POST", "/completion", data={
         "prompt": LONG_PROMPT,
@@ -59,7 +59,7 @@ def test_clear_and_restore():
     original_prompt_n = res.body["timings"]["prompt_n"]
 
     # Slot 0 is the only slot with KV — should NOT be cleared
-    assert "__TEST_TAG_CLEAR_IDLE_SLOT__" not in log.drain()
+    assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
 
     # Launching slot 1 clears idle slot 0
     res = server.make_request("POST", "/completion", data={
@@ -68,7 +68,7 @@ def test_clear_and_restore():
         "cache_prompt": True,
     })
     assert res.status_code == 200
-    assert "__TEST_TAG_CLEAR_IDLE_SLOT__" in log.drain()
+    assert "__TEST_TAG_CACHE_IDLE_SLOT__" in log.drain()
 
     # Re-send same prompt — should restore from cache-ram
     res = server.make_request("POST", "/completion", data={
@@ -86,7 +86,7 @@ def test_clear_and_restore():
         "cache_prompt": True,
     })
     assert res.status_code == 200
-    assert "__TEST_TAG_CLEAR_IDLE_SLOT__" not in log.drain()
+    assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
 
 
 def test_disabled_with_flag():
@@ -96,7 +96,7 @@ def test_disabled_with_flag():
     log = LogReader(server.log_path)
 
     # Feature should not be enabled
-    assert "__TEST_TAG_CLEAR_IDLE_ENABLED__" not in log.drain()
+    assert "__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__" not in log.drain()
 
     res = server.make_request("POST", "/completion", data={
         "prompt": LONG_PROMPT,
@@ -112,4 +112,4 @@ def test_disabled_with_flag():
         "cache_prompt": True,
     })
     assert res.status_code == 200
-    assert "__TEST_TAG_CLEAR_IDLE_SLOT__" not in log.drain()
+    assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
