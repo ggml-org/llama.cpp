@@ -81,7 +81,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: llama-cpp-android-arm64-snapdragon
           path: pkg-snapdragon/llama.cpp
