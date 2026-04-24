@@ -44,13 +44,13 @@ struct Params {
     y_elems: u32,
 };
 
-@group(0) @binding(0) var<storage, read> s_in: array<f32>;
-@group(0) @binding(1) var<storage, read> x: array<f32>;
-@group(0) @binding(2) var<storage, read> dt: array<f32>;
-@group(0) @binding(3) var<storage, read> A: array<f32>;
-@group(0) @binding(4) var<storage, read> B: array<f32>;
-@group(0) @binding(5) var<storage, read> C: array<f32>;
-@group(0) @binding(6) var<storage, read> ids: array<i32>;
+@group(0) @binding(0) var<storage, read_write> s_in: array<f32>;
+@group(0) @binding(1) var<storage, read_write> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> dt: array<f32>;
+@group(0) @binding(3) var<storage, read_write> A: array<f32>;
+@group(0) @binding(4) var<storage, read_write> B: array<f32>;
+@group(0) @binding(5) var<storage, read_write> C: array<f32>;
+@group(0) @binding(6) var<storage, read_write> ids: array<i32>;
 @group(0) @binding(7) var<storage, read_write> dst: array<f32>;
 @group(0) @binding(8) var<uniform> params: Params;
 
