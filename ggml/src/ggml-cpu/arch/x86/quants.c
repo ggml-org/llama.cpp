@@ -494,8 +494,77 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 }
 
 // placeholder implementation for Apple targets
-void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-    quantize_row_q8_K_ref(x, y, k);
+void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    block_q8_K * GGML_RESTRICT y = (block_q8_K *) vy;
+
+#if defined(__AVX2__)
+    const __m256i clamp_hi = _mm256_set1_epi32(127);
+
+    for (int64_t i = 0; i < nb; ++i) {
+        __m256 vmax = _mm256_setzero_ps();
+        __m256 vmin = _mm256_setzero_ps();
+        for (int j = 0; j < QK_K; j += 8) {
+            const __m256 v = _mm256_loadu_ps(x + j);
+            vmax = _mm256_max_ps(vmax, v);
+            vmin = _mm256_min_ps(vmin, v);
+        }
+
+        __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(vmax, 1),
+                                 _mm256_castps256_ps128(vmax));
+        max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
+        max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
+        const float max_pos = _mm_cvtss_f32(max4);
+
+        __m128 min4 = _mm_min_ps(_mm256_extractf128_ps(vmin, 1),
+                                 _mm256_castps256_ps128(vmin));
+        min4 = _mm_min_ps(min4, _mm_movehl_ps(min4, min4));
+        min4 = _mm_min_ss(min4, _mm_movehdup_ps(min4));
+        const float min_neg = _mm_cvtss_f32(min4);
+
+        const float max = (max_pos >= -min_neg) ? max_pos : min_neg;
+
+        if (max == 0.0f) {
+            y[i].d = 0;
+            memset(y[i].qs, 0, QK_K);
+            memset(y[i].bsums, 0, (QK_K / 16) * sizeof(int16_t));
+            x += QK_K;
+            continue;
+        }
+
+        const float iscale = -127.0f / max;
+        const __m256 viscale = _mm256_set1_ps(iscale);
+
+        for (int j = 0; j < QK_K; j += 16) {
+            const __m256 v_lo = _mm256_loadu_ps(x + j);
+            const __m256 v_hi = _mm256_loadu_ps(x + j + 8);
+
+            const __m256i i32_lo = _mm256_cvtps_epi32(_mm256_mul_ps(v_lo, viscale));
+            const __m256i i32_hi = _mm256_cvtps_epi32(_mm256_mul_ps(v_hi, viscale));
+
+            const __m256i c_lo = _mm256_min_epi32(i32_lo, clamp_hi);
+            const __m256i c_hi = _mm256_min_epi32(i32_hi, clamp_hi);
+
+            const __m128i i16_lo = _mm_packs_epi32(
+                _mm256_castsi256_si128(c_lo),
+                _mm256_extracti128_si256(c_lo, 1));
+            const __m128i i16_hi = _mm_packs_epi32(
+                _mm256_castsi256_si128(c_hi),
+                _mm256_extracti128_si256(c_hi, 1));
+            const __m128i packed = _mm_packs_epi16(i16_lo, i16_hi);
+            _mm_storeu_si128((__m128i *) (y[i].qs + j), packed);
+
+            y[i].bsums[j / 16] = (int16_t) hsum_i32_8(_mm256_add_epi32(c_lo, c_hi));
+        }
+
+        y[i].d = 1.0f / iscale;
+        x += QK_K;
+    }
+#else
+    quantize_row_q8_K_ref(x, vy, k);
+#endif
 }
 
 //===================================== Dot products =================================
