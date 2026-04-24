@@ -3,7 +3,6 @@
 #include "ggml-backend-impl.h"
 
 #include "ggml-cuda/allreduce.cuh"
-#include "ggml-cuda/comm.cuh"
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/add-id.cuh"
@@ -1141,68 +1140,35 @@ static const ggml_backend_buffer_type_i ggml_backend_cuda_split_buffer_type_inte
 };
 
 // Communication context for multi-GPU AllReduce during tensor parallelism.
-// Created once per meta backend instance; the preferred provider is chosen at
-// init time, but per-call dispatch may fall back to another CUDA provider when
-// the preferred one does not support a tensor configuration.
+//
+// Created once per meta backend instance. The internal pipeline (if any) is
+// allocated eagerly at init time; NCCL communicators are created lazily on
+// first use so NCCL's init/runtime quirks don't interfere with configurations
+// that never hit the fallback path.
 struct ggml_backend_cuda_comm_context {
-    ggml_cuda_allreduce_provider preferred_provider;
-    std::vector<ggml_backend_t>  backends;
+    std::vector<ggml_backend_t> backends;
+    std::vector<int>            dev_ids;
 
+    ggml_cuda_ar_pipeline *     ar_pipeline = nullptr;
+
+    // NCCL is eligible when GGML_USE_NCCL is defined and the user did not
+    // force GGML_CUDA_ALLREDUCE=internal. Comms are initialised on first use.
+    bool                        nccl_eligible = false;
 #ifdef GGML_USE_NCCL
-    std::vector<ncclComm_t>      comms;
+    std::once_flag              nccl_init_flag;
+    bool                        nccl_init_ok = false;
+    std::vector<ncclComm_t>     comms;
 #endif
-
-    ggml_cuda_ar_pipeline *      ar_pipeline = nullptr;
 
     ~ggml_backend_cuda_comm_context() {
 #ifdef GGML_USE_NCCL
-        if (!comms.empty()) {
-            for (ncclComm_t comm : comms) {
-                NCCL_CHECK(ncclCommDestroy(comm));
-            }
+        for (ncclComm_t comm : comms) {
+            NCCL_CHECK(ncclCommDestroy(comm));
         }
 #endif
         ggml_cuda_ar_pipeline_free(ar_pipeline);
     }
 };
-
-// Select an AllReduce provider for the given set of CUDA device IDs.
-//
-// Priority:
-//   1. GGML_CUDA_ALLREDUCE env var ("nccl" or "internal") — explicit override.
-//   2. Internal for 2 GPUs (the optimised path).
-//   3. NCCL as fallback for >2 GPUs when compiled in (GGML_USE_NCCL defined).
-//   4. Internal otherwise.
-static ggml_cuda_allreduce_provider ggml_cuda_select_allreduce_provider(
-        const std::vector<int> & device_ids) {
-    const char * env = getenv("GGML_CUDA_ALLREDUCE");
-    if (env != nullptr && env[0] != '\0') {
-        if (strcmp(env, "internal") == 0) {
-            return GGML_CUDA_ALLREDUCE_INTERNAL;
-        }
-        if (strcmp(env, "nccl") == 0) {
-#ifdef GGML_USE_NCCL
-            return GGML_CUDA_ALLREDUCE_NCCL;
-#else
-            GGML_LOG_WARN("%s: GGML_CUDA_ALLREDUCE=nccl requested but NCCL not compiled in, using internal provider\n", __func__);
-            return GGML_CUDA_ALLREDUCE_INTERNAL;
-#endif
-        }
-        GGML_LOG_WARN("%s: unknown GGML_CUDA_ALLREDUCE value '%s', using default\n", __func__, env);
-    }
-
-    // Internal provider is the default for 2-GPU configurations.
-    if (device_ids.size() <= 2) {
-        return GGML_CUDA_ALLREDUCE_INTERNAL;
-    }
-
-    // >2 GPUs: fall back to NCCL if available, otherwise internal.
-#ifdef GGML_USE_NCCL
-    return GGML_CUDA_ALLREDUCE_NCCL;
-#else
-    return GGML_CUDA_ALLREDUCE_INTERNAL;
-#endif
-}
 
 static void ggml_backend_cuda_comm_free(void * comm_ctx_v) {
     if (comm_ctx_v == nullptr) {
@@ -1211,6 +1177,16 @@ static void ggml_backend_cuda_comm_free(void * comm_ctx_v) {
     delete static_cast<ggml_backend_cuda_comm_context *>(comm_ctx_v);
 }
 
+// Create the comm context.
+//
+// GGML_CUDA_ALLREDUCE selects which provider(s) to enable:
+//   unset    — try internal first, fall back to NCCL if compiled in,
+//              then to the meta-backend butterfly reduction.
+//   internal — internal only; on unsupported/failure, fall back to butterfly.
+//   nccl     — NCCL only; on unsupported/failure, fall back to butterfly.
+//   none     — skip the CUDA AllReduce entirely; always use butterfly.
+// Returns nullptr when no CUDA provider is available, which causes the meta
+// backend to run its generic butterfly reduction.
 static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_backends) {
     for (size_t i = 0; i < n_backends; i++) {
         if (!ggml_backend_is_cuda(backends[i])) {
@@ -1218,60 +1194,60 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
         }
     }
 
-    // GGML_CUDA_ALLREDUCE=none disables the CUDA-specific AllReduce entirely,
-    // so the meta-backend falls back to its generic butterfly reduction.
-    {
-        const char * env = getenv("GGML_CUDA_ALLREDUCE");
-        if (env != nullptr && strcmp(env, "none") == 0) {
-            GGML_LOG_INFO("%s: GGML_CUDA_ALLREDUCE=none; using meta-backend butterfly reduction\n", __func__);
-            return nullptr;
-        }
+    const char * env = getenv("GGML_CUDA_ALLREDUCE");
+    const bool force_none     = env && strcmp(env, "none")     == 0;
+    const bool force_internal = env && strcmp(env, "internal") == 0;
+    const bool force_nccl     = env && strcmp(env, "nccl")     == 0;
+    if (env && *env && !force_none && !force_internal && !force_nccl) {
+        GGML_LOG_WARN("%s: unknown GGML_CUDA_ALLREDUCE value '%s', using default\n", __func__, env);
     }
 
-    std::vector<int> dev_ids;
-    dev_ids.reserve(n_backends);
-    for (size_t i = 0; i < n_backends; i++) {
-        dev_ids.push_back(static_cast<ggml_backend_cuda_context *>(backends[i]->context)->device);
+    if (force_none) {
+        GGML_LOG_INFO("%s: GGML_CUDA_ALLREDUCE=none; using meta-backend butterfly reduction\n", __func__);
+        return nullptr;
     }
 
-    const ggml_cuda_allreduce_provider provider = ggml_cuda_select_allreduce_provider(dev_ids);
+#ifndef GGML_USE_NCCL
+    if (force_nccl) {
+        GGML_LOG_WARN("%s: GGML_CUDA_ALLREDUCE=nccl requested but NCCL not compiled in; using meta-backend butterfly reduction\n", __func__);
+        return nullptr;
+    }
+#endif
 
     auto * ret = new ggml_backend_cuda_comm_context;
-    ret->preferred_provider = provider;
     ret->backends.assign(backends, backends + n_backends);
+    ret->dev_ids.reserve(n_backends);
+    for (size_t i = 0; i < n_backends; i++) {
+        ret->dev_ids.push_back(static_cast<ggml_backend_cuda_context *>(backends[i]->context)->device);
+    }
 
-    GGML_ASSERT(provider == GGML_CUDA_ALLREDUCE_INTERNAL || provider == GGML_CUDA_ALLREDUCE_NCCL);
-
-    if (provider == GGML_CUDA_ALLREDUCE_INTERNAL) {
+    // Try to allocate the internal pipeline unless the user forced NCCL.
+    if (!force_nccl) {
         ret->ar_pipeline = ggml_cuda_ar_pipeline_init(
-            dev_ids.data(), n_backends, GGML_CUDA_AR_MAX_BYTES);
-        if (ret->ar_pipeline != nullptr) {
-            return ret;
+            ret->dev_ids.data(), n_backends, GGML_CUDA_AR_MAX_BYTES);
+        if (ret->ar_pipeline == nullptr) {
+            // Clear any sticky CUDA error from the failed init so it can't
+            // leak into a later NCCL call.
+            (void) cudaGetLastError();
+            if (force_internal) {
+                GGML_LOG_ERROR("%s: internal AllReduce pipeline init failed; falling back to butterfly\n", __func__);
+            }
         }
+    }
 
-        GGML_LOG_ERROR("%s: internal AllReduce pipeline init failed\n", __func__);
 #ifdef GGML_USE_NCCL
-        // Clear any sticky CUDA error left over from the failed pipeline init
-        // so NCCL's own error-check on entry doesn't observe it.
-        (void) cudaGetLastError();
-        ret->preferred_provider = GGML_CUDA_ALLREDUCE_NCCL;
+    ret->nccl_eligible = !force_internal;
 #else
+    ret->nccl_eligible = false;
+#endif
+
+    // If nothing is usable, return nullptr so the meta backend uses butterfly.
+    if (ret->ar_pipeline == nullptr && !ret->nccl_eligible) {
         delete ret;
         return nullptr;
-#endif
     }
 
-    if (ret->preferred_provider == GGML_CUDA_ALLREDUCE_NCCL) {
-#ifdef GGML_USE_NCCL
-        ret->comms.resize(n_backends);
-        NCCL_CHECK(ncclCommInitAll(ret->comms.data(), (int) n_backends, dev_ids.data()));
-        return ret;
-#else
-        GGML_ABORT("NCCL provider selected but NCCL not compiled in");
-#endif
-    }
-
-    GGML_ABORT("unexpected AllReduce provider");
+    return ret;
 }
 
 #ifdef GGML_USE_NCCL
@@ -1419,67 +1395,61 @@ static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_inte
 }
 
 #ifdef GGML_USE_NCCL
+// Lazily initialise NCCL communicators on first use.
+// Returns true when comms are ready; false if init failed (dispatcher should skip NCCL).
+static bool ggml_backend_cuda_comm_ensure_nccl(ggml_backend_cuda_comm_context * comm_ctx) {
+    std::call_once(comm_ctx->nccl_init_flag, [&] {
+        const size_t n = comm_ctx->dev_ids.size();
+        comm_ctx->comms.resize(n);
+        ncclResult_t rc = ncclCommInitAll(comm_ctx->comms.data(), (int) n, comm_ctx->dev_ids.data());
+        if (rc != ncclSuccess) {
+            GGML_LOG_ERROR("%s: ncclCommInitAll failed: %s\n", __func__, ncclGetErrorString(rc));
+            comm_ctx->comms.clear();
+            return;
+        }
+        comm_ctx->nccl_init_ok = true;
+    });
+    return comm_ctx->nccl_init_ok;
+}
+
 static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_nccl(
         ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
-    if (comm_ctx->comms.empty()) {
+    if (!ggml_backend_cuda_comm_ensure_nccl(comm_ctx)) {
         return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
     }
     return ggml_backend_cuda_comm_allreduce_nccl(comm_ctx, tensors)
         ? GGML_CUDA_COMM_ALLREDUCE_SUCCESS
         : GGML_CUDA_COMM_ALLREDUCE_FAILED;
 }
-#else
-static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_nccl(
-        ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
-    GGML_UNUSED_VARS(comm_ctx, tensors);
-    return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
-}
 #endif
 
+// Dispatch order is fixed: internal first (if allocated), then NCCL (if
+// eligible, lazily initialised on first call). If neither handles the tensor,
+// return false so the meta backend runs its butterfly reduction.
 static bool ggml_backend_cuda_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tensor ** tensors) {
     if (comm_ctx_v == nullptr) {
         return false;
     }
     auto * comm_ctx = static_cast<ggml_backend_cuda_comm_context *>(comm_ctx_v);
 
-    auto try_in_order = [&](ggml_cuda_allreduce_provider first) -> bool {
-        const ggml_cuda_allreduce_provider second =
-            first == GGML_CUDA_ALLREDUCE_INTERNAL
-                ? GGML_CUDA_ALLREDUCE_NCCL
-                : GGML_CUDA_ALLREDUCE_INTERNAL;
-        const ggml_cuda_allreduce_provider order[2] = { first, second };
-
-        for (ggml_cuda_allreduce_provider provider : order) {
-            ggml_cuda_comm_allreduce_result result = GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
-            switch (provider) {
-                case GGML_CUDA_ALLREDUCE_INTERNAL:
-                    result = ggml_backend_cuda_comm_try_allreduce_internal(comm_ctx, tensors);
-                    break;
-                case GGML_CUDA_ALLREDUCE_NCCL:
-                    result = ggml_backend_cuda_comm_try_allreduce_nccl(comm_ctx, tensors);
-                    break;
-                default:
-                    GGML_ASSERT(false);
-            }
-
-            if (result == GGML_CUDA_COMM_ALLREDUCE_SUCCESS) {
-                return true;
-            }
-            if (result == GGML_CUDA_COMM_ALLREDUCE_FAILED) {
-                return false;
-            }
-        }
-
-        return false;
-    };
-
-    switch (comm_ctx->preferred_provider) {
-        case GGML_CUDA_ALLREDUCE_INTERNAL:
-        case GGML_CUDA_ALLREDUCE_NCCL:
-            return try_in_order(comm_ctx->preferred_provider);
-        default:
-            return false;
+    if (comm_ctx->ar_pipeline != nullptr) {
+        const ggml_cuda_comm_allreduce_result r =
+            ggml_backend_cuda_comm_try_allreduce_internal(comm_ctx, tensors);
+        if (r == GGML_CUDA_COMM_ALLREDUCE_SUCCESS) return true;
+        if (r == GGML_CUDA_COMM_ALLREDUCE_FAILED)  return false;
+        // UNSUPPORTED — fall through to NCCL (if eligible).
     }
+
+#ifdef GGML_USE_NCCL
+    if (comm_ctx->nccl_eligible) {
+        const ggml_cuda_comm_allreduce_result r =
+            ggml_backend_cuda_comm_try_allreduce_nccl(comm_ctx, tensors);
+        if (r == GGML_CUDA_COMM_ALLREDUCE_SUCCESS) return true;
+        if (r == GGML_CUDA_COMM_ALLREDUCE_FAILED)  return false;
+    }
+#endif
+
+    return false;
 }
 
 ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_type(int main_device, const float * tensor_split) {
