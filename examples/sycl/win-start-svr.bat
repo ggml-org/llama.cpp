@@ -168,6 +168,7 @@ if not "%GGML_SYCL_DEVICE%"=="-1" (
   echo ONEAPI_DEVICE_SELECTOR=%ONEAPI_DEVICE_SELECTOR%
 ) else (
   echo Use all Intel GPUs, including iGPU ^& dGPU
+  set "GPUS_SETTING=-sm %SPLIT_MODE%"
 )
 
 echo run cmd: ZES_ENABLE_SYSMAN=1 %BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --mmap --host 0.0.0.0 --port 8000
