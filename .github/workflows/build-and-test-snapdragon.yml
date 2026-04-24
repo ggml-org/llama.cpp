@@ -49,17 +49,17 @@ jobs:
           cp docs/backend/snapdragon/CMakeUserPresets.json .
           cmake --preset arm64-android-snapdragon-release -B build
           cmake --build build
-          cmake --install build --prefix pkg-adb/llama.cpp
+          cmake --install build --prefix pkg-snapdragon/llama.cpp
 
       - name: Upload Llama.CPP Snapdragon Android Build Artifact
         if: ${{ always() && steps.build_llama_cpp_snapdragon_android.outcome == 'success' }}
         uses: actions/upload-artifact@v6
         with:
           name: llama-cpp-android-arm64-snapdragon
-          path: pkg-adb/llama.cpp
+          path: pkg-snapdragon/llama.cpp
 
   check-secret:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       has-key: ${{ steps.check.outputs.has-key }}
     steps:
