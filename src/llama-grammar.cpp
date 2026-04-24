@@ -1432,7 +1432,12 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
                 return;
             }
         }
-        GGML_ABORT("fatal error");
+
+        // Do not abort the whole server on malformed grammar state during
+        // sampler init/prefill (observed with long cached prompts + tool-use).
+        // Ignore this EOG token and keep grammar state unchanged.
+        LLAMA_LOG_WARN("%s: ignoring unexpected EOG while grammar stacks are non-empty\n", __func__);
+        return;
     }
 
     llama_grammar_accept_token(grammar, token, piece);
