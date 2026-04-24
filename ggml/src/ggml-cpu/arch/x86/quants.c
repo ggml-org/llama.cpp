@@ -339,13 +339,9 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
         v2 = _mm256_mul_ps( v2, mul );
         v3 = _mm256_mul_ps( v3, mul );
 
-        // Round to nearest integer
-        v0 = _mm256_round_ps( v0, _MM_ROUND_NEAREST );
-        v1 = _mm256_round_ps( v1, _MM_ROUND_NEAREST );
-        v2 = _mm256_round_ps( v2, _MM_ROUND_NEAREST );
-        v3 = _mm256_round_ps( v3, _MM_ROUND_NEAREST );
-
-        // Convert floats to integers
+        // Convert floats to integers. vcvtps2dq uses MXCSR rounding mode;
+        // with the default round-to-nearest-even mode, a separate
+        // _mm256_round_ps pass is redundant.
         __m256i i0 = _mm256_cvtps_epi32( v0 );
         __m256i i1 = _mm256_cvtps_epi32( v1 );
         __m256i i2 = _mm256_cvtps_epi32( v2 );
@@ -435,13 +431,9 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
         v2 = _mm256_mul_ps( v2, mul );
         v3 = _mm256_mul_ps( v3, mul );
 
-        // Round to nearest integer
-        v0 = _mm256_round_ps( v0, _MM_ROUND_NEAREST );
-        v1 = _mm256_round_ps( v1, _MM_ROUND_NEAREST );
-        v2 = _mm256_round_ps( v2, _MM_ROUND_NEAREST );
-        v3 = _mm256_round_ps( v3, _MM_ROUND_NEAREST );
-
-        // Convert floats to integers
+        // Convert floats to integers. vcvtps2dq uses MXCSR rounding mode;
+        // with the default round-to-nearest-even mode, a separate
+        // _mm256_round_ps pass is redundant.
         __m256i i0 = _mm256_cvtps_epi32( v0 );
         __m256i i1 = _mm256_cvtps_epi32( v1 );
         __m256i i2 = _mm256_cvtps_epi32( v2 );
