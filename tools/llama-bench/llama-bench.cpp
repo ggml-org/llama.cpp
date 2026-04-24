@@ -107,10 +107,19 @@ template <typename T> static T stdev(const std::vector<T> & v) {
     if (v.size() <= 1) {
         return 0;
     }
-    T mean   = avg(v);
-    T sq_sum = std::inner_product(v.begin(), v.end(), v.begin(), T(0));
-    T stdev  = std::sqrt(sq_sum / (T) (v.size() - 1) - mean * mean * (T) v.size() / (T) (v.size() - 1));
-    return stdev;
+    // Two-pass algorithm: compute deviations from the mean directly.
+    // The one-pass formula (sq_sum/(n-1) - mean^2*n/(n-1)) suffers from
+    // catastrophic cancellation when values are large and nearly equal
+    // (e.g. nanosecond timestamps), causing sqrt() to receive a small
+    // negative number and return NaN or a wildly inaccurate result.
+    // See: https://github.com/ggml-org/llama.cpp/issues/22300
+    double mean   = (double) avg(v);
+    double sq_dev = 0.0;
+    for (const auto & x : v) {
+        double d  = (double) x - mean;
+        sq_dev   += d * d;
+    }
+    return (T) std::sqrt(sq_dev / (double) (v.size() - 1));
 }
 
 static std::string get_cpu_info() {
