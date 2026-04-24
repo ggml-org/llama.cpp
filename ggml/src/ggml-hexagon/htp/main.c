@@ -101,6 +101,24 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         }
     }
 
+    {
+        // Set HMX clock
+        HAP_power_request_t request;
+        memset(&request, 0, sizeof(HAP_power_request_t));
+        request.type = HAP_power_set_HMX_v2;
+        request.hmx_v2.set_clock = TRUE;
+        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.min_corner = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.max_corner = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.perf_mode = HAP_CLK_PERF_HIGH;
+        FARF(ALWAYS, "Setting HMX clock\n");
+        err = HAP_power_set((void *) &ctx, &request);
+        if (err != AEE_SUCCESS) {
+            FARF(ERROR, "Error setting HMX clock.");
+            return err;
+        }
+    }
+
     return AEE_SUCCESS;
 }
 
