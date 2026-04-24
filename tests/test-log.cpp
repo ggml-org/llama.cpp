@@ -35,5 +35,6 @@ int main() {
         threads[i].join();
     }
 
+    common_log_flush(common_log_main());
     return 0;
 }
