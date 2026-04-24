@@ -7,7 +7,7 @@
 	interface Props {
 		class?: string;
 		id: string;
-		onclick?: (event?: MouseEvent) => void;
+		onclick?: (event: MouseEvent) => void;
 		onRemove?: (id: string) => void;
 		name: string;
 		readonly?: boolean;

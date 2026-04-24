@@ -1,9 +1,9 @@
 <script lang="ts">
 	import {
-		ChatAttachmentsListItemMcpPrompt,
-		ChatAttachmentsListItemMcpResource,
-		ChatAttachmentsListItemThumbnailImage,
-		ChatAttachmentsListItemThumbnailFile,
+		ChatAttachmentsItemMcpPrompt,
+		ChatAttachmentsItemMcpResource,
+		ChatAttachmentsItemThumbnailImage,
+		ChatAttachmentsItemThumbnailFile,
 		DialogChatAttachmentPreview,
 		DialogChatAttachmentsViewAll,
 		DialogMcpResourcePreview,
@@ -128,7 +128,7 @@
 										}
 									: null}
 						{#if mcpPrompt}
-							<ChatAttachmentsListItemMcpPrompt
+							<ChatAttachmentsItemMcpPrompt
 								class="max-w-[300px] min-w-[200px] flex-shrink-0 {limitToSingleRow
 									? 'first:ml-4 last:mr-4'
 									: ''}"
@@ -142,13 +142,13 @@
 					{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
 						{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
 
-						<ChatAttachmentsListItemMcpResource
+						<ChatAttachmentsItemMcpResource
 							class="flex-shrink-0 {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
 							attachment={toMcpResourceAttachment(mcpResource, item.id)}
 							onclick={() => openMcpResourcePreview(mcpResource)}
 						/>
 					{:else if item.isImage && item.preview}
-						<ChatAttachmentsListItemThumbnailImage
+						<ChatAttachmentsItemThumbnailImage
 							class="flex-shrink-0 cursor-pointer {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
 							id={item.id}
 							name={item.name}
@@ -158,10 +158,10 @@
 							height={imageHeight}
 							width={imageWidth}
 							{imageClass}
-							onclick={(event) => openPreview(item, event)}
+							onclick={(event?: MouseEvent) => openPreview(item, event)}
 						/>
 					{:else}
-						<ChatAttachmentsListItemThumbnailFile
+						<ChatAttachmentsItemThumbnailFile
 							class="flex-shrink-0 cursor-pointer {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
 							id={item.id}
 							name={item.name}
@@ -171,7 +171,7 @@
 							textContent={item.textContent}
 							attachment={item.attachment}
 							uploadedFile={item.uploadedFile}
-							onclick={(event) => openPreview(item, event)}
+							onclick={(event?: MouseEvent) => openPreview(item, event)}
 						/>
 					{/if}
 				{/each}
@@ -209,7 +209,7 @@
 									: null}
 
 						{#if mcpPrompt}
-							<ChatAttachmentsListItemMcpPrompt
+							<ChatAttachmentsItemMcpPrompt
 								class="max-w-[300px] min-w-[200px]"
 								prompt={mcpPrompt}
 								{readonly}
@@ -221,12 +221,12 @@
 					{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
 						{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
 
-						<ChatAttachmentsListItemMcpResource
+						<ChatAttachmentsItemMcpResource
 							attachment={toMcpResourceAttachment(mcpResource, item.id)}
 							onclick={() => openMcpResourcePreview(mcpResource)}
 						/>
 					{:else if item.isImage && item.preview}
-						<ChatAttachmentsListItemThumbnailImage
+						<ChatAttachmentsItemThumbnailImage
 							class="cursor-pointer"
 							id={item.id}
 							name={item.name}
@@ -236,10 +236,10 @@
 							height={imageHeight}
 							width={imageWidth}
 							{imageClass}
-							onclick={(event) => openPreview(item, event)}
+							onclick={(event?: MouseEvent) => openPreview(item, event)}
 						/>
 					{:else}
-						<ChatAttachmentsListItemThumbnailFile
+						<ChatAttachmentsItemThumbnailFile
 							class="cursor-pointer"
 							id={item.id}
 							name={item.name}

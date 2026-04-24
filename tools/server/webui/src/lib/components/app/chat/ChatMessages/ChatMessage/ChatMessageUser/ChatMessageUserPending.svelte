@@ -1,11 +1,9 @@
 <script lang="ts">
-	import { ActionIcon } from '$lib/components/app';
-	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
+	import { ActionIcon, ChatMessageEditForm, ChatMessageUserBubble } from '$lib/components/app';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { ArrowUp, Edit, Trash2 } from '@lucide/svelte';
 	import { getProcessingInfoContext } from '$lib/contexts';
 	import { useMessageEditContext } from '$lib/hooks/use-message-edit-context.svelte';
-	import ChatMessageUserBubble from './ChatMessageUserBubble.svelte';
 
 	interface Props {
 		class?: string;

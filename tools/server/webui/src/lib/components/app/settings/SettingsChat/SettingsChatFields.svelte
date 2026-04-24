@@ -11,7 +11,7 @@
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore, selectedModelName } from '$lib/stores/models.svelte';
 	import { normalizeFloatingPoint } from '$lib/utils/precision';
-	import { ChatSettingsParameterSourceIndicator } from '$lib/components/app';
+	import SettingsChatParameterSourceIndicator from './SettingsChatParameterSourceIndicator.svelte';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -66,7 +66,7 @@
 					{/if}
 				</Label>
 				{#if isCustomRealTime}
-					<ChatSettingsParameterSourceIndicator />
+					<SettingsChatParameterSourceIndicator />
 				{/if}
 			</div>
 
@@ -161,7 +161,7 @@
 					{/if}
 				</Label>
 				{#if isCustomRealTime}
-					<ChatSettingsParameterSourceIndicator />
+					<SettingsChatParameterSourceIndicator />
 				{/if}
 			</div>
 

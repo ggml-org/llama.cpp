@@ -178,7 +178,7 @@ export { default as DialogChatAttachmentPreview } from './DialogChatAttachmentPr
  * **DialogChatAttachmentsViewAll** - Grid view of all attachments
  *
  * Dialog showing all attachments in a responsive grid layout. Triggered by
- * "+X more" button in ChatAttachmentsList when there are too many attachments
+ * "+X more" button in ChatAttachments when there are too many attachments
  * to display inline.
  *
  * **Architecture:**

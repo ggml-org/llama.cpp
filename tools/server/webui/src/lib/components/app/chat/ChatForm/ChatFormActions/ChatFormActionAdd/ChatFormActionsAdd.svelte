@@ -44,7 +44,6 @@
 		{onSystemPromptClick}
 		{onMcpPromptClick}
 		{onMcpResourcesClick}
-		onMcpSettingsClick={onMcpSettingsClick}
 	>
 		{#snippet trigger({ disabled, onclick })}
 			 <ChatFormActionAddButton {disabled} {onclick} />

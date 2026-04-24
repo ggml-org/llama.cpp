@@ -2,7 +2,7 @@
 	import { Edit, Copy, RefreshCw, Trash2, ArrowRight, GitBranch } from '@lucide/svelte';
 	import {
 		ActionIcon,
-		ChatMessageBranchingControls,
+		ChatMessageActionIconsBranchingControls,
 		DialogConfirmation
 	} from '$lib/components/app';
 	import { Switch } from '$lib/components/ui/switch';
@@ -89,7 +89,7 @@
 			: 'right-0'} flex items-center gap-2 opacity-100 transition-opacity"
 	>
 		{#if siblingInfo && siblingInfo.totalSiblings > 1}
-			<ChatMessageBranchingControls {siblingInfo} {onNavigateToSibling} />
+			<ChatMessageActionIconsBranchingControls {siblingInfo} {onNavigateToSibling} />
 		{/if}
 
 		<div

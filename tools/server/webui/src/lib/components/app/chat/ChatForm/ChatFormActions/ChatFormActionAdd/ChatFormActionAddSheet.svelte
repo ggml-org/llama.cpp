@@ -8,10 +8,9 @@
 		ATTACHMENT_EXTRA_ITEMS,
 		ATTACHMENT_MCP_ITEMS
 	} from '$lib/constants/attachment-menu';
-	import { ChatFormActionAddToolsSubmenu, ChatFormActionAddMcpServersSubmenu, McpLogo } from '$lib/components/app';
+	import { McpLogo } from '$lib/components/app';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 	import { AttachmentMenuItemId } from '$lib/enums';
-	import ChatFormActionAddButton from './ChatFormActionAddButton.svelte';
 	import { PencilRuler } from '@lucide/svelte';
 
 	interface Props {
@@ -24,7 +23,6 @@
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
 		trigger: Snippet<[{ disabled: boolean; onclick?: () => void; }]>;
 	}
@@ -39,7 +37,6 @@
 		onFileUpload,
 		onSystemPromptClick,
 		onMcpPromptClick,
-		onMcpSettingsClick,
 		onMcpResourcesClick,
 		trigger
 	}: Props = $props();
@@ -53,11 +50,6 @@
 			sheetOpen = false;
 		}
 	);
-
-	function handleMcpSettingsClick() {
-		sheetOpen = false;
-		onMcpSettingsClick?.();
-	}
 
 	const sheetItemClass =
 		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';

@@ -1,9 +1,7 @@
 <script lang="ts">
-	import {
-		ChatSettingsFooter,
-		ChatSettingsFields,
-		ChatSettingsToolsTab
-	} from '$lib/components/app';
+	import SettingsChatFooter from './SettingsChatFooter.svelte';
+	import SettingsChatFields from './SettingsChatFields.svelte';
+	import SettingsChatToolsTab from './SettingsChatToolsTab.svelte';
 	import {
 		SettingsChatDesktopSidebar,
 		SettingsChatMobileHeader
@@ -130,10 +128,10 @@
 					</div>
 
 					{#if currentSection.title === SETTINGS_SECTION_TITLES.TOOLS}
-						<ChatSettingsToolsTab />
+						<SettingsChatToolsTab />
 					{:else if currentSection.fields}
 						<div class="space-y-6">
-							<ChatSettingsFields
+							<SettingsChatFields
 								fields={currentSection.fields}
 								{localConfig}
 								onConfigChange={handleConfigChange}
@@ -148,7 +146,7 @@
 				</div>
 			</div>
 
-			<ChatSettingsFooter onReset={handleReset} onSave={handleSave} />
+			<SettingsChatFooter onReset={handleReset} onSave={handleSave} />
 		</div>
 	</div>
 </div>

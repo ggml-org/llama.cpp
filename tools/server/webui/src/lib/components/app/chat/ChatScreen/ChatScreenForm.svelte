@@ -33,6 +33,7 @@
 
 	let chatFormRef: ChatForm | undefined = $state(undefined);
 	let chatId = $derived(page.params.id as string | undefined);
+	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let message = $derived(initialMessage);
 	let previousIsLoading = $derived(isLoading);
 	let previousInitialMessage = $derived(initialMessage);
@@ -46,18 +47,9 @@
 		getInitialMessage: () => initialMessage
 	});
 
-	$effect(() => {
-		if (initialMessage !== previousInitialMessage) {
-			message = initialMessage;
-			previousInitialMessage = initialMessage;
-		}
-	});
-
-	function handleSystemPromptClick() {
-		onSystemPromptAdd?.({ message, files: uploadedFiles });
+	function handleFilesAdd(files: File[]) {
+		onFileUpload?.(files);
 	}
-
-	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 
 	async function handleSubmit() {
 		if ((!message.trim() && uploadedFiles.length === 0) || disabled || hasLoadingAttachments)
@@ -82,10 +74,9 @@
 		}
 	}
 
-	function handleFilesAdd(files: File[]) {
-		onFileUpload?.(files);
+	function handleSystemPromptClick() {
+		onSystemPromptAdd?.({ message, files: uploadedFiles });
 	}
-
 	function handleUploadedFileRemove(fileId: string) {
 		onFileRemove?.(fileId);
 	}
@@ -97,6 +88,13 @@
 	afterNavigate((navigation) => {
 		if (navigation?.from != null) {
 			setTimeout(() => chatFormRef?.focus(), 10);
+		}
+	});
+
+	$effect(() => {
+		if (initialMessage !== previousInitialMessage) {
+			message = initialMessage;
+			previousInitialMessage = initialMessage;
 		}
 	});
 

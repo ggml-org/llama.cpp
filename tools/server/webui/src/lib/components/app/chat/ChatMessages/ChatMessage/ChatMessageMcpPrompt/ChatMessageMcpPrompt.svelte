@@ -1,66 +1,69 @@
 <script lang="ts">
+	import {
+		ChatMessageActionIcons,
+		ChatMessageEditForm,
+		ChatMessageMcpPromptContent
+	} from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
-	import ChatMessageActions from './ChatMessageActions.svelte';
-	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
-	import { MessageRole } from '$lib/enums';
-	import ChatMessageUserBubble from './ChatMessageUserBubble.svelte';
+	import { MessageRole, McpPromptVariant } from '$lib/enums';
+	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
+		mcpPrompt: DatabaseMessageExtraMcpPrompt;
 		siblingInfo?: ChatMessageSiblingInfo | null;
+		showDeleteDialog: boolean;
 		deletionInfo: {
 			totalCount: number;
 			userMessages: number;
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		showDeleteDialog: boolean;
+		onCopy: () => void;
 		onEdit: () => void;
 		onDelete: () => void;
 		onConfirmDelete: () => void;
-		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
-		onCopy: () => void;
+		onShowDeleteDialogChange: (show: boolean) => void;
 	}
 
 	let {
 		class: className = '',
 		message,
+		mcpPrompt,
 		siblingInfo = null,
-		deletionInfo,
 		showDeleteDialog,
+		deletionInfo,
+		onCopy,
 		onEdit,
 		onDelete,
 		onConfirmDelete,
-		onForkConversation,
-		onShowDeleteDialogChange,
 		onNavigateToSibling,
-		onCopy
+		onShowDeleteDialogChange
 	}: Props = $props();
 
-	// Get contexts
+	// Get edit context
 	const editCtx = getMessageEditContext();
 </script>
 
 <div
-	aria-label="User message with actions"
+	aria-label="MCP Prompt message with actions"
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
-		<ChatMessageUserBubble
-			content={message.content}
-			attachments={message.extra}
-			renderMarkdown={true}
+		<ChatMessageMcpPromptContent
+			prompt={mcpPrompt}
+			variant={McpPromptVariant.MESSAGE}
+			class="w-full max-w-[80%]"
 		/>
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActions
+				<ChatMessageActionIcons
 					actionsPosition="right"
 					{deletionInfo}
 					justify="end"
@@ -68,7 +71,6 @@
 					{onCopy}
 					{onDelete}
 					{onEdit}
-					{onForkConversation}
 					{onNavigateToSibling}
 					{onShowDeleteDialogChange}
 					{siblingInfo}

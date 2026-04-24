@@ -1,6 +1,6 @@
 <script lang="ts">
 	import {
-		ChatAttachmentsList,
+		ChatAttachments,
 		ChatFormActions,
 		ChatFormFileInputInvisible,
 		ChatFormPickerMcpPrompts,
@@ -584,7 +584,7 @@
 			: ''}"
 		data-slot="input-area"
 	>
-		<ChatAttachmentsList
+		<ChatAttachments
 			{attachments}
 			bind:uploadedFiles
 			onFileRemove={handleFileRemove}

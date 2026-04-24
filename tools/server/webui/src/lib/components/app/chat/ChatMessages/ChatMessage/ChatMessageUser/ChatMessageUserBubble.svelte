@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
-	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
+	import { ChatAttachments, MarkdownContent } from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 
@@ -53,7 +53,7 @@
 
 {#if attachments && attachments.length > 0}
 	<div class="mb-2 max-w-[80%]">
-		<ChatAttachmentsList {attachments} readonly imageHeight="h-40" />
+		<ChatAttachments {attachments} readonly imageHeight="h-40" />
 	</div>
 {/if}
 

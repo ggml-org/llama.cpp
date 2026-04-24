@@ -1,7 +1,7 @@
 <script lang="ts">
 	import {
 		ChatMessageAgenticContent,
-		ChatMessageActions,
+		ChatMessageActionIcons,
 		ChatMessageStatistics,
 		ModelBadge,
 		ModelsSelectorDropdown
@@ -388,7 +388,7 @@
 	</div>
 
 	{#if message.timestamp && !editCtx.isEditing}
-		<ChatMessageActions
+		<ChatMessageActionIcons
 			role={MessageRole.ASSISTANT}
 			justify="start"
 			actionsPosition="left"

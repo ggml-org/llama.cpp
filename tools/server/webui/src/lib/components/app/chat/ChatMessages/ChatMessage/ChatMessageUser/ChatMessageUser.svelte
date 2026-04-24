@@ -1,69 +1,64 @@
 <script lang="ts">
-	import {
-		ChatMessageActions,
-		ChatMessageEditForm,
-		ChatMessageMcpPromptContent
-	} from '$lib/components/app';
+	import { ChatMessageActionIcons, ChatMessageEditForm, ChatMessageUserBubble} from '$lib/components/app/chat';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { MessageRole, McpPromptVariant } from '$lib/enums';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { MessageRole } from '$lib/enums';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		mcpPrompt: DatabaseMessageExtraMcpPrompt;
 		siblingInfo?: ChatMessageSiblingInfo | null;
-		showDeleteDialog: boolean;
 		deletionInfo: {
 			totalCount: number;
 			userMessages: number;
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		onCopy: () => void;
+		showDeleteDialog: boolean;
 		onEdit: () => void;
 		onDelete: () => void;
 		onConfirmDelete: () => void;
-		onNavigateToSibling?: (siblingId: string) => void;
+		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
+		onNavigateToSibling?: (siblingId: string) => void;
+		onCopy: () => void;
 	}
 
 	let {
 		class: className = '',
 		message,
-		mcpPrompt,
 		siblingInfo = null,
-		showDeleteDialog,
 		deletionInfo,
-		onCopy,
+		showDeleteDialog,
 		onEdit,
 		onDelete,
 		onConfirmDelete,
+		onForkConversation,
+		onShowDeleteDialogChange,
 		onNavigateToSibling,
-		onShowDeleteDialogChange
+		onCopy
 	}: Props = $props();
 
-	// Get edit context
+	// Get contexts
 	const editCtx = getMessageEditContext();
 </script>
 
 <div
-	aria-label="MCP Prompt message with actions"
+	aria-label="User message with actions"
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
-		<ChatMessageMcpPromptContent
-			prompt={mcpPrompt}
-			variant={McpPromptVariant.MESSAGE}
-			class="w-full max-w-[80%]"
+		<ChatMessageUserBubble
+			content={message.content}
+			attachments={message.extra}
+			renderMarkdown={true}
 		/>
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActions
+				<ChatMessageActionIcons
 					actionsPosition="right"
 					{deletionInfo}
 					justify="end"
@@ -71,6 +66,7 @@
 					{onCopy}
 					{onDelete}
 					{onEdit}
+					{onForkConversation}
 					{onNavigateToSibling}
 					{onShowDeleteDialogChange}
 					{siblingInfo}

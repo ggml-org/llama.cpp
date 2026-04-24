@@ -1,14 +1,13 @@
 <script lang="ts">
 	import { Check, X } from '@lucide/svelte';
-	import { Card } from '$lib/components/ui/card';
+	import { ChatMessageActionIcons, MarkdownContent } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { MarkdownContent } from '$lib/components/app';
-	import { getMessageEditContext } from '$lib/contexts';
+	import { Card } from '$lib/components/ui/card';
 	import { INPUT_CLASSES } from '$lib/constants';
+	import { getMessageEditContext } from '$lib/contexts';
+	import { KeyboardKey, MessageRole } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isIMEComposing } from '$lib/utils';
-	import ChatMessageActions from './ChatMessageActions.svelte';
-	import { KeyboardKey, MessageRole } from '$lib/enums';
 
 	interface Props {
 		class?: string;
@@ -213,7 +212,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActions
+				<ChatMessageActionIcons
 					actionsPosition="right"
 					{deletionInfo}
 					justify="end"

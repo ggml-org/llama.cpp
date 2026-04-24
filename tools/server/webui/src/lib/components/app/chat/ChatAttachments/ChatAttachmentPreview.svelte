@@ -181,15 +181,19 @@
 			{#if !hasVisionModality && activeModelId}
 				<Alert.Root class="mb-4">
 					<Info class="h-4 w-4" />
+
 					<Alert.Title>Preview only</Alert.Title>
+
 					<Alert.Description>
 						<span class="inline-flex">
 							The selected model does not support vision. Only the extracted
+
 							<!-- svelte-ignore a11y_click_events_have_key_events -->
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<span class="mx-1 cursor-pointer underline" onclick={() => (pdfViewMode = 'text')}>
 								text
 							</span>
+
 							will be sent to the model.
 						</span>
 					</Alert.Description>
