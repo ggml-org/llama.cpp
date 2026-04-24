@@ -22,7 +22,7 @@
  * **Architecture:**
  * - Delegates rendering to specialized thumbnail components based on attachment type
  * - Manages scroll state and navigation arrows for horizontal overflow
- * - Integrates with DialogChatAttachmentPreview for full-size viewing
+ * - Integrates with DialogChatAttachmentsPreview for full-size gallery/single viewing
  * - Validates vision modality support via `activeModelId` prop
  *
  * **Features:**
@@ -52,6 +52,13 @@
 export { default as ChatAttachments } from './ChatAttachments/ChatAttachments.svelte';
 
 /**
+ * Renders a single attachment item based on its type (image, file, MCP prompt, or MCP resource).
+ * Delegates to specialized sub-components: ChatAttachmentsItemThumbnailImage, ChatAttachmentsItemThumbnailFile,
+ * ChatAttachmentsItemMcpPrompt, or ChatAttachmentsItemMcpResource.
+ */
+export { default as ChatAttachmentsItem } from './ChatAttachments/ChatAttachmentsItem/ChatAttachmentsItem.svelte';
+
+/**
  * Displays MCP Prompt attachment with expandable content preview.
  * Shows server name, prompt name, and allows expanding to view full prompt arguments
  * and content. Used when user selects a prompt from ChatFormPickerMcpPrompts.
@@ -64,13 +71,6 @@ export { default as ChatAttachmentsItemMcpPrompt } from './ChatAttachments/ChatA
  * Used within ChatAttachmentMcpResources for individual resource display.
  */
 export { default as ChatAttachmentsItemMcpResource } from './ChatAttachments/ChatAttachmentsItem/ChatAttachmentsItemMcpResource.svelte';
-
-/**
- * Full-size attachment preview component for dialog display. Handles different file types:
- * images (full-size display), text files (syntax highlighted), PDFs (text extraction or image preview),
- * audio (placeholder with download), and generic files (download option).
- */
-export { default as ChatAttachmentPreview } from './ChatAttachments/ChatAttachmentPreview.svelte';
 
 /**
  * Thumbnail for non-image file attachments. Displays file type icon based on extension,
@@ -87,11 +87,11 @@ export { default as ChatAttachmentsItemThumbnailFile } from './ChatAttachments/C
 export { default as ChatAttachmentsItemThumbnailImage } from './ChatAttachments/ChatAttachmentsItem/ChatAttachmentsItemThumbnailImage.svelte';
 
 /**
- * Grid view of all attachments for "View All" dialog. Displays all attachments
- * in a responsive grid layout when there are too many to show inline.
- * Triggered by "+X more" button in ChatAttachments.
+ * Unified attachment preview component for dialog display. Shows a single file
+ * preview without carousel, or a gallery/carousel view when multiple items exist.
+ * Uses ChatAttachmentPreviewSingle internally for each item's content.
  */
-export { default as ChatAttachmentsViewAll } from './ChatAttachments/ChatAttachmentsViewAll.svelte';
+export { default as ChatAttachmentsPreview } from './ChatAttachments/ChatAttachmentsPreview.svelte';
 
 /**
  *
@@ -297,27 +297,27 @@ export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte'
  * />
  * ```
  */
-export { default as ChatFormPickerMcpPrompts } from './ChatForm/ChartFormPickers/ChatFormPickerMcpPrompts/ChatFormPickerMcpPrompts.svelte';
+export { default as ChatFormPickerMcpPrompts } from './ChatForm/ChatFormPickers/ChatFormPickerMcpPrompts/ChatFormPickerMcpPrompts.svelte';
 
 /**
  * Form for entering MCP prompt arguments. Displays input fields for each
  * required argument defined by the prompt. Validates input and submits
  * when all required fields are filled. Shows argument descriptions as hints.
  */
-export { default as ChatFormPromptPickerArgumentForm } from './ChatForm/ChartFormPickers/ChatFormPickerMcpPrompts/ChatFormPromptPickerArgumentForm.svelte';
+export { default as ChatFormPromptPickerArgumentForm } from './ChatForm/ChatFormPickers/ChatFormPickerMcpPrompts/ChatFormPromptPickerArgumentForm.svelte';
 
 /**
  * Single argument input field with autocomplete suggestions. Fetches suggestions
  * from MCP server based on argument type. Supports keyboard navigation through
  * suggestions list. Used within ChatFormPromptPickerArgumentForm.
  */
-export { default as ChatFormPromptPickerArgumentInput } from './ChatForm/ChartFormPickers/ChatFormPickerMcpPrompts/ChatFormPromptPickerArgumentInput.svelte';
+export { default as ChatFormPromptPickerArgumentInput } from './ChatForm/ChatFormPickers/ChatFormPickerMcpPrompts/ChatFormPromptPickerArgumentInput.svelte';
 
 /**
  * Shared popover wrapper for inline picker popovers (prompts, resources).
  * Provides consistent positioning, styling, and open/close behavior.
  */
-export { default as ChatFormPickerPopover } from './ChatForm/ChartFormPickers/ChatFormPicker/ChatFormPickerPopover.svelte';
+export { default as ChatFormPickerPopover } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerPopover.svelte';
 
 /**
  * Generic scrollable list for picker popovers. Provides search input,
@@ -325,27 +325,27 @@ export { default as ChatFormPickerPopover } from './ChatForm/ChartFormPickers/Ch
  * and optional footer. Uses Svelte 5 snippets for item/skeleton/footer rendering.
  * Shared by ChatFormPickerMcpPrompts and ChatFormPickerMcpResources.
  */
-export { default as ChatFormPickerList } from './ChatForm/ChartFormPickers/ChatFormPicker/ChatFormPickerList.svelte';
+export { default as ChatFormPickerList } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerList.svelte';
 
 /**
  * Generic button wrapper for picker list items. Provides consistent styling,
  * hover/selected states, and data-picker-index attribute for scroll-into-view.
  * Shared by ChatFormPickerMcpPrompts and ChatFormPickerMcpResources.
  */
-export { default as ChatFormPickerListItem } from './ChatForm/ChartFormPickers/ChatFormPicker/ChatFormPickerListItem.svelte';
+export { default as ChatFormPickerListItem } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerListItem.svelte';
 
 /**
  * Generic header for picker items displaying server favicon, label, item title,
  * and optional description. Accepts `titleExtra` and `subtitle` snippets for
  * custom content like badges or URIs. Shared by both pickers.
  */
-export { default as ChatFormPickerItemHeader } from './ChatForm/ChartFormPickers/ChatFormPicker/ChatFormPickerItemHeader.svelte';
+export { default as ChatFormPickerItemHeader } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerItemHeader.svelte';
 
 /**
  * Generic skeleton loading placeholder for picker list items. Configurable
  * title width and optional badge skeleton. Shared by both pickers.
  */
-export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChartFormPickers/ChatFormPicker/ChatFormPickerListItemSkeleton.svelte';
+export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerListItemSkeleton.svelte';
 
 /**
  * **ChatFormPickerMcpResources** - MCP resource selection interface
@@ -364,7 +364,7 @@ export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChartFormP
  * **Exported API:**
  * - `handleKeydown(event): boolean` - Process keyboard events, returns true if handled
  */
-export { default as ChatFormPickerMcpResources } from './ChatForm/ChartFormPickers/ChatFormPickerMcpResources/ChatFormPickerMcpResources.svelte';
+export { default as ChatFormPickerMcpResources } from './ChatForm/ChatFormPickers/ChatFormPickerMcpResources/ChatFormPickerMcpResources.svelte';
 
 /**
  *
@@ -654,7 +654,3 @@ export { default as ChatScreenForm } from './ChatScreen/ChatScreenForm.svelte';
  * Only visible when `isCurrentConversationLoading` is true.
  */
 export { default as ChatScreenProcessingInfo } from './ChatScreen/ChatScreenProcessingInfo.svelte';
-
-
-
-

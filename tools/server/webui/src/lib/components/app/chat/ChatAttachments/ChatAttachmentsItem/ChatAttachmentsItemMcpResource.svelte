@@ -16,23 +16,24 @@
 
 	let { attachment, onRemove, onclick, class: className }: Props = $props();
 
-	function getStatusClass(attachment: MCPResourceAttachment): string {
-		if (attachment.error) return 'border-red-500/50 bg-red-500/10';
-		if (attachment.loading) return 'border-border/50 bg-muted/30';
-		return 'border-border/50 bg-muted/30';
-	}
-
 	const ResourceIcon = $derived(
 		getResourceIcon(attachment.resource.mimeType, attachment.resource.uri)
 	);
 	const serverName = $derived(mcpStore.getServerDisplayName(attachment.resource.serverName));
 	const favicon = $derived(mcpStore.getServerFavicon(attachment.resource.serverName));
+
+	function getStatusClass(attachment: MCPResourceAttachment): string {
+		if (attachment.error) return 'border-red-500/50 bg-red-500/10';
+		if (attachment.loading) return 'border-border/50 bg-muted/30';
+
+		return 'border-border/50 bg-muted/30';
+	}
 </script>
 
 <Tooltip.Root>
 	<Tooltip.Trigger>
 		<button
-			type="button"
+			disabled={!onclick}
 			class={[
 				'flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.75 text-sm transition-colors',
 				getStatusClass(attachment),
@@ -40,7 +41,7 @@
 				className
 			]}
 			{onclick}
-			disabled={!onclick}
+			type="button"
 		>
 			{#if attachment.loading}
 				<Loader2 class="h-3 w-3 animate-spin text-muted-foreground" />

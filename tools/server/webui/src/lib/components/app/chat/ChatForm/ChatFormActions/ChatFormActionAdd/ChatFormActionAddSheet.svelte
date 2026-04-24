@@ -24,7 +24,7 @@
 		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
 		onMcpResourcesClick?: () => void;
-		trigger: Snippet<[{ disabled: boolean; onclick?: () => void; }]>;
+		trigger: Snippet<[{ disabled: boolean; onclick?: () => void }]>;
 	}
 
 	let {
@@ -58,7 +58,7 @@
 <div class="flex items-center gap-1 {className}">
 	<Sheet.Root bind:open={sheetOpen}>
 		{@render trigger({ disabled, onclick: () => (sheetOpen = true) })}
-		 <!-- <ChatFormActionAddButton {disabled} onclick={() => (sheetOpen = true)} /> -->
+		<!-- <ChatFormActionAddButton {disabled} onclick={() => (sheetOpen = true)} /> -->
 
 		<Sheet.Content side="bottom" class="max-h-[85vh] gap-0 overflow-y-auto">
 			<Sheet.Header>
@@ -146,13 +146,13 @@
 
 				<div class="my-2 border-t"></div>
 
-				<a href="#/settings/mcp" class="px-3 py-2 flex gap-3 items-center">
+				<a href="#/settings/mcp" class="flex items-center gap-3 px-3 py-2">
 					<McpLogo class="inline h-4 w-4" />
 
 					<span class="text-sm">MCP Servers</span>
 				</a>
 
-				<a href="#/settings/chat/tools" class="px-3 py-2 flex gap-3 items-center">
+				<a href="#/settings/chat/tools" class="flex items-center gap-3 px-3 py-2">
 					<PencilRuler class="inline h-4 w-4" />
 
 					<span class="text-sm">Tools</span>

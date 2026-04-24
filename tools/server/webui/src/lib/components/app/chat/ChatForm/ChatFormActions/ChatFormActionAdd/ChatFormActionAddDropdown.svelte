@@ -9,7 +9,10 @@
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
 	import { AttachmentMenuItemId } from '$lib/enums';
-	import { ChatFormActionAddToolsSubmenu, ChatFormActionAddMcpServersSubmenu } from '$lib/components/app';
+	import {
+		ChatFormActionAddToolsSubmenu,
+		ChatFormActionAddMcpServersSubmenu
+	} from '$lib/components/app';
 
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 

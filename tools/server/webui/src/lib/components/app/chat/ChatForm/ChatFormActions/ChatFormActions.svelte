@@ -71,8 +71,9 @@
 		hasAudioModality && !hasText && !hasAudioAttachments && currentConfig.autoMicOnEmpty
 	);
 
-	let selectorModelRef: import('./ChatFormActionModels/ChatFormActionModels.svelte').default | undefined =
-		$state(undefined);
+	let selectorModelRef:
+		| import('./ChatFormActionModels/ChatFormActionModels.svelte').default
+		| undefined = $state(undefined);
 
 	export function openModelSelector() {
 		selectorModelRef?.open();
@@ -96,7 +97,7 @@
 	</div>
 
 	<ChatFormActionModels
-		disabled={disabled}
+		{disabled}
 		bind:this={selectorModelRef}
 		bind:hasAudioModality
 		bind:hasVisionModality
@@ -117,7 +118,7 @@
 			<span class="sr-only">Stop</span>
 
 			<Square
-				class="h-8 w-8 fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
+				class="h-8 w-8 fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
 			/>
 		</Button>
 	{:else if shouldShowRecordButton}

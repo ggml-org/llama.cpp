@@ -1,5 +1,9 @@
 <script lang="ts">
-	import { ChatMessageActionIcons, ChatMessageEditForm, ChatMessageUserBubble} from '$lib/components/app/chat';
+	import {
+		ChatMessageActionIcons,
+		ChatMessageEditForm,
+		ChatMessageUserBubble
+	} from '$lib/components/app/chat';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 

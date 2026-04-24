@@ -136,5 +136,3 @@ export { default as SidebarNavigationConversationItem } from './SidebarNavigatio
  * Integrated into sidebar header with proper styling.
  */
 export { default as SidebarNavigationSearch } from './SidebarNavigation/SidebarNavigationSearch.svelte';
-
-

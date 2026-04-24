@@ -6,29 +6,29 @@
 
 	interface Props {
 		class?: string;
-		prompt: DatabaseMessageExtraMcpPrompt;
-		readonly?: boolean;
 		isLoading?: boolean;
 		loadError?: string;
 		onRemove?: () => void;
+		prompt: DatabaseMessageExtraMcpPrompt;
+		readonly?: boolean;
 	}
 
 	let {
 		class: className = '',
-		prompt,
-		readonly = false,
 		isLoading = false,
 		loadError,
-		onRemove
+		onRemove,
+		prompt,
+		readonly = false
 	}: Props = $props();
 </script>
 
 <div class="group relative {className}">
 	<ChatMessageMcpPromptContent
-		{prompt}
-		variant={McpPromptVariant.ATTACHMENT}
 		{isLoading}
 		{loadError}
+		{prompt}
+		variant={McpPromptVariant.ATTACHMENT}
 	/>
 
 	{#if !readonly && onRemove}

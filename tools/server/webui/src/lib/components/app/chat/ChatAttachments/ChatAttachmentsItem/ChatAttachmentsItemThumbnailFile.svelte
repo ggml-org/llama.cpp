@@ -5,6 +5,7 @@
 	import { AttachmentType } from '$lib/enums';
 
 	interface Props {
+		attachment?: DatabaseMessageExtra;
 		class?: string;
 		id: string;
 		onclick?: (event: MouseEvent) => void;
@@ -15,10 +16,10 @@
 		textContent?: string;
 		// Either uploaded file or stored attachment
 		uploadedFile?: ChatUploadedFile;
-		attachment?: DatabaseMessageExtra;
 	}
 
 	let {
+		attachment,
 		class: className = '',
 		id,
 		onclick,
@@ -27,8 +28,7 @@
 		readonly = false,
 		size,
 		textContent,
-		uploadedFile,
-		attachment
+		uploadedFile
 	}: Props = $props();
 
 	let isText = $derived(isTextFile(attachment, uploadedFile));
@@ -57,94 +57,92 @@
 
 			return pdfAttachment.processedAsImages ? 'Sent as Image' : 'Sent as Text';
 		}
+
 		return null;
 	});
 </script>
 
+{#snippet textPreview(content: string)}
+	<div class="relative">
+		<div
+			class="overflow-hidden font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground {!readonly
+				? 'max-h-3rem line-height-1.2'
+				: ''}"
+		>
+			{getPreviewText(content)}
+		</div>
+
+		{#if content.length > 150}
+			<div
+				class="pointer-events-none absolute right-0 bottom-0 left-0 h-4 bg-gradient-to-t from-muted to-transparent {readonly
+					? 'h-6'
+					: ''}"
+			></div>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet removeButton()}
+	<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
+		<ActionIcon icon={X} tooltip="Remove" stopPropagationOnClick onclick={() => onRemove?.(id)} />
+	</div>
+{/snippet}
+
+{#snippet fileIcon()}
+	<div
+		class="flex h-8 w-8 items-center justify-center rounded bg-primary/10 text-xs font-medium text-primary"
+	>
+		{fileTypeLabel}
+	</div>
+{/snippet}
+
+{#snippet info(text: string | undefined)}
+	{#if text}
+		<span class="text-xs text-muted-foreground">{text}</span>
+	{/if}
+{/snippet}
+
 {#if isText}
-	{#if readonly}
-		<!-- Readonly mode (ChatMessage) -->
-		<button
-			class="cursor-pointer rounded-lg border border-border bg-muted p-3 transition-shadow hover:shadow-md {className} w-full max-w-2xl"
-			{onclick}
-			aria-label={`Preview ${name}`}
-			type="button"
-		>
-			<div class="flex items-start gap-3">
-				<div class="flex min-w-0 flex-1 flex-col items-start text-left">
-					<span class="w-full truncate text-sm font-medium text-foreground">{name}</span>
+	<button
+		class="rounded-lg border border-border bg-muted p-3 {className} cursor-pointer {readonly
+			? 'w-full max-w-2xl transition-shadow hover:shadow-md'
+			: `group relative text-left ${textContent ? 'max-h-24 max-w-72' : 'max-w-36'}`}"
+		{onclick}
+		aria-label={readonly ? `Preview ${name}` : undefined}
+		type={readonly ? 'button' : undefined}
+	>
+		{#if !readonly}
+			{@render removeButton()}
+		{/if}
 
-					{#if size}
-						<span class="text-xs text-muted-foreground">{formatFileSize(size)}</span>
-					{/if}
+		<div class={!readonly ? 'pr-8' : ''}>
+			{#if readonly}
+				<div class="flex items-start gap-3">
+					<div class="flex min-w-0 flex-1 flex-col items-start text-left">
+						<span class="w-full truncate text-sm font-medium text-foreground">{name}</span>
 
-					{#if textContent}
-						<div class="relative mt-2 w-full">
-							<div
-								class="overflow-hidden font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
-							>
-								{getPreviewText(textContent)}
-							</div>
+						{@render info(size ? formatFileSize(size) : undefined)}
 
-							{#if textContent.length > 150}
-								<div
-									class="pointer-events-none absolute right-0 bottom-0 left-0 h-6 bg-gradient-to-t from-muted to-transparent"
-								></div>
-							{/if}
-						</div>
-					{/if}
+						{#if textContent}
+							{@render textPreview(textContent)}
+						{/if}
+					</div>
 				</div>
-			</div>
-		</button>
-	{:else}
-		<!-- Non-readonly mode (ChatForm) -->
-		<button
-			class="group relative rounded-lg border border-border bg-muted p-3 {className} {textContent
-				? 'max-h-24 max-w-72'
-				: 'max-w-36'} cursor-pointer text-left"
-			{onclick}
-		>
-			<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
-				<ActionIcon
-					icon={X}
-					tooltip="Remove"
-					stopPropagationOnClick
-					onclick={() => onRemove?.(id)}
-				/>
-			</div>
-
-			<div class="pr-8">
+			{:else}
 				<span class="mb-3 block truncate text-sm font-medium text-foreground">{name}</span>
 
 				{#if textContent}
-					<div class="relative">
-						<div
-							class="overflow-hidden font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
-							style="max-height: 3rem; line-height: 1.2em;"
-						>
-							{getPreviewText(textContent)}
-						</div>
-
-						{#if textContent.length > 150}
-							<div
-								class="pointer-events-none absolute right-0 bottom-0 left-0 h-4 bg-gradient-to-t from-muted to-transparent"
-							></div>
-						{/if}
-					</div>
+					{@render textPreview(textContent)}
 				{/if}
-			</div>
-		</button>
-	{/if}
+			{/if}
+		</div>
+	</button>
 {:else}
 	<button
 		class="group flex items-center gap-3 rounded-lg border border-border bg-muted p-3 {className} relative"
 		{onclick}
 	>
-		<div
-			class="flex h-8 w-8 items-center justify-center rounded bg-primary/10 text-xs font-medium text-primary"
-		>
-			{fileTypeLabel}
-		</div>
+		{@render fileIcon()}
 
 		<div class="flex flex-col gap-0.5">
 			<span
@@ -155,22 +153,11 @@
 				{name}
 			</span>
 
-			{#if pdfProcessingMode}
-				<span class="text-left text-xs text-muted-foreground">{pdfProcessingMode}</span>
-			{:else if size}
-				<span class="text-left text-xs text-muted-foreground">{formatFileSize(size)}</span>
-			{/if}
+			{@render info(pdfProcessingMode || (size ? formatFileSize(size) : undefined))}
 		</div>
 
 		{#if !readonly}
-			<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
-				<ActionIcon
-					icon={X}
-					tooltip="Remove"
-					stopPropagationOnClick
-					onclick={() => onRemove?.(id)}
-				/>
-			</div>
+			{@render removeButton()}
 		{/if}
 	</button>
 {/if}

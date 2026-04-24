@@ -87,16 +87,12 @@
 	});
 
 	$effect(() => {
-		hasAudioModality = activeModelId
-			? modelsStore.modelSupportsAudio(activeModelId)
-			: false;
+		hasAudioModality = activeModelId ? modelsStore.modelSupportsAudio(activeModelId) : false;
 	});
 
 	$effect(() => {
 		void modelPropsVersion;
-		hasVisionModality = activeModelId
-			? modelsStore.modelSupportsVision(activeModelId)
-			: false;
+		hasVisionModality = activeModelId ? modelsStore.modelSupportsVision(activeModelId) : false;
 	});
 
 	$effect(() => {
@@ -107,17 +103,13 @@
 		if (!isRouter) {
 			isSelectedModelInCache = true;
 		} else if (conversationModel) {
-			isSelectedModelInCache = modelOptions().some(
-				(option) => option.model === conversationModel
-			);
+			isSelectedModelInCache = modelOptions().some((option) => option.model === conversationModel);
 		} else {
 			const currentModelId = selectedModelId();
 			if (!currentModelId) {
 				isSelectedModelInCache = false;
 			} else {
-				isSelectedModelInCache = modelOptions().some(
-					(option) => option.id === currentModelId
-				);
+				isSelectedModelInCache = modelOptions().some((option) => option.id === currentModelId);
 			}
 		}
 	});

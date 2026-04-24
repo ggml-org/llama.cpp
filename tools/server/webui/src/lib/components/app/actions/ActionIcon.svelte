@@ -5,7 +5,7 @@
 	import { TooltipSide } from '$lib/enums';
 
 	interface Props {
-		'aria-label'?: string;
+		ariaLabel?: string;
 		class?: string;
 		disabled?: boolean;
 		icon: Component;
@@ -29,7 +29,7 @@
 		tooltipSide = TooltipSide.TOP,
 		stopPropagationOnClick = false,
 		onclick,
-		'aria-label': ariaLabel
+		ariaLabel
 	}: Props = $props();
 </script>
 

@@ -31,6 +31,10 @@
 	}: Props = $props();
 </script>
 
+{#snippet image()}
+	<img src={preview} alt={name} class="{height} {width} cursor-pointer object-cover {imageClass}" />
+{/snippet}
+
 <div
 	class="group relative overflow-hidden rounded-lg bg-muted shadow-lg dark:border dark:border-muted {className}"
 >
@@ -41,18 +45,10 @@
 			{onclick}
 			aria-label="Preview {name}"
 		>
-			<img
-				src={preview}
-				alt={name}
-				class="{height} {width} cursor-pointer object-cover {imageClass}"
-			/>
+			{@render image()}
 		</button>
 	{:else}
-		<img
-			src={preview}
-			alt={name}
-			class="{height} {width} cursor-pointer object-cover {imageClass}"
-		/>
+		{@render image()}
 	{/if}
 
 	{#if !readonly}

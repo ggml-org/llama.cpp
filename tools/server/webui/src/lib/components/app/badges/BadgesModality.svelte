@@ -20,9 +20,11 @@
 		>
 			{#if modality === ModelModality.VISION}
 				<Eye class="h-3 w-3" />
+
 				Vision
 			{:else}
 				<Mic class="h-3 w-3" />
+
 				Audio
 			{/if}
 		</span>

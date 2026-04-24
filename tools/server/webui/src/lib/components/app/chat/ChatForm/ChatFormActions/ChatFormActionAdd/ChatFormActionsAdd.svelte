@@ -27,7 +27,7 @@
 		onSystemPromptClick,
 		onMcpPromptClick,
 		onMcpSettingsClick,
-		onMcpResourcesClick,
+		onMcpResourcesClick
 	}: Props = $props();
 
 	let isMobile = new IsMobile();
@@ -46,7 +46,7 @@
 		{onMcpResourcesClick}
 	>
 		{#snippet trigger({ disabled, onclick })}
-			 <ChatFormActionAddButton {disabled} {onclick} />
+			<ChatFormActionAddButton {disabled} {onclick} />
 		{/snippet}
 	</ChatFormActionAddSheet>
 {:else}
@@ -60,7 +60,7 @@
 		{onSystemPromptClick}
 		{onMcpPromptClick}
 		{onMcpResourcesClick}
-		onMcpSettingsClick={onMcpSettingsClick}
+		{onMcpSettingsClick}
 	>
 		{#snippet trigger()}
 			<ChatFormActionAddButton {disabled} />
