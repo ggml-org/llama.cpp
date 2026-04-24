@@ -500,7 +500,45 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
     block_q8_K * GGML_RESTRICT y = (block_q8_K *) vy;
 
-#if defined(__AVX2__)
+#if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+    const __m512i clamp_hi = _mm512_set1_epi32(127);
+
+    for (int64_t i = 0; i < nb; ++i) {
+        __m512 vmax = _mm512_setzero_ps();
+        __m512 vmin = _mm512_setzero_ps();
+        for (int j = 0; j < QK_K; j += 16) {
+            const __m512 v = _mm512_loadu_ps(x + j);
+            vmax = _mm512_max_ps(vmax, v);
+            vmin = _mm512_min_ps(vmin, v);
+        }
+
+        const float max_pos = _mm512_reduce_max_ps(vmax);
+        const float min_neg = _mm512_reduce_min_ps(vmin);
+        const float max = (max_pos >= -min_neg) ? max_pos : min_neg;
+
+        if (max == 0.0f) {
+            y[i].d = 0;
+            memset(y[i].qs, 0, QK_K);
+            memset(y[i].bsums, 0, (QK_K / 16) * sizeof(int16_t));
+            x += QK_K;
+            continue;
+        }
+
+        const float iscale = -127.0f / max;
+        const __m512 viscale = _mm512_set1_ps(iscale);
+
+        for (int j = 0; j < QK_K; j += 16) {
+            const __m512 v = _mm512_loadu_ps(x + j);
+            const __m512i i32 = _mm512_cvtps_epi32(_mm512_mul_ps(v, viscale));
+            const __m512i clamped = _mm512_min_epi32(i32, clamp_hi);
+            _mm_storeu_si128((__m128i *) (y[i].qs + j), _mm512_cvtsepi32_epi8(clamped));
+            y[i].bsums[j / 16] = (int16_t) _mm512_reduce_add_epi32(clamped);
+        }
+
+        y[i].d = 1.0f / iscale;
+        x += QK_K;
+    }
+#elif defined(__AVX2__)
     const __m256i clamp_hi = _mm256_set1_epi32(127);
 
     for (int64_t i = 0; i < nb; ++i) {
