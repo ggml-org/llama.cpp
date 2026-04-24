@@ -34,6 +34,7 @@ add_library(${HTP_LIB} SHARED
     argsort-ops.c
     ssm-conv.c
     cumsum-ops.c
+    fill-ops.c
     diag-ops.c
 )
 

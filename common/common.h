@@ -274,6 +274,7 @@ struct common_params_sampling {
     std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
     std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
     std::vector<llama_token> reasoning_budget_forced;          // forced sequence (message + end tag)
+    std::string              reasoning_budget_message;         // message injected before end tag when budget exhausted
 
     bool backend_sampling = false;
 
@@ -581,8 +582,6 @@ struct common_params {
     bool force_pure_content_parser = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
-    int reasoning_budget = -1;
-    std::string reasoning_budget_message; // message injected before end tag when budget exhausted
     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
 
@@ -745,6 +744,11 @@ inline std::vector<std::string> string_split<std::string>(const std::string & st
 inline bool string_starts_with(std::string_view str, std::string_view prefix) {
     return str.size() >= prefix.size() &&
            str.compare(0, prefix.size(), prefix) == 0;
+}
+
+// remove when moving to c++20
+inline bool string_starts_with(std::string_view str, char prefix) {
+    return !str.empty() && str.front() == prefix;
 }
 
 // remove when moving to c++20
