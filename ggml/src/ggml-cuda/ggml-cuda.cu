@@ -1234,7 +1234,7 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
 
     if (provider == GGML_CUDA_ALLREDUCE_INTERNAL) {
         ret->ar_pipeline = ggml_cuda_ar_pipeline_init(
-            dev_ids.data(), static_cast<int>(n_backends), GGML_CUDA_AR_MAX_BYTES);
+            dev_ids.data(), n_backends, GGML_CUDA_AR_MAX_BYTES);
         if (ret->ar_pipeline != nullptr) {
             return ret;
         }
@@ -1388,13 +1388,15 @@ static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_inte
             return GGML_CUDA_COMM_ALLREDUCE_FAILED;
         }
         if (!ggml_is_contiguously_allocated(tensors[i])) {
-            GGML_LOG_WARN("%s: internal tensor[%zu] is not contiguously allocated: ne=%" PRId64 " nbytes=%zu packed=%zu type=%d\n",
+            GGML_LOG_WARN("%s: internal unsupported: tensor[%zu] is not contiguously allocated: ne=%" PRId64 " nbytes=%zu packed=%zu type=%d\n",
                           __func__, i, ne, ggml_nbytes(tensors[i]),
                           (size_t) ne * ggml_type_size(type) / ggml_blck_size(type), (int) type);
+            return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
         }
         if (((uintptr_t) tensors[i]->data & 0xF) != 0) {
-            GGML_LOG_WARN("%s: internal tensor[%zu] data pointer is not 16-byte aligned: %p type=%d ne=%" PRId64 "\n",
+            GGML_LOG_WARN("%s: internal unsupported: tensor[%zu] data pointer is not 16-byte aligned: %p type=%d ne=%" PRId64 "\n",
                           __func__, i, tensors[i]->data, (int) type, ne);
+            return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
         }
     }
 

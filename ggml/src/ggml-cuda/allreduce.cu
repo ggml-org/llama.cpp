@@ -322,8 +322,11 @@ static void ggml_cuda_ar_wdog_thread(ggml_cuda_ar_pipeline * p) {
 // ---------------------------------------------------------------------------
 
 ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
-        const int * devices, int n_devices, size_t max_bytes) {
-    GGML_ASSERT(n_devices >= 2 && n_devices <= GGML_CUDA_MAX_DEVICES);
+        const int * devices, size_t n_devices, size_t max_bytes) {
+
+    if ((n_devices != 2) || (n_devices > GGML_CUDA_MAX_DEVICES)) {
+        return nullptr;
+    }
 
     auto * p = new ggml_cuda_ar_pipeline{};
     p->n_devices  = n_devices;

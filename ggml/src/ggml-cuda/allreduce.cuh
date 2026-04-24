@@ -18,7 +18,7 @@ struct ggml_cuda_ar_pipeline;
 // as the largest tensor that will be reduced.
 // Returns nullptr on allocation failure.
 ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
-    const int * devices, int n_devices, size_t max_bytes);
+    const int * devices, size_t n_devices, size_t max_bytes);
 
 // Release all resources owned by the pipeline.
 void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * pipeline);
