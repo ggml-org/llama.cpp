@@ -14,8 +14,9 @@ struct ggml_cuda_ar_pipeline;
 
 // Allocate a pipeline for n_devices GPUs.
 // devices[] holds the CUDA device IDs in rank order.
-// max_bytes is the staging buffer size per device; must be at least as large
-// as the largest tensor that will be reduced.
+// max_bytes is the staging buffer size per device, which also bounds the
+// per-launch chunk size; tensors larger than this are reduced via multiple
+// chunked launches.
 // Returns nullptr on allocation failure.
 ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
     const int * devices, size_t n_devices, size_t max_bytes);

@@ -520,7 +520,6 @@ bool ggml_cuda_ar_allreduce(
     }
 
     const size_t max_chunk_elems = p->buf_bytes / type_size;
-    GGML_ASSERT(max_chunk_elems > 0);
 
     // Insert chunked kernels into each GPU's existing compute stream via events:
     //   record(app, compute_stream)       — capture "upstream done"

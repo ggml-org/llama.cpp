@@ -1327,11 +1327,6 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
 }
 #endif // GGML_USE_NCCL
 
-static bool ggml_backend_cuda_comm_allreduce_internal(
-        ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
-    return ggml_cuda_ar_allreduce(comm_ctx->ar_pipeline, comm_ctx->backends.data(), tensors);
-}
-
 enum ggml_cuda_comm_allreduce_result {
     GGML_CUDA_COMM_ALLREDUCE_SUCCESS,
     GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED,
@@ -1389,7 +1384,7 @@ static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_inte
         }
     }
 
-    return ggml_backend_cuda_comm_allreduce_internal(comm_ctx, tensors)
+    return ggml_cuda_ar_allreduce(comm_ctx->ar_pipeline, comm_ctx->backends.data(), tensors)
         ? GGML_CUDA_COMM_ALLREDUCE_SUCCESS
         : GGML_CUDA_COMM_ALLREDUCE_FAILED;
 }
