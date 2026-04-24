@@ -1468,11 +1468,21 @@ llama-server
 ### Model sources
 
 There are 3 possible sources for model files:
-1. Cached models (controlled by the `LLAMA_CACHE` environment variable)
+1. Cached models (controlled by environment variables)
 2. Custom model directory (set via the `--models-dir` argument)
 3. Custom preset (set via the `--models-preset` argument)
 
-By default, the router looks for models in the cache. You can add Hugging Face models to the cache with:
+By default, the router looks for models in the cache. The router checks the following environment variables for a cache directory and picks the first extant and non-empty one:
+
+- `LLAMA_CACHE`
+- `HF_HUB_CACHE`
+- `HUGGINGFACE_HUB_CACHE`
+- `HF_HOME`
+- `XDG_CACHE_HOME`
+
+If none of the above exist or all are empty, the router picks `~/.cache/huggingface/hub` if it exists. 
+
+You can add Hugging Face models to the cache with:
 
 ```sh
 llama-server -hf <user>/<model>:<tag>
