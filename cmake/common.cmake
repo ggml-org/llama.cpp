@@ -15,7 +15,13 @@ function(llama_add_compile_flags)
             list(APPEND C_FLAGS -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes
                                 -Werror=implicit-int -Werror=implicit-function-declaration)
 
-            list(APPEND CXX_FLAGS -Wmissing-declarations -Wmissing-noreturn)
+            list(APPEND CXX_FLAGS -Wmissing-declarations)
+            # ref: https://github.com/ggml-org/llama.cpp/pull/22294
+            if (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_CXX_COMPILER_VERSION MATCHES "^21\.0\.0")
+                message(WARNING "Skipping -Wmissing-noreturn due to incompatible clang version ${CMAKE_CXX_COMPILER_VERSION}")
+            else()
+                list(APPEND CXX_FLAGS -Wmissing-noreturn)
+            endif()
 
             list(APPEND WARNING_FLAGS -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function)
 
