@@ -84,7 +84,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: llama-cpp-android-arm64-snapdragon
-          path: pkg-snapdragon/
+          path: pkg-snapdragon/llama.cpp
 
       - name: Set up Python
         uses: actions/setup-python@v5
