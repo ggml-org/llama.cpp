@@ -548,9 +548,16 @@ bool ggml_cuda_ar_allreduce(
         ggml_cuda_set_device(p->devices[i]);
         auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
         ggml_cuda_ar_event_slot & ev = p->ev_pool[i][slot];
+        const bool compute = (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
 
         CUDA_CHECK(cudaEventRecord(ev.app, cuda_ctx->stream()));
         CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], ev.app));
+
+        // Match the NCCL and meta-backend semantics: inactive shards
+        // contribute zeros to the reduction.
+        if (!compute) {
+            CUDA_CHECK(cudaMemsetAsync(tensors[i]->data, 0, bytes, p->streams[i]));
+        }
 
 #if GGML_CUDA_AR_WATCHDOG
 #define GGML_CUDA_AR_WDOG_EXTRA_ARGS , p->debug_ring[i], p->wdog_max_spin, i, slot
