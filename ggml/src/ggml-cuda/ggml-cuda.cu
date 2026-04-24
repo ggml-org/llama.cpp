@@ -282,6 +282,16 @@ static ggml_cuda_device_info ggml_cuda_init() {
                       (size_t)(prop.totalGlobalMem / (1024 * 1024)));
 #else
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
+
+        // Workaround: on some Blackwell (compute capability 12.0) GPUs,
+        // sharedMemPerBlockOptin reports a bogus value (0x100000001) which
+        // overflows to 1 when cast to int in cudaFuncSetAttribute(), causing
+        // kernel launches to fail with cudaErrorInvalidValue.
+        // Fall back to sharedMemPerBlock if the value is unreasonably large.
+        if (info.devices[id].smpbo > 1024*1024) {
+            info.devices[id].smpbo = prop.sharedMemPerBlock;
+        }
+
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
         GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n",
                       id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
