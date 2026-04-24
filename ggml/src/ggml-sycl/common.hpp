@@ -23,9 +23,17 @@
 #include "ggml-impl.h"
 #include "ggml-sycl.h"
 #include "presets.hpp"
+#include "type.hpp"
 #include "sycl_hw.hpp"
 
 namespace syclexp = sycl::ext::oneapi::experimental;
+
+#if defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/oneapi/bfloat16.hpp>)
+    #include <sycl/ext/oneapi/bfloat16.hpp>
+    #ifndef GGML_SYCL_HAS_BF16
+        #define GGML_SYCL_HAS_BF16
+    #endif
+#endif
 
 #if GGML_SYCL_DNNL
 #include "dnnl.hpp"
@@ -211,7 +219,7 @@ struct sycl_device_info {
              // number of compute units on a SYCL device.
     // size_t  smpb;               // max. shared memory per block
     size_t  smpbo;              // max. shared memory per block (with opt-in)
-    int warp_size;     // max sub_group_size of SYCL
+    int warp_size;     // WARP_SIZE(16)|WARP_32_SIZE(32)|WARP_16_SIZE(16). For Intel GPU, 16 is better in most cases. Some OP support 32 only.
     int max_wg_per_cu; // max work groups per compute unit - refer to
                        // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
@@ -963,6 +971,12 @@ static T block_reduce(T val, T * shared_vals, int block_size_template) {
         return block_reduce_policy<reduce_method_t, T, warp_size>::reduce(tmp);
     }
     return val;
+}
+
+static __dpct_inline__ float ggml_sycl_ue4m3_to_fp32(uint8_t x) {
+    const uint32_t bits = x * (x != 0x7F && x != 0xFF);
+    const __nv_fp8_e4m3 xf = *reinterpret_cast<const __nv_fp8_e4m3 *>(&bits);
+    return static_cast<float>(xf) / 2;
 }
 
 #endif // GGML_SYCL_COMMON_HPP

@@ -16,5 +16,6 @@ export enum ServerModelStatus {
 	UNLOADED = 'unloaded',
 	LOADING = 'loading',
 	LOADED = 'loaded',
+	SLEEPING = 'sleeping',
 	FAILED = 'failed'
 }

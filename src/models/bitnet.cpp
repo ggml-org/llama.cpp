@@ -28,33 +28,8 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
 
         // self-attention
         {
-            // compute Q and K and RoPE them
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
-            cb(Qcur, "Qcur", il);
-            if (model.layers[il].bq) {
-                Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
-                cb(Qcur, "Qcur", il);
-            }
-
-            // B1.K
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
-            cb(Kcur, "Kcur", il);
-            if (model.layers[il].bk) {
-                Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
-                cb(Kcur, "Kcur", il);
-            }
-
-            // B1.V
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s);
-            cb(Vcur, "Vcur", il);
-            if (model.layers[il].bv) {
-                Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
-                cb(Vcur, "Vcur", il);
-            }
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
@@ -73,7 +48,7 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    NULL, NULL,
+                    NULL, NULL, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
 
             cur = build_norm(cur,
@@ -82,8 +57,8 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
             cb(cur, "attn_sub_norm", il);
 
             cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
-            if (model.layers[il].bo) {
-                cur = ggml_add(ctx0, cur, model.layers[il].bo);
+            if (model.layers[il].wo_b) {
+                cur = ggml_add(ctx0, cur, model.layers[il].wo_b);
             }
             cb(cur, "attn_out", il);
         }
@@ -119,6 +94,9 @@ llm_build_bitnet::llm_build_bitnet(const llama_model & model, const llm_graph_pa
         cb(cur, "ffn_down", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
+        cb(cur, "l_out", il);
+
+        cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
         // input for next layer

@@ -1,6 +1,7 @@
 /**
  * Utility functions for conversation data manipulation
  */
+import type { DatabaseMessage } from '$lib/types';
 
 /**
  * Creates a map of conversation IDs to their message counts from exported conversation data

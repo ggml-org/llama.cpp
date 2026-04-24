@@ -33,9 +33,9 @@ struct mtmd_audio_cache {
 
     mtmd_audio_mel_filters filters;
 
-    void fill_sin_cos_table(int n);
+    void fill_sin_cos_table(uint32_t n);
 
-    void fill_hann_window(int length, bool periodic);
+    void fill_hann_window(uint32_t length, bool periodic);
 
     // Build mel filterbank matrix [n_mel × n_fft_bins] at runtime.
     // n_fft_bins must be (N_fft / 2 + 1). Example: if N_fft=512 -> n_fft_bins=257.
@@ -45,7 +45,8 @@ struct mtmd_audio_cache {
                                     float fmin             = 0.0f,   // e.g. 0.0
                                     float fmax             = -1.0f,  // e.g. sr/2; pass -1 for auto
                                     bool  slaney_area_norm = true,
-                                    float scale = 1.0f  // optional extra scaling
+                                    float scale            = 1.0f,
+                                    bool  use_htk          = false
     );
 };
 
@@ -70,6 +71,15 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
 
 struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    void initialize() override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+
+  private:
+    mtmd_audio_cache cache;
+};
+
+struct mtmd_audio_preprocessor_gemma4a : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_gemma4a(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
 

@@ -8,9 +8,13 @@
 #include <string>
 #include <thread>
 
+#ifdef LLAMA_BUILD_WEBUI
 // auto generated files (see README.md for details)
-#include "index.html.gz.hpp"
+#include "index.html.hpp"
+#include "bundle.js.hpp"
+#include "bundle.css.hpp"
 #include "loading.html.hpp"
+#endif
 
 //
 // HTTP implementation using cpp-httplib
@@ -110,6 +114,16 @@ bool server_http_context::init(const common_params & params) {
     // set timeouts and change hostname and port
     srv->set_read_timeout (params.timeout_read);
     srv->set_write_timeout(params.timeout_write);
+    srv->set_socket_options([reuse_port = params.reuse_port](socket_t sock) {
+        httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEADDR, 1);
+        if (reuse_port) {
+#ifdef SO_REUSEPORT
+            httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEPORT, 1);
+#else
+            LOG_WRN("%s: SO_REUSEPORT is not supported\n", __func__);
+#endif
+        }
+    });
 
     if (params.api_keys.size() == 1) {
         auto key = params.api_keys[0];
@@ -129,7 +143,10 @@ bool server_http_context::init(const common_params & params) {
             "/v1/health",
             "/models",
             "/v1/models",
-            "/api/tags"
+            "/",
+            "/index.html",
+            "/bundle.js",
+            "/bundle.css",
         };
 
         // If API key is not set, skip validation
@@ -137,8 +154,8 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // If path is public or is static file, skip validation
-        if (public_endpoints.find(req.path) != public_endpoints.end() || req.path == "/") {
+        // If path is public or static file, skip validation
+        if (public_endpoints.find(req.path) != public_endpoints.end()) {
             return true;
         }
 
@@ -181,11 +198,14 @@ bool server_http_context::init(const common_params & params) {
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
         bool ready = is_ready.load();
         if (!ready) {
+#ifdef LLAMA_BUILD_WEBUI
             auto tmp = string_split<std::string>(req.path, '.');
             if (req.path == "/" || tmp.back() == "html") {
                 res.status = 503;
                 res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
-            } else {
+            } else
+#endif
+            {
                 // no endpoints is allowed to be accessed when the server is not ready
                 // this is to prevent any data races or inconsistent states
                 res.status = 503;
@@ -227,11 +247,17 @@ bool server_http_context::init(const common_params & params) {
 
     int n_threads_http = params.n_threads_http;
     if (n_threads_http < 1) {
-        // +2 threads for monitoring endpoints
-        n_threads_http = std::max(params.n_parallel + 2, (int32_t) std::thread::hardware_concurrency() - 1);
+        // +4 threads for monitoring, health and some threads reserved for MCP and other tasks in the future
+        n_threads_http = std::max(params.n_parallel + 4, (int32_t) std::thread::hardware_concurrency() - 1);
     }
     LOG_INF("%s: using %d threads for HTTP server\n", __func__, n_threads_http);
-    srv->new_task_queue = [n_threads_http] { return new httplib::ThreadPool(n_threads_http); };
+    srv->new_task_queue = [n_threads_http] {
+        // spawn n_threads_http fixed thread (always alive), while allow up to 1024 max possible additional threads
+        // when n_threads_http is used, server will create new "dynamic" threads that will be destroyed after processing each request
+        // ref: https://github.com/yhirose/cpp-httplib/pull/2368
+        size_t max_threads = (size_t)n_threads_http + 1024;
+        return new httplib::ThreadPool(n_threads_http, max_threads);
+    };
 
     //
     // Web UI setup
@@ -249,19 +275,24 @@ bool server_http_context::init(const common_params & params) {
                 return 1;
             }
         } else {
+#ifdef LLAMA_BUILD_WEBUI
             // using embedded static index.html
-            srv->Get(params.api_prefix + "/", [](const httplib::Request & req, httplib::Response & res) {
-                if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
-                    res.set_content("Error: gzip is not supported by this browser", "text/plain");
-                } else {
-                    res.set_header("Content-Encoding", "gzip");
-                    // COEP and COOP headers, required by pyodide (python interpreter)
-                    res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                    res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-                    res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
-                }
+            srv->Get(params.api_prefix + "/", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                // COEP and COOP headers, required by pyodide (python interpreter)
+                res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                res.set_content(reinterpret_cast<const char*>(index_html), index_html_len, "text/html; charset=utf-8");
                 return false;
             });
+            srv->Get(params.api_prefix + "/bundle.js", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                res.set_content(reinterpret_cast<const char*>(bundle_js), bundle_js_len, "application/javascript; charset=utf-8");
+                return false;
+            });
+            srv->Get(params.api_prefix + "/bundle.css", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                res.set_content(reinterpret_cast<const char*>(bundle_css), bundle_css_len, "text/css; charset=utf-8");
+                return false;
+            });
+#endif
         }
     }
     return true;
@@ -365,8 +396,9 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             std::string chunk;
             bool has_next = response->next(chunk);
             if (!chunk.empty()) {
-                // TODO: maybe handle sink.write unsuccessful? for now, we rely on is_connection_closed()
-                sink.write(chunk.data(), chunk.size());
+                if (!sink.write(chunk.data(), chunk.size())) {
+                    return false;
+                }
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
             }
             if (!has_next) {
@@ -395,6 +427,7 @@ void server_http_context::get(const std::string & path, const server_http_contex
             req.path,
             build_query_string(req),
             req.body,
+            {},
             req.is_connection_closed
         });
         server_http_res_ptr response = handler(*request);
@@ -404,12 +437,39 @@ void server_http_context::get(const std::string & path, const server_http_contex
 
 void server_http_context::post(const std::string & path, const server_http_context::handler_t & handler) const {
     pimpl->srv->Post(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+        std::string body = req.body;
+        std::map<std::string, raw_buffer> files;
+
+        if (req.is_multipart_form_data()) {
+            // translate text fields to a JSON object and use it as the body
+            json form_json = json::object();
+            for (const auto & [key, field] : req.form.fields) {
+                if (form_json.contains(key)) {
+                    // if the key already exists, convert it to an array
+                    if (!form_json[key].is_array()) {
+                        json existing_value = form_json[key];
+                        form_json[key] = json::array({existing_value});
+                    }
+                    form_json[key].push_back(field.content);
+                } else {
+                    form_json[key] = field.content;
+                }
+            }
+            body = form_json.dump();
+
+            // populate files from multipart form
+            for (const auto & [key, file] : req.form.files) {
+                files[key] = raw_buffer(file.content.begin(), file.content.end());
+            }
+        }
+
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
             get_headers(req),
             req.path,
             build_query_string(req),
-            req.body,
+            body,
+            std::move(files),
             req.is_connection_closed
         });
         server_http_res_ptr response = handler(*request);

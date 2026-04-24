@@ -1,8 +1,15 @@
-import { AgenticSectionType } from '$lib/enums';
-import { AGENTIC_TAGS, AGENTIC_REGEX, REASONING_TAGS, TRIM_NEWLINES_REGEX } from '$lib/constants';
+import { AgenticSectionType, MessageRole } from '$lib/enums';
+import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
+import type { ApiChatCompletionToolCall } from '$lib/types/api';
+import type {
+	DatabaseMessage,
+	DatabaseMessageExtra,
+	DatabaseMessageExtraImageFile
+} from '$lib/types/database';
+import { AttachmentType } from '$lib/enums';
 
 /**
- * Represents a parsed section of agentic content
+ * Represents a parsed section of agentic content for display
  */
 export interface AgenticSection {
 	type: AgenticSectionType;
@@ -10,63 +17,75 @@ export interface AgenticSection {
 	toolName?: string;
 	toolArgs?: string;
 	toolResult?: string;
+	toolResultExtras?: DatabaseMessageExtra[];
 }
 
 /**
- * Represents a segment of content that may contain reasoning blocks
+ * Represents a tool result line that may reference an image attachment
  */
-type ReasoningSegment = {
-	type:
-		| AgenticSectionType.TEXT
-		| AgenticSectionType.REASONING
-		| AgenticSectionType.REASONING_PENDING;
-	content: string;
+export type ToolResultLine = {
+	text: string;
+	image?: DatabaseMessageExtraImageFile;
 };
 
 /**
- * Parses agentic content into structured sections
+ * Derives display sections from a single assistant message and its direct tool results.
  *
- * Main parsing function that processes content containing:
- * - Tool calls (completed, pending, or streaming)
- * - Reasoning blocks (completed or streaming)
- * - Regular text content
- *
- * The parser handles chronological display of agentic flow output, maintaining
- * the order of operations and properly identifying different states of tool calls
- * and reasoning blocks during streaming.
- *
- * @param rawContent - The raw content string to parse
- * @returns Array of structured agentic sections ready for display
- *
- * @example
- * ```typescript
- * const content = "Some text <<<AGENTIC_TOOL_CALL>>>tool_name...";
- * const sections = parseAgenticContent(content);
- * // Returns: [{ type: 'text', content: 'Some text' }, { type: 'tool_call_streaming', ... }]
- * ```
+ * @param message - The assistant message
+ * @param toolMessages - Tool result messages for this assistant's tool_calls
+ * @param streamingToolCalls - Partial tool calls during streaming (not yet persisted)
  */
-export function parseAgenticContent(rawContent: string): AgenticSection[] {
-	if (!rawContent) return [];
-
-	const segments = splitReasoningSegments(rawContent);
+function deriveSingleTurnSections(
+	message: DatabaseMessage,
+	toolMessages: DatabaseMessage[] = [],
+	streamingToolCalls: ApiChatCompletionToolCall[] = [],
+	isStreaming: boolean = false
+): AgenticSection[] {
 	const sections: AgenticSection[] = [];
 
-	for (const segment of segments) {
-		if (segment.type === AgenticSectionType.TEXT) {
-			sections.push(...parseToolCallContent(segment.content));
-			continue;
-		}
-
-		if (segment.type === AgenticSectionType.REASONING) {
-			if (segment.content.trim()) {
-				sections.push({ type: AgenticSectionType.REASONING, content: segment.content });
-			}
-			continue;
-		}
-
+	// 1. Reasoning content (from dedicated field)
+	if (message.reasoningContent) {
+		const toolCalls = parseToolCalls(message.toolCalls);
+		const hasContentAfterReasoning =
+			!!message.content?.trim() || toolCalls.length > 0 || streamingToolCalls.length > 0;
+		const isPending = isStreaming && !hasContentAfterReasoning;
 		sections.push({
-			type: AgenticSectionType.REASONING_PENDING,
-			content: segment.content
+			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
+			content: message.reasoningContent
+		});
+	}
+
+	// 2. Text content
+	if (message.content?.trim()) {
+		sections.push({
+			type: AgenticSectionType.TEXT,
+			content: message.content
+		});
+	}
+
+	// 3. Persisted tool calls (from message.toolCalls field)
+	const toolCalls = parseToolCalls(message.toolCalls);
+	for (const tc of toolCalls) {
+		const resultMsg = toolMessages.find((m) => m.toolCallId === tc.id);
+		sections.push({
+			type: resultMsg ? AgenticSectionType.TOOL_CALL : AgenticSectionType.TOOL_CALL_PENDING,
+			content: resultMsg?.content || '',
+			toolName: tc.function?.name,
+			toolArgs: tc.function?.arguments,
+			toolResult: resultMsg?.content,
+			toolResultExtras: resultMsg?.extra
+		});
+	}
+
+	// 4. Streaming tool calls (not yet persisted - currently being received)
+	for (const tc of streamingToolCalls) {
+		// Skip if already in persisted tool calls
+		if (tc.id && toolCalls.find((t) => t.id === tc.id)) continue;
+		sections.push({
+			type: AgenticSectionType.TOOL_CALL_STREAMING,
+			content: '',
+			toolName: tc.function?.name,
+			toolArgs: tc.function?.arguments
 		});
 	}
 
@@ -74,211 +93,129 @@ export function parseAgenticContent(rawContent: string): AgenticSection[] {
 }
 
 /**
- * Parses content containing tool call markers
+ * Derives display sections from structured message data.
  *
- * Identifies and extracts tool calls from content, handling:
- * - Completed tool calls with name, arguments, and results
- * - Pending tool calls (execution in progress)
- * - Streaming tool calls (arguments being received)
- * - Early-stage tool calls (just started)
+ * Handles both single-turn (one assistant + its tool results) and multi-turn
+ * agentic sessions (multiple assistant + tool messages grouped together).
  *
- * @param rawContent - The raw content string to parse
- * @returns Array of agentic sections representing tool calls and text
+ * When `toolMessages` contains continuation assistant messages (from multi-turn
+ * agentic flows), they are processed in order to produce sections across all turns.
+ *
+ * @param message - The first/anchor assistant message
+ * @param toolMessages - Tool result messages and continuation assistant messages
+ * @param streamingToolCalls - Partial tool calls during streaming (not yet persisted)
+ * @param isStreaming - Whether the message is currently being streamed
  */
-function parseToolCallContent(rawContent: string): AgenticSection[] {
-	if (!rawContent) return [];
+export function deriveAgenticSections(
+	message: DatabaseMessage,
+	toolMessages: DatabaseMessage[] = [],
+	streamingToolCalls: ApiChatCompletionToolCall[] = [],
+	isStreaming: boolean = false
+): AgenticSection[] {
+	const hasAssistantContinuations = toolMessages.some((m) => m.role === MessageRole.ASSISTANT);
+
+	if (!hasAssistantContinuations) {
+		return deriveSingleTurnSections(message, toolMessages, streamingToolCalls, isStreaming);
+	}
 
 	const sections: AgenticSection[] = [];
 
-	const completedToolCallRegex = new RegExp(AGENTIC_REGEX.COMPLETED_TOOL_CALL.source, 'g');
+	const firstTurnToolMsgs = collectToolMessages(toolMessages, 0);
+	sections.push(...deriveSingleTurnSections(message, firstTurnToolMsgs));
 
-	let lastIndex = 0;
-	let match;
+	let i = firstTurnToolMsgs.length;
 
-	while ((match = completedToolCallRegex.exec(rawContent)) !== null) {
-		if (match.index > lastIndex) {
-			const textBefore = rawContent.slice(lastIndex, match.index).trim();
-			if (textBefore) {
-				sections.push({ type: AgenticSectionType.TEXT, content: textBefore });
-			}
+	while (i < toolMessages.length) {
+		const msg = toolMessages[i];
+
+		if (msg.role === MessageRole.ASSISTANT) {
+			const turnToolMsgs = collectToolMessages(toolMessages, i + 1);
+			const isLastTurn = i + 1 + turnToolMsgs.length >= toolMessages.length;
+
+			sections.push(
+				...deriveSingleTurnSections(
+					msg,
+					turnToolMsgs,
+					isLastTurn ? streamingToolCalls : [],
+					isLastTurn && isStreaming
+				)
+			);
+
+			i += 1 + turnToolMsgs.length;
+		} else {
+			i++;
 		}
-
-		const toolName = match[1];
-		const toolArgs = match[2];
-		const toolResult = match[3].replace(TRIM_NEWLINES_REGEX, '');
-
-		sections.push({
-			type: AgenticSectionType.TOOL_CALL,
-			content: toolResult,
-			toolName,
-			toolArgs,
-			toolResult
-		});
-
-		lastIndex = match.index + match[0].length;
-	}
-
-	const remainingContent = rawContent.slice(lastIndex);
-
-	const pendingMatch = remainingContent.match(AGENTIC_REGEX.PENDING_TOOL_CALL);
-	const partialWithNameMatch = remainingContent.match(AGENTIC_REGEX.PARTIAL_WITH_NAME);
-	const earlyMatch = remainingContent.match(AGENTIC_REGEX.EARLY_MATCH);
-
-	if (pendingMatch) {
-		const pendingIndex = remainingContent.indexOf(AGENTIC_TAGS.TOOL_CALL_START);
-
-		if (pendingIndex > 0) {
-			const textBefore = remainingContent.slice(0, pendingIndex).trim();
-
-			if (textBefore) {
-				sections.push({ type: AgenticSectionType.TEXT, content: textBefore });
-			}
-		}
-
-		const toolName = pendingMatch[1];
-		const toolArgs = pendingMatch[2];
-		const streamingResult = (pendingMatch[3] || '').replace(TRIM_NEWLINES_REGEX, '');
-
-		sections.push({
-			type: AgenticSectionType.TOOL_CALL_PENDING,
-			content: streamingResult,
-			toolName,
-			toolArgs,
-			toolResult: streamingResult || undefined
-		});
-	} else if (partialWithNameMatch) {
-		const pendingIndex = remainingContent.indexOf(AGENTIC_TAGS.TOOL_CALL_START);
-
-		if (pendingIndex > 0) {
-			const textBefore = remainingContent.slice(0, pendingIndex).trim();
-			if (textBefore) {
-				sections.push({ type: AgenticSectionType.TEXT, content: textBefore });
-			}
-		}
-
-		const partialArgs = partialWithNameMatch[2] || '';
-
-		sections.push({
-			type: AgenticSectionType.TOOL_CALL_STREAMING,
-			content: '',
-			toolName: partialWithNameMatch[1],
-			toolArgs: partialArgs || undefined,
-			toolResult: undefined
-		});
-	} else if (earlyMatch) {
-		const pendingIndex = remainingContent.indexOf(AGENTIC_TAGS.TOOL_CALL_START);
-
-		if (pendingIndex > 0) {
-			const textBefore = remainingContent.slice(0, pendingIndex).trim();
-			if (textBefore) {
-				sections.push({ type: AgenticSectionType.TEXT, content: textBefore });
-			}
-		}
-
-		const nameMatch = earlyMatch[1]?.match(AGENTIC_REGEX.TOOL_NAME_EXTRACT);
-
-		sections.push({
-			type: AgenticSectionType.TOOL_CALL_STREAMING,
-			content: '',
-			toolName: nameMatch?.[1],
-			toolArgs: undefined,
-			toolResult: undefined
-		});
-	} else if (lastIndex < rawContent.length) {
-		let remainingText = rawContent.slice(lastIndex).trim();
-
-		const partialMarkerMatch = remainingText.match(AGENTIC_REGEX.PARTIAL_MARKER);
-
-		if (partialMarkerMatch) {
-			remainingText = remainingText.slice(0, partialMarkerMatch.index).trim();
-		}
-
-		if (remainingText) {
-			sections.push({ type: AgenticSectionType.TEXT, content: remainingText });
-		}
-	}
-
-	if (sections.length === 0 && rawContent.trim()) {
-		sections.push({ type: AgenticSectionType.TEXT, content: rawContent });
 	}
 
 	return sections;
 }
 
 /**
- * Strips partial marker from text content
- *
- * Removes incomplete agentic markers (e.g., "<<<", "<<<AGENTIC") that may appear
- * at the end of streaming content.
- *
- * @param text - The text content to process
- * @returns Text with partial markers removed
+ * Collect consecutive tool messages starting at `startIndex`.
  */
-function stripPartialMarker(text: string): string {
-	const partialMarkerMatch = text.match(AGENTIC_REGEX.PARTIAL_MARKER);
+function collectToolMessages(messages: DatabaseMessage[], startIndex: number): DatabaseMessage[] {
+	const result: DatabaseMessage[] = [];
 
-	if (partialMarkerMatch) {
-		return text.slice(0, partialMarkerMatch.index).trim();
+	for (let i = startIndex; i < messages.length; i++) {
+		if (messages[i].role === MessageRole.TOOL) {
+			result.push(messages[i]);
+		} else {
+			break;
+		}
 	}
 
-	return text;
+	return result;
 }
 
 /**
- * Splits raw content into segments based on reasoning blocks
- *
- * Identifies and extracts reasoning content wrapped in REASONING_TAGS.START/END markers,
- * separating it from regular text content. Handles both complete and incomplete
- * (streaming) reasoning blocks.
- *
- * @param rawContent - The raw content string to parse
- * @returns Array of reasoning segments with their types and content
+ * Parse tool result text into lines, matching image attachments by name.
  */
-function splitReasoningSegments(rawContent: string): ReasoningSegment[] {
-	if (!rawContent) return [];
+export function parseToolResultWithImages(
+	toolResult: string,
+	extras?: DatabaseMessageExtra[]
+): ToolResultLine[] {
+	const lines = toolResult.split(NEWLINE_SEPARATOR);
+	return lines.map((line) => {
+		const match = line.match(ATTACHMENT_SAVED_REGEX);
+		if (!match || !extras) return { text: line };
 
-	const segments: ReasoningSegment[] = [];
-	let cursor = 0;
+		const attachmentName = match[1];
+		const image = extras.find(
+			(e): e is DatabaseMessageExtraImageFile =>
+				e.type === AttachmentType.IMAGE && e.name === attachmentName
+		);
 
-	while (cursor < rawContent.length) {
-		const startIndex = rawContent.indexOf(REASONING_TAGS.START, cursor);
+		return { text: line, image };
+	});
+}
 
-		if (startIndex === -1) {
-			const remainingText = rawContent.slice(cursor);
+/**
+ * Safely parse the toolCalls JSON string from a DatabaseMessage.
+ */
+function parseToolCalls(toolCallsJson?: string): ApiChatCompletionToolCall[] {
+	if (!toolCallsJson) return [];
 
-			if (remainingText) {
-				segments.push({ type: AgenticSectionType.TEXT, content: remainingText });
-			}
+	try {
+		const parsed = JSON.parse(toolCallsJson);
 
-			break;
-		}
+		return Array.isArray(parsed) ? parsed : [];
+	} catch {
+		return [];
+	}
+}
 
-		if (startIndex > cursor) {
-			const textBefore = rawContent.slice(cursor, startIndex);
+/**
+ * Check if a message has agentic content (tool calls or is part of an agentic flow).
+ */
+export function hasAgenticContent(
+	message: DatabaseMessage,
+	toolMessages: DatabaseMessage[] = []
+): boolean {
+	if (message.toolCalls) {
+		const tc = parseToolCalls(message.toolCalls);
 
-			if (textBefore) {
-				segments.push({ type: AgenticSectionType.TEXT, content: textBefore });
-			}
-		}
-
-		const contentStart = startIndex + REASONING_TAGS.START.length;
-		const endIndex = rawContent.indexOf(REASONING_TAGS.END, contentStart);
-
-		if (endIndex === -1) {
-			const pendingContent = rawContent.slice(contentStart);
-
-			segments.push({
-				type: AgenticSectionType.REASONING_PENDING,
-				content: stripPartialMarker(pendingContent)
-			});
-
-			break;
-		}
-
-		const reasoningContent = rawContent.slice(contentStart, endIndex);
-		segments.push({ type: AgenticSectionType.REASONING, content: reasoningContent });
-		cursor = endIndex + REASONING_TAGS.END.length;
+		if (tc.length > 0) return true;
 	}
 
-	return segments;
+	return toolMessages.length > 0;
 }

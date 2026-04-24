@@ -2,9 +2,12 @@
 #include "server-http.h"
 #include "server-models.h"
 #include "server-cors-proxy.h"
+#include "server-tools.h"
 
 #include "arg.h"
+#include "build-info.h"
 #include "common.h"
+#include "fit.h"
 #include "llama.h"
 #include "log.h"
 
@@ -74,6 +77,8 @@ int main(int argc, char ** argv) {
     // own arguments required by this example
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
@@ -99,18 +104,14 @@ int main(int argc, char ** argv) {
         params.model_alias.insert(params.model.name);
     }
 
-    common_init();
-
     // struct that contains llama context and inference
     server_context ctx_server;
 
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    LOG_INF("system info: n_threads = %d, n_threads_batch = %d, total_threads = %d\n", params.cpuparams.n_threads, params.cpuparams_batch.n_threads, std::thread::hardware_concurrency());
-    LOG_INF("\n");
+    LOG_INF("build_info: %s\n", llama_build_info());
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());
-    LOG_INF("\n");
 
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {
@@ -124,6 +125,7 @@ int main(int argc, char ** argv) {
 
     // register API routes
     server_routes routes(params, ctx_server);
+    server_tools tools;
 
     bool is_router_server = params.model.path.empty();
     std::optional<server_models_routes> models_routes{};
@@ -140,11 +142,11 @@ int main(int argc, char ** argv) {
         // note: routes.get_health stays the same
         routes.get_metrics                 = models_routes->proxy_get;
         routes.post_props                  = models_routes->proxy_post;
-        routes.get_api_show                = models_routes->proxy_get;
         routes.post_completions            = models_routes->proxy_post;
         routes.post_completions_oai        = models_routes->proxy_post;
         routes.post_chat_completions       = models_routes->proxy_post;
         routes.post_responses_oai          = models_routes->proxy_post;
+        routes.post_transcriptions_oai     = models_routes->proxy_post;
         routes.post_anthropic_messages     = models_routes->proxy_post;
         routes.post_anthropic_count_tokens = models_routes->proxy_post;
         routes.post_infill                 = models_routes->proxy_post;
@@ -160,48 +162,48 @@ int main(int argc, char ** argv) {
         routes.post_slots                  = models_routes->proxy_post;
 
         // custom routes for router
-        routes.get_props  = models_routes->get_router_props;
-        routes.get_models = models_routes->get_router_models;
-        ctx_http.post("/models/load",   ex_wrapper(models_routes->post_router_models_load));
-        ctx_http.post("/models/unload", ex_wrapper(models_routes->post_router_models_unload));
+        routes.get_props                   = models_routes->get_router_props;
+        routes.get_models                  = models_routes->get_router_models;
+
+        ctx_http.post("/models/load",          ex_wrapper(models_routes->post_router_models_load));
+        ctx_http.post("/models/unload",        ex_wrapper(models_routes->post_router_models_unload));
     }
 
-    ctx_http.get ("/health",              ex_wrapper(routes.get_health)); // public endpoint (no API key check)
-    ctx_http.get ("/v1/health",           ex_wrapper(routes.get_health)); // public endpoint (no API key check)
-    ctx_http.get ("/metrics",             ex_wrapper(routes.get_metrics));
-    ctx_http.get ("/props",               ex_wrapper(routes.get_props));
-    ctx_http.post("/props",               ex_wrapper(routes.post_props));
-    ctx_http.post("/api/show",            ex_wrapper(routes.get_api_show));
-    ctx_http.get ("/models",              ex_wrapper(routes.get_models)); // public endpoint (no API key check)
-    ctx_http.get ("/v1/models",           ex_wrapper(routes.get_models)); // public endpoint (no API key check)
-    ctx_http.get ("/api/tags",            ex_wrapper(routes.get_models)); // ollama specific endpoint. public endpoint (no API key check)
-    ctx_http.post("/completion",          ex_wrapper(routes.post_completions)); // legacy
-    ctx_http.post("/completions",         ex_wrapper(routes.post_completions));
-    ctx_http.post("/v1/completions",      ex_wrapper(routes.post_completions_oai));
-    ctx_http.post("/chat/completions",    ex_wrapper(routes.post_chat_completions));
-    ctx_http.post("/v1/chat/completions", ex_wrapper(routes.post_chat_completions));
-    ctx_http.post("/api/chat",            ex_wrapper(routes.post_chat_completions)); // ollama specific endpoint
-    ctx_http.post("/v1/responses",        ex_wrapper(routes.post_responses_oai));
-    ctx_http.post("/responses",           ex_wrapper(routes.post_responses_oai));
-    ctx_http.post("/v1/messages",         ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
+    ctx_http.get ("/health",                   ex_wrapper(routes.get_health)); // public endpoint (no API key check)
+    ctx_http.get ("/v1/health",                ex_wrapper(routes.get_health)); // public endpoint (no API key check)
+    ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));
+    ctx_http.get ("/props",                    ex_wrapper(routes.get_props));
+    ctx_http.post("/props",                    ex_wrapper(routes.post_props));
+    ctx_http.get ("/models",                   ex_wrapper(routes.get_models)); // public endpoint (no API key check)
+    ctx_http.get ("/v1/models",                ex_wrapper(routes.get_models)); // public endpoint (no API key check)
+    ctx_http.post("/completion",               ex_wrapper(routes.post_completions)); // legacy
+    ctx_http.post("/completions",              ex_wrapper(routes.post_completions));
+    ctx_http.post("/v1/completions",           ex_wrapper(routes.post_completions_oai));
+    ctx_http.post("/chat/completions",         ex_wrapper(routes.post_chat_completions));
+    ctx_http.post("/v1/chat/completions",      ex_wrapper(routes.post_chat_completions));
+    ctx_http.post("/v1/responses",             ex_wrapper(routes.post_responses_oai));
+    ctx_http.post("/responses",                ex_wrapper(routes.post_responses_oai));
+    ctx_http.post("/v1/audio/transcriptions",  ex_wrapper(routes.post_transcriptions_oai));
+    ctx_http.post("/audio/transcriptions",     ex_wrapper(routes.post_transcriptions_oai));
+    ctx_http.post("/v1/messages",              ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
     ctx_http.post("/v1/messages/count_tokens", ex_wrapper(routes.post_anthropic_count_tokens)); // anthropic token counting
-    ctx_http.post("/infill",              ex_wrapper(routes.post_infill));
-    ctx_http.post("/embedding",           ex_wrapper(routes.post_embeddings)); // legacy
-    ctx_http.post("/embeddings",          ex_wrapper(routes.post_embeddings));
-    ctx_http.post("/v1/embeddings",       ex_wrapper(routes.post_embeddings_oai));
-    ctx_http.post("/rerank",              ex_wrapper(routes.post_rerank));
-    ctx_http.post("/reranking",           ex_wrapper(routes.post_rerank));
-    ctx_http.post("/v1/rerank",           ex_wrapper(routes.post_rerank));
-    ctx_http.post("/v1/reranking",        ex_wrapper(routes.post_rerank));
-    ctx_http.post("/tokenize",            ex_wrapper(routes.post_tokenize));
-    ctx_http.post("/detokenize",          ex_wrapper(routes.post_detokenize));
-    ctx_http.post("/apply-template",      ex_wrapper(routes.post_apply_template));
+    ctx_http.post("/infill",                   ex_wrapper(routes.post_infill));
+    ctx_http.post("/embedding",                ex_wrapper(routes.post_embeddings)); // legacy
+    ctx_http.post("/embeddings",               ex_wrapper(routes.post_embeddings));
+    ctx_http.post("/v1/embeddings",            ex_wrapper(routes.post_embeddings_oai));
+    ctx_http.post("/rerank",                   ex_wrapper(routes.post_rerank));
+    ctx_http.post("/reranking",                ex_wrapper(routes.post_rerank));
+    ctx_http.post("/v1/rerank",                ex_wrapper(routes.post_rerank));
+    ctx_http.post("/v1/reranking",             ex_wrapper(routes.post_rerank));
+    ctx_http.post("/tokenize",                 ex_wrapper(routes.post_tokenize));
+    ctx_http.post("/detokenize",               ex_wrapper(routes.post_detokenize));
+    ctx_http.post("/apply-template",           ex_wrapper(routes.post_apply_template));
     // LoRA adapters hotswap
-    ctx_http.get ("/lora-adapters",       ex_wrapper(routes.get_lora_adapters));
-    ctx_http.post("/lora-adapters",       ex_wrapper(routes.post_lora_adapters));
+    ctx_http.get ("/lora-adapters",            ex_wrapper(routes.get_lora_adapters));
+    ctx_http.post("/lora-adapters",            ex_wrapper(routes.post_lora_adapters));
     // Save & load slots
-    ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
-    ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));
+    ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
+    ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
     if (params.webui_mcp_proxy) {
         SRV_WRN("%s", "-----------------\n");
@@ -210,6 +212,16 @@ int main(int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
         ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+    }
+    // EXPERIMENTAL built-in tools
+    if (!params.server_tools.empty()) {
+        tools.setup(params.server_tools);
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "Built-in tools are enabled, do not expose server to untrusted environments\n");
+        SRV_WRN("%s", "This feature is EXPERIMENTAL and may be changed in the future\n");
+        SRV_WRN("%s", "-----------------\n");
+        ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
+        ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
     }
 
     //
@@ -258,6 +270,12 @@ int main(int argc, char ** argv) {
 
         // load the model
         LOG_INF("%s: loading model\n", __func__);
+
+        if (server_models::is_child_server()) {
+            ctx_server.on_sleeping_changed([&](bool sleeping) {
+                server_models::notify_router_sleeping_state(sleeping);
+            });
+        }
 
         if (!ctx_server.load_model(params)) {
             clean_up();
@@ -309,9 +327,8 @@ int main(int argc, char ** argv) {
         LOG_INF("%s: starting the main loop...\n", __func__);
 
         // optionally, notify router server that this instance is ready
-        const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
         std::thread monitor_thread;
-        if (router_port != nullptr) {
+        if (server_models::is_child_server()) {
             monitor_thread = server_models::setup_child_server(shutdown_handler);
         }
 
@@ -328,7 +345,7 @@ int main(int argc, char ** argv) {
 
         auto * ll_ctx = ctx_server.get_llama_context();
         if (ll_ctx != nullptr) {
-            llama_memory_breakdown_print(ll_ctx);
+            common_memory_breakdown_print(ll_ctx);
         }
     }
 

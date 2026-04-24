@@ -7,7 +7,7 @@ import os
 
 # Add utils directory to path for direct script execution
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
-from common import get_model_name_from_env_path, compare_tokens, exit_with_warning  # type: ignore[import-not-found]
+from common import get_model_name_from_env_path, compare_tokens, exit_with_warning  # type: ignore[import-not-found, ty:unresolved-import]
 
 def quick_logits_check(pytorch_file, llamacpp_file):
     """Lightweight sanity check before NMSE"""

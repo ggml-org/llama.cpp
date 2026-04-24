@@ -9,6 +9,19 @@ def create_server():
     server = ServerPreset.router()
 
 
+def test_router_props():
+    global server
+    server.models_max = 2
+    server.no_models_autoload = True
+    server.start()
+    res = server.make_request("GET", "/props")
+    assert res.status_code == 200
+    assert res.body["role"] == "router"
+    assert res.body["max_instances"] == 2
+    assert res.body["models_autoload"] is False
+    assert res.body["build_info"].startswith("b")
+
+
 @pytest.mark.parametrize(
     "model,success",
     [
@@ -103,8 +116,8 @@ def test_router_models_max_evicts_lru():
 
     candidate_models = [
         "ggml-org/tinygemma3-GGUF:Q8_0",
-        "ggml-org/test-model-stories260K",
-        "ggml-org/test-model-stories260K-infill",
+        "ggml-org/test-model-stories260K:F32",
+        "ggml-org/test-model-stories260K-infill:F32",
     ]
 
     # Load only the first 2 models to fill the cache

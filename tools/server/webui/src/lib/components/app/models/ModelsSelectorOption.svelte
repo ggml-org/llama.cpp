@@ -1,5 +1,14 @@
 <script lang="ts">
-	import { CircleAlert, Heart, HeartOff, Loader2, Power, PowerOff, RotateCw } from '@lucide/svelte';
+	import {
+		CircleAlert,
+		Heart,
+		HeartOff,
+		Info,
+		Loader2,
+		Power,
+		PowerOff,
+		RotateCw
+	} from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
@@ -15,6 +24,7 @@
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
 		onKeyDown: (e: KeyboardEvent) => void;
+		onInfoClick?: (modelName: string) => void;
 	}
 
 	let {
@@ -25,7 +35,8 @@
 		showOrgName = false,
 		onSelect,
 		onMouseEnter,
-		onKeyDown
+		onKeyDown,
+		onInfoClick
 	}: Props = $props();
 
 	let currentRouterModels = $derived(routerModels());
@@ -35,7 +46,10 @@
 	});
 	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
-	let isLoaded = $derived(serverStatus === ServerModelStatus.LOADED && !isOperationInProgress);
+	let isSleeping = $derived(serverStatus === ServerModelStatus.SLEEPING);
+	let isLoaded = $derived(
+		(serverStatus === ServerModelStatus.LOADED || isSleeping) && !isOperationInProgress
+	);
 	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
 </script>
 
@@ -63,31 +77,43 @@
 		class="flex-1"
 	/>
 
-	<div class="flex shrink-0 items-center gap-2.5">
+	<div class="flex shrink-0 items-center gap-1">
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<div
-			class="pointer-events-none flex w-4 items-center justify-center pl-2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100"
+			class="pointer-events-none flex items-center justify-center gap-0.75 pl-2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100"
 			onclick={(e) => e.stopPropagation()}
 		>
 			{#if isFav}
 				<ActionIcon
 					iconSize="h-2.5 w-2.5"
 					icon={HeartOff}
-					tooltip="Remove from favourites"
+					tooltip="Remove from favorites"
 					class="h-3 w-3 hover:text-foreground"
-					onclick={() => modelsStore.toggleFavourite(option.model)}
+					onclick={() => modelsStore.toggleFavorite(option.model)}
 				/>
 			{:else}
 				<ActionIcon
 					iconSize="h-2.5 w-2.5"
 					icon={Heart}
-					tooltip="Add to favourites"
+					tooltip="Add to favorites"
 					class="h-3 w-3 hover:text-foreground"
-					onclick={() => modelsStore.toggleFavourite(option.model)}
+					onclick={() => modelsStore.toggleFavorite(option.model)}
+				/>
+			{/if}
+
+			<!-- info button: only shown when model is loaded and callback is provided -->
+			{#if isLoaded && onInfoClick}
+				<ActionIcon
+					iconSize="h-2.5 w-2.5"
+					icon={Info}
+					tooltip="Model information"
+					class="h-3 w-3 hover:text-foreground"
+					onclick={() => onInfoClick(option.model)}
 				/>
 			{/if}
 		</div>
+
 		{#if isLoading}
 			<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
 		{:else if isFailed}
@@ -103,6 +129,23 @@
 						tooltip="Retry loading model"
 						class="h-3 w-3 text-red-500 hover:text-foreground"
 						onclick={() => modelsStore.loadModel(option.model)}
+					/>
+				</div>
+			</div>
+		{:else if isSleeping}
+			<div class="flex w-4 items-center justify-center">
+				<span class="h-2 w-2 rounded-full bg-orange-400 group-hover:hidden"></span>
+
+				<div class="hidden group-hover:flex">
+					<ActionIcon
+						iconSize="h-2.5 w-2.5"
+						icon={PowerOff}
+						tooltip="Unload model"
+						class="h-3 w-3 text-red-500 hover:text-red-600"
+						onclick={(e) => {
+							e?.stopPropagation();
+							modelsStore.unloadModel(option.model);
+						}}
 					/>
 				</div>
 			</div>

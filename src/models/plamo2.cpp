@@ -71,6 +71,7 @@ llm_build_plamo2::llm_build_plamo2(const llama_model & model, const llm_graph_pa
         cur = ggml_add(ctx0, cur, residual);
         cb(cur, "ffn_residual", il);
 
+        // input for next layer
         inpL = cur;
     }
 
@@ -140,7 +141,7 @@ ggml_tensor * llm_build_plamo2::build_plamo2_attn_layer(llm_graph_input_attn_kv 
                              ext_factor, attn_factor, beta_fast, beta_slow);
 
         cur = build_attn(inp,
-            model.layers[il].wo, NULL,
+            model.layers[il].wo, NULL, model.layers[il].wo_s,
             Qcur, Kcur, Vcur, NULL, NULL, NULL, 1.0f / sqrtf(float(n_embd_head_v)), il);
     }
 

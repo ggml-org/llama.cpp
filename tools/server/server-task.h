@@ -34,6 +34,7 @@ enum task_response_type {
     TASK_RESPONSE_TYPE_OAI_CHAT,
     TASK_RESPONSE_TYPE_OAI_CMPL,
     TASK_RESPONSE_TYPE_OAI_RESP,
+    TASK_RESPONSE_TYPE_OAI_ASR, // transcriptions API
     TASK_RESPONSE_TYPE_OAI_EMBD,
     TASK_RESPONSE_TYPE_ANTHROPIC,
 };
@@ -209,6 +210,7 @@ struct server_task {
         const llama_vocab * vocab,
         const common_params & params_base,
         const int n_ctx_slot,
+        const std::vector<llama_logit_bias> & logit_bias_eog,
         const json & data);
 
     // utility function
@@ -261,14 +263,14 @@ struct result_timings {
     int32_t cache_n = -1;
 
     int32_t prompt_n = -1;
-    double prompt_ms;
-    double prompt_per_token_ms;
-    double prompt_per_second;
+    double prompt_ms = 0.0;
+    double prompt_per_token_ms = 0.0;
+    double prompt_per_second = 0.0;
 
     int32_t predicted_n = -1;
-    double predicted_ms;
-    double predicted_per_token_ms;
-    double predicted_per_second;
+    double predicted_ms = 0.0;
+    double predicted_per_token_ms = 0.0;
+    double predicted_per_second = 0.0;
 
     // Optional speculative metrics - only included when > 0
     int32_t draft_n = 0;
@@ -344,6 +346,7 @@ struct server_task_result_cmpl_final : server_task_result {
     bool truncated;
     int32_t n_decoded;
     int32_t n_prompt_tokens;
+    int32_t n_prompt_tokens_cache;
     int32_t n_tokens_cached;
     bool has_new_line;
     std::string stopping_word;
@@ -387,6 +390,8 @@ struct server_task_result_cmpl_final : server_task_result {
 
     json to_json_non_oaicompat();
 
+    json usage_json_oaicompat();
+
     json to_json_oaicompat();
 
     json to_json_oaicompat_chat();
@@ -396,6 +401,8 @@ struct server_task_result_cmpl_final : server_task_result {
     json to_json_oaicompat_resp();
 
     json to_json_oaicompat_resp_stream();
+
+    json to_json_oaicompat_asr();
 
     json to_json_anthropic();
 
@@ -408,6 +415,7 @@ struct server_task_result_cmpl_partial : server_task_result {
 
     int32_t n_decoded;
     int32_t n_prompt_tokens;
+    int32_t n_prompt_tokens_cache;
 
     bool post_sampling_probs;
     bool is_progress = false;
@@ -451,6 +459,8 @@ struct server_task_result_cmpl_partial : server_task_result {
     json to_json_oaicompat_chat();
 
     json to_json_oaicompat_resp();
+
+    json to_json_oaicompat_asr();
 
     json to_json_anthropic();
 };
@@ -565,6 +575,17 @@ struct server_prompt_checkpoint {
 
     size_t size() const {
         return data.size();
+    }
+
+    bool empty() const {
+        return data.empty();
+    }
+
+    void clear() {
+        pos_min = 0;
+        pos_max = 0;
+        n_tokens = 0;
+        data.clear();
     }
 };
 

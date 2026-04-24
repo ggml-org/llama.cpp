@@ -148,7 +148,7 @@
 					</Tooltip.Trigger>
 
 					<Tooltip.Content side="right">
-						<p>Images require vision models to be processed</p>
+						<p>Image processing requires a vision model</p>
 					</Tooltip.Content>
 				</Tooltip.Root>
 			{/if}
@@ -173,7 +173,7 @@
 					</Tooltip.Trigger>
 
 					<Tooltip.Content side="right">
-						<p>Audio files require audio models to be processed</p>
+						<p>Audio files processing requires an audio model</p>
 					</Tooltip.Content>
 				</Tooltip.Root>
 			{/if}

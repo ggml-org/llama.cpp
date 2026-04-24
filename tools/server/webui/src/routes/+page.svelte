@@ -57,7 +57,6 @@
 		// Handle ?q= parameter - create new conversation and send message
 		if (qParam !== null) {
 			await conversationsStore.createConversation();
-			await chatStore.sendMessage(qParam);
 			clearUrlParams();
 		} else if (modelParam || newChatParam === 'true') {
 			clearUrlParams();
@@ -78,6 +77,11 @@
 			!modelsStore.isModelLoaded(modelsStore.selectedModelName)
 		) {
 			modelsStore.clearSelection();
+
+			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
+			if (first) {
+				await modelsStore.selectModelById(first.id);
+			}
 		}
 
 		// Handle URL params only if we have ?q= or ?model= or ?new_chat=true

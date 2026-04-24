@@ -37,13 +37,16 @@ sched=
 [ "$SCHED" != "" ] && sched="GGML_SCHED_DEBUG=2" cli_opts="$cli_opts -v"
 
 profile=
-[ "$PROF" != "" ] && profile="GGML_HEXAGON_PROFILE=$PROF GGML_HEXAGON_OPSYNC=1"
+[ "$PROF" != "" ] && profile="GGML_HEXAGON_PROFILE=$PROF"
 
 opmask=
-[ "$OPMASK" != "" ] && opmask="GGML_HEXAGON_OPMASK=$OPMASK"
+[ "$OPSTAGE" != "" ] && opmask="GGML_HEXAGON_OPSTAGE=$OPSTAGE"
 
 nhvx=
 [ "$NHVX" != "" ] && nhvx="GGML_HEXAGON_NHVX=$NHVX"
+
+hmx=
+[ "$HMX" != "" ] && hmx="GGML_HEXAGON_USE_HMX=$HMX"
 
 ndev=
 [ "$NDEV" != "" ] && ndev="GGML_HEXAGON_NDEV=$NDEV"
@@ -58,7 +61,7 @@ adb $adbserial $adbhost shell " \
   cd $basedir; ulimit -c unlimited;        \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \
-    $verbose $experimental $sched $opmask $profile $nhvx $ndev $mtmd_backend \
+    $verbose $experimental $sched $opmask $profile $hmx $nhvx $ndev $mtmd_backend \
       ./$branch/bin/llama-mtmd-cli --no-mmap -m $basedir/../gguf/$model      \
          --mmproj $basedir/../gguf/$mmproj                                   \
          --image $basedir/../gguf/$image                                     \

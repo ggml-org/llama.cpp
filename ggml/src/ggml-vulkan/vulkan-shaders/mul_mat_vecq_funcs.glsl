@@ -11,8 +11,8 @@ FLOAT_TYPE get_dm(uint ib) {
 #endif
 
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
-FLOAT_TYPE_VEC2 get_dm(uint ib) {
-    return FLOAT_TYPE_VEC2(data_a_packed32[ib].dm);
+FLOAT_TYPEV2 get_dm(uint ib) {
+    return FLOAT_TYPEV2(data_a_packed32[ib].dm);
 }
 #endif
 
@@ -23,9 +23,9 @@ FLOAT_TYPE get_dm(uint ib) {
 #endif
 
 #if defined(DATA_A_Q2_K)
-FLOAT_TYPE_VEC2 get_dm(uint ib) {
+FLOAT_TYPEV2 get_dm(uint ib) {
     const uint ib_k = ib / 8;
-    return FLOAT_TYPE_VEC2(data_a_packed32[ib_k].dm);
+    return FLOAT_TYPEV2(data_a_packed32[ib_k].dm);
 }
 #endif
 
@@ -304,7 +304,7 @@ vec2 get_dm_scale(uint ib, uint iqs) {
                           (data_a[ib_k].scales[is+4] >>  4) | ((data_a[ib_k].scales[is  ] & 0xC0) >> 2));
     }
 
-    return FLOAT_TYPE_VEC2(data_a_packed32[ib_k].dm) * FLOAT_TYPE_VEC2(scale_dm);
+    return FLOAT_TYPEV2(data_a_packed32[ib_k].dm) * FLOAT_TYPEV2(scale_dm);
 }
 
 FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
@@ -422,7 +422,7 @@ vec2 get_dm(uint ib, uint iqs) {
     const float dl = d * float(2 * bitfieldExtract(qh, 12, 3) + 1);
 
     // the -1 cancels out the bias in iq1s_grid_gpu
-    return FLOAT_TYPE_VEC2(dl, dl * (delta - 1));
+    return FLOAT_TYPEV2(dl, dl * (delta - 1));
 }
 
 FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {

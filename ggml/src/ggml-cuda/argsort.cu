@@ -47,35 +47,59 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
 #ifdef STRIDED_ITERATOR_AVAILABLE
     auto offset_iterator = cuda::make_strided_iterator(cuda::make_counting_iterator(0), ncols);
 #else
-    ggml_cuda_pool_alloc<int> offsets_alloc(pool, nrows + 1);
+    // offset_iterator needs to populate nrows + 1 elements, so we also have to ceildiv nrows + 1 by block_size
+    const int                 nrows_offset = nrows + 1;
+    ggml_cuda_pool_alloc<int> offsets_alloc(pool, nrows_offset);
     int *                     offset_iterator = offsets_alloc.get();
-    const dim3                offset_grid((nrows + block_size - 1) / block_size);
+    const dim3                offset_grid((nrows_offset + block_size - 1) / block_size);
     init_offsets<<<offset_grid, block_size, 0, stream>>>(offset_iterator, ncols, nrows);
 #endif
     CUDA_CHECK(cudaMemcpyAsync(temp_keys, x, ncols * nrows * sizeof(float), cudaMemcpyDeviceToDevice, stream));
 
     size_t temp_storage_bytes = 0;
 
+    bool is_capturing = false;
+#ifdef USE_CUDA_GRAPH
+    // Currently (confirmed for CCCL <= 3.2) DeviceSegmentedSort does not support stream capture, while DeviceSegmentedRadixSort does.
+    // See https://github.com/NVIDIA/cccl/issues/5661#issuecomment-3229037149
+    // TODO: constrain this to the CCCL versions that have this issue once it's resolved in a future CCCL release.
+    cudaStreamCaptureStatus capture_status;
+    CUDA_CHECK(cudaStreamIsCapturing(stream, &capture_status));
+    is_capturing = (capture_status != cudaStreamCaptureStatusNone);
+#endif  // USE_CUDA_GRAPH
+
     if (order == GGML_SORT_ORDER_ASC) {
         if (nrows == 1) {
-            DeviceRadixSort::SortPairs(nullptr, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
-                                       temp_indices, dst,                                  // values (indices)
-                                       ncols, 0, sizeof(float) * 8, stream);
+            CUDA_CHECK(DeviceRadixSort::SortPairs(nullptr, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
+                                                  temp_indices, dst,  // values (indices)
+                                                  ncols, 0, sizeof(float) * 8, stream));
+        } else if (is_capturing) {
+            CUDA_CHECK(DeviceSegmentedRadixSort::SortPairs(
+                nullptr, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
+                temp_indices, dst,                                  // values (indices)
+                ncols * nrows, nrows,                               // num items, num segments
+                offset_iterator, offset_iterator + 1, 0, sizeof(float) * 8, stream));
         } else {
-            DeviceSegmentedSort::SortPairs(nullptr, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
-                                           temp_indices, dst,                                  // values (indices)
-                                           ncols * nrows, nrows,  // num items, num segments
-                                           offset_iterator, offset_iterator + 1, stream);
+            CUDA_CHECK(DeviceSegmentedSort::SortPairs(nullptr, temp_storage_bytes, temp_keys,
+                                                      temp_keys,             // keys (in-place)
+                                                      temp_indices, dst,     // values (indices)
+                                                      ncols * nrows, nrows,  // num items, num segments
+                                                      offset_iterator, offset_iterator + 1, stream));
         }
     } else {
         if (nrows == 1) {
-            DeviceRadixSort::SortPairsDescending(nullptr, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
-                                                 temp_indices, dst,                                  // values (indices)
-                                                 ncols, 0, sizeof(float) * 8, stream);
+            CUDA_CHECK(DeviceRadixSort::SortPairsDescending(nullptr, temp_storage_bytes, temp_keys,
+                                                            temp_keys,          // keys (in-place)
+                                                            temp_indices, dst,  // values (indices)
+                                                            ncols, 0, sizeof(float) * 8, stream));
+        } else if (is_capturing) {
+            CUDA_CHECK(DeviceSegmentedRadixSort::SortPairsDescending(
+                nullptr, temp_storage_bytes, temp_keys, temp_keys, temp_indices, dst, ncols * nrows, nrows,
+                offset_iterator, offset_iterator + 1, 0, sizeof(float) * 8, stream));
         } else {
-            DeviceSegmentedSort::SortPairsDescending(nullptr, temp_storage_bytes, temp_keys, temp_keys, temp_indices,
-                                                     dst, ncols * nrows, nrows, offset_iterator, offset_iterator + 1,
-                                                     stream);
+            CUDA_CHECK(DeviceSegmentedSort::SortPairsDescending(nullptr, temp_storage_bytes, temp_keys, temp_keys,
+                                                                temp_indices, dst, ncols * nrows, nrows,
+                                                                offset_iterator, offset_iterator + 1, stream));
         }
     }
 
@@ -84,22 +108,33 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
 
     if (order == GGML_SORT_ORDER_ASC) {
         if (nrows == 1) {
-            DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
-                                       temp_indices, dst,  // values (indices)
-                                       ncols, 0, sizeof(float) * 8, stream);
+            CUDA_CHECK(DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys,
+                                                  temp_keys,          // keys (in-place)
+                                                  temp_indices, dst,  // values (indices)
+                                                  ncols, 0, sizeof(float) * 8, stream));
+        } else if (is_capturing) {
+            CUDA_CHECK(DeviceSegmentedRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys,
+                                                           temp_indices, dst, ncols * nrows, nrows, offset_iterator,
+                                                           offset_iterator + 1, 0, sizeof(float) * 8, stream));
         } else {
-            DeviceSegmentedSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys, temp_indices, dst,
-                                           ncols * nrows, nrows, offset_iterator, offset_iterator + 1, stream);
+            CUDA_CHECK(DeviceSegmentedSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys,
+                                                      temp_indices, dst, ncols * nrows, nrows, offset_iterator,
+                                                      offset_iterator + 1, stream));
         }
     } else {
         if (nrows == 1) {
-            DeviceRadixSort::SortPairsDescending(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
-                                                 temp_indices, dst,                                  // values (indices)
-                                                 ncols, 0, sizeof(float) * 8, stream);
+            CUDA_CHECK(DeviceRadixSort::SortPairsDescending(d_temp_storage, temp_storage_bytes, temp_keys,
+                                                            temp_keys,          // keys (in-place)
+                                                            temp_indices, dst,  // values (indices)
+                                                            ncols, 0, sizeof(float) * 8, stream));
+        } else if (is_capturing) {
+            CUDA_CHECK(DeviceSegmentedRadixSort::SortPairsDescending(
+                d_temp_storage, temp_storage_bytes, temp_keys, temp_keys, temp_indices, dst, ncols * nrows, nrows,
+                offset_iterator, offset_iterator + 1, 0, sizeof(float) * 8, stream));
         } else {
-            DeviceSegmentedSort::SortPairsDescending(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys,
-                                                     temp_indices, dst, ncols * nrows, nrows, offset_iterator,
-                                                     offset_iterator + 1, stream);
+            CUDA_CHECK(DeviceSegmentedSort::SortPairsDescending(d_temp_storage, temp_storage_bytes, temp_keys,
+                                                                temp_keys, temp_indices, dst, ncols * nrows, nrows,
+                                                                offset_iterator, offset_iterator + 1, stream));
         }
     }
 }
