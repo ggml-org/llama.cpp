@@ -500,7 +500,102 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
     block_q8_K * GGML_RESTRICT y = (block_q8_K *) vy;
 
-#if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+    const __m512i clamp_hi = _mm512_set1_epi32(127);
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const __m512 v0  = _mm512_loadu_ps(x +   0);
+        const __m512 v1  = _mm512_loadu_ps(x +  16);
+        const __m512 v2  = _mm512_loadu_ps(x +  32);
+        const __m512 v3  = _mm512_loadu_ps(x +  48);
+        const __m512 v4  = _mm512_loadu_ps(x +  64);
+        const __m512 v5  = _mm512_loadu_ps(x +  80);
+        const __m512 v6  = _mm512_loadu_ps(x +  96);
+        const __m512 v7  = _mm512_loadu_ps(x + 112);
+        const __m512 v8  = _mm512_loadu_ps(x + 128);
+        const __m512 v9  = _mm512_loadu_ps(x + 144);
+        const __m512 v10 = _mm512_loadu_ps(x + 160);
+        const __m512 v11 = _mm512_loadu_ps(x + 176);
+        const __m512 v12 = _mm512_loadu_ps(x + 192);
+        const __m512 v13 = _mm512_loadu_ps(x + 208);
+        const __m512 v14 = _mm512_loadu_ps(x + 224);
+        const __m512 v15 = _mm512_loadu_ps(x + 240);
+
+        const __m512 vmax01 = _mm512_max_ps(v0,  v1);
+        const __m512 vmax23 = _mm512_max_ps(v2,  v3);
+        const __m512 vmax45 = _mm512_max_ps(v4,  v5);
+        const __m512 vmax67 = _mm512_max_ps(v6,  v7);
+        const __m512 vmax89 = _mm512_max_ps(v8,  v9);
+        const __m512 vmaxab = _mm512_max_ps(v10, v11);
+        const __m512 vmaxcd = _mm512_max_ps(v12, v13);
+        const __m512 vmaxef = _mm512_max_ps(v14, v15);
+        const __m512 vmax0 = _mm512_max_ps(_mm512_max_ps(vmax01, vmax23),
+                                           _mm512_max_ps(vmax45, vmax67));
+        const __m512 vmax1 = _mm512_max_ps(_mm512_max_ps(vmax89, vmaxab),
+                                           _mm512_max_ps(vmaxcd, vmaxef));
+        const __m512 vmax  = _mm512_max_ps(vmax0, vmax1);
+
+        const __m512 vmin01 = _mm512_min_ps(v0,  v1);
+        const __m512 vmin23 = _mm512_min_ps(v2,  v3);
+        const __m512 vmin45 = _mm512_min_ps(v4,  v5);
+        const __m512 vmin67 = _mm512_min_ps(v6,  v7);
+        const __m512 vmin89 = _mm512_min_ps(v8,  v9);
+        const __m512 vminab = _mm512_min_ps(v10, v11);
+        const __m512 vmincd = _mm512_min_ps(v12, v13);
+        const __m512 vminef = _mm512_min_ps(v14, v15);
+        const __m512 vmin0 = _mm512_min_ps(_mm512_min_ps(vmin01, vmin23),
+                                           _mm512_min_ps(vmin45, vmin67));
+        const __m512 vmin1 = _mm512_min_ps(_mm512_min_ps(vmin89, vminab),
+                                           _mm512_min_ps(vmincd, vminef));
+        const __m512 vmin  = _mm512_min_ps(vmin0, vmin1);
+
+        const float max_pos = _mm512_reduce_max_ps(vmax);
+        const float min_neg = _mm512_reduce_min_ps(vmin);
+        const float max = (max_pos >= -min_neg) ? max_pos : min_neg;
+
+        if (max == 0.0f) {
+            y[i].d = 0;
+            memset(y[i].qs, 0, QK_K);
+            memset(y[i].bsums, 0, (QK_K / 16) * sizeof(int16_t));
+            x += QK_K;
+            continue;
+        }
+
+        const float iscale = -127.0f / max;
+        const __m512 viscale = _mm512_set1_ps(iscale);
+
+#define Q8K_ZMM_LANE(src, off)                                                   \
+        do {                                                                      \
+            const __m512i i32_ = _mm512_cvtps_epi32(_mm512_mul_ps(src, viscale)); \
+            const __m512i clamped_ = _mm512_min_epi32(i32_, clamp_hi);            \
+            _mm_storeu_si128((__m128i *) (y[i].qs + (off)),                       \
+                             _mm512_cvtsepi32_epi8(clamped_));                   \
+            y[i].bsums[(off) / 16] = (int16_t) _mm512_reduce_add_epi32(clamped_); \
+        } while (0)
+
+        Q8K_ZMM_LANE(v0,    0);
+        Q8K_ZMM_LANE(v1,   16);
+        Q8K_ZMM_LANE(v2,   32);
+        Q8K_ZMM_LANE(v3,   48);
+        Q8K_ZMM_LANE(v4,   64);
+        Q8K_ZMM_LANE(v5,   80);
+        Q8K_ZMM_LANE(v6,   96);
+        Q8K_ZMM_LANE(v7,  112);
+        Q8K_ZMM_LANE(v8,  128);
+        Q8K_ZMM_LANE(v9,  144);
+        Q8K_ZMM_LANE(v10, 160);
+        Q8K_ZMM_LANE(v11, 176);
+        Q8K_ZMM_LANE(v12, 192);
+        Q8K_ZMM_LANE(v13, 208);
+        Q8K_ZMM_LANE(v14, 224);
+        Q8K_ZMM_LANE(v15, 240);
+
+#undef Q8K_ZMM_LANE
+
+        y[i].d = 1.0f / iscale;
+        x += QK_K;
+    }
+#elif defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
     const __m512i clamp_hi = _mm512_set1_epi32(127);
 
     for (int64_t i = 0; i < nb; ++i) {
