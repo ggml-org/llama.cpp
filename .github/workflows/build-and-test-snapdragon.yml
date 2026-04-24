@@ -94,8 +94,14 @@ jobs:
           unzip qdc_sdk.zip -d qdc_sdk
           pip install qdc_sdk/qualcomm_device_cloud_sdk-0.2.3-py3-none-any.whl
 
+      - name: Check QDC API key
+        id: check_secret
+        env:
+          QDC_API_KEY: ${{ secrets.QDC_API_KEY }}
+        run: echo "has-qdc-key=${{ env.QDC_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
       - name: Run QDC tests (${{ matrix.device }})
-        if: ${{ env.QDC_API_KEY != '' }}
+        if: steps.check_secret.outputs.has-qdc-key == 'true'
         run: |
           python scripts/snapdragon/qdc/run_qdc_jobs.py \
               --test       all \
