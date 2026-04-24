@@ -15,7 +15,7 @@ struct Params {
     nblk1: u32,
 };
 
-@group(0) @binding(0) var<storage, read> mask: array<f16>;
+@group(0) @binding(0) var<storage, read_write> mask: array<f16>;
 @group(0) @binding(1) var<storage, read_write> blk: array<u32>;
 @group(0) @binding(2) var<uniform> params: Params;
 
