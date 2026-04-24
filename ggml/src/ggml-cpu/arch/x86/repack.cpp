@@ -2062,7 +2062,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if defined(__AVX2__) || defined(__AVX512F__)
+#if defined(__AVX2__)
     const block_q4_Kx8 * b_ptr_start = (const block_q4_Kx8 * ) vx;
     const block_q8_Kx4 * a_ptr_start = (const block_q8_Kx4 * ) vy;
     int64_t b_nb = n / QK_K;
@@ -2074,7 +2074,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     __m256i requiredOrder = _mm256_set_epi32(3, 2, 1, 0, 7, 6, 5, 4);
     int64_t xstart = 0;
     int anr = nr - nr % 16;; // Used to align nr with boundary of 16
-#if defined(__AVX512BW__) && defined(__AVX512DQ__)
+#if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
     int anc = nc - nc % 16; // Used to align nc with boundary of 16
     // Mask to mask out nibbles from packed bytes expanded to 512 bit length
     const __m512i m4bexpanded = _mm512_set1_epi8(0x0F);
@@ -2812,7 +2812,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
         xstart = anc/8;
         y = 0;
     }
-#endif // __AVX512BW__ && __AVX512DQ__
+#endif // __AVX512F__ && __AVX512BW__ && __AVX512DQ__
 
     // Take group of four block_q8_Kx4 structures at each pass of the loop and perform dot product operation
     for (; y < anr / 4; y += 4) {
