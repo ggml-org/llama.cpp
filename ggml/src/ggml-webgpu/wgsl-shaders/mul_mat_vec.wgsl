@@ -1,4 +1,5 @@
 #ifdef USE_SUBGROUP_REDUCTION
+diagnostic(off, subgroup_uniformity);
 enable subgroups;
 #endif
 enable f16;
