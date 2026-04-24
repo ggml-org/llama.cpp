@@ -1223,8 +1223,7 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
 
     // Try to allocate the internal pipeline unless the user forced NCCL.
     if (!force_nccl) {
-        ret->ar_pipeline = ggml_cuda_ar_pipeline_init(
-            ret->dev_ids.data(), n_backends, GGML_CUDA_AR_MAX_BYTES);
+        ret->ar_pipeline = ggml_cuda_ar_pipeline_init(ret->dev_ids.data(), n_backends);
         if (ret->ar_pipeline == nullptr) {
             // Clear any sticky CUDA error from the failed init so it can't
             // leak into a later NCCL call.
@@ -1336,7 +1335,7 @@ enum ggml_cuda_comm_allreduce_result {
 static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_internal(
         ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
     if (comm_ctx->ar_pipeline == nullptr) {
-        GGML_LOG_WARN("%s: internal unsupported: pipeline unavailable\n", __func__);
+        GGML_LOG_DEBUG("%s: internal unsupported: pipeline unavailable\n", __func__);
         return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
     }
 
@@ -1348,12 +1347,12 @@ static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_inte
     const ggml_type type = tensors[0]->type;
 
     if (n_backends != 2) {
-        GGML_LOG_WARN("%s: internal unsupported: n_backends=%zu\n", __func__, n_backends);
+        GGML_LOG_DEBUG("%s: internal unsupported: n_backends=%zu\n", __func__, n_backends);
         return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
     }
 
     if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && type != GGML_TYPE_BF16) {
-        GGML_LOG_WARN("%s: internal unsupported: type=%d\n", __func__, (int) type);
+        GGML_LOG_DEBUG("%s: internal unsupported: type=%d\n", __func__, (int) type);
         return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
     }
 
@@ -1372,14 +1371,14 @@ static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_inte
             return GGML_CUDA_COMM_ALLREDUCE_FAILED;
         }
         if (!ggml_is_contiguously_allocated(tensors[i])) {
-            GGML_LOG_WARN("%s: internal unsupported: tensor[%zu] is not contiguously allocated: ne=%" PRId64 " nbytes=%zu packed=%zu type=%d\n",
-                          __func__, i, ne, ggml_nbytes(tensors[i]),
-                          (size_t) ne * ggml_type_size(type) / ggml_blck_size(type), (int) type);
+            GGML_LOG_DEBUG("%s: internal unsupported: tensor[%zu] is not contiguously allocated: ne=%" PRId64 " nbytes=%zu packed=%zu type=%d\n",
+                           __func__, i, ne, ggml_nbytes(tensors[i]),
+                           (size_t) ne * ggml_type_size(type) / ggml_blck_size(type), (int) type);
             return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
         }
         if (((uintptr_t) tensors[i]->data & 0xF) != 0) {
-            GGML_LOG_WARN("%s: internal unsupported: tensor[%zu] data pointer is not 16-byte aligned: %p type=%d ne=%" PRId64 "\n",
-                          __func__, i, tensors[i]->data, (int) type, ne);
+            GGML_LOG_DEBUG("%s: internal unsupported: tensor[%zu] data pointer is not 16-byte aligned: %p type=%d ne=%" PRId64 "\n",
+                           __func__, i, tensors[i]->data, (int) type, ne);
             return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
         }
     }
