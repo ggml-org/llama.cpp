@@ -175,3 +175,4 @@ set "ZES_ENABLE_SYSMAN=1"
 %BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --mmap --host 0.0.0.0 --port 8000
 
 endlocal
+
