@@ -16,11 +16,25 @@ typedef void (*quantize_cuda_t)(
         ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
+//x4 pack for q8_1 blocks:
+// - 4 x ds first (16 bytes)
+// - then 4 blocks of qs, packed as 32 x int32 (128 bytes total)
+struct block_q8_1_x4 {
+    half2   ds[4];
+    int32_t qs[4 * QK8_1 / 4];
+};
+static_assert(sizeof(block_q8_1_x4) == 4 * sizeof(block_q8_1), "Unexpected block_q8_1_x4 size");
+
 void quantize_row_q8_1_cuda(
         const float * x, const int32_t * ids, void * vy,
         ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
+void quantize_row_q8_1_x4_cuda(
+        const float * x, const int32_t * ids, void * vy,
+        ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
+        
 void quantize_mmq_q8_1_cuda(
         const float * x, const int32_t * ids, void * vy,
         ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,

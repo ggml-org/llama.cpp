@@ -47,6 +47,62 @@ static __global__ void quantize_q8_1(
     y[ib].ds = make_half2(d, sum);
 }
 
+static __device__ __forceinline__ int32_t pack_q8_1_i8x4(
+        const int8_t q0, const int8_t q1, const int8_t q2, const int8_t q3) {
+    return
+        ((uint32_t) (uint8_t) q0) |
+        ((uint32_t) (uint8_t) q1 <<  8) |
+        ((uint32_t) (uint8_t) q2 << 16) |
+        ((uint32_t) (uint8_t) q3 << 24);
+}
+
+// one warp handles 4 q8_1 blocks, each 8-lane subgroup handles one block.
+static __global__ void quantize_q8_1_x4(
+        const float * __restrict__ x, void * __restrict__ vy,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const uint32_t ne1, const uint3 ne2) {
+    const int lane       = threadIdx.x;      // [0, 31]
+    const int ibx4_inner = lane >> 3;        // [0, 3]
+    const int iqs        = lane &  7;        // [0, 7] (one packed int32 = 4 values)
+
+    const int64_t i3 = fastdiv(blockIdx.z, ne2);
+    const int64_t i2 = blockIdx.z - i3*ne2.z;
+    const int64_t i1 = blockIdx.y;
+
+    const int64_t x4_per_row = ne0 / (4 * QK8_1);
+    const int64_t i0_block = ((int64_t) blockIdx.x * 4 + ibx4_inner) * QK8_1;
+    const int64_t i0 = i0_block + iqs * 4;
+    const int64_t base = i3*s03 + i2*s02 + i1*s01;
+
+    const float x0 = i0 + 0 < ne00 ? x[base + i0 + 0] : 0.0f;
+    const float x1 = i0 + 1 < ne00 ? x[base + i0 + 1] : 0.0f;
+    const float x2 = i0 + 2 < ne00 ? x[base + i0 + 2] : 0.0f;
+    const float x3 = i0 + 3 < ne00 ? x[base + i0 + 3] : 0.0f;
+
+    float amax = fmaxf(fmaxf(fabsf(x0), fabsf(x1)), fmaxf(fabsf(x2), fabsf(x3)));
+    amax = warp_reduce_max<8>(amax);
+
+    const float d = amax / 127.0f;
+    const float d_inv = (amax == 0.0f) ? 0.0f : (1.0f / d);
+
+    // Keep CUDA q8_1 behavior consistent with the existing kernel: ds.y stores sum(x), not d * sum(q).
+    float sum = x0 + x1 + x2 + x3;
+    sum = warp_reduce_sum<8>(sum);
+
+    block_q8_1_x4 * y = (block_q8_1_x4 *) vy;
+    const int64_t ibx4_outer = ((i3*ne2.z + i2) * ne1 + i1) * x4_per_row + blockIdx.x;
+
+    const int8_t q0 = (amax == 0.0f) ? 0 : (int8_t) roundf(x0 * d_inv);
+    const int8_t q1 = (amax == 0.0f) ? 0 : (int8_t) roundf(x1 * d_inv);
+    const int8_t q2 = (amax == 0.0f) ? 0 : (int8_t) roundf(x2 * d_inv);
+    const int8_t q3 = (amax == 0.0f) ? 0 : (int8_t) roundf(x3 * d_inv);
+
+    y[ibx4_outer].qs[ibx4_inner * 8 + iqs] = pack_q8_1_i8x4(q0, q1, q2, q3);
+    if (iqs == 0) {
+        y[ibx4_outer].ds[ibx4_inner] = make_half2(d, sum);
+    }
+}
+
 __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
     if (!(amax > 0.0f)) {
         return 0;
@@ -379,6 +435,22 @@ void quantize_row_q8_1_cuda(
     const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
     quantize_q8_1<<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    GGML_UNUSED(type_src0);
+}
+
+void quantize_row_q8_1_x4_cuda(
+        const float * x, const int32_t * ids, void * vy, const ggml_type type_src0,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    GGML_ASSERT(!ids);
+    GGML_ASSERT(ne0 % QK8_1 == 0);
+    GGML_ASSERT(ne0 % (4 * QK8_1) == 0);
+
+    const uint3 ne2_fastdiv = init_fastdiv_values(ne2);
+    const int64_t block_num_x = ne0 / (4 * QK8_1);
+    const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
+    const dim3 block_size(WARP_SIZE, 1, 1);
+    quantize_q8_1_x4<<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
     GGML_UNUSED(type_src0);
 }
 
