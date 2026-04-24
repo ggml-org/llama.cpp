@@ -2210,7 +2210,9 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         struct autoparser::autoparser autoparser;
         autoparser.analyze_template(tmpl);
         auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, autoparser);
-        auto_params.supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
+        // Only enable thinking support if both the template supports it AND enable_thinking is true
+        bool template_supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
+        auto_params.supports_thinking   = template_supports_thinking && params.enable_thinking;
         if (auto_params.supports_thinking) {
             auto_params.thinking_start_tag = autoparser.reasoning.start;
             auto_params.thinking_end_tag   = autoparser.reasoning.end;
