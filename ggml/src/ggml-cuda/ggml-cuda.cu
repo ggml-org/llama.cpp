@@ -1377,13 +1377,6 @@ static ggml_cuda_comm_allreduce_result ggml_backend_cuda_comm_try_allreduce_inte
         return GGML_CUDA_COMM_ALLREDUCE_SUCCESS;
     }
 
-    const size_t bytes = (size_t) ne * ggml_type_size(type);
-    if (bytes > GGML_CUDA_AR_MAX_BYTES) {
-        GGML_LOG_WARN("%s: internal unsupported: ne=%" PRId64 " type=%d bytes=%zu max=%zu\n",
-                       __func__, ne, (int) type, bytes, GGML_CUDA_AR_MAX_BYTES);
-        return GGML_CUDA_COMM_ALLREDUCE_UNSUPPORTED;
-    }
-
     for (size_t i = 0; i < n_backends; ++i) {
         if (tensors[i] == nullptr) {
             GGML_LOG_ERROR("%s: internal failed: tensor[%zu] is null\n", __func__, i);

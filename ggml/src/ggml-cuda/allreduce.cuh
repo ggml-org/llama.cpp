@@ -5,9 +5,8 @@
 
 #include <cstddef>
 
-// Maximum tensor size (bytes per GPU) handled by the internal kernel path.
-// Tensors larger than this are not yet supported and ggml_cuda_ar_allreduce()
-// returns false, allowing the caller to fall back to another provider.
+// Maximum chunk size (bytes per GPU) handled by one internal kernel launch.
+// Larger tensors are reduced by issuing multiple chunked launches.
 static constexpr size_t GGML_CUDA_AR_MAX_BYTES = 256 * 1024; // 256 KB
 
 // Opaque pipeline context — owns all pinned buffers, streams, and events.

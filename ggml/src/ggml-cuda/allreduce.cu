@@ -505,59 +505,69 @@ bool ggml_cuda_ar_allreduce(
         return false;
     }
 
-    const int64_t ne    = ggml_nelements(tensors[0]);
-    const size_t  bytes = (size_t)ne * type_size;
+    const int64_t ne = ggml_nelements(tensors[0]);
 
     if (ne == 0) {
         return true;
     }
 
-    if (bytes > p->buf_bytes) {
+    if (p->buf_bytes < type_size) {
         return false;
     }
 
-    // Cycle through the event pool.  On the second pass through the ring,
-    // synchronise on the slot's ker event before touching arrival ints —
-    // the event and arrival pools wrap in lock-step so this guarantees the
-    // kernels which last used this slot have finished.
-    const int  slot        = static_cast<int>(p->call_count % GGML_CUDA_AR_POOL_SIZE);
-    const bool pool_lapped = p->call_count >= GGML_CUDA_AR_POOL_SIZE;
-    p->call_count++;
+    const size_t max_chunk_elems = p->buf_bytes / type_size;
+    GGML_ASSERT(max_chunk_elems > 0);
 
-    if (pool_lapped) {
-        for (int i = 0; i < n; ++i) {
-            ggml_cuda_set_device(p->devices[i]);
-            CUDA_CHECK(cudaEventSynchronize(p->ev_pool[i][slot].ker));
-        }
-    }
-
-    // Reset the arrival ints for this slot before any kernel can read them.
-    for (int i = 0; i < n; ++i) {
-        *ggml_cuda_ar_arrival_ptr(p, slot, i) = 0;
-    }
-
-
-    // Insert the kernel into each GPU's existing compute stream via events:
+    // Insert chunked kernels into each GPU's existing compute stream via events:
     //   record(app, compute_stream)       — capture "upstream done"
     //   wait(internal_stream, app)        — internal stream defers until then
-    //   launch kernel on internal_stream
-    //   record(ker, internal_stream)      — capture "kernel done"
-    //   wait(compute_stream, ker)         — compute stream resumes after kernel
-    for (int i = 0; i < n; ++i) {
-        const int peer = 1 - i;  // valid for n == 2 only
-        ggml_cuda_set_device(p->devices[i]);
-        auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
-        ggml_cuda_ar_event_slot & ev = p->ev_pool[i][slot];
-        const bool compute = (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+    //   launch one or more chunk kernels on internal_stream
+    //   record(ker, internal_stream)      — capture "final chunk done"
+    //   wait(compute_stream, ker)         — compute stream resumes after reduce
+    for (int64_t chunk_start = 0; chunk_start < ne; chunk_start += (int64_t) max_chunk_elems) {
+        const size_t remaining_elems = (size_t) (ne - chunk_start);
+        const size_t chunk_elems = remaining_elems < max_chunk_elems ? remaining_elems : max_chunk_elems;
+        const size_t chunk_bytes = chunk_elems * type_size;
 
-        CUDA_CHECK(cudaEventRecord(ev.app, cuda_ctx->stream()));
-        CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], ev.app));
+        // Cycle through the event pool.  On the second pass through the ring,
+        // synchronise on the slot's ker event before touching arrival ints —
+        // the event and arrival pools wrap in lock-step so this guarantees the
+        // kernels which last used this slot have finished.
+        const int  slot        = static_cast<int>(p->call_count % GGML_CUDA_AR_POOL_SIZE);
+        const bool pool_lapped = p->call_count >= GGML_CUDA_AR_POOL_SIZE;
+        p->call_count++;
 
-        // Match the NCCL and meta-backend semantics: inactive shards
-        // contribute zeros to the reduction.
-        if (!compute) {
-            CUDA_CHECK(cudaMemsetAsync(tensors[i]->data, 0, bytes, p->streams[i]));
+        if (pool_lapped) {
+            for (int i = 0; i < n; ++i) {
+                ggml_cuda_set_device(p->devices[i]);
+                CUDA_CHECK(cudaEventSynchronize(p->ev_pool[i][slot].ker));
+            }
         }
+
+        // Reset the arrival ints for this slot before any kernel can read them.
+        for (int i = 0; i < n; ++i) {
+            *ggml_cuda_ar_arrival_ptr(p, slot, i) = 0;
+        }
+
+        for (int i = 0; i < n; ++i) {
+            const int peer = 1 - i;  // valid for n == 2 only
+            ggml_cuda_set_device(p->devices[i]);
+            auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+            ggml_cuda_ar_event_slot & ev = p->ev_pool[i][slot];
+            const bool compute = (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+
+            if (chunk_start == 0) {
+                CUDA_CHECK(cudaEventRecord(ev.app, cuda_ctx->stream()));
+                CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], ev.app));
+            }
+
+            char * data = static_cast<char *>(tensors[i]->data) + chunk_start * (int64_t) type_size;
+
+            // Match the NCCL and meta-backend semantics: inactive shards
+            // contribute zeros to the reduction.
+            if (!compute) {
+                CUDA_CHECK(cudaMemsetAsync(data, 0, chunk_bytes, p->streams[i]));
+            }
 
 #if GGML_CUDA_AR_WATCHDOG
 #define GGML_CUDA_AR_WDOG_EXTRA_ARGS , p->debug_ring[i], p->wdog_max_spin, i, slot
@@ -566,30 +576,32 @@ bool ggml_cuda_ar_allreduce(
 #endif
 
 #define LAUNCH_AR_KERNEL(T) \
-        ggml_cuda_ar_kernel<T><<<dim3(1), dim3(256), 0, p->streams[i]>>>( \
-            static_cast<const T *>(tensors[i]->data), \
-            static_cast<T *>(tensors[i]->data), \
-            reinterpret_cast<T *>(p->host_buf[i]), \
-            reinterpret_cast<const T *>(p->host_buf[peer]), \
-            static_cast<int>(ne), \
-            ggml_cuda_ar_arrival_ptr(p, slot, i), \
-            ggml_cuda_ar_arrival_ptr(p, slot, peer) \
-            GGML_CUDA_AR_WDOG_EXTRA_ARGS)
+            ggml_cuda_ar_kernel<T><<<dim3(1), dim3(256), 0, p->streams[i]>>>( \
+                reinterpret_cast<const T *>(data), \
+                reinterpret_cast<T *>(data), \
+                reinterpret_cast<T *>(p->host_buf[i]), \
+                reinterpret_cast<const T *>(p->host_buf[peer]), \
+                static_cast<int>(chunk_elems), \
+                ggml_cuda_ar_arrival_ptr(p, slot, i), \
+                ggml_cuda_ar_arrival_ptr(p, slot, peer) \
+                GGML_CUDA_AR_WDOG_EXTRA_ARGS)
 
-        switch (type) {
-            case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float);           break;
-            case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half);            break;
-            case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(__nv_bfloat16);   break;
-            default: GGML_ASSERT(false);
-        }
+            switch (type) {
+                case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float);           break;
+                case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half);            break;
+                case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(__nv_bfloat16);   break;
+                default: GGML_ASSERT(false);
+            }
 
 #undef LAUNCH_AR_KERNEL
 #undef GGML_CUDA_AR_WDOG_EXTRA_ARGS
-        CUDA_CHECK(cudaGetLastError());
+            CUDA_CHECK(cudaGetLastError());
 
-        CUDA_CHECK(cudaEventRecord(ev.ker, p->streams[i]));
-        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), ev.ker));
-
+            CUDA_CHECK(cudaEventRecord(ev.ker, p->streams[i]));
+            if (chunk_start + (int64_t) chunk_elems == ne) {
+                CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), ev.ker));
+            }
+        }
     }
 
     return true;
