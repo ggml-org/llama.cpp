@@ -350,12 +350,14 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(
     for (int i = 0; i < n_devices; ++i) {
         ggml_cuda_set_device(p->devices[i]);
 
-        if (cudaStreamCreateWithFlags(&p->streams[i], cudaStreamNonBlocking) != cudaSuccess) {
+        cudaStream_t stream = nullptr;
+        if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess) {
             GGML_LOG_ERROR("%s: cudaStreamCreateWithFlags failed for device %d\n",
                            __func__, p->devices[i]);
             ggml_cuda_ar_pipeline_free(p);
             return nullptr;
         }
+        p->streams[i] = stream;
 
         p->ev_pool[i] = new ggml_cuda_ar_event_slot[GGML_CUDA_AR_POOL_SIZE]();
         for (int s = 0; s < GGML_CUDA_AR_POOL_SIZE; ++s) {
@@ -490,7 +492,6 @@ bool ggml_cuda_ar_allreduce(
         ggml_cuda_ar_pipeline * p,
         ggml_backend_t        * backends,
         ggml_tensor           ** tensors) {
-    //printf("ggml_cuda_ar_allreduce\n");
     GGML_ASSERT(p != nullptr);
 
     const int n = p->n_devices;

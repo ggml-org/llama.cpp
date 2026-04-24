@@ -1241,6 +1241,9 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
 
         GGML_LOG_ERROR("%s: internal AllReduce pipeline init failed\n", __func__);
 #ifdef GGML_USE_NCCL
+        // Clear any sticky CUDA error left over from the failed pipeline init
+        // so NCCL's own error-check on entry doesn't observe it.
+        (void) cudaGetLastError();
         ret->preferred_provider = GGML_CUDA_ALLREDUCE_NCCL;
 #else
         delete ret;
