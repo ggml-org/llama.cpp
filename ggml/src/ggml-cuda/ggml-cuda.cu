@@ -1218,6 +1218,16 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
         }
     }
 
+    // GGML_CUDA_ALLREDUCE=none disables the CUDA-specific AllReduce entirely,
+    // so the meta-backend falls back to its generic butterfly reduction.
+    {
+        const char * env = getenv("GGML_CUDA_ALLREDUCE");
+        if (env != nullptr && strcmp(env, "none") == 0) {
+            GGML_LOG_INFO("%s: GGML_CUDA_ALLREDUCE=none; using meta-backend butterfly reduction\n", __func__);
+            return nullptr;
+        }
+    }
+
     std::vector<int> dev_ids;
     dev_ids.reserve(n_backends);
     for (size_t i = 0; i < n_backends; i++) {
