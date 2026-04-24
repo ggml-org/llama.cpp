@@ -292,7 +292,7 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
         hf_tag = "default";
     }
 
-    std::string model_endpoint = common_get_model_endpoint();
+    std::string model_endpoint = get_model_endpoint();
     auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
 
     // prepare local path for caching
@@ -1316,13 +1316,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BATCHED, LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
-        {"--cache-idle-slots"},
-        {"--no-cache-idle-slots"},
+        {"--clear-idle"},
+        {"--no-clear-idle"},
         "save and clear idle slots on new task (default: enabled, requires unified KV and cache-ram)",
         [](common_params & params, bool value) {
-            params.cache_idle_slots = value;
+            params.clear_idle = value;
         }
-    ).set_env("LLAMA_ARG_CACHE_IDLE_SLOTS").set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_env("LLAMA_ARG_CLEAR_IDLE").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
@@ -2234,6 +2234,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.use_direct_io = value;
         }
     ).set_env("LLAMA_ARG_DIO"));
+    add_opt(common_arg(
+        {"--moe-lazy-experts"},
+        {"--no-moe-lazy-experts"},
+        string_format("lazy-load MoE experts, evicting unused ones from RAM via madvise (requires mmap) (default: %s)",
+            params.moe_lazy_experts ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.moe_lazy_experts = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_LAZY_EXPERTS"));
     add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"

@@ -50,6 +50,11 @@ struct llama_mmap {
 
     void unmap_fragment(size_t first, size_t last);
 
+    // advise the OS about expert memory pages (dontneed=true releases physical pages,
+    // dontneed=false hints prefetch). Unlike unmap_fragment, the virtual mapping is preserved
+    // so the OS can transparently page data back from file on next access.
+    void madvise_range(size_t first, size_t last, bool dontneed);
+
     static const bool SUPPORTED;
 
 private:

@@ -440,23 +440,26 @@ struct llama_mmap::impl {
         int flags = MAP_SHARED;
         if (numa) { prefetch = 0; }
 #ifdef __linux__
-        if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
-            LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_SEQUENTIAL) failed: %s\n",
+        if (posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM)) {
+            LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_RANDOM) failed: %s\n",
                     strerror(errno));
         }
-        if (prefetch) { flags |= MAP_POPULATE; }
+        // MAP_POPULATE disabled: let the kernel page in on demand
+        // This is critical for MoE models where only active experts need to be in RAM
+        //if (prefetch) { flags |= MAP_POPULATE; }
 #endif
         addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
         if (addr == MAP_FAILED) {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
         }
 
-        if (prefetch > 0) {
-            if (posix_madvise(addr, std::min(file->size(), prefetch), POSIX_MADV_WILLNEED)) {
-                LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
-                        strerror(errno));
-            }
-        }
+        // POSIX_MADV_WILLNEED disabled: avoid prefetching entire file into RAM
+        // if (prefetch > 0) {
+        //     if (posix_madvise(addr, std::min(file->size(), prefetch), POSIX_MADV_WILLNEED)) {
+        //         LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
+        //                 strerror(errno));
+        //     }
+        // }
         if (numa) {
             if (posix_madvise(addr, file->size(), POSIX_MADV_RANDOM)) {
                 LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_RANDOM) failed: %s\n",
@@ -513,6 +516,31 @@ struct llama_mmap::impl {
             }
         }
         mapped_fragments = std::move(new_mapped_fragments);
+    }
+
+    void madvise_range(size_t first, size_t last, bool dontneed) {
+        int page_size = sysconf(_SC_PAGESIZE);
+        align_range(&first, &last, page_size);
+        size_t len = last - first;
+
+        if (len == 0) {
+            return;
+        }
+
+        void * range_start = (uint8_t *) addr + first;
+
+#ifdef __linux__
+        int advice = dontneed ? MADV_DONTNEED : MADV_WILLNEED;
+        if (madvise(range_start, len, advice)) {
+            LLAMA_LOG_WARN("warning: madvise(%s) failed: %s\n",
+                    dontneed ? "MADV_DONTNEED" : "MADV_WILLNEED", strerror(errno));
+        }
+#else
+        int advice = dontneed ? POSIX_MADV_DONTNEED : POSIX_MADV_WILLNEED;
+        if (posix_madvise(range_start, len, advice)) {
+            LLAMA_LOG_WARN("warning: posix_madvise failed: %s\n", strerror(errno));
+        }
+#endif
     }
 
     ~impl() {
@@ -574,6 +602,13 @@ struct llama_mmap::impl {
         GGML_UNUSED(last);
     }
 
+    void madvise_range(size_t first, size_t last, bool dontneed) {
+        // Windows file mappings use OS page cache; no direct madvise equivalent
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+        GGML_UNUSED(dontneed);
+    }
+
     ~impl() {
         if (hMapping) {
             if (addr) {
@@ -603,6 +638,12 @@ struct llama_mmap::impl {
 
         throw std::runtime_error("mmap not supported");
     }
+
+    void madvise_range(size_t first, size_t last, bool dontneed) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+        GGML_UNUSED(dontneed);
+    }
 #endif
 
     void * addr;
@@ -616,6 +657,7 @@ size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
 
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
+void llama_mmap::madvise_range(size_t first, size_t last, bool dontneed) { pimpl->madvise_range(first, last, dontneed); }
 
 #if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)
 const bool llama_mmap::SUPPORTED  = true;

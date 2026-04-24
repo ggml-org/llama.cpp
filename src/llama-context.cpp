@@ -8,6 +8,7 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-moe-expert-manager.h"
 #include "llama-ext.h"
 #include "llama.h"
 
@@ -362,6 +363,20 @@ llama_context::llama_context(
         sampling.token_ids_full_vocab.resize(n_vocab);
         for (int i = 0; i < n_vocab; ++i) {
             sampling.token_ids_full_vocab[i] = i;
+        }
+    }
+
+    // Initialize MoE lazy expert manager
+    {
+        moe_expert_mgr = std::make_unique<llama_moe_expert_manager>();
+        // note: model is const in context, so we need a const_cast here
+        // the manager only reads model structure during init and mutates mappings via madvise
+        if (moe_expert_mgr->init(const_cast<llama_model &>(model))) {
+            // wrap the user eval callback with our expert-tracking callback
+            moe_expert_mgr->user_cb      = cparams.cb_eval;
+            moe_expert_mgr->user_cb_data = cparams.cb_eval_user_data;
+            cparams.cb_eval           = llama_moe_expert_manager::eval_callback;
+            cparams.cb_eval_user_data = moe_expert_mgr.get();
         }
     }
 }
@@ -1669,6 +1684,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     int64_t n_outputs_prev = 0;
 
+    if (moe_expert_mgr && moe_expert_mgr->is_active()) {
+        moe_expert_mgr->begin_query();
+    }
+
     do {
         const auto & ubatch = mctx->get_ubatch();
 
@@ -1824,6 +1843,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         n_outputs_prev += n_outputs;
     } while (mctx->next());
+
+    // evict unused MoE experts after all ubatches for this query are processed
+    if (moe_expert_mgr && moe_expert_mgr->is_active()) {
+        moe_expert_mgr->end_query();
+    }
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;

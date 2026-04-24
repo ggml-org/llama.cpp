@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 #include <map>
 
@@ -302,15 +303,15 @@ struct common_params_speculative {
     // general-purpose speculative decoding parameters
 
     int32_t n_max   = 16; // maximum number of tokens to draft during speculative decoding
-    int32_t n_min   = 0;  // minimum number of draft tokens to use for speculative decoding
+    int32_t n_min   = 0; // minimum number of draft tokens to use for speculative decoding
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min   = 0.75f; // minimum speculative decoding probability (greedy)
 
     // ngram-based speculative decoding
 
-    uint16_t ngram_size_n   = 12; // ngram size for lookup
-    uint16_t ngram_size_m   = 48; // mgram size for speculative tokens
-    uint16_t ngram_min_hits = 1; // minimum hits at ngram/mgram lookup for mgram to be proposed
+    uint16_t ngram_size_n     = 12; // ngram size for lookup
+    uint16_t ngram_size_m     = 48; // mgram size for speculative tokens
+    uint16_t ngram_min_hits   =  1; // minimum hits at ngram/mgram lookup for mgram to be proposed
 
     std::shared_ptr<common_ngram_mod> ngram_mod;
 
@@ -522,6 +523,7 @@ struct common_params {
     bool use_mmap          = true;  // enable mmap to use filesystem cache
     bool use_direct_io     = false; // read from disk without buffering
     bool use_mlock         = false; // use mlock to keep model in memory
+    bool moe_lazy_experts  = false; // lazy-load MoE experts, evict unused via madvise
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
     bool no_kv_offload     = false; // disable KV offloading
@@ -566,7 +568,7 @@ struct common_params {
     int32_t n_threads_http      = -1;    // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
-    bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
+    bool    clear_idle          = true;  // save and clear idle slots upon starting a new task
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
     int32_t checkpoint_every_nt = 8192;  // make a checkpoint every n tokens during prefill
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
@@ -846,23 +848,7 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_p
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
 
-// model endpoint from env
-std::string common_get_model_endpoint();
-
-//
-// Context utils
-//
-
-enum common_context_seq_rm_type {
-    COMMON_CONTEXT_SEQ_RM_TYPE_NO   = 0, // seq_rm not supported (e.g. no memory module)
-    COMMON_CONTEXT_SEQ_RM_TYPE_PART = 1, // can seq_rm partial sequences
-    COMMON_CONTEXT_SEQ_RM_TYPE_FULL = 2, // can seq_rm full sequences only
-};
-
-// check if the llama_context can remove sequences
-// note: clears the memory of the context
-common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx);
-
+std::string                   get_model_endpoint();
 
 //
 // Batch utils

@@ -5,6 +5,7 @@
 #include "llama-graph.h"
 #include "llama-adapter.h"
 #include "llama-impl.h"
+#include "llama-moe-expert-manager.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -342,6 +343,9 @@ private:
 
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
+
+    // MoE lazy expert loading manager
+    std::unique_ptr<llama_moe_expert_manager> moe_expert_mgr;
 
     // perf
     mutable int64_t t_start_us  = 0;

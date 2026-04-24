@@ -18,6 +18,8 @@ struct llama_cparams;
 struct llama_ubatch;
 struct llama_model_loader;
 
+#include "llama-mmap.h"
+
 // available models
 enum llm_type {
     LLM_TYPE_UNKNOWN,
@@ -246,8 +248,6 @@ struct llama_layer {
     struct ggml_tensor * wkv_b     = nullptr;
     struct ggml_tensor * wk_b      = nullptr;
     struct ggml_tensor * wv_b      = nullptr;
-    struct ggml_tensor * wqkv_b    = nullptr;
-    struct ggml_tensor * wo_b      = nullptr;
     struct ggml_tensor * wq_cross  = nullptr;
     struct ggml_tensor * wk_cross  = nullptr;
     struct ggml_tensor * wv_cross  = nullptr;
@@ -257,6 +257,13 @@ struct llama_layer {
     struct ggml_tensor * wv_enc    = nullptr;
     struct ggml_tensor * wo_enc    = nullptr;
     struct ggml_tensor * wqkv_gate = nullptr;
+
+    // attention bias
+    struct ggml_tensor * bq   = nullptr;
+    struct ggml_tensor * bk   = nullptr;
+    struct ggml_tensor * bv   = nullptr;
+    struct ggml_tensor * bo   = nullptr;
+    struct ggml_tensor * bqkv = nullptr;
 
     // relative position bias
     struct ggml_tensor * attn_rel_b       = nullptr;
@@ -614,6 +621,9 @@ struct llama_model {
     bool has_tensor_overrides() const;
 
     const struct ggml_tensor * get_tensor(const char * name) const;
+
+    bool has_moe_lazy_experts() const;
+    llama_mmaps * get_mappings();
 
     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
