@@ -13,7 +13,7 @@
 				outline:
 					'shadow-xs hover:text-accent-foreground hover:bg-muted-foreground/10 backdrop-blur-sm dark:border-input border',
 				secondary:
-					'dark:bg-secondary dark:text-secondary-foreground bg-background shadow-sm text-foreground hover:bg-muted-foreground/20',
+					'bg-background dark:bg-muted-foreground/15 dark:text-secondary-foreground shadow-sm text-foreground hover:bg-muted-foreground/20 dark:hover:bg-muted-foreground/25',
 				ghost: 'hover:text-accent-foreground hover:bg-muted-foreground/10 backdrop-blur-sm',
 				link: 'text-primary underline-offset-4 hover:underline'
 			},

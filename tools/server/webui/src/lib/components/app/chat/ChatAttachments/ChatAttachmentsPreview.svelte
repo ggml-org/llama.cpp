@@ -1,9 +1,18 @@
 <script lang="ts">
-	import { FileText, Image, Music, FileIcon, Eye, Info } from '@lucide/svelte';
+	import {
+		ChevronLeft,
+		ChevronRight,
+		FileText,
+		Image,
+		Music,
+		FileIcon,
+		Eye,
+		Info
+	} from '@lucide/svelte';
 	import { SyntaxHighlightedCode } from '$lib/components/app';
+	import { HorizontalScrollCarousel } from '$lib/components/app/misc';
 	import { Button } from '$lib/components/ui/button';
 	import * as Alert from '$lib/components/ui/alert';
-	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import {
 		getAttachmentDisplayItems,
@@ -12,7 +21,8 @@
 		isPdfFile,
 		isTextFile,
 		getLanguageFromFilename,
-		createBase64DataUrl
+		createBase64DataUrl,
+		formatFileSize
 	} from '$lib/utils';
 	import { convertPDFToImage } from '$lib/utils/browser-only';
 	import { modelsStore } from '$lib/stores/models.svelte';
@@ -55,23 +65,37 @@
 			)
 	);
 
-	let isGallery = $derived(allItems.length > 1);
 	let currentIndex = $state(0);
-
-	const thumbnailCarousel = useScrollCarousel();
 
 	$effect(() => {
 		if (previewFocusIndex >= 0 && previewFocusIndex < allItems.length) {
 			currentIndex = previewFocusIndex;
-
-			// Scroll the focused thumbnail into view after a tick
-			setTimeout(() => {
-				const thumbnail = document.querySelector(`[data-thumbnail-index="${currentIndex}"]`);
-				if (thumbnail && thumbnailCarousel.scrollContainer) {
-					thumbnailCarousel.scrollToCenter(thumbnail as HTMLElement);
-				}
-			}, 0);
 		}
+	});
+
+	$effect(() => {
+		const handler = (e: Event) => {
+			const delta = (e as CustomEvent).detail;
+
+			if (delta < 0) {
+				currentIndex = currentIndex > 0 ? currentIndex - 1 : allItems.length - 1;
+			} else {
+				currentIndex = currentIndex < allItems.length - 1 ? currentIndex + 1 : 0;
+			}
+		};
+
+		document.addEventListener('chat-attachments-nav', handler);
+
+		return () => document.removeEventListener('chat-attachments-nav', handler);
+	});
+
+	$effect(() => {
+		const index = currentIndex;
+		setTimeout(() => {
+			const thumbnail = document.querySelector(`[data-thumbnail-index="${index}"]`);
+
+			thumbnail?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+		}, 0);
 	});
 
 	let currentItem = $derived(allItems[currentIndex] ?? null);
@@ -109,6 +133,8 @@
 	);
 
 	let language = $derived(getLanguageFromFilename(displayName));
+
+	let fileSize = $derived(currentItem?.size ? formatFileSize(currentItem.size) : '');
 
 	let hasVisionModality = $derived(
 		currentItem && activeModelId ? modelsStore.modelSupportsVision(activeModelId) : false
@@ -205,367 +231,223 @@
 		}
 	});
 
-	function prevItem() {
-		if (currentIndex > 0) currentIndex--;
+	export function prev() {
+		currentIndex = currentIndex > 0 ? currentIndex - 1 : allItems.length - 1;
 	}
 
-	function nextItem() {
-		if (currentIndex < allItems.length - 1) currentIndex++;
+	export function next() {
+		currentIndex = currentIndex < allItems.length - 1 ? currentIndex + 1 : 0;
+	}
+
+	function onNavigate(index: number) {
+		currentIndex = index;
 	}
 </script>
 
-<div class="{className} flex flex-col">
-	{#if isGallery}
-		<!-- Gallery mode with carousel -->
-		<div class="relative flex items-center justify-center overflow-hidden">
-			<!-- Left arrow -->
-			<button
-				class="absolute top-1/2 left-2 z-10 -translate-y-1/2 rounded-full bg-background/80 p-2 backdrop-blur-sm transition-opacity hover:bg-background disabled:pointer-events-none disabled:opacity-0"
-				disabled={currentIndex <= 0}
-				onclick={prevItem}
-				aria-label="Previous"
-			>
-				<span class="text-lg leading-none">‹</span>
-			</button>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="{className} flex flex-col text-white">
+	<div class="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+		<Button
+			variant="secondary"
+			size="icon"
+			class="absolute top-1/2 left-4 z-10 h-8 w-8 -translate-y-1/2 rounded-full bg-background/5 p-0 text-white!"
+			onclick={prev}
+			aria-label="Previous"
+		>
+			<ChevronLeft class="size-4" />
+		</Button>
 
-			<!-- Preview container -->
-			<div class="flex w-full items-center justify-center px-12">
-				{#if currentItem}
-					<div class="space-y-4">
-						<!-- PDF view mode toggle -->
-						{#if isPdf}
-							<div class="flex items-center justify-end gap-6">
-								<div class="flex items-center gap-2">
-									<Button
-										variant={pdfViewMode === 'text' ? 'default' : 'outline'}
-										size="sm"
+		<div class="flex h-full w-full flex-col items-center justify-start overflow-auto py-4">
+			{#if currentItem}
+				<div class="sticky top-0 z-[20] mb-4 rounded-lg px-4 py-2 text-center backdrop-blur-md">
+					<p class="font-medium text-white">{displayName}</p>
+
+					<p class="text-xs text-white/60">{fileSize}</p>
+				</div>
+
+				{#if isPdf}
+					<div class="mb-4 flex items-center justify-end gap-2">
+						<Button
+							variant={pdfViewMode === 'text' ? 'default' : 'outline'}
+							size="sm"
+							onclick={() => (pdfViewMode = 'text')}
+							disabled={pdfImagesLoading}
+						>
+							<FileText class="mr-1 h-4 w-4" />
+
+							Text
+						</Button>
+
+						<Button
+							variant={pdfViewMode === 'pages' ? 'default' : 'outline'}
+							size="sm"
+							onclick={() => {
+								pdfViewMode = 'pages';
+								loadPdfImages();
+							}}
+							disabled={pdfImagesLoading}
+						>
+							{#if pdfImagesLoading}
+								<div
+									class="mr-1 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+								></div>
+							{:else}
+								<Eye class="mr-1 h-4 w-4" />
+							{/if}
+
+							Pages
+						</Button>
+					</div>
+				{/if}
+
+				{#if isImage && displayPreview}
+					<div class="flex flex-1 items-center justify-center">
+						<img
+							src={displayPreview}
+							alt={displayName}
+							class="max-h-[80vh] max-w-[80vw] rounded-lg object-contain shadow-lg"
+						/>
+					</div>
+				{:else if isPdf && pdfViewMode === 'pages'}
+					{#if !hasVisionModality && activeModelId && currentItem}
+						<Alert.Root class="mb-4">
+							<Info class="h-4 w-4" />
+
+							<Alert.Title>Preview only</Alert.Title>
+
+							<Alert.Description>
+								<span class="inline-flex">
+									The selected model does not support vision. Only the extracted
+									<!-- svelte-ignore a11y_click_events_have_key_events -->
+									<!-- svelte-ignore a11y_no_static_element_interactions -->
+									<span
+										class="mx-1 cursor-pointer underline"
 										onclick={() => (pdfViewMode = 'text')}
-										disabled={pdfImagesLoading}
 									>
-										<FileText class="mr-1 h-4 w-4" />
-										Text
-									</Button>
+										text
+									</span>
+									will be sent to the model.
+								</span>
+							</Alert.Description>
+						</Alert.Root>
+					{/if}
 
-									<Button
-										variant={pdfViewMode === 'pages' ? 'default' : 'outline'}
-										size="sm"
-										onclick={() => {
-											pdfViewMode = 'pages';
-											loadPdfImages();
-										}}
-										disabled={pdfImagesLoading}
-									>
-										{#if pdfImagesLoading}
-											<div
-												class="mr-1 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
-											></div>
-										{:else}
-											<Eye class="mr-1 h-4 w-4" />
-										{/if}
-										Pages
-									</Button>
-								</div>
+					{#if pdfImagesLoading}
+						<div class="flex flex-1 items-center justify-center p-8">
+							<div class="text-center">
+								<div
+									class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-white border-t-transparent"
+								></div>
+
+								<p class="text-white/70">Converting PDF to images...</p>
 							</div>
-						{/if}
+						</div>
+					{:else if pdfImagesError}
+						<div class="flex flex-1 items-center justify-center p-8">
+							<div class="text-center">
+								<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
 
-						<!-- Preview content -->
-						<div class="flex-1 overflow-auto">
-							{#if isImage && displayPreview}
-								<div class="flex items-center justify-center">
+								<p class="mb-4 text-white/70">Failed to load PDF images</p>
+
+								<p class="text-sm text-white/50">{pdfImagesError}</p>
+
+								<Button class="mt-4" onclick={() => (pdfViewMode = 'text')}>View as Text</Button>
+							</div>
+						</div>
+					{:else if pdfImages.length > 0}
+						<div class="max-h-full space-y-4 overflow-auto">
+							{#each pdfImages as image, index (image)}
+								<div class="text-center">
+									<p class="mb-2 text-sm text-white/50">Page {index + 1}</p>
+
 									<img
-										src={displayPreview}
-										alt={displayName}
-										class="max-h-full rounded-lg object-contain shadow-lg"
+										src={image}
+										alt="PDF Page {index + 1}"
+										class="mx-auto max-w-full rounded-lg shadow-lg"
 									/>
 								</div>
-							{:else if isPdf && pdfViewMode === 'pages'}
-								{#if !hasVisionModality && activeModelId && currentItem}
-									<Alert.Root class="mb-4">
-										<Info class="h-4 w-4" />
-										<Alert.Title>Preview only</Alert.Title>
-										<Alert.Description>
-											<span class="inline-flex">
-												The selected model does not support vision. Only the extracted
-												<!-- svelte-ignore a11y_click_events_have_key_events -->
-												<!-- svelte-ignore a11y_no_static_element_interactions -->
-												<span
-													class="mx-1 cursor-pointer underline"
-													onclick={() => (pdfViewMode = 'text')}
-												>
-													text
-												</span>
-												will be sent to the model.
-											</span>
-										</Alert.Description>
-									</Alert.Root>
-								{/if}
-
-								{#if pdfImagesLoading}
-									<div class="flex items-center justify-center p-8">
-										<div class="text-center">
-											<div
-												class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"
-											></div>
-											<p class="text-muted-foreground">Converting PDF to images...</p>
-										</div>
-									</div>
-								{:else if pdfImagesError}
-									<div class="flex items-center justify-center p-8">
-										<div class="text-center">
-											<FileText class="mx-auto mb-4 h-16 w-16 text-muted-foreground" />
-											<p class="mb-4 text-muted-foreground">Failed to load PDF images</p>
-											<p class="text-sm text-muted-foreground">{pdfImagesError}</p>
-											<Button class="mt-4" onclick={() => (pdfViewMode = 'text')}
-												>View as Text</Button
-											>
-										</div>
-									</div>
-								{:else if pdfImages.length > 0}
-									<div class="max-h-[70vh] space-y-4 overflow-auto">
-										{#each pdfImages as image, index (image)}
-											<div class="text-center">
-												<p class="mb-2 text-sm text-muted-foreground">Page {index + 1}</p>
-												<img
-													src={image}
-													alt="PDF Page {index + 1}"
-													class="mx-auto max-w-full rounded-lg shadow-lg"
-												/>
-											</div>
-										{/each}
-									</div>
-								{:else}
-									<div class="flex items-center justify-center p-8">
-										<div class="text-center">
-											<FileText class="mx-auto mb-4 h-16 w-16 text-muted-foreground" />
-											<p class="mb-4 text-muted-foreground">No PDF pages available</p>
-										</div>
-									</div>
-								{/if}
-							{:else if (isText || (isPdf && pdfViewMode === 'text')) && displayTextContent}
-								<SyntaxHighlightedCode
-									code={displayTextContent}
-									{language}
-									maxWidth="calc(69rem - 2rem)"
-								/>
-							{:else if isAudio}
-								<div class="flex items-center justify-center p-8">
-									<div class="w-full max-w-md text-center">
-										<Music class="mx-auto mb-4 h-16 w-16 text-muted-foreground" />
-										{#if audioSrc}
-											<audio controls class="mb-4 w-full" src={audioSrc}>
-												Your browser does not support the audio element.
-											</audio>
-										{:else}
-											<p class="mb-4 text-muted-foreground">Audio preview not available</p>
-										{/if}
-										<p class="text-sm text-muted-foreground">{displayName}</p>
-									</div>
-								</div>
-							{:else}
-								<div class="flex items-center justify-center p-8">
-									<div class="text-center">
-										{#if IconComponent}
-											<IconComponent class="mx-auto mb-4 h-16 w-16 text-muted-foreground" />
-										{/if}
-										<p class="mb-4 text-muted-foreground">
-											Preview not available for this file type
-										</p>
-									</div>
-								</div>
-							{/if}
+							{/each}
 						</div>
-					</div>
-				{/if}
-			</div>
-
-			<!-- Right arrow -->
-			<button
-				class="absolute top-1/2 right-2 z-10 -translate-y-1/2 rounded-full bg-background/80 p-2 backdrop-blur-sm transition-opacity hover:bg-background disabled:pointer-events-none disabled:opacity-0"
-				disabled={currentIndex >= allItems.length - 1}
-				onclick={nextItem}
-				aria-label="Next"
-			>
-				<span class="text-lg leading-none">›</span>
-			</button>
-		</div>
-
-		<!-- Thumbnails strip -->
-		<div
-			bind:this={thumbnailCarousel.scrollContainer}
-			onscroll={thumbnailCarousel.updateScrollButtons}
-			class="flex gap-2 overflow-x-auto px-2"
-		>
-			{#each allItems as item, index (item.id)}
-				<button
-					data-thumbnail-index={index}
-					class="relative flex-shrink-0 overflow-hidden rounded border-2 transition-colors hover:opacity-80 {index ===
-					currentIndex
-						? 'border-primary'
-						: 'border-transparent opacity-60'}"
-					onclick={() => {
-						currentIndex = index;
-						setTimeout(() => {
-							const thumbnail = document.querySelector(`[data-thumbnail-index="${index}"]`);
-							if (thumbnail && thumbnailCarousel.scrollContainer) {
-								thumbnailCarousel.scrollToCenter(thumbnail as HTMLElement);
-							}
-						}, 0);
-					}}
-					aria-label={`Go to ${item.name}`}
-				>
-					{#if item.isImage && item.preview}
-						<img src={item.preview} alt={item.name} class="h-12 w-12 object-cover" />
 					{:else}
-						<div class="flex h-12 w-12 items-center justify-center bg-muted">
-							<span class="text-xs text-muted-foreground">File</span>
+						<div class="flex flex-1 items-center justify-center p-8">
+							<div class="text-center">
+								<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
+
+								<p class="text-white/70">No PDF pages available</p>
+							</div>
 						</div>
 					{/if}
-				</button>
-			{/each}
-		</div>
-	{:else}
-		<!-- Single item mode - no carousel, just the preview -->
-		{#if allItems.length === 1 && currentItem}
-			<div class="space-y-4">
-				<!-- PDF view mode toggle -->
-				{#if isPdf}
-					<div class="flex items-center justify-end gap-6">
-						<div class="flex items-center gap-2">
-							<Button
-								variant={pdfViewMode === 'text' ? 'default' : 'outline'}
-								size="sm"
-								onclick={() => (pdfViewMode = 'text')}
-								disabled={pdfImagesLoading}
-							>
-								<FileText class="mr-1 h-4 w-4" />
-								Text
-							</Button>
-
-							<Button
-								variant={pdfViewMode === 'pages' ? 'default' : 'outline'}
-								size="sm"
-								onclick={() => {
-									pdfViewMode = 'pages';
-									loadPdfImages();
-								}}
-								disabled={pdfImagesLoading}
-							>
-								{#if pdfImagesLoading}
-									<div
-										class="mr-1 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
-									></div>
-								{:else}
-									<Eye class="mr-1 h-4 w-4" />
-								{/if}
-								Pages
-							</Button>
-						</div>
-					</div>
-				{/if}
-
-				<!-- Preview content -->
-				<div class="flex-1 overflow-auto">
-					{#if isImage && displayPreview}
-						<div class="flex items-center justify-center">
-							<img
-								src={displayPreview}
-								alt={displayName}
-								class="max-h-full rounded-lg object-contain shadow-lg"
-							/>
-						</div>
-					{:else if isPdf && pdfViewMode === 'pages'}
-						{#if !hasVisionModality && activeModelId}
-							<Alert.Root class="mb-4">
-								<Info class="h-4 w-4" />
-								<Alert.Title>Preview only</Alert.Title>
-								<Alert.Description>
-									<span class="inline-flex">
-										The selected model does not support vision. Only the extracted
-										<!-- svelte-ignore a11y_click_events_have_key_events -->
-										<!-- svelte-ignore a11y_no_static_element_interactions -->
-										<span
-											class="mx-1 cursor-pointer underline"
-											onclick={() => (pdfViewMode = 'text')}
-										>
-											text
-										</span>
-										will be sent to the model.
-									</span>
-								</Alert.Description>
-							</Alert.Root>
-						{/if}
-
-						{#if pdfImagesLoading}
-							<div class="flex items-center justify-center p-8">
-								<div class="text-center">
-									<div
-										class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"
-									></div>
-									<p class="text-muted-foreground">Converting PDF to images...</p>
-								</div>
-							</div>
-						{:else if pdfImagesError}
-							<div class="flex items-center justify-center p-8">
-								<div class="text-center">
-									<FileText class="mx-auto mb-4 h-16 w-16 text-muted-foreground" />
-									<p class="mb-4 text-muted-foreground">Failed to load PDF images</p>
-									<p class="text-sm text-muted-foreground">{pdfImagesError}</p>
-									<Button class="mt-4" onclick={() => (pdfViewMode = 'text')}>View as Text</Button>
-								</div>
-							</div>
-						{:else if pdfImages.length > 0}
-							<div class="max-h-[70vh] space-y-4 overflow-auto">
-								{#each pdfImages as image, index (image)}
-									<div class="text-center">
-										<p class="mb-2 text-sm text-muted-foreground">Page {index + 1}</p>
-										<img
-											src={image}
-											alt="PDF Page {index + 1}"
-											class="mx-auto max-w-full rounded-lg shadow-lg"
-										/>
-									</div>
-								{/each}
-							</div>
-						{:else}
-							<div class="flex items-center justify-center p-8">
-								<div class="text-center">
-									<FileText class="mx-auto mb-4 h-16 w-16 text-muted-foreground" />
-									<p class="mb-4 text-muted-foreground">No PDF pages available</p>
-								</div>
-							</div>
-						{/if}
-					{:else if (isText || (isPdf && pdfViewMode === 'text')) && displayTextContent}
+				{:else if (isText || (isPdf && pdfViewMode === 'text')) && displayTextContent}
+					<div class="px-4 pb-4">
 						<SyntaxHighlightedCode
+							class="max-w-4xl"
 							code={displayTextContent}
 							{language}
-							maxWidth="calc(69rem - 2rem)"
+							maxHeight="none"
 						/>
-					{:else if isAudio}
-						<div class="flex items-center justify-center p-8">
-							<div class="w-full max-w-md text-center">
-								<Music class="mx-auto mb-4 h-16 w-16 text-muted-foreground" />
-								{#if audioSrc}
-									<audio controls class="mb-4 w-full" src={audioSrc}>
-										Your browser does not support the audio element.
-									</audio>
-								{:else}
-									<p class="mb-4 text-muted-foreground">Audio preview not available</p>
-								{/if}
-								<p class="text-sm text-muted-foreground">{displayName}</p>
-							</div>
+					</div>
+				{:else if isAudio}
+					<div class="flex flex-1 items-center justify-center p-8">
+						<div class="w-full max-w-md text-center">
+							<Music class="mx-auto mb-4 h-16 w-16 text-white/50" />
+
+							{#if audioSrc}
+								<audio controls class="mb-4 w-full" src={audioSrc}>
+									Your browser does not support the audio element.
+								</audio>
+							{:else}
+								<p class="mb-4 text-white/70">Audio preview not available</p>
+							{/if}
+
+							<p class="text-sm text-white/50">{displayName}</p>
 						</div>
-					{:else}
-						<div class="flex items-center justify-center p-8">
-							<div class="text-center">
-								{#if IconComponent}
-									<IconComponent class="mx-auto mb-4 h-16 w-16 text-muted-foreground" />
-								{/if}
-								<p class="mb-4 text-muted-foreground">Preview not available for this file type</p>
-							</div>
+					</div>
+				{:else}
+					<div class="flex flex-1 items-center justify-center p-8">
+						<div class="text-center">
+							{#if IconComponent}
+								<IconComponent class="mx-auto mb-4 h-16 w-16 text-white/50" />
+							{/if}
+
+							<p class="text-white/70">Preview not available for this file type</p>
 						</div>
-					{/if}
-				</div>
+					</div>
+				{/if}
+			{/if}
+			<div class="sticky bottom-0 z-10 mt-4 flex-shrink-0 backdrop-blur-md">
+				<HorizontalScrollCarousel class="max-w-full">
+					{#each allItems as item, index (item.id)}
+						<button
+							data-thumbnail-index={index}
+							class={[
+								'relative flex-shrink-0 cursor-pointer overflow-hidden rounded border-2 transition-all hover:opacity-90',
+								index === currentIndex ? 'border-white' : 'border-transparent opacity-50',
+								'[&:not(:first-child)]:last:mr-4 [&:not(:last-child)]:first:ml-4'
+							]}
+							onclick={() => onNavigate(index)}
+							aria-label={`Go to ${item.name}`}
+						>
+							{#if item.isImage && item.preview}
+								<img src={item.preview} alt={item.name} class="h-12 w-12 object-cover" />
+							{:else}
+								<div class="flex h-12 w-12 items-center justify-center bg-white/10">
+									<span class="text-xs text-white/70">File</span>
+								</div>
+							{/if}
+						</button>
+					{/each}
+				</HorizontalScrollCarousel>
 			</div>
-		{/if}
-	{/if}
+		</div>
+
+		<Button
+			variant="secondary"
+			size="icon"
+			class="absolute top-1/2 right-4 z-10 h-8 w-8 -translate-y-1/2 rounded-full bg-background/5 p-0 text-white!"
+			onclick={next}
+			aria-label="Next"
+		>
+			<ChevronRight class="size-4" />
+		</Button>
+	</div>
 </div>

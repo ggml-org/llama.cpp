@@ -6,6 +6,7 @@
 		DatabaseMessageExtraMcpResource,
 		MCPResourceAttachment
 	} from '$lib/types';
+	import { isPdfFile } from '$lib/utils';
 	import {
 		ChatAttachmentsItemMcpPrompt,
 		ChatAttachmentsItemMcpResource,
@@ -100,6 +101,19 @@
 		height={imageHeight}
 		width={imageWidth}
 		{imageClass}
+		onclick={() => onPreview?.(item)}
+	/>
+{:else if isPdfFile(item.attachment, item.uploadedFile)}
+	<ChatAttachmentsItemThumbnailFile
+		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
+		id={item.id}
+		name={item.name}
+		size={item.size}
+		{readonly}
+		onRemove={onFileRemove}
+		textContent={item.textContent}
+		attachment={item.attachment}
+		uploadedFile={item.uploadedFile}
 		onclick={() => onPreview?.(item)}
 	/>
 {:else}

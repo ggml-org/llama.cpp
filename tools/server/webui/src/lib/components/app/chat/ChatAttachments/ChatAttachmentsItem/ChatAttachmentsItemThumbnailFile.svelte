@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { ActionIcon } from '$lib/components/app';
 	import { X } from '@lucide/svelte';
-	import { formatFileSize, getFileTypeLabel, getPreviewText, isTextFile } from '$lib/utils';
+	import {
+		formatFileSize,
+		getFileTypeLabel,
+		getPreviewText,
+		isTextFile,
+		isPdfFile
+	} from '$lib/utils';
 	import { AttachmentType } from '$lib/enums';
 
 	interface Props {
@@ -32,6 +38,9 @@
 	}: Props = $props();
 
 	let isText = $derived(isTextFile(attachment, uploadedFile));
+	let isPdf = $derived(isPdfFile(attachment, uploadedFile));
+	let isTextWithContent = $derived(isText && !!textContent);
+	let isPdfWithContent = $derived(isPdf && !!textContent);
 
 	let fileTypeLabel = $derived.by(() => {
 		if (uploadedFile?.type) {
@@ -102,14 +111,14 @@
 	{/if}
 {/snippet}
 
-{#if isText}
+{#if isTextWithContent || isPdfWithContent}
 	<button
 		class="rounded-lg border border-border bg-muted p-3 {className} cursor-pointer {readonly
 			? 'w-full max-w-2xl transition-shadow hover:shadow-md'
 			: `group relative text-left ${textContent ? 'max-h-24 max-w-72' : 'max-w-36'}`}"
 		{onclick}
 		aria-label={readonly ? `Preview ${name}` : undefined}
-		type={readonly ? 'button' : undefined}
+		type="button"
 	>
 		{#if !readonly}
 			{@render removeButton()}
@@ -121,7 +130,7 @@
 					<div class="flex min-w-0 flex-1 flex-col items-start text-left">
 						<span class="w-full truncate text-sm font-medium text-foreground">{name}</span>
 
-						{@render info(size ? formatFileSize(size) : undefined)}
+						{@render info(pdfProcessingMode || (size ? formatFileSize(size) : undefined))}
 
 						{#if textContent}
 							{@render textPreview(textContent)}
@@ -141,6 +150,7 @@
 	<button
 		class="group flex items-center gap-3 rounded-lg border border-border bg-muted p-3 {className} relative"
 		{onclick}
+		type="button"
 	>
 		{@render fileIcon()}
 

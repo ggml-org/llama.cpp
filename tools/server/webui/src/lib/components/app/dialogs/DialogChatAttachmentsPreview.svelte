@@ -1,7 +1,8 @@
 <script lang="ts">
-	import * as Dialog from '$lib/components/ui/dialog';
+	import { Dialog } from 'bits-ui';
+	import { X } from '@lucide/svelte';
+	import * as DialogUI from '$lib/components/ui/dialog';
 	import { ChatAttachmentsPreview } from '$lib/components/app';
-	import { formatFileSize, getAttachmentDisplayItems } from '$lib/utils';
 
 	interface Props {
 		open: boolean;
@@ -19,41 +20,60 @@
 		previewFocusIndex = 0
 	}: Props = $props();
 
-	let displayItems = $derived(
-		getAttachmentDisplayItems({ uploadedFiles, attachments }).filter(
-			(item) => !item.isMcpPrompt && !item.isMcpResource
-		)
-	);
-	let totalCount = $derived(displayItems.length);
+	function handleClose() {
+		open = false;
+	}
 
-	let displayName = $derived(
-		displayItems.length === 1
-			? (displayItems[0]?.name ?? 'Attachment')
-			: `Attachments (${totalCount})`
-	);
-	let displaySize = $derived(displayItems.length === 1 ? displayItems[0]?.size : undefined);
+	$effect(() => {
+		if (!open) return;
+
+		function handleKeyDown(event: KeyboardEvent) {
+			const target = event.target as HTMLElement;
+			if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+			switch (event.key) {
+				case 'ArrowLeft':
+					event.preventDefault();
+					event.stopPropagation();
+					document.dispatchEvent(new CustomEvent('chat-attachments-nav', { detail: -1 }));
+					break;
+				case 'ArrowRight':
+					event.preventDefault();
+					event.stopPropagation();
+					document.dispatchEvent(new CustomEvent('chat-attachments-nav', { detail: 1 }));
+					break;
+				case ' ':
+					event.preventDefault();
+					event.stopPropagation();
+					document.dispatchEvent(new CustomEvent('chat-attachments-nav', { detail: 1 }));
+					break;
+			}
+		}
+
+		document.addEventListener('keydown', handleKeyDown);
+		return () => document.removeEventListener('keydown', handleKeyDown);
+	});
 </script>
 
 <Dialog.Root bind:open>
 	<Dialog.Portal>
-		<Dialog.Overlay />
-		<Dialog.Content class="flex !max-h-[90vh] !max-w-6xl flex-col">
-			<Dialog.Header>
-				<Dialog.Title class="pr-8">{displayName}</Dialog.Title>
-				<Dialog.Description>
-					{#if displaySize}
-						{formatFileSize(displaySize)}
-					{:else}
-						{totalCount} attachment{totalCount !== 1 ? 's' : ''}
-					{/if}
-				</Dialog.Description>
-			</Dialog.Header>
+		<DialogUI.Overlay class="bg-black/85" />
+
+		<Dialog.Content class="fixed inset-0 z-50 flex flex-col bg-transparent outline-none">
+			<Dialog.Close
+				class="absolute top-4 right-4 z-10 cursor-pointer text-white hover:text-gray-400"
+				onclick={handleClose}
+				aria-label="Close"
+			>
+				<X class="size-4" />
+			</Dialog.Close>
+
 			<ChatAttachmentsPreview
 				{uploadedFiles}
 				{attachments}
 				{activeModelId}
 				{previewFocusIndex}
-				class="min-h-0 flex-1 overflow-y-auto px-1"
+				class="min-h-0 flex-1"
 			/>
 		</Dialog.Content>
 	</Dialog.Portal>

@@ -75,6 +75,7 @@ export function getAttachmentDisplayItems(
 		items.push({
 			id: `attachment-${index}`,
 			name: attachment.name,
+			size: 'size' in attachment ? attachment.size : undefined,
 			preview: isImage && 'base64Url' in attachment ? attachment.base64Url : undefined,
 			isImage,
 			isMcpPrompt,
