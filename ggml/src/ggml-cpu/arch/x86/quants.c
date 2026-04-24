@@ -1176,7 +1176,48 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int ib = 0;
     float sumf = 0;
 
-#if defined(__AVX2__)
+#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+    __m512 acc512 = _mm512_setzero_ps();
+
+    for (; ib + 1 < nb; ib += 2) {
+        const __m256i qx0 = _mm256_loadu_si256((const __m256i *) x[ib  ].qs);
+        const __m256i qx1 = _mm256_loadu_si256((const __m256i *) x[ib+1].qs);
+        const __m512i qx  = _mm512_inserti32x8(_mm512_castsi256_si512(qx0), qx1, 1);
+
+        const __m256i qy0 = _mm256_loadu_si256((const __m256i *) y[ib  ].qs);
+        const __m256i qy1 = _mm256_loadu_si256((const __m256i *) y[ib+1].qs);
+        const __m512i qy  = _mm512_inserti32x8(_mm512_castsi256_si512(qy0), qy1, 1);
+
+        const __m512i ax = _mm512_abs_epi8(qx);
+        const __mmask64 neg = _mm512_movepi8_mask(qx);
+        const __m512i sy = _mm512_mask_sub_epi8(qy, neg, _mm512_setzero_si512(), qy);
+
+        const __m512i dot_i32 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), ax, sy);
+        const __m512  dot_f32 = _mm512_cvtepi32_ps(dot_i32);
+
+        const float s0 = GGML_CPU_FP16_TO_FP32(x[ib  ].d) * GGML_CPU_FP16_TO_FP32(y[ib  ].d);
+        const float s1 = GGML_CPU_FP16_TO_FP32(x[ib+1].d) * GGML_CPU_FP16_TO_FP32(y[ib+1].d);
+        const __m512 d = _mm512_insertf32x8(
+            _mm512_castps256_ps512(_mm256_set1_ps(s0)),
+            _mm256_set1_ps(s1),
+            1);
+
+        acc512 = _mm512_fmadd_ps(d, dot_f32, acc512);
+    }
+
+    sumf = _mm512_reduce_add_ps(acc512);
+
+    __m256 acc = _mm256_setzero_ps();
+    for (; ib < nb; ++ib) {
+        const __m256 d = _mm256_set1_ps(GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d));
+        const __m256i qx = _mm256_loadu_si256((const __m256i *)x[ib].qs);
+        const __m256i qy = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+        const __m256 q = mul_sum_i8_pairs_float(qx, qy);
+        acc = _mm256_fmadd_ps(d, q, acc);
+    }
+
+    sumf += hsum_float_8(acc);
+#elif defined(__AVX2__)
     // Initialize accumulator with zeros
     __m256 acc = _mm256_setzero_ps();
 
