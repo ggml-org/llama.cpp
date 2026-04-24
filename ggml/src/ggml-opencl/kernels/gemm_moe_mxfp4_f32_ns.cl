@@ -149,8 +149,8 @@ kernel void kernel_gemm_moe_mxfp4_f32_ns(
         __global     uint *           src2,
         __global     ushort *         src2_emap,
         __write_only image1d_buffer_t dst,
-	    __global     int *            total_tiles,
-        uint ne00,            
+        __global     int *            total_tiles,
+        uint ne00,
         uint ne01
 ) {
     uint block_id_m = get_global_id(1); // m_tile
@@ -183,7 +183,7 @@ kernel void kernel_gemm_moe_mxfp4_f32_ns(
         // First sub-block
         uint q_sub_offset = row + ((ne01 * step) >> 3) + ((expert_id * ne00 * ne01) >> 3);
         uint s_sub_offset = row + ((ne01 * step) >> 5) + ((expert_id * ne00 * ne01) >> 5);
-        uint b_sub_offset = col * ne00 + step;   
+        uint b_sub_offset = col * ne00 + step;
 
         // Load scale for current mxfp4 block
         uint s_offset = s_sub_offset + get_global_id(0);
@@ -248,11 +248,11 @@ kernel void kernel_gemm_moe_mxfp4_f32_ns(
     if (get_local_id(0) < TILESIZE_N) {
         uint idx = src2[block_id_n * TILESIZE_N + get_local_id(0)];
         if (idx == 0xFFFFFFFF) {
-			idx = src2[block_id_n * TILESIZE_N + 0];
+            idx = src2[block_id_n * TILESIZE_N + 0];
         }
-		out_idx[get_local_id(0)] = idx * ne01;
+        out_idx[get_local_id(0)] = idx * ne01;
     }
-    
+
     barrier(CLK_LOCAL_MEM_FENCE);
 
     // Scatter results back to original position in output grid
@@ -290,7 +290,7 @@ kernel void kernel_gemm_moe_mxfp4_f32_ns(
     write_imagef(dst, out_idx[30] + m_offset, (reg_c.su));
     write_imagef(dst, out_idx[31] + m_offset, (reg_c.sv));
 
-    // Store zero padding parts to the index of first output in tile, override correct result in the end 
+    // Store zero padding parts to the index of first output in tile, override correct result in the end
     barrier(CLK_GLOBAL_MEM_FENCE);
     write_imagef(dst, out_idx[0] + m_offset, (reg_c.s0));
 }

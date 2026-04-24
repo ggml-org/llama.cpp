@@ -12952,7 +12952,7 @@ static void moe_router_reoerder(ggml_backend_t backend, const ggml_tensor * src,
     size_t fill_global_size[] = {(size_t)(((max_post_router_tile + 63) / 64) * 64), n_tile_size, 1};
     size_t fill_local_size[] = {64, 1, 1};
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, fill_global_size, fill_local_size, src);
-    
+
     // Scatter
     kernel = backend_ctx->kernel_moe_scatter;
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &original_router_buf));
