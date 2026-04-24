@@ -220,11 +220,12 @@ struct ggml_webgpu_row_norm_pipeline_key_hash {
 /** RMS_NORM + MUL **/
 
 struct ggml_webgpu_rms_norm_mul_pipeline_key {
-    bool inplace;
-    bool src_overlap;
+    bool inplace;      // rn_src == dst
+    bool overlap;      // mul_src == dst
+    bool src_overlap;  // rn_src == mul_src
 
     bool operator==(const ggml_webgpu_rms_norm_mul_pipeline_key & other) const {
-        return inplace == other.inplace && src_overlap == other.src_overlap;
+        return inplace == other.inplace && overlap == other.overlap && src_overlap == other.src_overlap;
     }
 };
 
@@ -232,6 +233,7 @@ struct ggml_webgpu_rms_norm_mul_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_rms_norm_mul_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.inplace);
+        ggml_webgpu_hash_combine(seed, key.overlap);
         ggml_webgpu_hash_combine(seed, key.src_overlap);
         return seed;
     }
@@ -298,6 +300,25 @@ struct ggml_webgpu_conv2d_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_conv2d_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.weight_type);
+        ggml_webgpu_hash_combine(seed, key.input_type);
+        ggml_webgpu_hash_combine(seed, key.output_type);
+        return seed;
+    }
+};
+
+/** Im2Col **/
+struct ggml_webgpu_im2col_pipeline_key {
+    ggml_type input_type;
+    ggml_type output_type;
+
+    bool operator==(const ggml_webgpu_im2col_pipeline_key & other) const {
+        return input_type == other.input_type && output_type == other.output_type;
+    }
+};
+
+struct ggml_webgpu_im2col_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_im2col_pipeline_key & key) const {
+        size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.input_type);
         ggml_webgpu_hash_combine(seed, key.output_type);
         return seed;
@@ -858,6 +879,8 @@ class ggml_webgpu_shader_lib {
         soft_max_pipelines;
     std::unordered_map<ggml_webgpu_conv2d_pipeline_key, webgpu_pipeline, ggml_webgpu_conv2d_pipeline_key_hash>
         conv2d_pipelines;
+    std::unordered_map<ggml_webgpu_im2col_pipeline_key, webgpu_pipeline, ggml_webgpu_im2col_pipeline_key_hash>
+        im2col_pipelines;
 
     std::unordered_map<ggml_webgpu_rms_norm_mul_pipeline_key,
                        webgpu_pipeline,
@@ -1929,6 +1952,7 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_rms_norm_mul_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_rms_norm_mul_pipeline_key key = {};
         key.inplace                               = context.inplace;
+        key.overlap                               = context.overlap;
         key.src_overlap                           = context.src_overlap;
 
         auto it = rms_norm_mul_pipelines.find(key);
@@ -1943,6 +1967,9 @@ class ggml_webgpu_shader_lib {
         if (key.inplace) {
             defines.push_back("INPLACE");
             variant += "_inplace";
+        } else if (key.overlap) {
+            defines.push_back("OVERLAP");
+            variant += "_overlap";
         } else if (key.src_overlap) {
             defines.push_back("SRC_OVERLAP");
             variant += "_src_overlap";
@@ -2574,6 +2601,44 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         conv2d_pipelines[key]    = pipeline;
         return conv2d_pipelines[key];
+    }
+
+    webgpu_pipeline get_im2col_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_im2col_pipeline_key key = {};
+        key.input_type                      = context.src1->type;
+        key.output_type                     = context.dst->type;
+
+        auto it = im2col_pipelines.find(key);
+        if (it != im2col_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "im2col";
+
+        auto push_type_defines = [&](const char * prefix, ggml_type type) {
+            std::string s_prefix = prefix;
+            if (type == GGML_TYPE_F32) {
+                defines.push_back(s_prefix + "_F32");
+            } else if (type == GGML_TYPE_F16) {
+                defines.push_back(s_prefix + "_F16");
+            } else {
+                GGML_ABORT("Unsupported type for IM2COL shader");
+            }
+        };
+
+        push_type_defines("INPUT", key.input_type);
+        push_type_defines("OUTPUT", key.output_type);
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_im2col, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        im2col_pipelines[key]    = pipeline;
+        return im2col_pipelines[key];
     }
 
   private:
