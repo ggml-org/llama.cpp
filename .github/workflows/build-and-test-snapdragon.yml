@@ -58,18 +58,10 @@ jobs:
           name: llama-cpp-android-arm64-snapdragon
           path: pkg-snapdragon/llama.cpp
 
-  check-secret:
-    runs-on: ubuntu-slim
-    outputs:
-      has-key: ${{ steps.check.outputs.has-key }}
-    steps:
-      - id: check
-        run: echo "has-key=${{ secrets.QDC_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
-
   test-snapdragon-qdc:
     name: Test on QDC Android Device (${{ matrix.device }})
-    needs: [android-ndk-snapdragon, check-secret]
-    if: needs.check-secret.outputs.has-key == 'true'
+    needs: [android-ndk-snapdragon]
+    if: ${{ secrets.QDC_API_KEY != '' }}
     runs-on: ubuntu-slim
     strategy:
       fail-fast: false
