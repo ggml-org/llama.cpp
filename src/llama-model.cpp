@@ -8185,7 +8185,6 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_ff                  = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_ff(il); }, hparams.n_layer).c_str());
         LLAMA_LOG_INFO("%s: n_expert              = %u\n",     __func__, hparams.n_expert);
         LLAMA_LOG_INFO("%s: n_expert_used         = %u\n",     __func__, hparams.n_expert_used);
-        _putenv_s("MOE_EXPERT_USED", (std::to_string(hparams.n_expert_used)).c_str());
         LLAMA_LOG_INFO("%s: n_expert_groups       = %d\n",     __func__, hparams.n_expert_groups);
         LLAMA_LOG_INFO("%s: n_group_used          = %d\n",     __func__, hparams.n_group_used);
         LLAMA_LOG_INFO("%s: causal attn           = %d\n",     __func__, hparams.causal_attn);

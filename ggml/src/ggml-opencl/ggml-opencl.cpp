@@ -419,6 +419,7 @@ struct ggml_backend_opencl_context {
     ggml_cl_buffer prealloc_src1;
 
     // prealloc buffers for MoE router table preprocess
+    bool toggle_reorder = false;
     ggml_cl_buffer prealloc_post_router;
     ggml_cl_buffer prealloc_emap;
     ggml_cl_buffer prealloc_hist;
@@ -13235,8 +13236,11 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 } else { // for gemm
                     kernel = backend_ctx->kernel_gemm_moe_mxfp4_f32_ns;
 
-                    if (strstr(src0->name, "as") != NULL) {
+                    // Reorder router if called from test-backend-ops or when new router is generated.
+                    // Otherwise reuse the reordered result from previous mul_mat_id call.
+                    if ((strstr(src0->name, "as") != NULL) || backend_ctx->toggle_reorder) {
                         moe_router_reoerder(backend, src2, ne20);
+                        backend_ctx->toggle_reorder = false;
                     }
 
                     cl_mem sub_buf_src1_pre, buf_src1_reordered, image_src1_reordered, sub_buf_dst, buf_dst_image;
@@ -14294,8 +14298,7 @@ static void ggml_cl_argsort(ggml_backend_t backend, const ggml_tensor * src0, co
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     const int ne21 = dst->ne[1];
     if ((strstr(src0->name, "_moe") != NULL) && (ne21 != 1)) {
-        const int ne20 = std::stoi(std::getenv("MOE_EXPERT_USED"));
-        moe_router_reoerder(backend, dst, ne20);
+        backend_ctx->toggle_reorder = true;
     }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 }
