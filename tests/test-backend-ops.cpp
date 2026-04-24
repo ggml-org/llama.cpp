@@ -6637,6 +6637,10 @@ struct test_lightning_indexer : public test_case {
         return VARS_TO_STR8(type_a, type_b, type_c, ne_a, ne_b, ne_c, scale_embd, scale_heads);
     }
 
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+
     test_lightning_indexer(ggml_type type_a = GGML_TYPE_F32,
             ggml_type type_b = GGML_TYPE_F16,
             ggml_type type_c = GGML_TYPE_F32,
@@ -8752,6 +8756,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q5_1, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
     test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q8_0, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
     test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_BF16, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
 
     return test_cases;
 }
@@ -9036,6 +9041,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q5_1, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
     test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_Q8_0, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
     test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_BF16, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
+    test_cases.emplace_back(new test_lightning_indexer(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32, {128, 64, 128, 1}, {128, 1, 256, 1}, {64, 128, 1, 1}, 1.0f / sqrtf(float(128)), 1.0f / sqrtf(float(64))));
 
     return test_cases;
 }
