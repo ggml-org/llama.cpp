@@ -25,6 +25,7 @@
 #include <ctime>
 #include <stdexcept>
 #include <vector>
+using namespace std;
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -113,7 +114,7 @@ int64_t llama_time_us(void) {
 
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
-        const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model & model, llama_model_params & params) {
+        const string & fname, vector<string> & splits, FILE * file, llama_model & model, llama_model_params & params) {
     // loading time will be recalculated after the first eval, so
     // we take page faults deferred by mmap() into consideration
     model.t_load_us = 0;
@@ -132,21 +133,21 @@ static int llama_model_load(struct gguf_context * metadata, llama_model_set_tens
 
         try {
             model.load_arch(ml);
-        } catch(const std::exception & e) {
-            throw std::runtime_error("error loading model architecture: " + std::string(e.what()));
+        } catch(const exception & e) {
+            throw runtime_error("error loading model architecture: " + string(e.what()));
         }
         try {
             model.load_hparams(ml);
-        } catch(const std::exception & e) {
-            throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
+        } catch(const exception & e) {
+            throw runtime_error("error loading model hyperparameters: " + string(e.what()));
         }
         if (model.arch == LLM_ARCH_CLIP) {
-            throw std::runtime_error("CLIP cannot be used as main model, use it with --mmproj instead");
+            throw runtime_error("CLIP cannot be used as main model, use it with --mmproj instead");
         }
         try {
             model.load_vocab(ml);
-        } catch(const std::exception & e) {
-            throw std::runtime_error("error loading model vocabulary: " + std::string(e.what()));
+        } catch(const exception & e) {
+            throw runtime_error("error loading model vocabulary: " + string(e.what()));
         }
 
         model.load_stats(ml);
@@ -160,7 +161,7 @@ static int llama_model_load(struct gguf_context * metadata, llama_model_set_tens
         if (!model.load_tensors(ml)) {
             return -2;
         }
-    } catch (const std::exception & err) {
+    } catch (const exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
         return -1;
     }
@@ -172,8 +173,8 @@ static struct llama_model * llama_model_load_from_file_impl(
         struct gguf_context * metadata,
         llama_model_set_tensor_data_t set_tensor_data,
         void * set_tensor_data_ud,
-        const std::string & path_model,
-        std::vector<std::string> & splits,
+        const string & path_model,
+        vector<string> & splits,
         FILE * file,
         struct llama_model_params params) {
     {
@@ -248,12 +249,12 @@ static struct llama_model * llama_model_load_from_file_impl(
         // default device selection
 
         // build list of available devices
-        std::vector<llama_device> gpus;
-        std::vector<llama_device> igpus;
-        std::vector<llama_device> rpc_servers;
+        vector<llama_device> gpus;
+        vector<llama_device> igpus;
+        vector<llama_device> rpc_servers;
 
         if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
-            std::vector<ggml_backend_dev_t> devs;
+            vector<ggml_backend_dev_t> devs;
             devs.reserve(ggml_backend_dev_count());
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 auto * dev = ggml_backend_dev_get(i);
@@ -291,13 +292,13 @@ static struct llama_model * llama_model_load_from_file_impl(
 
                     case GGML_BACKEND_DEVICE_TYPE_GPU: {
                         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-                        if (ggml_backend_reg_name(reg) == std::string("RPC")) {
+                        if (ggml_backend_reg_name(reg) == string("RPC")) {
                             rpc_servers.push_back({false, dev});
                         } else {
                             // check if there is already a GPU with the same device id
                             ggml_backend_dev_props props;
                             ggml_backend_dev_get_props(dev, &props);
-                            auto it = std::find_if(gpus.begin(), gpus.end(), [&props](const llama_device & d) {
+                            auto it = find_if(gpus.begin(), gpus.end(), [&props](const llama_device & d) {
                                 ggml_backend_dev_props d_props;
                                 ggml_backend_dev_get_props(d.dev, &d_props);
                                 if (props.device_id && d_props.device_id) {
@@ -387,8 +388,8 @@ struct llama_model * llama_model_init_from_user(
         void * set_tensor_data_ud,
         struct llama_model_params params) {
     GGML_ASSERT(metadata != nullptr);
-    std::string path_model;
-    std::vector<std::string> splits = {};
+    string path_model;
+    vector<string> splits = {};
     params.use_mmap = false;
     params.use_extra_bufts = false;
     return llama_model_load_from_file_impl(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, /*file*/ nullptr, params);
@@ -403,7 +404,7 @@ struct llama_model * llama_load_model_from_file(
 struct llama_model * llama_model_load_from_file(
         const char * path_model,
         struct llama_model_params params) {
-    std::vector<std::string> splits = {};
+    vector<string> splits = {};
     return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, /*file*/ nullptr, params);
 }
 
@@ -411,7 +412,7 @@ struct llama_model * llama_model_load_from_splits(
         const char ** paths,
         size_t n_paths,
         struct llama_model_params params) {
-    std::vector<std::string> splits;
+    vector<string> splits;
     if (n_paths == 0) {
         LLAMA_LOG_ERROR("%s: list of splits is empty\n", __func__);
         return nullptr;
@@ -428,8 +429,8 @@ struct llama_model * llama_model_load_from_file_ptr(FILE * file, struct llama_mo
         LLAMA_LOG_ERROR("%s: file is NULL\n", __func__);
         return nullptr;
     }
-    std::string path_model;
-    std::vector<std::string> splits = {};
+    string path_model;
+    vector<string> splits = {};
     return llama_model_load_from_file_impl(nullptr, nullptr, nullptr, path_model, splits, file, params);
 }
 
@@ -451,16 +452,16 @@ int32_t llama_chat_apply_template(
                                     bool   add_ass,
                                     char * buf,
                                  int32_t   length) {
-    const std::string curr_tmpl(tmpl == nullptr ? "chatml" : tmpl);
+    const string curr_tmpl(tmpl == nullptr ? "chatml" : tmpl);
 
     // format the chat to string
-    std::vector<const llama_chat_message *> chat_vec;
+    vector<const llama_chat_message *> chat_vec;
     chat_vec.resize(n_msg);
     for (size_t i = 0; i < n_msg; i++) {
         chat_vec[i] = &chat[i];
     }
 
-    std::string formatted_chat;
+    string formatted_chat;
     llm_chat_template detected_tmpl = llm_chat_detect_template(curr_tmpl);
     if (detected_tmpl == LLM_CHAT_TEMPLATE_UNKNOWN) {
         return -1;
@@ -511,20 +512,20 @@ int32_t llama_split_prefix(
     int32_t split_no,
     int32_t split_count) {
 
-    const std::string str_split_path(split_path);
+    const string str_split_path(split_path);
 
     char postfix[32];
     snprintf(postfix, sizeof(postfix), "-%05d-of-%05d.gguf", split_no + 1, split_count);
 
-    const std::string str_postfix(postfix);
+    const string str_postfix(postfix);
     if (str_split_path.size() <= str_postfix.size()) {
         return 0;
     }
 
     const size_t size_prefix = str_split_path.size() - str_postfix.size();
 
-    if (str_split_path.compare(size_prefix, std::string::npos, str_postfix) == 0) {
-        const size_t copy_len = std::min(size_prefix + 1, maxlen);
+    if (str_split_path.compare(size_prefix, string::npos, str_postfix) == 0) {
+        const size_t copy_len = min(size_prefix + 1, maxlen);
         snprintf(split_prefix, copy_len, "%s", split_path);
 
         return (int32_t) size_prefix;
@@ -534,7 +535,7 @@ int32_t llama_split_prefix(
 }
 
 const char * llama_print_system_info(void) {
-    static std::string s;
+    static string s;
     s.clear(); // Clear the string, since it's static, otherwise it will accumulate data from previous calls.
 
     for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
@@ -555,4 +556,3 @@ const char * llama_print_system_info(void) {
 
     return s.c_str();
 }
-

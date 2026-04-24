@@ -3,7 +3,7 @@
 #include "llama-kv-cache.h"
 
 #include <vector>
-
+using namespace std;
 //
 // llama_kv_cache_iswa
 //
@@ -56,7 +56,7 @@ public:
     llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
-    std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
+    map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
 
     // state write/load
 
@@ -75,8 +75,8 @@ private:
 
     const bool unified;
 
-    std::unique_ptr<llama_kv_cache> kv_base;
-    std::unique_ptr<llama_kv_cache> kv_swa;
+    unique_ptr<llama_kv_cache> kv_base;
+    unique_ptr<llama_kv_cache> kv_swa;
 };
 
 class llama_kv_cache_iswa_context : public llama_memory_context_i {
@@ -101,7 +101,7 @@ public:
             llama_kv_cache_iswa * kv,
             slot_info_vec_t sinfos_base,
             slot_info_vec_t sinfos_swa,
-            std::vector<llama_ubatch> ubatches);
+            vector<llama_ubatch> ubatches);
 
     virtual ~llama_kv_cache_iswa_context();
 
@@ -128,7 +128,7 @@ private:
     // the index of the next ubatch to process
     size_t i_next = 0;
 
-    std::vector<llama_ubatch> ubatches;
+    vector<llama_ubatch> ubatches;
 
     const llama_memory_context_ptr ctx_base;
     const llama_memory_context_ptr ctx_swa;

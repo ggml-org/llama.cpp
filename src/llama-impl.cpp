@@ -9,7 +9,7 @@
 #include <cstring>
 #include <vector>
 #include <sstream>
-
+using namespace std;
 struct llama_logger_state {
     ggml_log_callback log_callback = llama_log_callback_default;
     void * log_callback_user_data = nullptr;
@@ -66,39 +66,39 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
     fflush(stderr);
 }
 
-void replace_all(std::string & s, const std::string & search, const std::string & replace) {
+void replace_all(string & s, const string & search, const string & replace) {
     if (search.empty()) {
         return;
     }
-    std::string builder;
+    string builder;
     builder.reserve(s.length());
     size_t pos = 0;
     size_t last_pos = 0;
-    while ((pos = s.find(search, last_pos)) != std::string::npos) {
+    while ((pos = s.find(search, last_pos)) != string::npos) {
         builder.append(s, last_pos, pos - last_pos);
         builder.append(replace);
         last_pos = pos + search.length();
     }
-    builder.append(s, last_pos, std::string::npos);
-    s = std::move(builder);
+    builder.append(s, last_pos, string::npos);
+    s = move(builder);
 }
 
-std::string format(const char * fmt, ...) {
+string format(const char * fmt, ...) {
     va_list ap;
     va_list ap2;
     va_start(ap, fmt);
     va_copy(ap2, ap);
     int size = vsnprintf(NULL, 0, fmt, ap);
     GGML_ASSERT(size >= 0 && size < INT_MAX); // NOLINT
-    std::vector<char> buf(size + 1);
+    vector<char> buf(size + 1);
     int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
     GGML_ASSERT(size2 == size);
     va_end(ap2);
     va_end(ap);
-    return std::string(buf.data(), size);
+    return string(buf.data(), size);
 }
 
-std::string llama_format_tensor_shape(const std::vector<int64_t> & ne) {
+string llama_format_tensor_shape(const vector<int64_t> & ne) {
     char buf[256];
     snprintf(buf, sizeof(buf), "%6" PRId64, ne.at(0));
     for (size_t i = 1; i < ne.size(); i++) {
@@ -107,7 +107,7 @@ std::string llama_format_tensor_shape(const std::vector<int64_t> & ne) {
     return buf;
 }
 
-std::string llama_format_tensor_shape(const struct ggml_tensor * t) {
+string llama_format_tensor_shape(const struct ggml_tensor * t) {
     char buf[256];
     snprintf(buf, sizeof(buf), "%6" PRId64, t->ne[0]);
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
@@ -116,24 +116,24 @@ std::string llama_format_tensor_shape(const struct ggml_tensor * t) {
     return buf;
 }
 
-static std::string gguf_data_to_str(enum gguf_type type, const void * data, int i) {
+static string gguf_data_to_str(enum gguf_type type, const void * data, int i) {
     switch (type) {
-        case GGUF_TYPE_UINT8:   return std::to_string(((const uint8_t  *)data)[i]);
-        case GGUF_TYPE_INT8:    return std::to_string(((const int8_t   *)data)[i]);
-        case GGUF_TYPE_UINT16:  return std::to_string(((const uint16_t *)data)[i]);
-        case GGUF_TYPE_INT16:   return std::to_string(((const int16_t  *)data)[i]);
-        case GGUF_TYPE_UINT32:  return std::to_string(((const uint32_t *)data)[i]);
-        case GGUF_TYPE_INT32:   return std::to_string(((const int32_t  *)data)[i]);
-        case GGUF_TYPE_UINT64:  return std::to_string(((const uint64_t *)data)[i]);
-        case GGUF_TYPE_INT64:   return std::to_string(((const int64_t  *)data)[i]);
-        case GGUF_TYPE_FLOAT32: return std::to_string(((const float    *)data)[i]);
-        case GGUF_TYPE_FLOAT64: return std::to_string(((const double   *)data)[i]);
+        case GGUF_TYPE_UINT8:   return to_string(((const uint8_t  *)data)[i]);
+        case GGUF_TYPE_INT8:    return to_string(((const int8_t   *)data)[i]);
+        case GGUF_TYPE_UINT16:  return to_string(((const uint16_t *)data)[i]);
+        case GGUF_TYPE_INT16:   return to_string(((const int16_t  *)data)[i]);
+        case GGUF_TYPE_UINT32:  return to_string(((const uint32_t *)data)[i]);
+        case GGUF_TYPE_INT32:   return to_string(((const int32_t  *)data)[i]);
+        case GGUF_TYPE_UINT64:  return to_string(((const uint64_t *)data)[i]);
+        case GGUF_TYPE_INT64:   return to_string(((const int64_t  *)data)[i]);
+        case GGUF_TYPE_FLOAT32: return to_string(((const float    *)data)[i]);
+        case GGUF_TYPE_FLOAT64: return to_string(((const double   *)data)[i]);
         case GGUF_TYPE_BOOL:    return ((const int8_t *)data)[i] != 0 ? "true" : "false";
         default:                return format("unknown type %d", type);
     }
 }
 
-std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
+string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
     const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
 
     switch (type) {
@@ -144,11 +144,11 @@ std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
                 const enum gguf_type arr_type = gguf_get_arr_type(ctx_gguf, i);
                 int arr_n = gguf_get_arr_n(ctx_gguf, i);
                 const void * data = arr_type == GGUF_TYPE_STRING ? nullptr : gguf_get_arr_data(ctx_gguf, i);
-                std::stringstream ss;
+                stringstream ss;
                 ss << "[";
                 for (int j = 0; j < arr_n; j++) {
                     if (arr_type == GGUF_TYPE_STRING) {
-                        std::string val = gguf_get_arr_str(ctx_gguf, i, j);
+                        string val = gguf_get_arr_str(ctx_gguf, i, j);
                         // escape quotes
                         replace_all(val, "\\", "\\\\");
                         replace_all(val, "\"", "\\\"");

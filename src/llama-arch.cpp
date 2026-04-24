@@ -5,8 +5,8 @@
 #include <map>
 #include <set>
 #include <vector>
-
-static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+using namespace std;
+static const map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_CLIP,             "clip"             }, // dummy, only used by llama-quantize
     { LLM_ARCH_LLAMA,            "llama"            },
     { LLM_ARCH_LLAMA4,           "llama4"           },
@@ -136,7 +136,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
-static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+static const map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_GENERAL_TYPE,                     "general.type"                          },
     { LLM_KV_GENERAL_ARCHITECTURE,             "general.architecture"                  },
     { LLM_KV_GENERAL_QUANTIZATION_VERSION,     "general.quantization_version"          },
@@ -340,7 +340,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKENIZER_MIDDLE_ID, "tokenizer.ggml.middle_token_id" },
 };
 
-static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+static const map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_TOKEN_EMBD,                             "token_embd" },
     { LLM_TENSOR_OUTPUT_NORM,                            "output_norm" },
     { LLM_TENSOR_OUTPUT_NORM_LFM2,                       "token_embd_norm" }, // fix for wrong tensor name
@@ -559,7 +559,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
 //   assignment of the buffer types and extra overhead during computation
 // example: https://github.com/ggml-org/llama.cpp/pull/17548
 //
-static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+static const map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_TOKEN_EMBD,                 {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
     {LLM_TENSOR_POS_EMBD,                   {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
     {LLM_TENSOR_TOKEN_TYPES,                {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
@@ -771,8 +771,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
 
-std::string LLM_KV::operator()(llm_kv kv) const {
-    std::string name = ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
+string LLM_KV::operator()(llm_kv kv) const {
+    string name = ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
 
     if (suffix != nullptr) {
         name += ".";
@@ -785,12 +785,12 @@ std::string LLM_KV::operator()(llm_kv kv) const {
 LLM_TN_IMPL::LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid)
     : arch(arch), tensor(tensor), suffix(suffix), bid(bid), xid(xid) {}
 
-std::string LLM_TN_IMPL::str() const {
+string LLM_TN_IMPL::str() const {
     if (LLM_TENSOR_NAMES.find(tensor) == LLM_TENSOR_NAMES.end()) {
         GGML_ABORT("unknown tensor name for tensor id %d", static_cast<int>(tensor));
     }
 
-    std::string name = ::format(LLM_TENSOR_NAMES.at(tensor), bid, xid);
+    string name = ::format(LLM_TENSOR_NAMES.at(tensor), bid, xid);
     if (suffix != nullptr) {
         name += ".";
         name += suffix;
@@ -799,8 +799,8 @@ std::string LLM_TN_IMPL::str() const {
     return name;
 }
 
-std::vector<llm_arch> llm_arch_all() {
-    std::vector<llm_arch> ret;
+vector<llm_arch> llm_arch_all() {
+    vector<llm_arch> ret;
     ret.reserve(LLM_ARCH_NAMES.size());
     for (const auto & [arch, _] : LLM_ARCH_NAMES) {
         ret.push_back(arch);
@@ -816,7 +816,7 @@ const char * llm_arch_name(llm_arch arch) {
     return it->second;
 }
 
-llm_arch llm_arch_from_string(const std::string & name) {
+llm_arch llm_arch_from_string(const string & name) {
     for (const auto & kv : LLM_ARCH_NAMES) { // NOLINT
         if (kv.second == name) {
             return kv.first;

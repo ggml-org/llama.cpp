@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
-
+using namespace std;
 struct ggml_tensor;
 
 class llama_io_write_i {
@@ -17,7 +17,7 @@ public:
     // bytes written so far
     virtual size_t n_bytes() = 0;
 
-    void write_string(const std::string & str);
+    void write_string(const string & str);
 };
 
 class llama_io_read_i {
@@ -31,5 +31,5 @@ public:
     // bytes read so far
     virtual size_t n_bytes() = 0;
 
-    void read_string(std::string & str);
+    void read_string(string & str);
 };

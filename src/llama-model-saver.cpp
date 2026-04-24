@@ -11,7 +11,7 @@
 
 #include <cstdint>
 #include <string>
-
+using namespace std;
 bool llama_model_saver_supports_arch(llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_QWEN3NEXT:
@@ -100,27 +100,27 @@ void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, c
         }
     }
 
-    if (std::is_same<typename Container::value_type, uint8_t>::value) {
+    if (is_same<typename Container::value_type, uint8_t>::value) {
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_UINT8, value.data(), n_values);
-    } else if (std::is_same<typename Container::value_type, int8_t>::value) {
+    } else if (is_same<typename Container::value_type, int8_t>::value) {
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_INT8, value.data(), n_values);
-    } else if (std::is_same<typename Container::value_type, uint32_t>::value) {
+    } else if (is_same<typename Container::value_type, uint32_t>::value) {
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_UINT32, value.data(), n_values);
-    } else if (std::is_same<typename Container::value_type, int32_t>::value) {
+    } else if (is_same<typename Container::value_type, int32_t>::value) {
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_INT32, value.data(), n_values);
-    } else if (std::is_same<typename Container::value_type, float>::value) {
+    } else if (is_same<typename Container::value_type, float>::value) {
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_FLOAT32, value.data(), n_values);
-    } else if (std::is_same<Container, std::string>::value) {
+    } else if (is_same<Container, string>::value) {
         gguf_set_val_str(gguf_ctx, llm_kv(key).c_str(), reinterpret_cast<const char *>(value.data()));
     } else {
         GGML_ABORT("fatal error");
     }
 }
 // instantiate for external usage:
-template void llama_model_saver::add_kv<std::vector<uint32_t>>(const enum llm_kv, const std::vector<uint32_t> &, const bool);
+template void llama_model_saver::add_kv<vector<uint32_t>>(const enum llm_kv, const vector<uint32_t> &, const bool);
 
-void llama_model_saver::add_kv(const enum llm_kv key, const std::vector<std::string> & value) {
-    std::vector<const char *> tmp(value.size());
+void llama_model_saver::add_kv(const enum llm_kv key, const vector<string> & value) {
+    vector<const char *> tmp(value.size());
     for (size_t i = 0; i < value.size(); ++i) {
         tmp[i] = value[i].c_str();
     }
@@ -132,7 +132,7 @@ void llama_model_saver::add_tensor(const struct ggml_tensor * tensor) {
         return;
     }
     if (gguf_find_tensor(gguf_ctx, tensor->name) >= 0) {
-        const std::string tensor_name = tensor->name;
+        const string tensor_name = tensor->name;
         GGML_ASSERT(
             tensor_name == "rope_freqs.weight" || tensor_name == "rope_factors_long.weight" ||
             tensor_name == "rope_factors_short.weight"); // FIXME
@@ -146,9 +146,9 @@ void llama_model_saver::add_kv_from_model() {
     const llama_vocab   & vocab   = model->vocab;
 
     const int32_t n_vocab = vocab.n_tokens();
-    std::vector<std::string> tokens(n_vocab);
-    std::vector<float>       scores(n_vocab);
-    std::vector<int32_t>     token_types(n_vocab);
+    vector<string> tokens(n_vocab);
+    vector<float>       scores(n_vocab);
+    vector<int32_t>     token_types(n_vocab);
 
     if (vocab.get_type() != LLAMA_VOCAB_TYPE_NONE) {
         for (int32_t id = 0; id < n_vocab; ++id) {
@@ -380,7 +380,7 @@ void llama_model_saver::add_kv_from_model() {
 
 void llama_model_saver::add_tensors_from_model() {
     if (model->output != nullptr &&
-            std::string(model->output->name) != std::string(model->tok_embd->name)) {
+            string(model->output->name) != string(model->tok_embd->name)) {
         add_tensor(model->tok_embd); // some models use the same tensor for tok_embd and output
     }
     add_tensor(model->type_embd);
@@ -405,7 +405,7 @@ void llama_model_saver::add_tensors_from_model() {
     }
 }
 
-void llama_model_saver::save(const std::string & path_model) {
+void llama_model_saver::save(const string & path_model) {
     gguf_write_to_file(gguf_ctx, path_model.c_str(), false);
 }
 

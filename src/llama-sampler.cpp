@@ -19,43 +19,44 @@
 #include <random>
 #include <unordered_map>
 #include <stdexcept>
+using namespace std;
 
-// the ring buffer works similarly to std::deque, but with a fixed capacity
+// the ring buffer works similarly to deque, but with a fixed capacity
 template<typename T>
 struct ring_buffer {
     ring_buffer(size_t cap) : capacity(cap), data(cap) {}
 
     T & front() {
         if (sz == 0) {
-            throw std::runtime_error("ring buffer is empty");
+            throw runtime_error("ring buffer is empty");
         }
         return data[first];
     }
 
     const T & front() const {
         if (sz == 0) {
-            throw std::runtime_error("ring buffer is empty");
+            throw runtime_error("ring buffer is empty");
         }
         return data[first];
     }
 
     T & back() {
         if (sz == 0) {
-            throw std::runtime_error("ring buffer is empty");
+            throw runtime_error("ring buffer is empty");
         }
         return data[pos];
     }
 
     const T & back() const {
         if (sz == 0) {
-            throw std::runtime_error("ring buffer is empty");
+            throw runtime_error("ring buffer is empty");
         }
         return data[pos];
     }
 
     void push_back(const T & value) {
         if (capacity == 0) {
-            throw std::runtime_error("ring buffer: capacity is zero");
+            throw runtime_error("ring buffer: capacity is zero");
         }
 
         if (sz == capacity) {
@@ -70,7 +71,7 @@ struct ring_buffer {
 
     T pop_front() {
         if (sz == 0) {
-            throw std::runtime_error("ring buffer is empty");
+            throw runtime_error("ring buffer is empty");
         }
         T value = data[first];
         first = (first + 1) % capacity;
@@ -80,27 +81,27 @@ struct ring_buffer {
 
     //T & operator[](size_t i) {
     //    if (i >= sz) {
-    //        throw std::runtime_error("ring buffer: index out of bounds");
+    //        throw runtime_error("ring buffer: index out of bounds");
     //    }
     //    return data[(first + i) % capacity];
     //}
 
     //const T & at(size_t i) const {
     //    if (i >= sz) {
-    //        throw std::runtime_error("ring buffer: index out of bounds");
+    //        throw runtime_error("ring buffer: index out of bounds");
     //    }
     //    return data[(first + i) % capacity];
     //}
 
     const T & rat(size_t i) const {
         if (i >= sz) {
-            throw std::runtime_error("ring buffer: index out of bounds");
+            throw runtime_error("ring buffer: index out of bounds");
         }
         return data[(first + sz - i - 1) % capacity];
     }
 
-    std::vector<T> to_vector() const {
-        std::vector<T> result;
+    vector<T> to_vector() const {
+        vector<T> result;
         result.reserve(sz);
         for (size_t i = 0; i < sz; i++) {
             result.push_back(data[(first + i) % capacity]);
@@ -128,11 +129,11 @@ struct ring_buffer {
     size_t first = 0;
     size_t pos = 0;
 
-    std::vector<T> data;
+    vector<T> data;
 };
 
 // writes result in res, does not mutate cur
-static void llama_token_data_array_partial_sort(const llama_token_data_array & cur, int npartial, std::vector<llama_token_data> & res) {
+static void llama_token_data_array_partial_sort(const llama_token_data_array & cur, int npartial, vector<llama_token_data> & res) {
     static const auto comp = [](const llama_token_data & a, const llama_token_data & b) {
         return a.logit > b.logit;
     };
@@ -143,17 +144,17 @@ static void llama_token_data_array_partial_sort(const llama_token_data_array & c
     constexpr float bucket_scale = nbuckets/(bucket_high - bucket_low);
     constexpr float bucket_inter = -bucket_low * bucket_scale;
 
-    std::vector<int> bucket_idx;
-    std::vector<int> histo(nbuckets, 0);
+    vector<int> bucket_idx;
+    vector<int> histo(nbuckets, 0);
 
-    std::vector<llama_token_data*> bucket_ptrs;
+    vector<llama_token_data*> bucket_ptrs;
 
     bucket_idx.reserve(cur.size);
 
     for (int i = 0; i < (int)cur.size; ++i) {
         const float val = cur.data[i].logit;
         int ib = int(bucket_scale * val + bucket_inter); //nbuckets * (val - bucket_low) / (bucket_high - bucket_low);
-        ib = std::max(0, std::min(nbuckets - 1, ib));
+        ib = max(0, min(nbuckets - 1, ib));
         bucket_idx.push_back(ib);
         ++histo[ib];
     }
@@ -182,11 +183,11 @@ static void llama_token_data_array_partial_sort(const llama_token_data_array & c
     ptr = res.data();
     int ndone = 0;
     for (int j = nbuckets - 1; j > ib; --j) {
-        std::sort(ptr, ptr + histo[j], comp);
+        sort(ptr, ptr + histo[j], comp);
         ptr += histo[j];
         ndone += histo[j];
     }
-    std::partial_sort(ptr, ptr + npartial - ndone, ptr + histo[ib], comp);
+    partial_sort(ptr, ptr + npartial - ndone, ptr + histo[ib], comp);
 }
 
 // reduces the size of cur_p to npartial, keeping only the top npartial elements
@@ -196,7 +197,7 @@ static void llama_token_data_array_partial_sort_inplace(llama_token_data_array *
     };
 
     if (npartial <= 128) {
-        std::partial_sort(cur_p->data, cur_p->data + npartial, cur_p->data + cur_p->size, comp);
+        partial_sort(cur_p->data, cur_p->data + npartial, cur_p->data + cur_p->size, comp);
 
         cur_p->size = npartial;
         cur_p->sorted = true;
@@ -204,17 +205,17 @@ static void llama_token_data_array_partial_sort_inplace(llama_token_data_array *
         return;
     }
 
-    std::vector<llama_token_data> tmp;
+    vector<llama_token_data> tmp;
 
     llama_token_data_array_partial_sort(*cur_p, npartial, tmp);
 
-    std::copy(tmp.data(), tmp.data() + npartial, cur_p->data);
+    copy(tmp.data(), tmp.data() + npartial, cur_p->data);
 
     cur_p->size = npartial;
     cur_p->sorted = true;
 }
 
-static int llama_sample_dist(llama_token_data_array * cur_p, std::mt19937 & rng) {
+static int llama_sample_dist(llama_token_data_array * cur_p, mt19937 & rng) {
     // iterator for the probabilities
 #ifdef __GNUC__
     #pragma GCC diagnostic push
@@ -222,7 +223,7 @@ static int llama_sample_dist(llama_token_data_array * cur_p, std::mt19937 & rng)
 #endif
 
     struct probs_iterator {
-        typedef std::input_iterator_tag iterator_category;
+        typedef input_iterator_tag iterator_category;
         typedef float value_type;
         typedef float * pointer;
         typedef float & reference;
@@ -241,14 +242,14 @@ static int llama_sample_dist(llama_token_data_array * cur_p, std::mt19937 & rng)
     #pragma GCC diagnostic pop
 #endif
 
-    std::discrete_distribution<int> dist(probs_iterator{cur_p->data}, probs_iterator{cur_p->data + cur_p->size});
+    discrete_distribution<int> dist(probs_iterator{cur_p->data}, probs_iterator{cur_p->data + cur_p->size});
 
     return dist(rng);
 }
 
 /*
 static void llama_log_softmax(float * array, size_t size) {
-    float max_l = *std::max_element(array, array + size);
+    float max_l = *max_element(array, array + size);
     float sum = 0.f;
     for (size_t i = 0; i < size; ++i) {
         float p = expf(array[i] - max_l);
@@ -297,7 +298,7 @@ static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, bool do_s
     float max_l = cur_p->data[0].logit;
     if (!cur_p->sorted) {
         for (size_t i = 1; i < cur_p->size; ++i) {
-            max_l = std::max(max_l, cur_p->data[i].logit);
+            max_l = max(max_l, cur_p->data[i].logit);
         }
     }
 
@@ -323,7 +324,7 @@ static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) 
         return;
     }
 
-    k = std::min(k, (int) cur_p->size);
+    k = min(k, (int) cur_p->size);
 
     // Sort scores in descending order
     if (!cur_p->sorted) {
@@ -335,12 +336,12 @@ static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) 
 
 static uint32_t get_rng_seed(uint32_t seed) {
     if (seed == LLAMA_DEFAULT_SEED) {
-        // use system clock if std::random_device is not a true RNG
-        static bool is_rd_prng = std::random_device().entropy() == 0;
+        // use system clock if random_device is not a true RNG
+        static bool is_rd_prng = random_device().entropy() == 0;
         if (is_rd_prng) {
-            return (uint32_t) std::chrono::system_clock::now().time_since_epoch().count();
+            return (uint32_t) chrono::system_clock::now().time_since_epoch().count();
         }
-        std::random_device rd;
+        random_device rd;
         return rd();
     }
     return seed;
@@ -548,8 +549,8 @@ struct llama_sampler_backend {
     }
 
 private:
-    std::string name;
-    std::string name_ext;
+    string name;
+    string name_ext;
 
     bool is_init;
     bool support;
@@ -573,7 +574,7 @@ static bool llama_sampler_backend_support(
 
     ggml_context_ptr ctx_ptr { ggml_init(params) };
     if (!ctx_ptr) {
-        throw std::runtime_error(format("failed to create ggml context"));
+        throw runtime_error(format("failed to create ggml context"));
     }
 
     ggml_context * ctx = ctx_ptr.get();
@@ -821,8 +822,8 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
     const int n_vocab = llama_vocab_n_tokens(vocab);
 
     // use pre-allocated buffer from chain if available, otherwise allocate locally
-    std::vector<llama_token_data> * cur_ptr;
-    std::vector<llama_token_data> cur_local;
+    vector<llama_token_data> * cur_ptr;
+    vector<llama_token_data> cur_local;
 
     if (smpl->iface == &llama_sampler_chain_i) {
         auto * chain = (llama_sampler_chain *) smpl->ctx;
@@ -1023,7 +1024,7 @@ struct llama_sampler_dist : public llama_sampler_backend {
     const uint32_t seed;
           uint32_t seed_cur;
 
-    std::mt19937 rng;
+    mt19937 rng;
 
     ggml_tensor * inp_uniform;
 };
@@ -1053,7 +1054,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     float max_l = cur_p->data[0].logit;
     if (!cur_p->sorted) {
         for (size_t i = 1; i < cur_p->size; ++i) {
-            max_l = std::max(max_l, cur_p->data[i].logit);
+            max_l = max(max_l, cur_p->data[i].logit);
         }
     }
 
@@ -1069,7 +1070,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     // sample from the obtained probabilities and normalize the probs in a single pass
     // this is ~3x faster on Mac with full gpt-oss vocab than the version below
     //
-    std::uniform_real_distribution<double> dist(0.0f, 1.0f);
+    uniform_real_distribution<double> dist(0.0f, 1.0f);
     const double rnd = dist(ctx->rng);
 
           double sum_run = 0.0f;
@@ -1205,10 +1206,10 @@ static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
 
     // We sample in double precision and cast to float to match rnd numbers of
     // llama_dampler_dist which uses double precision (sampling from
-    // std::uniform_real_distribution<double> and
-    // std::uniform_real_distribution<float> with same rng will produce
+    // uniform_real_distribution<double> and
+    // uniform_real_distribution<float> with same rng will produce
     // different sequences).
-    std::uniform_real_distribution<double> dist(0.0f, 1.0f);
+    uniform_real_distribution<double> dist(0.0f, 1.0f);
     const float rnd = dist(sctx->rng);
 
     ggml_backend_tensor_set(sctx->inp_uniform, &rnd, 0, sizeof(float));
@@ -1235,7 +1236,7 @@ struct llama_sampler * llama_sampler_init_dist(uint32_t seed) {
             ("dist"),
             /* .seed        = */ seed,
             /* .seed_cur    = */ seed_cur,
-            /* .rng         = */ std::mt19937(seed_cur),
+            /* .rng         = */ mt19937(seed_cur),
             /* .inp_uniform = */ nullptr,
         }
     );
@@ -1340,7 +1341,7 @@ struct llama_sampler_top_p : public llama_sampler_backend {
     const float  p;
     const size_t min_keep;
 
-    std::vector<llama_token_data> buf_sort;
+    vector<llama_token_data> buf_sort;
 };
 
 static const char * llama_sampler_top_p_name(const struct llama_sampler * smpl) {
@@ -1364,7 +1365,7 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
 
     // if not sorted, try adaptive top-k sorting
     if (!cur_p->sorted && cur_p->size > 1024) {
-        k = std::min<size_t>(256, cur_p->size);
+        k = min<size_t>(256, cur_p->size);
         llama_token_data_array_partial_sort(*cur_p, k, buf_sort);
         pdata = buf_sort.data();
     } else if (!cur_p->sorted) {
@@ -1396,7 +1397,7 @@ static void llama_sampler_top_p_apply(struct llama_sampler * smpl, llama_token_d
 
     // Resize the output vector to keep only the top-p tokens
     if (!cur_p->sorted) {
-        std::copy(buf_sort.data(), buf_sort.data() + last_idx, cur_p->data);
+        copy(buf_sort.data(), buf_sort.data() + last_idx, cur_p->data);
         cur_p->sorted = true;
     }
 
@@ -1551,11 +1552,11 @@ static void llama_sampler_min_p_apply(struct llama_sampler * smpl, llama_token_d
 
     // if the cur_p aren't sorted, try the unsorted implementation first
     if (!cur_p->sorted) {
-        std::vector<llama_token_data> filtered_tokens;
+        vector<llama_token_data> filtered_tokens;
 
         float max_logit = -FLT_MAX;
         for (size_t i = 0; i < cur_p->size; ++i) {
-            max_logit = std::max(max_logit, cur_p->data[i].logit);
+            max_logit = max(max_logit, cur_p->data[i].logit);
         }
         const float min_logit = max_logit + logf(ctx->p); // min logit for p_i >= p * p_max
 
@@ -1567,7 +1568,7 @@ static void llama_sampler_min_p_apply(struct llama_sampler * smpl, llama_token_d
 
         // if we have enough values the operation was a success
         if (!filtered_tokens.empty() && filtered_tokens.size() >= ctx->min_keep) {
-            std::copy(filtered_tokens.begin(), filtered_tokens.end(), cur_p->data);
+            copy(filtered_tokens.begin(), filtered_tokens.end(), cur_p->data);
             cur_p->size = filtered_tokens.size();
             min_p_applied = true;
         }
@@ -1713,17 +1714,17 @@ static void llama_sampler_typical_apply(struct llama_sampler * smpl, llama_token
     }
 
     // Compute the absolute difference between negative log probability and entropy for each candidate
-    std::vector<float> shifted_scores;
+    vector<float> shifted_scores;
     for (size_t i = 0; i < cur_p->size; ++i) {
         float shifted_score = fabsf(-logf(cur_p->data[i].p) - entropy);
         shifted_scores.push_back(shifted_score);
     }
 
     // Sort tokens based on the shifted_scores and their corresponding indices
-    std::vector<size_t> indices(cur_p->size);
-    std::iota(indices.begin(), indices.end(), 0);
+    vector<size_t> indices(cur_p->size);
+    iota(indices.begin(), indices.end(), 0);
 
-    std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
+    sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
         return shifted_scores[a] < shifted_scores[b];
     });
 
@@ -1743,14 +1744,14 @@ static void llama_sampler_typical_apply(struct llama_sampler * smpl, llama_token
     }
 
     // Resize the output vector to keep only the locally typical tokens
-    std::vector<llama_token_data> cur_p_new;
+    vector<llama_token_data> cur_p_new;
     for (size_t i = 0; i < last_idx; ++i) {
         size_t idx = indices[i];
         cur_p_new.push_back(cur_p->data[idx]);
     }
 
     // Replace the data in cur_p with the cur_p_new data
-    std::copy(cur_p_new.begin(), cur_p_new.end(), cur_p->data);
+    copy(cur_p_new.begin(), cur_p_new.end(), cur_p->data);
     cur_p->size = cur_p_new.size();
     cur_p->sorted = false;
 }
@@ -1913,7 +1914,7 @@ static const char * llama_sampler_temp_ext_name(const struct llama_sampler * smp
 static void llama_sampler_temp_ext_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_temp_ext *) smpl->ctx;
     if (ctx->delta > 0) {
-        const float min_temp = std::max(0.0f, ctx->temp - ctx->delta);
+        const float min_temp = max(0.0f, ctx->temp - ctx->delta);
         const float max_temp = ctx->temp + ctx->delta;
 
         float exponent_val = ctx->exponent;
@@ -2016,7 +2017,7 @@ static void llama_sampler_temp_ext_backend_apply(
     }
 
     // Calculate min_temp, max_temp, and max_entropy.
-    const float min_temp    = std::max(0.0f, sctx->temp - sctx->delta);
+    const float min_temp    = max(0.0f, sctx->temp - sctx->delta);
     const float max_temp    = sctx->temp + sctx->delta;
     const float max_entropy = logf(data->logits->ne[0]);
 
@@ -2108,7 +2109,7 @@ struct llama_sampler_xtc {
     const uint32_t seed;
     uint32_t       seed_cur;
 
-    std::mt19937   rng;
+    mt19937   rng;
 };
 
 static const char * llama_sampler_xtc_name(const struct llama_sampler * /*smpl*/) {
@@ -2124,7 +2125,7 @@ static void llama_sample_xtc_apply(struct llama_sampler * smpl, llama_token_data
         return;
     }
 
-    std::uniform_real_distribution<float> distribution(0.0f, 1.0f);
+    uniform_real_distribution<float> distribution(0.0f, 1.0f);
     float chance = distribution(ctx->rng);
     if (chance > ctx->probability) {
         return;
@@ -2202,7 +2203,7 @@ struct llama_sampler * llama_sampler_init_xtc(float p, float t, size_t min_keep,
             /* .min_keep      = */ min_keep,
             /* .seed          = */ seed,
             /* .seed_cur      = */ seed_cur,
-            /* .rng           = */ std::mt19937(seed_cur),
+            /* .rng           = */ mt19937(seed_cur),
         }
     );
 }
@@ -2222,7 +2223,7 @@ struct llama_sampler_mirostat {
 
     float mu;
 
-    std::mt19937    rng;
+    mt19937    rng;
 };
 
 static const char * llama_sampler_mirostat_name(const struct llama_sampler * /*smpl*/) {
@@ -2250,7 +2251,7 @@ static void llama_sampler_mirostat_apply(struct llama_sampler * smpl, llama_toke
     float epsilon_hat = s_hat - 1;
     float k = powf((epsilon_hat * powf(2, ctx->mu)) / (1 - powf(ctx->n_vocab, -epsilon_hat)), 1 / s_hat);
 
-    llama_sampler_top_k_impl(cur_p, std::max(int(k), 1));
+    llama_sampler_top_k_impl(cur_p, max(int(k), 1));
 
     llama_sampler_softmax_impl(cur_p, true);
 
@@ -2317,7 +2318,7 @@ struct llama_sampler * llama_sampler_init_mirostat(int32_t n_vocab, uint32_t see
             /* .eta      = */ eta,
             /* .m        = */ m,
             /* .mu       = */ 2.0f*tau,
-            /* .rng      = */ std::mt19937(seed_cur),
+            /* .rng      = */ mt19937(seed_cur),
         }
     );
 }
@@ -2333,7 +2334,7 @@ struct llama_sampler_mirostat_v2 {
 
     float mu;
 
-    std::mt19937 rng;
+    mt19937 rng;
 };
 
 static const char * llama_sampler_mirostat_v2_name(const struct llama_sampler * /*smpl*/) {
@@ -2346,7 +2347,7 @@ static void llama_sampler_mirostat_v2_apply(struct llama_sampler * smpl, llama_t
     llama_sampler_softmax_impl(cur_p, true);
 
     // Truncate the words with surprise values greater than mu
-    cur_p->size = std::distance(cur_p->data, std::find_if(cur_p->data, cur_p->data + cur_p->size, [&](const llama_token_data & candidate) {
+    cur_p->size = distance(cur_p->data, find_if(cur_p->data, cur_p->data + cur_p->size, [&](const llama_token_data & candidate) {
         return -log2f(candidate.p) > ctx->mu;
     }));
 
@@ -2418,7 +2419,7 @@ struct llama_sampler * llama_sampler_init_mirostat_v2(uint32_t seed, float tau, 
             /* .tau      = */ tau,
             /* .eta      = */ eta,
             /* .mu       = */ 2.0f*tau,
-            /* .rng      = */ std::mt19937(seed_cur),
+            /* .rng      = */ mt19937(seed_cur),
         }
     );
 }
@@ -2428,8 +2429,8 @@ struct llama_sampler * llama_sampler_init_mirostat_v2(uint32_t seed, float tau, 
 struct llama_sampler_grammar {
     const struct llama_vocab * vocab;
 
-    std::string grammar_str;
-    std::string grammar_root;
+    string grammar_str;
+    string grammar_root;
 
     struct llama_grammar * grammar;
 };
@@ -2471,7 +2472,7 @@ static void llama_sampler_grammar_reset(struct llama_sampler * smpl) {
         return;
     }
 
-    std::vector<const char *>  trigger_patterns_c;
+    vector<const char *>  trigger_patterns_c;
     trigger_patterns_c.reserve(ctx->grammar->trigger_patterns.size());
     for (auto & trigger_pattern : ctx->grammar->trigger_patterns) {
         trigger_patterns_c.push_back(trigger_pattern.pattern.c_str());
@@ -2543,22 +2544,22 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
     auto * ctx = new llama_sampler_grammar;
 
     if (grammar_str != nullptr && grammar_str[0] != '\0') {
-        std::string trigger_pattern;
+        string trigger_pattern;
         llama_grammar * grammar = nullptr;
         // TODO: remove trigger_words support.
         if (trigger_words != nullptr && num_trigger_words > 0) {
             GGML_ASSERT(trigger_patterns == nullptr && num_trigger_patterns == 0);
             trigger_pattern = "[\\s\\S]*?(";
             for (size_t i = 0; i < num_trigger_words; ++i) {
-                static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
+                static const regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
                 if (i > 0) {
                     trigger_pattern += "|";
                 }
-                trigger_pattern += std::regex_replace(trigger_words[i], special_chars, "\\$0");
+                trigger_pattern += regex_replace(trigger_words[i], special_chars, "\\$0");
             }
             trigger_pattern += ")[\\s\\S]*";
 
-            std::array<const char *, 1> tmp_trigger_patterns = { trigger_pattern.c_str() };
+            array<const char *, 1> tmp_trigger_patterns = { trigger_pattern.c_str() };
             grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, tmp_trigger_patterns.data(), tmp_trigger_patterns.size(), trigger_tokens, num_trigger_tokens);
         } else {
             grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, trigger_patterns, num_trigger_patterns, trigger_tokens, num_trigger_tokens);
@@ -2628,7 +2629,7 @@ struct llama_sampler_penalties {
     ring_buffer<llama_token> prev;
 
     // a frequency map to count token occurrences
-    std::unordered_map<llama_token, int> token_count;
+    unordered_map<llama_token, int> token_count;
 };
 
 static const char * llama_sampler_penalties_name(const struct llama_sampler * /*smpl*/) {
@@ -2657,8 +2658,8 @@ static void llama_sampler_penalties_accept(struct llama_sampler * smpl, llama_to
 
 #if 0
     // sanity check
-    std::unordered_map<llama_token, int> tmp;
-    for (int i = 0; i < std::min<int>(ctx->penalty_last_n, ctx->prev.size()); ++i) {
+    unordered_map<llama_token, int> tmp;
+    for (int i = 0; i < min<int>(ctx->penalty_last_n, ctx->prev.size()); ++i) {
         tmp[ctx->prev.rat(i)]++;
     }
 
@@ -2745,7 +2746,7 @@ struct llama_sampler * llama_sampler_init_penalties(
         float penalty_repeat,
         float penalty_freq,
         float penalty_present) {
-    penalty_last_n = std::max(penalty_last_n, 0);
+    penalty_last_n = max(penalty_last_n, 0);
 
     const bool is_empty = (penalty_last_n == 0 || (penalty_repeat == 1.0f && penalty_freq == 0.0f && penalty_present == 0.0f));
 
@@ -2790,7 +2791,7 @@ static void llama_sampler_top_n_sigma_apply(struct llama_sampler * smpl, llama_t
     for (size_t i = 0; i < cur_p->size; ++i) {
         // Only count non-negative infinity values
         if (cur_p->data[i].logit != -INFINITY) {
-            max = std::max(max, cur_p->data[i].logit);
+            max = max(max, cur_p->data[i].logit);
             logits_sum += cur_p->data[i].logit;
             valid_count++;
         }
@@ -2864,23 +2865,23 @@ struct llama_sampler_dry {
     const int32_t dry_allowed_length;
     const int32_t dry_penalty_last_n;
 
-    std::unordered_multimap<llama_token, std::vector<llama_token>> dry_processed_breakers;
-    std::vector<int> dry_repeat_count;
-    std::unordered_map<llama_token, int> dry_max_token_repeat;
+    unordered_multimap<llama_token, vector<llama_token>> dry_processed_breakers;
+    vector<int> dry_repeat_count;
+    unordered_map<llama_token, int> dry_max_token_repeat;
     ring_buffer<llama_token> last_tokens;
 };
 
 // Ported from Koboldcpp, original PR: https://github.com/LostRuins/koboldcpp/pull/982 (Original author: pi6am)
-static void get_overlapping_token_sequences(const llama_vocab & vocab, const std::string& str, std::unordered_multimap<llama_token, std::vector<llama_token>>& token_sequences, int max_tail_len = -1) {
+static void get_overlapping_token_sequences(const llama_vocab & vocab, const string& str, unordered_multimap<llama_token, vector<llama_token>>& token_sequences, int max_tail_len = -1) {
     for (llama_token token_id = 0; token_id < (llama_token) vocab.n_tokens(); token_id++) {
-        std::string word = vocab.detokenize({token_id}, true);
-        if (word.find(str) != std::string::npos) {
-            token_sequences.emplace(token_id, std::vector<llama_token>());
+        string word = vocab.detokenize({token_id}, true);
+        if (word.find(str) != string::npos) {
+            token_sequences.emplace(token_id, vector<llama_token>());
         } else {
             size_t word_len = word.size();
             size_t str_len = str.size();
             size_t pos = -1;
-            while ((pos = word.find(str[0], pos + 1)) != std::string::npos) {
+            while ((pos = word.find(str[0], pos + 1)) != string::npos) {
                 bool match = true;
                 size_t i;
                 for (i = 1; i < str_len && i + pos < word_len; ++i) {
@@ -2890,7 +2891,7 @@ static void get_overlapping_token_sequences(const llama_vocab & vocab, const std
                     }
                 }
                 if (match) {
-                    std::vector<llama_token> tokenization = vocab.tokenize(str.substr(i), false, false);
+                    vector<llama_token> tokenization = vocab.tokenize(str.substr(i), false, false);
                     if (max_tail_len >= 0 && tokenization.size() > (size_t)max_tail_len) {
                         tokenization.resize(max_tail_len);
                     }
@@ -2934,8 +2935,8 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
         return;
     }
 
-    int32_t effective_dry_penalty_last_n = (ctx->dry_penalty_last_n == -1) ? ctx->total_context_size : std::max(ctx->dry_penalty_last_n, 0);
-    int last_n_repeat = std::min(std::min((int)ctx->last_tokens.size(), effective_dry_penalty_last_n), ctx->total_context_size);
+    int32_t effective_dry_penalty_last_n = (ctx->dry_penalty_last_n == -1) ? ctx->total_context_size : max(ctx->dry_penalty_last_n, 0);
+    int last_n_repeat = min(min((int)ctx->last_tokens.size(), effective_dry_penalty_last_n), ctx->total_context_size);
 
     if (last_n_repeat <= ctx->dry_allowed_length) {
         return;
@@ -3040,7 +3041,7 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
                 while (n + k < last_n_repeat && ctx->last_tokens.rat(n) == ctx->last_tokens.rat(n+k)) {
                     ++n;
                 }
-                ctx->dry_repeat_count[last - k] = std::min(n, rep_limit);
+                ctx->dry_repeat_count[last - k] = min(n, rep_limit);
                 if (n > 0) {
                     lt = k;
                     rt = k + n - 1;
@@ -3052,7 +3053,7 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
                 int right_part_len = rt - k + 1;
 
                 if (ctx->dry_repeat_count[last - p] < right_part_len) {
-                    int n = std::min(ctx->dry_repeat_count[last - p], rep_limit);
+                    int n = min(ctx->dry_repeat_count[last - p], rep_limit);
                     ctx->dry_repeat_count[last - k] = n;
                 } else {
                     int i = rt + 1;
@@ -3060,7 +3061,7 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
                         i += 1;
                     }
 
-                    int n = std::min(i - k, rep_limit);
+                    int n = min(i - k, rep_limit);
                     ctx->dry_repeat_count[last - k] = n;
                     lt = k;
                     rt = i - 1;
@@ -3099,11 +3100,11 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
     // Step 4: Apply logit penalties based on the maximum repeat length for relevant tokens.
 
     // Prevent floating point overflow in `pow(penalty_base, exponent)` by clamping to `max_exponent`.
-    // Compute it from `penalty_base` and the approximate log of `std::numeric_limits<float>::max()`
+    // Compute it from `penalty_base` and the approximate log of `numeric_limits<float>::max()`
     const float FLOAT_MAX_LOG = 88.7228391f;
     int max_exponent = 0;
     if (ctx->dry_base > 1.000001f) {
-        max_exponent = FLOAT_MAX_LOG / std::log(ctx->dry_base);
+        max_exponent = FLOAT_MAX_LOG / log(ctx->dry_base);
     }
 
     for (size_t i = 0; i < cur_p->size; ++i) {
@@ -3126,7 +3127,7 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
                 if (max_exponent > 0 && repeat_exp > max_exponent) {
                     repeat_exp = max_exponent;
                 }
-                float penalty = ctx->dry_multiplier * std::pow(ctx->dry_base, repeat_exp);
+                float penalty = ctx->dry_multiplier * pow(ctx->dry_base, repeat_exp);
                 cur_p->data[i].logit -= penalty;
             }
         }
@@ -3180,8 +3181,8 @@ static struct llama_sampler_i llama_sampler_dry_i = {
 };
 
 struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, int32_t n_ctx_train, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers) {
-    int32_t effective_dry_penalty_last_n = (dry_penalty_last_n == -1) ? n_ctx_train : std::max(dry_penalty_last_n, 0);
-    std::unordered_multimap<llama_token, std::vector<llama_token>> processed_breakers;
+    int32_t effective_dry_penalty_last_n = (dry_penalty_last_n == -1) ? n_ctx_train : max(dry_penalty_last_n, 0);
+    unordered_multimap<llama_token, vector<llama_token>> processed_breakers;
     const int MAX_CHAR_LEN = 40;
     const int MAX_SEQ_LEN = 20;
 
@@ -3194,12 +3195,12 @@ struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, 
     if (dry_enabled && seq_breakers != nullptr && num_breakers > 0) {
         // Process sequence breakers
         for (size_t i = 0; i < num_breakers; ++i) {
-            if (seq_breakers[i] == nullptr || std::strlen(seq_breakers[i]) == 0) {
+            if (seq_breakers[i] == nullptr || strlen(seq_breakers[i]) == 0) {
                 LLAMA_LOG_WARN("skipping null or empty DRY sequence breaker at index %zu\n", i);
                 continue;
             }
 
-            std::string sequence_break(seq_breakers[i]);
+            string sequence_break(seq_breakers[i]);
             if (sequence_break.empty()) {
                 LLAMA_LOG_WARN("skipping empty DRY sequence breaker\n");
                 continue;
@@ -3222,8 +3223,8 @@ struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, 
             /* .dry_base               = */ dry_base,
             /* .dry_allowed_length     = */ dry_allowed_length,
             /* .dry_penalty_last_n     = */ dry_penalty_last_n,
-            /* .dry_processed_breakers = */ std::move(processed_breakers),
-            /* .dry_repeat_count       = */ dry_enabled ? std::vector<int>(effective_dry_penalty_last_n, 0) : std::vector<int>{},
+            /* .dry_processed_breakers = */ move(processed_breakers),
+            /* .dry_repeat_count       = */ dry_enabled ? vector<int>(effective_dry_penalty_last_n, 0) : vector<int>{},
             /* .dry_max_token_repeat   = */ {},
             /* .last_tokens            = */ dry_enabled ? ring_buffer<llama_token>(effective_dry_penalty_last_n) : ring_buffer<llama_token>(0),
         }
@@ -3231,7 +3232,7 @@ struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, 
 }
 
 // wrapper for test-sampling.cpp
-struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const std::vector<std::vector<llama_token>>& seq_breakers) {
+struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const vector<vector<llama_token>>& seq_breakers) {
     llama_vocab dummy_vocab;
     auto * result = llama_sampler_init_dry(&dummy_vocab, context_size, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, NULL, 0);
     auto * ctx = (llama_sampler_dry *) result->ctx;
@@ -3247,8 +3248,8 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
                 continue;
             }
             llama_token head_token = breaker[0];
-            std::vector<llama_token> tail_tokens(breaker.begin() + 1, breaker.end());
-            ctx->dry_processed_breakers.emplace(head_token, std::move(tail_tokens));
+            vector<llama_token> tail_tokens(breaker.begin() + 1, breaker.end());
+            ctx->dry_processed_breakers.emplace(head_token, move(tail_tokens));
         }
 
         if (ctx->dry_processed_breakers.empty()) {
@@ -3273,10 +3274,10 @@ struct llama_sampler_adaptive_p {
     const float        decay;             // EMA decay; history ~= 1/(1-decay) tokens (0.0 - 0.99)
     const uint32_t     seed;              // original RNG seed
     uint32_t           seed_cur;          // actual RNG seed
-    std::mt19937       rng;               // RNG state
+    mt19937       rng;               // RNG state
     float              weighted_sum;      // sum(p_i * decay^i)
     float              total_weight;      // sum(decay^i), converges to 1/(1-decay)
-    std::vector<float> original_probs;    // pre-transform probs, cached for EMA update
+    vector<float> original_probs;    // pre-transform probs, cached for EMA update
     llama_token        pending_token_id;  // token ID of selected token
     int32_t            pending_token_idx; // index of orig. prob. of selected token in original_probs
 };
@@ -3310,8 +3311,8 @@ static void llama_sampler_adaptive_p_apply(struct llama_sampler * smpl, llama_to
     }
 
     // using the EMA, compute the adapted target probability for the current sampling step
-    auto target = std::clamp(ctx->target, 0.0f, 1.0f);
-    float adapted_target = std::clamp(
+    auto target = clamp(ctx->target, 0.0f, 1.0f);
+    float adapted_target = clamp(
         ctx->total_weight == 0.0f ? target : 2.0f * target - (ctx->weighted_sum / ctx->total_weight),
         0.0f, 1.0f
     );
@@ -3328,7 +3329,7 @@ static void llama_sampler_adaptive_p_apply(struct llama_sampler * smpl, llama_to
             // (as masked out by e.g. min-p and top-p when using backend sampling)
             continue;
         }
-        float dist = std::abs((cur_p->data[i].p - adapted_target) * INV_WIDTH);
+        float dist = abs((cur_p->data[i].p - adapted_target) * INV_WIDTH);
         cur_p->data[i].logit = PEAK_LOGIT_VALUE - SHARPNESS * dist * dist / (1.0f + dist);
     }
 
@@ -3405,7 +3406,7 @@ struct llama_sampler * llama_sampler_init_adaptive_p(
     uint32_t seed
 ) {
     auto seed_cur = get_rng_seed(seed);
-    float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
+    float clamped_decay = clamp(decay, 0.0f, 0.99f);
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_adaptive_p_i,
         /* .ctx   = */ new llama_sampler_adaptive_p {
@@ -3413,7 +3414,7 @@ struct llama_sampler * llama_sampler_init_adaptive_p(
             /* .decay             = */ clamped_decay,
             /* .seed              = */ seed,
             /* .seed_cur          = */ seed_cur,
-            /* .rng               = */ std::mt19937(seed_cur),
+            /* .rng               = */ mt19937(seed_cur),
             /* .weighted_sum      = */ target / (1.0f - clamped_decay),
             /* .total_weight      = */ 1.0f / (1.0f - clamped_decay),
             /* .original_probs    = */ {},
@@ -3428,9 +3429,9 @@ struct llama_sampler * llama_sampler_init_adaptive_p(
 struct llama_sampler_logit_bias : public llama_sampler_backend {
     const int32_t n_vocab;
 
-    const std::vector<llama_logit_bias> logit_bias;
+    const vector<llama_logit_bias> logit_bias;
 
-    std::vector<llama_logit_bias> to_search;
+    vector<llama_logit_bias> to_search;
 
     struct ggml_tensor * inp_logit_bias;
     struct ggml_tensor * inp_logit_idxs;
@@ -3526,8 +3527,8 @@ static void llama_sampler_logit_bias_backend_set_input(struct llama_sampler * sm
 
     const size_t n = sctx->logit_bias.size();
 
-    std::vector<float>   data_logit_bias(n, 0.0f);
-    std::vector<int32_t> data_logit_idxs(n, 0);
+    vector<float>   data_logit_bias(n, 0.0f);
+    vector<int32_t> data_logit_idxs(n, 0);
     for (size_t i = 0; i < n; ++i) {
         const auto & lb = sctx->logit_bias[i];
         GGML_ASSERT(lb.token >= 0 && lb.token < (int32_t) sctx->n_vocab);
@@ -3583,7 +3584,7 @@ struct llama_sampler * llama_sampler_init_logit_bias(
         /* .ctx   = */ new llama_sampler_logit_bias {
             ("logit-bias"),
             /* .n_vocab        = */ n_vocab,
-            /* .logit_bias     = */ std::vector<llama_logit_bias>(logit_bias, logit_bias + n_logit_bias),
+            /* .logit_bias     = */ vector<llama_logit_bias>(logit_bias, logit_bias + n_logit_bias),
             /* .to_search      = */ {},
             /* .inp_logit_bias = */ nullptr,
             /* .inp_logit_idxs = */ nullptr,
@@ -3598,8 +3599,8 @@ struct llama_sampler * llama_sampler_init_logit_bias(
 struct llama_sampler_infill {
     const struct llama_vocab * vocab;
 
-    std::vector<char> buf0;
-    std::vector<char> buf1;
+    vector<char> buf0;
+    vector<char> buf1;
 };
 
 static const char * llama_sampler_infill_name(const struct llama_sampler * /*smpl*/) {
@@ -3696,7 +3697,7 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
 
                 // merge into the token with higher probability
                 if (cur_p->data[i1].p > cur_p->data[i0].p) {
-                    std::swap(dst, src);
+                    swap(dst, src);
                 }
 
                 cur_p->data[dst].p += cur_p->data[src].p;
@@ -3816,8 +3817,8 @@ struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * voca
         /* .iface = */ &llama_sampler_infill_i,
         /* .ctx   = */ new llama_sampler_infill {
             /* .vocab = */ vocab,
-            /* .buf0  = */ std::vector<char>(512),
-            /* .buf1  = */ std::vector<char>(512),
+            /* .buf0  = */ vector<char>(512),
+            /* .buf1  = */ vector<char>(512),
         }
     );
 }
@@ -3862,7 +3863,7 @@ struct llama_perf_sampler_data llama_perf_sampler(const struct llama_sampler * c
     const auto * ctx = (const struct llama_sampler_chain *) chain->ctx;
 
     data.t_sample_ms = 1e-3 * ctx->t_sample_us;
-    data.n_sample    = std::max(0, ctx->n_sample);
+    data.n_sample    = max(0, ctx->n_sample);
 
     return data;
 }

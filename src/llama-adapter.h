@@ -7,7 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-
+using namespace std;
 // TODO: pimpl
 
 //
@@ -33,13 +33,13 @@ private:
     int32_t layer_start = -1;
     int32_t layer_end   = -1;
 
-    std::vector<ggml_context_ptr> ctxs;
-    std::vector<ggml_backend_buffer_ptr> bufs;
+    vector<ggml_context_ptr> ctxs;
+    vector<ggml_backend_buffer_ptr> bufs;
 
-    std::vector<ggml_tensor *> tensors; // per layer
+    vector<ggml_tensor *> tensors; // per layer
 };
 
-using llama_adapter_cvec_ptr = std::shared_ptr<llama_adapter_cvec>;
+using llama_adapter_cvec_ptr = shared_ptr<llama_adapter_cvec>;
 
 //
 // llama_adapter_lora
@@ -64,18 +64,18 @@ struct llama_adapter_lora {
     llama_model * model = nullptr;
 
     // map tensor name to lora_a_b
-    std::unordered_map<std::string, llama_adapter_lora_weight> ab_map;
+    unordered_map<string, llama_adapter_lora_weight> ab_map;
 
-    std::vector<ggml_context_ptr> ctxs;
-    std::vector<ggml_backend_buffer_ptr> bufs;
+    vector<ggml_context_ptr> ctxs;
+    vector<ggml_backend_buffer_ptr> bufs;
 
     float alpha;
 
     // gguf metadata
-    std::unordered_map<std::string, std::string> gguf_kv;
+    unordered_map<string, string> gguf_kv;
 
     // activated lora (aLoRA)
-    std::vector<llama_token> alora_invocation_tokens;
+    vector<llama_token> alora_invocation_tokens;
 
     explicit llama_adapter_lora(llama_model * model) : model(model) {}
     ~llama_adapter_lora() = default;
@@ -87,5 +87,5 @@ struct llama_adapter_lora {
     }
 };
 
-using llama_adapter_loras = std::unordered_map<llama_adapter_lora *, float>;
-using llama_adapter_loras_ptr = std::unique_ptr<llama_adapter_loras>;
+using llama_adapter_loras = unordered_map<llama_adapter_lora *, float>;
+using llama_adapter_loras_ptr = unique_ptr<llama_adapter_loras>;

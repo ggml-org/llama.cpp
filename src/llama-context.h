@@ -12,7 +12,7 @@
 
 #include <map>
 #include <vector>
-
+using namespace std;
 struct llama_model;
 class llama_batch_allocr;
 
@@ -182,8 +182,8 @@ struct llama_context {
     void opt_epoch_iter(
             ggml_opt_dataset_t               dataset,
             ggml_opt_result_t                result,
-            const std::vector<llama_token> & tokens,
-            const std::vector<llama_token> & labels_sparse,
+            const vector<llama_token> & tokens,
+            const vector<llama_token> & labels_sparse,
             llama_batch                    & batch,
             ggml_opt_epoch_callback          callback,
             bool                             train,
@@ -253,7 +253,7 @@ private:
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
-    std::unique_ptr<llama_memory_i> memory;
+    unique_ptr<llama_memory_i> memory;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
@@ -264,47 +264,47 @@ private:
 
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active
-        std::map<llama_seq_id, llama_sampler *> samplers;
+        map<llama_seq_id, llama_sampler *> samplers;
 
         buffer_view<float>       logits     = {nullptr, 0};
         buffer_view<llama_token> sampled    = {nullptr, 0};
         buffer_view<float>       probs      = {nullptr, 0};
         buffer_view<llama_token> candidates = {nullptr, 0};
 
-        std::vector<uint32_t> logits_count;
-        std::vector<uint32_t> probs_count;
-        std::vector<uint32_t> candidates_count;
+        vector<uint32_t> logits_count;
+        vector<uint32_t> probs_count;
+        vector<uint32_t> candidates_count;
 
         // optimization
-        std::vector<llama_token> token_ids_full_vocab;
+        vector<llama_token> token_ids_full_vocab;
     };
 
     sampling_info sampling;
 
     // sequence embeddings output (map of [n_embd] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE
-    std::map<llama_seq_id, std::vector<float>> embd_seq;
+    map<llama_seq_id, vector<float>> embd_seq;
 
     // reuse the batch_allocr to avoid unnecessary memory allocations
-    std::unique_ptr<llama_batch_allocr> balloc;
+    unique_ptr<llama_batch_allocr> balloc;
 
     uint32_t n_outputs = 0; // number of actually-used outputs in the current ubatch or last logical batch
 
-    std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
+    vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
 
     struct swap_info {
         uint32_t i0;
         uint32_t i1;
     };
 
-    std::vector<swap_info> output_swaps;
+    vector<swap_info> output_swaps;
 
     ggml_backend_sched_ptr sched;
 
     bool sched_need_reserve = true;
 
     ggml_backend_t backend_cpu = nullptr;
-    std::vector<ggml_backend_ptr> backends;
+    vector<ggml_backend_ptr> backends;
 
     // training
     ggml_opt_context_t opt_ctx = nullptr;
@@ -315,12 +315,12 @@ private:
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
 
-    std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
+    vector<pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
 
     // pointers and buffer types used for the compute buffer of each backend
-    std::vector<ggml_backend_t>             backend_ptrs;
-    std::vector<ggml_backend_buffer_type_t> backend_buft;
-    std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
+    vector<ggml_backend_t>             backend_ptrs;
+    vector<ggml_backend_buffer_type_t> backend_buft;
+    vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
     llm_graph_result_ptr gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;

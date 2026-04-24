@@ -7,7 +7,7 @@
 
 #include <unordered_map>
 #include <vector>
-
+using namespace std;
 struct llama_cparams;
 struct llama_hparams;
 struct llama_model;
@@ -25,22 +25,22 @@ public:
             return ssrc.empty();
         }
 
-        std::vector<uint32_t> ssrc;
-        std::vector<uint32_t> sdst;
+        vector<uint32_t> ssrc;
+        vector<uint32_t> sdst;
     };
 
     // for each ubatch, create a slot_info that contains information about where the ubatch should be inserted in the
     //   KV cells. for example, cell indices for each token, such that: token[i] -> goes to cells[idxs[i]]
     struct slot_info {
         // data for ggml_set_rows
-        using idx_vec_t = std::vector<uint32_t>;
+        using idx_vec_t = vector<uint32_t>;
 
         // number of streams: ns = s1 - s0 + 1
         uint32_t s0;
         uint32_t s1;
 
-        std::vector<llama_seq_id> strm; // [ns]
-        std::vector<idx_vec_t>    idxs; // [ns]
+        vector<llama_seq_id> strm; // [ns]
+        vector<idx_vec_t>    idxs; // [ns]
 
         uint32_t head() const {
             GGML_ASSERT(idxs.size() == 1);
@@ -91,7 +91,7 @@ public:
         }
     };
 
-    using slot_info_vec_t = std::vector<slot_info>;
+    using slot_info_vec_t = vector<slot_info>;
 
     llama_kv_cache(
             const llama_model & model,
@@ -136,7 +136,7 @@ public:
     llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
-    std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
+    map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
 
     // state write/load
 
@@ -175,7 +175,7 @@ public:
 
     // find places for the provided ubatches in the cache, returns the slot infos
     // return empty vector on failure
-    slot_info_vec_t prepare(const std::vector<llama_ubatch> & ubatches);
+    slot_info_vec_t prepare(const vector<llama_ubatch> & ubatches);
 
     bool update(llama_context * lctx, bool do_shift, const stream_copy_info & sc_info);
 
@@ -220,8 +220,8 @@ private:
         ggml_tensor * k;
         ggml_tensor * v;
 
-        std::vector<ggml_tensor *> k_stream;
-        std::vector<ggml_tensor *> v_stream;
+        vector<ggml_tensor *> k_stream;
+        vector<ggml_tensor *> v_stream;
     };
 
     bool v_trans = true;  // the value tensor is transposed
@@ -245,7 +245,7 @@ private:
     int32_t n_embd_head_v_all = 0;
 
     // pre-computed hadamard martrices
-    std::unordered_map<int64_t, std::vector<float>> attn_rot_hadamard;
+    unordered_map<int64_t, vector<float>> attn_rot_hadamard;
 
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
@@ -254,24 +254,24 @@ private:
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
-    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    vector<pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
 
     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
     // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
-    std::vector<uint32_t> v_heads;
+    vector<uint32_t> v_heads;
 
-    std::vector<llama_kv_cells> v_cells;
+    vector<llama_kv_cells> v_cells;
 
     // maps from a sequence id to a stream id
-    std::vector<uint32_t> seq_to_stream;
+    vector<uint32_t> seq_to_stream;
 
     // pending stream copies that will be applied during the next update
     stream_copy_info sc_info;
 
-    std::vector<kv_layer> layers;
+    vector<kv_layer> layers;
 
     // model layer id -> KV cache layer id
-    std::unordered_map<int32_t, int32_t> map_layer_ids;
+    unordered_map<int32_t, int32_t> map_layer_ids;
 
     size_t total_size() const;
 
@@ -296,7 +296,7 @@ private:
     struct cell_ranges_t {
         uint32_t strm;
 
-        std::vector<std::pair<uint32_t, uint32_t>> data; // ranges, from inclusive, to exclusive
+        vector<pair<uint32_t, uint32_t>> data; // ranges, from inclusive, to exclusive
     };
 
     void state_write_meta(llama_io_write_i & io, const cell_ranges_t & cr, llama_seq_id seq_id = -1) const;
@@ -330,7 +330,7 @@ public:
     llama_kv_cache_context(
             llama_kv_cache * kv,
             slot_info_vec_t sinfos,
-            std::vector<llama_ubatch> ubatches);
+            vector<llama_ubatch> ubatches);
 
     virtual ~llama_kv_cache_context();
 
@@ -408,7 +408,7 @@ private:
 
     slot_info_vec_t sinfos;
 
-    std::vector<llama_ubatch> ubatches;
+    vector<llama_ubatch> ubatches;
 
     //
     // data needed for building the compute graph for the current ubatch:

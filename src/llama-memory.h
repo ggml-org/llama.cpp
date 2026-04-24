@@ -5,7 +5,7 @@
 #include <map>
 #include <memory>
 #include <functional>
-
+using namespace std;
 struct llama_ubatch;
 
 class llama_batch_allocr;
@@ -61,17 +61,17 @@ struct llama_memory_context_i {
     virtual llama_memory_status get_status() const = 0;
 };
 
-using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;
+using llama_memory_context_ptr = unique_ptr<llama_memory_context_i>;
 
 // general concept of LLM memory
 // the KV cache is a type of LLM memory, but there can be other types
 struct llama_memory_i {
     // this callback is used to filter out layers that should not be included in the cache
-    using layer_filter_cb = std::function<bool(int32_t il)>;
+    using layer_filter_cb = function<bool(int32_t il)>;
 
     // this callback is used to specify which layers should reuse memory from other layers
     // return negative value to indicate that the layer il should not reuse memory
-    using layer_reuse_cb = std::function<int32_t(int32_t il)>;
+    using layer_reuse_cb = function<int32_t(int32_t il)>;
 
     virtual ~llama_memory_i() = default;
 
@@ -109,7 +109,7 @@ struct llama_memory_i {
     virtual llama_pos seq_pos_min(llama_seq_id seq_id) const = 0;
     virtual llama_pos seq_pos_max(llama_seq_id seq_id) const = 0;
 
-    virtual std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const = 0;
+    virtual map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const = 0;
 
     //
     // state write/read
@@ -119,4 +119,4 @@ struct llama_memory_i {
     virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) = 0;
 };
 
-using llama_memory_ptr = std::unique_ptr<llama_memory_i>;
+using llama_memory_ptr = unique_ptr<llama_memory_i>;

@@ -8,7 +8,7 @@
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
 #define LLAMA_MAX_EXPERTS 512 // Qwen3 Next
-
+using namespace std;
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX        = 1,
@@ -68,9 +68,9 @@ struct llama_hparams {
 
     uint32_t n_shortconv_l_cache  = 0;
 
-    std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
-    std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
-    std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
+    array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
+    array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
+    array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 
     uint32_t n_layer_dense_lead = 0;
     uint32_t n_lora_q           = 0;
@@ -126,7 +126,7 @@ struct llama_hparams {
     float    yarn_beta_fast   = 32.0f;
     float    yarn_beta_slow   =  1.0f;
 
-    std::array<int, 4> rope_sections;
+    array<int, 4> rope_sections;
 
     // Sliding Window Attention (SWA)
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
@@ -136,7 +136,7 @@ struct llama_hparams {
     // if swa_layers[il] == 0, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense
     // note: using uint32_t type for compatibility reason
-    std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
+    array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;
@@ -149,7 +149,7 @@ struct llama_hparams {
     uint32_t n_embd_head_kda = 0;
 
     // for hybrid state space models
-    std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
+    array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
     bool ssm_dt_b_c_rms = false;
 
@@ -197,10 +197,10 @@ struct llama_hparams {
     uint32_t dense_3_feat_out = 0;  // out_features of the 3_Dense
 
     // xIELU
-    std::array<float, LLAMA_MAX_LAYERS> xielu_alpha_n;
-    std::array<float, LLAMA_MAX_LAYERS> xielu_alpha_p;
-    std::array<float, LLAMA_MAX_LAYERS> xielu_beta;
-    std::array<float, LLAMA_MAX_LAYERS> xielu_eps;
+    array<float, LLAMA_MAX_LAYERS> xielu_alpha_n;
+    array<float, LLAMA_MAX_LAYERS> xielu_alpha_p;
+    array<float, LLAMA_MAX_LAYERS> xielu_beta;
+    array<float, LLAMA_MAX_LAYERS> xielu_eps;
 
     // DSA (deepseek sparse attention)
     uint32_t indexer_n_head    = 0;
@@ -224,8 +224,8 @@ struct llama_hparams {
 
 
     // Step35: optional per-layer clamps for (Swi)GLU
-    std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
-    std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_shexp; // shared expert
+    array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
+    array<float, LLAMA_MAX_LAYERS> swiglu_clamp_shexp; // shared expert
 
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
     // dense_first means whether the pattern is start with a dense layer
@@ -354,4 +354,4 @@ struct llama_hparams {
     bool use_mrope() const;
 };
 
-static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");
+static_assert(is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");

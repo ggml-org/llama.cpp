@@ -8,7 +8,7 @@
 
 #include <memory>
 #include <vector>
-
+using namespace std;
 //
 // llama_memory_hybrid_iswa
 //
@@ -68,7 +68,7 @@ public:
     llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
-    std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
+    map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
 
     // state write/load
 
@@ -85,8 +85,8 @@ public:
 private:
     const llama_hparams & hparams;
 
-    const std::unique_ptr<llama_kv_cache_iswa> mem_attn;
-    const std::unique_ptr<llama_memory_recurrent> mem_recr;
+    const unique_ptr<llama_kv_cache_iswa> mem_attn;
+    const unique_ptr<llama_memory_recurrent> mem_recr;
 };
 
 class llama_memory_hybrid_iswa_context : public llama_memory_context_i {
@@ -110,7 +110,7 @@ public:
            llama_memory_hybrid_iswa * mem,
                     slot_info_vec_t   sinfos_base,
                     slot_info_vec_t   sinfos_swa,
-          std::vector<llama_ubatch>   ubatches);
+          vector<llama_ubatch>   ubatches);
 
     ~llama_memory_hybrid_iswa_context() = default;
 
@@ -131,7 +131,7 @@ private:
     // the index of the next ubatch to process
     size_t i_next = 0;
 
-    std::vector<llama_ubatch> ubatches;
+    vector<llama_ubatch> ubatches;
 
     const llama_memory_context_ptr ctx_attn;
     const llama_memory_context_ptr ctx_recr;

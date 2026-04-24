@@ -4,7 +4,7 @@
 
 #include <algorithm>
 #include <cassert>
-
+using namespace std;
 void llama_hparams::set_swa_pattern(uint32_t n_pattern, bool dense_first) {
     if (dense_first) {
         for (uint32_t il = 0; il < n_layer; ++il) {
@@ -137,7 +137,7 @@ bool llama_hparams::is_n_embd_v_gqa_variable() const {
 uint32_t llama_hparams::n_embd_k_gqa_max() const {
     uint32_t val = n_embd_k_gqa();
     for (uint32_t il = 0; il < n_layer; ++il) {
-        val = std::max(val, n_embd_k_gqa(il));
+        val = max(val, n_embd_k_gqa(il));
     }
 
     return val;
@@ -146,7 +146,7 @@ uint32_t llama_hparams::n_embd_k_gqa_max() const {
 uint32_t llama_hparams::n_embd_v_gqa_max() const {
     uint32_t val = n_embd_v_gqa();
     for (uint32_t il = 0; il < n_layer; ++il) {
-        val = std::max(val, n_embd_v_gqa(il));
+        val = max(val, n_embd_v_gqa(il));
     }
 
     return val;

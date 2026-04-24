@@ -11,7 +11,7 @@
 #include <set>
 #include <functional>
 #include <map>
-
+using namespace std;
 struct ggml_cgraph;
 struct ggml_context;
 struct ggml_tensor;
@@ -67,10 +67,10 @@ struct llama_cross {
     int64_t n_enc  = 0;
 
     // embeddings data copied to host memory (tmp)
-    std::vector<float> v_embd;
+    vector<float> v_embd;
 
     // needed to construct the cross-attention mask in the decoder
-    std::vector<std::set<llama_seq_id>> seq_ids_enc;
+    vector<set<llama_seq_id>> seq_ids_enc;
 };
 
 struct llm_graph_params;
@@ -103,7 +103,7 @@ protected:
     int debug = 0;
 };
 
-using llm_graph_input_ptr = std::unique_ptr<llm_graph_input_i>;
+using llm_graph_input_ptr = unique_ptr<llm_graph_input_i>;
 
 class llm_graph_input_embd : public llm_graph_input_i {
 public:
@@ -420,11 +420,11 @@ class llm_graph_input_mem_hybrid : public llm_graph_input_i {
 public:
     llm_graph_input_mem_hybrid(
             const llama_cparams & cparams,
-            std::unique_ptr<llm_graph_input_attn_kv> inp_attn,
-            std::unique_ptr<llm_graph_input_rs>      inp_rs,
+            unique_ptr<llm_graph_input_attn_kv> inp_attn,
+            unique_ptr<llm_graph_input_rs>      inp_rs,
             const llama_memory_hybrid_context *      mctx) :
-        inp_attn(std::move(inp_attn)),
-        inp_rs(std::move(inp_rs)),
+        inp_attn(move(inp_attn)),
+        inp_rs(move(inp_rs)),
         cparams(cparams),
         mctx(mctx) { }
     virtual ~llm_graph_input_mem_hybrid() = default;
@@ -433,8 +433,8 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override;
 
-    std::unique_ptr<llm_graph_input_attn_kv> inp_attn;
-    std::unique_ptr<llm_graph_input_rs>      inp_rs;
+    unique_ptr<llm_graph_input_attn_kv> inp_attn;
+    unique_ptr<llm_graph_input_rs>      inp_rs;
 
     llm_graph_input_attn_kv * get_attn() const { return inp_attn.get(); }
     llm_graph_input_rs      * get_recr() const { return inp_rs.get(); }
@@ -448,11 +448,11 @@ class llm_graph_input_mem_hybrid_k : public llm_graph_input_i {
 public:
     llm_graph_input_mem_hybrid_k(
             const llama_cparams & cparams,
-            std::unique_ptr<llm_graph_input_attn_k> inp_attn,
-            std::unique_ptr<llm_graph_input_rs>      inp_rs,
+            unique_ptr<llm_graph_input_attn_k> inp_attn,
+            unique_ptr<llm_graph_input_rs>      inp_rs,
             const llama_memory_hybrid_context *      mctx) :
-        inp_attn(std::move(inp_attn)),
-        inp_rs(std::move(inp_rs)),
+        inp_attn(move(inp_attn)),
+        inp_rs(move(inp_rs)),
         cparams(cparams),
         mctx(mctx) { }
     virtual ~llm_graph_input_mem_hybrid_k() = default;
@@ -461,8 +461,8 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override;
 
-    std::unique_ptr<llm_graph_input_attn_k> inp_attn;
-    std::unique_ptr<llm_graph_input_rs>      inp_rs;
+    unique_ptr<llm_graph_input_attn_k> inp_attn;
+    unique_ptr<llm_graph_input_rs>      inp_rs;
 
     llm_graph_input_attn_k * get_attn() const { return inp_attn.get(); }
     llm_graph_input_rs      * get_recr() const { return inp_rs.get(); }
@@ -476,11 +476,11 @@ class llm_graph_input_mem_hybrid_iswa : public llm_graph_input_i {
 public:
     llm_graph_input_mem_hybrid_iswa(
             const llama_cparams & cparams,
-            std::unique_ptr<llm_graph_input_attn_kv_iswa> inp_attn,
-            std::unique_ptr<llm_graph_input_rs>          inp_rs,
+            unique_ptr<llm_graph_input_attn_kv_iswa> inp_attn,
+            unique_ptr<llm_graph_input_rs>          inp_rs,
             const llama_memory_hybrid_iswa_context *     mctx) :
-        inp_attn(std::move(inp_attn)),
-        inp_rs(std::move(inp_rs)),
+        inp_attn(move(inp_attn)),
+        inp_rs(move(inp_rs)),
         cparams(cparams),
         mctx(mctx) { }
     virtual ~llm_graph_input_mem_hybrid_iswa() = default;
@@ -489,8 +489,8 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override;
 
-    std::unique_ptr<llm_graph_input_attn_kv_iswa> inp_attn;
-    std::unique_ptr<llm_graph_input_rs>          inp_rs;
+    unique_ptr<llm_graph_input_attn_kv_iswa> inp_attn;
+    unique_ptr<llm_graph_input_rs>          inp_rs;
 
     llm_graph_input_attn_kv_iswa * get_attn() const { return inp_attn.get(); }
     llm_graph_input_rs           * get_recr() const { return inp_rs.get(); }
@@ -502,14 +502,14 @@ public:
 
 class llm_graph_input_sampling : public llm_graph_input_i {
 public:
-    llm_graph_input_sampling(std::map<llama_seq_id, llama_sampler *> samplers) :
-        samplers(std::move(samplers)) { }
+    llm_graph_input_sampling(map<llama_seq_id, llama_sampler *> samplers) :
+        samplers(move(samplers)) { }
     virtual ~llm_graph_input_sampling() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
     bool can_reuse(const llm_graph_params & params) override;
 
-    std::map<llama_seq_id, llama_sampler *> samplers;
+    map<llama_seq_id, llama_sampler *> samplers;
 };
 
 //
@@ -523,7 +523,7 @@ public:
 //   these are used by the llama_context to extact the relevant data, based on the compute parameters
 
 // callback that allows us to apply custom logic to each tensor (e.g. ggml-alloc, offloading, etc.)
-using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il)>;
+using llm_graph_cb = function<void(const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il)>;
 
 class llm_graph_result;
 
@@ -545,11 +545,11 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
-    std::map<llama_seq_id, llama_sampler *> samplers;
+    map<llama_seq_id, llama_sampler *> samplers;
 
     static bool samplers_equal(
-          const std::map<llama_seq_id, llama_sampler *> & lhs,
-          const std::map<llama_seq_id, llama_sampler *> & rhs) {
+          const map<llama_seq_id, llama_sampler *> & lhs,
+          const map<llama_seq_id, llama_sampler *> & rhs) {
         if (lhs.size() != rhs.size()) {
             return false;
         }
@@ -673,17 +673,17 @@ public:
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
 
-    std::map<llama_seq_id, ggml_tensor*> t_sampled_logits;
-    std::map<llama_seq_id, ggml_tensor*> t_candidates;
-    std::map<llama_seq_id, ggml_tensor*> t_sampled;
-    std::map<llama_seq_id, ggml_tensor*> t_sampled_probs;
+    map<llama_seq_id, ggml_tensor*> t_sampled_logits;
+    map<llama_seq_id, ggml_tensor*> t_candidates;
+    map<llama_seq_id, ggml_tensor*> t_sampled;
+    map<llama_seq_id, ggml_tensor*> t_sampled_probs;
 
-    std::vector<llm_graph_input_ptr> inputs;
+    vector<llm_graph_input_ptr> inputs;
 
     ggml_context_ptr ctx_compute;
 
     // memory buffers used to evaluate the model
-    std::vector<uint8_t> buf_compute_meta;
+    vector<uint8_t> buf_compute_meta;
 
     ggml_cgraph * gf;
 
@@ -699,14 +699,14 @@ private:
     int debug = 0;
 };
 
-using llm_graph_result_ptr = std::unique_ptr<llm_graph_result>;
+using llm_graph_result_ptr = unique_ptr<llm_graph_result>;
 
 //
 // llm_graph_context
 //
 
 // used in build_rs to properly order writes and avoid unnecessary copies
-using llm_graph_get_rows_fn = std::function<ggml_tensor * (ggml_context *, ggml_tensor * states, ggml_tensor * ids)>;
+using llm_graph_get_rows_fn = function<ggml_tensor * (ggml_context *, ggml_tensor * states, ggml_tensor * ids)>;
 
 struct llm_graph_qkv {
     ggml_tensor * q; // [n_embd_head, n_head,    n_tokens]
@@ -759,7 +759,7 @@ struct llm_graph_context {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
-    std::map<llama_seq_id, llama_sampler *> samplers;
+    map<llama_seq_id, llama_sampler *> samplers;
 
     const llm_graph_cb & cb_func;
 

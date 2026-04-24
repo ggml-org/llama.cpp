@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 #include <memory>
-
+using namespace std;
 // pre-tokenization types
 enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_DEFAULT         = 0,
@@ -66,7 +66,7 @@ struct llama_model_loader;
 
 struct llama_vocab {
     struct token_data {
-        std::string      text;
+        string      text;
         float            score;
         llama_token_attr attr;
     };
@@ -76,8 +76,8 @@ struct llama_vocab {
 
     void load(llama_model_loader & ml, const LLM_KV & kv);
 
-    std::string get_tokenizer_model() const;
-    std::string get_tokenizer_pre() const;
+    string get_tokenizer_model() const;
+    string get_tokenizer_pre() const;
 
     enum llama_vocab_type     get_type()     const;
     enum llama_vocab_pre_type get_pre_type() const;
@@ -85,7 +85,7 @@ struct llama_vocab {
     uint32_t n_tokens() const;
     uint32_t n_token_types() const;
 
-    std::string type_name() const;
+    string type_name() const;
 
     bool is_normal      (llama_token id) const;
     bool is_unknown     (llama_token id) const;
@@ -98,7 +98,7 @@ struct llama_vocab {
     uint8_t     token_to_byte(llama_token id) const;
     llama_token byte_to_token(uint8_t ch)     const;
 
-    llama_token text_to_token(const std::string & text) const;
+    llama_token text_to_token(const string & text) const;
 
     const token_data & get_token_data(llama_token id) const;
 
@@ -139,10 +139,10 @@ struct llama_vocab {
 
     int max_token_len() const;
 
-    int find_bpe_rank(const std::string & token_left, const std::string & token_right) const;
-    std::vector<std::string> get_bpe_merges() const;
+    int find_bpe_rank(const string & token_left, const string & token_right) const;
+    vector<string> get_bpe_merges() const;
 
-    std::vector<char> get_precompiled_charsmap() const;
+    vector<char> get_precompiled_charsmap() const;
 
     int32_t tokenize(
                    const char * text,
@@ -152,8 +152,8 @@ struct llama_vocab {
                          bool   add_special,
                          bool   parse_special) const;
 
-    std::vector<llama_token> tokenize(
-            const std::string & raw_text,
+    vector<llama_token> tokenize(
+            const string & raw_text,
                          bool   add_special,
                          bool   parse_special = false) const;
 
@@ -166,7 +166,7 @@ struct llama_vocab {
                          bool   special) const;
 
     // use cached data
-    const std::string & token_to_piece(llama_token token) const;
+    const string & token_to_piece(llama_token token) const;
 
     int32_t detokenize(
             const llama_token * tokens,
@@ -176,13 +176,13 @@ struct llama_vocab {
                          bool   remove_special,
                          bool   unparse_special) const;
 
-    std::string detokenize(
-            const std::vector<llama_token> & tokens,
+    string detokenize(
+            const vector<llama_token> & tokens,
                                       bool   special) const;
 
     void print_info() const;
 
 private:
     struct impl;
-    std::unique_ptr<impl> pimpl;
+    unique_ptr<impl> pimpl;
 };

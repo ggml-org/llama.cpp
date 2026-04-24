@@ -9,7 +9,7 @@
 #include <map>
 #include <set>
 #include <vector>
-
+using namespace std;
 struct llama_kv_cell_ext {
     // 2D spatial positions, typically used for M-RoPE
     llama_pos x = 0;
@@ -21,7 +21,7 @@ struct llama_kv_cell_ext {
     }
 
     void reset() {
-        static_assert(std::is_trivially_copyable_v<llama_kv_cell_ext>);
+        static_assert(is_trivially_copyable_v<llama_kv_cell_ext>);
 
         memset(this, 0, sizeof(*this));
     }
@@ -138,7 +138,7 @@ public:
     }
 
     // copy the state of cells [idxs[0], idxs[1], ..., idxs[idxs.size() - 1])
-    llama_kv_cells cp(const std::vector<uint32_t> & idxs) const {
+    llama_kv_cells cp(const vector<uint32_t> & idxs) const {
         llama_kv_cells res;
 
         res.resize(idxs.size());
@@ -188,7 +188,7 @@ public:
     }
 
     // set the state of cells [idxs[0], idxs[1], ..., idxs[idxs.size() - 1])
-    void set(const std::vector<uint32_t> & idxs, const llama_kv_cells & other) {
+    void set(const vector<uint32_t> & idxs, const llama_kv_cells & other) {
         assert(idxs.size() == other.pos.size());
 
         for (uint32_t j = 0; j < other.pos.size(); ++j) {
@@ -459,12 +459,12 @@ private:
     bool has_shift = false;
 
     // set of indices of used cells (i.e. pos[i] != -1, allowed to not have any seq_id)
-    std::set<uint32_t> used;
+    set<uint32_t> used;
 
-    std::vector<llama_pos> pos;
+    vector<llama_pos> pos;
 
     // stores extra info per cell
-    std::vector<llama_kv_cell_ext> ext;
+    vector<llama_kv_cell_ext> ext;
 
     // this array accumulates any applied shifts to the pos array since the last reset_shift() call
     // this is used to queue multiple updates to the pos array, which in the end can be applied in one go:
@@ -481,22 +481,22 @@ private:
     //      cells.reset_shift();
     //   }
     //
-    std::vector<llama_pos> shift;
+    vector<llama_pos> shift;
 
-    using seq_set_t = std::bitset<LLAMA_MAX_SEQ>;
+    using seq_set_t = bitset<LLAMA_MAX_SEQ>;
 
     // the bitset seq[i] tells us which sequences are currently occupying the i-th cell
-    std::vector<seq_set_t> seq;
+    vector<seq_set_t> seq;
 
     // the set seq_pos[s][p] tells us how many times the position p is currently present for sequence s
     // if the position p is not present, seq_pos[s][p] is not set
     // this way seq_pos[s].begin() and seq_pos[s].rbegin() give us the min/max positions currently in the cache
     //
-    // note that we cannot a use an std::set because in some cases a position can occur more than once for the same seq:
+    // note that we cannot a use an set because in some cases a position can occur more than once for the same seq:
     //  - during performing a cache reuse via (rm + add)
     //  - some vision models have input embeddings with repeating positions
     //
-    std::map<llama_pos, int> seq_pos[LLAMA_MAX_SEQ];
+    map<llama_pos, int> seq_pos[LLAMA_MAX_SEQ];
 
     // helper functions for updating `seq_pos`, once cell at a time:
 

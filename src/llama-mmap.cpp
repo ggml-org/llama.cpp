@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <cerrno>
 #include <algorithm>
-
+using namespace std;
 #ifdef __has_include
     #if __has_include(<unistd.h>)
         #include <unistd.h>
@@ -42,14 +42,14 @@
 
 // TODO: consider moving to llama-impl.h if needed in more places
 #if defined(_WIN32)
-static std::string llama_format_win_err(DWORD err) {
+static string llama_format_win_err(DWORD err) {
     LPSTR buf;
     size_t size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                                  NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&buf, 0, NULL);
     if (!size) {
         return "FormatMessageA failed";
     }
-    std::string ret(buf, size);
+    string ret(buf, size);
     LocalFree(buf);
     return ret;
 }
@@ -60,8 +60,8 @@ static std::string llama_format_win_err(DWORD err) {
 struct llama_file::impl {
 #if defined(_WIN32)
     HANDLE fp_win32;
-    std::string GetErrorMessageWin32(DWORD error_code) const {
-        std::string ret;
+    string GetErrorMessageWin32(DWORD error_code) const {
+        string ret;
         LPSTR lpMsgBuf = NULL;
         DWORD bufLen = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                                     NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&lpMsgBuf, 0, NULL);
@@ -78,7 +78,7 @@ struct llama_file::impl {
     impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) {
         fp = ggml_fopen(fname, mode);
         if (fp == NULL) {
-            throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
+            throw runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
         }
         fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
         seek(0, SEEK_END);
@@ -99,7 +99,7 @@ struct llama_file::impl {
         li.QuadPart = 0;
         BOOL ret = SetFilePointerEx(fp_win32, li, &li, FILE_CURRENT);
         if (!ret) {
-            throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            throw runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
         }
 
         return li.QuadPart;
@@ -114,21 +114,21 @@ struct llama_file::impl {
         li.QuadPart = offset;
         BOOL ret = SetFilePointerEx(fp_win32, li, NULL, whence);
         if (!ret) {
-            throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            throw runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
         }
     }
 
     void read_raw(void * ptr, size_t len) {
         size_t bytes_read = 0;
         while (bytes_read < len) {
-            size_t chunk_size = std::min<size_t>(len - bytes_read, 64*1024*1024);
+            size_t chunk_size = min<size_t>(len - bytes_read, 64*1024*1024);
             DWORD chunk_read = 0;
             BOOL result = ReadFile(fp_win32, reinterpret_cast<char*>(ptr) + bytes_read, chunk_size, &chunk_read, NULL);
             if (!result) {
-                throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+                throw runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
             }
             if (chunk_read < chunk_size || chunk_read == 0) {
-                throw std::runtime_error("unexpectedly reached end of file");
+                throw runtime_error("unexpectedly reached end of file");
             }
 
             bytes_read += chunk_read;
@@ -144,14 +144,14 @@ struct llama_file::impl {
     void write_raw(const void * ptr, size_t len) const {
         size_t bytes_written = 0;
         while (bytes_written < len) {
-            size_t chunk_size = std::min<size_t>(len - bytes_written, 64*1024*1024);
+            size_t chunk_size = min<size_t>(len - bytes_written, 64*1024*1024);
             DWORD chunk_written = 0;
             BOOL result = WriteFile(fp_win32, reinterpret_cast<char const*>(ptr) + bytes_written, chunk_size, &chunk_written, NULL);
             if (!result) {
-                throw std::runtime_error(format("write error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+                throw runtime_error(format("write error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
             }
             if (chunk_written < chunk_size || chunk_written == 0) {
-                throw std::runtime_error("unexpectedly failed to write bytes");
+                throw runtime_error("unexpectedly failed to write bytes");
             }
 
             bytes_written += chunk_written;
@@ -168,14 +168,14 @@ struct llama_file::impl {
 
     ~impl() {
         if (fp && owns_fp) {
-            std::fclose(fp);
+            fclose(fp);
         }
     }
 #else
     impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) : fname(fname) {
 #ifdef __linux__
         // Try unbuffered I/O for read only
-        if (use_direct_io && std::strcmp(mode, "rb") == 0) {
+        if (use_direct_io && strcmp(mode, "rb") == 0) {
             if (init_fd()) {
                 return;
             }
@@ -199,7 +199,7 @@ struct llama_file::impl {
 
             off_t ret = lseek(fd, 0, SEEK_SET);
             if (ret == -1) {
-                throw std::runtime_error(format("seek error: %s", strerror(errno)));
+                throw runtime_error(format("seek error: %s", strerror(errno)));
             }
             return true;
         }
@@ -210,7 +210,7 @@ struct llama_file::impl {
     void init_fp(const char * mode) {
         fp = ggml_fopen(fname.c_str(), mode);
         if (fp == NULL) {
-            throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
+            throw runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
         }
         seek(0, SEEK_END);
         size = tell();
@@ -226,9 +226,9 @@ struct llama_file::impl {
 
     size_t tell() const {
         if (fd == -1) {
-            long ret = std::ftell(fp);
+            long ret = ftell(fp);
             if (ret == -1) {
-                throw std::runtime_error(format("ftell error: %s", strerror(errno)));
+                throw runtime_error(format("ftell error: %s", strerror(errno)));
             }
 
             return (size_t) ret;
@@ -236,7 +236,7 @@ struct llama_file::impl {
 
         off_t pos = lseek(fd, 0, SEEK_CUR);
         if (pos == -1) {
-            throw std::runtime_error(format("lseek error: %s", strerror(errno)));
+            throw runtime_error(format("lseek error: %s", strerror(errno)));
         }
         return (size_t) pos;
     }
@@ -244,12 +244,12 @@ struct llama_file::impl {
     void seek(size_t offset, int whence) const {
         off_t ret = 0;
         if (fd == -1) {
-            ret = std::fseek(fp, (long) offset, whence);
+            ret = fseek(fp, (long) offset, whence);
         } else {
             ret = lseek(fd, offset, whence);
         }
         if (ret == -1) {
-            throw std::runtime_error(format("seek error: %s", strerror(errno)));
+            throw runtime_error(format("seek error: %s", strerror(errno)));
         }
     }
 
@@ -260,14 +260,14 @@ struct llama_file::impl {
         errno = 0;
         if (fd == -1) {
             const size_t curr_off = tell();
-            const size_t to_read = std::min(len, size - curr_off);
+            const size_t to_read = min(len, size - curr_off);
 
-            std::size_t ret = std::fread(ptr, to_read, 1, fp);
+            size_t ret = fread(ptr, to_read, 1, fp);
             if (ferror(fp)) {
-                throw std::runtime_error(format("read error: %s", strerror(errno)));
+                throw runtime_error(format("read error: %s", strerror(errno)));
             }
             if (to_read > 0 && ret != 1) {
-                throw std::runtime_error("unexpectedly reached end of file");
+                throw runtime_error("unexpectedly reached end of file");
             }
         } else {
             size_t bytes_read = 0;
@@ -279,7 +279,7 @@ struct llama_file::impl {
                     if (errno == EINTR) {
                         continue;  // Interrupted by signal, retry
                     }
-                    // Fallback to std::fread in case the DMA controller cannot access the buffer
+                    // Fallback to fread in case the DMA controller cannot access the buffer
                     if (errno == EFAULT || errno == EINVAL) {
                         LLAMA_LOG_WARN("%s: Falling back to buffered IO due to %s\n", __func__, strerror(errno));
                         auto curr_off = tell();
@@ -291,16 +291,16 @@ struct llama_file::impl {
                         read_raw_unsafe(ptr, len);
                         return;
                     }
-                    throw std::runtime_error(format("read error: %s", strerror(errno)));
+                    throw runtime_error(format("read error: %s", strerror(errno)));
                 }
                 if (ret == 0) {
                     // EOF: allow if this read was only pulling alignment padding past file end
                     off_t pos = lseek(fd, 0, SEEK_CUR);
                     if (pos != -1 && (size_t) pos == size) {
-                        std::memset(reinterpret_cast<char *>(ptr) + bytes_read, 0, len - bytes_read);
+                        memset(reinterpret_cast<char *>(ptr) + bytes_read, 0, len - bytes_read);
                         return;
                     }
-                    throw std::runtime_error("unexpectedly reached end of file");
+                    throw runtime_error("unexpectedly reached end of file");
                 }
 
                 bytes_read += (size_t) ret;
@@ -317,13 +317,13 @@ struct llama_file::impl {
         void * raw_buffer = nullptr;
         int ret = posix_memalign(&raw_buffer, alignment, bytes_to_read);
         if (ret != 0) {
-            throw std::runtime_error(format("posix_memalign failed with error %d", ret));
+            throw runtime_error(format("posix_memalign failed with error %d", ret));
         }
 
         struct aligned_buffer_deleter {
             void operator()(void * p) const { free(p); }
         };
-        std::unique_ptr<void, aligned_buffer_deleter> buffer(raw_buffer);
+        unique_ptr<void, aligned_buffer_deleter> buffer(raw_buffer);
 
         seek(aligned_offset, SEEK_SET);
         read_raw_unsafe(buffer.get(), bytes_to_read);
@@ -351,9 +351,9 @@ struct llama_file::impl {
             return;
         }
         errno = 0;
-        size_t ret = std::fwrite(ptr, len, 1, fp);
+        size_t ret = fwrite(ptr, len, 1, fp);
         if (ret != 1) {
-            throw std::runtime_error(format("write error: %s", strerror(errno)));
+            throw runtime_error(format("write error: %s", strerror(errno)));
         }
     }
 
@@ -369,11 +369,11 @@ struct llama_file::impl {
         if (fd != -1) {
             close(fd);
         } else if (owns_fp) {
-            std::fclose(fp);
+            fclose(fp);
         }
     }
     int fd = -1;
-    std::string fname;
+    string fname;
 #endif
 
     size_t read_alignment() const {
@@ -388,9 +388,9 @@ struct llama_file::impl {
 };
 
 llama_file::llama_file(const char * fname, const char * mode, const bool use_direct_io) :
-    pimpl(std::make_unique<impl>(fname, mode, use_direct_io)) {}
+    pimpl(make_unique<impl>(fname, mode, use_direct_io)) {}
 
-llama_file::llama_file(FILE * file) : pimpl(std::make_unique<impl>(file)) {}
+llama_file::llama_file(FILE * file) : pimpl(make_unique<impl>(file)) {}
 
 llama_file::~llama_file() = default;
 
@@ -432,7 +432,7 @@ void llama_file::write_u32(uint32_t val) const { pimpl->write_u32(val); }
 
 struct llama_mmap::impl {
 #ifdef _POSIX_MAPPED_FILES
-    std::vector<std::pair<size_t, size_t>> mapped_fragments;
+    vector<pair<size_t, size_t>> mapped_fragments;
 
     impl(struct llama_file * file, size_t prefetch, bool numa) {
         size = file->size();
@@ -448,11 +448,11 @@ struct llama_mmap::impl {
 #endif
         addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
         if (addr == MAP_FAILED) {
-            throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
+            throw runtime_error(format("mmap failed: %s", strerror(errno)));
         }
 
         if (prefetch > 0) {
-            if (posix_madvise(addr, std::min(file->size(), prefetch), POSIX_MADV_WILLNEED)) {
+            if (posix_madvise(addr, min(file->size(), prefetch), POSIX_MADV_WILLNEED)) {
                 LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
                         strerror(errno));
             }
@@ -498,7 +498,7 @@ struct llama_mmap::impl {
             LLAMA_LOG_WARN("warning: munmap failed: %s\n", strerror(errno));
         }
 
-        std::vector<std::pair<size_t, size_t>> new_mapped_fragments;
+        vector<pair<size_t, size_t>> new_mapped_fragments;
         for (const auto & frag : mapped_fragments) {
             if (frag.first < first && frag.second > last) {
                 new_mapped_fragments.emplace_back(frag.first, first);
@@ -512,7 +512,7 @@ struct llama_mmap::impl {
                 new_mapped_fragments.push_back(frag);
             }
         }
-        mapped_fragments = std::move(new_mapped_fragments);
+        mapped_fragments = move(new_mapped_fragments);
     }
 
     ~impl() {
@@ -536,7 +536,7 @@ struct llama_mmap::impl {
 
         if (hMapping == NULL) {
             DWORD error = GetLastError();
-            throw std::runtime_error(format("CreateFileMappingA failed: %s", llama_format_win_err(error).c_str()));
+            throw runtime_error(format("CreateFileMappingA failed: %s", llama_format_win_err(error).c_str()));
         }
 
         addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
@@ -544,7 +544,7 @@ struct llama_mmap::impl {
 
         if (addr == NULL) {
             CloseHandle(hMapping);
-            throw std::runtime_error(format("MapViewOfFile failed: %s", llama_format_win_err(error).c_str()));
+            throw runtime_error(format("MapViewOfFile failed: %s", llama_format_win_err(error).c_str()));
         }
 
         if (prefetch > 0) {
@@ -557,7 +557,7 @@ struct llama_mmap::impl {
             if (pPrefetchVirtualMemory) {
                 WIN32_MEMORY_RANGE_ENTRY range;
                 range.VirtualAddress = addr;
-                range.NumberOfBytes = (SIZE_T) std::min(size, prefetch);
+                range.NumberOfBytes = (SIZE_T) min(size, prefetch);
                 if (!pPrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0)) {
                     LLAMA_LOG_WARN("warning: PrefetchVirtualMemory failed: %s\n",
                             llama_format_win_err(GetLastError()).c_str());
@@ -594,14 +594,14 @@ struct llama_mmap::impl {
         GGML_UNUSED(prefetch);
         GGML_UNUSED(numa);
 
-        throw std::runtime_error("mmap not supported");
+        throw runtime_error("mmap not supported");
     }
 
     void unmap_fragment(size_t first, size_t last) {
         GGML_UNUSED(first);
         GGML_UNUSED(last);
 
-        throw std::runtime_error("mmap not supported");
+        throw runtime_error("mmap not supported");
     }
 #endif
 
@@ -609,7 +609,7 @@ struct llama_mmap::impl {
     size_t size;
 };
 
-llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa) : pimpl(std::make_unique<impl>(file, prefetch, numa)) {}
+llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa) : pimpl(make_unique<impl>(file, prefetch, numa)) {}
 llama_mmap::~llama_mmap() = default;
 
 size_t llama_mmap::size() const { return pimpl->size; }
@@ -645,7 +645,7 @@ struct llama_mlock::impl {
         "Try increasing RLIMIT_MEMLOCK ('ulimit -l' as root).\n"
 #endif
 
-        char* errmsg = std::strerror(errno);
+        char* errmsg = strerror(errno);
         bool suggest = (errno == ENOMEM);
 #if defined(TARGET_OS_VISION) || defined(TARGET_OS_TV) || defined(_AIX) || defined(__HAIKU__)
         // visionOS/tvOS/Haiku don't support RLIMIT_MEMLOCK
@@ -668,7 +668,7 @@ struct llama_mlock::impl {
 
     static void raw_unlock(void * addr, size_t size) {
         if (munlock(addr, size)) {
-            LLAMA_LOG_WARN("warning: failed to munlock buffer: %s\n", std::strerror(errno));
+            LLAMA_LOG_WARN("warning: failed to munlock buffer: %s\n", strerror(errno));
         }
     }
 #elif defined(_WIN32)
@@ -754,7 +754,7 @@ struct llama_mlock::impl {
     bool failed_already;
 };
 
-llama_mlock::llama_mlock() : pimpl(std::make_unique<impl>()) {}
+llama_mlock::llama_mlock() : pimpl(make_unique<impl>()) {}
 llama_mlock::~llama_mlock() = default;
 
 void llama_mlock::init(void * ptr) { pimpl->init(ptr); }

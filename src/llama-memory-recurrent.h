@@ -3,7 +3,7 @@
 #include "llama-batch.h"
 #include "llama-graph.h"
 #include "llama-memory.h"
-
+using namespace std;
 #include <map>
 #include <set>
 #include <vector>
@@ -51,9 +51,9 @@ public:
     llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
-    std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
+    map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
 
-    bool prepare(const std::vector<llama_ubatch> & ubatches);
+    bool prepare(const vector<llama_ubatch> & ubatches);
 
     // find a contiguous slot of memory cells and emplace the ubatch there
     bool find_slot(const llama_ubatch & ubatch);
@@ -82,7 +82,7 @@ public:
         int32_t   src0 = -1; // like src, but only used when setting the inputs (allowing to copy once)
         int32_t   tail = -1;
 
-        std::set<llama_seq_id> seq_id;
+        set<llama_seq_id> seq_id;
 
         bool has_seq_id(const llama_seq_id & id) const {
             return seq_id.find(id) != seq_id.end();
@@ -97,11 +97,11 @@ public:
         }
     };
 
-    std::vector<mem_cell> cells;
+    vector<mem_cell> cells;
 
     // per layer
-    std::vector<ggml_tensor *> r_l;
-    std::vector<ggml_tensor *> s_l;
+    vector<ggml_tensor *> r_l;
+    vector<ggml_tensor *> s_l;
 
 private:
     //const llama_model & model;
@@ -110,15 +110,15 @@ private:
     const uint32_t n_seq_max = 1;
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
-    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    vector<pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
 
     size_t total_size() const;
 
     size_t size_r_bytes() const;
     size_t size_s_bytes() const;
 
-    void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
-    void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
+    void state_write_meta(llama_io_write_i & io, const vector<pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
+    void state_write_data(llama_io_write_i & io, const vector<pair<uint32_t, uint32_t>> & cell_ranges) const;
 
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
@@ -136,7 +136,7 @@ public:
     // used to create a batch processing context from a batch
     llama_memory_recurrent_context(
             llama_memory_recurrent * mem,
-            std::vector<llama_ubatch> ubatches);
+            vector<llama_ubatch> ubatches);
 
     virtual ~llama_memory_recurrent_context();
 
@@ -171,7 +171,7 @@ private:
 
     size_t i_next = 0;
 
-    std::vector<llama_ubatch> ubatches;
+    vector<llama_ubatch> ubatches;
 
     //
     // data needed for building the compute graph for the current ubatch:

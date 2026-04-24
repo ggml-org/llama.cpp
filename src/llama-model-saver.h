@@ -5,7 +5,7 @@
 #include "llama-arch.h"
 
 #include <vector>
-
+using namespace std;
 // FIXME temporary function for better error messages
 bool llama_model_saver_supports_arch(llm_arch arch);
 
@@ -31,7 +31,7 @@ struct llama_model_saver {
     template <typename Container>
     void add_kv(enum llm_kv key, const Container & value, bool per_layer = false);
 
-    void add_kv(enum llm_kv key, const std::vector<std::string> & value);
+    void add_kv(enum llm_kv key, const vector<string> & value);
 
     void add_tensor(const struct ggml_tensor * tensor);
 
@@ -39,6 +39,6 @@ struct llama_model_saver {
 
     void add_tensors_from_model();
 
-    void save(const std::string & path_model);
+    void save(const string & path_model);
     void save(FILE * file);
 };

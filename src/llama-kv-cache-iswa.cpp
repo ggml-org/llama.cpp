@@ -6,7 +6,7 @@
 
 #include <algorithm>
 #include <cassert>
-
+using namespace std;
 //
 // llama_kv_cache_iswa
 //
@@ -47,7 +47,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
 
     // note: the SWA cache is always padded to 256 for performance
     //       https://github.com/ggml-org/llama.cpp/issues/17037
-    uint32_t size_swa = GGML_PAD(std::min(size_base, hparams.n_swa*(unified ? n_seq_max : 1) + n_ubatch), 256);
+    uint32_t size_swa = GGML_PAD(min(size_base, hparams.n_swa*(unified ? n_seq_max : 1) + n_ubatch), 256);
 
     // when using full-size SWA cache, we set the SWA cache size to be equal to the base cache size
     if (swa_full) {
@@ -59,14 +59,14 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
 
     LLAMA_LOG_INFO("%s: creating non-SWA KV cache, size = %u cells\n", __func__, size_base);
 
-    kv_base = std::make_unique<llama_kv_cache>(
+    kv_base = make_unique<llama_kv_cache>(
             model, type_k, type_v,
             v_trans, offload, unified, size_base, n_seq_max, n_pad,
             0, LLAMA_SWA_TYPE_NONE, filter_base, reuse);
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
-    kv_swa = std::make_unique<llama_kv_cache>(
+    kv_swa = make_unique<llama_kv_cache>(
             model, type_k, type_v,
             v_trans, offload, unified, size_swa, n_seq_max, n_pad,
             hparams.n_swa, hparams.swa_type, filter_swa, reuse);
@@ -115,8 +115,8 @@ llama_pos llama_kv_cache_iswa::seq_pos_max(llama_seq_id seq_id) const {
     return kv_swa->seq_pos_max(seq_id);
 }
 
-std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache_iswa::memory_breakdown() const {
-    std::map<ggml_backend_buffer_type_t, size_t> mb = kv_base->memory_breakdown();
+map<ggml_backend_buffer_type_t, size_t> llama_kv_cache_iswa::memory_breakdown() const {
+    map<ggml_backend_buffer_type_t, size_t> mb = kv_base->memory_breakdown();
     for (const auto & buft_size : kv_swa->memory_breakdown()) {
         mb[buft_size.first] += buft_size.second;
     }
@@ -135,7 +135,7 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & ba
 
         balloc.split_reset();
 
-        std::vector<llama_ubatch> ubatches;
+        vector<llama_ubatch> ubatches;
         while (true) {
             auto ubatch = balloc.split_simple(n_ubatch);
 
@@ -143,7 +143,7 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & ba
                 break;
             }
 
-            ubatches.push_back(std::move(ubatch)); // NOLINT
+            ubatches.push_back(move(ubatch)); // NOLINT
         }
 
         if (balloc.get_n_used() < balloc.get_n_tokens()) {
@@ -163,15 +163,15 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & ba
 
         assert(sinfos_base.size() == sinfos_swa.size());
 
-        return std::make_unique<llama_kv_cache_iswa_context>(
-                this, std::move(sinfos_base), std::move(sinfos_swa), std::move(ubatches));
+        return make_unique<llama_kv_cache_iswa_context>(
+                this, move(sinfos_base), move(sinfos_swa), move(ubatches));
     } while (false);
 
     // if it fails, try equal split
     do {
         balloc.split_reset();
 
-        std::vector<llama_ubatch> ubatches;
+        vector<llama_ubatch> ubatches;
         while (true) {
             auto ubatch = balloc.split_equal(n_ubatch, !unified);
 
@@ -179,7 +179,7 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & ba
                 break;
             }
 
-            ubatches.push_back(std::move(ubatch)); // NOLINT
+            ubatches.push_back(move(ubatch)); // NOLINT
         }
 
         if (balloc.get_n_used() < balloc.get_n_tokens()) {
@@ -199,22 +199,22 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & ba
 
         assert(sinfos_base.size() == sinfos_swa.size());
 
-        return std::make_unique<llama_kv_cache_iswa_context>(
-                this, std::move(sinfos_base), std::move(sinfos_swa), std::move(ubatches));
+        return make_unique<llama_kv_cache_iswa_context>(
+                this, move(sinfos_base), move(sinfos_swa), move(ubatches));
     } while (false);
 
     // TODO: if we fail again, we should attempt different splitting strategies
     //       but to do that properly, we first have to refactor the batches to be more flexible
 
-    return std::make_unique<llama_kv_cache_iswa_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+    return make_unique<llama_kv_cache_iswa_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
 }
 
 llama_memory_context_ptr llama_kv_cache_iswa::init_full() {
-    return std::make_unique<llama_kv_cache_iswa_context>(this);
+    return make_unique<llama_kv_cache_iswa_context>(this);
 }
 
 llama_memory_context_ptr llama_kv_cache_iswa::init_update(llama_context * lctx, bool optimize) {
-    return std::make_unique<llama_kv_cache_iswa_context>(this, lctx, optimize);
+    return make_unique<llama_kv_cache_iswa_context>(this, lctx, optimize);
 }
 
 bool llama_kv_cache_iswa::get_can_shift() const {
@@ -273,11 +273,11 @@ llama_kv_cache_iswa_context::llama_kv_cache_iswa_context(
         llama_kv_cache_iswa * kv,
         slot_info_vec_t sinfos_base,
         slot_info_vec_t sinfos_swa,
-        std::vector<llama_ubatch> ubatches) :
-    ubatches(std::move(ubatches)),
+        vector<llama_ubatch> ubatches) :
+    ubatches(move(ubatches)),
     // note: here we copy the ubatches. not sure if this is ideal
-    ctx_base(new llama_kv_cache_context(kv->get_base(), std::move(sinfos_base), this->ubatches)),
-    ctx_swa (new llama_kv_cache_context(kv->get_swa (), std::move(sinfos_swa),  this->ubatches)),
+    ctx_base(new llama_kv_cache_context(kv->get_base(), move(sinfos_base), this->ubatches)),
+    ctx_swa (new llama_kv_cache_context(kv->get_swa (), move(sinfos_swa),  this->ubatches)),
     status(llama_memory_status_combine(ctx_base->get_status(), ctx_swa->get_status())) {
 }
 

@@ -5,7 +5,7 @@
 #include <string>
 #include <set>
 #include <vector>
-
+using namespace std;
 //
 // gguf constants (sync with gguf.py)
 //
@@ -568,7 +568,7 @@ struct LLM_KV {
     llm_arch arch;
     const char * suffix;
 
-    std::string operator()(llm_kv kv) const;
+    string operator()(llm_kv kv) const;
 };
 
 // helper to handle gguf constants
@@ -576,9 +576,9 @@ struct LLM_KV {
 //
 //   const auto tn = LLM_TN(LLM_ARCH_LLAMA);
 //
-//   std::string name = tn(LLM_TENSOR_OUTPUT);                     -> "output"
-//   std::string name = tn(LLM_TENSOR_TOKEN_EMBD, "bias");         -> "token_embd.bias"
-//   std::string name = tn(LLM_TENSOR_ATTN_NORM, "weight", 3);     -> "blk.3.attn_norm.weight"
+//   string name = tn(LLM_TENSOR_OUTPUT);                     -> "output"
+//   string name = tn(LLM_TENSOR_TOKEN_EMBD, "bias");         -> "token_embd.bias"
+//   string name = tn(LLM_TENSOR_ATTN_NORM, "weight", 3);     -> "blk.3.attn_norm.weight"
 //
 struct LLM_TN_IMPL {
     const llm_arch arch;
@@ -589,17 +589,17 @@ struct LLM_TN_IMPL {
 
     LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid);
 
-    std::string str() const;
+    string str() const;
 
-    operator std::string() const {
+    operator string() const {
         return str();
     }
 
-    friend bool operator==(const std::string & str, const LLM_TN_IMPL & tn) {
+    friend bool operator==(const string & str, const LLM_TN_IMPL & tn) {
         return str == tn.str();
     }
 
-    friend bool operator!=(const std::string & str, const LLM_TN_IMPL & tn) {
+    friend bool operator!=(const string & str, const LLM_TN_IMPL & tn) {
         return str != tn.str();
     }
 };
@@ -624,11 +624,11 @@ struct llm_tensor_info {
     ggml_op op;
 };
 
-std::vector<llm_arch> llm_arch_all();
+vector<llm_arch> llm_arch_all();
 
 const char * llm_arch_name(llm_arch arch);
 
-llm_arch llm_arch_from_string(const std::string & name);
+llm_arch llm_arch_from_string(const string & name);
 
 const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
 

@@ -3,7 +3,7 @@
 #include "llama.h"
 
 #include <vector>
-
+using namespace std;
 struct llama_vocab;
 struct llama_grammar;
 
@@ -21,10 +21,10 @@ struct llama_sampler_chain {
         llama_sampler * ptr;
     };
 
-    std::vector<info> samplers;
+    vector<info> samplers;
 
     // pre-allocated buffer for llama_sampler_sample to avoid repeated allocations
-    std::vector<llama_token_data> cur;
+    vector<llama_token_data> cur;
 
     // timing
 
@@ -39,4 +39,4 @@ struct llama_sampler * llama_sampler_init_dry_testing(
         float   dry_base,
         int32_t dry_allowed_length,
         int32_t dry_penalty_last_n,
-        const std::vector<std::vector<llama_token>> & seq_breakers);
+        const vector<vector<llama_token>> & seq_breakers);

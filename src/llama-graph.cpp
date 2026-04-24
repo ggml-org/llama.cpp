@@ -17,7 +17,7 @@
 #include <numeric>
 #include <sstream>
 #include <unordered_set>
-
+using namespace std;
 // dedup helpers
 
 static ggml_tensor * build_attn_inp_kq_mask(
@@ -104,7 +104,7 @@ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
         if (ubatch->token && n_pos_per_embd == 4) {
             // in case we're using M-RoPE with text tokens, convert the 1D positions to 4D
             // the 3 first dims are the same, and 4th dim is all 0
-            std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
+            vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
             // copy the first dimension
             for (int i = 0; i < n_tokens; ++i) {
                 pos_data[               i] = ubatch->pos[i];
@@ -134,11 +134,11 @@ void llm_graph_input_attn_temp::set_input(const llama_ubatch * ubatch) {
         GGML_ASSERT(f_attn_temp_scale != 0.0f);
         GGML_ASSERT(n_attn_temp_floor_scale != 0);
 
-        std::vector<float> attn_scale_data(n_tokens, 0.0f);
+        vector<float> attn_scale_data(n_tokens, 0.0f);
         for (int i = 0; i < n_tokens; ++i) {
             const float pos = ubatch->pos[i];
-            attn_scale_data[i] = std::log(
-                std::floor((pos + f_attn_temp_offset) / n_attn_temp_floor_scale) + 1.0
+            attn_scale_data[i] = log(
+                floor((pos + f_attn_temp_offset) / n_attn_temp_floor_scale) + 1.0
             ) * f_attn_temp_scale + 1.0;
         }
 
@@ -219,7 +219,7 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
         float * data = (float *) mean->data;
         memset(mean->data, 0, n_tokens*n_seqs_unq*ggml_element_size(mean));
 
-        std::vector<uint64_t> sums(n_seqs_unq, 0);
+        vector<uint64_t> sums(n_seqs_unq, 0);
         for (int i = 0; i < n_tokens; i += n_seq_tokens) {
             for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
                 const llama_seq_id seq_id  = ubatch->seq_id[i][s];
@@ -229,7 +229,7 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
             }
         }
 
-        std::vector<float> div(n_seqs_unq, 0.0f);
+        vector<float> div(n_seqs_unq, 0.0f);
         for (int s = 0; s < n_seqs_unq; ++s) {
             const uint64_t sum = sums[s];
             if (sum > 0) {
@@ -265,8 +265,8 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
         uint32_t * data = (uint32_t *) cls->data;
         memset(cls->data, 0, n_seqs_unq*ggml_element_size(cls));
 
-        std::vector<int> target_pos(n_seqs_unq, -1);
-        std::vector<int> target_row(n_seqs_unq, -1);
+        vector<int> target_pos(n_seqs_unq, -1);
+        vector<int> target_row(n_seqs_unq, -1);
 
         const bool last = (
              cparams.pooling_type == LLAMA_POOLING_TYPE_LAST ||
@@ -359,14 +359,14 @@ static void print_mask(const float * data, int64_t n_tokens, int64_t n_kv, int64
     LLAMA_LOG_DEBUG("%s: Rows = query tokens, Columns = key/value tokens\n\n", __func__);
 
     LLAMA_LOG_DEBUG("    ");
-    for (int j = 0; j < std::min((int64_t)20, n_kv); ++j) {
+    for (int j = 0; j < min((int64_t)20, n_kv); ++j) {
         LLAMA_LOG_DEBUG("%2d", j);
     }
     LLAMA_LOG_DEBUG("\n");
 
-    for (int i = 0; i < std::min((int64_t)20, n_tokens); ++i) {
+    for (int i = 0; i < min((int64_t)20, n_tokens); ++i) {
         LLAMA_LOG_DEBUG(" %2d ", i);
-        for (int j = 0; j < std::min((int64_t)20, n_kv); ++j) {
+        for (int j = 0; j < min((int64_t)20, n_kv); ++j) {
             float val = data[i * n_kv + j];
             if (val == -INFINITY) {
                 LLAMA_LOG_DEBUG(" ∞");
@@ -408,7 +408,7 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                     continue;
                 }
 
-                data[idst + i0] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
+                data[idst + i0] = hparams.use_alibi ? -abs(p0 - p1) : 0.0f;
             }
         }
     };
@@ -419,7 +419,7 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
 
         float * data = (float *) self_kq_mask->data;
 
-        std::fill(data, data + ggml_nelements(self_kq_mask), -INFINITY);
+        fill(data, data + ggml_nelements(self_kq_mask), -INFINITY);
 
         fill_mask(data, 0, LLAMA_SWA_TYPE_NONE);
 
@@ -434,7 +434,7 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
 
         float * data = (float *) self_kq_mask_swa->data;
 
-        std::fill(data, data + ggml_nelements(self_kq_mask_swa), -INFINITY);
+        fill(data, data + ggml_nelements(self_kq_mask_swa), -INFINITY);
 
         fill_mask(data, hparams.n_swa, hparams.swa_type);
 
@@ -749,7 +749,7 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
 
 void llm_graph_input_sampling::set_input(const llama_ubatch * ubatch) {
     // set the inputs only for the active samplers in the current ubatch
-    std::unordered_set<llama_seq_id> active_samplers;
+    unordered_set<llama_seq_id> active_samplers;
     for (uint32_t i = 0; i < ubatch->n_tokens; i++) {
         if (ubatch->output[i]) {
             llama_seq_id seq_id = ubatch->seq_id[i][0];
@@ -898,7 +898,7 @@ bool llm_graph_result::can_reuse(const llm_graph_params & params) {
 }
 
 llm_graph_input_i * llm_graph_result::add_input(llm_graph_input_ptr input) {
-    inputs.emplace_back(std::move(input));
+    inputs.emplace_back(move(input));
     return inputs.back().get();
 }
 
@@ -1707,7 +1707,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 
     assert(n_embd_inp >= n_embd);
 
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
+    auto inp = make_unique<llm_graph_input_embd>(n_embd_inp);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
     cb(inp->tokens, "inp_tokens", -1);
@@ -1720,7 +1720,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 
     // select one of the 2 inputs, based on the batch contents
     // ref: https://github.com/ggml-org/llama.cpp/pull/18550
-    std::array<ggml_tensor *, 2> inps;
+    array<ggml_tensor *, 2> inps;
 
     // token embeddings path (ubatch.token != nullptr)
     {
@@ -1776,7 +1776,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 
     cb(cur, "embd", -1);
 
-    res->add_input(std::move(inp));
+    res->add_input(move(inp));
 
     // make sure the produced embeddings are immediately materialized in the ggml graph
     // ref: https://github.com/ggml-org/llama.cpp/pull/18599
@@ -1786,20 +1786,20 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos() const {
-    auto inp = std::make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd());
+    auto inp = make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd());
 
     auto & cur = inp->pos;
 
     cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t)n_tokens*hparams.n_pos_per_embd());
     ggml_set_input(cur);
 
-    res->add_input(std::move(inp));
+    res->add_input(move(inp));
 
     return cur;
 }
 
 ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
-    auto inp = std::make_unique<llm_graph_input_attn_temp>(hparams.n_attn_temp_floor_scale, hparams.f_attn_temp_scale, hparams.f_attn_temp_offset);
+    auto inp = make_unique<llm_graph_input_attn_temp>(hparams.n_attn_temp_floor_scale, hparams.f_attn_temp_scale, hparams.f_attn_temp_offset);
 
     auto & cur = inp->attn_scale;
 
@@ -1808,7 +1808,7 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
     ggml_set_input(cur);
     ggml_set_name(cur, "attn_scale");
 
-    res->add_input(std::move(inp));
+    res->add_input(move(inp));
 
     return cur;
 }
@@ -1822,46 +1822,46 @@ ggml_tensor * llm_graph_context::build_inp_out_ids() const {
     //    return nullptr;
     //}
 
-    auto inp = std::make_unique<llm_graph_input_out_ids>(hparams, cparams, n_outputs);
+    auto inp = make_unique<llm_graph_input_out_ids>(hparams, cparams, n_outputs);
 
     auto & cur = inp->out_ids;
 
     cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_outputs);
     ggml_set_input(cur);
 
-    res->add_input(std::move(inp));
+    res->add_input(move(inp));
 
     return cur;
 }
 
 ggml_tensor * llm_graph_context::build_inp_mean() const {
-    auto inp = std::make_unique<llm_graph_input_mean>(cparams);
+    auto inp = make_unique<llm_graph_input_mean>(cparams);
 
     auto & cur = inp->mean;
 
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, ubatch.n_seqs_unq);
     ggml_set_input(cur);
 
-    res->add_input(std::move(inp));
+    res->add_input(move(inp));
 
     return cur;
 }
 
 ggml_tensor * llm_graph_context::build_inp_cls() const {
-    auto inp = std::make_unique<llm_graph_input_cls>(cparams, arch);
+    auto inp = make_unique<llm_graph_input_cls>(cparams, arch);
 
     auto & cur = inp->cls;
 
     cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_seqs_unq);
     ggml_set_input(cur);
 
-    res->add_input(std::move(inp));
+    res->add_input(move(inp));
 
     return cur;
 }
 
 ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
-    auto inp = std::make_unique<llm_graph_input_cross_embd>(cross);
+    auto inp = make_unique<llm_graph_input_cross_embd>(cross);
 
     auto & cur = inp->cross_embd;
 
@@ -1879,20 +1879,20 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_enc);
     ggml_set_input(cur);
 
-    res->add_input(std::move(inp));
+    res->add_input(move(inp));
 
     return cur;
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {
-    auto inp = std::make_unique<llm_graph_input_pos_bucket>(hparams);
+    auto inp = make_unique<llm_graph_input_pos_bucket>(hparams);
 
     auto & cur = inp->pos_bucket;
 
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_tokens, n_tokens);
     ggml_set_input(cur);
 
-    res->add_input(std::move(inp));
+    res->add_input(move(inp));
 
     return cur;
 }
@@ -1900,7 +1900,7 @@ ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {
 ggml_tensor * llm_graph_context::build_inp_pos_bucket_dec() const {
     const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
 
-    auto inp = std::make_unique<llm_graph_input_pos_bucket_kv>(hparams, mctx_cur);
+    auto inp = make_unique<llm_graph_input_pos_bucket_kv>(hparams, mctx_cur);
 
     const auto n_kv = mctx_cur->get_n_kv();
 
@@ -1909,7 +1909,7 @@ ggml_tensor * llm_graph_context::build_inp_pos_bucket_dec() const {
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv, n_tokens);
     ggml_set_input(cur);
 
-    res->add_input(std::move(inp));
+    res->add_input(move(inp));
 
     return cur;
 }
@@ -2065,7 +2065,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 }
 
 llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() const {
-    auto inp = std::make_unique<llm_graph_input_attn_no_cache>(hparams, cparams);
+    auto inp = make_unique<llm_graph_input_attn_no_cache>(hparams, cparams);
 
     // note: there is no KV cache, so the number of KV values is equal to the number of tokens in the batch
     inp->self_kq_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens, 1, 1);
@@ -2083,7 +2083,7 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
         inp->self_kq_mask_swa_cnv = nullptr;
     }
 
-    return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
+    return (llm_graph_input_attn_no_cache *) res->add_input(move(inp));
 }
 
 ggml_tensor * llm_graph_context::build_attn(
@@ -2138,14 +2138,14 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
-static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
+static unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
            ggml_context * ctx0,
      const llama_ubatch & ubatch,
     const llama_hparams & hparams,
     const llama_cparams & cparams,
     const llama_kv_cache_context * mctx_cur) {
 
-    auto inp = std::make_unique<llm_graph_input_attn_kv>(hparams, cparams, mctx_cur);
+    auto inp = make_unique<llm_graph_input_attn_kv>(hparams, cparams, mctx_cur);
 
     {
         GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "Use llama_kv_cache_iswa for SWA");
@@ -2168,7 +2168,7 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
 
     auto inp = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
 
-    return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
+    return (llm_graph_input_attn_kv *) res->add_input(move(inp));
 }
 
 ggml_tensor * llm_graph_context::build_attn(
@@ -2246,14 +2246,14 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
-static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
+static unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
            ggml_context * ctx0,
      const llama_ubatch & ubatch,
     const llama_hparams & hparams,
     const llama_cparams & cparams,
     const llama_kv_cache_context * mctx_cur) {
 
-    auto inp = std::make_unique<llm_graph_input_attn_k>(hparams, cparams, mctx_cur);
+    auto inp = make_unique<llm_graph_input_attn_k>(hparams, cparams, mctx_cur);
 
     {
         GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "Use llama_kv_cache_iswa for SWA");
@@ -2272,7 +2272,7 @@ llm_graph_input_attn_k * llm_graph_context::build_attn_inp_k() const {
 
     auto inp = build_attn_inp_k_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
 
-    return (llm_graph_input_attn_k *) res->add_input(std::move(inp));
+    return (llm_graph_input_attn_k *) res->add_input(move(inp));
 }
 
 ggml_tensor * llm_graph_context::build_attn(
@@ -2421,7 +2421,7 @@ ggml_tensor * llm_graph_context::build_attn(
 }
 
 llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
-    auto inp = std::make_unique<llm_graph_input_attn_cross>(cross);
+    auto inp = make_unique<llm_graph_input_attn_cross>(cross);
 
     const int32_t n_enc = !cross->v_embd.empty() ? cross->n_enc : hparams.n_ctx_train;
 
@@ -2430,7 +2430,7 @@ llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
 
     inp->cross_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->cross_kq_mask, GGML_TYPE_F16) : inp->cross_kq_mask;
 
-    return (llm_graph_input_attn_cross *) res->add_input(std::move(inp));
+    return (llm_graph_input_attn_cross *) res->add_input(move(inp));
 }
 
 ggml_tensor * llm_graph_context::build_attn(
@@ -2482,7 +2482,7 @@ ggml_tensor * llm_graph_context::build_attn(
 llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const {
     const auto * mctx_cur = static_cast<const llama_kv_cache_iswa_context *>(mctx);
 
-    auto inp = std::make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, mctx_cur);
+    auto inp = make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, mctx_cur);
 
     {
         inp->self_k_idxs = mctx_cur->get_base()->build_input_k_idxs(ctx0, ubatch);
@@ -2508,7 +2508,7 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
     inp->self_k_rot_swa = mctx_cur->get_swa()->build_input_k_rot(ctx0);
     inp->self_v_rot_swa = mctx_cur->get_swa()->build_input_v_rot(ctx0);
 
-    return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
+    return (llm_graph_input_attn_kv_iswa *) res->add_input(move(inp));
 }
 
 ggml_tensor * llm_graph_context::build_rs(
@@ -2546,12 +2546,12 @@ ggml_tensor * llm_graph_context::build_rs(
     return output_states;
 }
 
-static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
+static unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
            ggml_context * ctx0,
      const llama_ubatch & ubatch,
     const llama_memory_recurrent_context * mctx_cur) {
 
-    auto inp = std::make_unique<llm_graph_input_rs>(mctx_cur);
+    auto inp = make_unique<llm_graph_input_rs>(mctx_cur);
 
     const int64_t n_rs   = mctx_cur->get_n_rs();
     const int64_t n_seqs = ubatch.n_seqs;
@@ -2573,7 +2573,7 @@ llm_graph_input_rs * llm_graph_context::build_rs_inp() const {
 
     auto inp = build_rs_inp_impl(ctx0, ubatch, mctx_cur);
 
-    return (llm_graph_input_rs *) res->add_input(std::move(inp));
+    return (llm_graph_input_rs *) res->add_input(move(inp));
 }
 
 ggml_tensor * llm_graph_context::build_rs(
@@ -2636,9 +2636,9 @@ llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
     auto inp_rs   = build_rs_inp_impl     (ctx0, ubatch, mctx_cur->get_recr());
     auto inp_attn = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur->get_attn());
 
-    auto inp = std::make_unique<llm_graph_input_mem_hybrid>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
+    auto inp = make_unique<llm_graph_input_mem_hybrid>(cparams, move(inp_attn), move(inp_rs), mctx_cur);
 
-    return (llm_graph_input_mem_hybrid *) res->add_input(std::move(inp));
+    return (llm_graph_input_mem_hybrid *) res->add_input(move(inp));
 }
 
 llm_graph_input_mem_hybrid_k * llm_graph_context::build_inp_mem_hybrid_k() const {
@@ -2647,9 +2647,9 @@ llm_graph_input_mem_hybrid_k * llm_graph_context::build_inp_mem_hybrid_k() const
     auto inp_rs   = build_rs_inp_impl     (ctx0, ubatch, mctx_cur->get_recr());
     auto inp_attn = build_attn_inp_k_impl(ctx0, ubatch, hparams, cparams, mctx_cur->get_attn());
 
-    auto inp = std::make_unique<llm_graph_input_mem_hybrid_k>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
+    auto inp = make_unique<llm_graph_input_mem_hybrid_k>(cparams, move(inp_attn), move(inp_rs), mctx_cur);
 
-    return (llm_graph_input_mem_hybrid_k *) res->add_input(std::move(inp));
+    return (llm_graph_input_mem_hybrid_k *) res->add_input(move(inp));
 }
 
 llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa() const {
@@ -2660,7 +2660,7 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
     // build iswa attention input
     const auto * attn_ctx = mctx_cur->get_attn();
 
-    auto inp_attn = std::make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, attn_ctx);
+    auto inp_attn = make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, attn_ctx);
 
     {
         inp_attn->self_k_idxs = attn_ctx->get_base()->build_input_k_idxs(ctx0, ubatch);
@@ -2678,9 +2678,9 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
         inp_attn->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp_attn->self_kq_mask_swa, GGML_TYPE_F16) : inp_attn->self_kq_mask_swa;
     }
 
-    auto inp = std::make_unique<llm_graph_input_mem_hybrid_iswa>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
+    auto inp = make_unique<llm_graph_input_mem_hybrid_iswa>(cparams, move(inp_attn), move(inp_rs), mctx_cur);
 
-    return (llm_graph_input_mem_hybrid_iswa *) res->add_input(std::move(inp));
+    return (llm_graph_input_mem_hybrid_iswa *) res->add_input(move(inp));
 }
 
 void llm_graph_context::build_dense_out(
@@ -2813,13 +2813,13 @@ void llm_graph_context::build_sampling() const {
         return;
     }
 
-    std::array<ggml_tensor *, 2> outs;
+    array<ggml_tensor *, 2> outs;
     outs[0] = res->t_logits;
 
-    auto inp_sampling = std::make_unique<llm_graph_input_sampling>(samplers);
-    res->add_input(std::move(inp_sampling));
+    auto inp_sampling = make_unique<llm_graph_input_sampling>(samplers);
+    res->add_input(move(inp_sampling));
 
-    std::map<llama_seq_id, int32_t> seq_to_logit_row;
+    map<llama_seq_id, int32_t> seq_to_logit_row;
     int32_t logit_row_idx = 0;
 
     for (uint32_t i = 0; i < ubatch.n_tokens; i++) {
@@ -2911,13 +2911,13 @@ int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buck
 
     if (bidirectional) {
         relative_bucket += (relative_position > 0) * n_buckets;
-        relative_position = std::abs(relative_position);
+        relative_position = abs(relative_position);
     } else {
-        relative_position = -std::min<int32_t>(relative_position, 0);
+        relative_position = -min<int32_t>(relative_position, 0);
     }
 
     int32_t relative_position_if_large = floorf(max_exact + logf(1.0 * relative_position / max_exact) * (n_buckets - max_exact) / log(1.0 * max_distance / max_exact));
-    relative_position_if_large = std::min<int32_t>(relative_position_if_large, n_buckets - 1);
+    relative_position_if_large = min<int32_t>(relative_position_if_large, n_buckets - 1);
     relative_bucket += (relative_position < max_exact ? relative_position : relative_position_if_large);
 
     return relative_bucket;

@@ -7,7 +7,7 @@
 
 #include <cstdint>
 #include <map>
-
+using namespace std;
 // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
 LLAMA_API struct ggml_cgraph * llama_graph_reserve(
         struct llama_context * ctx,
@@ -80,7 +80,7 @@ struct llama_device_memory_data {
 };
 
 // TODO: convert to C-style data structure
-using llama_memory_breakdown = std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data>;
+using llama_memory_breakdown = map<ggml_backend_buffer_type_t, llama_memory_breakdown_data>;
 
 LLAMA_API int32_t llama_model_n_expert (const struct llama_model * model);
 LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);

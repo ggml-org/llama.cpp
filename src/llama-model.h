@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
+using namespace std;
 struct llama_cparams;
 struct llama_ubatch;
 struct llama_model_loader;
@@ -142,7 +142,7 @@ enum llm_type {
     LLM_TYPE_E4B,
 };
 
-std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
+string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
 
 struct llama_layer_posnet {
     // resnet
@@ -513,13 +513,13 @@ struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
 
-    std::string name = "n/a";
+    string name = "n/a";
 
     llama_hparams hparams = {};
     llama_vocab   vocab;
 
     // for classifier models
-    std::vector<std::string> classifier_labels;
+    vector<string> classifier_labels;
 
     struct ggml_tensor * tok_embd   = nullptr;
     struct ggml_tensor * type_embd  = nullptr;
@@ -550,7 +550,7 @@ struct llama_model {
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
 
-    std::vector<llama_layer> layers;
+    vector<llama_layer> layers;
 
     //Dense linear projections for SentenceTransformers models like embeddinggemma
     // For Sentence Transformers models structure see
@@ -560,16 +560,16 @@ struct llama_model {
     struct ggml_tensor * dense_3_out_layers   = nullptr;
 
     // gguf metadata
-    std::unordered_map<std::string, std::string> gguf_kv;
+    unordered_map<string, string> gguf_kv;
 
     // list of devices used in this model
-    std::vector<llama_device> devices;
+    vector<llama_device> devices;
 
     // for quantize-stats only
-    std::vector<std::pair<std::string, struct ggml_tensor *>> tensors_by_name;
+    vector<pair<string, struct ggml_tensor *>> tensors_by_name;
 
     // for keeping track of associated LoRA adapters
-    std::unordered_set<llama_adapter_lora *> loras;
+    unordered_set<llama_adapter_lora *> loras;
 
     // statically allocated context for assigning
     struct llama_meta_device_get_split_state_userdata get_split_state_ud;
@@ -586,10 +586,10 @@ struct llama_model {
     void load_vocab  (llama_model_loader & ml);
     bool load_tensors(llama_model_loader & ml); // returns false if cancelled by progress_callback
 
-    std::string arch_name() const;
-    std::string type_name() const;
+    string arch_name() const;
+    string type_name() const;
 
-    std::string desc() const;
+    string desc() const;
 
     size_t size() const; // file size
     size_t n_tensors() const;
@@ -599,7 +599,7 @@ struct llama_model {
     uint32_t n_gpu_layers() const;
     llama_split_mode split_mode() const;
 
-    std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
+    map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
     // total number of parameters in the model
     uint64_t n_elements() const;
@@ -630,11 +630,11 @@ private:
     llama_model_params params;
 
     struct impl;
-    std::unique_ptr<impl> pimpl;
+    unique_ptr<impl> pimpl;
 };
 
 const char * llm_type_name(llm_type type);
 
 // For internal test use
 // TODO: remove
-const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model);
+const vector<pair<string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model);

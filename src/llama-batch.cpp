@@ -8,7 +8,7 @@
 #include <cstring>
 #include <algorithm>
 #include <sstream>
-
+using namespace std;
 llama_batch_allocr::llama_batch_allocr(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {
     const char * LLAMA_BATCH_DEBUG = getenv("LLAMA_BATCH_DEBUG");
     debug = LLAMA_BATCH_DEBUG ? atoi(LLAMA_BATCH_DEBUG) : 0;
@@ -235,7 +235,7 @@ bool llama_batch_allocr::init(
                 continue;
             }
 
-            std::stringstream ss;
+            stringstream ss;
             for (int s1 = 0; s1 < (int) seq_cpl[s0].size(); ++s1) {
                 if (seq_cpl[s0][s1]) {
                     ss << s1 << " ";
@@ -396,7 +396,7 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
 
     const int64_t n_pos_all = (int64_t) n_tokens*n_pos_per_embd;
 
-    auto udata = std::make_shared<llama_ubatch::data_t>();
+    auto udata = make_shared<llama_ubatch::data_t>();
 
     udata->token     .resize(n_tokens);
     udata->embd      .clear();
@@ -428,7 +428,7 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
         /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
         /*.seq_idx      =*/ udata->seq_idx.data(),
         /*.output       =*/ udata->output.data(),
-        /*.data         =*/ std::move(udata),
+        /*.data         =*/ move(udata),
     };
 
     return res;
@@ -450,7 +450,7 @@ uint32_t llama_batch_allocr::get_n_used() const {
     return n_used;
 }
 
-std::vector<int32_t> & llama_batch_allocr::get_out_ids() {
+vector<int32_t> & llama_batch_allocr::get_out_ids() {
     return out_ids;
 }
 
@@ -483,7 +483,7 @@ llama_ubatch llama_batch_allocr::split_simple(uint32_t n_ubatch) {
         return {};
     }
 
-    std::vector<int32_t> idxs;
+    vector<int32_t> idxs;
 
     while (true) {
         idxs.push_back(cur_idx);
@@ -512,7 +512,7 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential)
         return {};
     }
 
-    std::vector<seq_set_t> cur_seq_set;
+    vector<seq_set_t> cur_seq_set;
 
     llama_seq_id last_seq_id = -1;
 
@@ -556,7 +556,7 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential)
     }
 
     // the current batch index of each sequence set
-    std::vector<int32_t> cur_idx(n_seqs, 0);
+    vector<int32_t> cur_idx(n_seqs, 0);
 
     for (uint32_t s = 0; s < n_seqs; ++s) {
         while (used[seq_set_map[cur_seq_set[s]][cur_idx[s]]]) {
@@ -566,7 +566,7 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential)
 
     // the list of batch indices for each sequence set
     // at the end we will concat these to get the final ubatch
-    std::vector<idx_vec_t> idxs_per_seq(n_seqs);
+    vector<idx_vec_t> idxs_per_seq(n_seqs);
 
     while (true) {
         // we can only add new n_seq_tokens tokens if all the sequence sets have at least one more unused token and
@@ -601,7 +601,7 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential)
     }
 
     // concat the per-sequence-set lists
-    std::vector<int32_t> idxs;
+    vector<int32_t> idxs;
 
     for (uint32_t s = 0; s < n_seqs; ++s) {
         idxs.insert(idxs.end(), idxs_per_seq[s].begin(), idxs_per_seq[s].end());
@@ -626,7 +626,7 @@ llama_ubatch llama_batch_allocr::split_seq(uint32_t n_ubatch) {
     // we allow adding tokens only if their sequence set is a subset of the current sequence set
     auto cur_seq_set = seq_set[cur_idx];
 
-    std::vector<int32_t> idxs;
+    vector<int32_t> idxs;
 
     while (true) {
         idxs.push_back(cur_idx);
@@ -668,22 +668,22 @@ void llama_batch_allocr::clear() {
     }
 
     for (auto & cur : seq_cpl) {
-        std::fill(cur.begin(), cur.end(), false);
+        fill(cur.begin(), cur.end(), false);
     }
 
     seq_set.clear();
 
     seq_set_map.clear();
 
-    std::fill(seq_idx.begin(), seq_idx.end(), -1);
+    fill(seq_idx.begin(), seq_idx.end(), -1);
 }
 
-llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, uint32_t n_seqs, bool equal_seqs) {
+llama_ubatch llama_batch_allocr::ubatch_add(const vector<int32_t> & idxs, uint32_t n_seqs, bool equal_seqs) {
     const uint32_t n_tokens = idxs.size();
 
     assert(n_tokens%n_seqs == 0);
 
-    auto udata = std::make_shared<llama_ubatch::data_t>();
+    auto udata = make_shared<llama_ubatch::data_t>();
 
     const int64_t n_embd_all = batch.embd ? (int64_t) n_tokens*n_embd : 0;
     const int64_t n_pos_all  =              (int64_t) n_tokens*n_pos_per_embd;
@@ -763,7 +763,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
         /*.seq_idx      =*/ udata->seq_idx.data(),
         /*.output       =*/ udata->output.data(),
-        /*.data         =*/ std::move(udata),
+        /*.data         =*/ move(udata),
     };
 
     if (debug > 0) {
@@ -783,8 +783,8 @@ void llama_batch_allocr::ubatch_print(const llama_ubatch & ubatch, int debug) {
         LLAMA_LOG_DEBUG("%s:   n_seqs       = %d\n", __func__, ubatch.n_seqs);
         LLAMA_LOG_DEBUG("%s:   n_seqs_unq   = %d\n", __func__, ubatch.n_seqs_unq);
 
-        std::stringstream ss_seq_id_unq;
-        std::stringstream ss_seq_idx;
+        stringstream ss_seq_id_unq;
+        stringstream ss_seq_idx;
 
         ss_seq_id_unq << "[ ";
         ss_seq_idx << "[";
@@ -819,7 +819,7 @@ void llama_batch_allocr::ubatch_print(const llama_ubatch & ubatch, int debug) {
             for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
                 for (int s = 0; s < ubatch.n_seq_id[i]; ++s) {
                     for (int s = 0; s < ubatch.n_seq_id[i]; ++s) {
-                        seq_id_max = std::max(seq_id_max, ubatch.seq_id[i][s]);
+                        seq_id_max = max(seq_id_max, ubatch.seq_id[i][s]);
                     }
                 }
             }
@@ -827,13 +827,13 @@ void llama_batch_allocr::ubatch_print(const llama_ubatch & ubatch, int debug) {
 
             LLAMA_LOG_DEBUG("%s:   token     = [\n", __func__);
             for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-                std::vector<int8_t> seq_id(seq_id_max);
+                vector<int8_t> seq_id(seq_id_max);
 
                 for (int s = 0; s < ubatch.n_seq_id[i]; ++s) {
                     seq_id[ubatch.seq_id[i][s]] = 1;
                 }
 
-                std::stringstream ss;
+                stringstream ss;
                 for (int s = 0; s < seq_id_max; ++s) {
                     if (seq_id[s]) {
                         ss << s%10;
