@@ -10,6 +10,7 @@
 #include "fit.h"
 #include "llama.h"
 #include "log.h"
+#include "preset.h"
 
 #include <atomic>
 #include <clocale>
@@ -81,6 +82,28 @@ int main(int argc, char ** argv) {
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
+    }
+
+    // apply the [*] section of --models-preset to params so that router-level
+    // options (prio, threads, host, etc.) set in the INI are honored by this
+    // process. CLI arguments keep the highest precedence.
+    if (!params.models_preset.empty()) {
+        try {
+            common_preset_context ctx_preset(LLAMA_EXAMPLE_SERVER);
+            common_preset global;
+            (void) ctx_preset.load_from_ini(params.models_preset, global);
+
+            std::map<common_arg, std::string> cli_overrides;
+            if (!common_params_to_map(argc, argv, LLAMA_EXAMPLE_SERVER, cli_overrides)) {
+                throw std::runtime_error("failed to collect CLI overrides");
+            }
+
+            global.apply_to_params(params, cli_overrides);
+        } catch (const std::exception & e) {
+            LOG_ERR("%s: failed to apply [*] preset from %s: %s\n",
+                    __func__, params.models_preset.c_str(), e.what());
+            return 1;
+        }
     }
 
     // validate batch size for embeddings

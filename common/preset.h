@@ -43,7 +43,10 @@ struct common_preset {
     void merge(const common_preset & other);
 
     // apply preset options to common_params
-    void apply_to_params(common_params & params) const;
+    // options whose key appears in cli_overrides are skipped, so values already
+    // provided on the command line take precedence over preset values
+    void apply_to_params(common_params & params,
+                         const std::map<common_arg, std::string> & cli_overrides = {}) const;
 };
 
 // interface for multiple presets in one file
