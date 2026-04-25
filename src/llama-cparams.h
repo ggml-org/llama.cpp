@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <cstdint>
+#include <vector>
 
 #define LLAMA_MAX_SEQ 256
 
@@ -38,8 +39,9 @@ struct llama_cparams {
     bool warmup;
     bool op_offload;
     bool kv_unified;
-    bool eagle3_extract_enabled;  // enable layer extraction for EAGLE3 speculative decoding
     bool pipeline_parallel;
+
+    std::vector<bool> output_layer_inp;
 
     enum llama_pooling_type pooling_type;
 

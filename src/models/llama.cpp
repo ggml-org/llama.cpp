@@ -123,18 +123,10 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
-        // EAGLE3: Extract intermediate layer features from target model at layer INPUT
-        if (eagle3 && cparams.eagle3_extract_enabled && !eagle3->extract_layer_indices.empty()) {
-            static const char * eagle3_extract_names[] = {"eagle3_extract_0", "eagle3_extract_1", "eagle3_extract_2"};
-            for (size_t i = 0; i < eagle3->extract_layer_indices.size() && i < 3; ++i) {
-                if (eagle3->extract_layer_indices[i] == il) {
-                    cb(inpL, eagle3_extract_names[i], il);
-                    break;
-                }
-            }
-        }
         // norm
         cur = build_norm(inpL,
                 model.layers[il].attn_norm, NULL,

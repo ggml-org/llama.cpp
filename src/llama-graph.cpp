@@ -810,6 +810,10 @@ void llm_graph_result::reset() {
     t_logits      = nullptr;
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
+
+    t_layer_inp.resize(LLAMA_MAX_LAYERS);
+    std::fill(t_layer_inp.begin(), t_layer_inp.end(), nullptr);
+
     t_sampled.clear();
     t_sampled_probs.clear();
     t_sampled_logits.clear();
@@ -838,7 +842,7 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
     }
 }
 
-void llm_graph_result::set_outputs() {
+void llm_graph_result::set_outputs(const llm_graph_params & params) {
     if (t_logits != nullptr) {
         ggml_set_output(t_logits);
     }
@@ -847,6 +851,14 @@ void llm_graph_result::set_outputs() {
     }
     if (t_embd_pooled != nullptr) {
         ggml_set_output(t_embd_pooled);
+    }
+    {
+        const auto & output_layer_inp = params.cparams.output_layer_inp;
+        for (size_t il = 0; il < output_layer_inp.size(); ++il) {
+            if (output_layer_inp[il]) {
+                ggml_set_output(t_layer_inp[il]);
+            }
+        }
     }
     for (auto & [seq_id, t] : t_sampled) {
         if (t != nullptr) {

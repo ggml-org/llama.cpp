@@ -65,6 +65,8 @@ llama_context::llama_context(
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
+    cparams.output_layer_inp.resize(hparams.n_layer, false);
+
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
     // re-reserve when graph nodes change.
@@ -164,8 +166,6 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
-
-    cparams.eagle3_extract_enabled = false;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -1170,30 +1170,14 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
-void llama_context::set_eagle3(const llama_model * model) {
-    // Initialize EAGLE3 feature extraction configuration
-    cparams.eagle3_extract_enabled = !!model;
-    if (!cparams.eagle3_extract_enabled) {
-        return;
-    }
+void llama_context::set_output_layer_inp(uint32_t layer_id, bool enable) {
+    LLAMA_LOG_DEBUG("%s: layer_id = %d, enable = %d\n", __func__, layer_id, enable);
+
+    GGML_ASSERT(layer_id < model.hparams.n_layer);
+
+    cparams.output_layer_inp[layer_id] = enable;
 
     sched_need_reserve = true;
-
-    const auto & eagle3_hparams = model->hparams;
-
-    // Copy feature extraction layer indices from EAGLE3 model's hparams
-    eagle3.extract_layer_indices.assign(
-            eagle3_hparams.eagle3_extract_layers.begin(),
-            eagle3_hparams.eagle3_extract_layers.end()
-            );
-
-    // Allocate tensors array for extraction
-    eagle3.extract_tensors.resize(eagle3.extract_layer_indices.size(), nullptr);
-
-    LLAMA_LOG_INFO("%s: EAGLE3 extraction enabled for layers [%d, %d, %d]\n", __func__,
-            eagle3.extract_layer_indices[0],
-            eagle3.extract_layer_indices[1],
-            eagle3.extract_layer_indices[2]);
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
@@ -1271,11 +1255,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
-    // EAGLE3: Extract intermediate layer features after graph execution
-    if (cparams.eagle3_extract_enabled && !eagle3.extract_tensors.empty()) {
-        extract_eagle3_features(ubatch);
-    }
-
     ret = GGML_STATUS_SUCCESS;
 
     return res;
@@ -1291,8 +1270,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const auto & hparams = model.hparams;
 
-    // EAGLE3: use 3*target_hidden_size for concatenated features input
-    const int64_t n_embd  = (model.arch == LLM_ARCH_EAGLE3 && batch_inp.embd) ? 3 * hparams.eagle3_target_hidden_size : hparams.n_embd;
+    const int64_t n_embd  = hparams.n_embd_inp();
     const int64_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
@@ -1987,7 +1965,6 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         has_embd   = true;
     }
 
-
     size_t backend_float_count = 0;
     size_t backend_token_count = 0;
 
@@ -2297,27 +2274,6 @@ llm_graph_cb llama_context::graph_get_cb() const {
             ggml_format_name(cur, "%s-%d", name, il);
         } else {
             ggml_set_name(cur, name);
-        }
-
-        // EAGLE3: Extract intermediate layer features if this is an extraction point
-        if (cparams.eagle3_extract_enabled) {
-            static constexpr const char * prefix = "eagle3_extract_";
-            static constexpr size_t prefix_len = 15; // strlen("eagle3_extract_")
-
-            if (strncmp(name, prefix, prefix_len) == 0) {
-                // Parse the extraction index from the name (e.g., "eagle3_extract_0" -> 0)
-                size_t extract_idx = 0;
-                if (sscanf(name + prefix_len, "%zu", &extract_idx) == 1 && extract_idx < eagle3.extract_tensors.size()) {
-                    // Mark as output tensor to ensure proper backend assignment
-                    ggml_set_output(cur);
-                    // Store this tensor reference for post-execution extraction
-                    eagle3.extract_tensors[extract_idx] = cur;
-                    LLAMA_LOG_DEBUG("%s: EAGLE3 stored tensor reference for extraction: "
-                                   "index=%zu, layer=%d, target_layer=%d, tensor=%s\n",
-                                   __func__, extract_idx, il,
-                                   eagle3.extract_layer_indices[extract_idx], name);
-                }
-            }
         }
 
         // norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
@@ -3327,7 +3283,6 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
-        /*.target_model                =*/ nullptr,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
     };
@@ -3341,12 +3296,6 @@ llama_context * llama_init_from_model(
     if (!model) {
         LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
         return nullptr;
-    }
-
-    // Auto-setup for EAGLE3: set target embedding if target_model is provided
-    if (model->arch == LLM_ARCH_EAGLE3 && params.target_model) {
-        model->target_tok_embd = params.target_model->tok_embd;
-        LLAMA_LOG_INFO("%s: EAGLE3 auto-setup: using target model's embedding layer\n", __func__);
     }
 
     if (params.n_batch == 0 && params.n_ubatch == 0) {
@@ -3628,16 +3577,6 @@ int32_t llama_set_adapter_cvec(
     bool res = ctx->set_adapter_cvec(data, len, n_embd, il_start, il_end);
 
     return res ? 0 : -1;
-}
-
-//
-// eagle3 (tmp)
-//
-
-void llama_set_eagle3(
-        llama_context * ctx,
-        const llama_model * model) {
-    ctx->set_eagle3(model);
 }
 
 //
@@ -3952,39 +3891,13 @@ void llama_opt_epoch(
 }
 
 //
-// EAGLE3 member functions
-//
-
-const float * llama_context::get_eagle3_target_features() const {
-    GGML_ASSERT(!eagle3.target_features.empty() && "EAGLE3 target features not extracted - call llama_encode() on target model first");
-    return eagle3.target_features.data();
-}
-
-void llama_context::set_eagle3_g_embeddings(const float * g_embd, int32_t n_embd, int32_t n_tokens) {
-    GGML_ASSERT(g_embd != nullptr && "g_embeddings cannot be null");
-    GGML_ASSERT(n_embd > 0 && n_tokens > 0 && "invalid dimensions");
-
-    const size_t size = n_embd * n_tokens;
-    eagle3.g_embeddings.resize(size);
-    std::memcpy(eagle3.g_embeddings.data(), g_embd, size * sizeof(float));
-}
-
-//
-// C API wrappers
-//
-
-const float * llama_get_eagle3_target_features(llama_context * ctx) {
-    return ctx->get_eagle3_target_features();
-}
-
-void llama_set_eagle3_g_embeddings(llama_context * ctx, const float * g_embd, int32_t n_embd, int32_t n_tokens) {
-    ctx->set_eagle3_g_embeddings(g_embd, n_embd, n_tokens);
-}
-
-//
 // ext
 //
 
 llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx) {
     return ctx->memory_breakdown();
+}
+
+void llama_set_output_layer_inp(struct llama_context * ctx, uint32_t layer_id, bool enable) {
+    ctx->set_output_layer_inp(layer_id, enable);
 }
