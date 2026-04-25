@@ -18,6 +18,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <execinfo.h>
+#include <signal.h>
 
 #include "ggml-tsavorite.h"
 #include <unistd.h>
@@ -63,7 +65,6 @@ struct TsavoriteRuntimeState {
     bool *device_free = nullptr;
     bool multi_thread_enable = false;
     // one packed-args buffer per TXE
-    //void *packed_args[NUM_OF_TXES];
     std::vector<void *> packed_args;
 
     std::vector<std::thread> workers;
@@ -116,12 +117,6 @@ auto &loadResult_add          = g_rt.loadResult_add;
 auto &loadResult_mult         = g_rt.loadResult_mult;
 auto &loadResult_rms_norm     = g_rt.loadResult_rms_norm;
 } // anonymous namespace
-
-
-
-
-#include <execinfo.h>
-#include <signal.h>
 
 static void tsavorite_sig_handler(int sig) {
     void *array[64];
@@ -1170,8 +1165,6 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
         tsi_cleanup();
         abort();
     }
-
-    //void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
     if (packed_args.size() != num_of_txes || !packed_args[deviceId]) {
         printf("ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
            deviceId, packed_args.size(), num_of_txes);
@@ -1254,16 +1247,14 @@ static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
        tsi_cleanup();
        abort();
     }
-
-   {
+    {
        std::lock_guard<std::mutex> lk(workers_mutex);
        workers.emplace_back([=]() {
            tsi_blob_execution_internal(commandList);
            release_device(deviceId);
        });
-   }
+    }
 }
-
 
 static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TSI_DeviceIdType deviceId) {
     constexpr int64_t kPackedArgsI64   = 9;
@@ -1281,7 +1272,6 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
         abort();
     }
 
-    //void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
     if (packed_args.size() != num_of_txes || !packed_args[deviceId]) {
         printf("ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
            deviceId, packed_args.size(), num_of_txes);
@@ -1327,7 +1317,6 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
     return commandList;
 }
 
-
 static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
     tsi_init_per_txe_state_once();
 
@@ -1366,7 +1355,6 @@ static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
    }
 }
 
-
 static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf, TSI_DeviceIdType deviceId) {
     constexpr int64_t kPackedArgsI64   = 20;
     constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
@@ -1383,7 +1371,6 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
         abort();
     }
 
-    //void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
     if (packed_args.size() != num_of_txes || !packed_args[deviceId]) {
         printf("ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
            deviceId, packed_args.size(), num_of_txes);
@@ -1460,19 +1447,13 @@ static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
         tsi_cleanup();
         abort();
     }
-#if 0
-    workers.emplace_back([=]() {
-        tsi_blob_execution_internal(commandList);
-        release_device(deviceId);
-    });
-#endif
-   {
+    {
        std::lock_guard<std::mutex> lk(workers_mutex);
        workers.emplace_back([=]() {
            tsi_blob_execution_internal(commandList);
            release_device(deviceId);
        });
-   }
+    }
 }
 
 
@@ -3538,18 +3519,6 @@ static void ggml_backend_tsavorite_free(ggml_backend_t backend) {
   free(backend);
   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
 }
-
-#if 0
-static void ggml_backend_tsavorite_synchronize(ggml_backend_t backend) {
-// We need to implement ASYN  Method to take output of tensor data to input of other Tensor
-// We will evaluate and implement at later PR
-#ifdef SYNC_DEBUG
-  usleep(100000);
-#endif /* SYNC_DEBUG */
-  
-  TSI_UNUSED(backend);
-}
-#endif
 
 static void ggml_backend_tsavorite_synchronize(ggml_backend_t backend) {
     join_all_workers();
