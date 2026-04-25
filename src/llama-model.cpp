@@ -720,6 +720,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     // get general kv
     ml.get_key(LLM_KV_GENERAL_NAME, name, false);
 
+    // read n_embd before vocab_only early return, needed by mmproj
+    ml.get_key(LLM_KV_EMBEDDING_LENGTH, hparams.n_embd, false);
+
     // everything past this point is not vocab-related
     // for CLIP models, we only need to load tensors, no hparams
     if (hparams.vocab_only || ml.get_arch() == LLM_ARCH_CLIP) {
