@@ -1201,31 +1201,45 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     // --- Dynamic VTCM layout ---
     const size_t vtcm_budget   = ctx->vtcm_size;
     const size_t vec_dot_size  = k * sizeof(__fp16);
-    // Pipeline = 4-stage DMA→dequant→HMX→store with HMX worker overlap.
-    // Previously gated on `k <= n`, which left FFN_down-like shapes (e.g. 512×2560×1024)
-    // stuck on the non-pipeline STANDARD path even though they have enough M and N
-    // chunks to benefit from HVX/HMX overlap.  Relax to `n >= 256` (2× HMX tile width,
-    // enough for >=2 N chunks), and keep the m >= 128 minimum for HMX efficiency.
-    const bool   use_pipeline  = (m >= 128) && (n >= 256);
 
-    // Select cost parameters based on execution path
-    size_t per_n_cost, per_mn_cost;
-    if (use_pipeline) {
-        per_n_cost  = row_stride + 2 * vec_dot_size;  // Q + S0 + S1 (dequant bufs)
-        per_mn_cost = 2 * sizeof(__fp16);              // O x 2 (output double buffer)
-    } else {
-        per_n_cost  = vec_dot_size + 2 * row_stride;   // W + S0 + S1 (x4x2 DMA bufs)
-        per_mn_cost = sizeof(__fp16);                   // O x 1
-    }
+    // Pipeline = 4-stage DMA→dequant→HMX→store with HMX worker overlap.
+    // Only pays off when the chunker yields >=2 n-chunks, so the main loop can
+    // overlap HMX (C) with HVX (B/D); with a single n-chunk the extra VTCM for
+    // double-buffered output and the worker-dispatch overhead are pure loss.
+    // Try pipeline costs first; fall back to sequential if the layout collapses
+    // to one n-chunk. m >= 128 floor keeps HMX utilization reasonable.
+    const size_t pipe_per_n  = row_stride + 2 * vec_dot_size;  // Q + S0 + S1 (dequant bufs)
+    const size_t pipe_per_mn = 2 * sizeof(__fp16);             // O x 2 (output double buffer)
+    const size_t seq_per_n   = vec_dot_size + 2 * row_stride;  // W + S0 + S1 (x4x2 DMA bufs)
+    const size_t seq_per_mn  = sizeof(__fp16);                 // O x 1
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0, vtcm_used = 0;
-    // Quantized weight: dequant ~1.5x more expensive per element than activation load.
-    if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, per_n_cost, /*per_m=*/vec_dot_size, per_mn_cost, m, n,
-                           /*m_block_cost=*/(size_t) n * 3,
-                           /*n_block_cost=*/(size_t) m * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
-        FARF(HIGH, "%s: VTCM too small (m=%d k=%d n=%d pipe=%d budget=%zu)",
-             __func__, m, k, n, use_pipeline, vtcm_budget);
-        return -1;
+    bool   use_pipeline   = false;
+
+    if (m >= 128) {
+        size_t mc = 0, nc = 0, used = 0;
+        if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, pipe_per_n, /*per_m=*/vec_dot_size, pipe_per_mn,
+                               m, n,
+                               /*m_block_cost=*/(size_t) n * 3,
+                               /*n_block_cost=*/(size_t) m * 2, &mc, &nc, &used) == 0
+            && hmx_ceil_div((size_t) n, nc) >= 2) {
+            m_chunk_n_rows = mc;
+            n_chunk_n_cols = nc;
+            vtcm_used      = used;
+            use_pipeline   = true;
+        }
+    }
+
+    if (!use_pipeline) {
+        if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, seq_per_n, /*per_m=*/vec_dot_size, seq_per_mn,
+                               m, n,
+                               /*m_block_cost=*/(size_t) n * 3,
+                               /*n_block_cost=*/(size_t) m * 2,
+                               &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
+            FARF(HIGH, "%s: VTCM too small (m=%d k=%d n=%d budget=%zu)",
+                 __func__, m, k, n, vtcm_budget);
+            return -1;
+        }
     }
 
     // Compute precise buffer sizes per execution path

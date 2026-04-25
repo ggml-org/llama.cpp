@@ -8739,6 +8739,29 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(64, 128, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q1_0));
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 64, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q1_0, GGML_TYPE_F16));
 
+    // HMX flash attention (Hexagon HTP) — exercises the prefill path:
+    //   F16 KV, head_dim % 32 == 0, neq1 (= nb) >= 32.
+    // Covers the cross-product of {ALiBi off/on} × {logit_softcap off/on}.
+    for (int64_t hs : { 64, 128 }) {
+        for (bool mask : { true, false }) {
+            for (float max_bias : { 0.0f, 8.0f }) {
+                if (!mask && max_bias > 0.0f) continue; // ALiBi requires a mask
+                for (float logit_softcap : { 0.0f, 10.0f }) {
+                    // GQA prefill: 4 KV heads × group of 4 = 16 query heads, kv=512, nb=64
+                    test_cases.emplace_back(new test_flash_attn_ext(
+                        hs, hs, /*nh=*/4, /*nr23=*/{4, 1}, /*kv=*/512, /*nb=*/64,
+                        mask, /*sinks=*/false, max_bias, logit_softcap,
+                        GGML_PREC_F32, GGML_TYPE_F16));
+                    // Smaller batch at the prefill threshold (nb == 32) with a non-aligned kv length
+                    test_cases.emplace_back(new test_flash_attn_ext(
+                        hs, hs, /*nh=*/2, /*nr23=*/{2, 1}, /*kv=*/113, /*nb=*/32,
+                        mask, /*sinks=*/false, max_bias, logit_softcap,
+                        GGML_PREC_F32, GGML_TYPE_F16));
+                }
+            }
+        }
+    }
+
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {30000, 1, 1, 1}));
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {   10, 5, 4, 3}));

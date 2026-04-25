@@ -2255,12 +2255,6 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
     }
 
     if (dst->ne[3] != 1) {
-        // Multi-sequence FA not yet supported on HTP.
-        // flash_attn_ext dst is permuted as [DV, n_heads, n_tokens, n_seq], so
-        // the prefill head dimension is dst->ne[1], not dst->ne[2]. Keep
-        // multi-head prefill enabled here: op_hmx_flash_attn_ext handles GQA
-        // via n_heads/n_kv_heads internally, and the HVX fallback in
-        // op_flash_attn_ext iterates per-head.
         return false;
     }
 

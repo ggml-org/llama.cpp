@@ -1,14 +1,5 @@
 // HMX-accelerated Flash Attention for prefill (neq1 >= 32).
 // Ported from htp-ops-lib/src/dsp/ops/flash_attn.c, adapted to the htp/ codebase.
-// K/V are always FP16 (from KV cache); model weights (Q4_0/Q8_0/FP16) are handled
-// by matmul (hmx-matmul-ops.c) which writes FP16 output into the KV cache.
-// Q can be F32 or F16. Output can be F32 or F16.
-//
-// Additions over htp-ops-lib: logit softcap, ALiBi (max_bias), DMA double-buffering,
-// mask DMA caching, tensor stride support, batch iteration.
-//
-// GQA merge strategy: iterate per KV head and merge G query heads into a single
-// tile block of g_br = hex_align_up(G * Br, 32) rows. This loads K/V once per KV head.
 
 #pragma clang diagnostic ignored "-Wunused-variable"
 #pragma clang diagnostic ignored "-Wunused-function"
@@ -85,33 +76,6 @@ static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV,
            + 256 * 2;                   // HMX scales (id + qk)
 }
 
-// Cost-based (Br, Bc) search for flash attention with pipeline constraint.
-//
-// VTCM model (same as before):
-//   overhead + g_br * per_gbr + g_br² * per_gbr2 + Bc * per_bc + g_br * Bc * per_gbr_bc
-//
-// Cost model (minimization objective):
-//   Q * (c_q_fixed + K * c_iter_fixed),  where Q = ceil(qo/Br), K = ceil(kv/Bc)
-//
-// Rationale: partial Q blocks only allocate HMX row tiles for actual rows
-// (g_br_actual = align_up(n_q_rows*G, 32)), so the data-proportional HMX/HVX
-// work is invariant in (Br, Bc) — it equals O(qo*kv) regardless of blocking.
-// Only two terms depend on (Br, Bc):
-//   c_q_fixed    — per-Q-block overhead (q_load + epilogue o_update + o_norm +
-//                  o_store + HMX queue flush between Q blocks), ~1400us.
-//   c_iter_fixed — per-KV-iter pipeline overhead (HMX queue push/pop + DMA pop
-//                  + HVX barriers), ~200us.
-// Coefficients are absolute (independent of qo_len/kv_len).
-//
-// Pipeline constraint: when kv_len >= MIN_KV_BLOCKS * bc_unit and n_threads >= 2,
-// enforce Bc <= kv_len / MIN_KV_BLOCKS so that n_kv_blocks >= MIN_KV_BLOCKS.
-// This ensures the 3-phase pipeline (HVX ‖ HMX) is always active.
-//
-// Tie-break: when cost is equal, prefer larger Br * Bc (fewer total iterations).
-//
-// Algorithm: sweep Br from max down, analytically solve for Bc_max at each Br.
-// The D matrix's O(g_br²) cost naturally limits g_br without a hardcoded cap.
-// Exact VTCM check via hmx_fa_compute_vtcm_usage() guards against alignment error.
 // ============================================================================
 // FP16 exp2 polynomial (ported from htp-ops-lib/include/dsp/hvx_math.h)
 // ============================================================================
@@ -155,7 +119,13 @@ static inline HVX_Vector hvx_exp2_hf(HVX_Vector x_v) {
 }
 
 #define FA_MIN_KV_BLOCKS 3
-
+// Cost-based (Br, Bc) search for flash attention with pipeline constraint.
+//
+// VTCM model (same as before):
+//   overhead + g_br * per_gbr + g_br² * per_gbr2 + Bc * per_bc + g_br * Bc * per_gbr_bc
+//
+// Cost model (minimization objective):
+//   Q * (c_q_fixed + K * c_iter_fixed),  where Q = ceil(qo/Br), K = ceil(kv/Bc)
 static int hmx_fa_find_chunk_size(size_t * Br_out,
                                   size_t * Bc_out,
                                   size_t   gqa_factor,
@@ -180,7 +150,7 @@ static int hmx_fa_find_chunk_size(size_t * Br_out,
     const size_t per_bc     =
         3 * (DK + DV) * fp16 + 2 * n_threads * fp16;  // K_dma×2 + V_dma×2 + K_tile + V_tile + row bufs
     const size_t per_gbr_bc = 2 * fp16;                                // S + P
-    // Fixed: HMX scales×2 + worst-case per-buffer alignment (13 buffers × 4095)
+
     const size_t overhead   = 256 * 2 + 13 * 4096;
 
     if (vtcm_budget <= overhead) {
@@ -691,20 +661,16 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
 
     const HVX_Vector v_neg_inf = Q6_Vh_vsplat_R(0xfbff);
 
-    // FIX(#3): union-backed per-row accumulator, replaces vlalign/vror writeback.
-    // `Q6_V_vlalign_VVR(U, V, 0) = V` drops the r_vec_off=0 write in the old pattern.
-    union vec_u16 {
-        HVX_Vector v;
-        uint16_t   u[64];
-    };
+    // Per-row accumulators: each fp16 lane in a 64-lane vector holds one row's scalar.
+    // CONTRACT: lane bits must be IEEE fp16 (hf), never qf16 — qf16 uses a different
+    // bit layout, so a later hf-domain read would silently produce wrong values.
+    // Convert first via Q6_Vhf_equals_Vqf16(). For reference: vtcm_m_vec/vtcm_s_rowmax
+    // are hf; vtcm_l_vec is qf16 — don't mix them up.
 
     for (size_t r_vec_idx = vec_start; r_vec_idx < vec_end; ++r_vec_idx) {
-        union vec_u16 rowmax_acc;
-        union vec_u16 rowsum_acc;
-        union vec_u16 m_prev;
-        rowmax_acc.v = v_neg_inf;
-        rowsum_acc.v = Q6_V_vzero();
-        m_prev.v     = factx->vtcm_m_vec[r_vec_idx];
+        HVX_Vector rowmax_acc_v = v_neg_inf;
+        HVX_Vector rowsum_acc_v = Q6_V_vzero();
+        HVX_Vector m_prev_v     = factx->vtcm_m_vec[r_vec_idx];
 
         for (int r_vec_off = 0; r_vec_off < 64; r_vec_off += 2) {
             int r = r_vec_idx * 64 + r_vec_off;
@@ -733,7 +699,15 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
 
             // Apply softcap if enabled (in F32 precision)
             if (factx->logit_softcap != 0.0f) {
-                const HVX_Vector v_cap = hvx_vec_splat_f32(factx->logit_softcap);
+                // When EXP2_HF is on, fold log2(e) into v_cap so the output lands in
+                // log2(e)-scaled space for the downstream exp2.  log2(e) is kept OUT
+                // of qk_scale in this configuration (see scale setup) so tanh sees
+                // the physical QK/(√d·c) argument.
+                float cap = factx->logit_softcap;
+#ifdef HMX_FA_USE_EXP2_HF
+                cap *= 1.44269504f;  // log2(e)
+#endif
+                const HVX_Vector v_cap = hvx_vec_splat_f32(cap);
                 for (size_t c = 0; c < kv_rows; c += 64) {
                     size_t ci = c / 64;
 
@@ -865,33 +839,32 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                 v_s_rowmax1 = Q6_Vhf_vmax_VhfVhf(v_s_rowmax1, my_row_buf1[ci]);
             }
 
-            // FIX(#3): broadcast-to-all-lanes reduce, then scalar extract + vsplat.
-            // Old vror+vlalign writeback had `vlalign(U,V,0)=V` dropping r_vec_off=0 writes.
-            // Also covers #2 (replaces the error-prone Q6_Wh_vlut16_VbVhR_nomatch R=0/R=2
-            // broadcast with a scalar fp16 extract + Q6_Vh_vsplat_R splat).
             v_s_rowmax0 = hvx_vec_reduce_max_f16(v_s_rowmax0);
             v_s_rowmax1 = hvx_vec_reduce_max_f16(v_s_rowmax1);
 
-            union vec_u16 s0_view, s1_view;
-            s0_view.v = v_s_rowmax0;
-            s1_view.v = v_s_rowmax1;
-            uint16_t rowmax_r_bits  = s0_view.u[0];
-            uint16_t rowmax_r1_bits = s1_view.u[0];
-            rowmax_acc.u[r_vec_off]     = rowmax_r_bits;
-            rowmax_acc.u[r_vec_off + 1] = rowmax_r1_bits;
+            // Splat m_prev[r], m_prev[r+1] from the per-row accumulator.
+            // vror brings the target lane to lane 0, then extract + re-splat.
+            HVX_Vector v_m_prev0 =
+                hvx_vec_splat_f16(hvx_vec_get_f16(Q6_V_vror_VR(m_prev_v, r_vec_off * 2)));
+            HVX_Vector v_m_prev1 =
+                hvx_vec_splat_f16(hvx_vec_get_f16(Q6_V_vror_VR(m_prev_v, (r_vec_off + 1) * 2)));
 
-            __fp16 rowmax_r_f16, rowmax_r1_f16, m_prev_r, m_prev_r1;
-            memcpy(&rowmax_r_f16,  &rowmax_r_bits,  2);
-            memcpy(&rowmax_r1_f16, &rowmax_r1_bits, 2);
-            memcpy(&m_prev_r,  &m_prev.u[r_vec_off],     2);
-            memcpy(&m_prev_r1, &m_prev.u[r_vec_off + 1], 2);
-            __fp16 m_new_r  = m_prev_r  > rowmax_r_f16  ? m_prev_r  : rowmax_r_f16;
-            __fp16 m_new_r1 = m_prev_r1 > rowmax_r1_f16 ? m_prev_r1 : rowmax_r1_f16;
-            uint16_t m_new_r_bits, m_new_r1_bits;
-            memcpy(&m_new_r_bits,  &m_new_r,  2);
-            memcpy(&m_new_r1_bits, &m_new_r1, 2);
-            HVX_Vector v_dup_m0 = Q6_Vh_vsplat_R((int) m_new_r_bits);
-            HVX_Vector v_dup_m1 = Q6_Vh_vsplat_R((int) m_new_r1_bits);
+            // HVX max — both operands are splats, so result is splat of m_new.
+            HVX_Vector v_dup_m0 = Q6_Vhf_vmax_VhfVhf(v_m_prev0, v_s_rowmax0);
+            HVX_Vector v_dup_m1 = Q6_Vhf_vmax_VhfVhf(v_m_prev1, v_s_rowmax1);
+
+            // Insert row r, r+1 rowmax into rowmax_acc_v via 2-byte-wide vmux.
+            // Byte ranges: lane0 = [r_vec_off*2 .. r_vec_off*2+1], lane1 shifted by 2.
+            // vsetq2 handles the n=128 corner case when r_vec_off reaches 62.
+            {
+                HVX_VectorPred p_start = Q6_Q_vsetq_R(r_vec_off * 2);
+                HVX_VectorPred p_mid   = Q6_Q_vsetq_R((r_vec_off + 1) * 2);
+                HVX_VectorPred p_end   = Q6_Q_vsetq2_R((r_vec_off + 2) * 2);
+                HVX_VectorPred p_lane0 = Q6_Q_and_QQn(p_mid, p_start);
+                HVX_VectorPred p_lane1 = Q6_Q_and_QQn(p_end, p_mid);
+                rowmax_acc_v = Q6_V_vmux_QVV(p_lane0, v_dup_m0, rowmax_acc_v);
+                rowmax_acc_v = Q6_V_vmux_QVV(p_lane1, v_dup_m1, rowmax_acc_v);
+            }
 
             // Compute P = exp(S - m_new), using HVX exp
             const HVX_Vector v_zero      = Q6_V_vzero();
@@ -900,12 +873,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
 
 #ifdef HMX_FA_USE_EXP2_HF
             // FP16 exp2 polynomial path (matches htp-ops-lib flash_attn.c):
-            // P = exp2(S - m_new).  Base-2 throughout — fa_ml_update_and_build_d's
-            // m_diff correction must also use exp2 to keep online-softmax consistent.
-            // ~22 ALU ops for 64 lanes vs ~44 for the F32 round-trip path.
-            // Output layout = input layout (pure per-lane), same as htp-ops-lib; the
-            // downstream tile write (Q6_W_vshuff_VVR) takes row0/row1 in my_row_buf
-            // layout directly — no extra shuff needed.
+            // P = exp2(S - m_new)
             for (size_t c = 0; c < kv_rows; c += 64) {
                 size_t     ci           = c / 64;
                 HVX_Vector v_s_minus_m0 = Q6_Vqf16_vsub_VhfVhf(my_row_buf0[ci], v_dup_m0);
@@ -915,7 +883,6 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                 HVX_Vector v_p_row1_hf = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_s_minus_m1));
 #else
             // F32 exp path: qf16 → f32 → exp → f32 → f16.  Higher precision,
-            // ~44 ops for 2×32 lanes (each exp_f32 call is ~20 ops).
             for (size_t c = 0; c < kv_rows; c += 64) {
                 size_t     ci           = c / 64;
                 HVX_Vector v_s_minus_m0 = Q6_Vqf16_vsub_VhfVhf(my_row_buf0[ci], v_dup_m0);
@@ -951,22 +918,27 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                     v_p_rowsum1, Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(vp_p1), Q6_V_hi_W(vp_p1)));
             }
 
-            // FIX(#3): reduce rowsum to all lanes, scalar extract to union.
             HVX_Vector rowsum0_sf = Q6_Vsf_equals_Vqf32(v_p_rowsum0);
             HVX_Vector rowsum1_sf = Q6_Vsf_equals_Vqf32(v_p_rowsum1);
             rowsum0_sf = hvx_vec_reduce_sum_f32(rowsum0_sf);
             rowsum1_sf = hvx_vec_reduce_sum_f32(rowsum1_sf);
             {
-                union vec_u16 rv0, rv1;
-                rv0.v = hvx_vec_f32_to_f16(rowsum0_sf, rowsum0_sf);
-                rv1.v = hvx_vec_f32_to_f16(rowsum1_sf, rowsum1_sf);
-                rowsum_acc.u[r_vec_off]     = rv0.u[0];
-                rowsum_acc.u[r_vec_off + 1] = rv1.u[0];
+                // Both inputs are f32 splats, so the f32->f16 output is an fp16 splat.
+                HVX_Vector rv0_v = hvx_vec_f32_to_f16(rowsum0_sf, rowsum0_sf);
+                HVX_Vector rv1_v = hvx_vec_f32_to_f16(rowsum1_sf, rowsum1_sf);
+
+                HVX_VectorPred p_start = Q6_Q_vsetq_R(r_vec_off * 2);
+                HVX_VectorPred p_mid   = Q6_Q_vsetq_R((r_vec_off + 1) * 2);
+                HVX_VectorPred p_end   = Q6_Q_vsetq2_R((r_vec_off + 2) * 2);
+                HVX_VectorPred p_lane0 = Q6_Q_and_QQn(p_mid, p_start);
+                HVX_VectorPred p_lane1 = Q6_Q_and_QQn(p_end, p_mid);
+                rowsum_acc_v = Q6_V_vmux_QVV(p_lane0, rv0_v, rowsum_acc_v);
+                rowsum_acc_v = Q6_V_vmux_QVV(p_lane1, rv1_v, rowsum_acc_v);
             }
         }
 
-        factx->vtcm_s_rowmax[r_vec_idx] = rowmax_acc.v;
-        factx->vtcm_p_rowsum[r_vec_idx] = rowsum_acc.v;
+        factx->vtcm_s_rowmax[r_vec_idx] = rowmax_acc_v;
+        factx->vtcm_p_rowsum[r_vec_idx] = rowsum_acc_v;
     }
 }
 
@@ -1293,7 +1265,14 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
     // Pre-bake log2(e) into qk_scale so HMX-produced S tiles are in log2(e)-scaled
     // space.  Then exp2(S - m) in the softmax equals base-e exp((S - m) / log2(e)),
     // preserving ggml's base-e softmax semantics.  Matches htp-ops-lib flash_attn.c.
-    scale *= 1.44269504f;  // log2(e)
+    //
+    // When softcap is active we cannot pre-bake log2(e) here — it would land inside
+    // the tanh argument and shift the softcap knee from x≈c to x≈c/log2(e), giving
+    // numerically wrong softcapped values.  Instead fold log2(e) into the post-tanh
+    // multiplier (see softcap block: v_cap absorbs log2(e)).
+    if (logit_softcap == 0.0f) {
+        scale *= 1.44269504f;  // log2(e)
+    }
 #endif
 
     factx.scale         = scale;
@@ -1564,9 +1543,6 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         DMA_PREFETCH_KV(kv_blk + 1);
 
                         TIMER_START(v_interleave);
-                        // FIX(v-stride): use n_tiles_per_bc (block-invariant) as V tile layout
-                        // stride to match o_update's v_tile access.  Using per-block n_col_tiles
-                        // misplaces DV_tile 1..3 in the last partial KV block.
                         fa_phase_v_interleave(&factx, kv_rows, v_src_stride, buf_idx, n_tiles_per_bc);
                         TIMER_STOP(v_interleave);
 
