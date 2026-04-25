@@ -8,7 +8,7 @@ CatalogFile = libggml-htp.cat
 PnpLockDown = 1
 
 [DestinationDirs]
-Drivers_Dir = 6
+Drivers_Dir = 13
 
 [SourceDisksNames]
 1 = %DiskId%

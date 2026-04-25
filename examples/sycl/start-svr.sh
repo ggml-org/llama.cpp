@@ -33,12 +33,11 @@ Options:
 EOF
 }
 
-BIN_FILE=./build/bin/llama-completion
+BIN_FILE=./build/bin/llama-server
 SEED=0
 GPUS_SETTING=""
 
-INPUT_PROMPT="Building a website can be done in 10 simple steps:\nStep 1:"
-MODEL_FILE=../models/llama-2-7b.Q4_0.gguf
+MODEL_FILE=../models/Qwen3.5-4B-Q4_0.gguf
 NGL=99
 CONTEXT=4096
 GGML_SYCL_DEVICE=-1
@@ -49,13 +48,6 @@ while [[ $# -gt 0 ]]; do
         -c|--context)
             CONTEXT=$2
             # Shift twice to consume both the option flag and its value
-            shift
-            shift
-            ;;
-        -p|--promote)
-            # Option that is a simple flag (boolean)
-            INPUT_PROMPT="$2"
-            # Shift once to consume the option flag
             shift
             shift
             ;;
@@ -127,5 +119,6 @@ else
  fi
 
 echo "run cmd: ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE}  --mmap "
-ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --mmap
+ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --mmap --host 0.0.0.0 --port 8000
+
 
