@@ -36,6 +36,7 @@ class TensorNameMap:
             "encoder",                                   # neobert
             "model.transformer.wte",                     # llada
             "embed_tokens",                              # qwen3-embedding
+            "embed",                                     # deepseek-v4
         ),
 
         # Token type embeddings
@@ -196,6 +197,7 @@ class TensorNameMap:
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.attention_layernorm",               # apertus
             "model.layers.{bid}.pre_attention_layernorm",           # kormo
+            "layers.{bid}.attn_norm",                               # deepseek-v4
         ),
 
         # Attention norm 2
@@ -357,6 +359,7 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_SINKS: (
             "model.layers.{bid}.self_attn.sinks", # openai-moe
             "model.layers.{bid}.self_attn.attention_sink_bias", # mimov2
+            "layers.{bid}.attn.attn_sink",        # deepseek-v4
         ),
 
         MODEL_TENSOR.ATTN_GATE: (
@@ -390,7 +393,8 @@ class TensorNameMap:
             "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
             "model.layers.{bid}.pre_mlp_layernorm",                          # kormo
-            "layers.{bid}.mlp_norm"                                          # modern-bert
+            "layers.{bid}.mlp_norm",                                         # modern-bert
+            "layers.{bid}.ffn_norm",                                         # deepseek-v4
         ),
 
         # Pre feed-forward norm
@@ -441,6 +445,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.gate",                 # nemotron-h-moe
             "model.layers.{bid}.moe.gate",                      # step3.5
             "model.layers.{bid}.router.proj",                   # gemma4
+            "layers.{bid}.ffn.gate",                            # deepseek-v4
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -458,6 +463,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.e_score_correction",                    # exaone-moe
             "model.layers.{bid}.block_sparse_moe.gate.e_score_correction",  # kimi
             "model.layers.{bid}.moe.router_bias",                           # step3.5 expert selection bias
+            "layers.{bid}.ffn.gate.bias",                                   # deepseek-v4
         ),
 
         # Feed-forward up
@@ -513,6 +519,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.experts.mlp.w1",              # nomic-bert-moe
             "model.layers.{bid}.block_sparse_moe.experts.up", # smallthinker
             "model.layers.{bid}.moe.up_proj",                       # step3.5
+            "layers.{bid}.ffn.experts.w3",                          # deepseek-v4 (merged)
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
@@ -525,6 +532,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.shared_experts.up_proj",    # nemotron-h-moe
             "model.layers.{bid}.block_sparse_moe.shared_experts.up_proj", # kimi
             "model.layers.{bid}.share_expert.up_proj",               # step3.5
+            "layers.{bid}.ffn.shared_experts.w3",                    # deepseek-v4
         ),
 
         MODEL_TENSOR.FFN_UP_CHEXP: (
@@ -565,6 +573,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.experts.gate_proj",        # llama4
             "model.layers.{bid}.block_sparse_moe.experts.gate",         # smallthinker
             "model.layers.{bid}.moe.gate_proj",                         # step3.5
+            "layers.{bid}.ffn.experts.w1",                              # deepseek-v4 (merged)
         ),
 
         MODEL_TENSOR.FFN_GATE_SHEXP: (
@@ -575,6 +584,7 @@ class TensorNameMap:
             "layers.{bid}.shared_experts.w1",                          # mistral-large
             "model.layers.{bid}.block_sparse_moe.shared_experts.gate_proj", # kimi
             "model.layers.{bid}.share_expert.gate_proj",               # step3.5
+            "layers.{bid}.ffn.shared_experts.w1",                      # deepseek-v4
         ),
 
         MODEL_TENSOR.FFN_GATE_CHEXP: (
@@ -644,6 +654,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.experts.down",     # smallthinker
             "model.layers.{bid}.moe.down_proj",                     # step3.5
             "model.layers.{bid}.experts.down_proj",                 # gemma4
+            "layers.{bid}.ffn.experts.w2",                          # deepseek-v4 (merged)
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
@@ -656,6 +667,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.shared_experts.down_proj",    # nemotron-h-moe
             "model.layers.{bid}.block_sparse_moe.shared_experts.down_proj", # kimi
             "model.layers.{bid}.share_expert.down_proj",               # step3.5
+            "layers.{bid}.ffn.shared_experts.w2",                      # deepseek-v4
         ),
 
         MODEL_TENSOR.FFN_DOWN_CHEXP: (
@@ -1064,11 +1076,13 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_Q_A: (
             "model.layers.{bid}.self_attn.q_a_proj", # deepseek2
             "layers.{bid}.attention.wq_a",           # mistral-large
+            "layers.{bid}.attn.wq_a",                # deepseek-v4
         ),
 
         MODEL_TENSOR.ATTN_Q_B: (
             "model.layers.{bid}.self_attn.q_b_proj", # deepseek2
             "layers.{bid}.attention.wq_b",           # mistral-large
+            "layers.{bid}.attn.wq_b",                # deepseek-v4
         ),
 
         MODEL_TENSOR.ATTN_KV_A_MQA: (
@@ -1093,11 +1107,97 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_Q_A_NORM: (
             "model.layers.{bid}.self_attn.q_a_layernorm", # deepseek2
             "layers.{bid}.attention.q_a_norm",            # mistral-large
+            "layers.{bid}.attn.q_norm",                   # deepseek-v4
         ),
 
         MODEL_TENSOR.ATTN_KV_A_NORM: (
             "model.layers.{bid}.self_attn.kv_a_layernorm", # deepseek2
             "layers.{bid}.attention.kv_a_norm",            # mistral-large
+            "layers.{bid}.attn.kv_norm",                   # deepseek-v4
+        ),
+
+        MODEL_TENSOR.ATTN_KV_LATENT: (
+            "layers.{bid}.attn.wkv",                       # deepseek-v4
+        ),
+
+        MODEL_TENSOR.ATTN_OUT_A: (
+            "layers.{bid}.attn.wo_a",                      # deepseek-v4
+        ),
+
+        MODEL_TENSOR.ATTN_OUT_B: (
+            "layers.{bid}.attn.wo_b",                      # deepseek-v4
+        ),
+
+        MODEL_TENSOR.ATTN_COMPRESS_APE: (
+            "layers.{bid}.attn.compressor.ape",            # deepseek-v4
+        ),
+
+        MODEL_TENSOR.ATTN_COMPRESS_NORM: (
+            "layers.{bid}.attn.compressor.norm",           # deepseek-v4
+        ),
+
+        MODEL_TENSOR.ATTN_COMPRESS_KV: (
+            "layers.{bid}.attn.compressor.wkv",            # deepseek-v4
+        ),
+
+        MODEL_TENSOR.ATTN_COMPRESS_GATE: (
+            "layers.{bid}.attn.compressor.wgate",          # deepseek-v4
+        ),
+
+        MODEL_TENSOR.INDEXER_COMPRESS_APE: (
+            "layers.{bid}.attn.indexer.compressor.ape",    # deepseek-v4
+        ),
+
+        MODEL_TENSOR.INDEXER_COMPRESS_NORM: (
+            "layers.{bid}.attn.indexer.compressor.norm",   # deepseek-v4
+        ),
+
+        MODEL_TENSOR.INDEXER_COMPRESS_KV: (
+            "layers.{bid}.attn.indexer.compressor.wkv",    # deepseek-v4
+        ),
+
+        MODEL_TENSOR.INDEXER_COMPRESS_GATE: (
+            "layers.{bid}.attn.indexer.compressor.wgate",  # deepseek-v4
+        ),
+
+        MODEL_TENSOR.HC_HEAD_BASE: (
+            "hc_head_base",                                # deepseek-v4
+        ),
+
+        MODEL_TENSOR.HC_HEAD_FN: (
+            "hc_head_fn",                                  # deepseek-v4
+        ),
+
+        MODEL_TENSOR.HC_HEAD_SCALE: (
+            "hc_head_scale",                               # deepseek-v4
+        ),
+
+        MODEL_TENSOR.HC_ATTN_BASE: (
+            "layers.{bid}.hc_attn_base",                  # deepseek-v4
+        ),
+
+        MODEL_TENSOR.HC_ATTN_FN: (
+            "layers.{bid}.hc_attn_fn",                    # deepseek-v4
+        ),
+
+        MODEL_TENSOR.HC_ATTN_SCALE: (
+            "layers.{bid}.hc_attn_scale",                 # deepseek-v4
+        ),
+
+        MODEL_TENSOR.HC_FFN_BASE: (
+            "layers.{bid}.hc_ffn_base",                   # deepseek-v4
+        ),
+
+        MODEL_TENSOR.HC_FFN_FN: (
+            "layers.{bid}.hc_ffn_fn",                     # deepseek-v4
+        ),
+
+        MODEL_TENSOR.HC_FFN_SCALE: (
+            "layers.{bid}.hc_ffn_scale",                  # deepseek-v4
+        ),
+
+        MODEL_TENSOR.FFN_GATE_TID2EID: (
+            "layers.{bid}.ffn.gate.tid2eid",              # deepseek-v4
         ),
 
         MODEL_TENSOR.ATTN_SUB_NORM: (
@@ -1244,6 +1344,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.INDEXER_PROJ: (
             "model.layers.{bid}.self_attn.indexer.weights_proj", # DSA
+            "layers.{bid}.attn.indexer.weights_proj",            # deepseek-v4
         ),
 
         MODEL_TENSOR.INDEXER_ATTN_K: (
@@ -1252,6 +1353,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.INDEXER_ATTN_Q_B: (
             "model.layers.{bid}.self_attn.indexer.wq_b", # DSA
+            "layers.{bid}.attn.indexer.wq_b",            # deepseek-v4
         ),
 
         ############################################################################
