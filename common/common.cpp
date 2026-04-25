@@ -1422,6 +1422,11 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
 
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
+        if (llama_n_rollback_max(ctx) > 0 &&
+            llama_model_supports_recurrent_partial_rollback(llama_get_model(ctx))) {
+            res = COMMON_CONTEXT_SEQ_RM_TYPE_PART;
+            goto done;
+        }
         LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
         res = COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
         goto done;
@@ -1490,6 +1495,12 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
+    {
+        // TODO: add for MTP
+        const bool has_spec = (params.speculative.type != COMMON_SPECULATIVE_TYPE_NONE)
+                              || params.speculative.has_dft();
+        cparams.n_rollback_max = has_spec ? (uint32_t) params.speculative.draft.n_max : 0u;
+    }
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;

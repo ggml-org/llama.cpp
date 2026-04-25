@@ -56,6 +56,17 @@ struct llm_build_delta_net_base : public llm_graph_context {
                 ggml_tensor * s,
                         int   il);
 
+    // fused op with keep_intermediates=true: returns the raw [attn | T snapshots]
+    // output tensor. Caller slices snapshot views and routes them to recurrent slots.
+    ggml_tensor * build_delta_net_fused_keep_intermediates(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * b,
+                ggml_tensor * s,
+                        int   il);
+
     // choose one of two implementations above based on the number of tokens
     std::pair<ggml_tensor *, ggml_tensor *> build_delta_net(
                 ggml_tensor * q,

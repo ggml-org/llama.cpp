@@ -346,7 +346,7 @@ struct server_slot {
             const auto & params_spec = task->params.speculative;
 
             if (!spec_draft.empty()) {
-                // we have a previous (partial) draft to reuse
+                // we have a previous (partial) draft to reuse from the FULL
                 if (ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
                     GGML_ASSERT(!spec_ckpt.empty());
                 }
@@ -807,6 +807,7 @@ private:
 
             params_base.speculative.draft.model = model_dft.get();
             params_base.speculative.draft.cparams = common_context_params_to_llama(params_dft);
+            params_base.speculative.draft.cparams.n_rollback_max = 0;
         }
 
         std::string & mmproj_path = params_base.mmproj.path;

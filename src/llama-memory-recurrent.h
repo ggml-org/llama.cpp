@@ -23,6 +23,7 @@ public:
                          bool   offload,
                      uint32_t   mem_size,
                      uint32_t   n_seq_max,
+                     uint32_t   n_rollback_max,
         const layer_filter_cb & filter);
 
     ~llama_memory_recurrent() = default;
@@ -68,6 +69,14 @@ public:
     uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
     uint32_t size = 0; // total number of cells, shared across all sequences
     uint32_t used = 0; // used cells (i.e. at least one seq_id)
+
+    // max recurrent-state rollback distance; tensors are widened to (1 + n_rollback_max) groups
+    uint32_t n_rollback_max = 0;
+    // per-seq rollback index
+    std::vector<uint32_t> recurrent_rollback_idx;
+
+    void     set_recurrent_rollback_idx(llama_seq_id seq_id, uint32_t idx);
+    uint32_t get_recurrent_rollback_idx(llama_seq_id seq_id) const;
 
     // computed before each graph build
     uint32_t n = 0;

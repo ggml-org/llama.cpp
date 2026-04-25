@@ -16867,8 +16867,9 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             tensor_clone = ggml_rwkv_wkv7(ggml_ctx, src_clone[0], src_clone[1], src_clone[2], src_clone[3],
             src_clone[4], src_clone[5], src_clone[6]);
         } else if (tensor->op == GGML_OP_GATED_DELTA_NET) {
+            const bool keep_intermediates = (((const int32_t *) tensor->op_params)[0] != 0);
             tensor_clone = ggml_gated_delta_net(ggml_ctx, src_clone[0], src_clone[1],
-            src_clone[2], src_clone[3], src_clone[4], src_clone[5]);
+            src_clone[2], src_clone[3], src_clone[4], src_clone[5], keep_intermediates);
         } else if (tensor->op == GGML_OP_OPT_STEP_ADAMW) {
             src_clone[0]->flags = tensor->src[0]->flags;
             tensor_clone = ggml_opt_step_adamw(ggml_ctx, src_clone[0], src_clone[1],

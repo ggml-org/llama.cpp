@@ -2548,7 +2548,8 @@ extern "C" {
             struct ggml_tensor  * v,
             struct ggml_tensor  * g,
             struct ggml_tensor  * beta,
-            struct ggml_tensor  * state);
+            struct ggml_tensor  * state,
+            bool                  keep_intermediates);
 
     // custom operators
 
