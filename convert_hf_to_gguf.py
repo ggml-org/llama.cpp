@@ -777,7 +777,8 @@ class ModelBase:
             old_dtype = data_torch.dtype
 
             # convert any unsupported data types to float32
-            if data_torch.dtype not in (torch.float16, torch.float32):
+            preserve_integer_tensor = name.endswith(".ffn.gate.tid2eid")
+            if data_torch.dtype not in (torch.float16, torch.float32) and not preserve_integer_tensor:
                 data_torch = data_torch.to(torch.float32)
 
             # use the first number-like part of the tensor name as the block id
@@ -788,6 +789,13 @@ class ModelBase:
                     break
 
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
+                if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_TID2EID, bid, suffix=""):
+                    data = LazyTorchTensor.to_eager(data_torch).to(torch.int32).numpy()
+                    shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"
+                    logger.info(f"{f'%-{max_name_len}s' % f'{new_name},'} {old_dtype} --> I32, shape = {shape_str}")
+                    self.gguf_writer.add_tensor(new_name, data)
+                    continue
+
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
@@ -9180,6 +9188,194 @@ class DeepseekV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("DeepseekV4ForCausalLM")
+class DeepseekV4Model(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK4
+    skip_mtp = True
+    merge_expert = True
+    chat_template = (
+        "{{ '<｜begin▁of▁sentence｜>' }}"
+        "{% for message in messages %}"
+        "{% if message['role'] == 'system' %}"
+        "{{ message['content'] }}"
+        "{% elif message['role'] == 'user' %}"
+        "{{ '<｜User｜>' + message['content'] }}"
+        "{% elif message['role'] == 'assistant' %}"
+        "{{ message['content'] + '<｜end▁of▁sentence｜>' }}"
+        "{% endif %}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}"
+        "{{ '<｜Assistant｜></think>' }}"
+        "{% endif %}"
+    )
+
+    def dequant_model(self):
+        quant_method = (self.hparams.get("quantization_config") or {}).get("quant_method")
+        if quant_method == "fp8":
+            fp4_table = torch.tensor([
+                0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+                0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+            ], dtype=torch.float32)
+
+            def dequant_with_scale(weight: Tensor, scale: Tensor) -> Tensor:
+                scale = scale.float()
+
+                while scale.ndim < weight.ndim:
+                    scale = scale.unsqueeze(-1)
+
+                if scale.ndim != weight.ndim:
+                    raise ValueError(
+                        f"Unexpected DeepSeek V4 scale rank for weight {tuple(weight.shape)} and scale {tuple(scale.shape)}"
+                    )
+
+                for dim, (weight_dim, scale_dim) in enumerate(zip(weight.shape, scale.shape)):
+                    if scale_dim == weight_dim:
+                        continue
+                    if scale_dim <= 0 or scale_dim > weight_dim:
+                        raise ValueError(
+                            f"Unexpected DeepSeek V4 scale shape {tuple(scale.shape)} for weight {tuple(weight.shape)}"
+                        )
+                    repeat = (weight_dim + scale_dim - 1) // scale_dim
+                    if repeat > 1:
+                        scale = scale.repeat_interleave(repeat, dim)
+
+                scale = scale[tuple(slice(0, size) for size in weight.shape)]
+                return weight.float() * scale
+
+            def dequant_packed_expert(weight: Tensor, scale: Tensor) -> Tensor:
+                weight = LazyTorchTensor.to_eager(weight)
+                scale = LazyTorchTensor.to_eager(scale).float()
+
+                if weight.dtype != torch.int8 or weight.ndim != 2:
+                    raise ValueError(f"Unexpected DeepSeek V4 expert weight {tuple(weight.shape)} {weight.dtype}")
+
+                packed = weight.view(torch.uint8)
+                low = fp4_table[(packed & 0x0F).long()]
+                high = fp4_table[((packed >> 4) & 0x0F).long()]
+                unpacked = torch.stack([low, high], dim=-1).flatten(1, 2)
+
+                scale = scale.repeat_interleave(32, dim=1)
+                scale = scale[:, :unpacked.shape[1]]
+
+                return unpacked * scale
+
+            for name, gen in list(self.model_tensors.items()):
+                if not name.endswith(".scale"):
+                    continue
+                weight_name = name.removesuffix(".scale") + ".weight"
+                if weight_name not in self.model_tensors:
+                    continue
+
+                weight_gen = self.model_tensors[weight_name]
+                if ".ffn.experts." in weight_name:
+                    self.model_tensors[weight_name] = (
+                        lambda weight_gen=weight_gen, scale_gen=gen: dequant_packed_expert(weight_gen(), scale_gen())
+                    )
+                    del self.model_tensors[name]
+                    continue
+
+                self.model_tensors[weight_name] = (
+                    lambda weight_gen=weight_gen, scale_gen=gen: dequant_with_scale(weight_gen(), scale_gen())
+                )
+                del self.model_tensors[name]
+
+        return super().dequant_model()
+
+    def set_gguf_parameters(self):
+        self.hparams["num_key_value_heads"] = self.hparams.get("num_key_value_heads", 1)
+        self.hparams["rms_norm_eps"] = self.hparams.get("rms_norm_eps", self.hparams.get("norm_eps", 1e-6))
+
+        score_func_keys = {}
+        for key in ("scoring_func", "score_func"):
+            if key in self.hparams:
+                score_func_keys[key] = self.hparams.pop(key)
+
+        try:
+            TextModel.set_gguf_parameters(self)
+        finally:
+            self.hparams.update(score_func_keys)
+
+        self.gguf_writer.add_chat_template(self.chat_template)
+
+        hparams = self.hparams
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+
+        if (q_lora_rank := hparams.get("q_lora_rank")) is not None:
+            self.gguf_writer.add_q_lora_rank(q_lora_rank)
+
+        if (rope_dim := hparams.get("qk_rope_head_dim")) is not None:
+            self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+        if (sliding_window := hparams.get("sliding_window")) is not None:
+            self.gguf_writer.add_sliding_window(sliding_window)
+
+        if (compress_rope_theta := hparams.get("compress_rope_theta")) is not None:
+            self.gguf_writer.add_rope_freq_base_swa(compress_rope_theta)
+
+        self.gguf_writer.add_leading_dense_block_count(0)
+
+        moe_intermediate_size = self.find_hparam(["moe_intermediate_size"], optional=False)
+        self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+
+        if (n_routed_experts := hparams.get("n_routed_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_routed_experts)
+
+        if (n_shared_experts := hparams.get("n_shared_experts")) is not None:
+            self.gguf_writer.add_expert_shared_count(n_shared_experts)
+
+        if (routed_scaling_factor := hparams.get("routed_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(routed_scaling_factor)
+
+        if hparams.get("scoring_func") != "softmax":
+            self.gguf_writer.add_expert_weights_norm(True)
+
+        if (swiglu_limit := hparams.get("swiglu_limit")) is not None:
+            self.gguf_writer.add_swiglu_clamp_exp([float(swiglu_limit)] * self.block_count)
+
+        if (index_n_heads := hparams.get("index_n_heads")) is not None:
+            self.gguf_writer.add_indexer_head_count(index_n_heads)
+
+        if (index_head_dim := hparams.get("index_head_dim")) is not None:
+            self.gguf_writer.add_indexer_key_length(index_head_dim)
+
+        if (index_topk := hparams.get("index_topk")) is not None:
+            self.gguf_writer.add_indexer_top_k(index_topk)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("mtp."):
+            return
+
+        if self.hparams.get("tie_word_embeddings", False) and name == "head.weight":
+            logger.info("Skipping tied output layer 'head.weight' (will use token_embd.weight)")
+            return
+
+        if self.merge_expert and ".ffn.experts." in name:
+            n_experts = self.hparams["n_routed_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                for w_name in ["w2", "w1", "w3"]:
+                    datas: list[Tensor] = []
+                    for xid in range(n_experts):
+                        ename = f"layers.{bid}.ffn.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    merged = torch.stack(datas, dim=0)
+                    merged_name = f"layers.{bid}.ffn.experts.{w_name}.weight"
+                    yield from TextModel.modify_tensors(self, merged, merged_name, bid)
+                return
+            else:
+                return
+
+        yield from TextModel.modify_tensors(self, data_torch, name, bid)
 
 
 @ModelBase.register(
