@@ -789,6 +789,7 @@ private:
                 cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
             }
 
+            cparams.n_rs_seq = 0;
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
@@ -2735,9 +2736,11 @@ private:
                     // checkpoints are created only if:
                     // - the model does not support partial sequence removal
                     // - the model uses SWA (and we are not using `swa_full`)
+                    // - the model supports partial sequence removal but only up to a fixed bound
                     do_checkpoint = do_checkpoint && (
-                            (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) ||
-                            (n_swa > 0));
+                            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL         ||
+                            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART_BOUNDED ||
+                            n_swa > 0);
 
                     bool has_mtmd = false;
 

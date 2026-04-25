@@ -1435,6 +1435,11 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
         goto done;
     }
 
+    if (llama_n_rs_seq(ctx) > 0) {
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_PART_BOUNDED;
+        goto done;
+    }
+
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
         LOG_TRC("%s: the context does not support partial sequence removal\n", __func__);
@@ -1505,6 +1510,17 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
+    {
+        // TODO: add for MTP
+        bool has_spec = params.speculative.has_dft();
+        for (auto t : params.speculative.types) {
+            if (t != COMMON_SPECULATIVE_TYPE_NONE) {
+                has_spec = true;
+                break;
+            }
+        }
+        cparams.n_rs_seq = has_spec ? (uint32_t) params.speculative.draft.n_max : 0u;
+    }
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;
