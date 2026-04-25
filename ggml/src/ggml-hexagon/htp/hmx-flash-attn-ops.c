@@ -756,10 +756,9 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
             // Apply mask & compute rowmax(S)
             //
             // Optimizations over baseline:
-            //   A. No-ALiBi fast path: when max_bias==0 (slope≡1.0), mask values are
-            //      0 (unmasked) or -inf (masked).  S += 1.0*mask is a no-op for
-            //      unmasked positions; masked ones are overwritten by vmux.  So we
-            //      skip the mul+add entirely and just do vmux — same as htp-ops-lib.
+            //   A. No-ALiBi fast path: when max_bias==0 (slope≡1.0), skip the
+            //      slope multiplication — still add mask (additive bias) but
+            //      avoid the mul_f16_f16.  Saves 2 ops/dual-row vs ALiBi path.
             //   B. GQA mask row dedup: G consecutive Q rows share one mask row
             //      (qi = r / G).  Reuse mask vector when qi is unchanged between
             //      row0 and row1 (saves ~75% of VTCM loads for G=4).
@@ -847,11 +846,13 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                         my_row_buf1[ci] = Q6_V_vmux_QVV(q_keep1,
                                               hvx_vec_add_f16_f16(my_row_buf1[ci], v_sm1), v_neg_inf);
                     } else {
-                        // No-ALiBi fast path (scheme A): slope≡1.0, mask is 0 or -inf.
-                        // S += 1.0 * mask is a no-op for unmasked (mask=0); vmux handles masked.
-                        // Same approach as htp-ops-lib flash_attn.c — skip mul + add entirely.
-                        my_row_buf0[ci] = Q6_V_vmux_QVV(q_keep0, my_row_buf0[ci], v_neg_inf);
-                        my_row_buf1[ci] = Q6_V_vmux_QVV(q_keep1, my_row_buf1[ci], v_neg_inf);
+                        // No-ALiBi fast path (scheme A): slope≡1.0, skip the mul
+                        // but still add mask (additive positional bias).  vmux
+                        // clamps mask < -16 to -inf as a numerical safeguard.
+                        my_row_buf0[ci] = Q6_V_vmux_QVV(q_keep0,
+                                              hvx_vec_add_f16_f16(my_row_buf0[ci], v_mask0), v_neg_inf);
+                        my_row_buf1[ci] = Q6_V_vmux_QVV(q_keep1,
+                                              hvx_vec_add_f16_f16(my_row_buf1[ci], v_mask1), v_neg_inf);
                     }
                 } else {
                     if (ne < 64) {
