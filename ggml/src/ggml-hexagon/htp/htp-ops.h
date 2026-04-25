@@ -42,9 +42,9 @@ enum htp_data_type {
 
 // Mask to enable various stages of the Ops.
 // Used for debugging and profiling.
-enum htp_op_mask {
-    HTP_OPMASK_QUEUE    = (1 << 0),  // Enable Queueing (ie calls into the DSP)
-    HTP_OPMASK_COMPUTE  = (1 << 1),  // Enable Compute
+enum htp_op_stage {
+    HTP_OPSTAGE_QUEUE    = (1 << 0),  // Enable Queueing (ie calls into NPU)
+    HTP_OPSTAGE_COMPUTE  = (1 << 1),  // Enable Compute
 };
 
 // Do not reorder first 4 (used as an index)
@@ -80,7 +80,9 @@ enum htp_op_code {
     HTP_OP_SSM_CONV,
     HTP_OP_REPEAT,
     HTP_OP_CUMSUM,
-
+    HTP_OP_FILL,
+    HTP_OP_DIAG,
+    HTP_OP_SOLVE_TRI,
     HTP_OP_INVALID
 };
 
@@ -135,27 +137,45 @@ struct htp_op_desc {
     int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
     uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
     uint16_t dst;                       // Output tensor index
+};
 
-    // the rest is filled in-place by the NPU
-    uint32_t prof_usecs;                // Number of usec per request
-    uint32_t prof_cycles;               // Number of cycles per request
-    uint32_t prof_pkts;                 // Number of instruction packets per request
-    uint32_t unused;
+enum htp_profiler_mode {
+    HTP_PROF_DISABLED = 0,
+    HTP_PROF_BASIC    = 1,
+    HTP_PROF_PMU      = 2,
+};
+
+#define HTP_PROF_PMU_NCNT 8
+
+// Profile descriptor
+struct htp_prof_desc {
+    uint32_t opcode;                 // GGML/HTP Op
+    uint32_t usecs;                  // Number of usec
+    uint32_t cycles;                 // Number of cycles
+    uint32_t pad;                    // Unused
+    uint32_t pmu[HTP_PROF_PMU_NCNT]; // PMU counters
 };
 
 struct htp_opbatch_req {
+    uint32_t id;          // Batch id
     uint32_t n_bufs;      // Number of buffers
     uint32_t n_tensors;   // Number of tensors
     uint32_t n_ops;       // Number of ops
     uint32_t flags;       // unused
+    uint32_t pad;         // unused
     // struct htp_buf_desc  bufs[];    -- dspqueue buf 0
     // struct htp_tensor    tensors[]; -- dspqueue buf 0
     // struct htp_op_desc   ops[];     -- dspqueue buf 0
 };
 
 struct htp_opbatch_rsp {
+    uint32_t id;         // Batch id
     uint32_t status;     // HTP_STATUS_...
-    // struct htp_op_req ops[];     -- dspqueue buf 0
+    uint32_t n_bufs;     // Number of buffers
+    uint32_t n_tensors;  // Number of tensors
+    uint32_t n_ops;      // Number of op profile descriptors
+    uint32_t pad;        // unused
+    // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 
 #endif /* HTP_OPS_H */

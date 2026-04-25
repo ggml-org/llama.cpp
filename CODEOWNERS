@@ -23,6 +23,7 @@
 /ci/                                    @ggerganov
 /cmake/                                 @ggerganov
 /common/                                @ggml-org/llama-common
+/common/fit.*                           @JohannesGaessler
 /common/jinja/                          @CISC
 /common/ngram-map.*                     @srogmann
 /convert_*.py                           @CISC
