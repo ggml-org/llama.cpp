@@ -16,7 +16,6 @@
 #define N_MM_BLOCK_Y 2
 #define N_MM_SIMD_GROUP_X 2
 #define N_MM_SIMD_GROUP_Y 2
-#define N_THREADS_PER_SIMDGROUP 32
 
 #define N_R0_Q1_0 8
 #define N_SG_Q1_0 2

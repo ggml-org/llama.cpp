@@ -2167,7 +2167,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         //    default: break;
         //}
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mm(lib, op, props_dev->has_tensor);
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mm(lib, op);
 
         ggml_metal_kargs_mul_mm args = {
             /*.ne00 =*/ ne00,
@@ -2202,7 +2202,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                                                          (SZ_SIMDGROUP * N_MM_SIMD_GROUP_X * N_MM_BLOCK_X),
                                                      (ne01 + (SZ_SIMDGROUP * N_MM_SIMD_GROUP_Y * N_MM_BLOCK_Y) - 1) /
                                                          (SZ_SIMDGROUP * N_MM_SIMD_GROUP_Y * N_MM_BLOCK_Y),
-                                                     ne12 * ne13, N_THREADS_PER_SIMDGROUP * N_MM_SIMD_GROUP_X, N_MM_SIMD_GROUP_Y, 1);
+                                                     ne12 * ne13, 32, N_MM_SIMD_GROUP_X, N_MM_SIMD_GROUP_Y);
         } else {
             ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + 31) / 32), ((ne01 + 63) / 64), ne12 * ne13, 128, 1, 1);
         }

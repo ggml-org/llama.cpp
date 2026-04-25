@@ -9307,11 +9307,11 @@ constant bool FC_mul_mm_bc_out [[function_constant(FC_MUL_MM + 1)]];
 
 // each block_q contains 16*nl weights
 #ifdef GGML_METAL_HAS_TENSOR
-template <typename SA, typename SA_4x4, typename SA_8x8,
-          typename SB, typename SB_2x4, typename SB_8x8,
-          typename block_q, short nl,
-          void (*dequantize_func)(device const block_q *, short, thread SA_4x4 &),
-          typename T0, typename T0_4x4, typename T1, typename T1_2x4>
+template<
+    typename SA, typename SA_4x4, typename SA_8x8,
+    typename SB, typename SB_2x4, typename SB_8x8,
+    typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread SA_4x4 &),
+    typename T0, typename T0_4x4, typename T1, typename T1_2x4>
 kernel void kernel_mul_mm(
         constant ggml_metal_kargs_mul_mm & args,
         device const char * srcA,
@@ -9321,7 +9321,6 @@ kernel void kernel_mul_mm(
         uint3  tgpig [[threadgroup_position_in_grid]],
         ushort tiitg [[thread_index_in_threadgroup]],
         ushort sgitg [[simdgroup_index_in_threadgroup]]) {
-
     (void) sgitg;
 
     // Matrix dimensions: A(M,K) x B(K,N) -> C(M,N)
@@ -9350,7 +9349,7 @@ kernel void kernel_mul_mm(
 
     // Work-item count for A loading
     constexpr int A_WORK_ITEMS = NRA * N_MM_NK;
-    constexpr int NUM_THREADS = N_THREADS_PER_SIMDGROUP * N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
+    constexpr int NUM_THREADS = N_SIMDWIDTH * N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
 
     // tA wraps threadgroup memory
     auto tA = tensor(sa, dextents<int32_t, 2>(N_MM_NK_TOTAL, NRA));
@@ -9430,10 +9429,14 @@ kernel void kernel_mul_mm(
     auto tD = tensor(dstBatch, dextents<int32_t, 2>(M, N), array<int, 2>({1, M}));
     cT.store(tD.slice(ra, rb));
 }
+
 #else
 
-
-template<typename S0, typename S0_4x4, typename S0_8x8, typename S1, typename S1_2x4, typename S1_8x8, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread S0_4x4 &), typename T0, typename T0_4x4, typename T1, typename T1_2x4>
+template<
+    typename S0, typename S0_4x4, typename S0_8x8,
+    typename S1, typename S1_2x4, typename S1_8x8,
+    typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread S0_4x4 &),
+    typename T0, typename T0_4x4, typename T1, typename T1_2x4>
 kernel void kernel_mul_mm(
         constant ggml_metal_kargs_mul_mm & args,
         device const char * src0,
