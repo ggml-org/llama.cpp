@@ -24,6 +24,12 @@
 #include <inttypes.h>
 #include <math.h>
 #include <iostream>
+#include <filesystem>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include <stdio.h>
 #include <fstream>
 #include <cctype>
 #include <cstdlib>
@@ -46,7 +52,7 @@
 using namespace tsi::runtime;
 
 // This will  go in deployment file at next PR
-#define NUM_OF_TXES 1
+#define NUM_OF_TXES 2
 
 // ggml-tsavorite.cpp
 namespace {
@@ -56,10 +62,16 @@ struct TsavoriteRuntimeState {
     uint32_t num_of_txes = 1;
     bool *device_free = nullptr;
     bool multi_thread_enable = false;
+    // one packed-args buffer per TXE
+    //void *packed_args[NUM_OF_TXES];
+    std::vector<void *> packed_args;
 
     std::vector<std::thread> workers;
+    std::mutex workers_mutex;
     std::mutex device_mutex;
     std::mutex tsi_pack_mutex;
+    // Global guard for TsavRT shim calls (stability for Ollama multi-threading)
+    std::mutex tsavrt_api_mutex;   // Global guard for TsavRT shim calls
     std::condition_variable device_cv;
     // blobs
     BlobDescriptor **blobDescriptor_add = nullptr;
@@ -87,10 +99,13 @@ static TsavoriteRuntimeState g_rt;
 auto &num_of_txes = g_rt.num_of_txes;
 auto &device_free = g_rt.device_free;
 auto &multi_thread_enable     = g_rt.multi_thread_enable;
+auto &packed_args     = g_rt.packed_args;
 
 auto &workers = g_rt.workers;
+auto &workers_mutex = g_rt.workers_mutex;
 auto &device_mutex = g_rt.device_mutex;
 auto &tsi_pack_mutex = g_rt.tsi_pack_mutex;
+auto &tsavrt_api_mutex = g_rt.tsavrt_api_mutex;
 auto &device_cv = g_rt.device_cv;
 
 auto &blobDescriptor_add      = g_rt.blobDescriptor_add;
@@ -101,6 +116,31 @@ auto &loadResult_add          = g_rt.loadResult_add;
 auto &loadResult_mult         = g_rt.loadResult_mult;
 auto &loadResult_rms_norm     = g_rt.loadResult_rms_norm;
 } // anonymous namespace
+
+
+
+
+#include <execinfo.h>
+#include <signal.h>
+
+static void tsavorite_sig_handler(int sig) {
+    void *array[64];
+    int size = backtrace(array, 64);
+
+    fprintf(stderr, "\n\n=== TSAVORITE FATAL SIGNAL %d ===\n", sig);
+    backtrace_symbols_fd(array, size, STDERR_FILENO);
+    fprintf(stderr, "=== END BACKTRACE ===\n");
+
+    _exit(128 + sig); // hard exit, no cleanup
+}
+
+static void tsavorite_install_signal_handlers() {
+    signal(SIGSEGV, tsavorite_sig_handler);
+    signal(SIGABRT, tsavorite_sig_handler);
+    signal(SIGBUS,  tsavorite_sig_handler);
+    signal(SIGILL,  tsavorite_sig_handler);
+    signal(SIGFPE,  tsavorite_sig_handler);
+}
 
 // =============================================================================
 // YAML deployment parsing (no external yaml lib)
@@ -388,13 +428,31 @@ static std::string blob_prefix(const char *rel) {
 
 static inline void tsi_blob_free_tables() {
     // free pointer tables only (does NOT unload blobs)
-    free(loadResult_add);      loadResult_add = nullptr;
-    free(loadResult_mult);     loadResult_mult = nullptr;
-    free(loadResult_rms_norm); loadResult_rms_norm = nullptr;
+    if (loadResult_add) {
+        free(loadResult_add);
+        loadResult_add = nullptr;
+    }
+    if (loadResult_mult) {
+        free(loadResult_mult);
+        loadResult_mult = nullptr;
+    }
+    if (loadResult_rms_norm) {
+        free(loadResult_rms_norm);
+        loadResult_rms_norm = nullptr;
+    }
 
-    free(blobDescriptor_add);      blobDescriptor_add = nullptr;
-    free(blobDescriptor_mult);     blobDescriptor_mult = nullptr;
-    free(blobDescriptor_rms_norm); blobDescriptor_rms_norm = nullptr;
+    if (blobDescriptor_add) {
+        free(blobDescriptor_add);
+        blobDescriptor_add = nullptr;
+    }
+    if (blobDescriptor_mult) {
+        free(blobDescriptor_mult);
+        blobDescriptor_mult = nullptr;
+    }
+    if (blobDescriptor_rms_norm) {
+        free(blobDescriptor_rms_norm);
+        blobDescriptor_rms_norm = nullptr;
+    }
 
     g_rt.blob_tables_txes = 0;
     g_rt.blob_state = TsavoriteRuntimeState::BLOB_UNINITIALIZED;
@@ -477,11 +535,15 @@ static void tsi_load_all_blobs() {
 
     // ensure tables exist (allocates if needed)
     tsi_blob_ensure_tables_allocated();
+    
+    // size matches runtime txe_count
+    //packed_args.resize(num_of_txes, nullptr);
 
     for (uint32_t i = 0; i < num_of_txes; ++i) {
         char name_add[64];
         char name_mult[64];
         char name_rms[64];
+       // packed_args[i] = tsi_alloc(100*8, tsi::MemorySpace::SHARED_DRAM_TS);
 
         snprintf(name_add,  sizeof(name_add),  "txe_add_dev%u",  i);
         snprintf(name_mult, sizeof(name_mult), "txe_mult_dev%u", i);
@@ -569,6 +631,29 @@ static void tsi_unload_all_blobs() {
     tsi_blob_free_tables();
 }
 
+static inline void tsi_init_per_txe_state_once() {
+    // allocate device_free[]
+    if (!device_free) {
+        device_free = (bool*)calloc(num_of_txes, sizeof(bool));
+        for (uint32_t i = 0; i < num_of_txes; ++i) device_free[i] = true;
+    }
+
+    // allocate per-TXE packed args buffer (device-visible)
+    constexpr size_t kPackedArgsBytesMax = 2048;
+
+    if (packed_args.size() != num_of_txes) {
+        packed_args.assign(num_of_txes, nullptr);
+        for (uint32_t i = 0; i < num_of_txes; ++i) {
+            if (!packed_args[i]) {
+                packed_args[i] = tsi_alloc(kPackedArgsBytesMax, tsi::MemorySpace::SHARED_DRAM_TS);
+                if (!packed_args[i]) {
+                    fprintf(stderr, "tsi_alloc failed for packed_args[%u]\n", i);
+                    abort();
+                }
+            }
+        }
+    }
+}
 
 // Centralized TSI runtime initialization - called once globally
 //
@@ -578,6 +663,8 @@ static void ensure_tsi_runtime_initialized() {
         GGML_TSAVORITE_LOG_INFO("\n tsavorite backend already initialized \n");
         return;
     }
+    tsi_blob_free_tables();
+
     std::string mainProfilerName = "OPU ";
     tsirt::utils::TSIProfiler::initialize();
 
@@ -598,28 +685,33 @@ static void ensure_tsi_runtime_initialized() {
     if (txe > (int)NUM_OF_TXES) txe = (int)NUM_OF_TXES;
 
     tsi_initialize(num_of_txes, NULL);
+    tsavorite_install_signal_handlers();
 
     if (multi_thread_enable) {
         // Temporarily disabled; will be enabled in the next release to avoid collateral impact
         tsi_load_all_blobs();
+    } else {
+        #if NEW_HOST_CODE
+            tsi_load_all_blobs();
+        #endif
     }
-    device_free = (bool *)malloc(num_of_txes * sizeof(bool));
+
+    tsi_init_per_txe_state_once();
+
     if (!device_free) {
         fprintf(stderr, "Failed to allocate device_free\n");
         tsi_unload_all_blobs();
+        printf("\n finalize 1 \n");
         tsi_finalize();
         abort();
     }
     
-    for (uint32_t i = 0; i < num_of_txes; i++) {
-        device_free[i] = true;
-    }
-
     workers.reserve(num_of_txes);
     runtime_initialized = true;
     GGML_TSAVORITE_LOG_INFO("Profiler and TSI runtime initialized early in registration\n");
     return;
 }
+
 #ifdef USE_COMMAND_BUFFERS
 typedef struct _txe_command_queue_t *txe_command_queue_s;
 typedef struct _txe_dispatch_queue_t *txe_dispatch_queue_s;
@@ -1007,19 +1099,22 @@ static void _mlir_ciface_txe_mult_test (void *src0, void *src1, void *res)
 static inline int acquire_device_blocking() {
     std::unique_lock<std::mutex> lock(device_mutex);
 
-    device_cv.wait(lock, [] {
-        for (uint32_t i = 0; i < num_of_txes; ++i)
-            if (device_free[i])
-                return true;
+    device_cv.wait(lock, []() {
+        if (!device_free) return false;
+        for (uint32_t i = 0; i < num_of_txes; ++i) {
+            if (device_free[i]) return true;
+        }
         return false;
     });
 
     for (uint32_t i = 0; i < num_of_txes; ++i) {
         if (device_free[i]) {
             device_free[i] = false;
-            return i;
+            return (int)i;
         }
     }
+
+    // Should be unreachable because wait predicate ensures availability
     return -1;
 }
 
@@ -1035,26 +1130,26 @@ static inline void release_device(int deviceId) {
 // ============================================================
 
 static inline void join_all_workers() {
-    for (auto &t : workers) {
-        if (t.joinable())
-            t.join();
-    }
-    workers.clear();
-
+    std::vector<std::thread> local;
     {
-        std::lock_guard<std::mutex> lock(device_mutex);
-        for (uint32_t i = 0; i < num_of_txes; ++i)
-            device_free[i] = true;
+        std::lock_guard<std::mutex> lk(workers_mutex);
+        if (workers.empty()) return;
+        local.swap(workers);   // take ownership, release lock early
     }
-    device_cv.notify_all();
+
+    for (auto &t : local) {
+        if (t.joinable()) t.join();
+    }
 }
 
 static void tsi_blob_execution_internal(void *commandList) {
   // Enqueue & run
+  std::lock_guard<std::mutex> rt_lock(tsavrt_api_mutex);
   tsi_finalize_command_list(commandList);
   tsi_wait(commandList);
   return;
 }
+
 
 //lock goes out of scope
 // <--- function scope ends here mutex will be released
@@ -1063,18 +1158,29 @@ static void tsi_blob_execution_internal(void *commandList) {
 static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI_DeviceIdType deviceId) {
     constexpr int64_t kPackedArgsI64   = 9;
     constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
+    
+    // One lock to protect ALL TsavRT operations + packed_args usage
+    std::lock_guard<std::mutex> rt_lock(tsavrt_api_mutex);
 
     std::lock_guard<std::mutex> lock(tsi_pack_mutex);
 
     void *commandList = tsi_create_command_list(deviceId);
 
-    void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
-    if(!packed) {
-        printf("\nFailed to allocate packed argument memory in tsi_alloc\n");
+    if ((uint32_t)deviceId >= num_of_txes) {
+        printf("ERROR: deviceId=%d out of range num_of_txes=%u\n", deviceId, num_of_txes);
         tsi_cleanup();
         abort();
     }
-    auto *p = static_cast<int64_t *>(packed);
+
+    //void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    if (packed_args.size() != num_of_txes || !packed_args[deviceId]) {
+        printf("ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
+           deviceId, packed_args.size(), num_of_txes);
+        tsi_cleanup();
+        abort();
+    }
+
+    auto *p = static_cast<int64_t *>(packed_args[deviceId]);
 
     MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
     MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
@@ -1099,7 +1205,7 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
         abort();
     }
 
-    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
+    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed_args[deviceId]);
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add[deviceId], packedHandle);
 
     if (!blobExecuteCmd) {
@@ -1115,34 +1221,48 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
 }
 
 static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
+    tsi_init_per_txe_state_once();
+
     if (!multi_thread_enable) {
-      _mlir_ciface_txe_add_host(a, b, res);
       // Temporarily disabled; will be enabled in the next release to avoid collateral impact
        #if NEW_HOST_CODE
-       void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, 0);
-       if (!commandList) {
-            printf("Command List Empt for ADD OPERATION on device 0\n");
-            tsi_cleanup();
-            abort();
-        }
-        tsi_blob_execution_internal(commandList);
+           void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, 0);
+           if (!commandList) {
+                printf("Command List Empt for ADD OPERATION on device 0\n");
+                tsi_cleanup();
+                abort();
+            }
+            tsi_blob_execution_internal(commandList);
+       #else
+              _mlir_ciface_txe_add_host(a, b, res);
        #endif  /* NEW_HOST_CODE */
         return;
     }
 
-    int deviceId = acquire_device_blocking();
+    const int deviceId = acquire_device_blocking();
+    
+    if (deviceId < 0) {
+        fprintf(stderr, "Failed to acquire device for ADD\n");
+        tsi_cleanup();
+        abort();
+    }
 
    // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
    void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, deviceId);
    if (!commandList) {
        printf("Command List Empt for ADD on device %d\n", deviceId);
+       release_device(deviceId);
        tsi_cleanup();
        abort();
     }
-    workers.emplace_back([=]() {
-        tsi_blob_execution_internal(commandList);
-        release_device(deviceId);
-    });
+
+   {
+       std::lock_guard<std::mutex> lk(workers_mutex);
+       workers.emplace_back([=]() {
+           tsi_blob_execution_internal(commandList);
+           release_device(deviceId);
+       });
+   }
 }
 
 
@@ -1150,17 +1270,27 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
     constexpr int64_t kPackedArgsI64   = 9;
     constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
 
+    // One lock to protect ALL TsavRT operations + packed_args usage
+    std::lock_guard<std::mutex> rt_lock(tsavrt_api_mutex);
     std::lock_guard<std::mutex> lock(tsi_pack_mutex);
 
     void *commandList = tsi_create_command_list(deviceId);
 
-    void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
-    if(!packed) {
-        printf("\nFailed to allocate packed argument memory in tsi_alloc\n");
+    if ((uint32_t)deviceId >= num_of_txes) {
+        printf("ERROR: deviceId=%d out of range num_of_txes=%u\n", deviceId, num_of_txes);
         tsi_cleanup();
         abort();
     }
-    auto *p = static_cast<int64_t *>(packed);
+
+    //void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    if (packed_args.size() != num_of_txes || !packed_args[deviceId]) {
+        printf("ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
+           deviceId, packed_args.size(), num_of_txes);
+        tsi_cleanup();
+        abort();
+    }
+
+    auto *p = static_cast<int64_t *>(packed_args[deviceId]);
 
     MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
     MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
@@ -1185,7 +1315,7 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
         abort();
     }
 
-    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
+    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed_args[deviceId]);
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult[deviceId], packedHandle);
     if (!blobExecuteCmd) {
         printf("tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
@@ -1200,18 +1330,20 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
 
 
 static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
+    tsi_init_per_txe_state_once();
+
     if (!multi_thread_enable) {
-        _mlir_ciface_txe_mult_host(a, b, res);
-      
-      // Temporarily disabled; will be enabled in the next release to avoid collateral impact
+        // Temporarily disabled; will be enabled in the next release to avoid collateral impact
         #if NEW_HOST_CODE
-        void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, 1);
-       if (!commandList) {
-            printf("Command List Empt for MUL OPERATION on device 0\n");
-            tsi_cleanup();
-            abort();
-        }
-        tsi_blob_execution_internal(commandList);
+            void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, 1);
+            if (!commandList) {
+                printf("Command List Empt for MUL OPERATION on device 0\n");
+                tsi_cleanup();
+                abort();
+            }
+            tsi_blob_execution_internal(commandList);
+        #else
+            _mlir_ciface_txe_mult_host(a, b, res);
         #endif /* NEW_HOST_CODE */
         return;
     }
@@ -1222,13 +1354,17 @@ static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
    void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, deviceId);
    if (!commandList) {
         printf("Command List Empt for MUL OPERATION on device %d\n", deviceId);
+        release_device(deviceId);
         tsi_cleanup();
         abort();
    }
-    workers.emplace_back([=]() {
-        tsi_blob_execution_internal(commandList);
-        release_device(deviceId);
-    });
+   {
+       std::lock_guard<std::mutex> lk(workers_mutex);
+       workers.emplace_back([=]() {
+           tsi_blob_execution_internal(commandList);
+           release_device(deviceId);
+       });
+   }
 }
 
 
@@ -1236,17 +1372,27 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
     constexpr int64_t kPackedArgsI64   = 20;
     constexpr int64_t kPackedArgsBytes = kPackedArgsI64 * 8;
 
+    // One lock to protect ALL TsavRT operations + packed_args usage
+    std::lock_guard<std::mutex> rt_lock(tsavrt_api_mutex);
     std::lock_guard<std::mutex> lock(tsi_pack_mutex);
 
     void *commandList = tsi_create_command_list(deviceId);
 
-    void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
-    if(!packed) {
-        printf("\nFailed to allocate packed argument memory in tsi_alloc\n");
+    if ((uint32_t)deviceId >= num_of_txes) {
+        printf("ERROR: deviceId=%d out of range num_of_txes=%u\n", deviceId, num_of_txes);
         tsi_cleanup();
         abort();
     }
-    auto *p = static_cast<int64_t *>(packed);
+
+    //void *packed = tsi_alloc(kPackedArgsBytes, tsi::MemorySpace::SHARED_DRAM_TS);
+    if (packed_args.size() != num_of_txes || !packed_args[deviceId]) {
+        printf("ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
+           deviceId, packed_args.size(), num_of_txes);
+        tsi_cleanup();
+        abort();
+    }
+
+    auto *p = static_cast<int64_t *>(packed_args[deviceId]);
 
     MemRefDescriptor<Rank> *A = (MemRefDescriptor<Rank> *)a;
     MemRefDescriptor<Rank> *B = (MemRefDescriptor<Rank> *)b;
@@ -1273,7 +1419,7 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
         abort();
     }
 
-    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed);
+    const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed_args[deviceId]);
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm[deviceId], packedHandle);
     if (!blobExecuteCmd) {
         printf("tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
@@ -1287,18 +1433,21 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
 } 
 
 static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
+    tsi_init_per_txe_state_once();
+
     if (!multi_thread_enable) {
-        _mlir_ciface_txe_rms_norm_host(a, b, buf);
       // Temporarily disabled; will be enabled in the next release to avoid collateral impact
-      #if NEW_HOST_CODE
-        void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, 0);
-       if (!commandList) {
-            printf("Command List Empt for RMS OPERATION  on device 0\n");
-            tsi_cleanup();
-            abort();
-        }
-        tsi_blob_execution_internal(commandList);
-      #endif  /* NEW_HOST_CODE */
+        #if NEW_HOST_CODE
+            void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, 0);
+            if (!commandList) {
+                printf("Command List Empt for RMS OPERATION  on device 0\n");
+                tsi_cleanup();
+                abort();
+            }
+            tsi_blob_execution_internal(commandList);
+        #else
+            _mlir_ciface_txe_rms_norm_host(a, b, buf);
+        #endif  /* NEW_HOST_CODE */
         return;
     }
 
@@ -1308,13 +1457,23 @@ static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
     void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, deviceId);
     if (!commandList) {
         printf("Command List Empt for RMS OPERATION on device %d\n", deviceId);
+        release_device(deviceId);
         tsi_cleanup();
         abort();
     }
+#if 0
     workers.emplace_back([=]() {
         tsi_blob_execution_internal(commandList);
         release_device(deviceId);
     });
+#endif
+   {
+       std::lock_guard<std::mutex> lk(workers_mutex);
+       workers.emplace_back([=]() {
+           tsi_blob_execution_internal(commandList);
+           release_device(deviceId);
+       });
+   }
 }
 
 
@@ -1646,19 +1805,17 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
 
   GGML_TSAVORITE_LOG_INFO("Delaying tsi_finalize for 2 sec");
   if (runtime_initialized == true) {
-      sleep(2);
       runtime_initialized = false;
-      #ifndef GGML_TARGET_POSIX
-          if (multi_thread_enable) {
-              // Temporarily disabled; will be enabled in the next release to avoid collateral impact
-              tsi_unload_all_blobs();
-          }
-      #endif /* !GGML_TARGET_POSIX */
+      tsi_unload_all_blobs();
+
       if(device_free) {
           free(device_free);
          device_free = NULL;
-    }
+      }
+      sleep(2);
+      printf("\n finalize 2 \n");
       tsi_finalize();
+      printf("\n finalize 2 \n");
       tsirt::utils::TSIProfiler::finalize();
       sleep(2);
   }
@@ -1675,16 +1832,13 @@ tsi_cleanup() {
     if (runtime_initialized != true)
         return;
     runtime_initialized = false;
-    #ifndef GGML_TARGET_POSIX
-          if (multi_thread_enable) {
-              // Temporarily disabled; will be enabled in the next release to avoid collateral impact
-              tsi_unload_all_blobs();
-          }
-    #endif /* !GGML_TARGET_POSIX */
+    tsi_unload_all_blobs();
     if(device_free) {
         free(device_free);
         device_free = NULL;
     }
+    sleep(2);
+    printf("\n finalize 3 \n");
     tsi_finalize();
     GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
     tsirt::utils::TSIProfiler::finalize();
@@ -2498,12 +2652,16 @@ static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
     return GGML_STATUS_SUCCESS;
 }
 
+
+static std::mutex g_tsavorite_compute_mutex;
+
 // nodes are intermediate which has multiple src tensors & operation
 // Here we create multiple thread
 // Each Thread run the command buffer & pick Tensor and execute and get the result back base on
 // async or sync all Compute wil finish all tensors execution
 static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
                                                      struct ggml_cgraph *cgraph) {
+std::lock_guard<std::mutex> _lk(g_tsavorite_compute_mutex);
 #if 0
     GGML_LOG_INFO("Start %s\n", __func__);
     struct ggml_backend_tsavorite_context        * ctx     = backend->context;
@@ -3045,9 +3203,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
         node->perf_time_us += (INT64_MAX - t_start + t_end + 1);
     }
 #endif /* GGML_PERF-related flags */
-    if (multi_thread_enable) {
-      join_all_workers();
-     }
+    join_all_workers();
   } /* this is main for loop */
 
 
@@ -3056,6 +3212,8 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
   // return ggml_graph_compute(cgraph, &cplan);
   ggml_backend_tsavorite_device_rel(
       (struct ggml_backend_tsavorite_device_context *)backend->device->context);
+
+  join_all_workers();
   return GGML_STATUS_SUCCESS;
 
   GGML_UNUSED(backend);
@@ -3385,13 +3543,21 @@ static void ggml_backend_tsavorite_free(ggml_backend_t backend) {
   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
 }
 
+#if 0
 static void ggml_backend_tsavorite_synchronize(ggml_backend_t backend) {
 // We need to implement ASYN  Method to take output of tensor data to input of other Tensor
 // We will evaluate and implement at later PR
 #ifdef SYNC_DEBUG
   usleep(100000);
 #endif /* SYNC_DEBUG */
+  
   TSI_UNUSED(backend);
+}
+#endif
+
+static void ggml_backend_tsavorite_synchronize(ggml_backend_t backend) {
+    join_all_workers();
+    (void)backend;
 }
 
 static ggml_backend_buffer_type_t
@@ -3434,6 +3600,29 @@ static void ggml_backend_tsavorite_set_n_cb(ggml_backend_t backend, int n_cb) {
   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
 }
 
+#ifdef OLLAMA
+void
+tsi_log_profile_info() {
+    GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+    tsi_unload_all_blobs();
+    if(device_free) {
+        free(device_free);
+        device_free = NULL;
+    }
+    printf("\n finalize 4 \n");
+    tsi_finalize();
+    tsirt::utils::TSIProfiler::finalize();
+    // Profiling results already printed during first cleanup
+    std::cout << "\nOPU Profiling Results:" << std::endl;
+    std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
+                  /*truncateFuncNames*/ true)
+               << std::endl;
+    GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
+    fflush(stdout);
+    return;
+}
+#endif /* OLLAMA */
+
 static struct ggml_backend_i ggml_backend_tsavorite_i = {
     /* .get_name                = */ ggml_backend_tsavorite_name,
     /* .free                    = */ ggml_backend_tsavorite_free,
@@ -3447,7 +3636,16 @@ static struct ggml_backend_i ggml_backend_tsavorite_i = {
     /* .graph_plan_compute      = */ NULL,
     /* .graph_compute           = */ ggml_backend_tsavorite_graph_compute,
     /* .event_record            = */ NULL,
+#ifdef OLLAMA
     /* .event_wait              = */ NULL,
+    /* .graph_optimize          = */ NULL,
+    /* .graph_reserve           = */ NULL,
+    /* .buffer_size             = */ NULL,
+    /* .reset                   = */ NULL,
+    /* .profile                 = */ tsi_log_profile_info
+#else
+    /* .event_wait              = */ NULL
+#endif /* OLLAMA */
 };
 
 static ggml_guid_t ggml_backend_tsavorite_guid(void) {
@@ -3857,19 +4055,80 @@ static struct ggml_backend_reg_i ggml_backend_tsavorite_reg_i = {
     /* .get_proc_address = */ NULL,
 };
 
+#ifdef OLLAMA
+#define SHM_NAME "/ollama_init_shm"
+
+typedef struct {
+  bool init_done;
+} shared_state_t;
+
+static shared_state_t *state = NULL;
+
+static bool init_shared_state() {
+    int fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
+    if (fd == -1) {
+        perror("shm_open");
+        return false;
+    }
+
+    if (ftruncate(fd, sizeof(shared_state_t)) != 0) {
+        perror("ftruncate");
+        close(fd);
+        return false;
+    }
+
+    void *p = mmap(NULL,
+                   sizeof(shared_state_t),
+                   PROT_READ | PROT_WRITE,
+                   MAP_SHARED,
+                   fd,
+                   0);
+    close(fd);
+
+    if (p == MAP_FAILED) {
+        perror("mmap");
+        return false;
+    }
+
+    state = (shared_state_t *)p;
+    return true;
+}
+#endif /* OLLAMA */
 
 ggml_backend_reg_t ggml_backend_tsavorite_reg(void) {
-  ggml_tsavorite_log_type_val = GGML_TSAVORITE_LOG_NONE;
-  ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
-  GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-  ensure_tsi_runtime_initialized();
-  g_ggml_backend_tsavorite_reg.iface = ggml_backend_tsavorite_reg_i;
-  g_ggml_backend_tsavorite_reg.context = NULL;
-  g_ggml_backend_tsavorite_device.iface = ggml_backend_tsavorite_device_i;
-  g_ggml_backend_tsavorite_device.reg = &g_ggml_backend_tsavorite_reg;
-  g_ggml_backend_tsavorite_device.context = &g_ggml_ctx_dev_main;
-  GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
-  return &g_ggml_backend_tsavorite_reg;
+    ggml_tsavorite_log_type_val    = GGML_TSAVORITE_LOG_NONE;
+    ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
+
+#ifdef OLLAMA
+    bool shm_ok = init_shared_state();
+
+    if (!shm_ok || state == NULL) {
+        // No shared memory available → per-process init
+        ensure_tsi_runtime_initialized();
+    } else {
+        // Shared memory available → exactly-once init
+        if (!state->init_done) {
+            state->init_done = true;
+            GGML_LOG_DEBUG("%s: Initialization not done, proceeding...\n", __func__);
+        } else {
+            ensure_tsi_runtime_initialized();
+        }
+        // else: already initialized in another process
+    }
+    g_ggml_backend_tsavorite_reg.api_version = GGML_BACKEND_API_VERSION;
+#else
+    ensure_tsi_runtime_initialized();
+    
+#endif /* OLLAMA */
+
+    g_ggml_backend_tsavorite_reg.iface = ggml_backend_tsavorite_reg_i;
+    g_ggml_backend_tsavorite_reg.context = NULL;
+
+    g_ggml_backend_tsavorite_device.iface   = ggml_backend_tsavorite_device_i;
+    g_ggml_backend_tsavorite_device.reg     = &g_ggml_backend_tsavorite_reg;
+    g_ggml_backend_tsavorite_device.context = &g_ggml_ctx_dev_main;
+
+    return &g_ggml_backend_tsavorite_reg;
 }
 
 GGML_BACKEND_DL_IMPL(ggml_backend_tsavorite_reg)
