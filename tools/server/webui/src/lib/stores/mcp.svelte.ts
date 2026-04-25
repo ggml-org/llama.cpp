@@ -1460,12 +1460,14 @@ class MCPStore {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Unknown error occurred';
 
-			logs.push({
-				timestamp: new Date(),
-				phase: MCPConnectionPhase.ERROR,
-				message: `Connection failed: ${message}`,
-				level: MCPLogLevel.ERROR
-			});
+			if (logs.at(-1)?.phase !== MCPConnectionPhase.ERROR) {
+				logs.push({
+					timestamp: new Date(),
+					phase: MCPConnectionPhase.ERROR,
+					message: `Connection failed: ${message}`,
+					level: MCPLogLevel.ERROR
+				});
+			}
 
 			this.updateHealthCheck(server.id, {
 				status: HealthCheckStatus.ERROR,

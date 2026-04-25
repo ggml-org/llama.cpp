@@ -198,10 +198,19 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         args_field = format.function_field + "." + args_field;
     }
 
-    auto tools_parser = p.standard_json_tools(
-        format.section_start, format.section_end, inputs.tools, inputs.parallel_tool_calls,
-        inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
-        format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order);
+    auto tools_parser = p.eps();
+    if (format.section_start.empty() && !format.per_call_start.empty()) {
+        auto single_tool_parser = p.standard_json_tools(
+            format.per_call_start, format.per_call_end, inputs.tools, inputs.parallel_tool_calls,
+            inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
+            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order);
+        tools_parser = p.trigger_rule("tool-calls", p.one_or_more(single_tool_parser + p.space()));
+    } else {
+        tools_parser = p.standard_json_tools(
+            format.section_start, format.section_end, inputs.tools, inputs.parallel_tool_calls,
+            inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
+            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order);
+    }
 
     // Handle content wrappers if present
     if (ctx.content && ctx.content->is_always_wrapped()) {
@@ -434,14 +443,14 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     if (!format.per_call_start.empty()) {
         auto wrapped_call = format.per_call_start + p.space() + tool_choice + p.space() + format.per_call_end;
         if (inputs.parallel_tool_calls) {
-            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call));
+            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call) + p.space());
         } else {
-            tool_calls = p.trigger_rule("tool-call", wrapped_call);
+            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.space());
         }
         if (!format.section_start.empty()) {
             tool_calls = p.trigger_rule("tool-calls",
                                         p.literal(format.section_start) + p.space() + tool_calls + p.space() +
-                                            (format.section_end.empty() ? p.end() : p.literal(format.section_end)));
+                                            (format.section_end.empty() ? p.end() : p.literal(format.section_end) + p.space()));
         }
     } else {
         std::string separator = ", ";  // Default

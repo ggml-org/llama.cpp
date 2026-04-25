@@ -89,6 +89,11 @@
 					key: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
 					label: 'Ask for confirmation before changing conversation title',
 					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
+					label: 'Use first non-empty line for conversation title',
+					type: SettingsFieldType.CHECKBOX
 				}
 			]
 		},

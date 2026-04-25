@@ -1,9 +1,11 @@
 #include "sampling.h"
 
 #include "common.h"
-#include "ggml.h"
+#include "fit.h"
 #include "log.h"
 #include "reasoning-budget.h"
+
+#include "ggml.h"
 
 #include <algorithm>
 #include <cctype>
@@ -287,8 +289,8 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         }
     }
 
-    // reasoning budget sampler
-    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty()) {
+    // reasoning budget sampler (skip when budget is unlimited unless a lazy grammar is active, which needs rbudget for thinking-block suppression)
+    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (params.grammar_lazy || params.reasoning_budget_tokens >= 0)) {
         rbudget = common_reasoning_budget_init(
             vocab,
             params.reasoning_budget_start,
@@ -511,7 +513,7 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
         LOG_INF("%s: unaccounted time = %10.2f ms / %5.1f %%      (total - sampling - prompt eval - eval) / (total)\n", __func__, t_unacc_ms, t_unacc_pc);
         LOG_INF("%s:    graphs reused = %10d\n", __func__, data.n_reused);
 
-        llama_memory_breakdown_print(ctx);
+        common_memory_breakdown_print(ctx);
     }
 }
 

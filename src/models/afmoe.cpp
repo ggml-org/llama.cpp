@@ -41,21 +41,12 @@ llm_build_afmoe::llm_build_afmoe(const llama_model & model, const llm_graph_para
         {
             ggml_tensor * attn_inp = cur;  // save input for gate computation
 
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            cb(Qcur, "Qcur", il);
-
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            cb(Kcur, "Kcur", il);
-
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            cb(Vcur, "Vcur", il);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             // compute gate from input
             ggml_tensor * gate = build_lora_mm(model.layers[il].wqkv_gate, attn_inp);
             cb(gate, "attn_gate_proj", il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
 
             // Q/K normalization
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
@@ -77,10 +68,8 @@ llm_build_afmoe::llm_build_afmoe(const llama_model & model, const llm_graph_para
                 cb(Kcur, "Kcur_rope", il);
             }
 
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
             cur = build_attn(inp_attn,
-                    NULL, NULL,  // wo will be applied after gating
+                    NULL, NULL, NULL,  // wo will be applied after gating
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
@@ -91,7 +80,7 @@ llm_build_afmoe::llm_build_afmoe(const llama_model & model, const llm_graph_para
             cb(cur, "attn_gated", il);
 
             // now apply output projection
-            cur = build_lora_mm(model.layers[il].wo, cur);
+            cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
             cb(cur, "attn_o_proj", il);
         }
 
