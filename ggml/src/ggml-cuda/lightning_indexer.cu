@@ -26,6 +26,7 @@ static __global__ void lightning_indexer_kernel_wmma(
     constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WARP_SIZE;
     constexpr int HEADS_PER_INNER_LOOP = 16;
     constexpr int K_EMBD_PER_INNER_LOOP = 16;
+    constexpr int n_embd_padded = n_embd + 8;
 
     const int i_batch  = blockIdx.y;
     const int i_stream = blockIdx.z;
@@ -42,7 +43,7 @@ static __global__ void lightning_indexer_kernel_wmma(
     // phase 1 - load weights and first Q tile to shared memory
 
     __shared__ float w_shared[n_head];
-    __shared__ int2  q_shared_h[HEADS_PER_INNER_LOOP][n_embd / 4];
+    __shared__ int2  q_shared_h[HEADS_PER_INNER_LOOP][n_embd_padded / 4];
 
     if (tid < n_head) {
         w_shared[tid] = w_base[tid];
@@ -69,7 +70,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 
     // phase 2 - load (and dequantize if needed) K to shared mem
 
-    __shared__ half2 k_shared_h[K_VECS_PER_BLOCK][n_embd / 4][2];
+    __shared__ half2 k_shared_h[K_VECS_PER_BLOCK][n_embd_padded / 4][2];
 
     constexpr int n_k = K_VECS_PER_BLOCK * (n_embd / 4);
 
@@ -110,7 +111,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 
     // load K fragment
     wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> frag_k;
-    wmma::load_matrix_sync(frag_k, (half*) &k_shared_h[0][i_warp * K_EMBD_PER_INNER_LOOP / 4], n_embd);
+    wmma::load_matrix_sync(frag_k, (half*) &k_shared_h[0][i_warp * K_EMBD_PER_INNER_LOOP / 4], n_embd_padded);
 
     float score_k = 0.0f;
 
@@ -123,7 +124,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 
         // load Q fragment
         wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> frag_q;
-        wmma::load_matrix_sync(frag_q, (half*) &q_shared_h[0][i_warp * K_EMBD_PER_INNER_LOOP / 4], n_embd);
+        wmma::load_matrix_sync(frag_q, (half*) &q_shared_h[0][i_warp * K_EMBD_PER_INNER_LOOP / 4], n_embd_padded);
 
         // preload next Q tile to registers during matrix multiplication
         float4 q_next[n_q_next];
