@@ -25,6 +25,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #include <signal.h>
 #endif
 
@@ -85,6 +86,38 @@ static void sigint_handler(int signo) {
 #endif
 
 int main(int argc, char ** argv) {
+#if defined(_WIN32)
+    // Convert argv from system ANSI codepage to UTF-8.
+    // Without this, Cyrillic / Chinese / other non-ASCII -p prompts arrive
+    // mangled in argv on Windows (CRT uses GetCommandLineA which transcodes
+    // through the system locale). See issue #22361 (ref #6396).
+    std::vector<std::string> args_storage;
+    std::vector<char *> argv_storage;
+    {
+        int argc_w = 0;
+        LPWSTR * wargv = CommandLineToArgvW(GetCommandLineW(), &argc_w);
+        if (wargv != nullptr && argc_w > 0) {
+            args_storage.resize(argc_w);
+            argv_storage.resize(argc_w + 1, nullptr);
+            for (int i = 0; i < argc_w; ++i) {
+                int n = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1,
+                                            nullptr, 0, nullptr, nullptr);
+                if (n > 0) {
+                    args_storage[i].resize(n - 1);
+                    WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1,
+                                        args_storage[i].data(), n,
+                                        nullptr, nullptr);
+                }
+                argv_storage[i] = args_storage[i].data();
+            }
+            LocalFree(wargv);
+            argc = argc_w;
+            argv = argv_storage.data();
+        }
+        SetConsoleOutputCP(CP_UTF8);
+    }
+#endif
+
     std::setlocale(LC_NUMERIC, "C");
 
     common_params params;
