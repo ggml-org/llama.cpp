@@ -3,31 +3,29 @@
 	import { X } from '@lucide/svelte';
 
 	interface Props {
+		class?: string;
+		height?: string;
 		id: string;
+		imageClass?: string;
+		onclick?: (event?: MouseEvent) => void;
+		onRemove?: (id: string) => void;
 		name: string;
 		preview: string;
 		readonly?: boolean;
-		onRemove?: (id: string) => void;
-		onclick?: (event?: MouseEvent) => void;
-		class?: string;
-		// Customizable size props
 		width?: string;
-		height?: string;
-		imageClass?: string;
 	}
 
 	let {
+		class: className = '',
+		height = 'h-16',
 		id,
+		imageClass = '',
+		onclick,
+		onRemove,
 		name,
 		preview,
 		readonly = false,
-		onRemove,
-		onclick,
-		class: className = '',
-		// Default to small size for form previews
-		width = 'w-auto',
-		height = 'h-16',
-		imageClass = ''
+		width = 'w-auto'
 	}: Props = $props();
 </script>
 
@@ -40,10 +38,10 @@
 >
 	{#if onclick}
 		<button
-			type="button"
+			aria-label="Preview {name}"
 			class="block h-full w-full rounded-lg focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:outline-none"
 			{onclick}
-			aria-label="Preview {name}"
+			type="button"
 		>
 			{@render image()}
 		</button>
@@ -56,11 +54,11 @@
 			class="absolute top-1 right-1 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
 		>
 			<ActionIcon
-				icon={X}
-				tooltip="Remove"
-				stopPropagationOnClick
-				onclick={() => onRemove?.(id)}
 				class="text-white"
+				icon={X}
+				onclick={() => onRemove?.(id)}
+				stopPropagationOnClick
+				tooltip="Remove"
 			/>
 		</div>
 	{/if}

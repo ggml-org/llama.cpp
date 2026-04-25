@@ -6,8 +6,7 @@
 		HorizontalScrollCarousel
 	} from '$lib/components/app';
 	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
-	import { getAttachmentDisplayItems } from '$lib/utils';
-	import { isMcpPrompt, isMcpResource } from '$lib/utils/attachment-display';
+	import { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -75,38 +74,32 @@
 	});
 </script>
 
+{#snippet attachmentitem(item: ChatAttachmentDisplayItem)}
+	<ChatAttachmentsItem
+		{imageClass}
+		{imageHeight}
+		{imageWidth}
+		{item}
+		{limitToSingleRow}
+		{onFileRemove}
+		onMcpResourcePreview={openMcpResourcePreview}
+		onPreview={(i: ChatAttachmentDisplayItem, event?: MouseEvent) => openPreview(i, event)}
+		{readonly}
+	/>
+{/snippet}
+
 {#if displayItems.length > 0}
 	<div class={className} {style}>
 		{#if limitToSingleRow}
 			<HorizontalScrollCarousel bind:this={carouselRef}>
 				{#each displayItems as item (item.id)}
-					<ChatAttachmentsItem
-						{imageClass}
-						{imageHeight}
-						{imageWidth}
-						{item}
-						{limitToSingleRow}
-						{onFileRemove}
-						onMcpResourcePreview={openMcpResourcePreview}
-						onPreview={(i: ChatAttachmentDisplayItem, event?: MouseEvent) => openPreview(i, event)}
-						{readonly}
-					/>
+					{@render attachmentitem(item)}
 				{/each}
 			</HorizontalScrollCarousel>
 		{:else}
 			<div class="flex flex-wrap items-start justify-end gap-3">
 				{#each displayItems as item (item.id)}
-					<ChatAttachmentsItem
-						{imageClass}
-						{imageHeight}
-						{imageWidth}
-						{item}
-						{limitToSingleRow}
-						{onFileRemove}
-						onMcpResourcePreview={openMcpResourcePreview}
-						onPreview={(i: ChatAttachmentDisplayItem, event?: MouseEvent) => openPreview(i, event)}
-						{readonly}
-					/>
+					{@render attachmentitem(item)}
 				{/each}
 			</div>
 		{/if}
@@ -114,13 +107,13 @@
 {/if}
 
 <DialogChatAttachmentsPreview
-	bind:open={viewAllDialogOpen}
-	{uploadedFiles}
-	{attachments}
 	{activeModelId}
+	{attachments}
+	bind:open={viewAllDialogOpen}
 	{previewFocusIndex}
+	{uploadedFiles}
 />
 
 {#if mcpResourcePreviewExtra}
-	<DialogMcpResourcePreview bind:open={mcpResourcePreviewOpen} extra={mcpResourcePreviewExtra} />
+	<DialogMcpResourcePreview extra={mcpResourcePreviewExtra} bind:open={mcpResourcePreviewOpen} />
 {/if}

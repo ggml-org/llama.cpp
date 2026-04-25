@@ -1,13 +1,13 @@
 <script lang="ts">
-	import { ActionIcon } from '$lib/components/app';
 	import { X } from '@lucide/svelte';
 	import {
 		formatFileSize,
 		getFileTypeLabel,
 		getPreviewText,
-		isTextFile,
-		isPdfFile
+		isPdfFile,
+		isTextFile
 	} from '$lib/utils';
+	import { ActionIcon } from '$lib/components/app';
 	import { AttachmentType } from '$lib/enums';
 
 	interface Props {
@@ -37,10 +37,11 @@
 		uploadedFile
 	}: Props = $props();
 
-	let isText = $derived(isTextFile(attachment, uploadedFile));
 	let isPdf = $derived(isPdfFile(attachment, uploadedFile));
-	let isTextWithContent = $derived(isText && !!textContent);
 	let isPdfWithContent = $derived(isPdf && !!textContent);
+
+	let isText = $derived(isTextFile(attachment, uploadedFile));
+	let isTextWithContent = $derived(isText && !!textContent);
 
 	let fileTypeLabel = $derived.by(() => {
 		if (uploadedFile?.type) {
@@ -113,11 +114,11 @@
 
 {#if isTextWithContent || isPdfWithContent}
 	<button
+		aria-label={readonly ? `Preview ${name}` : undefined}
 		class="rounded-lg border border-border bg-muted p-3 {className} cursor-pointer {readonly
 			? 'w-full max-w-2xl transition-shadow hover:shadow-md'
 			: `group relative text-left ${textContent ? 'max-h-24 max-w-72' : 'max-w-36'}`} overflow-hidden"
 		{onclick}
-		aria-label={readonly ? `Preview ${name}` : undefined}
 		type="button"
 	>
 		{#if !readonly}

@@ -1,4 +1,10 @@
 <script lang="ts">
+	import {
+		ChatAttachmentsItemMcpPrompt,
+		ChatAttachmentsItemMcpResource,
+		ChatAttachmentsItemThumbnailImage,
+		ChatAttachmentsItemThumbnailFile
+	} from '$lib/components/app';
 	import { AttachmentType } from '$lib/enums';
 	import type {
 		ChatAttachmentDisplayItem,
@@ -6,14 +12,7 @@
 		DatabaseMessageExtraMcpResource,
 		MCPResourceAttachment
 	} from '$lib/types';
-	import { isPdfFile } from '$lib/utils';
-	import { isMcpPrompt, isMcpResource } from '$lib/utils/attachment-display';
-	import {
-		ChatAttachmentsItemMcpPrompt,
-		ChatAttachmentsItemMcpResource,
-		ChatAttachmentsItemThumbnailImage,
-		ChatAttachmentsItemThumbnailFile
-	} from '$lib/components/app';
+	import { isMcpPrompt, isMcpResource, isPdfFile } from '$lib/utils';
 
 	interface Props {
 		class?: string;

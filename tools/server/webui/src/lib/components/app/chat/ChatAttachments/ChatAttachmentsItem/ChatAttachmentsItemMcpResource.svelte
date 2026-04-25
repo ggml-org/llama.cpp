@@ -9,12 +9,12 @@
 
 	interface Props {
 		attachment: MCPResourceAttachment;
-		onRemove?: (attachmentId: string) => void;
-		onclick?: () => void;
 		class?: string;
+		onclick?: () => void;
+		onRemove?: (attachmentId: string) => void;
 	}
 
-	let { attachment, onRemove, onclick, class: className }: Props = $props();
+	let { attachment, class: className , onclick, onRemove}: Props = $props();
 
 	const ResourceIcon = $derived(
 		getResourceIcon(attachment.resource.mimeType, attachment.resource.uri)
@@ -33,13 +33,13 @@
 <Tooltip.Root>
 	<Tooltip.Trigger>
 		<button
-			disabled={!onclick}
 			class={[
 				'flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.75 text-sm transition-colors',
 				getStatusClass(attachment),
 				onclick && 'cursor-pointer hover:bg-muted/50',
 				className
 			]}
+			disabled={!onclick}
 			{onclick}
 			type="button"
 		>
@@ -57,12 +57,12 @@
 
 			{#if onRemove}
 				<ActionIcon
-					icon={X}
-					tooltip="Remove"
-					stopPropagationOnClick
 					class="-my-2 -mr-1.5 bg-transparent"
+					icon={X}
 					iconSize="h-2 w-2"
 					onclick={() => onRemove?.(attachment.id)}
+					stopPropagationOnClick
+					tooltip="Remove"
 				/>
 			{/if}
 		</button>
@@ -72,12 +72,12 @@
 		<div class="flex items-center gap-1 text-xs">
 			{#if favicon}
 				<img
-					src={favicon}
-					alt=""
+					alt={attachment.resource.serverName}
 					class="h-3 w-3 shrink-0 rounded-sm"
 					onerror={(e) => {
 						(e.currentTarget as HTMLImageElement).style.display = 'none';
 					}}
+					src={favicon}
 				/>
 			{/if}
 
