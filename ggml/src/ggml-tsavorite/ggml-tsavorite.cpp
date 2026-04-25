@@ -701,7 +701,6 @@ static void ensure_tsi_runtime_initialized() {
     if (!device_free) {
         fprintf(stderr, "Failed to allocate device_free\n");
         tsi_unload_all_blobs();
-        printf("\n finalize 1 \n");
         tsi_finalize();
         abort();
     }
@@ -1813,9 +1812,7 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
          device_free = NULL;
       }
       sleep(2);
-      printf("\n finalize 2 \n");
       tsi_finalize();
-      printf("\n finalize 2 \n");
       tsirt::utils::TSIProfiler::finalize();
       sleep(2);
   }
@@ -1838,7 +1835,6 @@ tsi_cleanup() {
         device_free = NULL;
     }
     sleep(2);
-    printf("\n finalize 3 \n");
     tsi_finalize();
     GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
     tsirt::utils::TSIProfiler::finalize();
