@@ -538,17 +538,29 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
         return false;
     }
 
+    const size_t n_samples_orig = n_samples; // save original length before padding
+
     std::vector<float> smpl;
     // if input is too short, pad with zeros
     // this is to avoid potential issues with stage1/2 padding in log_mel_spectrogram
     // TODO: maybe handle this better
-    size_t min_samples = (size_t) hparams.audio_sample_rate * (hparams.audio_chunk_len + 1);  // +1 second margin
+
+    // qwen3a uses chunked processing
+    const bool use_chunked = (hparams.n_window > 0);
+    size_t min_samples;
+    if (use_chunked) {
+        // For chunked models, only need enough for the mel computation to succeed
+        min_samples = (size_t) hparams.audio_n_fft + (size_t) hparams.audio_hop_len;
+    } else {
+        min_samples = (size_t) hparams.audio_sample_rate * (hparams.audio_chunk_len + 1);  // +1 second margin
+    }
     if (n_samples < min_samples) {
         smpl.resize(min_samples, 0.0f);
         std::memcpy(smpl.data(), samples, n_samples * sizeof(float));
         samples   = smpl.data();
         n_samples = smpl.size();
     }
+
 
     filter_params params;
     params.n_mel            = hparams.n_mel_bins;
@@ -579,13 +591,50 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
     if (DEBUG) {
         printf("output: n_mel = %d, n_len = %d\n", out_full.n_mel, out_full.n_len);
     }
-    const size_t frames_per_chunk = 3000;
-    GGML_ASSERT((size_t) out_full.n_len > frames_per_chunk);
-    for (size_t off = 0; off < (size_t) out_full.n_len; off += frames_per_chunk) {
-        int n_len = std::min(frames_per_chunk, (size_t) out_full.n_len - off);
-        if ((size_t) n_len < frames_per_chunk) {
-            break;  // last incomplete chunk will always be a padded chunk, safe to ignore
+    if (use_chunked) {
+        // qwen3a: chunk real audio frames into inference-window-sized blocks.
+        // Each inference window contains multiple conv sub-chunks that share attention
+        // via a block-diagonal mask in the encoder. The encoder splits the window
+        // into conv sub-chunks of n_window*2 frames internally.
+        const int conv_chunk_frames = hparams.n_window * 2;  // 100 for 0.6B
+        const int chunks_per_window = hparams.n_window_infer > 0
+            ? hparams.n_window_infer / conv_chunk_frames      // 800/100 = 8
+            : 1;
+        const int frames_per_chunk = conv_chunk_frames * chunks_per_window;  // 800
+
+        // Only chunk real audio frames (not the 30s silence padding from mel computation)
+        const int n_real_frames = std::min(
+            (int)(n_samples_orig / params.hop_length) + 1,
+            out_full.n_len);
+
+        if (DEBUG) {
+            printf("chunked mode: frames_per_chunk = %d, n_real_frames = %d\n",
+                   frames_per_chunk, n_real_frames);
+         }
+        for (int off = 0; off < n_real_frames; off += frames_per_chunk) {
+            int n_len = std::min(frames_per_chunk, n_real_frames - off);
+
+            mtmd_audio_mel out_chunk;
+            out_chunk.n_len     = n_len;
+            out_chunk.n_mel     = out_full.n_mel;
+            out_chunk.n_len_org = n_len;
+            out_chunk.data.reserve(out_chunk.n_mel * out_chunk.n_len);
+
+            for (int i = 0; i < out_full.n_mel; i++) {
+                auto src = out_full.data.begin() + i * out_full.n_len + off;
+                out_chunk.data.insert(out_chunk.data.end(), src, src + n_len);
+            }            output.push_back(std::move(out_chunk));
         }
+    } else {
+        // Standard Whisper: chunk into 3000-frame blocks (full 30s windows)
+        // We always expect the mel to have 3000 silent frames at the end
+        const size_t frames_per_chunk = 3000;
+        GGML_ASSERT((size_t) out_full.n_len > frames_per_chunk);
+        for (size_t off = 0; off < (size_t) out_full.n_len; off += frames_per_chunk) {
+            int n_len = std::min(frames_per_chunk, (size_t) out_full.n_len - off);
+            if ((size_t) n_len < frames_per_chunk) {
+                break;  // last incomplete chunk will always be a padded chunk, safe to ignore
+            }
 
         mtmd_audio_mel out_chunk;
         out_chunk.n_len     = n_len;
@@ -598,7 +647,8 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
             out_chunk.data.insert(out_chunk.data.end(), src, src + frames_per_chunk);
         }
 
-        output.push_back(std::move(out_chunk));
+            output.push_back(std::move(out_chunk));
+        }
     }
 
     return true;

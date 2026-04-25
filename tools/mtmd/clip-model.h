@@ -93,6 +93,13 @@ struct clip_hparams {
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
 
+    // qwen3a
+    int32_t downsample_hidden_size = 0;
+    int32_t max_source_positions = 0;
+    int32_t n_window = 0;
+    int32_t n_window_infer = 0;
+    int32_t conv_chunksize = 0;
+
     // audio-to-mel preprocessor params
     int32_t audio_chunk_len   = -1; // in seconds
     int32_t audio_sample_rate = -1;
