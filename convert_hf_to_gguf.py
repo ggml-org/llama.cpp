@@ -109,6 +109,7 @@ class ModelBase:
     is_mistral_format: bool = False
     disable_mistral_community_chat_template: bool = False
     sentence_transformers_dense_modules: bool = False
+    supports_moe_f8_e4m3_mxfp4: bool = False
 
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
@@ -786,7 +787,8 @@ class ModelBase:
             old_dtype = data_torch.dtype
 
             # convert any unsupported data types to float32
-            preserve_integer_tensor = name.endswith(".ffn.gate.tid2eid")
+            preserve_moe_mixed_quant_tensor = name in getattr(self, "_preserve_moe_mixed_quant_tensors", set())
+            preserve_integer_tensor = name.endswith(".ffn.gate.tid2eid") or preserve_moe_mixed_quant_tensor
             if data_torch.dtype not in (torch.float16, torch.float32) and not preserve_integer_tensor:
                 data_torch = data_torch.to(torch.float32)
 
@@ -882,6 +884,8 @@ class ModelBase:
                         data_qtype = gguf.GGMLQuantizationType.TQ1_0
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_TQ2_0:
                         data_qtype = gguf.GGMLQuantizationType.TQ2_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_F8_E4M3_MXFP4_MOE:
+                        data_qtype = gguf.GGMLQuantizationType.BF16
                     else:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
 
@@ -9204,6 +9208,7 @@ class DeepseekV4Model(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK4
     skip_mtp = True
     merge_expert = True
+    supports_moe_f8_e4m3_mxfp4 = True
     chat_template = (
         "{{ '<｜begin▁of▁sentence｜>' }}"
         "{% for message in messages %}"
@@ -9220,9 +9225,33 @@ class DeepseekV4Model(DeepseekV2Model):
         "{% endif %}"
     )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._preserve_moe_mixed_quant_tensors: set[str] = set()
+        self._moe_mixed_quant_weight_types: dict[str, gguf.GGMLQuantizationType] = {}
+        self._moe_mixed_quant_output_types: dict[str, gguf.GGMLQuantizationType] = {}
+        self._moe_mixed_quant_scales: dict[str, Callable[[], Tensor]] = {}
+
     def dequant_model(self):
         quant_method = (self.hparams.get("quantization_config") or {}).get("quant_method")
         if quant_method == "fp8":
+            if self.ftype == gguf.LlamaFileType.MOSTLY_F8_E4M3_MXFP4_MOE:
+                for name, gen in list(self.model_tensors.items()):
+                    if not name.endswith(".scale"):
+                        continue
+                    weight_name = name.removesuffix(".scale") + ".weight"
+                    if weight_name not in self.model_tensors:
+                        continue
+
+                    qtype = gguf.GGMLQuantizationType.MXFP4 if ".ffn.experts." in weight_name else gguf.GGMLQuantizationType.F8_E4M3_B128
+                    self._preserve_moe_mixed_quant_tensors.add(weight_name)
+                    self._moe_mixed_quant_weight_types[weight_name] = qtype
+                    self._moe_mixed_quant_scales[weight_name] = gen
+                    del self.model_tensors[name]
+
+                return super().dequant_model()
+
+            dequant_dtype = torch.float16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else None
             fp4_table = torch.tensor([
                 0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
                 0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
@@ -9292,6 +9321,60 @@ class DeepseekV4Model(DeepseekV2Model):
 
         return super().dequant_model()
 
+    @staticmethod
+    def _pack_f8_e4m3_b128(weight: Tensor, scale: Tensor, name: str) -> Tensor:
+        weight = LazyTorchTensor.to_eager(weight)
+        scale = LazyTorchTensor.to_eager(scale)
+
+        if weight.dtype != torch.float8_e4m3fn or weight.ndim != 2:
+            raise ValueError(f"Unexpected FP8 E4M3 tensor {name}: {tuple(weight.shape)} {weight.dtype}")
+
+        rows, cols = weight.shape
+        if rows % 128 != 0 or cols % 128 != 0:
+            raise ValueError(f"FP8 E4M3 tensor {name} shape {tuple(weight.shape)} is not divisible by 128x128")
+
+        row_blocks = rows // 128
+        col_blocks = cols // 128
+        if scale.ndim != 2 or scale.shape != (row_blocks, col_blocks):
+            raise ValueError(
+                f"Unexpected FP8 E4M3 scale {tuple(scale.shape)} for tensor {name} with shape {tuple(weight.shape)}"
+            )
+
+        weight_u8 = weight.view(torch.uint8)
+        scale_u8 = scale.view(torch.uint8)
+        out = torch.empty((rows, col_blocks, 129), dtype=torch.uint8)
+        out[:, :, 0].copy_(scale_u8.repeat_interleave(128, dim=0))
+        out[:, :, 1:].copy_(weight_u8.reshape(rows, col_blocks, 128))
+        return out.reshape(rows, col_blocks * 129)
+
+    @staticmethod
+    def _pack_mxfp4_moe(weight: Tensor, scale: Tensor, name: str) -> Tensor:
+        weight = LazyTorchTensor.to_eager(weight)
+        scale = LazyTorchTensor.to_eager(scale)
+
+        if weight.dtype != torch.int8 or weight.ndim != 2:
+            raise ValueError(f"Unexpected MXFP4 expert tensor {name}: {tuple(weight.shape)} {weight.dtype}")
+
+        rows, packed_cols = weight.shape
+        if packed_cols % 16 != 0:
+            raise ValueError(f"MXFP4 expert tensor {name} has {packed_cols} bytes per row, not a multiple of 16")
+
+        groups = packed_cols // 16
+        if scale.ndim != 2 or scale.shape[0] != rows or scale.shape[1] < groups:
+            raise ValueError(
+                f"Unexpected MXFP4 expert scale {tuple(scale.shape)} for tensor {name} with shape {tuple(weight.shape)}"
+            )
+
+        hf = weight.view(torch.uint8).reshape(rows, groups, 16)
+        vals = torch.empty((rows, groups, 32), dtype=torch.uint8)
+        vals[:, :, 0::2].copy_(hf & 0x0F)
+        vals[:, :, 1::2].copy_(hf >> 4)
+
+        out = torch.empty((rows, groups, 17), dtype=torch.uint8)
+        out[:, :, 0].copy_(scale.view(torch.uint8)[:, :groups])
+        out[:, :, 1:].copy_(vals[:, :, :16] | (vals[:, :, 16:] << 4))
+        return out.reshape(rows, groups * 17)
+
     def set_gguf_parameters(self):
         self.hparams["num_key_value_heads"] = self.hparams.get("num_key_value_heads", 1)
         self.hparams["rms_norm_eps"] = self.hparams.get("rms_norm_eps", self.hparams.get("norm_eps", 1e-6))
@@ -9360,6 +9443,21 @@ class DeepseekV4Model(DeepseekV2Model):
             logger.info("Skipping tied output layer 'head.weight' (will use token_embd.weight)")
             return
 
+        moe_mixed_qtype = self._moe_mixed_quant_weight_types.get(name)
+        if moe_mixed_qtype is not None:
+            scale_gen = self._moe_mixed_quant_scales[name]
+            if moe_mixed_qtype == gguf.GGMLQuantizationType.F8_E4M3_B128:
+                data_torch = self._pack_f8_e4m3_b128(data_torch, scale_gen(), name)
+                for new_name, data_torch in TextModel.modify_tensors(self, data_torch, name, bid):
+                    self._moe_mixed_quant_output_types[new_name] = moe_mixed_qtype
+                    yield new_name, data_torch
+                return
+
+            if moe_mixed_qtype == gguf.GGMLQuantizationType.MXFP4:
+                data_torch = self._pack_mxfp4_moe(data_torch, scale_gen(), name)
+            else:
+                raise ValueError(f"Unsupported MoE mixed quantization type for {name}: {moe_mixed_qtype}")
+
         if self.merge_expert and ".ffn.experts." in name:
             n_experts = self.hparams["n_routed_experts"]
             assert bid is not None
@@ -9379,12 +9477,22 @@ class DeepseekV4Model(DeepseekV2Model):
 
                     merged = torch.stack(datas, dim=0)
                     merged_name = f"layers.{bid}.ffn.experts.{w_name}.weight"
-                    yield from TextModel.modify_tensors(self, merged, merged_name, bid)
+                    for new_name, data_torch in TextModel.modify_tensors(self, merged, merged_name, bid):
+                        if moe_mixed_qtype == gguf.GGMLQuantizationType.MXFP4:
+                            self._moe_mixed_quant_output_types[new_name] = moe_mixed_qtype
+                        yield new_name, data_torch
                 return
             else:
                 return
 
         yield from TextModel.modify_tensors(self, data_torch, name, bid)
+
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        qtype = self._moe_mixed_quant_output_types.get(new_name)
+        if qtype is not None:
+            return qtype
+
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
 @ModelBase.register(
@@ -13525,8 +13633,8 @@ def parse_args() -> argparse.Namespace:
         help="path to write to; default: based on input. {ftype} will be replaced by the outtype.",
     )
     parser.add_argument(
-        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "auto"], default="auto",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, and auto for the highest-fidelity 16-bit float type",
+        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "moe-f8-e4m3-mxfp4", "auto"], default="auto",
+        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, moe-f8-e4m3-mxfp4 to preserve MoE FP8 E4M3 non-expert and MXFP4 expert source quantization formats, and auto for the highest-fidelity 16-bit float type",
     )
     parser.add_argument(
         "--bigendian", action="store_true",
@@ -13701,6 +13809,7 @@ def main() -> None:
         "q8_0": gguf.LlamaFileType.MOSTLY_Q8_0,
         "tq1_0": gguf.LlamaFileType.MOSTLY_TQ1_0,
         "tq2_0": gguf.LlamaFileType.MOSTLY_TQ2_0,
+        "moe-f8-e4m3-mxfp4": gguf.LlamaFileType.MOSTLY_F8_E4M3_MXFP4_MOE,
         "auto": gguf.LlamaFileType.GUESSED,
     }
 
@@ -13743,6 +13852,15 @@ def main() -> None:
             model_class = MistralMoeModel
         else:
             model_class = MistralModel
+
+        if output_type == gguf.LlamaFileType.MOSTLY_F8_E4M3_MXFP4_MOE and not model_class.supports_moe_f8_e4m3_mxfp4:
+            model_arch_name = model_architecture if not is_mistral_format else model_class.__name__
+            logger.error(
+                f"Model {model_arch_name} does not support --outtype moe-f8-e4m3-mxfp4; "
+                "this output type requires a converter that preserves MoE FP8 E4M3 non-expert tensors "
+                "and MXFP4 expert tensors."
+            )
+            sys.exit(1)
 
         model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,

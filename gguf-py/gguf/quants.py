@@ -54,6 +54,8 @@ _type_traits: dict[GGMLQuantizationType, type[__Quant]] = {}
 
 
 def quantize(data: np.ndarray, qtype: GGMLQuantizationType) -> np.ndarray:
+    if data.dtype == np.uint8 and qtype in (GGMLQuantizationType.MXFP4, GGMLQuantizationType.NVFP4, GGMLQuantizationType.F8_E4M3_B128):
+        return data
     if qtype == GGMLQuantizationType.F32:
         return data.astype(np.float32, copy=False)
     elif qtype == GGMLQuantizationType.F16:
@@ -761,6 +763,31 @@ class NVFP4(__Quant, qtype=GGMLQuantizationType.NVFP4):
         vals = np.take_along_axis(kvalues, vals, axis=-1)
 
         return (d * vals.astype(np.float32)).reshape(n_super, 64)
+
+
+class F8_E4M3_B128(__Quant, qtype=GGMLQuantizationType.F8_E4M3_B128):
+    @staticmethod
+    def e8m0_to_fp32(x: np.ndarray) -> np.ndarray:
+        bits = np.where(x == 0, np.uint32(0x00400000), x.astype(np.uint32) << np.uint32(23))
+        return bits.view(np.float32)
+
+    @staticmethod
+    def f8_e4m3fn_to_fp32(x: np.ndarray) -> np.ndarray:
+        sign = np.where((x & np.uint8(0x80)) == 0, np.float32(1.0), np.float32(-1.0))
+        ax = x & np.uint8(0x7F)
+        exp = ((x >> np.uint8(3)) & np.uint8(0x0F)).astype(np.int32)
+        man = (x & np.uint8(0x07)).astype(np.float32)
+        val = np.where(exp == 0, man * np.float32(2.0 ** -9), (np.float32(1.0) + man * np.float32(0.125)) * (np.float32(2.0) ** (exp.astype(np.float32) - np.float32(7.0))))
+        return np.where(ax == 0, np.float32(0.0), np.where(ax == 0x7F, np.float32(np.nan), sign * val))
+
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        raise QuantError(f"{cls.qtype.name} is a raw storage format and cannot be quantized from float data")
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        e, qs = np.hsplit(blocks, [1])
+        return cls.e8m0_to_fp32(e) * cls.f8_e4m3fn_to_fp32(qs)
 
 
 class IQ2_XXS(__Quant, qtype=GGMLQuantizationType.IQ2_XXS):
