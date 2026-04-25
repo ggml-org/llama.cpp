@@ -1191,8 +1191,11 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
                 /* max = */ inputs.parallel_tool_calls ? -1 : 1
             ));
 
-            auto scan_to_toolcall = p.rule("scan-to-toolcall", p.until("<|tool_call>"));
-            auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>", "<|tool_call>"})));
+            // Only stop content/scan at actual tool-call starts (<|tool_call>call:).
+            // This prevents stray <|tool_call> tokens in content (e.g. references to
+            // previous turns) from being greedily consumed by the tool_call rule.
+            auto scan_to_toolcall = p.rule("scan-to-toolcall", p.until("<|tool_call>call:"));
+            auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>", "<|tool_call>call:"})));
             auto message = p.rule("message", thought + content);
             return start + p.zero_or_more(message) + scan_to_toolcall + tool_call;
         }
@@ -1223,7 +1226,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         });
 
         data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call>" },
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call>call:" },
         };
     }
 

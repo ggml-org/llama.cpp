@@ -1342,6 +1342,11 @@ class peg_test_builder {
         return *this;
     }
 
+    peg_test_builder & messages(std::vector<common_chat_msg> msgs) {
+        tc_.params.messages = std::move(msgs);
+        return *this;
+    }
+
     peg_test_builder & json_schema(const std::string & schema) {
         tc_.params.json_schema = schema;
         return *this;
@@ -2143,6 +2148,39 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist)
             .run();
+
+        // Regression test for multi-turn tool calls after round 0.
+        // A stray <|tool_call> token in content (from referencing a previous turn)
+        // must not be consumed before the real tool_call rule can match.
+        {
+            common_chat_msg tool_result;
+            tool_result.role = "tool";
+            tool_result.content = "10:00 AM";
+            tool_result.tool_call_id = "call_1";
+
+            tst.test(
+                    "<|channel>thought\n"
+                    "I need to get the time in Paris\n"
+                    "<channel|>\n"
+                    "Prior turn used the <|tool_call> token.\n"
+                    "Now let me check Paris.\n"
+                    "<|tool_call>call:get_time{city:<|\"|>Paris<|\"|>}<tool_call|>")
+                .tools({ get_time_tool })
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .messages({
+                    {"user", "What time in London?"},
+                    {"assistant", "", {}, {{ "get_time", R"({"city": "London"})" }}},
+                    tool_result,
+                    {"user", "And in Paris?"}
+                })
+                .expect(simple_assist_msg(
+                    "Prior turn used the <|tool_call> token.\n"
+                    "Now let me check Paris.\n",
+                    "I need to get the time in Paris",
+                    "get_time",
+                    R"({"city": "Paris"})"))
+                .run();
+        }
     }
 
     {
