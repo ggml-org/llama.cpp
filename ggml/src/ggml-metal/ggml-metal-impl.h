@@ -1,12 +1,9 @@
 #ifndef GGML_METAL_IMPL
 #define GGML_METAL_IMPL
 
-// kernel parameters for mat-vec threadgroups
+// kernel parameters for mat-mat threadgroups
 //
-// N_R0: number of src0 rows to process per simdgroup
-// N_SG: number of simdgroups per threadgroup
-//
-// TODO: for optimal performance, become function of the device and work size
+// TODO: become function constants
 
 #define SZ_SIMDGROUP 16
 #define N_MM_NK 2
@@ -16,6 +13,13 @@
 #define N_MM_BLOCK_Y 2
 #define N_MM_SIMD_GROUP_X 2
 #define N_MM_SIMD_GROUP_Y 2
+
+// kernel parameters for mat-vec threadgroups
+//
+// N_R0: number of src0 rows to process per simdgroup
+// N_SG: number of simdgroups per threadgroup
+//
+// TODO: for optimal performance, become function of the device and work size
 
 #define N_R0_Q1_0 8
 #define N_SG_Q1_0 2
