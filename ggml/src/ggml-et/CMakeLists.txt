@@ -41,7 +41,9 @@ set(KERNELS
     rope_f32
     unary_f32
     sqr_f32
+    clamp_f32
     sum_rows_f32
+    mean_f32
     cumsum_f32
     norm_f32
     l2_norm_f32

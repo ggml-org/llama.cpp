@@ -296,6 +296,18 @@ struct ggml_et_sum_rows_params {
     ggml_tensor dst;      // F32 output tensor [1, ne01, ne02, ne03]
 };
 
+struct ggml_et_mean_params {
+    ggml_tensor src0;     // F32 input tensor [ne00, ne01, ne02, ne03]
+    ggml_tensor dst;      // F32 output tensor [1, ne01, ne02, ne03]
+};
+
+struct ggml_et_clamp_params {
+    ggml_tensor src0;     // F32 input tensor (contiguous)
+    ggml_tensor dst;      // F32 output tensor (contiguous; may alias src0)
+    float min_val;
+    float max_val;
+};
+
 struct ggml_et_cumsum_params {
     ggml_tensor src0;     // F32 input tensor [ne00, ne01, ne02, ne03]
     ggml_tensor dst;      // F32 output tensor [ne00, ne01, ne02, ne03]
@@ -312,6 +324,8 @@ bool ggml_et_op_cumsum(ggml_backend_et_device_context* dev_ctx, const ggml_tenso
 bool ggml_et_op_sqr(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_unary(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_sum_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_mean(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_clamp(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_scale(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
