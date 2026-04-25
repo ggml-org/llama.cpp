@@ -703,12 +703,20 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     }
 
     if (has_tensor) {
-        constexpr size_t NRA = SZ_SIMDGROUP * N_MM_BLOCK_Y * N_MM_SIMD_GROUP_Y;  // 64
-        const size_t smem_a  = NRA * N_MM_NK_TOTAL * sizeof(ggml_fp16_t);
+        res.nr0 = SZ_SIMDGROUP * N_MM_BLOCK_Y * N_MM_SIMD_GROUP_Y;  // 64
+        res.nr1 = SZ_SIMDGROUP * N_MM_BLOCK_X * N_MM_SIMD_GROUP_X;  // 32
+
+        const size_t NRA    = res.nr0;
+        const size_t smem_a = NRA * N_MM_NK_TOTAL * sizeof(ggml_fp16_t);
         res.smem = smem_a;
     } else {
+        res.nr0 = 64;
+        res.nr1 = 32;
+
         res.smem = bc_out ? 8192 : (4096 + 2048);
     }
+
+    res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
 
     return res;
 }
