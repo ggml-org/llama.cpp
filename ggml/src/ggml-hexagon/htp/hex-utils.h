@@ -74,10 +74,10 @@ static inline size_t hex_smax(size_t a, size_t b) {
     return a > b ? a : b;
 }
 
-static inline void swap_ptr(void **p1, void **p2) {
-    void *t = *p1;
-    *p1     = *p2;
-    *p2     = t;
+static inline void swap_ptr(void ** p1, void ** p2) {
+    void * t = *p1;
+    *p1      = *p2;
+    *p2      = t;
 }
 
 static inline void hex_l2fetch(const void * p, uint32_t width, uint32_t stride, uint32_t height) {

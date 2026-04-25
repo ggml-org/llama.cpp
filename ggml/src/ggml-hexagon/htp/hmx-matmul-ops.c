@@ -361,7 +361,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
     // vscatter setup: write dequantized K-values directly to transposed [K][N] tile positions.
     // Each int32 element holds a K-row-pair (2 adjacent fp16 values).  word[i] at offset i*128
     // maps to K-rows 2i and 2i+1.  Column offset (n*4) added per row.
-    const HVX_Vector v_scat_base = hvx_vmem(hmx_transpose_scatter_offsets);
+    const HVX_Vector     v_scat_base = hvx_vmem(hmx_transpose_scatter_offsets);
     const HVX_Vector v_scat_step = Q6_V_vsplat_R(4);  // 4 bytes = 1 column step
     const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);  // first 16 words (64 bytes)
 
@@ -953,8 +953,8 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
                                               fp16_row_bytes, weight_row_bytes, fp16_row_bytes, n_cols_next);
                         }
 
-                        interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr,
-                                                 n_cols, params->k, params->k, 0, n_cols);
+                        interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr, n_cols, params->k, params->k,
+                                                 0, n_cols);
                         swap_ptr(&buf_curr, &buf_next);
                     }
                     TIMER_STOP(weight_load);
@@ -1125,8 +1125,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
                 }
 
                 // interleave row-major fp16 from scratch into tile-major in vtcm_weight
-                interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr,
-                                         n_cols, k, k, 0, n_cols);
+                interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr, n_cols, k, k, 0, n_cols);
 
                 swap_ptr(&buf_curr, &buf_next);
             }
@@ -1214,15 +1213,14 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     const size_t seq_per_mn  = sizeof(__fp16);                 // O x 1
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0, vtcm_used = 0;
-    bool   use_pipeline   = false;
+    bool   use_pipeline = false;
 
     if (m >= 128) {
         size_t mc = 0, nc = 0, used = 0;
-        if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, pipe_per_n, /*per_m=*/vec_dot_size, pipe_per_mn,
-                               m, n,
+        if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, pipe_per_n, /*per_m=*/vec_dot_size, pipe_per_mn, m, n,
                                /*m_block_cost=*/(size_t) n * 3,
-                               /*n_block_cost=*/(size_t) m * 2, &mc, &nc, &used) == 0
-            && hmx_ceil_div((size_t) n, nc) >= 2) {
+                               /*n_block_cost=*/(size_t) m * 2, &mc, &nc, &used) == 0 &&
+            hmx_ceil_div((size_t) n, nc) >= 2) {
             m_chunk_n_rows = mc;
             n_chunk_n_cols = nc;
             vtcm_used      = used;
@@ -1231,13 +1229,10 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     }
 
     if (!use_pipeline) {
-        if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, seq_per_n, /*per_m=*/vec_dot_size, seq_per_mn,
-                               m, n,
+        if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, seq_per_n, /*per_m=*/vec_dot_size, seq_per_mn, m, n,
                                /*m_block_cost=*/(size_t) n * 3,
-                               /*n_block_cost=*/(size_t) m * 2,
-                               &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
-            FARF(HIGH, "%s: VTCM too small (m=%d k=%d n=%d budget=%zu)",
-                 __func__, m, k, n, vtcm_budget);
+                               /*n_block_cost=*/(size_t) m * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
+            FARF(HIGH, "%s: VTCM too small (m=%d k=%d n=%d budget=%zu)", __func__, m, k, n, vtcm_budget);
             return -1;
         }
     }
