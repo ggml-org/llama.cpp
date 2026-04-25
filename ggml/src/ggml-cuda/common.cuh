@@ -830,6 +830,21 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
 #endif // defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
 }
 
+static __device__ __forceinline__ float ggml_cuda_f8_e4m3fn_to_fp32(uint8_t x) {
+    if ((x & 0x7F) == 0) {
+        return 0.0f;
+    }
+    if ((x & 0x7F) == 0x7F) {
+        return NAN;
+    }
+
+    const int exp = (x >> 3) & 0x0F;
+    const int man = x & 0x07;
+    const float val = exp == 0 ? ldexpf((float) man, -9) : ldexpf(1.0f + (float) man * 0.125f, exp - 7);
+
+    return (x & 0x80) ? -val : val;
+}
+
 __device__ __forceinline__ uint8_t ggml_cuda_float_to_fp4_e2m1(float x, float e) {
     const uint8_t sign_bit = (x < 0.0f) << 3;
     float         ax       = fabsf(x) * e;
@@ -974,6 +989,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_NVFP4> {
     static constexpr int qk = QK_NVFP4;
     static constexpr int qr = QR_NVFP4;
     static constexpr int qi = QI_NVFP4;
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_F8_E4M3_B128> {
+    static constexpr int qk = QK_F8_E4M3_B128;
+    static constexpr int qr = QR_F8_E4M3_B128;
+    static constexpr int qi = QI_F8_E4M3_B128;
 };
 
 template<>

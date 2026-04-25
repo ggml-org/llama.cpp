@@ -11,6 +11,7 @@
 #include <string.h>
 #include <assert.h>
 #include <float.h>
+#include <math.h>
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
 
@@ -56,6 +57,10 @@ void quantize_row_mxfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
 
 void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_nvfp4_ref(x, y, k);
+}
+
+void quantize_row_f8_e4m3_b128(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_f8_e4m3_b128_ref(x, y, k);
 }
 
 //
@@ -308,6 +313,56 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
             sumf += dy * d * (sumi_lo + sumi_hi);
         }
     }
+    *s = sumf;
+}
+
+static inline float ggml_f8_e4m3fn_to_fp32_cpu(uint8_t x) {
+    if ((x & 0x7F) == 0) {
+        return 0.0f;
+    }
+    if ((x & 0x7F) == 0x7F) {
+        return NAN;
+    }
+
+    const int sign = x >> 7;
+    const int exp  = (x >> 3) & 0x0F;
+    const int man  = x & 0x07;
+    const float val = exp == 0 ? ldexpf((float) man, -9) : ldexpf(1.0f + (float) man * 0.125f, exp - 7);
+
+    return sign ? -val : val;
+}
+
+void ggml_vec_dot_f8_e4m3_b128_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_F8_E4M3_B128 == 0);
+
+    const block_f8_e4m3_b128 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_F8_E4M3_B128;
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const float dx = GGML_E8M0_TO_FP32(x[ib].e);
+
+        for (int q8b = 0; q8b < QK_F8_E4M3_B128 / QK8_0; ++q8b) {
+            const block_q8_0 * yb = &y[ib * (QK_F8_E4M3_B128 / QK8_0) + q8b];
+            const float dy = GGML_CPU_FP16_TO_FP32(yb->d);
+            float sumi = 0;
+
+            for (int j = 0; j < QK8_0; ++j) {
+                sumi += ggml_f8_e4m3fn_to_fp32_cpu(x[ib].qs[q8b * QK8_0 + j]) * yb->qs[j];
+            }
+
+            sumf += dx * dy * sumi;
+        }
+    }
+
     *s = sumf;
 }
 
