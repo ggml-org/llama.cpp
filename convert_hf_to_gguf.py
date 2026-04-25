@@ -167,7 +167,7 @@ class ModelBase:
                 logger.info("heuristics unable to detect tensor dtype, defaulting to --outtype f16")
 
         # Configure GGUF Writer
-        self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
+        self.gguf_writer = gguf.GGUFWriter(path=fname_out, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
 
         # Mistral specific
@@ -9211,13 +9211,26 @@ class DeepseekV4Model(DeepseekV2Model):
         "{% endif %}"
     )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._expert_buffers: list[dict[str, Tensor]] | None = None
+        self._expert_seen: list[dict[str, set[int]]] | None = None
+
     def dequant_model(self):
         quant_method = (self.hparams.get("quantization_config") or {}).get("quant_method")
         if quant_method == "fp8":
+            dequant_dtype = torch.float16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else None
             fp4_table = torch.tensor([
                 0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
                 0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
             ], dtype=torch.float32)
+            fp4_codes = torch.arange(256, dtype=torch.uint8)
+            fp4_pair_table = fp4_table[
+                torch.stack((fp4_codes & 0x0F, (fp4_codes >> 4) & 0x0F), dim=1).long()
+            ]
+
+            def finalize_dequant(data: Tensor) -> Tensor:
+                return data.to(dequant_dtype) if dequant_dtype is not None else data
 
             def dequant_with_scale(weight: Tensor, scale: Tensor) -> Tensor:
                 scale = scale.float()
@@ -9230,19 +9243,44 @@ class DeepseekV4Model(DeepseekV2Model):
                         f"Unexpected DeepSeek V4 scale rank for weight {tuple(weight.shape)} and scale {tuple(scale.shape)}"
                     )
 
-                for dim, (weight_dim, scale_dim) in enumerate(zip(weight.shape, scale.shape)):
+                repeats: list[int] = []
+                can_broadcast_blocks = True
+                for weight_dim, scale_dim in zip(weight.shape, scale.shape):
                     if scale_dim == weight_dim:
+                        repeats.append(1)
                         continue
                     if scale_dim <= 0 or scale_dim > weight_dim:
                         raise ValueError(
                             f"Unexpected DeepSeek V4 scale shape {tuple(scale.shape)} for weight {tuple(weight.shape)}"
                         )
+                    if weight_dim % scale_dim != 0:
+                        can_broadcast_blocks = False
+                        break
+                    repeats.append(weight_dim // scale_dim)
+
+                if can_broadcast_blocks:
+                    weight_shape: list[int] = []
+                    scale_shape: list[int] = []
+                    for scale_dim, repeat in zip(scale.shape, repeats):
+                        weight_shape.extend((scale_dim, repeat))
+                        scale_shape.extend((scale_dim, 1))
+                    if dequant_dtype is not None:
+                        return (
+                            weight.to(dequant_dtype).reshape(weight_shape)
+                            * scale.to(dequant_dtype).reshape(scale_shape)
+                        ).reshape(weight.shape)
+
+                    return (weight.float().reshape(weight_shape) * scale.reshape(scale_shape)).reshape(weight.shape)
+
+                for dim, (weight_dim, scale_dim) in enumerate(zip(weight.shape, scale.shape)):
+                    if scale_dim == weight_dim:
+                        continue
                     repeat = (weight_dim + scale_dim - 1) // scale_dim
                     if repeat > 1:
                         scale = scale.repeat_interleave(repeat, dim)
 
                 scale = scale[tuple(slice(0, size) for size in weight.shape)]
-                return weight.float() * scale
+                return finalize_dequant(weight.float() * scale)
 
             def dequant_packed_expert(weight: Tensor, scale: Tensor) -> Tensor:
                 weight = LazyTorchTensor.to_eager(weight)
@@ -9252,14 +9290,21 @@ class DeepseekV4Model(DeepseekV2Model):
                     raise ValueError(f"Unexpected DeepSeek V4 expert weight {tuple(weight.shape)} {weight.dtype}")
 
                 packed = weight.view(torch.uint8)
-                low = fp4_table[(packed & 0x0F).long()]
-                high = fp4_table[((packed >> 4) & 0x0F).long()]
-                unpacked = torch.stack([low, high], dim=-1).flatten(1, 2)
+                unpacked = fp4_pair_table[packed.long()].reshape(packed.shape[0], packed.shape[1] * 2)
 
-                scale = scale.repeat_interleave(32, dim=1)
-                scale = scale[:, :unpacked.shape[1]]
+                scale_groups = (unpacked.shape[1] + 31) // 32
+                if scale.ndim != 2 or scale.shape[0] != unpacked.shape[0] or scale.shape[1] < scale_groups:
+                    raise ValueError(
+                        f"Unexpected DeepSeek V4 expert scale {tuple(scale.shape)} for weight {tuple(weight.shape)}"
+                    )
 
-                return unpacked * scale
+                scale = scale[:, :scale_groups]
+                if unpacked.shape[1] % 32 == 0:
+                    data = unpacked.reshape(unpacked.shape[0], scale_groups, 32).mul_(scale.unsqueeze(-1))
+                    return finalize_dequant(data.reshape(unpacked.shape))
+
+                scale = scale.repeat_interleave(32, dim=1)[:, :unpacked.shape[1]]
+                return finalize_dequant(unpacked.mul_(scale))
 
             for name, gen in list(self.model_tensors.items()):
                 if not name.endswith(".scale"):
@@ -9355,27 +9400,62 @@ class DeepseekV4Model(DeepseekV2Model):
             n_experts = self.hparams["n_routed_experts"]
             assert bid is not None
 
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
+            match = re.fullmatch(r"layers\.(\d+)\.ffn\.experts\.(\d+)\.(w[123])\.weight", name)
+            if match is None:
+                raise ValueError(f"Unexpected DeepSeek V4 expert tensor name: {name}")
 
-            self._experts[bid][name] = data_torch
+            xid = int(match.group(2))
+            w_name = match.group(3)
+            if xid >= n_experts:
+                raise ValueError(f"Unexpected DeepSeek V4 expert id {xid} for tensor {name}")
 
-            if len(self._experts[bid]) >= n_experts * 3:
-                for w_name in ["w2", "w1", "w3"]:
-                    datas: list[Tensor] = []
-                    for xid in range(n_experts):
-                        ename = f"layers.{bid}.ffn.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
+            if self._expert_buffers is None:
+                self._expert_buffers = [{} for _ in range(self.block_count)]
+                self._expert_seen = [{} for _ in range(self.block_count)]
+            assert self._expert_seen is not None
 
-                    merged = torch.stack(datas, dim=0)
-                    merged_name = f"layers.{bid}.ffn.experts.{w_name}.weight"
+            layer_buffers = self._expert_buffers[bid]
+            layer_seen = self._expert_seen[bid]
+
+            seen = layer_seen.setdefault(w_name, set())
+            if xid in seen:
+                raise ValueError(f"Duplicate DeepSeek V4 expert tensor: {name}")
+
+            if w_name not in layer_buffers:
+                layer_buffers[w_name] = torch.empty((n_experts, *data_torch.shape), dtype=data_torch.dtype)
+            elif layer_buffers[w_name].shape[1:] != data_torch.shape:
+                raise ValueError(
+                    f"Unexpected DeepSeek V4 expert shape {tuple(data_torch.shape)} for tensor {name}; "
+                    f"expected {tuple(layer_buffers[w_name].shape[1:])}"
+                )
+
+            layer_buffers[w_name][xid].copy_(data_torch)
+            seen.add(xid)
+
+            if all(len(layer_seen.get(done_w_name, set())) >= n_experts for done_w_name in ("w2", "w1", "w3")):
+                for done_w_name in ["w2", "w1", "w3"]:
+                    merged = layer_buffers.pop(done_w_name)
+                    del layer_seen[done_w_name]
+                    merged_name = f"layers.{bid}.ffn.experts.{done_w_name}.weight"
                     yield from TextModel.modify_tensors(self, merged, merged_name, bid)
                 return
             else:
                 return
 
         yield from TextModel.modify_tensors(self, data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._expert_seen is not None:
+            pending = [
+                f"blk {bid} {w_name}: {len(xids)}/{self.hparams['n_routed_experts']}"
+                for bid, layer_seen in enumerate(self._expert_seen)
+                for w_name, xids in layer_seen.items()
+                if xids
+            ]
+            if pending:
+                raise ValueError(f"Unprocessed DeepSeek V4 experts: {pending}")
 
 
 @ModelBase.register(
@@ -13504,6 +13584,11 @@ class LazyTorchTensor(gguf.LazyBase):
         return cls._wrap_fn(func)(*args, **kwargs)
 
 
+if (torch_float8_e8m0fnu := getattr(torch, "float8_e8m0fnu", None)) is not None:
+    LazyTorchTensor._dtype_byteswap_map[torch_float8_e8m0fnu] = np.uint8
+    LazyTorchTensor._dtype_str_map["F8_E8M0"] = torch_float8_e8m0fnu
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert a huggingface model to a GGML compatible file")
@@ -13543,6 +13628,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--verbose", action="store_true",
         help="increase output verbosity",
+    )
+    parser.add_argument(
+        "--torch-threads", type=int, default=None,
+        help="number of PyTorch CPU threads to use for tensor conversion operations",
     )
     parser.add_argument(
         "--split-max-tensors", type=int, default=0,
@@ -13664,6 +13753,12 @@ def main() -> None:
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
+
+    if args.torch_threads is not None:
+        if args.torch_threads <= 0:
+            raise ValueError("--torch-threads must be a positive integer")
+        torch.set_num_threads(args.torch_threads)
+        logger.info(f"PyTorch tensor conversion threads: {torch.get_num_threads()}")
 
     if args.remote:
         hf_repo_id = args.model

@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 SHARD_NAME_FORMAT = "{:s}-{:05d}-of-{:05d}.gguf"
+GGUF_WRITE_BUFFER_SIZE = 64 * 1024 * 1024
 
 
 @dataclass
@@ -179,7 +180,7 @@ class GGUFWriter:
 
         if self.path is not None:
             filenames = self.print_plan()
-            self.fout = [open(filename, "wb") for filename in filenames]
+            self.fout = [open(filename, "wb", buffering=GGUF_WRITE_BUFFER_SIZE) for filename in filenames]
             self.state = WriterState.EMPTY
 
     def print_plan(self) -> list[Path]:
@@ -384,7 +385,11 @@ class GGUFWriter:
             # Don't byteswap inplace since lazy copies cannot handle it
             tensor = tensor.byteswap(inplace=False)
         if self.use_temp_file and self.temp_file is None:
-            fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024)
+            fp = tempfile.SpooledTemporaryFile(
+                mode="w+b",
+                max_size=256 * 1024 * 1024,
+                dir=(self.path if self.path.is_dir() else self.path.parent) if self.path is not None else None,
+            )
             fp.seek(0)
             self.temp_file = fp
 
@@ -401,7 +406,31 @@ class GGUFWriter:
     def write_padding(self, fp: IO[bytes], n: int, align: int | None = None) -> None:
         pad = GGUFWriter.ggml_pad(n, align if align is not None else self.data_alignment) - n
         if pad != 0:
-            fp.write(bytes([0] * pad))
+            fp.write(b"\0" * pad)
+
+    @staticmethod
+    def copy_file_range(src: IO[bytes], dst: IO[bytes], length: int = GGUF_WRITE_BUFFER_SIZE) -> None:
+        if not hasattr(os, "copy_file_range"):
+            shutil.copyfileobj(src, dst, length=length)
+            return
+
+        try:
+            src.flush()
+            dst.flush()
+            src_fd = src.fileno()
+            dst_fd = dst.fileno()
+        except OSError:
+            shutil.copyfileobj(src, dst, length=length)
+            return
+
+        while True:
+            try:
+                n = os.copy_file_range(src_fd, dst_fd, length)
+            except OSError:
+                shutil.copyfileobj(src, dst, length=length)
+                return
+            if n == 0:
+                return
 
     def write_tensor_data(self, tensor: np.ndarray[Any, Any], tensor_endianess: GGUFEndian | None = None) -> None:
         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
@@ -476,7 +505,7 @@ class GGUFWriter:
         else:
             self.temp_file.seek(0)
 
-            shutil.copyfileobj(self.temp_file, self.fout[0 if not self.small_first_shard else 1])
+            self.copy_file_range(self.temp_file, self.fout[0 if not self.small_first_shard else 1])
             self.flush()
             self.temp_file.close()
 
