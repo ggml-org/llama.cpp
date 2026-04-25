@@ -7,6 +7,7 @@
 	} from '$lib/components/app';
 	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
 	import { getAttachmentDisplayItems } from '$lib/utils';
+	import { isMcpPrompt, isMcpResource } from '$lib/utils/attachment-display';
 
 	interface Props {
 		class?: string;
@@ -55,7 +56,7 @@
 		event?.preventDefault();
 
 		// Find the index of the clicked item among non-MCP attachments
-		const nonMcpItems = displayItems.filter((i) => !i.isMcpPrompt && !i.isMcpResource);
+		const nonMcpItems = displayItems.filter((i) => !isMcpPrompt(i) && !isMcpResource(i));
 		const index = nonMcpItems.findIndex((i) => i.id === item.id);
 
 		previewFocusIndex = index >= 0 ? index : 0;

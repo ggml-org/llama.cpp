@@ -7,6 +7,7 @@
 		MCPResourceAttachment
 	} from '$lib/types';
 	import { isPdfFile } from '$lib/utils';
+	import { isMcpPrompt, isMcpResource } from '$lib/utils/attachment-display';
 	import {
 		ChatAttachmentsItemMcpPrompt,
 		ChatAttachmentsItemMcpResource,
@@ -58,7 +59,7 @@
 	}
 </script>
 
-{#if item.isMcpPrompt}
+{#if isMcpPrompt(item)}
 	{@const mcpPrompt =
 		item.attachment?.type === AttachmentType.MCP_PROMPT
 			? (item.attachment as DatabaseMessageExtraMcpPrompt)
@@ -82,7 +83,7 @@
 			onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
 		/>
 	{/if}
-{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
+{:else if isMcpResource(item)}
 	{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
 
 	<ChatAttachmentsItemMcpResource

@@ -25,6 +25,7 @@
 		formatFileSize
 	} from '$lib/utils';
 	import { convertPDFToImage } from '$lib/utils/browser-only';
+	import { isMcpPrompt, isMcpResource } from '$lib/utils/attachment-display';
 	import { modelsStore } from '$lib/stores/models.svelte';
 
 	interface PreviewItem {
@@ -36,6 +37,7 @@
 		attachment?: DatabaseMessageExtra;
 		textContent?: string;
 		isImage: boolean;
+		isAudio: boolean;
 	}
 
 	interface Props {
@@ -56,11 +58,12 @@
 
 	let allItems = $derived(
 		getAttachmentDisplayItems({ uploadedFiles, attachments })
-			.filter((item) => !item.isMcpPrompt && !item.isMcpResource)
+			.filter((item) => !isMcpPrompt(item) && !isMcpResource(item))
 			.map(
 				(item): PreviewItem => ({
 					...item,
-					isImage: isImageFile(item.attachment, item.uploadedFile)
+					isImage: isImageFile(item.attachment, item.uploadedFile),
+					isAudio: isAudioFile(item.attachment, item.uploadedFile)
 				})
 			)
 	);
@@ -174,8 +177,19 @@
 	}
 
 	$effect(() => {
+		void currentIndex; // Needed to reset PDF state on every navigation, including PDF→PDF case
+
 		resetPdfState();
 	});
+
+	function getFileExtension(name: string): string {
+		const parts = name.split('.');
+		if (parts.length > 1) {
+			return parts.pop()?.toUpperCase() ?? '';
+		}
+
+		return '';
+	}
 
 	async function loadPdfImages() {
 		if (!isPdf || pdfImages.length > 0 || pdfImagesLoading || !currentItem) return;
@@ -226,6 +240,8 @@
 	}
 
 	$effect(() => {
+		// re-run on every navigation (handles PDF→PDF case)
+		void currentIndex;
 		if (isPdf && pdfViewMode === 'pages') {
 			loadPdfImages();
 		}
@@ -247,19 +263,23 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="{className} flex flex-col text-white">
 	<div class="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
-		<Button
-			variant="secondary"
-			size="icon"
-			class="absolute top-1/2 left-4 z-10 h-8 w-8 -translate-y-1/2 rounded-full bg-background/5 p-0 text-white!"
-			onclick={prev}
-			aria-label="Previous"
-		>
-			<ChevronLeft class="size-4" />
-		</Button>
+		{#if allItems.length > 1}
+			<Button
+				variant="secondary"
+				size="icon"
+				class="absolute top-1/2 left-4 z-10 h-8 w-8 -translate-y-1/2 rounded-full bg-background/5 p-0 text-white!"
+				onclick={prev}
+				aria-label="Previous"
+			>
+				<ChevronLeft class="size-4" />
+			</Button>
+		{/if}
 
 		<div class="flex h-full w-full flex-col items-center justify-start overflow-auto py-4">
 			{#if currentItem}
-				<div class="sticky top-0 z-[20] mb-4 rounded-lg px-4 py-2 text-center backdrop-blur-md">
+				<div
+					class="sticky top-0 z-[20] mb-4 rounded-lg bg-black/5 px-4 py-2 text-center backdrop-blur-md"
+				>
 					<p class="font-medium text-white">{displayName}</p>
 
 					<p class="text-xs text-white/60">{fileSize}</p>
@@ -355,19 +375,19 @@
 							</div>
 						</div>
 					{:else if pdfImages.length > 0}
-						<div class="max-h-full space-y-4 overflow-auto">
-							{#each pdfImages as image, index (image)}
-								<div class="text-center">
-									<p class="mb-2 text-sm text-white/50">Page {index + 1}</p>
+						<!-- <div class="flex flex-1 flex-col overflow-auto px-4 pb-4"> -->
+						{#each pdfImages as image, index (image)}
+							<p class="mb-2 text-sm text-white/50">Page {index + 1}</p>
 
-									<img
-										src={image}
-										alt="PDF Page {index + 1}"
-										class="mx-auto max-w-full rounded-lg shadow-lg"
-									/>
-								</div>
-							{/each}
-						</div>
+							<img
+								src={image}
+								alt="PDF Page {index + 1}"
+								class="mx-auto max-w-[85vw] rounded-lg shadow-lg"
+							/>
+
+							<div class="h-4"></div>
+						{/each}
+						<!-- </div> -->
 					{:else}
 						<div class="flex flex-1 items-center justify-center p-8">
 							<div class="text-center">
@@ -414,40 +434,55 @@
 					</div>
 				{/if}
 			{/if}
-			<div class="sticky bottom-0 z-10 mt-4 flex-shrink-0 backdrop-blur-md">
-				<HorizontalScrollCarousel class="max-w-full">
-					{#each allItems as item, index (item.id)}
-						<button
-							data-thumbnail-index={index}
-							class={[
-								'relative flex-shrink-0 cursor-pointer overflow-hidden rounded border-2 transition-all hover:opacity-90',
-								index === currentIndex ? 'border-white' : 'border-transparent opacity-50',
-								'[&:not(:first-child)]:last:mr-4 [&:not(:last-child)]:first:ml-4'
-							]}
-							onclick={() => onNavigate(index)}
-							aria-label={`Go to ${item.name}`}
-						>
-							{#if item.isImage && item.preview}
-								<img src={item.preview} alt={item.name} class="h-12 w-12 object-cover" />
-							{:else}
-								<div class="flex h-12 w-12 items-center justify-center bg-white/10">
-									<span class="text-xs text-white/70">File</span>
-								</div>
-							{/if}
-						</button>
-					{/each}
-				</HorizontalScrollCarousel>
-			</div>
+
+			{#if allItems.length > 1}
+				<div class="sticky bottom-0 z-10 mt-4 flex-shrink-0">
+					<HorizontalScrollCarousel class="max-w-full">
+						{#each allItems as item, index (item.id)}
+							<button
+								data-thumbnail-index={index}
+								class={[
+									'relative flex-shrink-0 cursor-pointer overflow-hidden rounded border-2 bg-black/80 backdrop-blur-sm transition-all hover:opacity-90',
+									index === currentIndex ? 'border-white' : 'border-transparent opacity-60',
+									'[&:not(:first-child)]:last:mr-4 [&:not(:last-child)]:first:ml-4'
+								]}
+								onclick={() => onNavigate(index)}
+								aria-label={`Go to ${item.name}`}
+							>
+								{#if item.isImage && item.preview}
+									<img src={item.preview} alt={item.name} class="h-12 w-12 object-cover" />
+								{:else}
+									<div
+										class="bg-foreground-muted/50 flex h-12 w-12 flex-col items-center justify-center gap-0.5 py-1"
+									>
+										{#if item.isAudio}
+											<Music class="h-4 w-4 text-white/70" />
+										{:else}
+											<FileText class="h-4 w-4 text-white/70" />
+										{/if}
+
+										<span class="font-mono text-[9px] text-white/60"
+											>{getFileExtension(item.name)}</span
+										>
+									</div>
+								{/if}
+							</button>
+						{/each}
+					</HorizontalScrollCarousel>
+				</div>
+			{/if}
 		</div>
 
-		<Button
-			variant="secondary"
-			size="icon"
-			class="absolute top-1/2 right-4 z-10 h-8 w-8 -translate-y-1/2 rounded-full bg-background/5 p-0 text-white!"
-			onclick={next}
-			aria-label="Next"
-		>
-			<ChevronRight class="size-4" />
-		</Button>
+		{#if allItems.length > 1}
+			<Button
+				variant="secondary"
+				size="icon"
+				class="absolute top-1/2 right-4 z-10 h-8 w-8 -translate-y-1/2 rounded-full bg-background/5 p-0 text-white!"
+				onclick={next}
+				aria-label="Next"
+			>
+				<ChevronRight class="size-4" />
+			</Button>
+		{/if}
 	</div>
 </div>

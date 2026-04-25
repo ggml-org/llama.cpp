@@ -74,7 +74,7 @@
 {#snippet textPreview(content: string)}
 	<div class="relative">
 		<div
-			class="overflow-hidden font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground {!readonly
+			class="font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground {!readonly
 				? 'max-h-3rem line-height-1.2'
 				: ''}"
 		>
@@ -115,7 +115,7 @@
 	<button
 		class="rounded-lg border border-border bg-muted p-3 {className} cursor-pointer {readonly
 			? 'w-full max-w-2xl transition-shadow hover:shadow-md'
-			: `group relative text-left ${textContent ? 'max-h-24 max-w-72' : 'max-w-36'}`}"
+			: `group relative text-left ${textContent ? 'max-h-24 max-w-72' : 'max-w-36'}`} overflow-hidden"
 		{onclick}
 		aria-label={readonly ? `Preview ${name}` : undefined}
 		type="button"
@@ -124,7 +124,7 @@
 			{@render removeButton()}
 		{/if}
 
-		<div class={!readonly ? 'pr-8' : ''}>
+		<div class={[!readonly && 'pr-8', 'overflow-hidden']}>
 			{#if readonly}
 				<div class="flex items-start gap-3">
 					<div class="flex min-w-0 flex-1 flex-col items-start text-left">
@@ -154,7 +154,7 @@
 	>
 		{@render fileIcon()}
 
-		<div class="flex flex-col gap-0.5">
+		<div class="flex flex-col items-start gap-0.5">
 			<span
 				class="max-w-24 truncate text-sm font-medium text-foreground {readonly
 					? ''

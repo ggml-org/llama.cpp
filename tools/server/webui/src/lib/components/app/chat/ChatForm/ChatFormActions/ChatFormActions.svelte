@@ -16,11 +16,11 @@
 
 	interface Props {
 		canSend?: boolean;
+		canSubmit?: boolean;
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
 		isRecording?: boolean;
-		hasText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
@@ -32,11 +32,11 @@
 
 	let {
 		canSend = false,
+		canSubmit = false,
 		class: className = '',
 		disabled = false,
 		isLoading = false,
 		isRecording = false,
-		hasText = false,
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
@@ -68,7 +68,7 @@
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
 	let shouldShowRecordButton = $derived(
-		hasAudioModality && !hasText && !hasAudioAttachments && currentConfig.autoMicOnEmpty
+		hasAudioModality && !canSubmit && !hasAudioAttachments && currentConfig.autoMicOnEmpty
 	);
 
 	let selectorModelRef:
@@ -108,7 +108,7 @@
 		useGlobalSelection
 	/>
 
-	{#if isLoading && !hasText}
+	{#if isLoading && !canSubmit}
 		<Button
 			type="button"
 			variant="secondary"
