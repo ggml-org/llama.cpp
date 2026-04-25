@@ -2,20 +2,14 @@
 ::  Copyright (C) 2024 Intel Corporation
 ::  SPDX-License-Identifier: MIT
 
-
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-REM MIT license
-REM Copyright (C) 2024 Intel Corporation
-REM SPDX-License-Identifier: MIT
-
-set "BIN_FILE=.\build\bin\llama-completion.exe"
+set "BIN_FILE=.\build\bin\llama-server.exe"
 set "SEED=0"
 set "GPUS_SETTING="
 
-set "INPUT_PROMPT=Building a website can be done in 10 simple steps:^nStep 1:"
-set "MODEL_FILE=..\models\llama-2-7b.Q4_0.gguf"
+set "MODEL_FILE=..\models\Qwen3.5-4B-Q4_0.gguf"
 set "NGL=99"
 set "CONTEXT=4096"
 set "GGML_SYCL_DEVICE=-1"
@@ -37,21 +31,6 @@ if /I "%~1"=="-c" (
 if /I "%~1"=="--context" (
   if "%~2"=="" goto missing_value
   set "CONTEXT=%~2"
-  shift
-  shift
-  goto parse_args
-)
-
-if /I "%~1"=="-p" (
-  if "%~2"=="" goto missing_value
-  set "INPUT_PROMPT=%~2"
-  shift
-  shift
-  goto parse_args
-)
-if /I "%~1"=="--promote" (
-  if "%~2"=="" goto missing_value
-  set "INPUT_PROMPT=%~2"
   shift
   shift
   goto parse_args
@@ -152,7 +131,6 @@ echo.
 echo Options:
 echo   -h, --help    Display this help message and exit.
 echo   -c, --context ^<value^>    Set context length. Bigger need more memory.
-echo   -p, --promote ^<value^>    Prompt to start generation with.
 echo   -m, --model   ^<value^>    Full model file path.
 echo   -mg,--main-gpu ^<value^>   Set main GPU ID (0 - n) for single GPU mode.
 echo   -sm,--split-mode ^<value^> How to split the model across multiple GPUs, one of:
@@ -193,9 +171,9 @@ if not "%GGML_SYCL_DEVICE%"=="-1" (
   set "GPUS_SETTING=-sm %SPLIT_MODE%"
 )
 
-echo run cmd: ZES_ENABLE_SYSMAN=1 %BIN_FILE% -m %MODEL_FILE% -no-cnv -p "%INPUT_PROMPT%" -n 200 -e -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --mmap
+echo run cmd: ZES_ENABLE_SYSMAN=1 %BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --mmap --host 0.0.0.0 --port 8000
 set "ZES_ENABLE_SYSMAN=1"
-%BIN_FILE% -m "%MODEL_FILE%" -no-cnv -p "%INPUT_PROMPT%" -n 200 -e -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --mmap
+%BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --mmap --host 0.0.0.0 --port 8000
 
 endlocal
 
