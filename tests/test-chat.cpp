@@ -2181,6 +2181,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                     R"({"city": "Paris"})"))
                 .run();
         }
+
+        // Negative regression: stray <|tool_call> in content with no real tool
+        // call following must round-trip as content with zero tool_calls.
+        tst.test(
+                "<|channel>thought\n"
+                "Considering the user's question\n"
+                "<channel|>\n"
+                "The <|tool_call> token starts a tool call. "
+                "Let me know if you want me to use one.\n")
+            .tools({ get_time_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg(
+                "The <|tool_call> token starts a tool call. "
+                "Let me know if you want me to use one.\n",
+                "Considering the user's question"))
+            .run();
     }
 
     {
