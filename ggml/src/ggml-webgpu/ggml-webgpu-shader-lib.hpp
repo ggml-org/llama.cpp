@@ -98,6 +98,29 @@ struct ggml_webgpu_ssm_conv_shader_decisions {
     uint32_t tokens_per_wg;
 };
 
+struct ggml_webgpu_ssm_scan_pipeline_key {
+    int type;
+    int d_state;
+
+    bool operator==(const ggml_webgpu_ssm_scan_pipeline_key & other) const {
+        return type == other.type && d_state == other.d_state;
+    }
+};
+
+struct ggml_webgpu_ssm_scan_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_ssm_scan_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.type);
+        ggml_webgpu_hash_combine(seed, key.d_state);
+        return seed;
+    }
+};
+
+struct ggml_webgpu_ssm_scan_shader_decisions {
+    uint32_t wg_size;
+    uint32_t tokens_per_tile;
+};
+
 /** Argsort **/
 
 struct ggml_webgpu_argsort_shader_lib_context {
@@ -921,6 +944,8 @@ class ggml_webgpu_shader_lib {
         solve_tri_pipelines;  // type
     std::unordered_map<ggml_webgpu_ssm_conv_pipeline_key, webgpu_pipeline, ggml_webgpu_ssm_conv_pipeline_key_hash>
         ssm_conv_pipelines;   // type/vectorized
+    std::unordered_map<ggml_webgpu_ssm_scan_pipeline_key, webgpu_pipeline, ggml_webgpu_ssm_scan_pipeline_key_hash>
+        ssm_scan_pipelines;   // type/d_state
     std::unordered_map<ggml_webgpu_gated_delta_net_pipeline_key,
                        webgpu_pipeline,
                        ggml_webgpu_gated_delta_net_pipeline_key_hash>
@@ -1431,6 +1456,53 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         ssm_conv_pipelines[key]  = pipeline;
         return ssm_conv_pipelines[key];
+    }
+
+    webgpu_pipeline get_ssm_scan_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_ssm_scan_pipeline_key key = {};
+        key.type                              = context.dst->type;
+        key.d_state                           = (int) context.src0->ne[0];
+
+        auto it = ssm_scan_pipelines.find(key);
+        if (it != ssm_scan_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "ssm_scan";
+
+        switch (key.type) {
+            case GGML_TYPE_F32:
+                variant += "_f32";
+                break;
+            default:
+                GGML_ABORT("Unsupported type for ssm_scan shader");
+        }
+
+        const uint32_t wg_size = (uint32_t) key.d_state;
+
+        constexpr uint32_t tokens_per_tile = 4u;
+
+        defines.push_back("WG_SIZE=" + std::to_string(wg_size) + "u");
+        defines.push_back("TOKENS_PER_TILE=" + std::to_string(tokens_per_tile) + "u");
+
+        if (context.supports_subgroups) {
+            defines.push_back("USE_SUBGROUP_REDUCTION");
+            variant += "_sg_reduce";
+        } else {
+            variant += "_wg_reduce";
+        }
+
+        variant += "_d" + std::to_string(key.d_state);
+
+        auto processed             = preprocessor.preprocess(wgsl_ssm_scan, defines);
+        auto decisions             = std::make_shared<ggml_webgpu_ssm_scan_shader_decisions>();
+        decisions->wg_size         = wg_size;
+        decisions->tokens_per_tile = tokens_per_tile;
+        webgpu_pipeline pipeline   = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context           = decisions;
+        ssm_scan_pipelines[key]    = pipeline;
+        return ssm_scan_pipelines[key];
     }
 
     webgpu_pipeline get_gated_delta_net_pipeline(const ggml_webgpu_shader_lib_context & context) {
