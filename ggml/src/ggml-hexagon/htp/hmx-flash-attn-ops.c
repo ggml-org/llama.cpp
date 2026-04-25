@@ -167,7 +167,7 @@ static int hmx_fa_find_chunk_size(size_t * Br_out,
     const size_t Bc_limit     = can_pipeline
                                     ? hex_align_down(kv_len / FA_MIN_KV_BLOCKS, bc_unit)
                                     : (kv_len >= bc_unit ? hex_align_down(kv_len, bc_unit) : bc_unit);
-    // Cost coefficients calibrated from profiling 
+    // Cost coefficients calibrated from profiling
     const size_t c_q_fixed    = 1400;  // per-Q-block: q_load + epilogue o_update + o_norm + o_store
     const size_t c_iter_fixed = 200;   // per-KV-iter: HMX queue push/pop + DMA pop + barriers
 
@@ -943,6 +943,13 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
 }
 
 // Serial m/l update + build_D.  Must run after softmax barrier (s_rowmax written by all threads).
+//
+// noinline: function boundary acts as a hard compiler barrier so the (size_t)addr scatter
+// intrinsics inside cannot be hoisted past the call site.  Mirrors the structural protection
+// matmul gets for free via worker_pool function-pointer dispatch.  Without this, the compiler
+// can reorder the scatter past the subsequent hmx_queue_push and the HMX-queue worker thread
+// reads stale VTCM (PPL → ~vocab-size).
+__attribute__((noinline))
 static void fa_ml_update_and_build_d(struct hmx_fa_context * factx,
                                       size_t n_rows_g, size_t n_row_tiles, size_t n_row_tiles_g_br) {
     // Reuse s_rowmax buffer for exp(m_diff) — safe because softmax is fully complete
@@ -980,8 +987,47 @@ static void fa_ml_update_and_build_d(struct hmx_fa_context * factx,
         __fp16 * out_base = factx->vtcm_d_tiles + i * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
         Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets,
                            v_content);
+        // Compiler barrier — Q6_vscatter takes (size_t)addr; without this the
+        // compiler may not recognize the volatile read below as aliasing and
+        // could reorder it before the scatter, defeating the HW drain.
+        __asm__ __volatile__("" ::: "memory");
+        // Per-tile drain: scatter regions are disjoint (stride > tile size),
+        // so a single drain at tile 0 does NOT retire later tiles' entries.
+        (void) *(volatile HVX_Vector *) out_base;
     }
-    (void) *(volatile HVX_Vector *) (factx->vtcm_d_tiles);
+}
+
+// Build D = diag(1/l) tile for the final O = D @ O normalization.
+//
+// noinline: same rationale as fa_ml_update_and_build_d — keeps Q6_vscatter from
+// being hoisted past the subsequent hmx_queue_push at the o_norm call site.
+__attribute__((noinline))
+static void fa_build_d_diag_inv_l(struct hmx_fa_context * factx,
+                                   size_t n_row_tiles, size_t n_row_tiles_g_br) {
+    const HVX_Vector     v_offsets = *(const HVX_Vector *) d_tile_scatter_offsets;
+    const HVX_VectorPred q_32_mask = Q6_Q_vsetq_R(32 * sizeof(__fp16));
+
+    HVX_Vector v_content = Q6_V_vzero();
+    for (size_t i = 0; i < n_row_tiles; ++i) {
+        if ((i % 2) == 0) {
+            HVX_Vector       v_l_hf = Q6_Vhf_equals_Vqf16(factx->vtcm_l_vec[i / 2]);
+            HVX_VectorPair   vp_l   = hvx_vec_f16_to_f32_shuff(v_l_hf);
+            const HVX_Vector one    = hvx_vec_splat_f32(1.0f);
+            HVX_Vector       inv_lo =
+                Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_lo_W(vp_l))));
+            HVX_Vector inv_hi =
+                Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_hi_W(vp_l))));
+            v_content = hvx_vec_f32_to_f16_shuff(inv_lo, inv_hi);
+        } else {
+            v_content = Q6_V_vror_VR(v_content, 64);
+        }
+
+        __fp16 * out_base = factx->vtcm_d_tiles + i * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+        Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
+        // Compiler barrier — see fa_ml_update_and_build_d for rationale.
+        __asm__ __volatile__("" ::: "memory");
+        (void) *(volatile HVX_Vector *) out_base;
+    }
 }
 
 // Combined: multi-thread softmax -> barrier -> serial m/l update + build_D
@@ -1744,30 +1790,7 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 // ---- Final normalization: O = diag(1/l) @ O ----
                 TIMER_START(o_norm);
                 {
-                    // Build D = diag(1/l) — pure HVX, safe on main thread
-                    const HVX_Vector     v_offsets = *(const HVX_Vector *) d_tile_scatter_offsets;
-                    const HVX_VectorPred q_32_mask = Q6_Q_vsetq_R(32 * sizeof(__fp16));
-
-                    HVX_Vector v_content = Q6_V_vzero();
-                    for (size_t i = 0; i < n_row_tiles; ++i) {
-                        if ((i % 2) == 0) {
-                            HVX_Vector       v_l_hf = Q6_Vhf_equals_Vqf16(factx.vtcm_l_vec[i / 2]);
-                            HVX_VectorPair   vp_l   = hvx_vec_f16_to_f32_shuff(v_l_hf);
-                            const HVX_Vector one    = hvx_vec_splat_f32(1.0f);
-                            HVX_Vector       inv_lo =
-                                Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_lo_W(vp_l))));
-                            HVX_Vector inv_hi =
-                                Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_hi_W(vp_l))));
-                            v_content = hvx_vec_f32_to_f16_shuff(inv_lo, inv_hi);
-                        } else {
-                            v_content = Q6_V_vror_VR(v_content, 64);
-                        }
-
-                        __fp16 * out_base = factx.vtcm_d_tiles + i * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-                        Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
-                    }
-
-                    (void) *(volatile HVX_Vector *) (factx.vtcm_d_tiles);
+                    fa_build_d_diag_inv_l(&factx, n_row_tiles, n_row_tiles_g_br);
 
                     // HMX: O_final = diag(1/l) @ O_prev
                     if (factx.use_pipeline) {
