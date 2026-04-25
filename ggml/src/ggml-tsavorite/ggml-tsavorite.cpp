@@ -118,15 +118,18 @@ auto &loadResult_mult         = g_rt.loadResult_mult;
 auto &loadResult_rms_norm     = g_rt.loadResult_rms_norm;
 } // anonymous namespace
 
+constexpr int kMaxBacktraceFrames = 64;
+constexpr int kSignalExitBase     = 128;
+
 static void tsavorite_sig_handler(int sig) {
-    void *array[64];
-    int size = backtrace(array, 64);
+    void *array[kMaxBacktraceFrames];
+    int size = backtrace(array, kMaxBacktraceFrames);
 
     fprintf(stderr, "\n\n=== TSAVORITE FATAL SIGNAL %d ===\n", sig);
     backtrace_symbols_fd(array, size, STDERR_FILENO);
     fprintf(stderr, "=== END BACKTRACE ===\n");
 
-    _exit(128 + sig); // hard exit, no cleanup
+    _exit(kSignalExitBase + sig); // hard exit, no cleanup
 }
 
 static void tsavorite_install_signal_handlers() {
@@ -538,7 +541,6 @@ static void tsi_load_all_blobs() {
         char name_add[64];
         char name_mult[64];
         char name_rms[64];
-       // packed_args[i] = tsi_alloc(100*8, tsi::MemorySpace::SHARED_DRAM_TS);
 
         snprintf(name_add,  sizeof(name_add),  "txe_add_dev%u",  i);
         snprintf(name_mult, sizeof(name_mult), "txe_mult_dev%u", i);
@@ -630,6 +632,11 @@ static inline void tsi_init_per_txe_state_once() {
     // allocate device_free[]
     if (!device_free) {
         device_free = (bool*)calloc(num_of_txes, sizeof(bool));
+        if (!device_free) {
+            fprintf(stderr, "ERROR: failed to allocate device_free array (calloc failed)\n");
+            tsi_cleanup();
+            abort();
+        }
         for (uint32_t i = 0; i < num_of_txes; ++i) device_free[i] = true;
     }
 
@@ -1161,12 +1168,12 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
     void *commandList = tsi_create_command_list(deviceId);
 
     if ((uint32_t)deviceId >= num_of_txes) {
-        printf("ERROR: deviceId=%d out of range num_of_txes=%u\n", deviceId, num_of_txes);
+        fprintf(stderr, "ERROR: deviceId=%d out of range num_of_txes=%u\n", deviceId, num_of_txes);
         tsi_cleanup();
         abort();
     }
     if (packed_args.size() != num_of_txes || !packed_args[deviceId]) {
-        printf("ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
+        fprintf(stderr, "ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
            deviceId, packed_args.size(), num_of_txes);
         tsi_cleanup();
         abort();
@@ -1192,7 +1199,7 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
     p[idx++] = (int64_t)C->shape[0];
 
     if (idx != kPackedArgsI64) {
-        printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        fprintf(stderr, "ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
         tsi_cleanup();
         abort();
     }
@@ -1201,7 +1208,7 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add[deviceId], packedHandle);
 
     if (!blobExecuteCmd) {
-        printf("tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
+        fprintf(stderr, "tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
                                      (unsigned long)deviceId, (char *)blobDescriptor_add[deviceId]);
         tsi_cleanup();
         abort();
@@ -1220,7 +1227,7 @@ static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
        #if NEW_HOST_CODE
            void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, 0);
            if (!commandList) {
-                printf("Command List Empt for ADD OPERATION on device 0\n");
+                fprintf(stderr, "Command List Empt for ADD OPERATION on device 0\n");
                 tsi_cleanup();
                 abort();
             }
@@ -1242,7 +1249,7 @@ static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
    // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
    void *commandList = _mlir_ciface_txe_add_host_internal(a, b, res, deviceId);
    if (!commandList) {
-       printf("Command List Empt for ADD on device %d\n", deviceId);
+       fprintf(stderr, "Command List Empt for ADD on device %d\n", deviceId);
        release_device(deviceId);
        tsi_cleanup();
        abort();
@@ -1267,13 +1274,13 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
     void *commandList = tsi_create_command_list(deviceId);
 
     if ((uint32_t)deviceId >= num_of_txes) {
-        printf("ERROR: deviceId=%d out of range num_of_txes=%u\n", deviceId, num_of_txes);
+        fprintf(stderr, "ERROR: deviceId=%d out of range num_of_txes=%u\n", deviceId, num_of_txes);
         tsi_cleanup();
         abort();
     }
 
     if (packed_args.size() != num_of_txes || !packed_args[deviceId]) {
-        printf("ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
+        fprintf(stderr, "ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
            deviceId, packed_args.size(), num_of_txes);
         tsi_cleanup();
         abort();
@@ -1299,7 +1306,7 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
     p[idx++] = (int64_t)C->shape[0];
 
     if (idx != kPackedArgsI64) {
-        printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        fprintf(stderr, "ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
         tsi_cleanup();
         abort();
     }
@@ -1307,7 +1314,7 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
     const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed_args[deviceId]);
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult[deviceId], packedHandle);
     if (!blobExecuteCmd) {
-        printf("tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
+        fprintf(stderr, "tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
                                      (unsigned long)deviceId, (char *)blobDescriptor_mult[deviceId]);
         tsi_cleanup();
         abort();
@@ -1325,7 +1332,7 @@ static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
         #if NEW_HOST_CODE
             void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, 1);
             if (!commandList) {
-                printf("Command List Empt for MUL OPERATION on device 0\n");
+                fprintf(stderr, "Command List Empt for MUL OPERATION on device 0\n");
                 tsi_cleanup();
                 abort();
             }
@@ -1341,7 +1348,7 @@ static void _mlir_ciface_txe_mult_host_new(void *a, void *b, void *res) {
    // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
    void *commandList = _mlir_ciface_txe_mult_host_internal(a, b, res, deviceId);
    if (!commandList) {
-        printf("Command List Empt for MUL OPERATION on device %d\n", deviceId);
+        fprintf(stderr, "Command List Empt for MUL OPERATION on device %d\n", deviceId);
         release_device(deviceId);
         tsi_cleanup();
         abort();
@@ -1366,13 +1373,13 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
     void *commandList = tsi_create_command_list(deviceId);
 
     if ((uint32_t)deviceId >= num_of_txes) {
-        printf("ERROR: deviceId=%d out of range num_of_txes=%u\n", deviceId, num_of_txes);
+        fprintf(stderr, "ERROR: deviceId=%d out of range num_of_txes=%u\n", deviceId, num_of_txes);
         tsi_cleanup();
         abort();
     }
 
     if (packed_args.size() != num_of_txes || !packed_args[deviceId]) {
-        printf("ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
+        fprintf(stderr, "ERROR: packed_args not initialized for deviceId=%d (size=%zu, num_of_txes=%u)\n",
            deviceId, packed_args.size(), num_of_txes);
         tsi_cleanup();
         abort();
@@ -1400,7 +1407,7 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
     p[idx++] = (int64_t)C->offset;
 
     if (idx != kPackedArgsI64) {
-        printf("ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
+        fprintf(stderr, "ERROR: packed-args idx=%d expected=%ld\n", idx, (long)kPackedArgsI64);
         tsi_cleanup();
         abort();
     }
@@ -1408,7 +1415,7 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
     const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed_args[deviceId]);
     void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm[deviceId], packedHandle);
     if (!blobExecuteCmd) {
-        printf("tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
+        fprintf(stderr, "tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
                                      (unsigned long)deviceId, (char *)blobDescriptor_rms_norm[deviceId]);
         tsi_cleanup();
         abort();
@@ -1426,7 +1433,7 @@ static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
         #if NEW_HOST_CODE
             void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, 0);
             if (!commandList) {
-                printf("Command List Empt for RMS OPERATION  on device 0\n");
+                fprintf(stderr, "Command List Empt for RMS OPERATION  on device 0\n");
                 tsi_cleanup();
                 abort();
             }
@@ -1442,7 +1449,7 @@ static void _mlir_ciface_txe_rms_norm_host_new(void *a, void *b, void *buf) {
     // IMPORTANT: pack args NOW while MemRefDescriptor fields are still correct
     void *commandList = _mlir_ciface_txe_rms_norm_host_internal(a, b, buf, deviceId);
     if (!commandList) {
-        printf("Command List Empt for RMS OPERATION on device %d\n", deviceId);
+        fprintf(stderr, "Command List Empt for RMS OPERATION on device %d\n", deviceId);
         release_device(deviceId);
         tsi_cleanup();
         abort();
