@@ -70,6 +70,22 @@ static ggml_et_cpu_compare_config sum_rows_cpu_compare_config = {
     /* .max_log_elements = */ 4096
 };
 
+static ggml_et_cpu_compare_config clamp_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-6f,
+    /* .max_log_elements = */ 4096
+};
+
+static ggml_et_cpu_compare_config mean_cpu_compare_config = {
+    /* .enabled = */ false,
+    /* .use_cpu_result = */ false,
+    /* .log_differences = */ true,
+    /* .tolerance = */ 1e-5f,
+    /* .max_log_elements = */ 4096
+};
+
 static ggml_et_cpu_compare_config sqr_cpu_compare_config = {
     /* .enabled = */ false,
     /* .use_cpu_result = */ false,
@@ -371,6 +387,105 @@ bool ggml_et_op_sum_rows(ggml_backend_et_device_context* dev_ctx, const ggml_ten
     }
 
     ET_PERF_END("SUM_ROWS", "sum_rows_f32", node);
+    return kernel_result;
+}
+
+bool ggml_et_op_mean(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for MEAN operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: MEAN operation missing required input\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: MEAN operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    ggml_et_mean_params params;
+    params.src0 = *node->src[0];
+    params.dst = *node;
+
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (mean_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_MEAN)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for MEAN operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "mean_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &mean_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for MEAN operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END("MEAN", "mean_f32", node);
+    return kernel_result;
+}
+
+bool ggml_et_op_clamp(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node) {
+        GGML_LOG_ERROR("ET: Invalid parameters for CLAMP operation\n");
+        return false;
+    }
+
+    if (!node->src[0]) {
+        GGML_LOG_ERROR("ET: CLAMP operation missing required input\n");
+        return false;
+    }
+
+    if (node->type != GGML_TYPE_F32 ||
+        node->src[0]->type != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: CLAMP operation with unsupported types: dst=%s src0=%s\n",
+                       ggml_type_name(node->type),
+                       ggml_type_name(node->src[0]->type));
+        return false;
+    }
+
+    ggml_et_clamp_params params;
+    params.src0 = *node->src[0];
+    params.dst  = *node;
+    // op_params layout per ggml.c::ggml_clamp: { min, max } as floats
+    memcpy(&params.min_val, (const float*)node->op_params + 0, sizeof(float));
+    memcpy(&params.max_val, (const float*)node->op_params + 1, sizeof(float));
+
+    ggml_et_cpu_compare_ctx cpu_cmp_ctx;
+    bool cpu_comparison_active = false;
+    if (clamp_cpu_compare_config.enabled) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_CLAMP)) {
+            cpu_comparison_active = true;
+        } else {
+            GGML_LOG_WARN("ET: Failed to initialize CPU comparison for CLAMP operation\n");
+        }
+    }
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "clamp_f32", &params, sizeof(params), 0xFFFFFFFF);
+
+    if (cpu_comparison_active) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &clamp_cpu_compare_config)) {
+            GGML_LOG_WARN("ET: CPU comparison failed for CLAMP operation\n");
+        }
+        ggml_et_cpu_compare_free(&cpu_cmp_ctx);
+    }
+
+    ET_PERF_END("CLAMP", "clamp_f32", node);
     return kernel_result;
 }
 
@@ -1809,7 +1924,15 @@ bool ggml_et_op_repeat(ggml_backend_et_device_context* dev_ctx, const ggml_tenso
     if (node->type == GGML_TYPE_F32 &&
         node->src[0]->type == GGML_TYPE_F32) {
 
-        kernel_name = "repeat_f32";
+        // No-op REPEAT (every repeat factor is 1): the output is just a copy
+        // of the input. Route to cont_f32, whose contiguous fast path handles
+        // arbitrary sizes (including those rejected by repeat_f32's gate,
+        // e.g. ne[0]=1).
+        if (ggml_are_same_shape(node->src[0], node)) {
+            kernel_name = "cont_f32";
+        } else {
+            kernel_name = "repeat_f32";
+        }
 
     } else {
         GGML_LOG_ERROR("ET: REPEAT operation with unsupported types: dst=%s src0=%s\n",
@@ -1818,6 +1941,8 @@ bool ggml_et_op_repeat(ggml_backend_et_device_context* dev_ctx, const ggml_tenso
         return false;
     }
 
+    // ggml_et_cont_params and ggml_et_repeat_params have identical layouts
+    // (just src0 + dst), so the same payload works for either kernel.
     ggml_et_repeat_params params;
     params.src0 = *node->src[0];
     params.dst  = *node;

@@ -228,6 +228,15 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         case GGML_OP_SUM_ROWS:
             ctx->cpu_dst = ggml_sum_rows(ctx->ggml_ctx, ctx->cpu_src0);
             break;
+        case GGML_OP_MEAN:
+            ctx->cpu_dst = ggml_mean(ctx->ggml_ctx, ctx->cpu_src0);
+            break;
+        case GGML_OP_CLAMP: {
+            float clamp_min, clamp_max;
+            memcpy(&clamp_min, (const float*)node->op_params + 0, sizeof(float));
+            memcpy(&clamp_max, (const float*)node->op_params + 1, sizeof(float));
+            ctx->cpu_dst = ggml_clamp(ctx->ggml_ctx, ctx->cpu_src0, clamp_min, clamp_max);
+        } break;
         case GGML_OP_GLU:
             // Extract GLU parameters from op_params (split mode only)
             {

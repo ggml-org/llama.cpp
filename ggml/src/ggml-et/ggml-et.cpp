@@ -629,6 +629,14 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_sum_rows(dev_ctx, node);
                 break;
 
+            case GGML_OP_MEAN:
+                ggml_et_op_mean(dev_ctx, node);
+                break;
+
+            case GGML_OP_CLAMP:
+                ggml_et_op_clamp(dev_ctx, node);
+                break;
+
             case GGML_OP_MUL:
                 ggml_et_op_mul(dev_ctx, node);
                 break;
@@ -828,6 +836,22 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        op->src[0]->ne[0] % 16 == 0 &&
                        ggml_is_contiguous(op->src[0]);
             break;
+        case GGML_OP_MEAN:
+            // Kernel handles arbitrary ne00 (per-row alignment guard with
+            // scalar tail), so no row-length divisibility constraint here.
+            supported = op->type == GGML_TYPE_F32 &&
+                       op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                       ggml_is_contiguous(op->src[0]);
+            break;
+        case GGML_OP_CLAMP:
+            // Element-wise; kernel distributes by cache lines and handles a
+            // scalar tail, so any contiguous F32 size is fine — including the
+            // 1×1×1×1 scalar case.
+            supported = op->type == GGML_TYPE_F32 &&
+                       op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                       ggml_is_contiguous(op) &&
+                       ggml_is_contiguous(op->src[0]);
+            break;
         case GGML_OP_UNARY:
             // Only require dim-0 contiguity (nb[0] == sizeof(float)). Higher
             // dims may be arbitrarily strided views; the kernel walks per-row
@@ -875,8 +899,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        op->nb[0] == sizeof(float) &&
                        op->src[0]->nb[0] == sizeof(float) &&
                        (op->src[1]->nb[0] == sizeof(float) || op->src[1]->ne[0] == 1) &&
-                       op->nb[1] == op->ne[0] * sizeof(float) &&
-                       op->src[0]->nb[1] == op->src[0]->ne[0] * sizeof(float);
+                       op->nb[1] == op->ne[0] * sizeof(float);
             break;
         case GGML_OP_MUL_MAT:
             // Support Q8_0 x F32 -> F32, F16 x F32 -> F32, F16 x F16 -> F32, and F32 x F32 -> F32 matrix multiplication
@@ -1325,10 +1348,18 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_REPEAT:
-            // F32 contiguous, dst ne[0] cacheline-aligned
-            // src0 ne[0] must be cacheline-aligned OR 1 (scalar broadcast)
-            // dst.ne[i] must be divisible by src0.ne[i] for all dims
+            // Two acceptable shapes:
+            //   1. No-op REPEAT (src and dst have identical shape): dispatched
+            //      to cont_f32, which handles arbitrary contiguous sizes.
+            //   2. Real REPEAT via repeat_f32 kernel: dst ne[0] cacheline-aligned,
+            //      src0 ne[0] cacheline-aligned or 1, dst.ne[i] % src0.ne[i] == 0.
             if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(op) &&
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_are_same_shape(op->src[0], op)) {
+                supported = true;
+            } else if (op->type == GGML_TYPE_F32 &&
                 op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                 (op->src[0]->ne[0] == 1 || op->src[0]->ne[0] % 16 == 0) &&
                 op->ne[0] % 16 == 0 &&
