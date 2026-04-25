@@ -43,6 +43,14 @@ struct clip_graph_youtuvl : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_yasa2 : clip_graph {
+    clip_graph_yasa2(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+
+    ggml_tensor * layer_norm_channels(ggml_tensor * inp, ggml_tensor * w, ggml_tensor * b, float eps = 1e-6f);
+    ggml_tensor * convnext_grn(ggml_tensor * inp, ggml_tensor * w, ggml_tensor * b);
+};
+
 struct clip_graph_minicpmv : clip_graph {
     clip_graph_minicpmv(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -150,6 +158,11 @@ struct clip_graph_mobilenetv5 : clip_graph {
     ggml_tensor * build_mobilenet_attn(
         ggml_tensor * inp,
         const mobilenetv5_block & block);
+};
+
+struct clip_graph_qwen3a : clip_graph {
+    clip_graph_qwen3a(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
 };
 
 struct clip_graph_kimik25 : clip_graph {

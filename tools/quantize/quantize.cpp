@@ -1,5 +1,8 @@
-#include "common.h"
 #include "llama.h"
+
+#include "build-info.h"
+#include "common.h"
+
 #include "gguf.h"
 
 #include <algorithm>
@@ -709,7 +712,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    print_build_info();
+    llama_print_build_info();
 
     if (params.dry_run) {
         fprintf(stderr, "%s: calculating quantization size for '%s' as %s", __func__, fname_inp.c_str(), ftype_str.c_str());

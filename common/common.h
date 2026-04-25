@@ -2,15 +2,15 @@
 
 #pragma once
 
+#include "llama-cpp.h"
+
 #include "ggml-opt.h"
 #include "ggml.h"
-#include "llama-cpp.h"
 
 #include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <variant>
 #include <vector>
 #include <map>
 
@@ -26,11 +26,6 @@
 
 #define die(msg)          do { fputs("error: " msg "\n", stderr);                exit(1); } while (0)
 #define die_fmt(fmt, ...) do { fprintf(stderr, "error: " fmt "\n", __VA_ARGS__); exit(1); } while (0)
-
-#define print_build_info() do {                                                                     \
-    fprintf(stderr, "%s: build = %d (%s)\n",      __func__, LLAMA_BUILD_NUMBER, LLAMA_COMMIT);      \
-    fprintf(stderr, "%s: built with %s for %s\n", __func__, LLAMA_COMPILER, LLAMA_BUILD_TARGET);    \
-} while(0)
 
 struct common_time_meas {
     common_time_meas(int64_t & t_acc, bool disable = false);
@@ -52,14 +47,6 @@ struct common_adapter_lora_info {
 };
 
 using llama_tokens = std::vector<llama_token>;
-
-// build info
-extern int LLAMA_BUILD_NUMBER;
-extern const char * LLAMA_COMMIT;
-extern const char * LLAMA_COMPILER;
-extern const char * LLAMA_BUILD_TARGET;
-
-const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
 
 struct common_control_vector_load_info;
 
@@ -287,6 +274,7 @@ struct common_params_sampling {
     std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
     std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
     std::vector<llama_token> reasoning_budget_forced;          // forced sequence (message + end tag)
+    std::string              reasoning_budget_message;         // message injected before end tag when budget exhausted
 
     bool backend_sampling = false;
 
@@ -315,15 +303,15 @@ struct common_params_speculative {
     // general-purpose speculative decoding parameters
 
     int32_t n_max   = 16; // maximum number of tokens to draft during speculative decoding
-    int32_t n_min   = 0; // minimum number of draft tokens to use for speculative decoding
+    int32_t n_min   = 0;  // minimum number of draft tokens to use for speculative decoding
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min   = 0.75f; // minimum speculative decoding probability (greedy)
 
     // ngram-based speculative decoding
 
-    uint16_t ngram_size_n     = 12; // ngram size for lookup
-    uint16_t ngram_size_m     = 48; // mgram size for speculative tokens
-    uint16_t ngram_min_hits   =  1; // minimum hits at ngram/mgram lookup for mgram to be proposed
+    uint16_t ngram_size_n   = 12; // ngram size for lookup
+    uint16_t ngram_size_m   = 48; // mgram size for speculative tokens
+    uint16_t ngram_min_hits = 1; // minimum hits at ngram/mgram lookup for mgram to be proposed
 
     std::shared_ptr<common_ngram_mod> ngram_mod;
 
@@ -433,11 +421,12 @@ struct common_params {
     // offload params
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
-    int32_t n_gpu_layers       = -1;   // number of layers to store in VRAM, -1 is auto, <= -2 is all
-    int32_t main_gpu           = 0;    // the GPU that is used for scratch and small tensors
-    float   tensor_split[128]  = {0};  // how split tensors should be distributed across GPUs
-    bool    fit_params         = true; // whether to fit unset model/context parameters to free device memory
-    int32_t fit_params_min_ctx = 4096; // minimum context size to set when trying to reduce memory use
+    int32_t n_gpu_layers       = -1;    // number of layers to store in VRAM, -1 is auto, <= -2 is all
+    int32_t main_gpu           = 0;     // the GPU that is used for scratch and small tensors
+    float   tensor_split[128]  = {0};   // how split tensors should be distributed across GPUs
+    bool    fit_params         = true;  // whether to fit unset model/context parameters to free device memory
+    bool    fit_params_print   = false; // print the estimated required memory to run the model
+    int32_t fit_params_min_ctx = 4096;  // minimum context size to set when trying to reduce memory use
 
     // margin per device in bytes for fitting parameters to free memory:
     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
@@ -579,7 +568,7 @@ struct common_params {
     int32_t n_threads_http      = -1;    // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
-    bool    clear_idle          = true;  // save and clear idle slots upon starting a new task
+    bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
     int32_t checkpoint_every_nt = 8192;  // make a checkpoint every n tokens during prefill
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
@@ -593,8 +582,6 @@ struct common_params {
     bool force_pure_content_parser = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
-    int reasoning_budget = -1;
-    std::string reasoning_budget_message; // message injected before end tag when budget exhausted
     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
 
@@ -760,6 +747,11 @@ inline bool string_starts_with(std::string_view str, std::string_view prefix) {
 }
 
 // remove when moving to c++20
+inline bool string_starts_with(std::string_view str, char prefix) {
+    return !str.empty() && str.front() == prefix;
+}
+
+// remove when moving to c++20
 inline bool string_ends_with(std::string_view str, std::string_view suffix) {
     return str.size() >= suffix.size() &&
            str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -859,7 +851,23 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_p
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
 
-std::string                   get_model_endpoint();
+// model endpoint from env
+std::string common_get_model_endpoint();
+
+//
+// Context utils
+//
+
+enum common_context_seq_rm_type {
+    COMMON_CONTEXT_SEQ_RM_TYPE_NO   = 0, // seq_rm not supported (e.g. no memory module)
+    COMMON_CONTEXT_SEQ_RM_TYPE_PART = 1, // can seq_rm partial sequences
+    COMMON_CONTEXT_SEQ_RM_TYPE_FULL = 2, // can seq_rm full sequences only
+};
+
+// check if the llama_context can remove sequences
+// note: clears the memory of the context
+common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx);
+
 
 //
 // Batch utils

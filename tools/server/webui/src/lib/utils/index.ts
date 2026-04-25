@@ -8,7 +8,7 @@
  */
 
 // API utilities
-export { getAuthHeaders, getJsonHeaders } from './api-headers';
+export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
 export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
@@ -55,7 +55,7 @@ export {
 
 // File preview utilities
 export { getFileTypeLabel } from './file-preview';
-export { getPreviewText } from './text';
+export { getPreviewText, generateConversationTitle } from './text';
 
 // File type utilities
 export {
@@ -163,6 +163,20 @@ export { runLegacyMigration, isMigrationNeeded } from './legacy-migration';
 
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
+
+// Redaction utilities
+export { redactValue } from './redact';
+
+// Request inspection utilities
+export {
+	getRequestUrl,
+	getRequestMethod,
+	getRequestBody,
+	summarizeRequestBody,
+	formatDiagnosticErrorMessage,
+	extractJsonRpcMethods,
+	type RequestBodySummary
+} from './request-helpers';
 
 // Abort signal utilities
 export {

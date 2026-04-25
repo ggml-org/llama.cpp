@@ -15,6 +15,7 @@ export const SETTINGS_KEYS = {
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
 	PDF_AS_IMAGE: 'pdfAsImage',
 	ASK_FOR_TITLE_CONFIRMATION: 'askForTitleConfirmation',
+	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
