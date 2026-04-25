@@ -4000,7 +4000,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     {
         auto tst = peg_tester("models/templates/StepFun3.5-Flash.jinja", detailed_debug);
-        
+
         tst.test("I was thinking\n</think>\nNow I'm not.").
             enable_thinking(true).
             reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK).
