@@ -128,6 +128,38 @@ fn main(
     }
 #endif
 
+#ifdef MUL_ACC_Q1_0
+#define BLOCK_SIZE 128
+#define BLOCK_SIZE_BYTES 18
+#define THREADS_PER_BLOCK 16
+#define ELEMS_PER_THREAD (BLOCK_SIZE/THREADS_PER_BLOCK)
+
+    let num_blocks = params.k / BLOCK_SIZE;
+    let thread_within_block = thread_id % THREADS_PER_BLOCK;
+    for (var block = thread_id / THREADS_PER_BLOCK; block < num_blocks; block += WG_SIZE / THREADS_PER_BLOCK) {
+        let x_base = src1_idx_base + block * BLOCK_SIZE + thread_within_block * ELEMS_PER_THREAD;
+        var x_block: array<f32, ELEMS_PER_THREAD>;
+        for (var i = 0u; i < ELEMS_PER_THREAD; i++) {
+            x_block[i] = f32(src1[x_base + i]);
+        }
+
+        for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+            let output_row = row_base + row;
+            if (output_row < params.m) {
+                let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
+                let d = f32(load_f16_at_src0(block_byte_base));
+                let q_byte = load_u32_at_src0(block_byte_base + 2u + thread_within_block) & 0xFFu;
+                var row_sum = 0.0;
+                for (var bit = 0u; bit < 8u; bit++) {
+                    let w = select(-d, d, ((q_byte >> bit) & 1u) != 0u);
+                    row_sum += w * x_block[bit];
+                }
+                acc[row] += row_sum;
+            }
+        }
+    }
+#endif
+
 #ifdef MUL_ACC_Q4_0
 #define BLOCK_SIZE 32
 #define BLOCK_SIZE_BYTES 18
