@@ -3,13 +3,17 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-io.h"
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <vector>
 
 namespace {
+
+static constexpr uint32_t DEEPSEEK4_STATE_VERSION = 1;
 
 static llama_ubatch make_dummy_ubatch() {
     llama_ubatch ubatch = {};
@@ -64,6 +68,76 @@ static void deepseek4_fill_f32_tensor(ggml_tensor * tensor, float value) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F32);
     std::vector<float> data(ggml_nelements(tensor), value);
     ggml_backend_tensor_set(tensor, data.data(), 0, ggml_nbytes(tensor));
+}
+
+static void deepseek4_write_tensor(llama_io_write_i & io, const ggml_tensor * tensor) {
+    const uint32_t present = tensor != nullptr;
+    io.write(&present, sizeof(present));
+
+    if (!present) {
+        return;
+    }
+
+    const int32_t type = static_cast<int32_t>(tensor->type);
+    const uint32_t n_dims = ggml_n_dims(tensor);
+    int64_t ne[GGML_MAX_DIMS] = {};
+    for (uint32_t i = 0; i < GGML_MAX_DIMS; ++i) {
+        ne[i] = tensor->ne[i];
+    }
+    const uint64_t nbytes = ggml_nbytes(tensor);
+
+    io.write(&type,   sizeof(type));
+    io.write(&n_dims, sizeof(n_dims));
+    io.write(ne,      sizeof(ne));
+    io.write(&nbytes, sizeof(nbytes));
+    io.write_tensor(tensor, 0, nbytes);
+}
+
+static void deepseek4_read_tensor(llama_io_read_i & io, ggml_tensor * tensor) {
+    uint32_t present;
+    io.read_to(&present, sizeof(present));
+
+    if (!present) {
+        if (tensor != nullptr) {
+            throw std::runtime_error("DeepSeek4 state is missing a runtime tensor");
+        }
+        return;
+    }
+
+    if (tensor == nullptr) {
+        throw std::runtime_error("DeepSeek4 state contains an unexpected runtime tensor");
+    }
+
+    int32_t type_ref;
+    uint32_t n_dims_ref;
+    int64_t ne_ref[GGML_MAX_DIMS];
+    uint64_t nbytes_ref;
+
+    io.read_to(&type_ref,    sizeof(type_ref));
+    io.read_to(&n_dims_ref,  sizeof(n_dims_ref));
+    io.read_to(ne_ref,       sizeof(ne_ref));
+    io.read_to(&nbytes_ref,  sizeof(nbytes_ref));
+
+    if (type_ref != static_cast<int32_t>(tensor->type)) {
+        throw std::runtime_error("DeepSeek4 state tensor type mismatch");
+    }
+    if (n_dims_ref != static_cast<uint32_t>(ggml_n_dims(tensor))) {
+        throw std::runtime_error("DeepSeek4 state tensor rank mismatch");
+    }
+    for (uint32_t i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (ne_ref[i] != tensor->ne[i]) {
+            throw std::runtime_error("DeepSeek4 state tensor shape mismatch");
+        }
+    }
+
+    const uint64_t nbytes = ggml_nbytes(tensor);
+    if (nbytes_ref != nbytes) {
+        throw std::runtime_error("DeepSeek4 state tensor size mismatch");
+    }
+
+    if (nbytes > 0) {
+        ggml_backend_tensor_set(tensor, io.read(nbytes), 0, nbytes);
+    }
 }
 
 } // namespace
@@ -237,12 +311,40 @@ void llama_memory_deepseek4::clear(bool data) {
 }
 
 bool llama_memory_deepseek4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    GGML_UNUSED(p0);
-    GGML_UNUSED(p1);
-    if (seq_id == 0 || seq_id < 0) {
-        clear(false);
+    const llama_pos r0 = p0 < 0 ? 0 : p0;
+    const llama_pos r1 = p1 < 0 ? std::numeric_limits<llama_pos>::max() : p1;
+
+    if (r0 >= r1) {
         return true;
     }
+
+    llama_pos pos_min = -1;
+    llama_pos pos_max = -1;
+    if (seq_id < 0) {
+        for (size_t i = 0; i < seq_pos_min_v.size(); ++i) {
+            if (seq_pos_min_v[i] < 0) {
+                continue;
+            }
+            pos_min = pos_min < 0 ? seq_pos_min_v[i] : std::min(pos_min, seq_pos_min_v[i]);
+            pos_max = std::max(pos_max, seq_pos_max_v[i]);
+        }
+    } else {
+        if (static_cast<size_t>(seq_id) >= seq_pos_min_v.size()) {
+            return false;
+        }
+        pos_min = seq_pos_min_v[seq_id];
+        pos_max = seq_pos_max_v[seq_id];
+    }
+
+    if (pos_min < 0 || r1 <= pos_min || r0 > pos_max) {
+        return true;
+    }
+
+    if (r0 <= pos_min && r1 > pos_max) {
+        clear(true);
+        return true;
+    }
+
     return false;
 }
 
@@ -294,17 +396,134 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_memory_deepseek4::memory_brea
 }
 
 void llama_memory_deepseek4::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
-    GGML_UNUSED(io);
-    GGML_UNUSED(seq_id);
     GGML_UNUSED(flags);
-    throw std::runtime_error("DeepSeek4 runtime state export is not implemented");
+
+    const bool seq_specific = seq_id != -1;
+    const bool seq_valid = seq_id >= 0 && static_cast<size_t>(seq_id) < seq_pos_min_v.size();
+    const bool seq_active = !seq_specific || (seq_valid && seq_pos_min_v[seq_id] >= 0);
+
+    const uint32_t version = DEEPSEEK4_STATE_VERSION;
+    const uint32_t n_layer = layers.size();
+    const uint32_t seq_mode = seq_specific ? 1 : 0;
+    const uint32_t has_data = seq_active ? 1 : 0;
+    const uint32_t seq_count = seq_specific ? 1 : n_seq_max;
+
+    io.write(&version,   sizeof(version));
+    io.write(&n_ctx_seq, sizeof(n_ctx_seq));
+    io.write(&n_seq_max, sizeof(n_seq_max));
+    io.write(&n_layer,   sizeof(n_layer));
+    io.write(&seq_mode,  sizeof(seq_mode));
+    io.write(&has_data,  sizeof(has_data));
+    io.write(&seq_count, sizeof(seq_count));
+
+    if (seq_specific) {
+        const llama_pos pos_min = seq_valid ? seq_pos_min_v[seq_id] : -1;
+        const llama_pos pos_max = seq_valid ? seq_pos_max_v[seq_id] : -1;
+        io.write(&pos_min, sizeof(pos_min));
+        io.write(&pos_max, sizeof(pos_max));
+    } else {
+        for (uint32_t i = 0; i < n_seq_max; ++i) {
+            const llama_pos pos_min = i < seq_pos_min_v.size() ? seq_pos_min_v[i] : -1;
+            const llama_pos pos_max = i < seq_pos_max_v.size() ? seq_pos_max_v[i] : -1;
+            io.write(&pos_min, sizeof(pos_min));
+            io.write(&pos_max, sizeof(pos_max));
+        }
+    }
+
+    if (!has_data) {
+        return;
+    }
+
+    for (const auto & layer : layers) {
+        deepseek4_write_tensor(io, layer.attn_kv);
+        deepseek4_write_tensor(io, layer.attn_comp_kv_state);
+        deepseek4_write_tensor(io, layer.attn_comp_score_state);
+        deepseek4_write_tensor(io, layer.indexer_kv);
+        deepseek4_write_tensor(io, layer.indexer_comp_kv_state);
+        deepseek4_write_tensor(io, layer.indexer_comp_score_state);
+    }
 }
 
 void llama_memory_deepseek4::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    GGML_UNUSED(io);
-    GGML_UNUSED(seq_id);
     GGML_UNUSED(flags);
-    throw std::runtime_error("DeepSeek4 runtime state import is not implemented");
+
+    uint32_t version;
+    uint32_t n_ctx_seq_ref;
+    uint32_t n_seq_max_ref;
+    uint32_t n_layer_ref;
+    uint32_t seq_mode;
+    uint32_t has_data;
+    uint32_t seq_count;
+
+    io.read_to(&version,       sizeof(version));
+    io.read_to(&n_ctx_seq_ref, sizeof(n_ctx_seq_ref));
+    io.read_to(&n_seq_max_ref, sizeof(n_seq_max_ref));
+    io.read_to(&n_layer_ref,   sizeof(n_layer_ref));
+    io.read_to(&seq_mode,      sizeof(seq_mode));
+    io.read_to(&has_data,      sizeof(has_data));
+    io.read_to(&seq_count,     sizeof(seq_count));
+
+    if (version != DEEPSEEK4_STATE_VERSION) {
+        throw std::runtime_error("DeepSeek4 state version mismatch");
+    }
+    if (n_ctx_seq_ref != n_ctx_seq) {
+        throw std::runtime_error("DeepSeek4 state context length mismatch");
+    }
+    if (n_layer_ref != layers.size()) {
+        throw std::runtime_error("DeepSeek4 state layer count mismatch");
+    }
+
+    if (seq_mode == 1) {
+        if (seq_count != 1) {
+            throw std::runtime_error("DeepSeek4 sequence state metadata mismatch");
+        }
+
+        llama_pos pos_min;
+        llama_pos pos_max;
+        io.read_to(&pos_min, sizeof(pos_min));
+        io.read_to(&pos_max, sizeof(pos_max));
+
+        if (seq_id < 0 || static_cast<size_t>(seq_id) >= seq_pos_min_v.size()) {
+            throw std::runtime_error("DeepSeek4 sequence state destination is out of range");
+        }
+
+        seq_pos_min_v[seq_id] = has_data ? pos_min : -1;
+        seq_pos_max_v[seq_id] = has_data ? pos_max : -1;
+    } else if (seq_mode == 0) {
+        const uint32_t n_read = std::min<uint32_t>(seq_count, n_seq_max);
+        for (uint32_t i = 0; i < seq_count; ++i) {
+            llama_pos pos_min;
+            llama_pos pos_max;
+            io.read_to(&pos_min, sizeof(pos_min));
+            io.read_to(&pos_max, sizeof(pos_max));
+
+            if (i < n_read) {
+                seq_pos_min_v[i] = pos_min;
+                seq_pos_max_v[i] = pos_max;
+            }
+        }
+        for (uint32_t i = n_read; i < n_seq_max; ++i) {
+            seq_pos_min_v[i] = -1;
+            seq_pos_max_v[i] = -1;
+        }
+    } else {
+        throw std::runtime_error("DeepSeek4 state sequence mode mismatch");
+    }
+
+    GGML_UNUSED(n_seq_max_ref);
+
+    if (!has_data) {
+        return;
+    }
+
+    for (auto & layer : layers) {
+        deepseek4_read_tensor(io, layer.attn_kv);
+        deepseek4_read_tensor(io, layer.attn_comp_kv_state);
+        deepseek4_read_tensor(io, layer.attn_comp_score_state);
+        deepseek4_read_tensor(io, layer.indexer_kv);
+        deepseek4_read_tensor(io, layer.indexer_comp_kv_state);
+        deepseek4_read_tensor(io, layer.indexer_comp_score_state);
+    }
 }
 
 const llama_memory_deepseek4::layer_state & llama_memory_deepseek4::get_layer(int32_t il) const {
