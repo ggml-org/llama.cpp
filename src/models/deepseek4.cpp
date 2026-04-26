@@ -313,7 +313,7 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
         ggml_tensor * mixed = ggml_cont(ctx0, ggml_transpose(ctx0, mixed_t));
 
         ggml_tensor * x_repeat = repeat_checked(x_single, residual, "hc_post.x");
-        ggml_tensor * post_t = ggml_cont(ctx0, ggml_transpose(ctx0, post));
+        ggml_tensor * post_t = ggml_reshape_2d(ctx0, post, 1, hc_mult);
 
         ggml_tensor * out = ggml_add(ctx0, ggml_mul(ctx0, x_repeat, post_t), mixed);
         cb(out, "hc_expand", il);
