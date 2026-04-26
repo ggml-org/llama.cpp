@@ -2863,14 +2863,14 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m256i rhs_raw_mat_4567_3 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + 224 + sb * 256));
 
                     // Save the values in the following vectors in the formats B0B1B4B5, B2B3B6B7 for further processing and storing of values
-                    const __m256i rhs_raw_mat_0145_0 = _mm256_blend_epi32(rhs_raw_mat_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_0, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_0, requiredOrder), rhs_raw_mat_4567_0, 240);
-                    const __m256i rhs_raw_mat_0145_1 = _mm256_blend_epi32(rhs_raw_mat_0123_1, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_1, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_1, requiredOrder), rhs_raw_mat_4567_1, 240);
-                    const __m256i rhs_raw_mat_0145_2 = _mm256_blend_epi32(rhs_raw_mat_0123_2, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_2, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_2 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_2, requiredOrder), rhs_raw_mat_4567_2, 240);
-                    const __m256i rhs_raw_mat_0145_3 = _mm256_blend_epi32(rhs_raw_mat_0123_3, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_3, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_3 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_3, requiredOrder), rhs_raw_mat_4567_3, 240);
+                    const __m256i rhs_raw_mat_0145_0 = _mm256_permute2x128_si256(rhs_raw_mat_0123_0, rhs_raw_mat_4567_0, 0x20); //B00(0-7) B01(0-7) B04(0-7) B05(0-7)
+                    const __m256i rhs_raw_mat_2367_0 = _mm256_permute2x128_si256(rhs_raw_mat_0123_0, rhs_raw_mat_4567_0, 0x31); //B02(0-7) B03(0-7) B06(0-7) B07(0-7)
+                    const __m256i rhs_raw_mat_0145_1 = _mm256_permute2x128_si256(rhs_raw_mat_0123_1, rhs_raw_mat_4567_1, 0x20); //B00(8-15) B01(8-15) B04(8-15) B05(8-15)
+                    const __m256i rhs_raw_mat_2367_1 = _mm256_permute2x128_si256(rhs_raw_mat_0123_1, rhs_raw_mat_4567_1, 0x31); //B02(8-15) B03(8-15) B06(8-15) B07(8-15)
+                    const __m256i rhs_raw_mat_0145_2 = _mm256_permute2x128_si256(rhs_raw_mat_0123_2, rhs_raw_mat_4567_2, 0x20); //B00(16-23) B01(16-23) B04(16-23) B05(16-23)
+                    const __m256i rhs_raw_mat_2367_2 = _mm256_permute2x128_si256(rhs_raw_mat_0123_2, rhs_raw_mat_4567_2, 0x31); //B02(16-23) B03(16-23) B06(16-23) B07(16-23)
+                    const __m256i rhs_raw_mat_0145_3 = _mm256_permute2x128_si256(rhs_raw_mat_0123_3, rhs_raw_mat_4567_3, 0x20); //B00(24-31) B01(24-31) B04(24-31) B05(24-31)
+                    const __m256i rhs_raw_mat_2367_3 = _mm256_permute2x128_si256(rhs_raw_mat_0123_3, rhs_raw_mat_4567_3, 0x31); //B02(24-31) B03(24-31) B06(24-31) B07(24-31)
 
                     // 4-bit -> 8-bit
                     // First sub block of the two sub blocks processed in the iteration
@@ -3155,6 +3155,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             }
         }
     }
+    
     for (; y < nr / 4; y++) {
 
         const block_q8_Kx4 * a_ptr = a_ptr_start + (y * nb);
@@ -3196,14 +3197,14 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m256i rhs_raw_mat_4567_3 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + 224 + sb * 256));
 
                     // Save the values in the following vectors in the formats B0B1B4B5, B2B3B6B7 for further processing and storing of values
-                    const __m256i rhs_raw_mat_0145_0 = _mm256_blend_epi32(rhs_raw_mat_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_0, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_0, requiredOrder), rhs_raw_mat_4567_0, 240);
-                    const __m256i rhs_raw_mat_0145_1 = _mm256_blend_epi32(rhs_raw_mat_0123_1, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_1, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_1, requiredOrder), rhs_raw_mat_4567_1, 240);
-                    const __m256i rhs_raw_mat_0145_2 = _mm256_blend_epi32(rhs_raw_mat_0123_2, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_2, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_2 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_2, requiredOrder), rhs_raw_mat_4567_2, 240);
-                    const __m256i rhs_raw_mat_0145_3 = _mm256_blend_epi32(rhs_raw_mat_0123_3, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_3, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_3 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_3, requiredOrder), rhs_raw_mat_4567_3, 240);
+                    const __m256i rhs_raw_mat_0145_0 = _mm256_permute2x128_si256(rhs_raw_mat_0123_0, rhs_raw_mat_4567_0, 0x20); //B00(0-7) B01(0-7) B04(0-7) B05(0-7)
+                    const __m256i rhs_raw_mat_2367_0 = _mm256_permute2x128_si256(rhs_raw_mat_0123_0, rhs_raw_mat_4567_0, 0x31); //B02(0-7) B03(0-7) B06(0-7) B07(0-7)
+                    const __m256i rhs_raw_mat_0145_1 = _mm256_permute2x128_si256(rhs_raw_mat_0123_1, rhs_raw_mat_4567_1, 0x20); //B00(8-15) B01(8-15) B04(8-15) B05(8-15)
+                    const __m256i rhs_raw_mat_2367_1 = _mm256_permute2x128_si256(rhs_raw_mat_0123_1, rhs_raw_mat_4567_1, 0x31); //B02(8-15) B03(8-15) B06(8-15) B07(8-15)
+                    const __m256i rhs_raw_mat_0145_2 = _mm256_permute2x128_si256(rhs_raw_mat_0123_2, rhs_raw_mat_4567_2, 0x20); //B00(16-23) B01(16-23) B04(16-23) B05(16-23)
+                    const __m256i rhs_raw_mat_2367_2 = _mm256_permute2x128_si256(rhs_raw_mat_0123_2, rhs_raw_mat_4567_2, 0x31); //B02(16-23) B03(16-23) B06(16-23) B07(16-23)
+                    const __m256i rhs_raw_mat_0145_3 = _mm256_permute2x128_si256(rhs_raw_mat_0123_3, rhs_raw_mat_4567_3, 0x20); //B00(24-31) B01(24-31) B04(24-31) B05(24-31)
+                    const __m256i rhs_raw_mat_2367_3 = _mm256_permute2x128_si256(rhs_raw_mat_0123_3, rhs_raw_mat_4567_3, 0x31); //B02(24-31) B03(24-31) B06(24-31) B07(24-31)
 
                     // 4-bit -> 8-bit
                     // First sub block of the two sub blocks processed in the iteration
@@ -3311,7 +3312,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     // Mins of first and second sub block of Q4_K block are arranged side by side
                     const __m256i mins_01 = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(_mm_shuffle_epi32(mins_and_scales_0, 78), _mm_shuffle_epi32(mins_and_scales_1, 78)));
-
+                    
                     const __m256i scale_0145_0 = _mm256_shuffle_epi32(scales_0, 68);
                     const __m256i scale_2367_0 = _mm256_shuffle_epi32(scales_0, 238);
 
