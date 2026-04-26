@@ -109,6 +109,17 @@ jobs:
             os: ubuntu-24.04-arm
           - build: 's390x'
             os: ubuntu-24.04-s390x
+          - build: 'riscv64'
+            os: ubuntu-24.04
+            cmake_cross: >-
+              -DCMAKE_SYSTEM_NAME=Linux
+              -DCMAKE_SYSTEM_PROCESSOR=riscv64
+              -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14
+              -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+              -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER
+              -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY
+              -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+              -DLLAMA_OPENSSL=OFF
 
     runs-on: ${{ matrix.os }}
 
@@ -132,8 +143,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install build-essential libssl-dev
 
+      - name: Install cross-compiler (riscv64)
+        if: ${{ matrix.build == 'riscv64' }}
+        run: |
+          sudo apt-get install -y gcc-14-riscv64-linux-gnu g++-14-riscv64-linux-gnu
+
       - name: Toolchain workaround (GCC 14)
-        if: ${{ contains(matrix.os, 'ubuntu-24.04') }}
+        if: ${{ contains(matrix.os, 'ubuntu-24.04') && matrix.build != 'riscv64' }}
         run: |
           sudo apt-get install -y gcc-14 g++-14
           echo "CC=gcc-14" >> "$GITHUB_ENV"
@@ -149,6 +165,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
+            ${{ matrix.cmake_cross || '' }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -1216,6 +1233,7 @@ jobs:
             - [Ubuntu x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-x64.tar.gz)
             - [Ubuntu arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-arm64.tar.gz)
             - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
+            - [Ubuntu riscv64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-riscv64.tar.gz)
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
             - [Ubuntu x64 (ROCm 7.2)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.2-x64.tar.gz)
