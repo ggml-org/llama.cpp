@@ -9373,7 +9373,7 @@ class DeepseekV4Model(DeepseekV2Model):
         weight_u8 = weight.view(torch.uint8)
         scale_u8 = scale.view(torch.uint8)
         out = torch.empty((rows, col_blocks, 129), dtype=torch.uint8)
-        out[:, :, 0].copy_(scale_u8.repeat_interleave(128, dim=0))
+        out.view(row_blocks, 128, col_blocks, 129)[:, :, :, 0].copy_(scale_u8[:, None, :])
         out[:, :, 1:].copy_(weight_u8.reshape(rows, col_blocks, 128))
         return out.reshape(rows, col_blocks * 129)
 
