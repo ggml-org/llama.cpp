@@ -29,6 +29,9 @@ enum handcrafted_file_type {
     HANDCRAFTED_KV_BAD_TYPE                =  20 + offset_has_kv,
     // HANDCRAFTED_KV_BAD_VALUE_SIZE          =  30 + offset_has_kv, // removed because it can result in allocations > 1 TB (default sanitizer limit)
     HANDCRAFTED_KV_DUPLICATE_KEY           =  40 + offset_has_kv,
+    HANDCRAFTED_KV_EMPTY_KEY               =  45 + offset_has_kv,
+    HANDCRAFTED_KV_EMPTY_KEY_ONLY_FIRST    =  46 + offset_has_kv,
+    HANDCRAFTED_KV_EMPTY_KEY_ONLY_MID      =  47 + offset_has_kv,
     HANDCRAFTED_KV_BAD_ALIGN               =  50 + offset_has_kv,
     HANDCRAFTED_KV_SUCCESS                 = 800 + offset_has_kv,
 
@@ -66,6 +69,9 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_KV_BAD_KEY_SIZE:            return "KV_BAD_KEY_SIZE";
         case HANDCRAFTED_KV_BAD_TYPE:                return "KV_BAD_TYPE";
         case HANDCRAFTED_KV_DUPLICATE_KEY:           return "KV_DUPLICATE_KEY";
+        case HANDCRAFTED_KV_EMPTY_KEY:               return "KV_EMPTY_KEY";
+        case HANDCRAFTED_KV_EMPTY_KEY_ONLY_FIRST:    return "KV_EMPTY_KEY_ONLY_FIRST";
+        case HANDCRAFTED_KV_EMPTY_KEY_ONLY_MID:      return "KV_EMPTY_KEY_ONLY_MID";
         case HANDCRAFTED_KV_BAD_ALIGN:               return "KV_BAD_ALIGN";
         case HANDCRAFTED_KV_SUCCESS:                 return "KV_RANDOM_KV";
 
@@ -250,14 +256,24 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
 
         const std::string key = "my_key_" + std::to_string((hft == HANDCRAFTED_KV_DUPLICATE_KEY ? i/2 : i));
 
-        if (hft == HANDCRAFTED_KV_BAD_KEY_SIZE) {
+        const bool empty_key_this_iter =
+            hft == HANDCRAFTED_KV_EMPTY_KEY ||
+            (hft == HANDCRAFTED_KV_EMPTY_KEY_ONLY_FIRST && i == 0) ||
+            (hft == HANDCRAFTED_KV_EMPTY_KEY_ONLY_MID   && i == int(kv_types.size()) / 2);
+
+        if (empty_key_this_iter) {
+            const uint64_t n = 0;
+            helper_write(file, n);
+        } else if (hft == HANDCRAFTED_KV_BAD_KEY_SIZE) {
             const uint64_t n = -1;
             helper_write(file, n);
         } else {
             const uint64_t n = key.length();
             helper_write(file, n);
         }
-        helper_write(file, key.data(), key.length());
+        if (!empty_key_this_iter) {
+            helper_write(file, key.data(), key.length());
+        }
 
         {
             const int32_t type32 = int32_t(type);
@@ -698,6 +714,9 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_KV_BAD_KEY_SIZE,
         HANDCRAFTED_KV_BAD_TYPE,
         HANDCRAFTED_KV_DUPLICATE_KEY,
+        HANDCRAFTED_KV_EMPTY_KEY,
+        HANDCRAFTED_KV_EMPTY_KEY_ONLY_FIRST,
+        HANDCRAFTED_KV_EMPTY_KEY_ONLY_MID,
         HANDCRAFTED_KV_BAD_ALIGN,
         HANDCRAFTED_KV_SUCCESS,
 

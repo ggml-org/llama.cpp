@@ -508,6 +508,10 @@ struct gguf_context * gguf_init_from_file_ptr(FILE * file, struct gguf_init_para
                 GGML_LOG_ERROR("%s: encountered bad_alloc error while reading key %" PRIi64 "\n", __func__, i);
                 ok = false;
             }
+            if (ok && key.empty()) {
+                GGML_LOG_ERROR("%s: empty key name at KV pair %" PRIi64 "\n", __func__, i);
+                ok = false;
+            }
             for (size_t j = 0; ok && j < ctx->kv.size(); ++j) {
                 if (key == ctx->kv[j].key) {
                     GGML_LOG_ERROR("%s: duplicate key '%s' for tensors %zu and %" PRIi64 " \n", __func__, key.c_str(), j, i);
