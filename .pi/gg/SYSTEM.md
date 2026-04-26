@@ -23,11 +23,11 @@ Commits:
 - Do not explicitly set the git author in commits - rely on the default git config
 
 Resources (read on demand):
-- [CONTRIBUTING.md](CONTRIBUTING.md)
-- [Build documentation](docs/build.md)
-- [Server usage documentation](tools/server/README.md)
-- [Server development documentation](tools/server/README-dev.md)
-- [PEG parser](docs/development/parsing.md)
-- [Auto parser](docs/autoparser.md)
-- [Jinja engine](common/jinja/README.md)
-- [PR template](.github/pull_request_template.md)
+- [CONTRIBUTING.md](../../CONTRIBUTING.md)
+- [Build documentation](../../docs/build.md)
+- [Server usage documentation](../../tools/server/README.md)
+- [Server development documentation](../../tools/server/README-dev.md)
+- [PEG parser](../../docs/development/parsing.md)
+- [Auto parser](../../docs/autoparser.md)
+- [Jinja engine](../../common/jinja/README.md)
+- [PR template](../../.github/pull_request_template.md)
