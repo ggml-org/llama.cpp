@@ -1932,6 +1932,11 @@ struct test_unary : public test_case {
         return VARS_TO_STR3(type, ne_a, v);
     }
 
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return ggml_unary_op_name(op);
+    }
+
     test_unary(ggml_unary_op op,
             ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {128, 2, 2, 2},
@@ -7339,10 +7344,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 if (op == GGML_UNARY_OP_XIELU) {
                     continue; // need extra params, separate test
                 }
+                if (op == GGML_UNARY_OP_FP4_ACT_QUANT || op == GGML_UNARY_OP_FP8_ACT_QUANT) {
+                    continue; // require block-aligned row lengths; separate tests below
+                }
+                if (op == GGML_UNARY_OP_SINKHORN_4X4) {
+                    continue; // requires a 4x4 F32 matrix; separate test below
+                }
                 test_cases.emplace_back(new test_unary((ggml_unary_op) op, type, { 128, 2, 2, 2 }, v));
                 test_cases.emplace_back(new test_unary((ggml_unary_op) op, type, { 5, 7, 11, 13 }, v));
             }
         }
+    }
+
+    test_cases.emplace_back(new test_unary(GGML_UNARY_OP_SINKHORN_4X4, GGML_TYPE_F32, { 4, 4, 1, 1 }, 0));
+
+    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+        test_cases.emplace_back(new test_unary(GGML_UNARY_OP_FP4_ACT_QUANT, type, { 32, 5, 2, 1 }, 0));
+        test_cases.emplace_back(new test_unary(GGML_UNARY_OP_FP4_ACT_QUANT, type, { 96, 3, 2, 1 }, 0));
+        test_cases.emplace_back(new test_unary(GGML_UNARY_OP_FP8_ACT_QUANT, type, { 64, 5, 2, 1 }, 0));
+        test_cases.emplace_back(new test_unary(GGML_UNARY_OP_FP8_ACT_QUANT, type, { 128, 3, 2, 1 }, 0));
     }
 
     // fused relu + sqr (squared ReLU)

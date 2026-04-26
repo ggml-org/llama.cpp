@@ -2251,6 +2251,12 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 case GGML_UNARY_OP_CEIL:
                 case GGML_UNARY_OP_ROUND:
                 case GGML_UNARY_OP_TRUNC:
+                case GGML_UNARY_OP_FP4_ACT_QUANT:
+                case GGML_UNARY_OP_FP8_ACT_QUANT:
+                    {
+                        n_tasks = n_threads;
+                    } break;
+                case GGML_UNARY_OP_SINKHORN_4X4:
                     {
                         n_tasks = 1;
                     } break;

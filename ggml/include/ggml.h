@@ -605,6 +605,9 @@ extern "C" {
         GGML_UNARY_OP_CEIL,
         GGML_UNARY_OP_ROUND,
         GGML_UNARY_OP_TRUNC,
+        GGML_UNARY_OP_FP4_ACT_QUANT,
+        GGML_UNARY_OP_FP8_ACT_QUANT,
+        GGML_UNARY_OP_SINKHORN_4X4,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -1248,7 +1251,18 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // Blockwise activation quant-dequant simulation used by DeepSeek4 QAT paths.
+    GGML_API struct ggml_tensor * ggml_fp4_act_quant(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
 
+    GGML_API struct ggml_tensor * ggml_fp8_act_quant(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_sinkhorn_4x4(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
 
     // xIELU activation function
     // x = x * (c_a(alpha_n) + c_b(alpha_p, beta) * sigmoid(beta * x)) + eps * (x > 0)

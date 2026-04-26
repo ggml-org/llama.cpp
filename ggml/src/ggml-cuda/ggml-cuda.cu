@@ -2741,6 +2741,15 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_TRUNC:
                     ggml_cuda_op_trunc(ctx, dst);
                     break;
+                case GGML_UNARY_OP_FP4_ACT_QUANT:
+                    ggml_cuda_op_fp4_act_quant(ctx, dst);
+                    break;
+                case GGML_UNARY_OP_FP8_ACT_QUANT:
+                    ggml_cuda_op_fp8_act_quant(ctx, dst);
+                    break;
+                case GGML_UNARY_OP_SINKHORN_4X4:
+                    ggml_cuda_op_sinkhorn_4x4(ctx, dst);
+                    break;
                 case GGML_UNARY_OP_EXPM1:
                     ggml_cuda_op_expm1(ctx, dst);
                     break;
@@ -4845,6 +4854,16 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     // TODO: should become:
                     //return ggml_is_contiguous_rows(op->src[0]);
                     return ggml_is_contiguous(op->src[0]);
+                case GGML_UNARY_OP_FP4_ACT_QUANT:
+                    return op->src[0]->type == op->type && op->ne[0] % 32 == 0 && ggml_is_contiguous(op->src[0]) &&
+                        (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
+                case GGML_UNARY_OP_FP8_ACT_QUANT:
+                    return op->src[0]->type == op->type && op->ne[0] % 64 == 0 && ggml_is_contiguous(op->src[0]) &&
+                        (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
+                case GGML_UNARY_OP_SINKHORN_4X4:
+                    return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                        op->ne[0] == 4 && op->ne[1] == 4 && op->ne[2] == 1 && op->ne[3] == 1 &&
+                        ggml_is_contiguous(op->src[0]);
                 default:
                     return false;
             }

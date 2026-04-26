@@ -28,6 +28,9 @@ void ggml_compute_forward_floor(const struct ggml_compute_params * params, struc
 void ggml_compute_forward_ceil(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_round(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_trunc(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_fp4_act_quant(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_fp8_act_quant(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_sinkhorn_4x4(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_xielu(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 
 #ifdef __cplusplus

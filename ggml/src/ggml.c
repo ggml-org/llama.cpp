@@ -1220,9 +1220,12 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "CEIL",
     "ROUND",
     "TRUNC",
+    "FP4_ACT_QUANT",
+    "FP8_ACT_QUANT",
+    "SINKHORN_4X4",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 22, "GGML_UNARY_OP_COUNT != 22");
+static_assert(GGML_UNARY_OP_COUNT == 25, "GGML_UNARY_OP_COUNT != 25");
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
@@ -2949,6 +2952,28 @@ struct ggml_tensor * ggml_trunc_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_TRUNC);
+}
+
+struct ggml_tensor * ggml_fp4_act_quant(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    GGML_ASSERT(a->ne[0] % 32 == 0);
+    return ggml_unary(ctx, a, GGML_UNARY_OP_FP4_ACT_QUANT);
+}
+
+struct ggml_tensor * ggml_fp8_act_quant(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    GGML_ASSERT(a->ne[0] % 64 == 0);
+    return ggml_unary(ctx, a, GGML_UNARY_OP_FP8_ACT_QUANT);
+}
+
+struct ggml_tensor * ggml_sinkhorn_4x4(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->ne[0] == 4 && a->ne[1] == 4 && a->ne[2] == 1 && a->ne[3] == 1);
+    return ggml_unary(ctx, a, GGML_UNARY_OP_SINKHORN_4X4);
 }
 
 struct ggml_tensor * ggml_glu(

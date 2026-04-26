@@ -9756,6 +9756,18 @@ void ggml_compute_forward_unary(
             {
                 ggml_compute_forward_trunc(params, dst);
             } break;
+        case GGML_UNARY_OP_FP4_ACT_QUANT:
+            {
+                ggml_compute_forward_fp4_act_quant(params, dst);
+            } break;
+        case GGML_UNARY_OP_FP8_ACT_QUANT:
+            {
+                ggml_compute_forward_fp8_act_quant(params, dst);
+            } break;
+        case GGML_UNARY_OP_SINKHORN_4X4:
+            {
+                ggml_compute_forward_sinkhorn_4x4(params, dst);
+            } break;
         case GGML_UNARY_OP_XIELU:
             {
                 ggml_compute_forward_xielu(params, dst);
