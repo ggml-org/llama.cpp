@@ -139,7 +139,7 @@ struct server_slot {
         SRV_WRN(" - saving prompt with length %d, total state size = %.3f MiB\n",
                 (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0));
 
-        auto * cur = prompt_cache.alloc(prompt, cur_size);
+        auto * cur = prompt_cache.alloc(prompt, cur_size, ctx_seq_rm_type);
         if (cur == nullptr) {
             return;
         }
@@ -148,7 +148,7 @@ struct server_slot {
     }
 
     bool prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
-        bool res = prompt_cache.load(prompt, tokens, ctx, id);
+        bool res = prompt_cache.load(prompt, tokens, ctx, id, ctx_seq_rm_type);
         if (!res) {
             SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
         }

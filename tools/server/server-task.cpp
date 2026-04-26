@@ -1961,6 +1961,31 @@ json server_task_result_apply_lora::to_json() {
 //
 // server_prompt_cache
 //
+static bool server_prompt_can_restore_prefix(
+        const server_prompt        & prompt,
+        int64_t                      n_tokens,
+        common_context_seq_rm_type   seq_rm_type) {
+    if (n_tokens < 0 || n_tokens > prompt.n_tokens()) {
+        return false;
+    }
+
+    if (seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
+        return true;
+    }
+
+    if (n_tokens == prompt.n_tokens()) {
+        return true;
+    }
+
+    for (const auto & checkpoint : prompt.checkpoints) {
+        if (!checkpoint.empty() && checkpoint.n_tokens == n_tokens) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 size_t server_prompt_cache::size() const {
     size_t res = 0;
 
@@ -1981,12 +2006,16 @@ size_t server_prompt_cache::n_tokens() const {
     return res;
 }
 
-server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size) {
+server_prompt * server_prompt_cache::alloc(
+        const server_prompt        & prompt,
+        size_t                       state_size,
+        common_context_seq_rm_type   seq_rm_type) {
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
         const int cur_lcp_len = it->tokens.get_common_prefix(prompt.tokens);
 
-        if (cur_lcp_len == (int) prompt.tokens.size()) {
+        if (cur_lcp_len == (int) prompt.tokens.size() &&
+                server_prompt_can_restore_prefix(*it, prompt.n_tokens(), seq_rm_type)) {
             SRV_WRN("%s", " - prompt is already in the cache, skipping\n");
             return nullptr;
         }
@@ -1996,7 +2025,8 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
     for (auto it = states.begin(); it != states.end();) {
         const int len = it->tokens.get_common_prefix(prompt.tokens);
 
-        if (len == (int) it->tokens.size()) {
+        if (len == (int) it->tokens.size() &&
+                server_prompt_can_restore_prefix(prompt, it->n_tokens(), seq_rm_type)) {
             SRV_WRN(" - removing obsolete cached prompt with length %d\n", len);
 
             it = states.erase(it);
@@ -2032,7 +2062,12 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
     return &cur;
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx, int32_t id_slot) {
+bool server_prompt_cache::load(
+        server_prompt              & prompt,
+        const server_tokens        & tokens_new,
+        llama_context              * ctx,
+        int32_t                      id_slot,
+        common_context_seq_rm_type   seq_rm_type) {
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
@@ -2041,13 +2076,32 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     SRV_WRN(" - looking for better prompt, base f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
     auto it_best = states.end();
+    const server_prompt_checkpoint * checkpoint_best = nullptr;
+    int64_t n_tokens_best = -1;
 
     // find the most similar cached prompt, that would also preserve the most context
     for (auto it = states.begin(); it != states.end(); ++it) {
         const int lcp_cur = it->tokens.get_common_prefix(tokens_new);
 
-        const float f_keep_cur = float(lcp_cur) / it->tokens.size();
-        const float sim_cur    = float(lcp_cur) / tokens_new.size();
+        int64_t n_tokens_cur = lcp_cur;
+        const server_prompt_checkpoint * checkpoint_cur = nullptr;
+
+        if (seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL && lcp_cur < (int) it->tokens.size()) {
+            n_tokens_cur = -1;
+            for (const auto & checkpoint : it->checkpoints) {
+                if (!checkpoint.empty() && checkpoint.n_tokens <= lcp_cur && checkpoint.n_tokens > n_tokens_cur) {
+                    checkpoint_cur = &checkpoint;
+                    n_tokens_cur = checkpoint.n_tokens;
+                }
+            }
+
+            if (checkpoint_cur == nullptr) {
+                continue;
+            }
+        }
+
+        const float f_keep_cur = float(n_tokens_cur) / it->tokens.size();
+        const float sim_cur    = float(n_tokens_cur) / tokens_new.size();
 
         // don't trash large prompts
         if (f_keep_cur < 0.25f) {
@@ -2059,14 +2113,23 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             sim_best    = sim_cur;
 
             it_best = it;
+            checkpoint_best = checkpoint_cur;
+            n_tokens_best = n_tokens_cur;
         }
     }
 
     if (it_best != states.end()) {
-        SRV_WRN(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+        if (checkpoint_best != nullptr) {
+            SRV_WRN(" - found better prompt checkpoint with f_keep = %.3f, sim = %.3f, n_tokens = %" PRId64 "\n",
+                    f_keep_best, sim_best, n_tokens_best);
+        } else {
+            SRV_WRN(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+        }
 
-        const size_t size = it_best->data.size();
-        const size_t n = llama_state_seq_set_data_ext(ctx, it_best->data.data(), size, id_slot, 0);
+        const std::vector<uint8_t> & data = checkpoint_best != nullptr ? checkpoint_best->data : it_best->data;
+        const llama_state_seq_flags flags = checkpoint_best != nullptr ? LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY : 0;
+        const size_t size = data.size();
+        const size_t n = llama_state_seq_set_data_ext(ctx, data.data(), size, id_slot, flags);
         if (n != size) {
             SRV_WRN("failed to restore state with size %zu\n", size);
 
@@ -2077,6 +2140,16 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         it_best->data.shrink_to_fit();
 
         prompt = std::move(*it_best);
+        if (checkpoint_best != nullptr) {
+            prompt.tokens.keep_first(n_tokens_best);
+            for (auto it = prompt.checkpoints.begin(); it != prompt.checkpoints.end();) {
+                if (it->n_tokens > n_tokens_best) {
+                    it = prompt.checkpoints.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
 
         states.erase(it_best);
     }
