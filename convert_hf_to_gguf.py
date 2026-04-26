@@ -9372,6 +9372,8 @@ class DeepseekV4Model(DeepseekV2Model):
 
         weight_u8 = weight.view(torch.uint8)
         scale_u8 = scale.view(torch.uint8)
+        if scale_u8.shape != scale.shape:
+            raise ValueError(f"Unexpected DeepSeek V4 FP8 scale dtype {scale.dtype} for tensor {name}")
         out = torch.empty((rows, col_blocks, 129), dtype=torch.uint8)
         out.view(row_blocks, 128, col_blocks, 129)[:, :, :, 0].copy_(scale_u8[:, None, :])
         out[:, :, 1:].copy_(weight_u8.reshape(rows, col_blocks, 128))
@@ -9396,8 +9398,11 @@ class DeepseekV4Model(DeepseekV2Model):
             )
 
         hf = weight.view(torch.uint8).reshape(rows, groups, 16)
+        scale_u8 = scale.view(torch.uint8)
+        if scale_u8.shape != scale.shape:
+            raise ValueError(f"Unexpected DeepSeek V4 expert scale dtype {scale.dtype} for tensor {name}")
         out = torch.empty((rows, groups, 17), dtype=torch.uint8)
-        out[:, :, 0].copy_(scale.view(torch.uint8)[:, :groups])
+        out[:, :, 0].copy_(scale_u8[:, :groups])
         lo = hf[:, :, :8]
         hi = hf[:, :, 8:]
         out[:, :, 1::2].copy_((lo & 0x0F) | ((hi & 0x0F) << 4))
