@@ -486,21 +486,11 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 string(APPEND MARCH_STR "_zihintpause")
             endif()
             if (GGML_CPU_RISCV64_SPACEMIT)
-                # vmadot family lives behind the SpacemiT xsmtvdotii custom
-                # extension. Without this flag GAS rejects the inline asm in
-                # ime1_kernels.cpp with "extension `xsmtvdotii' required".
-                # GCC support for the extension was added in version 15;
-                # earlier toolchains do not understand the march suffix,
-                # so fail fast with a clear message instead of cryptic
-                # assembler errors later.
+                # `xsmtvdotii' is only required for GCC >= 15.
                 if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
-                    CMAKE_C_COMPILER_VERSION VERSION_LESS 15)
-                    message(FATAL_ERROR
-                        "GGML_CPU_RISCV64_SPACEMIT requires GCC >= 15 for "
-                        "the xsmtvdotii extension; current GCC "
-                        "${CMAKE_C_COMPILER_VERSION} does not support it.")
+                    CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 15)
+                    string(APPEND MARCH_STR "_xsmtvdotii")
                 endif()
-                string(APPEND MARCH_STR "_xsmtvdotii")
             endif()
 
             list(APPEND ARCH_FLAGS "-march=${MARCH_STR}" -mabi=lp64d)
