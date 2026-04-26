@@ -12588,7 +12588,7 @@ class LFM2AudioModel(ConformerAudioModel):
         return super().filter_tensors(item)
 
 
-@ModelBase.register("GraniteSpeechForConditionalGeneration", ModelType.MMPROJ)
+@ModelBase.register("GraniteSpeechForConditionalGeneration")
 class GraniteSpeechMmprojModel(MmprojModel):
     has_vision_encoder = False
     has_audio_encoder = True
