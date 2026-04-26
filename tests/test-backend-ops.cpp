@@ -8627,6 +8627,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_hc_weighted_sum(64, 4, false, false));
     test_cases.emplace_back(new test_hc_weighted_sum(4096, 4, false, false));
     test_cases.emplace_back(new test_hc_weighted_sum(127, 4, true, true));
+    test_cases.emplace_back(new test_hc_weighted_sum(19, 1, false, false));
+    test_cases.emplace_back(new test_hc_weighted_sum(65, 2, false, false));
+    test_cases.emplace_back(new test_hc_weighted_sum(31, 7, true, true));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {64, 64, 320, 1}));
