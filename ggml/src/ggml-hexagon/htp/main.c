@@ -101,6 +101,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         }
     }
 
+#if __HVX_ARCH__ >= 75
     {
         // Set HMX clock
         HAP_power_request_t request;
@@ -118,6 +119,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
             return err;
         }
     }
+#endif
 
     return AEE_SUCCESS;
 }
