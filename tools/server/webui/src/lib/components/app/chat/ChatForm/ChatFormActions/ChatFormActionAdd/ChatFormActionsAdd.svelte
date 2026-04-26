@@ -7,30 +7,30 @@
 	interface Props {
 		disabled?: boolean;
 		hasAudioModality?: boolean;
-		hasVisionModality?: boolean;
 		hasMcpPromptsSupport?: boolean;
 		hasMcpResourcesSupport?: boolean;
+		hasVisionModality?: boolean;
 		onFileUpload?: () => void;
-		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
+		onMcpSettingsClick?: () => void;
+		onSystemPromptClick?: () => void;
 	}
 
 	let {
 		disabled = false,
 		hasAudioModality = false,
-		hasVisionModality = false,
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
+		hasVisionModality = false,
 		onFileUpload,
-		onSystemPromptClick,
 		onMcpPromptClick,
+		onMcpResourcesClick,
 		onMcpSettingsClick,
-		onMcpResourcesClick
+		onSystemPromptClick
 	}: Props = $props();
 
-	let isMobile = new IsMobile();
+	const isMobile = new IsMobile();
 </script>
 
 {#if isMobile.current}
@@ -41,7 +41,6 @@
 		{hasMcpPromptsSupport}
 		{hasMcpResourcesSupport}
 		{onFileUpload}
-		{onSystemPromptClick}
 		{onMcpPromptClick}
 		{onMcpResourcesClick}
 	>
@@ -57,10 +56,10 @@
 		{hasMcpPromptsSupport}
 		{hasMcpResourcesSupport}
 		{onFileUpload}
-		{onSystemPromptClick}
 		{onMcpPromptClick}
 		{onMcpResourcesClick}
 		{onMcpSettingsClick}
+		{onSystemPromptClick}
 	>
 		{#snippet trigger()}
 			<ChatFormActionAddButton {disabled} />

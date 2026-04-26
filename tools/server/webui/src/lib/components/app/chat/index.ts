@@ -14,7 +14,7 @@
  */
 
 /**
- * **ChatAttachments** - Unified display for file attachments in chat
+ * **ChatAttachmentsList** - Unified display for file attachments in chat
  *
  * Central component for rendering file attachments in both ChatMessage (readonly)
  * and ChatForm (editable) contexts.
@@ -38,10 +38,10 @@
  * @example
  * ```svelte
  * <!-- Readonly mode (in ChatMessage) -->
- * <ChatAttachments attachments={message.extra} readonly />
+ * <ChatAttachmentsList attachments={message.extra} readonly />
  *
  * <!-- Editable mode (in ChatForm) -->
- * <ChatAttachments
+ * <ChatAttachmentsList
  *   bind:uploadedFiles
  *   onFileRemove={(id) => removeFile(id)}
  *   limitToSingleRow
@@ -49,42 +49,42 @@
  * />
  * ```
  */
-export { default as ChatAttachments } from './ChatAttachments/ChatAttachments.svelte';
+export { default as ChatAttachmentsList } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsList.svelte';
 
 /**
  * Renders a single attachment item based on its type (image, file, MCP prompt, or MCP resource).
- * Delegates to specialized sub-components: ChatAttachmentsItemThumbnailImage, ChatAttachmentsItemThumbnailFile,
- * ChatAttachmentsItemMcpPrompt, or ChatAttachmentsItemMcpResource.
+ * Delegates to specialized sub-components: ChatAttachmentsListItemThumbnailImage, ChatAttachmentsListItemThumbnailFile,
+ * ChatAttachmentsListItemMcpPrompt, or ChatAttachmentsListItemMcpResource.
  */
-export { default as ChatAttachmentsItem } from './ChatAttachments/ChatAttachmentsItem/ChatAttachmentsItem.svelte';
+export { default as ChatAttachmentsListItem } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItem.svelte';
 
 /**
  * Displays MCP Prompt attachment with expandable content preview.
  * Shows server name, prompt name, and allows expanding to view full prompt arguments
  * and content. Used when user selects a prompt from ChatFormPickerMcpPrompts.
  */
-export { default as ChatAttachmentsItemMcpPrompt } from './ChatAttachments/ChatAttachmentsItem/ChatAttachmentsItemMcpPrompt.svelte';
+export { default as ChatAttachmentsListItemMcpPrompt } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemMcpPrompt.svelte';
 
 /**
  * Displays a single MCP Resource attachment with icon, name, and server info.
  * Shows loading/error states and supports remove action.
  * Used within ChatAttachmentMcpResources for individual resource display.
  */
-export { default as ChatAttachmentsItemMcpResource } from './ChatAttachments/ChatAttachmentsItem/ChatAttachmentsItemMcpResource.svelte';
+export { default as ChatAttachmentsListItemMcpResource } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemMcpResource.svelte';
 
 /**
  * Thumbnail for non-image file attachments. Displays file type icon based on extension,
  * file name (truncated), and file size.
  * Handles text files, PDFs, audio, and other document types.
  */
-export { default as ChatAttachmentsItemThumbnailFile } from './ChatAttachments/ChatAttachmentsItem/ChatAttachmentsItemThumbnailFile.svelte';
+export { default as ChatAttachmentsListItemThumbnailFile } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemThumbnailFile.svelte';
 
 /**
  * Thumbnail for image attachments with lazy loading and error fallback.
  * Displays image preview with configurable dimensions. Falls back to placeholder
  * on load error.
  */
-export { default as ChatAttachmentsItemThumbnailImage } from './ChatAttachments/ChatAttachmentsItem/ChatAttachmentsItemThumbnailImage.svelte';
+export { default as ChatAttachmentsListItemThumbnailImage } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemThumbnailImage.svelte';
 
 /**
  * Unified attachment preview component for dialog display. Shows a single file
@@ -195,7 +195,7 @@ export { default as ChatFormActionSubmit } from './ChatForm/ChatFormActions/Chat
  * (desktop) or bottom sheet (mobile) for selecting the conversation model in router mode.
  * Exposes an `open` method for programmatically opening the selector.
  */
-export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/ChatFormActionModels/ChatFormActionModels.svelte';
+export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/ChatFormActionModels.svelte';
 
 /**
  * Dropdown submenu for managing tool permissions in the chat form.
@@ -368,7 +368,7 @@ export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPi
  * **Exported API:**
  * - `handleKeydown(event): boolean` - Process keyboard events, returns true if handled
  */
-export { default as ChatFormPickerMcpResources } from './ChatForm/ChatFormPickers/ChatFormPickerMcpResources/ChatFormPickerMcpResources.svelte';
+export { default as ChatFormPickerMcpResources } from './ChatForm/ChatFormPickers/ChatFormPickerMcpResources.svelte';
 
 /**
  *
@@ -559,7 +559,7 @@ export { default as ChatMessageEditForm } from './ChatMessages/ChatMessageEditFo
 
 /**
  * User message display component. Renders user messages with right-aligned bubble styling.
- * Shows message content, attachments via ChatAttachments, and MCP prompts if present.
+ * Shows message content, attachments via ChatAttachmentsList, and MCP prompts if present.
  * Supports inline editing mode with ChatMessageEditForm integration.
  */
 export { default as ChatMessageUser } from './ChatMessages/ChatMessage/ChatMessageUser/ChatMessageUser.svelte';

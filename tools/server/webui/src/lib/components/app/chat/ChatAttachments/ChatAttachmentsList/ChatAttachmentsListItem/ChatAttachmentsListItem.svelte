@@ -1,9 +1,9 @@
 <script lang="ts">
 	import {
-		ChatAttachmentsItemMcpPrompt,
-		ChatAttachmentsItemMcpResource,
-		ChatAttachmentsItemThumbnailImage,
-		ChatAttachmentsItemThumbnailFile
+		ChatAttachmentsListItemMcpPrompt,
+		ChatAttachmentsListItemMcpResource,
+		ChatAttachmentsListItemThumbnailImage,
+		ChatAttachmentsListItemThumbnailFile
 	} from '$lib/components/app';
 	import { AttachmentType } from '$lib/enums';
 	import type {
@@ -73,7 +73,7 @@
 					}
 				: null}
 	{#if mcpPrompt}
-		<ChatAttachmentsItemMcpPrompt
+		<ChatAttachmentsListItemMcpPrompt
 			class="max-w-[300px] min-w-[200px] flex-shrink-0 {className} {scrollClasses}"
 			prompt={mcpPrompt}
 			{readonly}
@@ -85,13 +85,13 @@
 {:else if isMcpResource(item)}
 	{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
 
-	<ChatAttachmentsItemMcpResource
+	<ChatAttachmentsListItemMcpResource
 		class="flex-shrink-0 {className} {scrollClasses}"
 		attachment={toMcpResourceAttachment(mcpResource, item.id)}
 		onclick={() => onMcpResourcePreview?.(mcpResource)}
 	/>
 {:else if item.isImage && item.preview}
-	<ChatAttachmentsItemThumbnailImage
+	<ChatAttachmentsListItemThumbnailImage
 		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
 		id={item.id}
 		name={item.name}
@@ -104,7 +104,7 @@
 		onclick={() => onPreview?.(item)}
 	/>
 {:else if isPdfFile(item.attachment, item.uploadedFile)}
-	<ChatAttachmentsItemThumbnailFile
+	<ChatAttachmentsListItemThumbnailFile
 		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
 		id={item.id}
 		name={item.name}
@@ -117,7 +117,7 @@
 		onclick={() => onPreview?.(item)}
 	/>
 {:else}
-	<ChatAttachmentsItemThumbnailFile
+	<ChatAttachmentsListItemThumbnailFile
 		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
 		id={item.id}
 		name={item.name}

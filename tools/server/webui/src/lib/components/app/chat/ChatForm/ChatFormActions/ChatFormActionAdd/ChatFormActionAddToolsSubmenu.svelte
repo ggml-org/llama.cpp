@@ -24,6 +24,7 @@
 			{#if toolsStore.loading}
 				<div class="px-3 py-4 text-center text-sm text-muted-foreground">
 					<Loader2 class="mx-auto mb-1 h-4 w-4 animate-spin" />
+
 					Loading tools...
 				</div>
 			{:else if toolsStore.isToolsEndpointUnreachable}
@@ -31,19 +32,21 @@
 					<span class="flex gap-2">
 						<Info class="mt-0.5 h-4 w-4 shrink-0" />
 
-						<span
-							>Run llama-server with <code>--tools</code> flag to enable
-							<strong>Built-in Tools</strong>.</span
-						>
+						<span>
+							Run llama-server with <code>--tools</code> flag to enable
+
+							<strong>Built-in Tools</strong>.
+						</span>
 					</span>
 
 					<span class="flex gap-2">
 						<Info class="mt-0.5 h-4 w-4 shrink-0" />
 
-						<span
-							>{hasMcpServersAvailable ? 'Enable' : 'Add'} MCP Server(s) to access
-							<strong>MCP Tools</strong>.</span
-						>
+						<span>
+							{hasMcpServersAvailable ? 'Enable' : 'Add'} MCP Server(s) to access
+
+							<strong>MCP Tools</strong>.
+						</span>
 					</span>
 				</div>
 			{:else if toolsStore.error}

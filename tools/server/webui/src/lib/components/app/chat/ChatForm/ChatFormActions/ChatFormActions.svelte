@@ -71,9 +71,7 @@
 		hasAudioModality && !canSubmit && !hasAudioAttachments && currentConfig.autoMicOnEmpty
 	);
 
-	let selectorModelRef:
-		| import('./ChatFormActionModels/ChatFormActionModels.svelte').default
-		| undefined = $state(undefined);
+	let selectorModelRef: ChatFormActionModels | undefined = $state(undefined);
 
 	export function openModelSelector() {
 		selectorModelRef?.open();
