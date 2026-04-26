@@ -1101,7 +1101,11 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
         fs::path cache_file = fs::path(cache_dir) / hash_str;
         std::ofstream ofs(cache_file, std::ios::binary);
         ofs.write((const char *)data, size);
+#ifdef _WIN32
+        GGML_LOG_INFO("[%s] saved to '%s'\n", __func__, cache_file.string().c_str());
+#else
         GGML_LOG_INFO("[%s] saved to '%s'\n", __func__, cache_file.c_str());
+#endif
     }
     ggml_backend_tensor_set(tensor, data, offset, size);
     return true;
