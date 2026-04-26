@@ -78,6 +78,11 @@ struct server_context {
     // not thread-safe, should only be used from the main thread
     server_context_meta get_meta() const;
 
+    // get/set the slot-prompt-similarity threshold for slot selection
+    // not thread-safe, should only be used from the main thread
+    float get_slot_prompt_similarity() const;
+    void  set_slot_prompt_similarity(float value);
+
     // register a callback to be called when sleeping state changes
     // must be set before load_model() is called
     void on_sleeping_changed(std::function<void(bool)> callback);
