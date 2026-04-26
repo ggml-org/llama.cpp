@@ -1519,6 +1519,7 @@ void ggml_compute_forward_hc_weighted_sum(
     GGML_ASSERT(src0->ne[1] == src1->ne[0]);
     GGML_ASSERT(src0->ne[2] == 1 && src0->ne[3] == 1);
     GGML_ASSERT(src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1);
+    GGML_ASSERT(dst->ne[0] == src0->ne[0] && dst->ne[1] == 1 && dst->ne[2] == 1 && dst->ne[3] == 1);
 
     const int64_t n_embd  = src0->ne[0];
     const int64_t hc_mult = src0->ne[1];
