@@ -1,6 +1,10 @@
 #include "argsort.cuh"
 #include "top-k.cuh"
 
+#include <cfloat>
+#include <climits>
+#include <cmath>
+
 #ifdef GGML_CUDA_USE_CUB
 #    include <cub/cub.cuh>
 #    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2)
@@ -47,6 +51,93 @@ static int next_power_of_2(int x) {
 
 #endif                            // CUB_TOP_K_AVAILABLE
 
+template<int ncols>
+static __global__ void top_k_warp_f32_i32(const float * src, int * dst, const int k, const int nrows) {
+    constexpr int experts_per_thread = (ncols + WARP_SIZE - 1) / WARP_SIZE;
+
+    const int row = blockIdx.x * blockDim.y + threadIdx.y;
+    if (row >= nrows) {
+        return;
+    }
+
+    const int lane = threadIdx.x;
+    src += row * ncols;
+    dst += row * k;
+
+    float vals[experts_per_thread];
+    uint32_t active_mask = 0;
+
+#pragma unroll
+    for (int i = 0; i < experts_per_thread; ++i) {
+        const int idx = lane + i * WARP_SIZE;
+        const bool active = idx < ncols;
+        if (active) {
+            active_mask |= 1u << i;
+        }
+        float val = active ? src[idx] : -INFINITY;
+        vals[i] = __isnanf(val) ? -FLT_MAX : val;
+    }
+
+    for (int out = 0; out < k; ++out) {
+        float max_val = -INFINITY;
+        int   max_idx = INT_MAX;
+
+#pragma unroll
+        for (int i = 0; i < experts_per_thread; ++i) {
+            const int idx = lane + i * WARP_SIZE;
+            if (((active_mask >> i) & 1u) && (vals[i] > max_val || (vals[i] == max_val && idx < max_idx))) {
+                max_val = vals[i];
+                max_idx = idx;
+            }
+        }
+
+#pragma unroll
+        for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+            const float other_val = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
+            const int   other_idx = __shfl_xor_sync(0xFFFFFFFF, max_idx, mask, WARP_SIZE);
+            if (other_val > max_val || (other_val == max_val && other_idx < max_idx)) {
+                max_val = other_val;
+                max_idx = other_idx;
+            }
+        }
+
+        if (lane == out) {
+            dst[out] = max_idx;
+        }
+
+        if (max_idx < ncols && (max_idx & (WARP_SIZE - 1)) == lane) {
+            active_mask &= ~(1u << (max_idx / WARP_SIZE));
+        }
+    }
+}
+
+static bool top_k_warp(const float * src, int * dst, const int ncols, const int nrows, const int k, cudaStream_t stream) {
+    if (k <= 0 || k > WARP_SIZE) {
+        return false;
+    }
+
+    constexpr int rows_per_block = 4;
+    const dim3 grid((nrows + rows_per_block - 1) / rows_per_block, 1, 1);
+    const dim3 block(WARP_SIZE, rows_per_block, 1);
+
+    switch (ncols) {
+        case 128:
+            top_k_warp_f32_i32<128><<<grid, block, 0, stream>>>(src, dst, k, nrows);
+            return true;
+        case 256:
+            top_k_warp_f32_i32<256><<<grid, block, 0, stream>>>(src, dst, k, nrows);
+            return true;
+        case 512:
+            top_k_warp_f32_i32<512><<<grid, block, 0, stream>>>(src, dst, k, nrows);
+            return true;
+        case 576:
+            top_k_warp_f32_i32<576><<<grid, block, 0, stream>>>(src, dst, k, nrows);
+            return true;
+        default:
+            return false;
+    }
+}
+
 void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
     const float *       src0_d = (const float *) src0->data;
@@ -62,6 +153,9 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t    nrows = ggml_nrows(src0);
     const int64_t    k     = dst->ne[0];
     ggml_cuda_pool & pool  = ctx.pool();
+    if (top_k_warp(src0_d, dst_d, ncols, nrows, k, stream)) {
+        return;
+    }
 #ifdef CUB_TOP_K_AVAILABLE
     // TODO: Switch to `DeviceSegmentedTopK` for multi-row TopK once implemented
     // https://github.com/NVIDIA/cccl/issues/6391
