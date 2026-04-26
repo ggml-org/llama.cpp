@@ -553,6 +553,22 @@ std::string finalize_file(const hf_file & file) {
     return file.final_path;
 }
 
+// borrowed from ggml-backend-reg.cpp
+static std::string path_str(const fs::path & path) {
+    try {
+#if defined(__cpp_lib_char8_t)
+        // C++20 and later: u8string() returns std::u8string
+        const std::u8string u8str = path.u8string();
+        return std::string(reinterpret_cast<const char *>(u8str.data()), u8str.size());
+#else
+        // C++17: u8string() returns std::string
+        return path.u8string();
+#endif
+    } catch (...) {
+        return std::string();
+    }
+}
+
 void prune_old_files(const std::string & hf_repo, const hf_cache::hf_files & current_model_files, const hf_cache::hf_file & current_mmproj) {
     std::vector<std::string> filenames_to_delete;
     std::vector<std::string> files_to_keep;
@@ -572,12 +588,12 @@ void prune_old_files(const std::string & hf_repo, const hf_cache::hf_files & cur
             LOG_DBG("%s: failed to resolve symlink target %s: %s\n", __func__, file.c_str(), ec.message().c_str());
             return std::string();
         }
-        return std::string(target);
+        return path_str(target);
     };
 
     for (const auto & file : current_model_files) {
         files_to_keep.push_back(file.local_path);
-        filenames_to_delete.push_back(fs::path(file.local_path).filename());
+        filenames_to_delete.push_back(path_str(fs::path(file.local_path).filename()));
         const auto & target = get_symlink_target(file.local_path);
         if (!target.empty()) {
             files_to_keep.push_back(target);
@@ -586,7 +602,7 @@ void prune_old_files(const std::string & hf_repo, const hf_cache::hf_files & cur
 
     if (!current_mmproj.local_path.empty()) {
         files_to_keep.push_back(current_mmproj.local_path);
-        filenames_to_delete.push_back(fs::path(current_mmproj.local_path).filename());
+        filenames_to_delete.push_back(path_str(fs::path(current_mmproj.local_path).filename()));
         const auto & target = get_symlink_target(current_mmproj.local_path);
         if (!target.empty()) {
             files_to_keep.push_back(target);
