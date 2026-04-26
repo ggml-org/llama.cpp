@@ -8846,6 +8846,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 16416, 1, 128, {8,  1}, {4, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 128, 1, 16416, {8,  1}, {4, 1}, {0, 1, 2, 3}, 2*16416));
 
+    // DeepSeek4 native FP8 projection shapes for focused CUDA MMVQ tuning.
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 4096, 1, 2048, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 4096, 1, 8192, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 8192, 1, 4096, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 1024, 1, 32768, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 4096, 1, 512, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 4096, 1, 1024, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 4096, 8, 2048, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 2048, 8, 4096, {1, 1}, {1, 1}));
+
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 32, 64, 4, 4 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 2 }, { 32, 128, 4, 2 }));
     // qwen3next with CHUNK_SIZE 64

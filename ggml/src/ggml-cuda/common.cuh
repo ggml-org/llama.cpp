@@ -784,7 +784,10 @@ static __device__ __forceinline__ void ggml_cuda_memcpy_1(void * __restrict__ ds
 }
 
 static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
-#if CUDART_VERSION >= 12080
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    const uint32_t bits = x == 0 ? 0x00400000 : (uint32_t) x << 23;
+    return __uint_as_float(bits);
+#elif CUDART_VERSION >= 12080
     const nv_bfloat16 e = __nv_cvt_e8m0_to_bf16raw(x);
     return (float) e;
 #else
