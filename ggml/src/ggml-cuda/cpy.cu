@@ -7,7 +7,7 @@
 
 typedef void (*cpy_kernel_t)(const char * cx, char * cdst);
 
-const int CUDA_CPY_TILE_DIM_2D = 32; // 2D tile dimension for transposed blocks
+const int CUDA_CPY_TILE_DIM_2D = 16; // 2D tile dimension for transposed blocks
 const int CUDA_CPY_BLOCK_NM = 8;     // block size of 3rd dimension if available
 const int CUDA_CPY_BLOCK_ROWS = 8;   // block dimension for marching through rows
 
