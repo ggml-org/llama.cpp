@@ -3,6 +3,7 @@
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Tuple
 
 
 def skip(message: str) -> None:
@@ -34,7 +35,7 @@ def load_converter(repo_root: Path):
     return module
 
 
-def make_u8(shape: tuple[int, ...]) -> torch.Tensor:
+def make_u8(shape: Tuple[int, ...]) -> torch.Tensor:
     n = 1
     for dim in shape:
         n *= dim
