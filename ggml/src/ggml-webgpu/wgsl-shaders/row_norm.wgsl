@@ -1,14 +1,26 @@
 #ifdef INPLACE
+#ifdef NORM
+fn update(src_offset: u32, dst_offset: u32, scale: f32, mean: f32) {
+    src[dst_offset] = scale * (src[src_offset] - mean);
+}
+#else
 fn update(src_offset: u32, dst_offset: u32, scale: f32) {
     src[dst_offset] = scale * src[src_offset];
 }
+#endif
 
 @group(0) @binding(1)
 var<uniform> params: Params;
 #else
+#ifdef NORM
+fn update(src_offset: u32, dst_offset: u32, scale: f32, mean: f32) {
+    dst[dst_offset] = scale * (src[src_offset] - mean);
+}
+#else
 fn update(src_offset: u32, dst_offset: u32, scale: f32) {
     dst[dst_offset] = scale * src[src_offset];
 }
+#endif
 
 @group(0) @binding(1)
 var<storage, read_write> dst: array<f32>;
@@ -65,7 +77,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         if (col >= params.ne0) {
             break;
         }
-        sum += pow(src[i_src_row + col], 2.0);
+        let v = f32(src[i_src_row + col]);
+#ifdef NORM
+        sum += v;
+#else
+        sum += v * v;
+#endif
         col += WG_SIZE;
     }
 
@@ -81,7 +98,35 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     }
     sum = scratch[0];
 
-#ifdef RMS_NORM
+#ifdef NORM
+    let mean = sum / f32(params.ne0);
+    var sq_sum = 0.0f;
+    col = lid.x;
+    for (var j: u32 = 0; j < elems; j++) {
+        if (col >= params.ne0) {
+            break;
+        }
+        let v = f32(src[i_src_row + col]);
+        let d = v - mean;
+        sq_sum += d * d;
+        col += WG_SIZE;
+    }
+
+    workgroupBarrier();
+    scratch[lid.x] = sq_sum;
+    workgroupBarrier();
+    offset = WG_SIZE / 2;
+    while (offset > 0) {
+        if (lid.x < offset) {
+            scratch[lid.x] += scratch[lid.x + offset];
+        }
+        offset /= 2;
+        workgroupBarrier();
+    }
+
+    let variance = scratch[0] / f32(params.ne0);
+    let scale = 1.0 / sqrt(variance + params.eps);
+#elif defined(RMS_NORM)
     let scale = 1.0/sqrt(sum/f32(params.ne0) + params.eps);
 #elif defined(L2_NORM)
     let scale = 1.0/max(sqrt(sum), params.eps);
@@ -92,7 +137,11 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         if (col >= params.ne0) {
             break;
         }
+#ifdef NORM
+        update(i_src_row + col, i_dst_row + col, scale, mean);
+#else
         update(i_src_row + col, i_dst_row + col, scale);
+#endif
         col += WG_SIZE;
     }
 }

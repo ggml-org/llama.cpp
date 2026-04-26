@@ -26,21 +26,21 @@
 // Matrix multiplication parameters
 
 // Register tiling parameters
-#define WEBGPU_MUL_MAT_TILE_M    4
-#define WEBGPU_MUL_MAT_TILE_N    4
-#define WEBGPU_MUL_MAT_WG_SIZE_M 8
-#define WEBGPU_MUL_MAT_WG_SIZE_N 8
+#define WEBGPU_MUL_MAT_TILE_M           4
+#define WEBGPU_MUL_MAT_TILE_N           4
+#define WEBGPU_MUL_MAT_WG_SIZE_M        8
+#define WEBGPU_MUL_MAT_WG_SIZE_N        8
 #define WEBGPU_MUL_MAT_REG_TILE_K_FLOAT 8
 #define WEBGPU_MUL_MAT_REG_TILE_K_QUANT 32
 
 // Subgroup matrix parameters
 // The number of subgroups in the M dimension
-#define WEBGPU_MUL_MAT_SUBGROUP_M        2
+#define WEBGPU_MUL_MAT_SUBGROUP_M            2
 // The number of subgroups in the N dimension
-#define WEBGPU_MUL_MAT_SUBGROUP_N        4
+#define WEBGPU_MUL_MAT_SUBGROUP_N            4
 // The number of subgroup matrices each subgroup accumulates over
-#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M 4
-#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N 2
+#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M     4
+#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N     2
 #define WEBGPU_MUL_MAT_SUBGROUP_TILE_K_FLOAT 32
 #define WEBGPU_MUL_MAT_SUBGROUP_TILE_K_QUANT 32
 
@@ -1035,6 +1035,10 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("RMS_NORM");
                 variant = "rms_norm";
                 break;
+            case GGML_OP_NORM:
+                defines.push_back("NORM");
+                variant = "norm";
+                break;
             case GGML_OP_L2_NORM:
                 defines.push_back("L2_NORM");
                 variant = "l2_norm";
@@ -1741,11 +1745,9 @@ class ggml_webgpu_shader_lib {
 
         uint32_t tile_k;
         if (key.use_subgroup_matrix) {
-            tile_k = is_quant ? WEBGPU_MUL_MAT_SUBGROUP_TILE_K_QUANT
-                              : WEBGPU_MUL_MAT_SUBGROUP_TILE_K_FLOAT;
+            tile_k = is_quant ? WEBGPU_MUL_MAT_SUBGROUP_TILE_K_QUANT : WEBGPU_MUL_MAT_SUBGROUP_TILE_K_FLOAT;
         } else {
-            tile_k = is_quant ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT
-                              : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
+            tile_k = is_quant ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
         }
 
         // Tiles
@@ -1978,9 +1980,8 @@ class ggml_webgpu_shader_lib {
         defines.push_back("SCALAR");
 
         // mul_mat_id is register-tile only.
-        const uint32_t tile_k = ggml_is_quantized(context.src0->type)
-                                    ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT
-                                    : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
+        const uint32_t tile_k =
+            ggml_is_quantized(context.src0->type) ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
 
         // Tiles
         defines.push_back("TILE_M=" + std::to_string(WEBGPU_MUL_MAT_TILE_M) + "u");
