@@ -510,12 +510,7 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), None)
                         tensors_to_remove.append(name)
-                    if name.endswith(".input_scale"):
-                        new_name = self.map_tensor_name(name, try_suffixes=(".input_scale",))
-                        input_scale = LazyTorchTensor.to_eager(self.model_tensors[name]())
-                        self._write_scale_tensor(new_name, input_scale)
-                        tensors_to_remove.append(name)
-                    if name.endswith((".k_scale", ".v_scale")):
+                    if name.endswith((".input_scale", ".k_scale", ".v_scale")):
                         tensors_to_remove.append(name)
             elif quant_method is not None:
                 raise NotImplementedError(f"Quant method is not yet supported: {quant_method!r}")
