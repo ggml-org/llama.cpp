@@ -10695,7 +10695,7 @@ class ExaoneMoEModel(Exaone4Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("GraniteForCausalLM")
+@ModelBase.register("GraniteForCausalLM", "GraniteSpeechForConditionalGeneration")
 class GraniteModel(LlamaModel):
     """Conversion for IBM's GraniteForCausalLM"""
     model_arch = gguf.MODEL_ARCH.GRANITE
