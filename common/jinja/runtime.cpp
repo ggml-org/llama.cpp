@@ -60,9 +60,15 @@ value statement::execute(context & ctx) {
         throw;
     } catch (const rethrown_exception & /* ex */) {
         throw;
+    } catch (const raised_exception & /* ex */) {
+        throw;
     } catch (const not_implemented_exception & /* ex */) {
         throw;
     } catch (const std::exception & e) {
+        if (std::string(e.what()).find("Jinja Exception: ") != std::string::npos) {
+            throw;
+        }
+
         const std::string & source = *ctx.src;
         if (source.empty()) {
             std::ostringstream oss;
