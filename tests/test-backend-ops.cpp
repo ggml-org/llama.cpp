@@ -1496,6 +1496,7 @@ struct test_case {
         // build graph
         ggml_cgraph * gf = ggml_new_graph_custom(ctx.get(), graph_nodes, false);
         ggml_build_forward_expand(gf, out);
+        const int base_graph_nodes = ggml_graph_n_nodes(gf);
 
         // warmup run
         ggml_status status = ggml_backend_graph_compute(backend, gf);
@@ -1504,32 +1505,6 @@ struct test_case {
             return false;
         }
 
-        // determine number of runs
-        int n_runs;
-        bool is_cpu = ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
-        if (op_flops(out) > 0) {
-            // based on flops
-            const uint64_t GFLOP = 1000 * 1000 * 1000;
-            const uint64_t target_flops_cpu =   8ULL * GFLOP;
-            const uint64_t target_flops_gpu = 100ULL * GFLOP;
-            uint64_t target_flops = is_cpu ? target_flops_cpu : target_flops_gpu;
-            n_runs = (int)std::min<int64_t>(ggml_graph_size(gf) - ggml_graph_n_nodes(gf), target_flops / op_flops(out)) + 1;
-        } else {
-            // based on memory size
-            const size_t GB = 1ULL << 30;
-            const size_t target_size_cpu =  8 * GB;
-            const size_t target_size_gpu = 32 * GB;
-            size_t target_size = is_cpu ? target_size_cpu : target_size_gpu;
-            n_runs = (int)std::min<int64_t>(ggml_graph_size(gf) - ggml_graph_n_nodes(gf), target_size / op_size(out)) + 1;
-        }
-
-        // duplicate the op
-        for (int i = 1; i < n_runs; i++) {
-            ggml_graph_add_node(gf, out);
-        }
-
-        // calculate memory
-        size_t mem = n_runs * op_size(out);
         auto tensor_op_size = [](ggml_tensor * t) {
             size_t size = ggml_nbytes(t);
             // add source tensors
@@ -1540,11 +1515,70 @@ struct test_case {
             }
             return size;
         };
-        for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
-            if (ggml_is_view_op(ggml_graph_node(gf, i)->op) || ggml_graph_node(gf, i) == out) {
-                continue;
+
+        auto graph_op_size = [&](int n_nodes) {
+            size_t size = 0;
+            for (int i = 0; i < n_nodes; ++i) {
+                ggml_tensor * node = ggml_graph_node(gf, i);
+                if (!ggml_is_view_op(node->op)) {
+                    size += tensor_op_size(node);
+                }
             }
-            mem += tensor_op_size(ggml_graph_node(gf, i));
+            return size;
+        };
+
+        // determine number of runs
+        int n_runs;
+        bool is_cpu = ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
+        const bool whole_graph = run_whole_graph();
+        const int max_runs = whole_graph ?
+            std::max(1, ggml_graph_size(gf) / base_graph_nodes) :
+            std::max(1, ggml_graph_size(gf) - base_graph_nodes + 1);
+        const size_t size_per_run = whole_graph ? graph_op_size(base_graph_nodes) : op_size(out);
+        if (op_flops(out) > 0) {
+            // based on flops
+            const uint64_t GFLOP = 1000 * 1000 * 1000;
+            const uint64_t target_flops_cpu =   8ULL * GFLOP;
+            const uint64_t target_flops_gpu = 100ULL * GFLOP;
+            uint64_t target_flops = is_cpu ? target_flops_cpu : target_flops_gpu;
+            n_runs = (int) std::min<int64_t>(max_runs, target_flops / op_flops(out) + 1);
+        } else {
+            // based on memory size
+            const size_t GB = 1ULL << 30;
+            const size_t target_size_cpu =  8 * GB;
+            const size_t target_size_gpu = 32 * GB;
+            size_t target_size = is_cpu ? target_size_cpu : target_size_gpu;
+            n_runs = (int) std::min<int64_t>(max_runs, target_size / size_per_run + 1);
+        }
+
+        if (whole_graph) {
+            std::vector<ggml_tensor *> nodes;
+            nodes.reserve(base_graph_nodes);
+            for (int i = 0; i < base_graph_nodes; ++i) {
+                nodes.push_back(ggml_graph_node(gf, i));
+            }
+
+            for (int i = 1; i < n_runs; i++) {
+                for (ggml_tensor * node : nodes) {
+                    ggml_graph_add_node(gf, node);
+                }
+            }
+        } else {
+            // duplicate the op
+            for (int i = 1; i < n_runs; i++) {
+                ggml_graph_add_node(gf, out);
+            }
+        }
+
+        // calculate memory
+        size_t mem = n_runs * size_per_run;
+        if (!whole_graph) {
+            for (int i = 0; i < base_graph_nodes; ++i) {
+                if (ggml_is_view_op(ggml_graph_node(gf, i)->op) || ggml_graph_node(gf, i) == out) {
+                    continue;
+                }
+                mem += tensor_op_size(ggml_graph_node(gf, i));
+            }
         }
 
         // run
@@ -1570,7 +1604,7 @@ struct test_case {
         double calculated_flops = (op_flops(out) > 0) ? (op_flops(out) * total_runs) / (total_time_us / 1e6) : 0.0;
         double calculated_bandwidth =
             (op_flops(out) == 0) ? total_mem / (total_time_us / 1e6) / 1024.0 / 1024.0 / 1024.0 : 0.0;
-        size_t calculated_memory_kb = op_size(out) / 1024;
+        size_t calculated_memory_kb = size_per_run / 1024;
 
         test_result result(ggml_backend_name(backend), current_op_name, vars(), "perf", true, true, "", avg_time_us,
                            calculated_flops, calculated_bandwidth, calculated_memory_kb, total_runs);
@@ -5539,6 +5573,13 @@ struct test_mul_mat_vec_fusion : public test_case {
 
     bool run_whole_graph() override { return true; }
 
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        const int64_t n_tokens = use_id ? n_used*m : m*batch_dims[0]*batch_dims[1];
+        const int64_t n_matmuls = with_gate ? 2 : 1;
+        return 2ULL*n_matmuls*n_tokens*n*k;
+    }
+
     ggml_tensor * build_gate(ggml_context * ctx, ggml_tensor * ffn_gate, ggml_tensor * ffn_up) {
         ggml_tensor * out = nullptr;
         if (with_gate) {
@@ -8704,6 +8745,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_F8_E4M3_B128, GGML_GLU_OP_SWIGLU, 1, 32, 256,
+        false, 1, 1, false, false, true, {1, 1}));
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT}) {
         for (bool with_norm : {false, true}) {
@@ -8855,6 +8898,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 4096, 1, 1024, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 4096, 8, 2048, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3_B128, GGML_TYPE_F32, 2048, 8, 4096, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_F8_E4M3_B128, GGML_GLU_OP_SWIGLU, 1, 4096, 2048, false, 1, 1, false, false, true, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_F8_E4M3_B128, GGML_GLU_OP_SWIGLU, 1, 2048, 4096, false, 1, 1, false, false, true, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_F8_E4M3_B128, GGML_GLU_OP_SWIGLU, 1, 4096, 512,  false, 1, 1, false, false, true, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_F8_E4M3_B128, GGML_GLU_OP_SWIGLU, 1, 4096, 8192, false, 1, 1, false, false, true, {1, 1}));
 
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 32, 64, 4, 4 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 2 }, { 32, 128, 4, 2 }));

@@ -416,7 +416,7 @@ static __global__ void mul_mat_vec_q(
     constexpr int blocks_per_iter = vdr * nwarps*warp_size / qi;
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    constexpr bool use_f8_shared_lut = type == GGML_TYPE_F8_E4M3_B128 && ncols_dst == 1 && !has_fusion && !small_k;
+    constexpr bool use_f8_shared_lut = type == GGML_TYPE_F8_E4M3_B128 && ncols_dst == 1 && !small_k;
 #else
     constexpr bool use_f8_shared_lut = false;
 #endif
