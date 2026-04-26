@@ -1,6 +1,7 @@
 #include "quantize.cuh"
 #include <cstdint>
 
+template <bool need_sum>
 __launch_bounds__(CUDA_QUANTIZE_BLOCK_SIZE, 1)
 static __global__ void quantize_q8_1(
         const float * __restrict__ x, void * __restrict__ vy,
@@ -30,10 +31,15 @@ static __global__ void quantize_q8_1(
 
     const float xi = i0 < ne00 ? x[i03*s03 + i02*s02 + i01*s01 + i00] : 0.0f;
     float amax = fabsf(xi);
-    float sum = xi;
+    float sum = 0.0f;
+    if constexpr (need_sum) {
+        sum = xi;
+    }
 
     amax = warp_reduce_max<QK8_1>(amax);
-    sum  = warp_reduce_sum<QK8_1>(sum);
+    if constexpr (need_sum) {
+        sum = warp_reduce_sum<QK8_1>(sum);
+    }
 
     const float  d = amax / 127.0f;
     const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
@@ -44,7 +50,11 @@ static __global__ void quantize_q8_1(
         return;
     }
 
-    y[ib].ds = make_half2(d, sum);
+    if constexpr (need_sum) {
+        y[ib].ds = make_half2(d, sum);
+    } else {
+        ((half *) &y[ib].ds)[0] = __float2half(d);
+    }
 }
 
 __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
@@ -282,8 +292,11 @@ void quantize_row_q8_1_cuda(
     const int64_t block_num_x = (ne0 + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
     const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
-    quantize_q8_1<<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
-    GGML_UNUSED(type_src0);
+    if (type_src0 == GGML_TYPE_F8_E4M3_B128 || type_src0 == GGML_TYPE_MXFP4 || type_src0 == GGML_TYPE_NVFP4) {
+        quantize_q8_1<false><<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    } else {
+        quantize_q8_1<true><<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    }
 }
 
 void quantize_mmq_q8_1_cuda(

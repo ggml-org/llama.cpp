@@ -415,6 +415,20 @@ static __global__ void mul_mat_vec_q(
     const     int blocks_per_row_x = ncols_x / qk;
     constexpr int blocks_per_iter = vdr * nwarps*warp_size / qi;
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    constexpr bool use_f8_shared_lut = type == GGML_TYPE_F8_E4M3_B128 && ncols_dst == 1 && !has_fusion && !small_k;
+#else
+    constexpr bool use_f8_shared_lut = false;
+#endif
+
+    __shared__ float f8_lut_shared[use_f8_shared_lut ? 256 : 1];
+    if constexpr (use_f8_shared_lut) {
+        for (int i = tid; i < 256; i += nwarps*warp_size) {
+            f8_lut_shared[i] = kvalues_f8_e4m3fn[i];
+        }
+        __syncthreads();
+    }
+
     const uint32_t channel_dst = blockIdx.y;
 
     uint32_t channel_x;
@@ -492,12 +506,22 @@ static __global__ void mul_mat_vec_q(
         for (int j = 0; j < ncols_dst; ++j) {
 #pragma unroll
             for (int i = 0; i < rows_per_cuda_block; ++i) {
-                tmp[j][i] += vec_dot_q_cuda(
-                    vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                if constexpr (use_f8_shared_lut) {
+                    tmp[j][i] += vec_dot_f8_e4m3_b128_q8_1_shared_lut(
+                        vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs, f8_lut_shared);
+                } else {
+                    tmp[j][i] += vec_dot_q_cuda(
+                        vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                }
                 if constexpr (has_fusion) {
                     if (use_gate) {
-                        tmp_gate[j][i] += vec_dot_q_cuda(
-                            vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                        if constexpr (use_f8_shared_lut) {
+                            tmp_gate[j][i] += vec_dot_f8_e4m3_b128_q8_1_shared_lut(
+                                vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs, f8_lut_shared);
+                        } else {
+                            tmp_gate[j][i] += vec_dot_q_cuda(
+                                vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                        }
                     }
                 }
             }
@@ -750,8 +774,10 @@ static void mul_mat_vec_q_switch_ncols_dst(
         constexpr int vdr                   = get_vdr_mmvq(type);
         const int     blocks_per_row_x      = ncols_x / qk;
         const int     blocks_per_iter_1warp = vdr * warp_size / qi;
+        const int     small_k_blocks_per_iter_1warp =
+            type == GGML_TYPE_F8_E4M3_B128 ? 4 * warp_size / qi : blocks_per_iter_1warp;
         const int     nwarps                = calc_nwarps(type, c_ncols_dst, table_id);
-        bool          use                   = nwarps > 1 && blocks_per_row_x < nwarps * blocks_per_iter_1warp;
+        bool          use                   = nwarps > 1 && blocks_per_row_x < nwarps * small_k_blocks_per_iter_1warp;
 
         constexpr std::array<ggml_type, 2> iq_slow_turing = {
             GGML_TYPE_IQ3_XXS,

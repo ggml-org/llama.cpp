@@ -170,6 +170,24 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_
     return d8 * __half2float(d_q8_1) * sum;
 }
 
+template <int vdr> static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_q8_1_impl_shared_lut(
+    const int * v, const int * u, const float & d8, const half & d_q8_1, const float * __restrict__ values) {
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < vdr; ++i) {
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const uint8_t q = (uint32_t(v[i]) >> (8*j)) & 0xFF;
+            const int8_t  y = (uint32_t(u[i]) >> (8*j)) & 0xFF;
+            sum += values[q] * y;
+        }
+    }
+
+    return d8 * __half2float(d_q8_1) * sum;
+}
+
 template <int vdr> static __device__ __forceinline__ float vec_dot_q4_0_q8_1_impl(
     const int * v, const int * u, const float & d4, const half2 & ds8) {
 
@@ -869,7 +887,7 @@ static __device__ __forceinline__ float vec_dot_q8_0_q8_1(
     return vec_dot_q8_0_q8_1_impl<float, VDR_Q8_0_Q8_1_MMVQ>(v, u, bq8_0->d, __low2half(bq8_1->ds));
 }
 
-#define VDR_F8_E4M3_B128_Q8_1_MMVQ 4
+#define VDR_F8_E4M3_B128_Q8_1_MMVQ 2
 
 static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
@@ -891,6 +909,29 @@ static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_q8_1(
 
     return vec_dot_f8_e4m3_b128_q8_1_impl<VDR_F8_E4M3_B128_Q8_1_MMVQ>(
         v, u, ggml_cuda_e8m0_to_fp32(bq->e), __low2half(bq8_1[y_block].ds));
+}
+
+static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_q8_1_shared_lut(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs,
+    const float * __restrict__ values) {
+
+    const block_f8_e4m3_b128 * bq = (const block_f8_e4m3_b128 *) vbq + kbx;
+
+    static_assert(VDR_F8_E4M3_B128_Q8_1_MMVQ <= QI8_1, "VDR must not span multiple Q8_1 blocks");
+    const int y_block = iqs / QI8_1;
+    const int y_iqs   = iqs % QI8_1;
+
+    int v[VDR_F8_E4M3_B128_Q8_1_MMVQ];
+    int u[VDR_F8_E4M3_B128_Q8_1_MMVQ];
+
+#pragma unroll
+    for (int i = 0; i < VDR_F8_E4M3_B128_Q8_1_MMVQ; ++i) {
+        v[i] = get_int_b1(bq->qs, iqs + i);
+        u[i] = get_int_b4(bq8_1[y_block].qs, y_iqs + i);
+    }
+
+    return vec_dot_f8_e4m3_b128_q8_1_impl_shared_lut<VDR_F8_E4M3_B128_Q8_1_MMVQ>(
+        v, u, ggml_cuda_e8m0_to_fp32(bq->e), __low2half(bq8_1[y_block].ds), values);
 }
 
 static __device__ __forceinline__ float vec_dot_q2_K_q8_1(

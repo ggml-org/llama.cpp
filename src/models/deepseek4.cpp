@@ -198,6 +198,10 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
         return ggml_clamp(ctx0, tensor, eps, INFINITY);
     };
 
+    auto cont_if_needed = [&](ggml_tensor * tensor) -> ggml_tensor * {
+        return ggml_is_contiguous(tensor) ? tensor : ggml_cont(ctx0, tensor);
+    };
+
     auto mul_mat_checked = [&](ggml_tensor * a, ggml_tensor * b, const char * tag) -> ggml_tensor * {
         if (ggml_is_transposed(a)) {
             GGML_ABORT("deepseek4: transposed lhs in %s (%s)", tag, a->name[0] ? a->name : "<unnamed>");
@@ -234,13 +238,12 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
     };
 
     auto affine = [&](ggml_tensor * tensor, ggml_tensor * scale, ggml_tensor * bias) -> ggml_tensor * {
-        ggml_tensor * scale_r = repeat_checked(scale, tensor, "affine.scale");
-        ggml_tensor * out = ggml_mul(ctx0, tensor, scale_r);
+        ggml_tensor * out = ggml_mul(ctx0, tensor, scale);
         return ggml_add(ctx0, out, bias);
     };
 
     auto weighted_sum_hc = [&](ggml_tensor * x_hc, ggml_tensor * weights) -> ggml_tensor * {
-        ggml_tensor * x_mat = ggml_cont(ctx0, ggml_reshape_2d(ctx0, x_hc, n_embd, hc_mult));
+        ggml_tensor * x_mat = cont_if_needed(ggml_reshape_2d(ctx0, x_hc, n_embd, hc_mult));
         ggml_tensor * x_t = ggml_cont(ctx0, ggml_transpose(ctx0, x_mat));
         return mul_mat_checked(x_t, weights, "weighted_sum_hc");
     };
@@ -272,7 +275,7 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
     };
 
     auto hc_pre = [&](ggml_tensor * x_hc, ggml_tensor * hc_fn, ggml_tensor * hc_scale, ggml_tensor * hc_base, int il) {
-        ggml_tensor * x_flat = ggml_cont(ctx0, ggml_reshape_2d(ctx0, x_hc, n_embd * hc_mult, work_tokens));
+        ggml_tensor * x_flat = cont_if_needed(ggml_reshape_2d(ctx0, x_hc, n_embd * hc_mult, work_tokens));
         ggml_tensor * x_norm = ggml_rms_norm(ctx0, x_flat, hparams.f_norm_rms_eps);
         cb(x_norm, "hc_norm", il);
 
@@ -304,22 +307,22 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
     };
 
     auto hc_post = [&](ggml_tensor * x_single, ggml_tensor * residual_hc, ggml_tensor * post, ggml_tensor * comb, int il) -> ggml_tensor * {
-        ggml_tensor * residual = ggml_cont(ctx0, ggml_reshape_2d(ctx0, residual_hc, n_embd, hc_mult));
+        ggml_tensor * residual = cont_if_needed(ggml_reshape_2d(ctx0, residual_hc, n_embd, hc_mult));
         ggml_tensor * residual_t = ggml_cont(ctx0, ggml_transpose(ctx0, residual));
         ggml_tensor * mixed_t = mul_mat_checked(comb, residual_t, "hc_post.mixed");
         ggml_tensor * mixed = ggml_cont(ctx0, ggml_transpose(ctx0, mixed_t));
 
         ggml_tensor * x_repeat = repeat_checked(x_single, residual, "hc_post.x");
-        ggml_tensor * post_repeat = repeat_checked(ggml_cont(ctx0, ggml_transpose(ctx0, post)), residual, "hc_post.post");
+        ggml_tensor * post_t = ggml_cont(ctx0, ggml_transpose(ctx0, post));
 
-        ggml_tensor * out = ggml_add(ctx0, ggml_mul(ctx0, x_repeat, post_repeat), mixed);
+        ggml_tensor * out = ggml_add(ctx0, ggml_mul(ctx0, x_repeat, post_t), mixed);
         cb(out, "hc_expand", il);
 
         return reshape_3d_checked(out, n_embd, hc_mult, work_tokens, "hc_post.out", il);
     };
 
     auto hc_head = [&](ggml_tensor * x_hc, ggml_tensor * hc_fn, ggml_tensor * hc_scale, ggml_tensor * hc_base) -> ggml_tensor * {
-        ggml_tensor * x_flat = ggml_cont(ctx0, ggml_reshape_2d(ctx0, x_hc, n_embd * hc_mult, work_tokens));
+        ggml_tensor * x_flat = cont_if_needed(ggml_reshape_2d(ctx0, x_hc, n_embd * hc_mult, work_tokens));
         ggml_tensor * x_norm = ggml_rms_norm(ctx0, x_flat, hparams.f_norm_rms_eps);
         ggml_tensor * mixes = mul_mat_checked(hc_fn, x_norm, "hc_head.mixes");
         ggml_tensor * pre = affine(mixes, scalar_view(hc_scale, 0), hc_base);
@@ -385,15 +388,10 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
         experts = ggml_mul(ctx0, experts, weights);
         cb(experts, "ffn_moe_down", il);
 
-        ggml_tensor * views[LLAMA_MAX_EXPERTS] = { nullptr };
-        for (uint32_t i = 0; i < hparams.n_expert_used; ++i) {
-            views[i] = ggml_view_2d(ctx0, experts, n_embd, work_tokens, experts->nb[2], i * experts->nb[1]);
-        }
-
-        ggml_tensor * out = views[0];
-        for (uint32_t i = 1; i < hparams.n_expert_used; ++i) {
-            out = ggml_add(ctx0, out, views[i]);
-        }
+        ggml_tensor * experts_by_id = ggml_cont(ctx0, ggml_permute(ctx0, experts, 1, 0, 2, 3));
+        ggml_tensor * out = sum_rows_checked(experts_by_id, "build_expert_mix.sum");
+        out = reshape_3d_checked(out, 1, n_embd, work_tokens, "build_expert_mix.sum_out", il);
+        out = ggml_reshape_2d(ctx0, out, n_embd, work_tokens);
 
         cb(out, "ffn_moe_out", il);
         return out;
@@ -430,7 +428,7 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
             cb(selection, "ffn_biased_scores", il);
         }
 
-        ggml_tensor * selected_experts = ggml_argsort_top_k(ctx0, selection, n_expert_used);
+        ggml_tensor * selected_experts = ggml_top_k(ctx0, selection, n_expert_used);
         cb(selected_experts, "ffn_topk", il);
 
         ggml_tensor * weights = ggml_get_rows(ctx0, reshape_3d_checked(scores, 1, n_expert, work_tokens, "build_moe_v4.scores", il), selected_experts);
@@ -479,11 +477,11 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
 
         ggml_tensor * k_nope = ggml_view_3d(ctx0, kv, nope_dim, 1, work_tokens, kv->nb[1], kv->nb[2], 0);
         ggml_tensor * k_pe = ggml_view_3d(ctx0, kv, rope_dim, 1, work_tokens, kv->nb[1], kv->nb[2], nope_dim * kv->nb[0]);
-        k_nope = ggml_fp8_act_quant(ctx0, ggml_cont(ctx0, k_nope));
+        k_nope = ggml_fp8_act_quant(ctx0, cont_if_needed(k_nope));
         k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, rope_dim, rope_type, layer_n_ctx_orig, layer_freq_base, layer_freq_scale,
                 layer_ext_factor, layer_attn_factor, layer_beta_fast, layer_beta_slow);
         ggml_tensor * k_states = ggml_concat(ctx0, k_nope, k_pe, 0);
-        ggml_tensor * k_flat = ggml_cont(ctx0, ggml_reshape_2d(ctx0, k_states, head_dim, work_tokens));
+        ggml_tensor * k_flat = cont_if_needed(ggml_reshape_2d(ctx0, k_states, head_dim, work_tokens));
 
         const auto & state = mctx_cur->get_layer(il);
         ggml_tensor * updated_cache = ggml_set_rows(ctx0, state.attn_kv, k_flat, deepseek4_inputs->attn_cache_idx);
@@ -563,7 +561,7 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                 ggml_tensor * comp_states = reshape_3d_checked(comp_flat, head_dim, 1, 1, "build_attn_v4.comp_states", il);
                 ggml_tensor * comp_nope = ggml_view_3d(ctx0, comp_states, nope_dim, 1, 1, comp_states->nb[1], comp_states->nb[2], 0);
                 ggml_tensor * comp_pe = ggml_view_3d(ctx0, comp_states, rope_dim, 1, 1, comp_states->nb[1], comp_states->nb[2], nope_dim * comp_states->nb[0]);
-                comp_nope = ggml_fp8_act_quant(ctx0, ggml_cont(ctx0, comp_nope));
+                comp_nope = ggml_fp8_act_quant(ctx0, cont_if_needed(comp_nope));
 
                 ggml_tensor * comp_pos = nullptr;
                 ggml_tensor * comp_cache_idx = nullptr;
@@ -580,7 +578,7 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                 comp_pe = ggml_rope_ext(ctx0, comp_pe, comp_pos, nullptr, rope_dim, rope_type, layer_n_ctx_orig, layer_freq_base, layer_freq_scale,
                         layer_ext_factor, layer_attn_factor, layer_beta_fast, layer_beta_slow);
                 comp_states = ggml_concat(ctx0, comp_nope, comp_pe, 0);
-                comp_flat = ggml_cont(ctx0, ggml_reshape_2d(ctx0, comp_states, head_dim, 1));
+                comp_flat = cont_if_needed(ggml_reshape_2d(ctx0, comp_states, head_dim, 1));
                 cb(comp_flat, "attn_comp_cache", il);
 
                 updated_cache = ggml_set_rows(ctx0, updated_cache, comp_flat, comp_cache_idx);
@@ -667,9 +665,9 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                 indexer_comp_pe = ggml_rope_ext(ctx0, indexer_comp_pe, deepseek4_inputs->comp_pos_r4, nullptr, rope_dim, rope_type,
                         layer_n_ctx_orig, layer_freq_base, layer_freq_scale, layer_ext_factor, layer_attn_factor, layer_beta_fast, layer_beta_slow);
                 indexer_comp_states = ggml_concat(ctx0, indexer_comp_nope, indexer_comp_pe, 0);
-                indexer_comp_flat = ggml_cont(ctx0, ggml_reshape_2d(ctx0, indexer_comp_states, indexer_head_dim, 1));
+                indexer_comp_flat = cont_if_needed(ggml_reshape_2d(ctx0, indexer_comp_states, indexer_head_dim, 1));
                 indexer_comp_flat = ggml_mul_mat(ctx0, deepseek4_inputs->indexer_hadamard, indexer_comp_flat);
-                indexer_comp_flat = ggml_fp4_act_quant(ctx0, ggml_cont(ctx0, indexer_comp_flat));
+                indexer_comp_flat = ggml_fp4_act_quant(ctx0, cont_if_needed(indexer_comp_flat));
                 cb(indexer_comp_flat, "indexer_comp_cache", il);
 
                 updated_indexer_kv = ggml_set_rows(ctx0, updated_indexer_kv, indexer_comp_flat, deepseek4_inputs->indexer_cache_idx_r4);
@@ -703,9 +701,9 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, rope_dim, rope_type,
                             layer_n_ctx_orig, layer_freq_base, layer_freq_scale, layer_ext_factor, layer_attn_factor, layer_beta_fast, layer_beta_slow);
                     indexer_q = ggml_concat(ctx0, indexer_q_nope, indexer_q_pe, 0);
-                    indexer_q = ggml_cont(ctx0, ggml_reshape_2d(ctx0, indexer_q, indexer_head_dim, hparams.indexer_n_head));
+                    indexer_q = cont_if_needed(ggml_reshape_2d(ctx0, indexer_q, indexer_head_dim, hparams.indexer_n_head));
                     indexer_q = ggml_mul_mat(ctx0, deepseek4_inputs->indexer_hadamard, indexer_q);
-                    indexer_q = ggml_fp4_act_quant(ctx0, ggml_cont(ctx0, indexer_q));
+                    indexer_q = ggml_fp4_act_quant(ctx0, cont_if_needed(indexer_q));
                     cb(indexer_q, "indexer_q", il);
 
                     ggml_tensor * indexer_kv_prefix = ggml_view_2d(ctx0, updated_indexer_kv, indexer_head_dim, n_comp, updated_indexer_kv->nb[1], 0);
@@ -757,7 +755,7 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                 layer_ext_factor, layer_attn_factor, layer_beta_fast, layer_beta_slow);
 
         out = ggml_concat(ctx0, o_nope, o_pe, 0);
-        out = ggml_cont(ctx0, ggml_reshape_2d(ctx0, out, total_q_dim, work_tokens));
+        out = cont_if_needed(ggml_reshape_2d(ctx0, out, total_q_dim, work_tokens));
         cb(out, "attn_out", il);
 
         return build_grouped_out(out, layer, il);
