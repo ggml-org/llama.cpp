@@ -397,6 +397,25 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
     return render_message_to_json(msgs, c);
 }
 
+json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools) {
+    if (tools.empty()) {
+        return json();
+    }
+
+    auto result = json::array();
+    for (const auto & tool : tools) {
+        result.push_back({
+            { "type",     "function" },
+            { "function", {
+                { "name", tool.name },
+                { "description", tool.description },
+                { "parameters", json::parse(tool.parameters) },
+            }},
+        });
+    }
+    return result;
+}
+
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & tools) {
     std::vector<common_chat_tool> result;
 
@@ -430,56 +449,6 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
     }
 
     return result;
-}
-
-json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools) {
-    if (tools.empty()) {
-        return json();
-    }
-
-    auto result = json::array();
-    for (const auto & tool : tools) {
-        result.push_back({
-            { "type",     "function" },
-            { "function",
-             {
-                  { "name", tool.name },
-                  { "description", tool.description },
-                  { "parameters", json::parse(tool.parameters) },
-              }                      },
-        });
-    }
-    return result;
-}
-
-json common_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {
-    json delta = json::object();
-    if (!diff.reasoning_content_delta.empty()) {
-        delta["reasoning_content"] = diff.reasoning_content_delta;
-    }
-    if (!diff.content_delta.empty()) {
-        delta["content"] = diff.content_delta;
-    }
-    if (diff.tool_call_index != std::string::npos) {
-        json tool_call;
-        tool_call["index"] = diff.tool_call_index;
-        if (!diff.tool_call_delta.id.empty()) {
-            tool_call["id"]   = diff.tool_call_delta.id;
-            tool_call["type"] = "function";
-        }
-        if (!diff.tool_call_delta.name.empty() || !diff.tool_call_delta.arguments.empty()) {
-            json function = json::object();
-            if (!diff.tool_call_delta.name.empty()) {
-                function["name"] = diff.tool_call_delta.name;
-            }
-            if (!diff.tool_call_delta.arguments.empty()) {
-                function["arguments"] = diff.tool_call_delta.arguments;
-            }
-            tool_call["function"] = function;
-        }
-        delta["tool_calls"] = json::array({ tool_call });
-    }
-    return delta;
 }
 
 bool common_chat_verify_template(const std::string & tmpl, bool use_jinja) {
@@ -573,6 +542,26 @@ void common_chat_templates_free(struct common_chat_templates * tmpls) {
 
 bool common_chat_templates_was_explicit(const struct common_chat_templates * tmpls) {
     return tmpls->has_explicit_template;
+}
+
+// LFM2 format detection: template uses <|tool_list_start|>[...]<|tool_list_end|> around the tool list
+// and <|tool_call_start|>[...]<|tool_call_end|> around each tool call
+static bool is_lfm2_template(const std::string & src) {
+    return src.find("<|tool_list_start|>") != std::string::npos &&
+           src.find("<|tool_list_end|>")   != std::string::npos;
+}
+
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates) {
+    common_chat_prompt_preset asr_preset;
+    asr_preset.system = "";
+    asr_preset.user   = "Transcribe audio to text";
+
+    if (chat_templates && chat_templates->template_default && is_lfm2_template(chat_templates->template_default->source())) {
+        asr_preset.system = "Perform ASR.";
+        asr_preset.user   = "";
+    }
+
+    return asr_preset;
 }
 
 std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant) {
@@ -2084,10 +2073,7 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_kimi_k2(tmpl, params);
     }
 
-    // LFM2 format detection: template uses <|tool_list_start|>[...]<|tool_list_end|> around the tool list
-    // and <|tool_call_start|>[...]<|tool_call_end|> around each tool call
-    if (src.find("<|tool_list_start|>") != std::string::npos &&
-        src.find("<|tool_list_end|>") != std::string::npos) {
+    if (is_lfm2_template(src)) {
         LOG_DBG("Using specialized template: LFM2\n");
         return common_chat_params_init_lfm2(tmpl, params);
     }
@@ -2334,7 +2320,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         ? input
         : params.generation_prompt + input;
 
-    LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.c_str());
+    //LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.c_str());
 
     common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_LENIENT;
     if (params.debug) {
@@ -2396,4 +2382,3 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     GGML_ASSERT(chat_templates->template_default != nullptr);
     return chat_templates->template_default->caps.to_map();
 }
-

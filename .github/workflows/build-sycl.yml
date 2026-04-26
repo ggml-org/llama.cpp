@@ -1,0 +1,142 @@
+name: CI (sycl)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/build-sycl.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-sycl.yml',
+      'ggml/src/ggml-sycl/**'
+    ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+
+jobs:
+
+  ubuntu-24-sycl:
+    strategy:
+      matrix:
+        build: [fp32, fp16]
+        include:
+          - build: fp32
+            fp16: OFF
+          - build: fp16
+            fp16: ON
+
+    runs-on: ubuntu-24.04
+
+    env:
+      ONEAPI_ROOT: /opt/intel/oneapi/
+      ONEAPI_INSTALLER_VERSION: "2025.3.3"
+
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Use oneAPI Installation Cache
+        uses: actions/cache@v5
+        id: cache-sycl
+        with:
+          path: ${{ env.ONEAPI_ROOT }}
+          key: oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
+
+      - name: Download & Install oneAPI
+        shell: bash
+        if: steps.cache-sycl.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
+          sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-24-sycl-${{ matrix.build }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          cmake -B build \
+            -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_SYCL=ON \
+            -DCMAKE_C_COMPILER=icx \
+            -DCMAKE_CXX_COMPILER=icpx \
+            -DLLAMA_OPENSSL=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_SYCL_F16=${{ matrix.fp16 }}
+          time cmake --build build --config Release -j $(nproc)
+
+  windows-latest-sycl:
+    runs-on: windows-2022
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
+      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
+      ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
+      ONEAPI_INSTALLER_VERSION: "2025.3.3"
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Use oneAPI Installation Cache
+        uses: actions/cache@v5
+        id: cache-sycl
+        with:
+          path: ${{ env.ONEAPI_ROOT }}
+          key: oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
+
+      - name: Download & Install oneAPI
+        shell: bash
+        if: steps.cache-sycl.outputs.cache-hit != 'true'
+        run: |
+          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: windows-latest-sycl
+          variant: ccache
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      # TODO: add ssl support ; we will also need to modify win-build-sycl.bat to accept user-specified args
+
+      - name: Build
+        id: cmake_build
+        run:  examples/sycl/win-build-sycl.bat
