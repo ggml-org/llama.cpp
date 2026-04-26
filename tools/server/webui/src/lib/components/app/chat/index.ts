@@ -92,6 +92,10 @@ export { default as ChatAttachmentsItemThumbnailImage } from './ChatAttachments/
  * Uses ChatAttachmentPreviewSingle internally for each item's content.
  */
 export { default as ChatAttachmentsPreview } from './ChatAttachments/ChatAttachmentsPreview.svelte';
+export { default as ChatAttachmentsPreviewNavButtons } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewNavButtons.svelte';
+export { default as ChatAttachmentsPreviewFileInfo } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewFileInfo.svelte';
+export { default as ChatAttachmentsPreviewThumbnailStrip } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewThumbnailStrip.svelte';
+export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewCurrentItem/ChatAttachmentsPreviewCurrentItem.svelte';
 
 /**
  *

@@ -14,7 +14,7 @@
 		onRemove?: (attachmentId: string) => void;
 	}
 
-	let { attachment, class: className , onclick, onRemove}: Props = $props();
+	let { attachment, class: className, onclick, onRemove }: Props = $props();
 
 	const ResourceIcon = $derived(
 		getResourceIcon(attachment.resource.mimeType, attachment.resource.uri)
