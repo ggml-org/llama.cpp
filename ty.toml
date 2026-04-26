@@ -28,3 +28,12 @@ include = [
 [overrides.rules]
 unsupported-operator = "ignore"
 not-subscriptable = "ignore"
+
+[[overrides]]
+include = [
+    "./cmake/triton_aot_compile.py",
+]
+
+[overrides.rules]
+unresolved-reference = "ignore"
+unresolved-import = "ignore"
