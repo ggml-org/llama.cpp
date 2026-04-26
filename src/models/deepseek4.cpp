@@ -243,6 +243,12 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
     };
 
     auto weighted_sum_hc = [&](ggml_tensor * x_hc, ggml_tensor * weights) -> ggml_tensor * {
+        if (x_hc->type == GGML_TYPE_F32 && weights->type == GGML_TYPE_F32 &&
+                x_hc->ne[0] == n_embd && x_hc->ne[1] == hc_mult && x_hc->ne[2] == 1 && x_hc->ne[3] == 1 &&
+                weights->ne[0] == hc_mult && weights->ne[1] == 1 && weights->ne[2] == 1 && weights->ne[3] == 1) {
+            return ggml_hc_weighted_sum(ctx0, x_hc, weights);
+        }
+
         ggml_tensor * x_mat = cont_if_needed(ggml_reshape_2d(ctx0, x_hc, n_embd, hc_mult));
         ggml_tensor * x_t = ggml_cont(ctx0, ggml_transpose(ctx0, x_mat));
         return mul_mat_checked(x_t, weights, "weighted_sum_hc");

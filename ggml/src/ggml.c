@@ -1081,9 +1081,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+    "HC_WEIGHTED_SUM",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1191,9 +1192,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+    "hc_weighted_sum(x,w)",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3277,6 +3279,28 @@ struct ggml_tensor * ggml_mul_mat(
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
     result->op     = GGML_OP_MUL_MAT;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
+// ggml_hc_weighted_sum
+
+struct ggml_tensor * ggml_hc_weighted_sum(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(b->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(a->ne[1] == b->ne[0]);
+    GGML_ASSERT(a->ne[2] == 1 && a->ne[3] == 1);
+    GGML_ASSERT(b->ne[1] == 1 && b->ne[2] == 1 && b->ne[3] == 1);
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, a->ne[0]);
+
+    result->op     = GGML_OP_HC_WEIGHTED_SUM;
     result->src[0] = a;
     result->src[1] = b;
 
@@ -6586,6 +6610,21 @@ static void ggml_compute_backward(
                             src0,               // [n,m,q1,r1]
                             ggml_transpose(ctx, // [p,m,qq,rr]
                                 grad)));        // [m,p,qq,rr]
+            }
+        } break;
+        case GGML_OP_HC_WEIGHTED_SUM: {
+            if (src0_needs_grads || src1_needs_grads) {
+                struct ggml_tensor * grad_x = ggml_repeat(ctx, grad, src0);
+
+                if (src0_needs_grads) {
+                    struct ggml_tensor * src1_cont = ggml_is_contiguous(src1) ? src1 : ggml_cont(ctx, src1);
+                    struct ggml_tensor * weights = ggml_reshape_2d(ctx, src1_cont, 1, src1->ne[0]);
+                    ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad_x, weights));
+                }
+                if (src1_needs_grads) {
+                    struct ggml_tensor * weighted_grad = ggml_mul(ctx, src0, grad_x);
+                    ggml_add_or_set(ctx, cgraph, isrc1, ggml_reshape(ctx, ggml_sum_rows(ctx, weighted_grad), src1));
+                }
             }
         } break;
         case GGML_OP_SCALE: {

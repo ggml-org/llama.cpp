@@ -47,6 +47,7 @@ void ggml_compute_forward_rms_norm(const struct ggml_compute_params * params, st
 void ggml_compute_forward_rms_norm_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_group_norm(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_l2_norm(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_hc_weighted_sum(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_out_prod(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_scale(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_set(const struct ggml_compute_params * params, struct ggml_tensor * dst);

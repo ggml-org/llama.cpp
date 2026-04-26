@@ -61,6 +61,7 @@
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/fill.cuh"
+#include "ggml-cuda/hc-weighted-sum.cuh"
 #include "ggml.h"
 
 #include <algorithm>
@@ -2829,6 +2830,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_MUL_MAT_ID:
             ggml_cuda_mul_mat_id(ctx, dst);
             break;
+        case GGML_OP_HC_WEIGHTED_SUM:
+            ggml_cuda_op_hc_weighted_sum(ctx, dst);
+            break;
         case GGML_OP_OUT_PROD:
             ggml_cuda_out_prod(ctx, dst);
             break;
@@ -5163,6 +5167,13 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_MEAN:
         case GGML_OP_GROUP_NORM:
             return ggml_is_contiguous(op->src[0]);
+        case GGML_OP_HC_WEIGHTED_SUM:
+            return op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1]->type == GGML_TYPE_F32 &&
+                op->type == GGML_TYPE_F32 &&
+                op->src[0]->ne[1] == op->src[1]->ne[0] &&
+                op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1 &&
+                op->src[1]->ne[1] == 1 && op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1;
         case GGML_OP_PAD:
             return true;
         case GGML_OP_UPSCALE:

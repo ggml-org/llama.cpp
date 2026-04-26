@@ -5761,6 +5761,59 @@ struct test_sum_rows : public test_case {
     }
 };
 
+// GGML_OP_HC_WEIGHTED_SUM
+struct test_hc_weighted_sum : public test_case {
+    const int64_t n_embd;
+    const int64_t hc_mult;
+    const bool slice_x;
+    const bool slice_w;
+
+    std::string vars() override {
+        return VARS_TO_STR4(n_embd, hc_mult, slice_x, slice_w);
+    }
+
+    test_hc_weighted_sum(int64_t n_embd = 64, int64_t hc_mult = 4, bool slice_x = false, bool slice_w = false)
+        : n_embd(n_embd), hc_mult(hc_mult), slice_x(slice_x), slice_w(slice_w) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = nullptr;
+        if (slice_x) {
+            int64_t ne_x_base[2] = { n_embd + 1, hc_mult };
+            ggml_tensor * x_base = ggml_new_tensor(ctx, GGML_TYPE_F32, 2, ne_x_base);
+            ggml_set_param(x_base);
+            ggml_set_name(x_base, "x_base");
+            x = ggml_view_2d(ctx, x_base, n_embd, hc_mult, x_base->nb[1], x_base->nb[0]);
+        } else {
+            int64_t ne_x[2] = { n_embd, hc_mult };
+            x = ggml_new_tensor(ctx, GGML_TYPE_F32, 2, ne_x);
+            ggml_set_param(x);
+        }
+        ggml_set_name(x, "x");
+
+        ggml_tensor * w = nullptr;
+        if (slice_w) {
+            ggml_tensor * w_base = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hc_mult + 1);
+            ggml_set_param(w_base);
+            ggml_set_name(w_base, "w_base");
+            w = ggml_view_1d(ctx, w_base, hc_mult, w_base->nb[0]);
+        } else {
+            w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hc_mult);
+            ggml_set_param(w);
+        }
+        ggml_set_name(w, "w");
+
+        ggml_tensor * out = ggml_hc_weighted_sum(ctx, x, w);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2ull*n_embd*hc_mult;
+    }
+};
+
 // GGML_OP_MEAN
 struct test_mean : public test_case {
     const ggml_type type;
@@ -8571,6 +8624,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 256, 1, 1 }));
+    test_cases.emplace_back(new test_hc_weighted_sum(64, 4, false, false));
+    test_cases.emplace_back(new test_hc_weighted_sum(4096, 4, false, false));
+    test_cases.emplace_back(new test_hc_weighted_sum(127, 4, true, true));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {64, 64, 320, 1}));

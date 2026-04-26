@@ -578,6 +578,7 @@ extern "C" {
         GGML_OP_OPT_STEP_SGD,
 
         GGML_OP_GLU,
+        GGML_OP_HC_WEIGHTED_SUM,
 
         GGML_OP_COUNT,
     };
@@ -1425,6 +1426,13 @@ extern "C" {
     // B: k columns, m rows  (i.e. we transpose it internally) => [ne03 * x, ne02 * y, m, k]
     // result is n columns, m rows => [ne03 * x, ne02 * y, m, n]
     GGML_API struct ggml_tensor * ggml_mul_mat(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    // weighted sum over the HC dimension:
+    // a: [n_embd, hc_mult], b: [hc_mult] => result: [n_embd]
+    GGML_API struct ggml_tensor * ggml_hc_weighted_sum(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
