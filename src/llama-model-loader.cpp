@@ -526,6 +526,17 @@ llama_model_loader::llama_model_loader(
         trace = atoi(getenv("LLAMA_TRACE"));
     }
 
+    #ifdef _WIN32
+        // Cap at MSVC's hard limit of 8192 - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setmaxstdio?view=msvc-160
+        #define _GGML_STDIO_TARGET 2048
+        int _setmaxstdio_ret = _setmaxstdio(_GGML_STDIO_TARGET);
+        if (_setmaxstdio_ret == -1) {
+            LLAMA_LOG_INFO("%s: failed to set max stdio to %d. (setmaxstdio returned -1)\n", __func__, _GGML_STDIO_TARGET);
+        } else {
+            LLAMA_LOG_INFO("%s: max stdio successfully set to %d\n", __func__, _setmaxstdio_ret);
+        }
+    #endif // _WIN32
+
     if (param_overrides_p != nullptr) {
         for (const struct llama_model_kv_override * p = param_overrides_p; p->key[0] != 0; p++) {
             kv_overrides.insert({std::string(p->key), *p});
