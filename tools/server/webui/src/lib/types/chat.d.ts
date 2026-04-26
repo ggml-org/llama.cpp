@@ -33,15 +33,6 @@ export interface ChatAttachmentDisplayItem {
 	textContent?: string;
 }
 
-export interface ChatAttachmentPreviewItem {
-	uploadedFile?: ChatUploadedFile;
-	attachment?: DatabaseMessageExtra;
-	preview?: string;
-	name?: string;
-	size?: number;
-	textContent?: string;
-}
-
 export interface ChatMessageSiblingInfo {
 	message: DatabaseMessage;
 	siblingIds: string[];

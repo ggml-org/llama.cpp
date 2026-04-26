@@ -24,8 +24,3 @@ export {
 	type ProcessingInfoContext
 } from './processing-info.context';
 
-export {
-	getAttachmentPreviewContext,
-	setAttachmentPreviewContext,
-	type AttachmentPreviewContext
-} from './attachment-preview.context';
