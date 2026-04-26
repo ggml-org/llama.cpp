@@ -9396,13 +9396,12 @@ class DeepseekV4Model(DeepseekV2Model):
             )
 
         hf = weight.view(torch.uint8).reshape(rows, groups, 16)
-        vals = torch.empty((rows, groups, 32), dtype=torch.uint8)
-        vals[:, :, 0::2].copy_(hf & 0x0F)
-        vals[:, :, 1::2].copy_(hf >> 4)
-
         out = torch.empty((rows, groups, 17), dtype=torch.uint8)
         out[:, :, 0].copy_(scale.view(torch.uint8)[:, :groups])
-        out[:, :, 1:].copy_(vals[:, :, :16] | (vals[:, :, 16:] << 4))
+        lo = hf[:, :, :8]
+        hi = hf[:, :, 8:]
+        out[:, :, 1::2].copy_((lo & 0x0F) | ((hi & 0x0F) << 4))
+        out[:, :, 2::2].copy_((lo >> 4) | (hi & 0xF0))
         return out.reshape(rows, groups * 17)
 
     def set_gguf_parameters(self):
