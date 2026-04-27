@@ -86,7 +86,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     el_map_f32
     fill_f32
     flash_attn_ext_f16_me
-    flash_attn_ext_f32
+    flash_attn_ext_f32     # disabled for debugging
     gated_delta_net_f32
     get_rows_f32
     glu_f32
@@ -109,7 +109,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     rwkv_wkv7_f32
     scale_f32
     set_f32
-    set_rows_f32
+    set_rows_f32           # disabled for debugging
     softmax_f32
     solve_tri_f32
     sqr_f32
