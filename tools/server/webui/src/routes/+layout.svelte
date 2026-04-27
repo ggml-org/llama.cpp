@@ -2,6 +2,7 @@
 	import '../app.css';
 	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
@@ -24,6 +25,7 @@
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
+	import { conversations } from '$lib/stores/conversations.svelte';
 
 	let { children } = $props();
 
@@ -47,11 +49,56 @@
 
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
-		editActiveConversation: () => chatSidebar?.editActiveConversation?.()
+		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
+
+		navigateToPrevConversation: () => {
+			const allConvs = conversations();
+			const currentId = page.params.id;
+
+			if (allConvs.length === 0) return;
+
+			if (!currentId) {
+				goto(`#/chat/${allConvs[allConvs.length - 1].id}`);
+
+				return;
+			}
+
+			const idx = allConvs.findIndex((c) => c.id === currentId);
+			if (idx === -1) return;
+
+			if (idx > 0) {
+				goto(`#/chat/${allConvs[idx - 1].id}`);
+			} else {
+				goto('?new_chat=true#/');
+			}
+		},
+
+		navigateToNextConversation: () => {
+			const allConvs = conversations();
+			const currentId = page.params.id;
+
+			if (allConvs.length === 0) return;
+
+			if (!currentId) {
+				goto(`#/chat/${allConvs[0].id}`);
+
+				return;
+			}
+
+			const idx = allConvs.findIndex((c) => c.id === currentId);
+			if (idx === -1) return;
+
+			if (idx < allConvs.length - 1) {
+				goto(`#/chat/${allConvs[idx + 1].id}`);
+			} else {
+				goto('?new_chat=true#/');
+			}
+		}
 	});
 
 	function handleTitleUpdateCancel() {
 		titleUpdateDialogOpen = false;
+
 		if (titleUpdateResolve) {
 			titleUpdateResolve(false);
 			titleUpdateResolve = null;
@@ -60,6 +107,7 @@
 
 	function handleTitleUpdateConfirm() {
 		titleUpdateDialogOpen = false;
+
 		if (titleUpdateResolve) {
 			titleUpdateResolve(true);
 			titleUpdateResolve = null;
