@@ -1424,7 +1424,16 @@ bool llama_model_loader::load_all_data(
 
     // Buffer size: balance between memory usage and I/O efficiency
     // 64MB works well for NVMe drives
-    const size_t buffer_size = alignment != 1 ? 64 * 1024 * 1024 + 2 * alignment : 1 * 1024 * 1024;
+    // The meta-aware path chunks split tensors by per-tensor row stride; with the
+    // 1MB default any tensor > 1MB would fall back to the sync upload path, so
+    // bump to 64MB whenever any destination buffer is meta.
+    bool any_meta_dest = false;
+    for (const auto & [_, buf] : bufs) {
+        if (ggml_backend_buffer_is_meta(buf)) { any_meta_dest = true; break; }
+    }
+    const size_t buffer_size = (alignment != 1 || any_meta_dest)
+        ? 64 * 1024 * 1024 + 2 * std::max<size_t>(alignment, 1)
+        : 1 * 1024 * 1024;
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<ggml_backend_event_t> events;
@@ -1567,7 +1576,33 @@ bool llama_model_loader::load_all_data(
                 }
             } else {
                 // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
-                if (upload_backend) {
+                if (upload_backend && ggml_backend_buffer_is_meta(cur->buffer)) {
+                    // Meta (split-tensor) backend: set_tensor_async requires (offset, size) to be multiples
+                    // of a per-tensor alignment (row stride for AXIS_0/1/2, 1 for MIRRORED). Tensors that
+                    // can't go through set_tensor_async (multi-segment, PARTIAL, etc.) report SIZE_MAX and
+                    // fall back to the sync set_tensor path which handles those cases. Single-row tensors
+                    // larger than the staging buffer also fall back to sync (max_chunk == 0).
+                    const size_t async_align = ggml_backend_buffer_set_async_alignment(cur->buffer, cur);
+                    const size_t max_chunk   = (async_align == SIZE_MAX) ? 0 : ((buffer_size / async_align) * async_align);
+                    if (max_chunk == 0) {
+                        read_buf.resize(n_size);
+                        file->seek(weight->offs, SEEK_SET);
+                        file->read_raw(read_buf.data(), n_size);
+                        ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+                    } else {
+                        file->seek(weight->offs, SEEK_SET);
+                        size_t data_done = 0;
+                        while (data_done < n_size) {
+                            const size_t this_chunk = std::min<size_t>(max_chunk, n_size - data_done);
+                            ggml_backend_event_synchronize(events[buffer_idx]);
+                            file->read_raw(host_ptrs[buffer_idx], this_chunk);
+                            ggml_backend_tensor_set_async(upload_backend, cur, host_ptrs[buffer_idx], data_done, this_chunk);
+                            ggml_backend_event_record(events[buffer_idx], upload_backend);
+                            data_done += this_chunk;
+                            buffer_idx = (buffer_idx + 1) % n_buffers;
+                        }
+                    }
+                } else if (upload_backend) {
                     size_t offset = weight->offs;
                     alignment = file->read_alignment();
                     size_t aligned_offset = offset & ~(alignment - 1);

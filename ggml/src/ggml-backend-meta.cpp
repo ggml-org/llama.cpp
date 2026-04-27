@@ -128,9 +128,9 @@ static void ggml_backend_meta_device_get_props(ggml_backend_dev_t dev, ggml_back
 
     props->caps = {
         /* .async                 = */ true,
-        /* .host_buffer           = */ false, // Not implemented.
+        /* .host_buffer           = */ true,  // proxied via simple devices in get_host_buffer_type
         /* .buffer_from_host_ptr  = */ false, // Not implemented.
-        /* .events                = */ false, // Not implemented.
+        /* .events                = */ true,  // proxied via simple devices (fan-out)
     };
     for (ggml_backend_dev_t simple_dev : meta_dev_ctx->simple_devs) {
         ggml_backend_dev_props tmp_props;
@@ -140,6 +140,39 @@ static void ggml_backend_meta_device_get_props(ggml_backend_dev_t dev, ggml_back
         props->caps.buffer_from_host_ptr = props->caps.buffer_from_host_ptr && tmp_props.caps.buffer_from_host_ptr;
         props->caps.events               = props->caps.events               && tmp_props.caps.events;
     }
+}
+
+struct ggml_backend_meta_event_context {
+    std::vector<ggml_backend_event_t> simple_events;
+};
+
+static ggml_backend_event_t ggml_backend_meta_device_event_new(ggml_backend_dev_t dev) {
+    GGML_ASSERT(ggml_backend_dev_is_meta(dev));
+    const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
+    auto * ev_ctx = new ggml_backend_meta_event_context();
+    ev_ctx->simple_events.reserve(meta_dev_ctx->simple_devs.size());
+    for (ggml_backend_dev_t simple_dev : meta_dev_ctx->simple_devs) {
+        ggml_backend_event_t simple_ev = ggml_backend_event_new(simple_dev);
+        if (simple_ev == nullptr) {
+            for (auto * e : ev_ctx->simple_events) ggml_backend_event_free(e);
+            delete ev_ctx;
+            return nullptr;
+        }
+        ev_ctx->simple_events.push_back(simple_ev);
+    }
+    return new ggml_backend_event{dev, ev_ctx};
+}
+
+static void ggml_backend_meta_device_event_free(ggml_backend_dev_t /*dev*/, ggml_backend_event_t event) {
+    auto * ev_ctx = (ggml_backend_meta_event_context *) event->context;
+    for (auto * e : ev_ctx->simple_events) ggml_backend_event_free(e);
+    delete ev_ctx;
+    delete event;
+}
+
+static void ggml_backend_meta_device_event_synchronize(ggml_backend_dev_t /*dev*/, ggml_backend_event_t event) {
+    auto * ev_ctx = (ggml_backend_meta_event_context *) event->context;
+    for (auto * e : ev_ctx->simple_events) ggml_backend_event_synchronize(e);
 }
 
 static ggml_backend_t ggml_backend_meta_device_init_backend(ggml_backend_dev_t dev, const char * params);
@@ -187,9 +220,9 @@ static const ggml_backend_device_i ggml_backend_meta_device_iface = {
     /* .supports_op          = */ ggml_backend_meta_device_supports_op,
     /* .supports_buft        = */ ggml_backend_meta_device_supports_buft,
     /* .offload_op           = */ nullptr,
-    /* .event_new            = */ nullptr,
-    /* .event_free           = */ nullptr,
-    /* .event_synchronize    = */ nullptr,
+    /* .event_new            = */ ggml_backend_meta_device_event_new,
+    /* .event_free           = */ ggml_backend_meta_device_event_free,
+    /* .event_synchronize    = */ ggml_backend_meta_device_event_synchronize,
 };
 
 static bool ggml_backend_dev_is_meta(ggml_backend_dev_t dev) {
@@ -1487,6 +1520,32 @@ struct ggml_backend_meta_context {
     void *                               comm_ctx       = nullptr;
     ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
 
+    // Per-device pinned host buffers used by set_tensor_async to gather strided source data
+    // into contiguous layout for fast 1D async upload. Allocated lazily, grown on demand.
+    // Caller must ensure the buffer is not in use before reuse.
+    struct gather_buf {
+        ggml_backend_buffer_t buf  = nullptr;
+        void *                ptr  = nullptr;
+        size_t                size = 0;
+    };
+    std::vector<gather_buf> gather_bufs;
+
+    void * get_gather_buf(size_t j, size_t needed) {
+        if (j >= gather_bufs.size()) {
+            gather_bufs.resize(j + 1);
+        }
+        auto & gb = gather_bufs[j];
+        if (gb.size < needed) {
+            if (gb.buf) ggml_backend_buffer_free(gb.buf);
+            ggml_backend_dev_t simple_dev = ggml_backend_get_device(backend_configs[j].backend);
+            ggml_backend_buffer_type_t host_buft = ggml_backend_dev_host_buffer_type(simple_dev);
+            gb.buf  = ggml_backend_buft_alloc_buffer(host_buft, needed);
+            gb.ptr  = ggml_backend_buffer_get_base(gb.buf);
+            gb.size = needed;
+        }
+        return gb.ptr;
+    }
+
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
         n_reduce_steps = std::ceil(std::log2(n_devs));
@@ -1521,6 +1580,9 @@ struct ggml_backend_meta_context {
     }
 
     ~ggml_backend_meta_context() {
+        for (auto & gb : gather_bufs) {
+            if (gb.buf) ggml_backend_buffer_free(gb.buf);
+        }
         if (comm_ctx != nullptr) {
             ggml_backend_comm_free_t comm_free = (ggml_backend_comm_free_t) ggml_backend_reg_get_proc_address(
                 ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_configs[0].backend)), "ggml_backend_comm_free");
@@ -1548,11 +1610,19 @@ static void ggml_backend_meta_free(ggml_backend_t backend) {
 
 static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     const size_t n_backends = ggml_backend_meta_n_backends(backend);
-    GGML_ASSERT(offset == 0);
     GGML_ASSERT(ggml_is_contiguous(tensor));
 
     const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(tensor, /*assume_sync =*/ false);
     GGML_ASSERT(split_state.n_segments == 1);
+
+    // GGML_META_ASYNC_2D=1 forces the strided 2D async copy path (matches upstream behaviour).
+    // Default is gather + 1D, which is faster on backends where 2D async with strided source
+    // is effectively synchronous (e.g. HIP/ROCm gfx906) and adds only a small host memcpy
+    // overhead on backends where 2D works well. Set to compare paths on new hardware.
+    static const bool use_2d_path = []() {
+        const char * s = getenv("GGML_META_ASYNC_2D");
+        return s != nullptr && atoi(s) != 0;
+    }();
 
     switch (split_state.axis) {
         case GGML_BACKEND_SPLIT_AXIS_0:
@@ -1564,16 +1634,49 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
             GGML_ASSERT(size   % chunk_size_full == 0);
             const int64_t i_start =  offset        /chunk_size_full;
             const int64_t i_stop  = (offset + size)/chunk_size_full;
-            size_t offset_j = 0;
-            for (size_t j = 0; j < n_backends; j++){
-                ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, j);
-                ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
-                const size_t chunk_size_j = simple_tensor->nb[split_state.axis + 1];
-                ggml_backend_tensor_set_2d_async(simple_backend, simple_tensor, (const char *) data + offset_j, offset, chunk_size_j,
-                    i_stop - i_start, chunk_size_j, chunk_size_full);
-                offset_j += chunk_size_j;
+            const int64_t n_rows  = i_stop - i_start;
+            if (use_2d_path) {
+                // Strided 2D async copy: one dispatch per device, DMA does the gather.
+                size_t offset_j = 0;
+                for (size_t j = 0; j < n_backends; j++) {
+                    ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, j);
+                    ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
+                    const size_t chunk_size_j = simple_tensor->nb[split_state.axis + 1];
+                    ggml_backend_tensor_set_2d_async(simple_backend, simple_tensor, (const char *) data + offset_j,
+                        i_start * chunk_size_j, chunk_size_j,
+                        n_rows, chunk_size_j, chunk_size_full);
+                    offset_j += chunk_size_j;
+                }
+                GGML_ASSERT(offset_j == chunk_size_full);
+            } else {
+                // Gather strided source into a per-device contiguous pinned host buffer, then
+                // dispatch a 1D async upload per device. On some backends a 2D async copy with
+                // strided source is effectively synchronous (the device DMA cannot pipeline a
+                // strided gather), while a 1D async copy from contiguous pinned memory queues
+                // and returns immediately. The host-side gather memcpy more than pays for itself.
+                ggml_backend_meta_context * be_ctx = (ggml_backend_meta_context *) backend->context;
+                size_t offset_j = 0;
+                for (size_t j = 0; j < n_backends; j++) {
+                    ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, j);
+                    ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
+                    const size_t chunk_size_j = simple_tensor->nb[split_state.axis + 1];
+                    const size_t total_j = (size_t) n_rows * chunk_size_j;
+                    char * dst = (char *) be_ctx->get_gather_buf(j, total_j);
+                    const char * src = (const char *) data + offset_j;
+                    for (int64_t r = 0; r < n_rows; r++) {
+                        std::memcpy(dst + (size_t) r * chunk_size_j, src + (size_t) r * chunk_size_full, chunk_size_j);
+                    }
+                    ggml_backend_tensor_set_async(simple_backend, simple_tensor, dst, i_start * chunk_size_j, total_j);
+                    offset_j += chunk_size_j;
+                }
+                GGML_ASSERT(offset_j == chunk_size_full);
+                // Sync each simple backend so the gather buffers can be reused on the next call.
+                // An async upload from pinned host requires the source to remain valid until the
+                // copy completes; we own the gather buffers so we have to gate reuse explicitly.
+                for (size_t j = 0; j < n_backends; j++) {
+                    ggml_backend_synchronize(ggml_backend_meta_simple_backend(backend, j));
+                }
             }
-            GGML_ASSERT(offset_j == chunk_size_full);
         } break;
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             for (size_t j = 0; j < n_backends; j++) {
@@ -1581,8 +1684,29 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
                     ggml_backend_meta_simple_backend(backend, j), ggml_backend_meta_buffer_simple_tensor(tensor, j), data, offset, size);
             }
         } break;
+        case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
+            // Mirror data to all simple backends, scaled by 1/n_backends so the partial-sum
+            // reduction across devices yields the original value. Matches sync set_tensor path.
+            GGML_ASSERT(tensor->type == GGML_TYPE_F32);
+            const int64_t ne = ggml_nelements(tensor);
+            std::vector<float> tmp;
+            tmp.reserve(ne);
+            const float * src_f = (const float *) data;
+            for (int64_t i = 0; i < ne; i++) {
+                tmp.push_back(src_f[i] / (float) n_backends);
+            }
+            for (size_t j = 0; j < n_backends; j++) {
+                ggml_backend_tensor_set_async(
+                    ggml_backend_meta_simple_backend(backend, j), ggml_backend_meta_buffer_simple_tensor(tensor, j), tmp.data(), offset, size);
+            }
+            // tmp lives on the host stack; an async dispatch needs the source data to remain
+            // valid until the upload completes. Synchronize all simple backends before returning.
+            for (size_t j = 0; j < n_backends; j++) {
+                ggml_backend_synchronize(ggml_backend_meta_simple_backend(backend, j));
+            }
+        } break;
         default: {
-            GGML_ABORT("fatal error");
+            GGML_ABORT("fatal error: meta set_tensor_async unhandled split axis %d", (int) split_state.axis);
         }
     }
 }
@@ -2044,6 +2168,26 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     return GGML_STATUS_SUCCESS;
 }
 
+static void ggml_backend_meta_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
+    GGML_ASSERT(ggml_backend_is_meta(backend));
+    auto * ev_ctx = (ggml_backend_meta_event_context *) event->context;
+    const size_t n = ggml_backend_meta_n_backends(backend);
+    GGML_ASSERT(ev_ctx->simple_events.size() == n);
+    for (size_t j = 0; j < n; j++) {
+        ggml_backend_event_record(ev_ctx->simple_events[j], ggml_backend_meta_simple_backend(backend, j));
+    }
+}
+
+static void ggml_backend_meta_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
+    GGML_ASSERT(ggml_backend_is_meta(backend));
+    auto * ev_ctx = (ggml_backend_meta_event_context *) event->context;
+    const size_t n = ggml_backend_meta_n_backends(backend);
+    GGML_ASSERT(ev_ctx->simple_events.size() == n);
+    for (size_t j = 0; j < n; j++) {
+        ggml_backend_event_wait(ggml_backend_meta_simple_backend(backend, j), ev_ctx->simple_events[j]);
+    }
+}
+
 static const ggml_backend_i ggml_backend_meta_i = {
     /* .get_name                = */ ggml_backend_meta_get_name,
     /* .free                    = */ ggml_backend_meta_free,
@@ -2058,8 +2202,8 @@ static const ggml_backend_i ggml_backend_meta_i = {
     /* .graph_plan_update       = */ nullptr,
     /* .graph_plan_compute      = */ nullptr,
     /* .graph_compute           = */ ggml_backend_meta_graph_compute,
-    /* .event_record            = */ nullptr,
-    /* .event_wait              = */ nullptr,
+    /* .event_record            = */ ggml_backend_meta_event_record,
+    /* .event_wait              = */ ggml_backend_meta_event_wait,
     /* .graph_optimize          = */ nullptr,
 };
 
@@ -2088,5 +2232,29 @@ ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, siz
     GGML_ASSERT(ggml_backend_is_meta(meta_backend));
     const ggml_backend_meta_context * backend_ctx = (const ggml_backend_meta_context *) meta_backend->context;
     return backend_ctx->backend_configs[index].backend;
+}
+
+// Returns the minimum offset/size alignment for set_tensor_async on this meta tensor.
+// AXIS_0/1/2 single-segment: nb[axis+1] — chunks must be whole rows along the split axis.
+// MIRRORED:    1 — fan-out to N devices, no per-row constraint.
+// PARTIAL / multi-segment / other: SIZE_MAX — set_tensor_async cannot handle these directly,
+// so the loader must take the sync set_tensor path (which does handle them).
+size_t ggml_backend_meta_buffer_set_async_alignment(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor) {
+    GGML_ASSERT(ggml_backend_buffer_is_meta(buffer));
+    const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(tensor, /*assume_sync =*/ false);
+    if (split_state.n_segments != 1) {
+        return SIZE_MAX;
+    }
+    switch (split_state.axis) {
+        case GGML_BACKEND_SPLIT_AXIS_0:
+        case GGML_BACKEND_SPLIT_AXIS_1:
+        case GGML_BACKEND_SPLIT_AXIS_2:
+            return tensor->nb[split_state.axis + 1];
+        case GGML_BACKEND_SPLIT_AXIS_MIRRORED:
+            return 1;
+        case GGML_BACKEND_SPLIT_AXIS_PARTIAL:
+        default:
+            return SIZE_MAX;
+    }
 }
 
