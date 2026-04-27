@@ -77,20 +77,46 @@ set(KERNELS
 )
 
 set(UBERKERNEL_SUPPORTED_KERNELS
+    concat_f32
+    cont_f16
     cont_f32
+    cpy_f32_f16
+    cumsum_f32
+    diag_f32
     el_map_f32
+    fill_f32
+    flash_attn_ext_f16_me
+    flash_attn_ext_f32
+    gated_delta_net_f32
     get_rows_f32
     glu_f32
+    group_norm_f32
+    im2col
+    l2_norm_f32
     mul_mat_f16
     mul_mat_f16_matrix_engine
     mul_mat_f32
     mul_mat_f32_matrix_engine
+    mul_mat_id_f32
     mul_mat_Q8_0
+    norm_f32
+    pad_f32
+    repeat_f32
     rms_norm_f32
     rms_norm_mul_f32
     rope_f32
+    rwkv_wkv6_f32
+    rwkv_wkv7_f32
+    scale_f32
+    set_f32
     set_rows_f32
     softmax_f32
+    solve_tri_f32
+    sqr_f32
+    ssm_conv_f32
+    ssm_scan_f32
+    sum_rows_f32
+    tri_f32
     unary_f32
 )
 
