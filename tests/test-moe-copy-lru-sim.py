@@ -100,7 +100,7 @@ def test_runtime_cache_parser_and_summary(sim) -> None:
     assert events[0].copied == 200
 
     stats = sim.summarize_runtime_cache(events)
-    k0 = stats["CUDA0:blk.0.ffn_down_exps.weight"]
+    k0 = stats[(2, "CUDA0:blk.0.ffn_down_exps.weight")]
     assert k0.slots == 2
     assert k0.events == 2
     assert k0.accesses == 4
@@ -112,12 +112,18 @@ def test_runtime_cache_parser_and_summary(sim) -> None:
     assert k0.max_total_copied == 300
 
     aggregate = sim.aggregate_runtime_stats(stats)
-    assert aggregate.events == 3
-    assert aggregate.accesses == 5
-    assert aggregate.hits == 1
-    assert aggregate.misses == 4
-    assert aggregate.copied == 350
-    assert aggregate.max_total_copied == 350
+    assert aggregate[1].events == 1
+    assert aggregate[1].accesses == 1
+    assert aggregate[1].hits == 0
+    assert aggregate[1].misses == 1
+    assert aggregate[1].copied == 50
+    assert aggregate[1].max_total_copied == 50
+    assert aggregate[2].events == 2
+    assert aggregate[2].accesses == 4
+    assert aggregate[2].hits == 1
+    assert aggregate[2].misses == 3
+    assert aggregate[2].copied == 300
+    assert aggregate[2].max_total_copied == 300
 
 
 def test_runtime_cache_cli(repo_root: Path) -> None:
@@ -132,7 +138,8 @@ def test_runtime_cache_cli(repo_root: Path) -> None:
             text=True,
         )
     assert "key\tslots\tevents\taccesses\thits\tmisses" in result.stdout
-    assert "ALL\t-\t3\t5\t1\t4\t0.200000\t350\t1\t4\t350" in result.stdout
+    assert "ALL\t1\t1\t1\t0\t1\t0.000000\t50\t0\t1\t50" in result.stdout
+    assert "ALL\t2\t2\t4\t1\t3\t0.250000\t300\t1\t3\t300" in result.stdout
     assert "CUDA0:blk.0.ffn_down_exps.weight\t2\t2\t4\t1\t3\t0.250000\t300\t1\t3\t300" in result.stdout
     assert "bypass_key\tslots\treason\tevents" in result.stdout
     assert "ALL\t1\ttoo_many_experts\t1" in result.stdout
@@ -226,17 +233,14 @@ def test_rejects_inconsistent_runtime_cache_accounting(sim) -> None:
     else:
         raise AssertionError("accepted runtime total counters below per-event counters")
 
-    bad_slots = """\
+    mixed_slots = """\
 ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100
 ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=3 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100
 """
-    events = list(sim.read_cache_events_from_lines(bad_slots.splitlines()))
-    try:
-        sim.summarize_runtime_cache(events)
-    except ValueError as exc:
-        assert "inconsistent slots" in str(exc)
-    else:
-        raise AssertionError("accepted inconsistent runtime slots for one key")
+    events = list(sim.read_cache_events_from_lines(mixed_slots.splitlines()))
+    stats = sim.summarize_runtime_cache(events)
+    assert stats[(2, "CUDA0:blk.0.ffn_down_exps.weight")].events == 1
+    assert stats[(3, "CUDA0:blk.0.ffn_down_exps.weight")].events == 1
 
     bad_bypass = "ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk backend=CUDA0 slots=-1 reason=too_many_experts n_expert=4 expert_size=100"
     try:

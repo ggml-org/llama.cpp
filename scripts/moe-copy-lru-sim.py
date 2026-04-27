@@ -346,14 +346,12 @@ def simulate_lru(events: Sequence[MoeCopyEvent], slots: Sequence[int]) -> Dict[T
     return stats
 
 
-def summarize_runtime_cache(events: Sequence[MoeCacheEvent]) -> Dict[str, RuntimeStats]:
-    stats: Dict[str, RuntimeStats] = {}
+def summarize_runtime_cache(events: Sequence[MoeCacheEvent]) -> Dict[Tuple[int, str], RuntimeStats]:
+    stats: Dict[Tuple[int, str], RuntimeStats] = {}
     for event in events:
-        stat = stats.setdefault(event.key, RuntimeStats())
+        stat = stats.setdefault((event.slots, event.key), RuntimeStats(slots=event.slots))
         if stat.slots is None:
             stat.slots = event.slots
-        elif stat.slots != event.slots:
-            raise ValueError(f"inconsistent slots for {event.key}: saw {event.slots}, expected {stat.slots}")
 
         stat.events += 1
         stat.accesses += event.used
@@ -385,17 +383,18 @@ def aggregate_stats(stats: Dict[Tuple[int, str], SimStats]) -> Dict[int, SimStat
     return aggregate
 
 
-def aggregate_runtime_stats(stats: Dict[str, RuntimeStats]) -> RuntimeStats:
-    aggregate = RuntimeStats()
-    for stat in stats.values():
-        aggregate.events += stat.events
-        aggregate.accesses += stat.accesses
-        aggregate.hits += stat.hits
-        aggregate.misses += stat.misses
-        aggregate.copied += stat.copied
-        aggregate.max_total_hits += stat.max_total_hits
-        aggregate.max_total_misses += stat.max_total_misses
-        aggregate.max_total_copied += stat.max_total_copied
+def aggregate_runtime_stats(stats: Dict[Tuple[int, str], RuntimeStats]) -> Dict[int, RuntimeStats]:
+    aggregate: Dict[int, RuntimeStats] = {}
+    for (slots, _), stat in stats.items():
+        dst = aggregate.setdefault(slots, RuntimeStats(slots=slots))
+        dst.events += stat.events
+        dst.accesses += stat.accesses
+        dst.hits += stat.hits
+        dst.misses += stat.misses
+        dst.copied += stat.copied
+        dst.max_total_hits += stat.max_total_hits
+        dst.max_total_misses += stat.max_total_misses
+        dst.max_total_copied += stat.max_total_copied
     return aggregate
 
 
@@ -451,14 +450,15 @@ def print_report(stats: Dict[Tuple[int, str], SimStats], show_details: bool) -> 
         print(stats_row(slot_count, key, stat))
 
 
-def print_runtime_report(stats: Dict[str, RuntimeStats], show_details: bool) -> None:
+def print_runtime_report(stats: Dict[Tuple[int, str], RuntimeStats], show_details: bool) -> None:
     print("key\tslots\tevents\taccesses\thits\tmisses\thit_rate\tcopied\tmax_total_hits\tmax_total_misses\tmax_total_copied")
-    print(runtime_stats_row("ALL", aggregate_runtime_stats(stats)))
+    for _, stat in sorted(aggregate_runtime_stats(stats).items()):
+        print(runtime_stats_row("ALL", stat))
 
     if not show_details:
         return
 
-    for key, stat in sorted(stats.items()):
+    for (_, key), stat in sorted(stats.items()):
         print(runtime_stats_row(key, stat))
 
 
