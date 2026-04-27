@@ -1699,6 +1699,14 @@ static int ggml_backend_sched_moe_prefetch_limit() {
     return limit;
 }
 
+static bool ggml_backend_sched_moe_cache_prime_last_enabled() {
+    static const bool enabled = []() {
+        const char * env = getenv("GGML_SCHED_MOE_CACHE_PRIME");
+        return env != nullptr && strcmp(env, "last") == 0;
+    }();
+    return enabled;
+}
+
 static const char * ggml_backend_sched_tensor_name(const ggml_tensor * tensor) {
     return tensor->name[0] != '\0' ? tensor->name : "<unnamed>";
 }
@@ -1902,7 +1910,9 @@ static bool ggml_backend_sched_moe_cache_prepare(
         return fail("no_experts");
     }
 
-    if ((int) needed.size() > n_slots) {
+    const bool too_many_experts = (int) needed.size() > n_slots;
+    const bool prime_last = too_many_experts && ggml_backend_sched_moe_cache_prime_last_enabled();
+    if (too_many_experts && !prime_last) {
         return fail("too_many_experts");
     }
 
@@ -1916,6 +1926,84 @@ static bool ggml_backend_sched_moe_cache_prepare(
         if (cache == nullptr) {
             return fail("cache_alloc_failed");
         }
+    }
+
+    if (too_many_experts) {
+        std::vector<int32_t> prime_ids;
+        prime_ids.reserve((size_t) n_slots);
+        std::vector<uint8_t> seen((size_t) n_expert, 0);
+        for (auto it = ids.rbegin(); it != ids.rend() && (int) prime_ids.size() < n_slots; ++it) {
+            const int32_t expert_id = *it;
+            if (expert_id < 0 || expert_id >= n_expert || seen[expert_id]) {
+                continue;
+            }
+            seen[expert_id] = 1;
+            prime_ids.push_back(expert_id);
+        }
+        std::reverse(prime_ids.begin(), prime_ids.end());
+
+        size_t primed = 0;
+        size_t primed_bytes = 0;
+        for (int32_t expert_id : prime_ids) {
+            int32_t slot = cache->slot_of[expert_id];
+            if (slot >= 0) {
+                cache->slot_speculative[slot] = 1;
+                cache->lru_tick[slot] = ++cache->now;
+                continue;
+            }
+
+            for (int32_t candidate = 0; candidate < cache->n_slots; ++candidate) {
+                if (cache->expert_in_slot[candidate] == -1) {
+                    slot = candidate;
+                    break;
+                }
+            }
+
+            if (slot == -1) {
+                uint64_t best_tick = std::numeric_limits<uint64_t>::max();
+                for (int32_t candidate = 0; candidate < cache->n_slots; ++candidate) {
+                    if (cache->lru_tick[candidate] < best_tick) {
+                        best_tick = cache->lru_tick[candidate];
+                        slot = candidate;
+                    }
+                }
+            }
+            if (slot == -1) {
+                continue;
+            }
+
+            const int32_t old_expert = cache->expert_in_slot[slot];
+            if (old_expert >= 0) {
+                if (cache->slot_speculative[slot]) {
+                    cache->wrong_prefetches++;
+                }
+                cache->slot_of[old_expert] = -1;
+            }
+
+            const size_t padding = expert_id < n_expert - 1 ? cache->slot_padding : 0;
+            const size_t copy_size = expert_size + padding;
+            ggml_backend_tensor_set_async(split_backend,
+                    &cache->weights_tensor,
+                    (const uint8_t *) input->data + (size_t) expert_id * expert_size,
+                    (size_t) slot * cache->slot_stride,
+                    copy_size);
+
+            cache->expert_in_slot[slot] = expert_id;
+            cache->slot_of[expert_id] = slot;
+            cache->slot_speculative[slot] = 1;
+            cache->lru_tick[slot] = ++cache->now;
+            cache->prefetches++;
+            cache->bytes_prefetched += copy_size;
+            primed++;
+            primed_bytes += copy_size;
+        }
+
+        if (moe_log) {
+            GGML_LOG_INFO("%s: moe_cache_prime tensor=%s backend=%s slots=%d primed=%zu primed_bytes=%zu used=%zu\n",
+                    __func__, ggml_backend_sched_tensor_name(input), ggml_backend_name(split_backend),
+                    n_slots, primed, primed_bytes, needed.size());
+        }
+        return fail("too_many_experts_primed");
     }
 
     if (!ggml_backend_sched_moe_cache_ensure_ids(cache, sched->bufts[split_backend_id], ids_tensor)) {
