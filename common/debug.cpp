@@ -1,9 +1,38 @@
 #include "debug.h"
 
+#include "common.h"
 #include "log.h"
 
 #include <cmath>
+#include <regex>
 #include <string>
+#include <vector>
+
+struct common_debug_cb_user_data::impl {
+    std::vector<uint8_t>    data;
+    std::vector<std::regex> tensor_filters;
+    bool                    abort_on_nan{false};
+};
+
+common_debug_cb_user_data::common_debug_cb_user_data() : pimpl(std::make_unique<impl>()) {}
+common_debug_cb_user_data::~common_debug_cb_user_data() = default;
+
+common_debug_cb_user_data::common_debug_cb_user_data(common_params & params, const std::vector<std::string> & filter_patterns, bool abort_on_nan)
+    : pimpl(std::make_unique<impl>())
+{
+    for (const auto & pattern : filter_patterns) {
+        try {
+            std::string anchored_pattern = "^" + pattern;
+            pimpl->tensor_filters.emplace_back(anchored_pattern, std::regex::optimize);
+        } catch (const std::regex_error & e) {
+            throw std::runtime_error("Invalid regex pattern '" + pattern + "': " + e.what());
+        }
+    }
+    pimpl->abort_on_nan = abort_on_nan;
+
+    params.cb_eval           = common_debug_cb_eval;
+    params.cb_eval_user_data = this;
+}
 
 static std::string common_ggml_ne_string(const ggml_tensor * t) {
     std::string str;
@@ -47,8 +76,7 @@ static float common_ggml_get_float_value(const uint8_t * data,
 
 #define INDENT "    "
 
-template <bool abort>
-void common_debug_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n) {
+static void common_debug_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n, bool abort_on_nan) {
     GGML_ASSERT(n > 0);
     float sum = 0;
     for (int64_t i3 = 0; i3 < ne[3]; i3++) {
@@ -94,7 +122,7 @@ void common_debug_print_tensor(uint8_t * data, ggml_type type, const int64_t * n
         LOG(INDENT "sum = %f\n", sum);
     }
 
-    if constexpr (abort) {
+    if (abort_on_nan) {
         if (std::isnan(sum)) {
             LOG("encountered NaN - aborting\n");
             exit(0);
@@ -112,8 +140,9 @@ void common_debug_print_tensor(uint8_t * data, ggml_type type, const int64_t * n
  * @param user_data user data to pass at each call back
  * @return true to receive data or continue the graph, false otherwise
  */
-template <bool abort_on_nan> bool common_debug_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
-    auto * cb_data = (base_callback_data *) user_data;
+bool common_debug_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
+    auto * cb_data = (common_debug_cb_user_data *) user_data;
+    auto * pimpl = cb_data->pimpl.get();
 
     const struct ggml_tensor * src0 = t->src[0];
     const struct ggml_tensor * src1 = t->src[1];
@@ -122,10 +151,10 @@ template <bool abort_on_nan> bool common_debug_cb_eval(struct ggml_tensor * t, b
         return true;  // Always retrieve data
     }
 
-    bool matches_filter = cb_data->tensor_filters.empty();
+    bool matches_filter = pimpl->tensor_filters.empty();
 
     if (!matches_filter) {
-        for (const auto & filter : cb_data->tensor_filters) {
+        for (const auto & filter : pimpl->tensor_filters) {
             if (std::regex_search(t->name, filter)) {
                 matches_filter = true;
                 break;
@@ -148,20 +177,14 @@ template <bool abort_on_nan> bool common_debug_cb_eval(struct ggml_tensor * t, b
 
     if (!is_host) {
         auto n_bytes = ggml_nbytes(t);
-        cb_data->data.resize(n_bytes);
-        ggml_backend_tensor_get(t, cb_data->data.data(), 0, n_bytes);
+        pimpl->data.resize(n_bytes);
+        ggml_backend_tensor_get(t, pimpl->data.data(), 0, n_bytes);
     }
 
     if (!ggml_is_quantized(t->type) && matches_filter) {
-        uint8_t * data = is_host ? (uint8_t *) t->data : cb_data->data.data();
-        common_debug_print_tensor<abort_on_nan>(data, t->type, t->ne, t->nb, 3);
+        uint8_t * data = is_host ? (uint8_t *) t->data : pimpl->data.data();
+        common_debug_print_tensor(data, t->type, t->ne, t->nb, 3, pimpl->abort_on_nan);
     }
 
     return true;
 }
-
-// Explicit template instantiations
-template bool common_debug_cb_eval<false>(ggml_tensor *, bool, void *);
-template bool common_debug_cb_eval<true>(ggml_tensor *, bool, void *);
-template void common_debug_print_tensor<false>(uint8_t *, ggml_type, const int64_t *, const size_t *, int64_t);
-template void common_debug_print_tensor<true>(uint8_t *, ggml_type, const int64_t *, const size_t *, int64_t);

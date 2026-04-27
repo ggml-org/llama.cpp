@@ -90,7 +90,7 @@ struct mtmd_cli_context {
     int n_threads    = 1;
     llama_pos n_past = 0;
 
-    base_callback_data cb_data;
+    common_debug_cb_user_data cb_data;
 
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
         model = llama_init->model();
@@ -145,7 +145,7 @@ struct mtmd_cli_context {
         mparams.image_max_tokens = params.image_max_tokens;
         if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
             mparams.cb_eval_user_data = &cb_data;
-            mparams.cb_eval = common_debug_cb_eval<false>;
+            mparams.cb_eval = common_debug_cb_eval;
         }
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
