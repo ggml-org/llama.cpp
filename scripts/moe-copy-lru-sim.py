@@ -134,14 +134,15 @@ def simulate_lru(events: Sequence[MoeCopyEvent], slots: Sequence[int]) -> Dict[T
             while len(cache) + len(misses) > slot_count:
                 victim = next((expert_id for expert_id in cache if expert_id not in needed_set), None)
                 if victim is None:
-                    break
+                    victim = next(iter(cache))
                 del cache[victim]
 
             for expert_id in misses:
                 cache[expert_id] = None
 
             for expert_id in needed:
-                cache.move_to_end(expert_id)
+                if expert_id in cache:
+                    cache.move_to_end(expert_id)
 
     return stats
 
