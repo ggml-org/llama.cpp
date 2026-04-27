@@ -17,9 +17,9 @@ ggml_backend_sched_compute_splits: moe_copy split=2 input=0 tensor=blk.1.ffn_dow
 
 SAMPLE_RUNTIME_LOG = """\
 noise before
-ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 used=2 hits=0 misses=2 copied=200 total_hits=0 total_misses=2 total_copied=200
-ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 used=2 hits=1 misses=1 copied=100 total_hits=1 total_misses=3 total_copied=300
-ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.1.ffn_down_exps.weight backend=CUDA1 slots=1 used=1 hits=0 misses=1 copied=50 total_hits=0 total_misses=1 total_copied=50
+ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 expert_size=100 cache_bytes=300 used=2 hits=0 misses=2 copied=200 total_hits=0 total_misses=2 total_copied=200
+ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 expert_size=100 cache_bytes=300 used=2 hits=1 misses=1 copied=100 total_hits=1 total_misses=3 total_copied=300
+ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.1.ffn_down_exps.weight backend=CUDA1 slots=1 expert_size=50 cache_bytes=50 used=1 hits=0 misses=1 copied=50 total_hits=0 total_misses=1 total_copied=50
 ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.2.ffn_down_exps.weight node=ffn_down ids=topk backend=CUDA0 slots=2 reason=too_many_experts n_expert=4 expert_size=100
 ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.2.ffn_down_exps.weight node=ffn_down ids=topk backend=CUDA0 slots=2 reason=ids_alloc_failed n_expert=4 expert_size=100
 ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.3.ffn_down_exps.weight node=ffn_down ids=topk backend=CUDA1 slots=1 reason=too_many_experts n_expert=4 expert_size=50
@@ -94,6 +94,7 @@ def test_runtime_cache_parser_and_summary(sim) -> None:
     assert len(events) == 3
     assert events[0].key == "CUDA0:blk.0.ffn_down_exps.weight"
     assert events[0].slots == 2
+    assert events[0].cache_bytes == 300
     assert events[0].used == 2
     assert events[0].hits == 0
     assert events[0].misses == 2
@@ -102,6 +103,7 @@ def test_runtime_cache_parser_and_summary(sim) -> None:
     stats = sim.summarize_runtime_cache(events)
     k0 = stats[(2, "CUDA0:blk.0.ffn_down_exps.weight")]
     assert k0.slots == 2
+    assert k0.cache_bytes == 300
     assert k0.events == 2
     assert k0.accesses == 4
     assert k0.hits == 1
@@ -112,12 +114,14 @@ def test_runtime_cache_parser_and_summary(sim) -> None:
     assert k0.max_total_copied == 300
 
     aggregate = sim.aggregate_runtime_stats(stats)
+    assert aggregate[1].cache_bytes == 50
     assert aggregate[1].events == 1
     assert aggregate[1].accesses == 1
     assert aggregate[1].hits == 0
     assert aggregate[1].misses == 1
     assert aggregate[1].copied == 50
     assert aggregate[1].max_total_copied == 50
+    assert aggregate[2].cache_bytes == 300
     assert aggregate[2].events == 2
     assert aggregate[2].accesses == 4
     assert aggregate[2].hits == 1
@@ -137,10 +141,10 @@ def test_runtime_cache_cli(repo_root: Path) -> None:
             capture_output=True,
             text=True,
         )
-    assert "key\tslots\tevents\taccesses\thits\tmisses" in result.stdout
-    assert "ALL\t1\t1\t1\t0\t1\t0.000000\t50\t0\t1\t50" in result.stdout
-    assert "ALL\t2\t2\t4\t1\t3\t0.250000\t300\t1\t3\t300" in result.stdout
-    assert "CUDA0:blk.0.ffn_down_exps.weight\t2\t2\t4\t1\t3\t0.250000\t300\t1\t3\t300" in result.stdout
+    assert "key\tslots\tcache_bytes\tevents\taccesses\thits\tmisses" in result.stdout
+    assert "ALL\t1\t50\t1\t1\t0\t1\t0.000000\t50\t0\t1\t50" in result.stdout
+    assert "ALL\t2\t300\t2\t4\t1\t3\t0.250000\t300\t1\t3\t300" in result.stdout
+    assert "CUDA0:blk.0.ffn_down_exps.weight\t2\t300\t2\t4\t1\t3\t0.250000\t300\t1\t3\t300" in result.stdout
     assert "bypass_key\tslots\treason\tevents" in result.stdout
     assert "ALL\t1\ttoo_many_experts\t1" in result.stdout
     assert "ALL\t2\ttoo_many_experts\t1" in result.stdout
@@ -177,7 +181,7 @@ ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.2.ffn_down_exps.w
             capture_output=True,
             text=True,
         )
-    assert "key\tslots\tevents\taccesses\thits\tmisses" not in result.stdout
+    assert "key\tslots\tcache_bytes\tevents\taccesses\thits\tmisses" not in result.stdout
     assert "bypass_key\tslots\treason\tevents" in result.stdout
     assert "ALL\t2\tids_alloc_failed\t1" in result.stdout
     assert "ALL\t2\ttoo_many_experts\t1" in result.stdout
@@ -234,13 +238,15 @@ def test_rejects_inconsistent_runtime_cache_accounting(sim) -> None:
         raise AssertionError("accepted runtime total counters below per-event counters")
 
     mixed_slots = """\
-ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100
-ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=3 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100
+ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 cache_bytes=200 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100
+ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=3 cache_bytes=300 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100
 """
     events = list(sim.read_cache_events_from_lines(mixed_slots.splitlines()))
     stats = sim.summarize_runtime_cache(events)
     assert stats[(2, "CUDA0:blk.0.ffn_down_exps.weight")].events == 1
     assert stats[(3, "CUDA0:blk.0.ffn_down_exps.weight")].events == 1
+    assert stats[(2, "CUDA0:blk.0.ffn_down_exps.weight")].cache_bytes == 200
+    assert stats[(3, "CUDA0:blk.0.ffn_down_exps.weight")].cache_bytes == 300
 
     bad_bypass = "ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk backend=CUDA0 slots=-1 reason=too_many_experts n_expert=4 expert_size=100"
     try:

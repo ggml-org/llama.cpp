@@ -32,6 +32,7 @@ class MoeCacheEvent:
     tensor: str
     backend: str
     slots: int
+    cache_bytes: int
     used: int
     hits: int
     misses: int
@@ -67,6 +68,7 @@ class SimStats:
 @dataclass
 class RuntimeStats:
     slots: Optional[int] = None
+    cache_bytes: int = 0
     events: int = 0
     accesses: int = 0
     hits: int = 0
@@ -141,6 +143,7 @@ def parse_moe_cache_line(line: str) -> Optional[MoeCacheEvent]:
         tensor = fields["tensor"]
         backend = fields["backend"]
         slots = int(fields["slots"])
+        cache_bytes = int(fields.get("cache_bytes", "0"))
         used = int(fields["used"])
         hits = int(fields["hits"])
         misses = int(fields["misses"])
@@ -151,7 +154,7 @@ def parse_moe_cache_line(line: str) -> Optional[MoeCacheEvent]:
     except KeyError as exc:
         raise ValueError(f"missing moe_cache field: {exc.args[0]}") from exc
 
-    if slots < 0 or used < 0 or hits < 0 or misses < 0 or copied < 0:
+    if slots < 0 or cache_bytes < 0 or used < 0 or hits < 0 or misses < 0 or copied < 0:
         raise ValueError("moe_cache counters must be non-negative")
     if used != hits + misses:
         raise ValueError(f"used={used} does not match hits={hits} + misses={misses}")
@@ -163,6 +166,7 @@ def parse_moe_cache_line(line: str) -> Optional[MoeCacheEvent]:
         tensor=tensor,
         backend=backend,
         slots=slots,
+        cache_bytes=cache_bytes,
         used=used,
         hits=hits,
         misses=misses,
@@ -352,6 +356,7 @@ def summarize_runtime_cache(events: Sequence[MoeCacheEvent]) -> Dict[Tuple[int, 
         stat = stats.setdefault((event.slots, event.key), RuntimeStats(slots=event.slots))
         if stat.slots is None:
             stat.slots = event.slots
+        stat.cache_bytes = max(stat.cache_bytes, event.cache_bytes)
 
         stat.events += 1
         stat.accesses += event.used
@@ -387,6 +392,7 @@ def aggregate_runtime_stats(stats: Dict[Tuple[int, str], RuntimeStats]) -> Dict[
     aggregate: Dict[int, RuntimeStats] = {}
     for (slots, _), stat in stats.items():
         dst = aggregate.setdefault(slots, RuntimeStats(slots=slots))
+        dst.cache_bytes += stat.cache_bytes
         dst.events += stat.events
         dst.accesses += stat.accesses
         dst.hits += stat.hits
@@ -425,6 +431,7 @@ def runtime_stats_row(key: str, stat: RuntimeStats) -> str:
     return "\t".join((
         key,
         slots,
+        str(stat.cache_bytes),
         str(stat.events),
         str(stat.accesses),
         str(stat.hits),
@@ -451,7 +458,7 @@ def print_report(stats: Dict[Tuple[int, str], SimStats], show_details: bool) -> 
 
 
 def print_runtime_report(stats: Dict[Tuple[int, str], RuntimeStats], show_details: bool) -> None:
-    print("key\tslots\tevents\taccesses\thits\tmisses\thit_rate\tcopied\tmax_total_hits\tmax_total_misses\tmax_total_copied")
+    print("key\tslots\tcache_bytes\tevents\taccesses\thits\tmisses\thit_rate\tcopied\tmax_total_hits\tmax_total_misses\tmax_total_copied")
     for _, stat in sorted(aggregate_runtime_stats(stats).items()):
         print(runtime_stats_row("ALL", stat))
 

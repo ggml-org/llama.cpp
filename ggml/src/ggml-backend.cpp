@@ -782,6 +782,7 @@ struct ggml_backend_sched_moe_cache {
 
     size_t expert_size;
     size_t slot_stride;
+    size_t weights_size;
     size_t ids_nbytes;
 
     ggml_backend_buffer_t weights_buffer;
@@ -1653,6 +1654,7 @@ static ggml_backend_sched_moe_cache * ggml_backend_sched_moe_cache_new(
     cache->n_slots     = n_slots;
     cache->expert_size = expert_size;
     cache->slot_stride = expert_size + padding;
+    cache->weights_size = 0;
 
     cache->weights_tensor = *input;
     cache->weights_tensor.buffer = nullptr;
@@ -1673,6 +1675,7 @@ static ggml_backend_sched_moe_cache * ggml_backend_sched_moe_cache_new(
             ggml_backend_sched_tensor_name(input), ggml_backend_name(backend));
 
     const size_t weights_size = ggml_backend_buft_get_alloc_size(buft, &cache->weights_tensor);
+    cache->weights_size = weights_size;
     cache->weights_buffer = ggml_backend_buft_alloc_buffer(buft, weights_size);
     if (cache->weights_buffer == nullptr) {
         delete cache;
@@ -1898,11 +1901,13 @@ static bool ggml_backend_sched_moe_cache_prepare(
     node->src[2] = &cache->ids_tensor;
 
     if (moe_log) {
-        GGML_LOG_INFO("%s: moe_cache tensor=%s backend=%s slots=%d used=%zu hits=%zu misses=%zu copied=%zu total_hits=%llu total_misses=%llu total_copied=%llu\n",
+        GGML_LOG_INFO("%s: moe_cache tensor=%s backend=%s slots=%d expert_size=%zu cache_bytes=%zu used=%zu hits=%zu misses=%zu copied=%zu total_hits=%llu total_misses=%llu total_copied=%llu\n",
                 __func__,
                 ggml_backend_sched_tensor_name(input),
                 ggml_backend_name(split_backend),
                 cache->n_slots,
+                cache->expert_size,
+                cache->weights_size,
                 needed.size(),
                 needed.size() - misses.size(),
                 misses.size(),
