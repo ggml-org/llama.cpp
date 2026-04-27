@@ -199,13 +199,13 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 break;
             }
 
-            case GGML_ET_UBERKERNEL_KERNEL_SET_ROWS_F32: {
-                struct uber_set_rows_params *p = (struct uber_set_rows_params *) inst_params;
-                evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
-                evict_region_past_l2(p->src1.data, tensor_bytes(&p->src1));
-                rc = set_rows_f32_entry((struct ggml_et_set_rows_params *) inst_params, env);
-                break;
-            }
+            // case GGML_ET_UBERKERNEL_KERNEL_SET_ROWS_F32: {
+            //     struct uber_set_rows_params *p = (struct uber_set_rows_params *) inst_params;
+            //     evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
+            //     evict_region_past_l2(p->src1.data, tensor_bytes(&p->src1));
+            //     rc = set_rows_f32_entry((struct ggml_et_set_rows_params *) inst_params, env);
+            //     break;
+            // }
 
             case GGML_ET_UBERKERNEL_KERNEL_GET_ROWS_F32: {
                 struct uber_get_rows_params *p = (struct uber_get_rows_params *) inst_params;
