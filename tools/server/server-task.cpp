@@ -322,9 +322,9 @@ task_params server_task::params_from_json_cmpl(
     params.speculative.ngram_size_m     = json_value(data, "speculative.ngram_size_m", defaults.speculative.ngram_size_m);
     params.speculative.ngram_min_hits   = json_value(data, "speculative.ngram_m_hits", defaults.speculative.ngram_min_hits);
 
-    params.speculative.ngram_size_n     = std::max(std::min(1, (int) params.speculative.ngram_size_n),     1024);
-    params.speculative.ngram_size_m     = std::max(std::min(1, (int) params.speculative.ngram_size_m),     1024);
-    params.speculative.ngram_min_hits   = std::max(std::min(1, (int) params.speculative.ngram_min_hits),   1024);
+    params.speculative.ngram_size_n     = std::min(std::max(1, (int) params.speculative.ngram_size_n),     1024);
+    params.speculative.ngram_size_m     = std::min(std::max(1, (int) params.speculative.ngram_size_m),     1024);
+    params.speculative.ngram_min_hits   = std::min(std::max(1, (int) params.speculative.ngram_min_hits),   1024);
 
     // Use OpenAI API logprobs only if n_probs wasn't provided
     if (data.contains("logprobs") && params.sampling.n_probs == defaults.sampling.n_probs){
