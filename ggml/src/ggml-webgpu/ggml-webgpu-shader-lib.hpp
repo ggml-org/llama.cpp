@@ -1,6 +1,7 @@
 #ifndef GGML_WEBGPU_SHADER_LIB_HPP
 #define GGML_WEBGPU_SHADER_LIB_HPP
 
+#include "ggml-impl.h"
 #include "ggml-wgsl-shaders.hpp"
 #include "ggml.h"
 #include "pre_wgsl.hpp"
@@ -8,6 +9,7 @@
 #include <webgpu/webgpu_cpp.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -26,21 +28,21 @@
 // Matrix multiplication parameters
 
 // Register tiling parameters
-#define WEBGPU_MUL_MAT_TILE_M    4
-#define WEBGPU_MUL_MAT_TILE_N    4
-#define WEBGPU_MUL_MAT_WG_SIZE_M 8
-#define WEBGPU_MUL_MAT_WG_SIZE_N 8
+#define WEBGPU_MUL_MAT_TILE_M           4
+#define WEBGPU_MUL_MAT_TILE_N           4
+#define WEBGPU_MUL_MAT_WG_SIZE_M        8
+#define WEBGPU_MUL_MAT_WG_SIZE_N        8
 #define WEBGPU_MUL_MAT_REG_TILE_K_FLOAT 8
 #define WEBGPU_MUL_MAT_REG_TILE_K_QUANT 32
 
 // Subgroup matrix parameters
 // The number of subgroups in the M dimension
-#define WEBGPU_MUL_MAT_SUBGROUP_M        2
+#define WEBGPU_MUL_MAT_SUBGROUP_M            2
 // The number of subgroups in the N dimension
-#define WEBGPU_MUL_MAT_SUBGROUP_N        4
+#define WEBGPU_MUL_MAT_SUBGROUP_N            4
 // The number of subgroup matrices each subgroup accumulates over
-#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M 4
-#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N 2
+#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M     4
+#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N     2
 #define WEBGPU_MUL_MAT_SUBGROUP_TILE_K_FLOAT 32
 #define WEBGPU_MUL_MAT_SUBGROUP_TILE_K_QUANT 32
 
@@ -370,6 +372,31 @@ struct ggml_webgpu_scale_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_scale_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.inplace);
+        return seed;
+    }
+};
+
+/** Upscale **/
+
+struct ggml_webgpu_upscale_pipeline_key {
+    ggml_type input_type;
+    ggml_type output_type;
+    uint32_t  base_mode;
+    bool      antialias;
+
+    bool operator==(const ggml_webgpu_upscale_pipeline_key & other) const {
+        return input_type == other.input_type && output_type == other.output_type && base_mode == other.base_mode &&
+               antialias == other.antialias;
+    }
+};
+
+struct ggml_webgpu_upscale_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_upscale_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.input_type);
+        ggml_webgpu_hash_combine(seed, key.output_type);
+        ggml_webgpu_hash_combine(seed, key.base_mode);
+        ggml_webgpu_hash_combine(seed, key.antialias);
         return seed;
     }
 };
@@ -1001,6 +1028,8 @@ class ggml_webgpu_shader_lib {
                        webgpu_pipeline,
                        ggml_webgpu_rms_norm_mul_pipeline_key_hash>
         rms_norm_mul_pipelines;
+    std::unordered_map<ggml_webgpu_upscale_pipeline_key, webgpu_pipeline, ggml_webgpu_upscale_pipeline_key_hash>
+        upscale_pipelines;
 
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
@@ -1741,11 +1770,9 @@ class ggml_webgpu_shader_lib {
 
         uint32_t tile_k;
         if (key.use_subgroup_matrix) {
-            tile_k = is_quant ? WEBGPU_MUL_MAT_SUBGROUP_TILE_K_QUANT
-                              : WEBGPU_MUL_MAT_SUBGROUP_TILE_K_FLOAT;
+            tile_k = is_quant ? WEBGPU_MUL_MAT_SUBGROUP_TILE_K_QUANT : WEBGPU_MUL_MAT_SUBGROUP_TILE_K_FLOAT;
         } else {
-            tile_k = is_quant ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT
-                              : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
+            tile_k = is_quant ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
         }
 
         // Tiles
@@ -1978,9 +2005,8 @@ class ggml_webgpu_shader_lib {
         defines.push_back("SCALAR");
 
         // mul_mat_id is register-tile only.
-        const uint32_t tile_k = ggml_is_quantized(context.src0->type)
-                                    ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT
-                                    : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
+        const uint32_t tile_k =
+            ggml_is_quantized(context.src0->type) ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
 
         // Tiles
         defines.push_back("TILE_M=" + std::to_string(WEBGPU_MUL_MAT_TILE_M) + "u");
@@ -2693,6 +2719,72 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         im2col_pipelines[key]    = pipeline;
         return im2col_pipelines[key];
+    }
+
+    webgpu_pipeline get_upscale_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        const uint32_t mode_flags = (uint32_t) ggml_get_op_params_i32(context.dst, 0);
+        const uint32_t base_mode  = mode_flags & 0xFFu;
+        const bool     antialias  = (mode_flags & GGML_SCALE_FLAG_ANTIALIAS) != 0u;
+
+        ggml_webgpu_upscale_pipeline_key key = {};
+        key.input_type                       = context.src0->type;
+        key.output_type                      = context.dst->type;
+        key.base_mode                        = base_mode;
+        key.antialias                        = antialias;
+
+        auto it = upscale_pipelines.find(key);
+        if (it != upscale_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "upscale";
+
+        auto push_type_defines = [&](const char * prefix, ggml_type type) {
+            std::string s_prefix = prefix;
+            if (type == GGML_TYPE_F32) {
+                defines.push_back(s_prefix + "_F32");
+            } else if (type == GGML_TYPE_F16) {
+                defines.push_back(s_prefix + "_F16");
+            } else {
+                GGML_ABORT("Unsupported type for UPSCALE shader");
+            }
+        };
+
+        push_type_defines("INPUT", key.input_type);
+        push_type_defines("OUTPUT", key.output_type);
+
+        switch (base_mode) {
+            case GGML_SCALE_MODE_NEAREST:
+                defines.push_back("NEAREST");
+                variant += "_nearest";
+                break;
+            case GGML_SCALE_MODE_BILINEAR:
+                defines.push_back("BILINEAR");
+                variant += "_bilinear";
+                break;
+            case GGML_SCALE_MODE_BICUBIC:
+                defines.push_back("BICUBIC");
+                variant += "_bicubic";
+                break;
+            default:
+                GGML_ABORT("Unsupported upscale mode");
+        }
+
+        if (antialias) {
+            defines.push_back("ANTIALIAS");
+            variant += "_aa";
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_upscale, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        upscale_pipelines[key]   = pipeline;
+        return upscale_pipelines[key];
     }
 
   private:
