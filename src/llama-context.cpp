@@ -2636,7 +2636,7 @@ void llama_context::perf_reset() {
     n_reused    = 0;
 }
 
-std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> llama_context::memory_breakdown() const {
+llama_memory_breakdown llama_context::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> ret;
     for (const auto & [buft, size] : model.memory_breakdown()) {
         ret[buft].model += size;
@@ -3628,7 +3628,6 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
             td[6].c_str(), td[7].c_str(), td[8].c_str());
     }
 }
-
 //
 // training
 //
@@ -3658,4 +3657,12 @@ void llama_opt_epoch(
         idata_split,
         callback_train,
         callback_eval);
+}
+
+//
+// ext
+//
+
+llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx) {
+    return ctx->memory_breakdown();
 }

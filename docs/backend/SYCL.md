@@ -31,6 +31,8 @@ SYCL cross-platform capabilities enable support for other vendor GPUs as well.
 
 ## Recommended Release
 
+### Windows
+
 The following releases are verified and recommended:
 
 |Commit ID|Tag|Release|Verified  Platform| Update date|
@@ -39,8 +41,21 @@ The following releases are verified and recommended:
 |3bcd40b3c593d14261fb2abfabad3c0fb5b9e318|b4040 |[llama-b4040-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b4040/llama-b4040-bin-win-sycl-x64.zip) |Arc A770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1| 2024-11-19|
 |fb76ec31a9914b7761c1727303ab30380fd4f05c|b3038 |[llama-b3038-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b3038/llama-b3038-bin-win-sycl-x64.zip) |Arc A770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1||
 
+### Ubuntu 24.04
+
+The release packages for Ubuntu 24.04 x64 (FP32/FP16) only include the binary files of the llama.cpp SYCL backend. They require the target machine to have pre-installed Intel GPU drivers and oneAPI packages that are the same version as the build package. To get the version and installation info, refer to release.yml: ubuntu-24-sycl -> Download & Install oneAPI.
+
+It is recommended to use them with Intel Docker.
+
+The packages for FP32 and FP16 would have different accuracy and performance on LLMs. Please choose it acording to the test result.
 
 ## News
+
+- 2026.04
+
+  - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q_K, Q8_0.
+  - Fused MoE.
+  - Upgrate CI and built package for oneAPI 2025.3.3, support Ubuntu 24.04 built package.
 
 - 2026.03
   - Support Flash-Attention: less memory usage, performance impact depends on LLM.
@@ -229,6 +244,7 @@ Upon a successful installation, SYCL is enabled for the available intel devices,
 
 |Verified release|
 |-|
+|2025.3.3 |
 |2025.2.1|
 |2025.1|
 |2024.1|
@@ -337,6 +353,12 @@ Choose one of following methods to run.
 
 ```sh
 ./examples/sycl/test.sh
+```
+
+- Run llama-server:
+
+```sh
+./examples/sycl/start-svr.sh -m PATH/MODEL_FILE
 ```
 
 2. Command line
@@ -627,8 +649,16 @@ Choose one of following methods to run.
 
 1. Script
 
+- Run test:
+
 ```
 examples\sycl\win-test.bat
+```
+
+- Run llama-server:
+
+```
+examples\sycl\win-start-svr.bat -m PATH\MODEL_FILE
 ```
 
 2. Command line
@@ -689,6 +719,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. (1.) |
 | GGML_SYCL_GRAPH    | OFF *(default)* \|ON *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
+| GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
 | CMAKE_C_COMPILER   | `icx` *(Linux)*, `icx/cl` *(Windows)* | Set `icx` compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | `icpx` *(Linux)*, `icx` *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 

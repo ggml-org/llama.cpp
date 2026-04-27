@@ -5,6 +5,8 @@ find_package(Threads REQUIRED)
 
 llama_add_compile_flags()
 
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
 
 # disable warnings in 3rd party code
@@ -39,7 +41,7 @@ if (LLAMA_BUILD_BORINGSSL)
     set(FIPS OFF CACHE BOOL "Enable FIPS (BoringSSL)")
 
     set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
-    set(BORINGSSL_VERSION "0.20260327.0" CACHE STRING "BoringSSL version")
+    set(BORINGSSL_VERSION "0.20260413.0" CACHE STRING "BoringSSL version")
 
     message(STATUS "Fetching BoringSSL version ${BORINGSSL_VERSION}")
 
@@ -79,7 +81,7 @@ if (LLAMA_BUILD_BORINGSSL)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
 
 elseif (LLAMA_BUILD_LIBRESSL)
-    set(LIBRESSL_VERSION "4.2.1" CACHE STRING "LibreSSL version")
+    set(LIBRESSL_VERSION "4.3.1" CACHE STRING "LibreSSL version")
 
     message(STATUS "Fetching LibreSSL version ${LIBRESSL_VERSION}")
 
@@ -159,11 +161,23 @@ if(LLAMA_BUILD_BORINGSSL OR LLAMA_BUILD_LIBRESSL)
         if(LLAMA_BUILD_BORINGSSL)
             target_compile_options(fipsmodule PRIVATE /w)
         endif()
+        if(LLAMA_BUILD_LIBRESSL)
+            target_compile_options(ssl_obj PRIVATE /w)
+            target_compile_options(bs_obj PRIVATE /w)
+            target_compile_options(compat_obj PRIVATE /w)
+            target_compile_options(crypto_obj PRIVATE /w)
+        endif()
     else()
         target_compile_options(ssl PRIVATE -w)
         target_compile_options(crypto PRIVATE -w)
         if(LLAMA_BUILD_BORINGSSL)
             target_compile_options(fipsmodule PRIVATE -w)
+        endif()
+        if(LLAMA_BUILD_LIBRESSL)
+            target_compile_options(ssl_obj PRIVATE -w)
+            target_compile_options(bs_obj PRIVATE -w)
+            target_compile_options(compat_obj PRIVATE -w)
+            target_compile_options(crypto_obj PRIVATE -w)
         endif()
     endif()
 endif()

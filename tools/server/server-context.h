@@ -105,12 +105,12 @@ struct server_routes {
     server_http_context::handler_t post_slots;
     server_http_context::handler_t get_props;
     server_http_context::handler_t post_props;
-    server_http_context::handler_t get_api_show;
     server_http_context::handler_t post_infill;
     server_http_context::handler_t post_completions;
     server_http_context::handler_t post_completions_oai;
     server_http_context::handler_t post_chat_completions;
     server_http_context::handler_t post_responses_oai;
+    server_http_context::handler_t post_transcriptions_oai;
     server_http_context::handler_t post_anthropic_messages;
     server_http_context::handler_t post_anthropic_count_tokens;
     server_http_context::handler_t post_apply_template;

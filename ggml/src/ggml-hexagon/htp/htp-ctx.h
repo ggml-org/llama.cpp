@@ -2,6 +2,7 @@
 #define HTP_CTX_H
 
 #include "hex-dma.h"
+#include "hmx-queue.h"
 #include "htp-ops.h"
 #include "worker-pool.h"
 
@@ -9,6 +10,7 @@
 #include <dspqueue.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #define HTP_MAX_NTHREADS 10
 #define HTP_MAX_MMAPS    16
@@ -29,6 +31,8 @@ struct htp_spad {
     uint32_t                  size;            // total size
     uint32_t                  size_per_thread; // size per thread
 };
+
+struct htp_context;
 
 // Context while processing an Op
 // TODO: fold this into the main context
@@ -63,7 +67,9 @@ struct htp_context {
     int                    thread_id;
     int                    thread_prio;
 
-    int                    hmx_enabled;
+    bool                   hmx_enabled;
+    bool                   etm;
+    uint32_t               profiler;
 
     uint8_t *              vtcm_base;
     size_t                 vtcm_size;
@@ -72,6 +78,10 @@ struct htp_context {
     atomic_bool            vtcm_needs_release;
 
     struct htp_ops_context octx;
+
+#ifdef HTP_HAS_HMX
+    struct hmx_queue *     hmx_queue; // Async HMX queue for pipeline overlap
+#endif
 };
 
 int op_matmul(struct htp_ops_context * octx);
@@ -91,5 +101,8 @@ int op_repeat(struct htp_ops_context * octx);
 int op_argsort(struct htp_ops_context * octx);
 int op_ssm_conv(struct htp_ops_context * octx);
 int op_cumsum(struct htp_ops_context * octx);
+int op_fill(struct htp_ops_context * octx);
+int op_diag(struct htp_ops_context * octx);
+int op_solve_tri(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */
