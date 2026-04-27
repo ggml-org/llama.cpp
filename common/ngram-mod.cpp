@@ -1,5 +1,9 @@
 #include "ngram-mod.h"
 
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+
 //
 // common_ngram_mod
 //
@@ -134,7 +138,11 @@ int common_ngram_mod::draft_rolling(const entry_t * ctx, int max_draft, entry_t 
         if (i + 1 < max_draft) {
             // Speculative prefetch: assume out[i] will be valid, pre-hash next
             const size_t next_idx = mask ? (h & mask) : (h % entries.size());
+#if defined(_MSC_VER) && !defined(__clang__)
+            _mm_prefetch((const char *)&entries[next_idx], _MM_HINT_T0);
+#else
             __builtin_prefetch(&entries[next_idx], 0, 1);
+#endif
         }
 
         tok = get_by_hash(h);

@@ -33,6 +33,10 @@
 #include "ggml-cuda.h"
 #endif
 
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+
 // ============================================================================
 // Component 1: Bloom filter for negative bigrams
 //
@@ -99,7 +103,15 @@ struct phantom_bloom {
     float occupancy() const {
         size_t set = 0;
         for (auto w : bits) {
+#if defined(_MSC_VER) && !defined(__clang__)
+#if defined(_M_X64) || defined(_M_ARM64)
+            set += __popcnt64(w);
+#else
+            set += __popcnt((uint32_t)w) + __popcnt((uint32_t)(w >> 32));
+#endif
+#else
             set += __builtin_popcountll(w);
+#endif
         }
         return (float)set / (float)n_bits;
     }
