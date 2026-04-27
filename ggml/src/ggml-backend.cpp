@@ -1658,6 +1658,8 @@ static ggml_backend_sched_moe_cache * ggml_backend_sched_moe_cache_new(
     cache->weights_tensor.buffer = nullptr;
     cache->weights_tensor.data = nullptr;
     cache->weights_tensor.view_src = nullptr;
+    cache->weights_tensor.view_offs = 0;
+    cache->weights_tensor.extra = nullptr;
     cache->weights_tensor.op = GGML_OP_NONE;
     cache->weights_tensor.flags = 0;
     cache->weights_tensor.ne[2] = n_slots + 1; // one dummy padding slot
@@ -1716,6 +1718,8 @@ static bool ggml_backend_sched_moe_cache_ensure_ids(
     cache->ids_tensor.buffer = nullptr;
     cache->ids_tensor.data = nullptr;
     cache->ids_tensor.view_src = nullptr;
+    cache->ids_tensor.view_offs = 0;
+    cache->ids_tensor.extra = nullptr;
     cache->ids_tensor.op = GGML_OP_NONE;
     cache->ids_tensor.flags = 0;
     for (int i = 0; i < GGML_MAX_SRC; ++i) {
