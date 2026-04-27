@@ -2249,6 +2249,46 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist)
             .run();
+
+        {
+            // additional tests for https://github.com/ggml-org/llama.cpp/pull/21760
+            auto tmpls = read_templates("models/templates/google-gemma-4-31B-it.jinja");
+
+            common_chat_msg tool_call_msg = simple_assist_msg(
+                "Let me check.", "", "special_function", "{\"arg1\": 1}","c0");
+
+            common_chat_msg tool_msg;
+            tool_msg.role         = "tool";
+            tool_msg.tool_name    = "special_function";
+            tool_msg.tool_call_id = "c0";
+            tool_msg.content      = "{\"r\":\"ok\"}";
+
+            {
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_user, tool_call_msg, tool_msg };
+                inputs.tools                 = { special_function_tool };
+                inputs.add_generation_prompt = true;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (!string_ends_with(params.prompt, "<turn|>\n<|turn>model\n")) {
+                    throw std::runtime_error("Missing generation prompt for Gemma 4");
+                }
+            }
+
+            {
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_user, tool_call_msg, tool_msg };
+                inputs.tools                 = { special_function_tool };
+                inputs.add_generation_prompt = false;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (string_ends_with(params.prompt, "<|turn>model\n")) {
+                    throw std::runtime_error("Gemma 4: generation prompt was modified despite add_generation_prompt=false");
+                }
+            }
+        }
     }
 
     {
