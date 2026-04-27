@@ -1,4 +1,5 @@
 #include "allreduce.cuh"
+#include "convert.cuh"
 #include "ggml-impl.h"
 
 #include <cinttypes>
@@ -228,14 +229,15 @@ static __global__ void ggml_cuda_ar_kernel(
     }
 }
 
-static __global__ void ggml_cuda_ar_add_f32_kernel(
-        float * __restrict__ dst,
-        const float * __restrict__ src,
+template <typename T>
+static __global__ void ggml_cuda_ar_add_kernel(
+        T * __restrict__ dst,
+        const T * __restrict__ src,
         int count) {
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
     const int nt  = gridDim.x * blockDim.x;
     for (int i = tid; i < count; i += nt) {
-        dst[i] += src[i];
+        dst[i] = dst[i] + src[i];
     }
 }
 
@@ -255,9 +257,12 @@ static constexpr size_t GGML_CUDA_AR_MAX_BYTES = 1024 * 1024; // 1 MB
 static constexpr size_t GGML_CUDA_AR_COPY_MAX_BYTES = 32 * 1024 * 1024; // 32 MB
 static constexpr size_t GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT = 1024 * 1024; // 1 MB
 static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_DEFAULT = 2 * 1024 * 1024; // 2 MB
+// Minimum chunk size the env-var override is allowed to set; this caps the
+// per-slot copy-event array.  256 KB → up to 128 chunks per 32 MB tensor.
+static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN = 256 * 1024;
 static constexpr int GGML_CUDA_AR_COPY_MAX_CHUNKS =
-    static_cast<int>((GGML_CUDA_AR_COPY_MAX_BYTES + GGML_CUDA_AR_COPY_CHUNK_BYTES_DEFAULT - 1) /
-                    GGML_CUDA_AR_COPY_CHUNK_BYTES_DEFAULT);
+    static_cast<int>((GGML_CUDA_AR_COPY_MAX_BYTES + GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN - 1) /
+                    GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN);
 
 // Byte spacing between adjacent arrival ints.  128 bytes (two cache lines)
 // ensures the arrival slots for the two GPUs never share a cache line,
@@ -282,6 +287,7 @@ struct ggml_cuda_ar_pipeline {
     size_t   copy_bytes;   // bytes per device in host_large[] / dev_tmp[]
     size_t   copy_threshold;
     size_t   copy_chunk_bytes;
+    size_t   bf16_threshold; // tensors >= this size (bytes) are reduced via FP32->BF16 round-trip; 0 disables
     uint64_t call_count;
     uint64_t reduce_count;
 
@@ -544,7 +550,13 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     p->buf_bytes         = 0;
     p->copy_bytes        = GGML_CUDA_AR_COPY_MAX_BYTES;
     p->copy_threshold    = ggml_cuda_ar_env_u64("GGML_CUDA_AR_COPY_THRESHOLD", GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT);
-    p->copy_chunk_bytes  = GGML_CUDA_AR_COPY_CHUNK_BYTES_DEFAULT;
+    p->copy_chunk_bytes  = ggml_cuda_ar_env_u64("GGML_CUDA_AR_COPY_CHUNK_BYTES", GGML_CUDA_AR_COPY_CHUNK_BYTES_DEFAULT);
+    if (p->copy_chunk_bytes < GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN) {
+        GGML_LOG_WARN("%s: GGML_CUDA_AR_COPY_CHUNK_BYTES=%zu below minimum %zu; clamping\n",
+                      __func__, p->copy_chunk_bytes, GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN);
+        p->copy_chunk_bytes = GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN;
+    }
+    p->bf16_threshold    = ggml_cuda_ar_env_u64("GGML_CUDA_AR_BF16_THRESHOLD", 128 * 1024); // 128 KB default
     p->call_count        = 0;
     p->reduce_count      = 0;
     p->arrival           = nullptr;
@@ -730,13 +742,16 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-static bool ggml_cuda_ar_allreduce_copy_f32(
+template <typename T>
+static bool ggml_cuda_ar_allreduce_copy_impl(
         ggml_cuda_ar_pipeline * p,
         ggml_backend_t        * backends,
-        ggml_tensor           ** tensors,
+        T * const               buf[GGML_CUDA_MAX_DEVICES],
+        const bool              compute[GGML_CUDA_MAX_DEVICES],
         uint64_t                reduce_id,
         int64_t                 ne,
-        size_t                  nbytes) {
+        size_t                  nbytes,
+        const char *            trace_label) {
     GGML_ASSERT(p->n_devices == 2);
     GGML_ASSERT(nbytes <= p->copy_bytes);
     GGML_ASSERT(ne <= std::numeric_limits<int>::max());
@@ -747,19 +762,16 @@ static bool ggml_cuda_ar_allreduce_copy_f32(
     GGML_ASSERT(copy_chunks <= GGML_CUDA_AR_COPY_MAX_CHUNKS);
 
     ggml_backend_cuda_context * cuda_ctx[2] = {};
-    char * data[2] = {};
 
     // Stage 1: both GPUs copy their local contribution to pinned host memory.
     for (int i = 0; i < 2; ++i) {
         ggml_cuda_set_device(p->devices[i]);
         cuda_ctx[i] = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
-        data[i] = static_cast<char *>(tensors[i]->data);
 
         ggml_cuda_ar_wait_for_compute(p, cuda_ctx[i], i, slot);
 
-        const bool compute = (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
-        if (!compute) {
-            CUDA_CHECK(cudaMemsetAsync(data[i], 0, nbytes, p->streams[i]));
+        if (!compute[i]) {
+            CUDA_CHECK(cudaMemsetAsync(buf[i], 0, nbytes, p->streams[i]));
         }
 
         for (size_t c = 0; c < copy_chunks; ++c) {
@@ -769,12 +781,12 @@ static bool ggml_cuda_ar_allreduce_copy_f32(
 
             if (i == 0) {
                 ggml_cuda_ar_trace_chunk(
-                    p, reduce_id, "copy_engine", c, slot, offset / sizeof(float),
-                    chunk_bytes / sizeof(float), chunk_bytes, c + 1 == copy_chunks);
+                    p, reduce_id, trace_label, c, slot, offset / sizeof(T),
+                    chunk_bytes / sizeof(T), chunk_bytes, c + 1 == copy_chunks);
             }
 
             CUDA_CHECK(cudaMemcpyAsync(
-                p->host_large[i] + offset, data[i] + offset, chunk_bytes,
+                p->host_large[i] + offset, reinterpret_cast<char *>(buf[i]) + offset, chunk_bytes,
                 cudaMemcpyDeviceToHost, p->streams[i]));
             CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].cpy[c], p->streams[i]));
         }
@@ -802,9 +814,9 @@ static bool ggml_cuda_ar_allreduce_copy_f32(
         if (n_blocks > 1024) {
             n_blocks = 1024;
         }
-        ggml_cuda_ar_add_f32_kernel<<<n_blocks, block_size, 0, p->streams[i]>>>(
-            reinterpret_cast<float *>(data[i]),
-            reinterpret_cast<const float *>(p->dev_tmp[i]),
+        ggml_cuda_ar_add_kernel<T><<<n_blocks, block_size, 0, p->streams[i]>>>(
+            buf[i],
+            reinterpret_cast<const T *>(p->dev_tmp[i]),
             (int) ne);
         CUDA_CHECK(cudaGetLastError());
 
@@ -823,68 +835,137 @@ bool ggml_cuda_ar_allreduce(
     const int n = p->n_devices;
     GGML_ASSERT(n == 2);
 
-    const ggml_type type      = tensors[0]->type;
-    const size_t    type_size = ggml_type_size(type);
-    GGML_ASSERT(type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16);
+    const ggml_type input_type = tensors[0]->type;
+    GGML_ASSERT(input_type == GGML_TYPE_F32 || input_type == GGML_TYPE_F16 || input_type == GGML_TYPE_BF16);
 
     const int64_t ne = ggml_nelements(tensors[0]);
     GGML_ASSERT(ne > 0);
-    GGML_ASSERT(p->buf_bytes >= type_size);
-
-    const size_t max_chunk_elems = p->buf_bytes / type_size;
-    GGML_ASSERT(max_chunk_elems > 0);
 
     const uint64_t reduce_id = p->reduce_count++;
-    const size_t nbytes = ggml_nbytes(tensors[0]);
+    const size_t   input_nbytes = ggml_nbytes(tensors[0]);
 
+    // BF16 round-trip: F32 inputs >= bf16_threshold are converted to BF16 for
+    // the reduction (chunked or copy-engine), halving on-wire bytes. Matches
+    // NCCL's behaviour. The pre-conversion zeroes inactive shards so the
+    // inner paths see them as already-prepared compute tensors.
+    const bool use_bf16 =
+        input_type == GGML_TYPE_F32 &&
+        p->bf16_threshold > 0 &&
+        input_nbytes >= p->bf16_threshold;
+
+    const ggml_type kernel_type = use_bf16 ? GGML_TYPE_BF16 : input_type;
+    const size_t    type_size   = ggml_type_size(kernel_type);
+    GGML_ASSERT(p->buf_bytes >= type_size);
+    const size_t    nbytes      = (size_t) ne * type_size;
+
+    bool compute_flag[GGML_CUDA_MAX_DEVICES] = {};
+    for (int i = 0; i < n; ++i) {
+        compute_flag[i] = (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+    }
+
+    ggml_cuda_pool_alloc<nv_bfloat16> bf16_tmp[GGML_CUDA_MAX_DEVICES];
+    void * data_ptr[GGML_CUDA_MAX_DEVICES];
+
+    if (use_bf16) {
+        to_bf16_cuda_t to_bf16 = ggml_get_to_bf16_cuda(GGML_TYPE_F32);
+        for (int i = 0; i < n; ++i) {
+            auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+            bf16_tmp[i].pool = &cuda_ctx->pool();
+            bf16_tmp[i].alloc(ne);
+            ggml_cuda_set_device(p->devices[i]);
+            if (compute_flag[i]) {
+                to_bf16(tensors[i]->data, bf16_tmp[i].get(), ne, cuda_ctx->stream());
+            } else {
+                CUDA_CHECK(cudaMemsetAsync(bf16_tmp[i].get(), 0, nbytes, cuda_ctx->stream()));
+            }
+            CUDA_CHECK(cudaGetLastError());
+            data_ptr[i] = bf16_tmp[i].get();
+        }
+    } else {
+        for (int i = 0; i < n; ++i) {
+            data_ptr[i] = tensors[i]->data;
+        }
+    }
+
+    // Decide between copy-engine and chunked-kernel paths based on the working
+    // type's actual byte count.
     const bool use_copy_engine =
-        type == GGML_TYPE_F32 &&
         p->copy_threshold > 0 &&
         nbytes >= p->copy_threshold &&
         nbytes <= p->copy_bytes;
+
+    bool ok = true;
     if (use_copy_engine) {
+        const char * label = use_bf16 ? "copy_engine-bf16" : "copy_engine";
         const size_t copy_chunk_elems = p->copy_chunk_bytes / type_size;
         const size_t copy_chunks = (nbytes + p->copy_chunk_bytes - 1) / p->copy_chunk_bytes;
-        ggml_cuda_ar_trace_call(p, reduce_id, "copy_engine", tensors, type, ne, nbytes, copy_chunk_elems, copy_chunks);
-        return ggml_cuda_ar_allreduce_copy_f32(p, backends, tensors, reduce_id, ne, nbytes);
-    }
+        ggml_cuda_ar_trace_call(p, reduce_id, label, tensors, kernel_type, ne, nbytes, copy_chunk_elems, copy_chunks);
 
-    const size_t chunks = ((size_t) ne + max_chunk_elems - 1) / max_chunk_elems;
-    ggml_cuda_ar_trace_call(p, reduce_id, "kernel", tensors, type, ne, nbytes, max_chunk_elems, chunks);
-
-    // Insert chunked kernels into each GPU's existing compute stream via events:
-    //   record(app, compute_stream)       — capture "upstream done"
-    //   wait(internal_stream, app)        — internal stream defers until then
-    //   launch one or more chunk kernels on internal_stream
-    //   record(ker, internal_stream)      — capture "final chunk done"
-    //   wait(compute_stream, ker)         — compute stream resumes after reduce
-    size_t chunk_index = 0;
-    for (int64_t chunk_start = 0; chunk_start < ne; chunk_start += (int64_t) max_chunk_elems, ++chunk_index) {
-        const size_t remaining_elems = (size_t) (ne - chunk_start);
-        const size_t chunk_elems = remaining_elems < max_chunk_elems ? remaining_elems : max_chunk_elems;
-        const size_t chunk_bytes = chunk_elems * type_size;
-
-        const int slot = ggml_cuda_ar_acquire_slot(p);
-        const bool last_chunk = chunk_start + (int64_t) chunk_elems == ne;
-        ggml_cuda_ar_trace_chunk(p, reduce_id, "kernel", chunk_index, slot, chunk_start, chunk_elems, chunk_bytes, last_chunk);
-
+        // After up-front BF16 conversion, the tmp buffers already hold the
+        // (possibly zeroed-for-inactive) data, so the inner path can treat
+        // every shard as compute.
+        bool inner_compute[GGML_CUDA_MAX_DEVICES];
         for (int i = 0; i < n; ++i) {
-            const int peer = 1 - i;  // valid for n == 2 only
-            ggml_cuda_set_device(p->devices[i]);
-            auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
-            const bool compute = (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+            inner_compute[i] = use_bf16 ? true : compute_flag[i];
+        }
 
-            if (chunk_start == 0) {
-                ggml_cuda_ar_wait_for_compute(p, cuda_ctx, i, slot);
+        switch (kernel_type) {
+            case GGML_TYPE_F32: {
+                float * buf[GGML_CUDA_MAX_DEVICES];
+                for (int i = 0; i < n; ++i) buf[i] = static_cast<float *>(data_ptr[i]);
+                ok = ggml_cuda_ar_allreduce_copy_impl<float>(p, backends, buf, inner_compute, reduce_id, ne, nbytes, label);
+                break;
             }
-
-            char * data = static_cast<char *>(tensors[i]->data) + chunk_start * (int64_t) type_size;
-
-            // Match the NCCL and meta-backend semantics: inactive shards
-            // contribute zeros to the reduction.
-            if (!compute) {
-                CUDA_CHECK(cudaMemsetAsync(data, 0, chunk_bytes, p->streams[i]));
+            case GGML_TYPE_BF16: {
+                __nv_bfloat16 * buf[GGML_CUDA_MAX_DEVICES];
+                for (int i = 0; i < n; ++i) buf[i] = static_cast<__nv_bfloat16 *>(data_ptr[i]);
+                ok = ggml_cuda_ar_allreduce_copy_impl<__nv_bfloat16>(p, backends, buf, inner_compute, reduce_id, ne, nbytes, label);
+                break;
             }
+            default:
+                GGML_ASSERT(false);
+        }
+    } else {
+        const char * label = use_bf16 ? "kernel-bf16" : "kernel";
+        const size_t max_chunk_elems = p->buf_bytes / type_size;
+        const size_t chunks = ((size_t) ne + max_chunk_elems - 1) / max_chunk_elems;
+        ggml_cuda_ar_trace_call(p, reduce_id, label, tensors, kernel_type, ne, nbytes, max_chunk_elems, chunks);
+
+        // Chunked-kernel path. Insert per-chunk kernels into each GPU's
+        // existing compute stream via events:
+        //   record(app, compute_stream)       — capture "upstream done"
+        //                                       (incl. F32->BF16 conversion when applicable)
+        //   wait(internal_stream, app)        — internal stream defers until then
+        //   launch one or more chunk kernels on internal_stream
+        //   record(ker, internal_stream)      — capture "final chunk done"
+        //   wait(compute_stream, ker)         — compute stream resumes
+        //                                       (then runs BF16->F32 when applicable)
+        size_t chunk_index = 0;
+        for (int64_t chunk_start = 0; chunk_start < ne; chunk_start += (int64_t) max_chunk_elems, ++chunk_index) {
+            const size_t remaining_elems = (size_t) (ne - chunk_start);
+            const size_t chunk_elems = remaining_elems < max_chunk_elems ? remaining_elems : max_chunk_elems;
+            const size_t chunk_bytes = chunk_elems * type_size;
+
+            const int slot = ggml_cuda_ar_acquire_slot(p);
+            const bool last_chunk = chunk_start + (int64_t) chunk_elems == ne;
+            ggml_cuda_ar_trace_chunk(p, reduce_id, label, chunk_index, slot, chunk_start, chunk_elems, chunk_bytes, last_chunk);
+
+            for (int i = 0; i < n; ++i) {
+                const int peer = 1 - i;  // valid for n == 2 only
+                ggml_cuda_set_device(p->devices[i]);
+                auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+
+                if (chunk_start == 0) {
+                    ggml_cuda_ar_wait_for_compute(p, cuda_ctx, i, slot);
+                }
+
+                char * data = static_cast<char *>(data_ptr[i]) + chunk_start * (int64_t) type_size;
+
+                // Match NCCL/meta-backend semantics: inactive shards contribute
+                // zeros. On the BF16 path the tmp buffer was already zeroed.
+                if (!compute_flag[i] && !use_bf16) {
+                    CUDA_CHECK(cudaMemsetAsync(data, 0, chunk_bytes, p->streams[i]));
+                }
 
 #if GGML_CUDA_AR_WATCHDOG
 #define GGML_CUDA_AR_WDOG_EXTRA_ARGS , p->debug_ring[i], p->wdog_max_spin, i, slot
@@ -893,30 +974,41 @@ bool ggml_cuda_ar_allreduce(
 #endif
 
 #define LAUNCH_AR_KERNEL(T) \
-            ggml_cuda_ar_kernel<T><<<dim3(1), dim3(256), 0, p->streams[i]>>>( \
-                reinterpret_cast<const T *>(data), \
-                reinterpret_cast<T *>(data), \
-                reinterpret_cast<T *>(p->host_buf[i]), \
-                reinterpret_cast<const T *>(p->host_buf[peer]), \
-                static_cast<int>(chunk_elems), \
-                ggml_cuda_ar_arrival_ptr(p, slot, i), \
-                ggml_cuda_ar_arrival_ptr(p, slot, peer) \
-                GGML_CUDA_AR_WDOG_EXTRA_ARGS)
+                ggml_cuda_ar_kernel<T><<<dim3(1), dim3(256), 0, p->streams[i]>>>( \
+                    reinterpret_cast<const T *>(data), \
+                    reinterpret_cast<T *>(data), \
+                    reinterpret_cast<T *>(p->host_buf[i]), \
+                    reinterpret_cast<const T *>(p->host_buf[peer]), \
+                    static_cast<int>(chunk_elems), \
+                    ggml_cuda_ar_arrival_ptr(p, slot, i), \
+                    ggml_cuda_ar_arrival_ptr(p, slot, peer) \
+                    GGML_CUDA_AR_WDOG_EXTRA_ARGS)
 
-            switch (type) {
-                case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float);           break;
-                case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half);            break;
-                case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(__nv_bfloat16);   break;
-                default: GGML_ASSERT(false);
-            }
+                switch (kernel_type) {
+                    case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float);           break;
+                    case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half);            break;
+                    case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(__nv_bfloat16);   break;
+                    default: GGML_ASSERT(false);
+                }
 
 #undef LAUNCH_AR_KERNEL
 #undef GGML_CUDA_AR_WDOG_EXTRA_ARGS
-            CUDA_CHECK(cudaGetLastError());
+                CUDA_CHECK(cudaGetLastError());
 
-            ggml_cuda_ar_record_chunk_done(p, cuda_ctx, i, slot, last_chunk);
+                ggml_cuda_ar_record_chunk_done(p, cuda_ctx, i, slot, last_chunk);
+            }
         }
     }
 
-    return true;
+    if (use_bf16 && ok) {
+        to_fp32_cuda_t to_fp32 = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
+        for (int i = 0; i < n; ++i) {
+            auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+            ggml_cuda_set_device(p->devices[i]);
+            to_fp32(bf16_tmp[i].get(), (float *) tensors[i]->data, ne, cuda_ctx->stream());
+            CUDA_CHECK(cudaGetLastError());
+        }
+    }
+
+    return ok;
 }
