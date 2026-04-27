@@ -3,7 +3,7 @@
 > [!NOTE]
 > Performance and memory optimizations, accuracy validation, broader quantization coverage, broader operator and model support are work in progress.
 
-[OpenVINO](https://docs.openvino.ai/) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs, and NPUs, in the cloud, on-premises, and on the edge. [OpenVINO backend for llama.cpp](../../src/ggml-openvino) enables hardware-accelerated inference on **Intel® CPUs, GPUs, and NPUs** while remaining compatible with the existing **GGUF model ecosystem**. The backend translates GGML compute graphs into OpenVINO graphs and leverages graph compilation, kernel fusion, and device-specific optimizations to improve inference performance on supported Intel hardware.
+[OpenVINO](https://docs.openvino.ai/) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs, and NPUs, in the cloud, on-premises, and on the edge. [OpenVINO backend for llama.cpp](../../ggml/src/ggml-openvino) enables hardware-accelerated inference on **Intel® CPUs, GPUs, and NPUs** while remaining compatible with the existing **GGUF model ecosystem**. The backend translates GGML compute graphs into OpenVINO graphs and leverages graph compilation, kernel fusion, and device-specific optimizations to improve inference performance on supported Intel hardware.
 
 The OpenVINO backend is implemented in `ggml/src/ggml-openvino` and provides a translation layer for core GGML operations. The OpenVINO backend replaces the standard GGML graph execution path with Intel's OpenVINO inference engine. This approach allows the same GGUF model file to run on Intel CPUs, Intel GPUs (integrated and discrete), and Intel NPUs without changes to the model or the rest of the llama.cpp stack. When a `ggml_cgraph` is dispatched to OpenVINO backend, it:
 
@@ -244,7 +244,6 @@ build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf"
 - `-fa 1` is required when running llama-bench with the OpenVINO backend.
   - `GGML_OPENVINO_STATEFUL_EXECUTION=1 GGML_OPENVINO_DEVICE=GPU ./llama-bench -fa 1`
 - `llama-server` with OpenVINO backend supports only one chat session/thread, when `GGML_OPENVINO_STATEFUL_EXECUTION=1` is enabled.
-- For Intel GPU, NPU detection in containers, GPU, NPU user-space drivers/libraries must be present inside the image. We will include in a future PR. Until then, you can use this reference Dockerfile: [openvino.Dockerfile](https://github.com/ravi9/llama.cpp/blob/ov-docker-update/.devops/openvino.Dockerfile)
 
 > [!NOTE]
 > The OpenVINO backend is actively under development. Fixes are underway, and this document will continue to be updated as issues are resolved.
@@ -274,8 +273,6 @@ docker build --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_p
 Run llama.cpp with OpenVINO backend Docker container.
 Save sample models in `~/models` as [shown above](#3-download-sample-model). It will be mounted to the container in the examples below.
 
-> [!NOTE]
-> Intel GPU, NPU detection in containers will be included in a future PR. Until then, you can use this reference Dockerfile: [openvino.Dockerfile](https://github.com/ravi9/llama.cpp/blob/ov-docker-update/.devops/openvino.Dockerfile).
 
 ```bash
 #  Run Docker container

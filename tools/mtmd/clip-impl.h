@@ -135,6 +135,8 @@
 
 // ultravox
 #define TN_CONV1D       "a.conv1d.%d.%s"
+#define TN_CONV2D       "a.conv2d.%d.%s"
+#define TN_CONV_OUT     "a.conv_out.%s"
 #define TN_MM_AUDIO_MLP "mm.a.mlp.%d.%s"
 #define TN_MM_AUDIO_FC  "mm.a.fc.%s" // fully connected layer
 #define TN_MM_NORM_PRE  "mm.a.norm_pre.%s"
@@ -148,7 +150,7 @@
 #define TN_TOK_BOI         "v.boi"
 #define TN_TOK_EOI         "v.eoi"
 
-// hunyuanocr
+// hunyuanocr / hunyuanvl (shared GGUF tensor names)
 #define TN_MM_PRE_NORM     "mm.pre_norm.%s"
 #define TN_TOK_IMG_BEGIN   "mm.image_begin"
 #define TN_TOK_IMG_END     "mm.image_end"
@@ -180,6 +182,21 @@
 #define TN_CONV_NORM       "%s.blk.%d.conv_norm.%s"
 #define TN_CONV_PW1        "%s.blk.%d.conv_pw1.%s"
 #define TN_CONV_PW2        "%s.blk.%d.conv_pw2.%s"
+
+// gemma4 audio conformer
+#define TN_A_MM_INP_PROJ     "mm.a.input_projection.%s"
+#define TN_A_MM_SOFT_EMB_N   "mm.a.soft_emb_norm.%s"
+#define TN_A_INP_PROJ        "a.input_projection.%s"
+#define TN_A_CONV1D          "a.conv1d.%d.%s"
+#define TN_A_CONV1D_NORM     "a.conv1d.%d.norm.%s"
+#define TN_A_OUT_PROJ        "a.pre_encode.out.%s"
+#define TN_A_ATTN_PRE_NORM   "%s.blk.%d.attn_pre_norm.%s"
+#define TN_A_ATTN_POST_NORM  "%s.blk.%d.attn_post_norm.%s"
+#define TN_A_ATTN_K_REL      "%s.blk.%d.attn_k_rel.%s"
+#define TN_A_PER_DIM_SCALE   "%s.blk.%d.per_dim_scale.%s"
+#define TN_A_PER_DIM_K_SCALE "%s.blk.%d.per_dim_k_scale.%s"
+#define TN_A_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"
+#define TN_A_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s"
 
 // mobilenetv5 (gemma3n) definitions
 #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
@@ -225,6 +242,15 @@
 #define TN_STD_BIAS              "v.std_bias"
 #define TN_STD_SCALE             "v.std_scale"
 
+// yasa2
+#define TN_YASA_PATCH_LN_W       "v.patch_ln.weight"
+#define TN_YASA_PATCH_LN_B       "v.patch_ln.bias"
+#define TN_YASA_BACKBONE_LN_W    "v.backbone_ln.weight"
+#define TN_YASA_BACKBONE_LN_B    "v.backbone_ln.bias"
+#define TN_YASA_POS_EMBD         "v.vision_pos_embed"
+#define TN_YASA_STAGE_DOWN_LN    "v.stage.%d.down.ln.%s"
+#define TN_YASA_STAGE_DOWN_CONV  "v.stage.%d.down.conv.%s"
+#define TN_YASA_STAGE_BLK        "v.stage.%d.blk.%d.%s.%s"
 
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
@@ -242,6 +268,7 @@ enum projector_type {
     PROJECTOR_TYPE_GLM_EDGE,
     PROJECTOR_TYPE_QWEN2VL,
     PROJECTOR_TYPE_QWEN3VL,
+    PROJECTOR_TYPE_STEP3VL,
     PROJECTOR_TYPE_GEMMA3,
     PROJECTOR_TYPE_GEMMA3NV,
     PROJECTOR_TYPE_GEMMA3NA,
@@ -255,9 +282,11 @@ enum projector_type {
     PROJECTOR_TYPE_INTERNVL,
     PROJECTOR_TYPE_LLAMA4,
     PROJECTOR_TYPE_QWEN2A,
+    PROJECTOR_TYPE_QWEN3A,
     PROJECTOR_TYPE_GLMA,
     PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on clip_ctx
     PROJECTOR_TYPE_VOXTRAL,
+    PROJECTOR_TYPE_MERALION,
     PROJECTOR_TYPE_MUSIC_FLAMINGO,
     PROJECTOR_TYPE_LFM2,
     PROJECTOR_TYPE_KIMIVL,
@@ -265,13 +294,16 @@ enum projector_type {
     PROJECTOR_TYPE_LIGHTONOCR,
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
+    PROJECTOR_TYPE_DOTS_OCR,
     PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
+    PROJECTOR_TYPE_YASA2,
     PROJECTOR_TYPE_KIMIK25,
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANOCR,
+    PROJECTOR_TYPE_HUNYUANVL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -284,6 +316,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN2VL,   "qwen2vl_merger"},
     { PROJECTOR_TYPE_QWEN25VL,  "qwen2.5vl_merger"},
     { PROJECTOR_TYPE_QWEN3VL,   "qwen3vl_merger"},
+    { PROJECTOR_TYPE_STEP3VL,   "step3vl"},
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
     { PROJECTOR_TYPE_GEMMA3NV,  "gemma3nv"},
     { PROJECTOR_TYPE_GEMMA3NA,  "gemma3na"},
@@ -296,9 +329,11 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_INTERNVL,  "internvl"},
     { PROJECTOR_TYPE_LLAMA4,    "llama4"},
     { PROJECTOR_TYPE_QWEN2A,    "qwen2a"},
+    { PROJECTOR_TYPE_QWEN3A,    "qwen3a"},
     { PROJECTOR_TYPE_GLMA,      "glma"},
     { PROJECTOR_TYPE_QWEN25O,   "qwen2.5o"},
     { PROJECTOR_TYPE_VOXTRAL,   "voxtral"},
+    { PROJECTOR_TYPE_MERALION,  "meralion"},
     { PROJECTOR_TYPE_MUSIC_FLAMINGO, "musicflamingo"},
     { PROJECTOR_TYPE_LFM2,      "lfm2"},
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
@@ -306,13 +341,16 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
+    { PROJECTOR_TYPE_DOTS_OCR,  "dots_ocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR,"deepseekocr"},
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
+    { PROJECTOR_TYPE_YASA2,     "yasa2"},
     { PROJECTOR_TYPE_KIMIK25,   "kimik25"},
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
     { PROJECTOR_TYPE_HUNYUANOCR, "hunyuanocr"},
+    { PROJECTOR_TYPE_HUNYUANVL,  "hunyuanvl"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

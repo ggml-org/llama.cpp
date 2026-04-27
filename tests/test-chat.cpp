@@ -7,6 +7,7 @@
 //
 #include "../src/llama-grammar.h"
 #include "../src/unicode.h"
+#include "../tools/server/server-chat.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
@@ -998,6 +999,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     auto parser = make_peg_parser(tmpls, tc.params, detailed_debug);
     if (detailed_debug) {
         LOG_DBG("Using parser: \n%s\n", parser.arena_.dump(parser.arena_.root()).c_str());
+        LOG_DBG("Generation prompt: '%s'\n", parser.params_.generation_prompt.c_str());
     }
 
     common_chat_msg msg_accum;
@@ -1513,6 +1515,117 @@ static void test_tools_oaicompat_json_conversion() {
                   common_chat_tools_to_json_oaicompat({ special_function_tool }).dump(2));
 }
 
+static void test_convert_responses_to_chatcmpl() {
+    LOG_DBG("%s\n", __func__);
+
+    // Test basic conversion with input messages (user/assistant alternating)
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "hi wassup"
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": "Hey! 👋 Not much, just here ready to chat. What's up with you? Anything I can help you with today?"
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "hi"
+                }
+            ],
+            "model": "gpt-5-mini",
+            "stream": false,
+            "text": {},
+            "reasoning": {
+                "effort": "medium"
+            }
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        // Verify messages were converted correctly
+        assert_equals(true, result.contains("messages"));
+        assert_equals(true, result.at("messages").is_array());
+        assert_equals((size_t)3, result.at("messages").size());
+
+        // Check first message (user)
+        const auto & msg0 = result.at("messages")[0];
+        assert_equals(std::string("user"), msg0.at("role").get<std::string>());
+        assert_equals(true, msg0.at("content").is_array());
+        assert_equals(std::string("text"), msg0.at("content")[0].at("type").get<std::string>());
+        assert_equals(std::string("hi wassup"), msg0.at("content")[0].at("text").get<std::string>());
+
+        // Check second message (assistant)
+        const auto & msg1 = result.at("messages")[1];
+        assert_equals(std::string("assistant"), msg1.at("role").get<std::string>());
+        assert_equals(true, msg1.at("content").is_array());
+        assert_equals(std::string("text"), msg1.at("content")[0].at("type").get<std::string>());
+        assert_equals(std::string("Hey! 👋 Not much, just here ready to chat. What's up with you? Anything I can help you with today?"), msg1.at("content")[0].at("text").get<std::string>());
+
+        // Check third message (user)
+        const auto & msg2 = result.at("messages")[2];
+        assert_equals(std::string("user"), msg2.at("role").get<std::string>());
+        assert_equals(true, msg2.at("content").is_array());
+        assert_equals(std::string("text"), msg2.at("content")[0].at("type").get<std::string>());
+        assert_equals(std::string("hi"), msg2.at("content")[0].at("text").get<std::string>());
+
+        // Verify other fields preserved
+        assert_equals(std::string("gpt-5-mini"), result.at("model").get<std::string>());
+        assert_equals(false, result.at("stream").get<bool>());
+    }
+
+    // Test string input
+    {
+        json input = json::parse(R"({
+            "input": "Hello, world!",
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals((size_t)1, result.at("messages").size());
+        const auto & msg = result.at("messages")[0];
+        assert_equals(std::string("user"), msg.at("role").get<std::string>());
+        assert_equals(std::string("Hello, world!"), msg.at("content").get<std::string>());
+    }
+
+    // Test with instructions (system message)
+    {
+        json input = json::parse(R"({
+            "input": "Hello",
+            "instructions": "You are a helpful assistant.",
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals((size_t)2, result.at("messages").size());
+        const auto & sys_msg = result.at("messages")[0];
+        assert_equals(std::string("system"), sys_msg.at("role").get<std::string>());
+        assert_equals(std::string("You are a helpful assistant."), sys_msg.at("content").get<std::string>());
+    }
+
+    // Test with max_output_tokens conversion
+    {
+        json input = json::parse(R"({
+            "input": "Hello",
+            "model": "test-model",
+            "max_output_tokens": 100
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(true, result.contains("max_tokens"));
+        assert_equals(false, result.contains("max_output_tokens"));
+        assert_equals(100, result.at("max_tokens").get<int>());
+    }
+}
+
 static void test_template_output_peg_parsers(bool detailed_debug) {
     LOG_DBG("%s\n", __func__);
 
@@ -1529,22 +1642,16 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         // Qwen3.5 (basically same as Nemotron, but keeping separate tests just in case)
         auto tst = peg_tester("models/templates/Qwen3.5-4B.jinja", detailed_debug);
 
-        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .enable_thinking(true)
             .expect(message_assist_thoughts)
             .run();
 
-                tst.test("I'm\nthinking\n</think>\nHello, world!\nWhat's up?")
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_NONE)
-            .expect_content("<think>\nI'm\nthinking\n</think>\nHello, world!\nWhat's up?")
-            .run();
-
-        tst.test("I'm\nthinking\n</think>\nHello, world!\nWhat's up?")
-            .enable_thinking(true)
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .expect(message_assist_thoughts)
+            .expect_content("<think>\nI'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
             .run();
 
         tst.test(
@@ -1560,7 +1667,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         tst.test(
-               "I'm\nthinking\n</think>\n"
+               "I'm\nthinking\n</think>\n\n"
                "<tool_call>\n"
                "<function=special_function>\n"
                "<parameter=arg1>\n1\n</parameter>\n"
@@ -1618,7 +1725,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test(
                "I need to output the invoice details in JSON\n"
-               "</think>\n"
+               "</think>\n\n"
                R"({"amount": 123.45, "date": "2025-12-03"})")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .enable_thinking(true)
@@ -1638,7 +1745,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "hello()\n"
                "</parameter>\n"
                "</function>\n"
-               "</tool_call></think>\n"
+               "</tool_call>\n</think>\n\n"
                "<tool_call>\n"
                "<function=python>\n"
                "<parameter=code>\n"
@@ -1795,7 +1902,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "<function=special_function>\n"
                "<parameter=arg1>\n1\n</parameter>\n"
                "</function>\n"
-               "</tool_call>")
+               "</tool_call>\n")
             .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
@@ -1808,7 +1915,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "<function=special_function>\n"
                "<parameter=arg1>\n1\n</parameter>\n"
                "</function>\n"
-               "</tool_call>")
+               "</tool_call>\n")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
             .expect(message_assist_call_thoughts)
@@ -1825,7 +1932,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "<parameter=arg1>\n1\n</parameter>\n"
                "<parameter=arg2>\n2\n</parameter>\n"
                "</function>\n"
-               "</tool_call>")
+               "</tool_call>\n")
             .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .parallel_tool_calls(true)
@@ -1848,7 +1955,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "hello()\n"
                "</parameter>\n"
                "</function>\n"
-               "</tool_call>")
+               "</tool_call>\n")
             .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({
@@ -1881,7 +1988,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "hello()\n"
                "</parameter>\n"
                "</function>\n"
-               "</tool_call></think>\n"
+               "</tool_call>\n</think>\n"
                "<tool_call>\n"
                "<function=python>\n"
                "<parameter=code>\n"
@@ -1891,7 +1998,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "hello()\n"
                "</parameter>\n"
                "</function>\n"
-               "</tool_call>"
+               "</tool_call>\n"
             )
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
@@ -1907,7 +2014,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "hello()\n"
                "</parameter>\n"
                "</function>\n"
-               "</tool_call>")
+               "</tool_call>\n")
             .expect_tool_calls({
                 { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
             })
@@ -1985,6 +2092,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 "<|channel>thought\nI'm\nthinking<channel|>Hello, world!\nWhat's up?")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist_thoughts)
+            .run();
+
+        // Empty reasoning (budget=0: sampler forces end tag before newline)
+        tst.test(
+                "<|channel>thought<channel|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", ""))
             .run();
 
         // Reasoning and content with reasoning_format = none
@@ -2110,6 +2224,71 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ amount_tool })
             .expect(message_with_tool_calls("amount", R"({"orig": 1.5e10})"))
             .run();
+
+        // Edge cases
+        tst.test(
+                "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<channel|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+                "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<|channel>thought\n<channel|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+                "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<|channel>thought\n<channel|><channel|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+                "<|channel><|channel>thought\n<channel|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        {
+            // additional tests for https://github.com/ggml-org/llama.cpp/pull/21760
+            auto tmpls = read_templates("models/templates/google-gemma-4-31B-it.jinja");
+
+            common_chat_msg tool_call_msg = simple_assist_msg(
+                "Let me check.", "", "special_function", "{\"arg1\": 1}","c0");
+
+            common_chat_msg tool_msg;
+            tool_msg.role         = "tool";
+            tool_msg.tool_name    = "special_function";
+            tool_msg.tool_call_id = "c0";
+            tool_msg.content      = "{\"r\":\"ok\"}";
+
+            {
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_user, tool_call_msg, tool_msg };
+                inputs.tools                 = { special_function_tool };
+                inputs.add_generation_prompt = true;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (!string_ends_with(params.prompt, "<turn|>\n<|turn>model\n")) {
+                    throw std::runtime_error("Missing generation prompt for Gemma 4");
+                }
+            }
+
+            {
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_user, tool_call_msg, tool_msg };
+                inputs.tools                 = { special_function_tool };
+                inputs.add_generation_prompt = false;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (string_ends_with(params.prompt, "<|turn>model\n")) {
+                    throw std::runtime_error("Gemma 4: generation prompt was modified despite add_generation_prompt=false");
+                }
+            }
+        }
     }
 
     {
@@ -2131,7 +2310,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test(
                "<tool_call>\n"
-               "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n"
+               "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}"
                "</tool_call>")
             .tools({ special_function_tool })
             .expect(message_assist_call)
@@ -2139,7 +2318,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test(
                "Hello, world!\nWhat's up?<tool_call>\n"
-               "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n"
+               "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}"
                "</tool_call>")
             .tools({ special_function_tool })
             .expect(message_assist_call_content)
@@ -2566,6 +2745,215 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
         tst.test("CONTENT").enable_thinking(false).reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK).
             expect(simple_assist_msg("CONTENT", "")).run();
+    }
+
+    // DeepSeek V3.2 tests - format uses DSML markup:
+    //   <｜DSML｜function_calls>
+    //   <｜DSML｜invoke name="foo">
+    //   <｜DSML｜parameter name="bar" string="true|false">value</｜DSML｜parameter>
+    //   </｜DSML｜invoke>
+    //   </｜DSML｜function_calls>
+    // Reasoning uses <think>...</think>. The generation prompt ends in <think> (thinking mode)
+    // or <think></think> (non-thinking mode).
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.2.jinja", detailed_debug);
+
+        // Pure content (non-thinking mode)
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        // Thinking + content
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Thinking + tool call (single, string param)
+        tst.test(
+               "Let me check the time</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check the time"))
+            .run();
+
+        // Tool call without reasoning (non-thinking mode), integer param (string="false")
+        tst.test(
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Multiple parallel tool calls with reasoning
+        tst.test(
+               "Calling both</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "<｜DSML｜invoke name=\"get_weather\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .run();
+
+        // Tool call with content before tool calls
+        tst.test(
+               "Thinking about it</think>"
+               "Let me call the function.\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect_reasoning("Thinking about it")
+            .expect_content("Let me call the function.")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // Tool call with negative number
+        tst.test(
+               "Test negative</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"magic_int\">\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">-14</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Test negative")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": -14})", {} },
+            })
+            .run();
+
+        // Tool call with decimal number
+        tst.test(
+               "Test decimal</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"amount\">\n"
+               "<｜DSML｜parameter name=\"orig\" string=\"false\">3.14</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ amount_tool })
+            .expect_reasoning("Test decimal")
+            .expect_tool_calls({
+                { "amount", R"({"orig": 3.14})", {} },
+            })
+            .run();
+
+        // Tool call with boolean
+        tst.test(
+               "Test boolean</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"toggle\">\n"
+               "<｜DSML｜parameter name=\"enabled\" string=\"false\">true</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ toggle_tool })
+            .expect_reasoning("Test boolean")
+            .expect_tool_calls({
+                { "toggle", R"({"enabled": true})", {} },
+            })
+            .run();
+
+        // Tool call with array parameter (JSON-formatted)
+        tst.test(
+               "Test array</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"todo_list\">\n"
+               "<｜DSML｜parameter name=\"todos\" string=\"false\">[\"buy milk\",\"walk dog\"]</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ todo_list })
+            .expect_reasoning("Test array")
+            .expect_tool_calls({
+                { "todo_list", R"({"todos": ["buy milk", "walk dog"]})", {} },
+            })
+            .run();
+
+        // Tool call with object parameter (JSON-formatted)
+        tst.test(
+               "Test object</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"set_config\">\n"
+               "<｜DSML｜parameter name=\"config\" string=\"false\">{\"theme\":\"dark\",\"level\":2}</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ config_tool })
+            .expect_reasoning("Test object")
+            .expect_tool_calls({
+                { "set_config", R"({"config": {"theme": "dark", "level": 2}})", {} },
+            })
+            .run();
+
+        // Edge case: empty reasoning
+        tst.test(
+               "</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">XYZCITY</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", R"({"city": "XYZCITY"})"))
+            .run();
+
+        // Edge case: tool call with multiple params (mixed types, string first)
+        tst.test(
+               "Multi-arg call</think>\n\n"
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"magic_int\">\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">42</｜DSML｜parameter>\n"
+               "<｜DSML｜parameter name=\"name\" string=\"true\">foo bar</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Multi-arg call")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42, "name": "foo bar"})", {} },
+            })
+            .run();
     }
 
     // GLM-4.6 tests - format: <tool_call>function_name\n<arg_key>...</arg_key>\n<arg_value>...</arg_value>\n</tool_call>
@@ -3087,6 +3475,92 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // Reka-Edge tests - uses native JSON format with per-call wrapper
+    {
+        auto tst = peg_tester("models/templates/Reka-Edge.jinja", detailed_debug);
+
+        // Basic content only
+        tst.test("Hello, world!\nWhat's up?").enable_thinking(false).expect(message_assist).run();
+
+        // Single tool call without reasoning
+        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</tool_call>")
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Tool call with string argument
+        tst.test("<tool_call>\n{\"name\": \"get_time\", \"arguments\": {\"city\": \"XYZCITY\"}}</tool_call>")
+            .enable_thinking(false)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", "{\"city\":\"XYZCITY\"}"))
+            .run();
+
+        // Tool call with reasoning (enable_thinking=true)
+        tst.test("I'm\nthinking\n</think>\n\n<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        // Multiple tool calls (parallel)
+        tst.test(
+            "<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</tool_call>"
+            "<tool_call>\n{\"name\": \"special_function_with_opt\", \"arguments\": {\"arg1\": 1, \"arg2\": 2}}</tool_call>"
+        )
+            .enable_thinking(false)
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, special_function_tool_with_optional_param
+            })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .run();
+
+        // Tool call with reasoning and content
+        tst.test("I need to call a function\n</think>\n\n"
+                 "Let me check the time.<tool_call>\n{\"name\": \"get_time\", \"arguments\": {\"city\": \"XYZCITY\"}}</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "I need to call a function", "Let me check the time.", { { "get_time", "{\"city\":\"XYZCITY\"}" } }
+            ))
+            .run();
+
+        // Partial tool call (streaming)
+        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\":")
+            .tools({ special_function_tool })
+            .enable_thinking(false)
+            .is_partial(true)
+            .expect(simple_assist_msg("", "", "special_function", "{\"arg1\": "))
+            .run();
+
+        // Tool call with empty arguments
+        tst.test("<tool_call>\n{\"name\": \"empty_args\", \"arguments\": {}}</tool_call>")
+            .enable_thinking(false)
+            .tools({ empty_args_tool })
+            .expect(simple_assist_msg("", "", "empty_args", "{}"))
+            .run();
+
+        // fake tool call marker in reasoning
+        tst.test(
+               "Let me think about <tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 2}}</tool_call> hmm\n</think>\n\n"
+               "<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect_reasoning("Let me think about <tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 2}}</tool_call> hmm")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+    }
+
+
     // Apertus-8B-Instruct tests - FUNC_NAME_AS_KEY format
     // Format: <|tools_prefix|>[{"function_name": {...arguments...}}]<|tools_suffix|>
     {
@@ -3102,8 +3576,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // Format: <minimax:tool_call><invoke name="func"><parameter name="key">value</parameter></invoke></minimax:tool_call>
     {
         auto tst = peg_tester("models/templates/MiniMax-M2.jinja", detailed_debug);
+        tst.test("\n</think>\n\nHello, world!\nWhat's up?").enable_thinking(true).reasoning_format(COMMON_REASONING_FORMAT_AUTO).expect(message_assist).run();
+
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?").enable_thinking(true).reasoning_format(COMMON_REASONING_FORMAT_AUTO).expect(message_assist_thoughts).run();
+
+        tst.test("Let's call a tool:\n</think>\n\n<minimax:tool_call>\n<invoke name=\"empty_args\">\n</invoke>\n</minimax:tool_call>").
+            enable_thinking(true).
+            reasoning_format(COMMON_REASONING_FORMAT_AUTO).
+            tools({ empty_args_tool }).
+            expect(message_with_reasoning_and_tool_call("Let's call a tool:", "empty_args", "{}")).
+            run();
+
         tst.test(
-               "<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter "
+               "\n</think>\n\n<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter "
                "name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>")
             .tools({ special_function_tool })
             .expect(message_assist_call)
@@ -3253,6 +3738,51 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .expect(message_assist_call)
             .expect_reconstruction()
+            .run();
+    }
+
+    // Reka Edge
+    {
+        auto tst = peg_tester("models/templates/Reka-Edge.jinja", detailed_debug);
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .expect(message_assist)
+            .run();
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+        tst.test("Hello, world!\nWhat's up?\n<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_content)
+            .run();
+        tst.test("I'm\nthinking\n</think>\n\n<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>\n<tool_call>\n{\"name\": \"special_function_with_opt\", \"arguments\": {\"arg1\": 1, \"arg2\": 2}}\n</tool_call>")
+            .enable_thinking(false)
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .run();
+        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg")
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .is_partial(true)
+            .expect(message_assist_call_cutoff_args)
             .run();
     }
 
@@ -3442,7 +3972,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                             },
                             "replaceAll": {
                                 "type": "boolean",
-                                "description": "Whether to replace all occurences."
+                                "description": "Whether to replace all occurrences."
                             }
                         },
                         "required": ["oldString", "newString"]
@@ -3510,7 +4040,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     {
         auto tst = peg_tester("models/templates/StepFun3.5-Flash.jinja", detailed_debug);
-        tst.test("I was thinking</think>\nNow I'm not.").
+
+        tst.test("I was thinking\n</think>\nNow I'm not.").
             enable_thinking(true).
             reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK).
             expect_reasoning("I was thinking").
@@ -3738,6 +4269,55 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 }
 
+static void test_reka_edge_common_path() {
+    auto tmpls = read_templates("models/templates/Reka-Edge.jinja");
+
+    {
+        common_chat_templates_inputs inputs;
+        common_chat_msg system_msg;
+        system_msg.role = "system";
+        system_msg.content = "Use tools when needed.";
+
+        common_chat_msg tool_call_msg = simple_assist_msg("", "", "special_function", "{\"arg1\": 1}");
+
+        common_chat_msg tool_msg;
+        tool_msg.role = "tool";
+        tool_msg.tool_name = "special_function";
+        tool_msg.tool_call_id = "call0";
+        tool_msg.content = "Sunny";
+
+        inputs.messages = { system_msg, message_user, tool_call_msg, tool_msg, message_user };
+        inputs.tools = { special_function_tool };
+        inputs.enable_thinking = true;
+        inputs.add_generation_prompt = true;
+
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+        if (params.prompt.find("<tool_response>\nSunny\n</tool_response><sep>") == std::string::npos) {
+            throw std::runtime_error("Reka Edge prompt did not render tool response history");
+        }
+        if (params.prompt.rfind("assistant: <think>\n") == std::string::npos) {
+            throw std::runtime_error("Reka Edge prompt did not render thinking generation prompt");
+        }
+    }
+
+    {
+        common_chat_templates_inputs inputs;
+        inputs.messages = {
+            message_user,
+            simple_assist_msg("The first point is")
+        };
+        inputs.add_generation_prompt = false;
+        inputs.enable_thinking = false;
+        inputs.chat_template_kwargs["continue_final_message"] = "true";
+
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        if (string_ends_with(params.prompt, "<sep>")) {
+            throw std::runtime_error("Reka Edge continue_final_message unexpectedly closed the assistant turn");
+        }
+    }
+}
+
 // Test the developer role to system workaround with a simple mock template
 static void test_developer_role_to_system_workaround() {
     LOG_DBG("%s\n", __func__);
@@ -3858,7 +4438,7 @@ int main(int argc, char ** argv) {
     bool detailed_debug    = false;
     bool only_run_filtered = false;
 
-    // Check for --template flag
+    // Check for --template and --detailed flags
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--template" && i + 1 < argc) {
@@ -3883,7 +4463,20 @@ int main(int argc, char ** argv) {
     }
 
 #ifndef _WIN32
-    if (argc > 1) {
+    // Check if any argument is a .jinja file (for template format detection mode)
+    bool has_jinja_files = false;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--detailed") {
+            continue;
+        }
+        if (arg.size() >= 6 && arg.rfind(".jinja") == arg.size() - 6) {
+            has_jinja_files = true;
+            break;
+        }
+    }
+
+    if (has_jinja_files) {
         common_chat_templates_inputs inputs;
         common_chat_msg              msg;
         msg.role        = "user";
@@ -3916,7 +4509,9 @@ int main(int argc, char ** argv) {
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
         test_tools_oaicompat_json_conversion();
+        test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();
+        test_reka_edge_common_path();
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All tests passed!" << '\n';
     }

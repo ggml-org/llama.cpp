@@ -12,9 +12,16 @@ RUN apt update \
         xz-utils
         
 # Install SSL and Vulkan SDK dependencies
-RUN apt install -y libssl-dev curl \
-libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc
-        
+RUN apt install -y \
+      libssl-dev \
+      curl \
+      libxcb-xinput0 \
+      libxcb-xinerama0 \
+      libxcb-cursor-dev \
+      libvulkan-dev \
+      glslc \
+      spirv-headers
+
 ARG CCACHE_ENABLED="false"
 RUN if $CCACHE_ENABLED; then \
         apt-get update \

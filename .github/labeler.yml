@@ -73,10 +73,18 @@ android:
     - changed-files:
         - any-glob-to-any-file:
             - examples/llama.android/**
+server/webui:
+    - changed-files:
+        - any-glob-to-any-file:
+            - tools/server/webui/**
+            - tools/server/public/**
 server:
     - changed-files:
         - any-glob-to-any-file:
             - tools/server/**
+
+
+
 ggml:
     - changed-files:
         - any-glob-to-any-file:

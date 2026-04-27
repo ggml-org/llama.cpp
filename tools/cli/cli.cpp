@@ -2,8 +2,10 @@
 #include "common.h"
 #include "arg.h"
 #include "console.h"
+#include "fit.h"
 // #include "log.h"
 
+#include "server-common.h"
 #include "server-context.h"
 #include "server-task.h"
 
@@ -57,8 +59,6 @@ struct cli_context {
     std::vector<raw_buffer> input_files;
     task_params defaults;
     bool verbose_prompt;
-    int reasoning_budget = -1;
-    std::string reasoning_budget_message;
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -75,8 +75,6 @@ struct cli_context {
         // defaults.return_progress = true; // TODO: show progress
 
         verbose_prompt = params.verbose_prompt;
-        reasoning_budget = params.reasoning_budget;
-        reasoning_budget_message = params.reasoning_budget_message;
     }
 
     std::string generate_completion(result_timings & out_timings) {
@@ -104,7 +102,7 @@ struct cli_context {
                 const llama_vocab * vocab = llama_model_get_vocab(
                     llama_get_model(ctx_server.get_llama_context()));
 
-                task.params.sampling.reasoning_budget_tokens = reasoning_budget;
+                task.params.sampling.reasoning_budget_tokens = defaults.sampling.reasoning_budget_tokens;
                 task.params.sampling.generation_prompt = chat_params.generation_prompt;
 
                 if (!chat_params.thinking_start_tag.empty()) {
@@ -114,7 +112,7 @@ struct cli_context {
                 task.params.sampling.reasoning_budget_end =
                     common_tokenize(vocab, chat_params.thinking_end_tag, false, true);
                 task.params.sampling.reasoning_budget_forced =
-                    common_tokenize(vocab, reasoning_budget_message + chat_params.thinking_end_tag, false, true);
+                    common_tokenize(vocab, defaults.sampling.reasoning_budget_message + chat_params.thinking_end_tag, false, true);
             }
 
             rd.post_task({std::move(task)});
@@ -194,7 +192,7 @@ struct cli_context {
             raw_buffer buf;
             buf.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             input_files.push_back(std::move(buf));
-            return mtmd_default_marker();
+            return get_media_marker();
         } else {
             std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             return content;
@@ -205,6 +203,8 @@ struct cli_context {
         auto meta = ctx_server.get_meta();
         auto & chat_params = meta.chat_params;
 
+        auto caps = common_chat_templates_get_caps(chat_params.tmpls.get());
+
         common_chat_templates_inputs inputs;
         inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
         inputs.tools                 = {}; // TODO
@@ -212,7 +212,7 @@ struct cli_context {
         inputs.json_schema           = ""; // TODO
         inputs.grammar               = ""; // TODO
         inputs.use_jinja             = chat_params.use_jinja;
-        inputs.parallel_tool_calls   = false;
+        inputs.parallel_tool_calls   = caps["supports_parallel_tool_calls"];
         inputs.add_generation_prompt = true;
         inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
         inputs.force_pure_content    = chat_params.force_pure_content;
@@ -224,7 +224,7 @@ struct cli_context {
 };
 
 // TODO?: Make this reusable, enums, docs
-static const std::array<const std::string, 7> cmds = {
+static const std::array<std::string_view, 7> cmds = {
     "/audio ",
     "/clear",
     "/exit",
@@ -238,19 +238,19 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
     std::vector<std::pair<std::string, size_t>> matches;
     std::string cmd;
 
-    if (line.length() > 1 && line[0] == '/' && !std::any_of(cmds.begin(), cmds.end(), [line](const std::string & prefix) {
+    if (line.length() > 1 && line.front() == '/' && !std::any_of(cmds.begin(), cmds.end(), [line](std::string_view prefix) {
         return string_starts_with(line, prefix);
     })) {
         auto it = cmds.begin();
 
-        while ((it = std::find_if(it, cmds.end(), [line](const std::string & cmd_line) {
+        while ((it = std::find_if(it, cmds.end(), [line](std::string_view cmd_line) {
             return string_starts_with(cmd_line, line);
         })) != cmds.end()) {
-            matches.emplace_back(*it, (*it).length());
+            matches.emplace_back(*it, it->length());
             ++it;
         }
     } else {
-        auto it = std::find_if(cmds.begin(), cmds.end(), [line](const std::string & prefix) {
+        auto it = std::find_if(cmds.begin(), cmds.end(), [line](std::string_view prefix) {
             return prefix.back() == ' ' && string_starts_with(line, prefix);
         });
 
@@ -267,18 +267,18 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
         std::string expanded_prefix = path_prefix;
 
 #if !defined(_WIN32)
-        if (string_starts_with(path_prefix, "~")) {
+        if (string_starts_with(path_prefix, '~')) {
             const char * home = std::getenv("HOME");
             if (home && home[0]) {
-                expanded_prefix = std::string(home) + path_prefix.substr(1);
+                expanded_prefix = home + path_prefix.substr(1);
             }
         }
-        if (string_starts_with(expanded_prefix, "/")) {
+        if (string_starts_with(expanded_prefix, '/')) {
 #else
         if (std::isalpha(expanded_prefix[0]) && expanded_prefix.find(':') == 1) {
 #endif
             cur_dir = std::filesystem::path(expanded_prefix).parent_path();
-            cur_dir_str = "";
+            cur_dir_str.clear();
         } else if (!path_prefix.empty()) {
             cur_dir /= std::filesystem::path(path_prefix).parent_path();
         }
@@ -301,7 +301,7 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
             }
 
             if (expanded_prefix.empty() || string_starts_with(path_entry, expanded_prefix)) {
-                std::string updated_line = cmd + path_entry;
+                const std::string updated_line = cmd + path_entry;
                 matches.emplace_back(updated_line + path_postfix, updated_line.length());
             }
 
@@ -311,7 +311,7 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
         }
 
         if (matches.empty()) {
-            std::string updated_line = cmd + path_prefix;
+            const std::string updated_line = cmd + path_prefix;
             matches.emplace_back(updated_line + path_postfix, updated_line.length());
         }
 
@@ -328,7 +328,7 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
                 len = std::min(len, static_cast<size_t>(cmp.first - match0.begin()));
             }
 
-            std::string updated_line = std::string(match0.substr(0, len));
+            const std::string updated_line = std::string(match0.substr(0, len));
             matches.emplace_back(updated_line + path_postfix, updated_line.length());
         }
 
@@ -565,10 +565,10 @@ int main(int argc, char ** argv) {
                 if (endpath != std::string::npos) {
                     std::string rel_pattern = pattern.substr(0, endpath);
 #if !defined(_WIN32)
-                    if (string_starts_with(rel_pattern, "~")) {
+                    if (string_starts_with(rel_pattern, '~')) {
                         const char * home = std::getenv("HOME");
                         if (home && home[0]) {
-                            rel_pattern = std::string(home) + rel_pattern.substr(1);
+                            rel_pattern = home + rel_pattern.substr(1);
                         }
                     }
 #endif
@@ -646,7 +646,7 @@ int main(int argc, char ** argv) {
 
     // bump the log level to display timings
     common_log_set_verbosity_thold(LOG_LEVEL_INFO);
-    llama_memory_breakdown_print(ctx_cli.ctx_server.get_llama_context());
+    common_memory_breakdown_print(ctx_cli.ctx_server.get_llama_context());
 
     return 0;
 }

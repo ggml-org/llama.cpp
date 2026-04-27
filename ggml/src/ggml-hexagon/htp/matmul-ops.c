@@ -16,8 +16,9 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-msg.h"
 #include "htp-ops.h"
+#include "htp-ops.h"
+#include "hmx-ops.h"
 
 #define MM_SPAD_SRC0_NROWS 16
 #define MM_SPAD_SRC1_NROWS 16
@@ -1897,11 +1898,11 @@ static void vec_dot_f16_f32_uu_1x1(const int n, float * restrict s, const void *
     hvx_vec_store_u(&s[0], 4, rsum);
 }
 
-#define htp_matmul_tensors_preamble    \
-    struct htp_tensor * restrict src0    = &octx->src0;      \
-    struct htp_tensor * restrict src1    = &octx->src1;      \
-    struct htp_tensor * restrict src2    = &octx->src2;      \
-    struct htp_tensor * restrict dst     = &octx->dst;       \
+#define htp_matmul_tensors_preamble                          \
+    const struct htp_tensor * restrict src0 = octx->src[0];  \
+    const struct htp_tensor * restrict src1 = octx->src[1];  \
+    const struct htp_tensor * restrict src2 = octx->src[2];  \
+    const struct htp_tensor * restrict  dst = octx->dst;     \
     struct htp_spad * restrict src0_spad = &octx->src0_spad; \
     struct htp_spad * restrict src1_spad = &octx->src1_spad; \
     struct htp_spad * restrict dst_spad  = &octx->dst_spad;  \
@@ -2223,8 +2224,8 @@ struct mmid_row_mapping {
 static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
-    struct htp_tensor * restrict     ids = &octx->src2;
-    struct htp_spad * restrict src2_spad = &octx->src2_spad;
+    const struct htp_tensor * restrict ids = octx->src[2];
+    struct htp_spad * restrict   src2_spad = &octx->src2_spad;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -2342,8 +2343,8 @@ static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
 static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
-    struct htp_tensor * restrict     ids = &octx->src2;
-    struct htp_spad * restrict src2_spad = &octx->src2_spad;
+    const struct htp_tensor * restrict ids = octx->src[2];
+    struct htp_spad * restrict   src2_spad = &octx->src2_spad;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -2612,7 +2613,7 @@ static void quantize_f32_q8x4x2(unsigned int nth, unsigned int ith, void * data)
     struct htp_matmul_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
 
-    const struct htp_tensor * src = &octx->src1;
+    const struct htp_tensor * src = octx->src[1];
     uint8_t * restrict dst = octx->src1_spad.data;
     struct htp_spad * spad = &octx->src0_spad;
     uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
@@ -2659,7 +2660,7 @@ static void quantize_f32_f16(unsigned int nth, unsigned int ith, void * data) {
     struct htp_matmul_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
 
-    const struct htp_tensor * src = &octx->src1;
+    const struct htp_tensor * src = octx->src[1];
     uint8_t * restrict dst = octx->src1_spad.data;
     uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
     uint32_t dst_stride = octx->src1_spad.stride;
@@ -2701,7 +2702,7 @@ static void quantize_f16_f16(unsigned int nth, unsigned int ith, void * data) {
     struct htp_matmul_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
 
-    const struct htp_tensor * src = &octx->src1;
+    const struct htp_tensor * src = octx->src[1];
     uint8_t * restrict dst = octx->src1_spad.data;
     uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
     uint32_t dst_stride = octx->src1_spad.stride;
@@ -2800,7 +2801,7 @@ static void htp_mminit_spad(struct htp_ops_context * octx,
     octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
 }
 
-int op_matmul(struct htp_ops_context * octx) {
+static int op_matmul_hvx(struct htp_ops_context * octx) {
     htp_matmul_tensors_preamble;
 
     struct htp_matmul_context mmctx_struct = {0};
@@ -2824,7 +2825,7 @@ int op_matmul(struct htp_ops_context * octx) {
     worker_callback_t quant_job_func;
     worker_callback_t matmul_job_func = src1_nrows > 1 ? matmul_2d : matvec_2d;
 
-    bool need_quant = !(octx->flags & HTP_OPFLAGS_SKIP_QUANTIZE);
+    bool need_quant = true;
 
     if (src0->type == HTP_TYPE_F16) {
         // Try optimized f16-f16 path first (src1 in VTCM)
@@ -2838,7 +2839,7 @@ int op_matmul(struct htp_ops_context * octx) {
         // Default matmul implementation does not support multi-batch src0 (N-vs-N broadcasting).
         // It only supports 1-vs-N broadcasting (src0 is 2D) or standard 2D matmul.
         const bool is_batched  = (ne02 > 1) || (ne03 > 1);
-        const bool is_permuted = htp_is_permuted(&octx->src0) || htp_is_permuted(&octx->src1);
+        const bool is_permuted = htp_is_permuted(octx->src[0]) || htp_is_permuted(octx->src[1]);
 
         if (!is_batched && !is_permuted && f16_total_size <= octx->ctx->vtcm_size) {
             // Optimized path
@@ -2915,32 +2916,174 @@ int op_matmul(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-    octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+    // Place src1 spad first. We use it for dyn.quant and may reuse between ops
+    octx->src1_spad.data = octx->ctx->vtcm_base;
+    octx->src0_spad.data = octx->src1_spad.data + octx->src1_spad.size;
+    octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
+
+    octx->src1_spad.src  = (src1 == octx->src1_spad.src) ? src1 : NULL;
+    octx->src0_spad.src  = NULL;
+    octx->dst_spad.src   = NULL;
 
     octx->src0_spad.stride = src0_row_size_padded;
     octx->src1_spad.stride = src1_row_size;
 
-    if (need_quant) {
+    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
+        return HTP_STATUS_OK;
+
+    if (need_quant && !octx->src1_spad.src) {
         const uint32_t n_quant_jobs  = MIN(src1_nrows, octx->n_threads);
         mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
         worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
-        // Cache where src1 was written so subsequent SKIP_QUANTIZE ops can find it
-        octx->ctx->prev_src1_spad = octx->src1_spad.data;
-    } else {
-        // SKIP_QUANTIZE: Q8 data lives at the address written by the previous
-        // quantize pass.  The current op may have a different src0 size (e.g.
-        // IQ4_NL vs MXFP4), so src1_spad.data computed above could be wrong.
-        octx->src1_spad.data = octx->ctx->prev_src1_spad;
+        octx->src1_spad.src = src1;
     }
 
-    if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        const uint32_t n_matmul_jobs = octx->n_threads;
-        worker_pool_run_func(octx->ctx->worker_pool, matmul_job_func, mmctx, n_matmul_jobs);
-    }
+    const uint32_t n_matmul_jobs = octx->n_threads;
+    worker_pool_run_func(octx->ctx->worker_pool, matmul_job_func, mmctx, n_matmul_jobs);
 
     return HTP_STATUS_OK;
+}
+
+int op_matmul(struct htp_ops_context * octx) {
+    htp_matmul_tensors_preamble;
+
+#ifndef HTP_HAS_HMX
+    return op_matmul_hvx(octx);
+#else
+    if (!octx->ctx->hmx_enabled) {
+        return op_matmul_hvx(octx);
+    }
+
+    // HMX weight tile requires N to be 32-aligned.
+    if (src0->ne[1] % 32 != 0) {
+        return op_matmul_hvx(octx);
+    }
+
+    // HMX supports F16, Q4_0, Q8_0, IQ4_NL, MXFP4 weights.
+    // Other types fall back to HVX.
+    uint32_t wtype = src0->type;
+    if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_Q4_0 && wtype != HTP_TYPE_Q8_0 && wtype != HTP_TYPE_IQ4_NL && wtype != HTP_TYPE_MXFP4) {
+        return op_matmul_hvx(octx);
+    }
+
+    // Quantised HMX path requires K aligned to 256 (x4x2 super-block).
+    // F16 HMX path requires K aligned to 32 (tile width).
+    if (wtype != HTP_TYPE_F16 && src0->ne[0] % 256 != 0) {
+        return op_matmul_hvx(octx);
+    }
+
+    if (wtype == HTP_TYPE_F16 && src0->ne[0] % 32 != 0) {
+        return op_matmul_hvx(octx);
+    }
+
+    const bool is_batched = (src0->ne[2] * src0->ne[3] > 1 || src1->ne[2] * src1->ne[3] > 1);
+
+    // Quantised HMX kernels only handle flat 2D matmul (host already rejects
+    // batched quantised, but guard here too).  F16 batched matmul is handled
+    // by the dedicated wrapper in hmx-matmul-ops.c.
+    if (is_batched && src0->type != HTP_TYPE_F16) {
+        return op_matmul_hvx(octx);
+    }
+
+    // HMX assumes contiguous row-major layout.  Fall back for permuted
+    // tensors where strides are non-monotonic (e.g. transposed KV cache).
+    if (src0->nb[0] > src0->nb[1] || src1->nb[0] > src1->nb[1]) {
+        return op_matmul_hvx(octx);
+    }
+
+    // M alignment: when M > 32 but not 32-aligned, we split into
+    // HMX (first m_hmx = M & ~31 rows) + HVX (remaining m_tail rows).
+    // When M <= 32 and not 32-aligned, fall back entirely to HVX.
+    const int m_total = (int) src1->ne[1];
+    const int m_tail  = m_total % 32;
+    const int m_hmx   = m_total - m_tail;
+
+    if (m_hmx == 0) {
+        return op_matmul_hvx(octx);
+    }
+
+    // Always re-quantize src1 since HMX kernel overwrites vtcm/spad,
+    // so any previously cached quantized data is invalid.
+    octx->src1_spad.src = NULL;
+
+    int k = (int) src0->ne[0];  // inner dimension
+    int n = (int) src0->ne[1];  // weight columns
+
+    // --- Phase 1: HMX on the first m_hmx (32-aligned) rows ---
+    int ret = -1;
+
+    // Row strides in elements. For compact tensors these equal k; for
+    // permuted attention views they can be larger, so pass the real stride.
+    const int act_stride = (int)(src1->nb[1] / sizeof(float));
+    const int wgt_stride = (int)(src0->nb[1] / sizeof(__fp16));
+
+    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
+        return HTP_STATUS_OK;
+    }
+
+    if (src0->type == HTP_TYPE_F16) {
+        if (is_batched) {
+            hmx_matmul_w16a32_batched_params_t batch_params = {
+                .dst             = (float *) dst->data,
+                .activation      = (float *) src1->data,
+                .permuted_weight = (const __fp16 *) src0->data,
+                .m               = m_hmx,
+                .k               = k,
+                .n               = n,
+                .act_stride      = act_stride,
+                .weight_stride   = wgt_stride,
+                .dst_stride      = (int) (dst->nb[1] / sizeof(float)),
+                .ne02            = ne02,
+                .ne03            = ne03,
+                .ne12            = ne12,
+                .ne13            = ne13,
+                .src0_nb2        = src0->nb[2],
+                .src0_nb3        = src0->nb[3],
+                .src1_nb2        = src1->nb[2],
+                .src1_nb3        = src1->nb[3],
+                .dst_nb2         = dst->nb[2],
+                .dst_nb3         = dst->nb[3],
+            };
+            ret = hmx_mat_mul_permuted_w16a32_batched(octx->ctx, &batch_params);
+        } else {
+            ret = hmx_mat_mul_permuted_w16a32(octx->ctx,
+                    (float*) dst->data, (float*) src1->data, (const __fp16 *) src0->data,
+                    m_hmx, k, n, act_stride, wgt_stride);
+        }
+    } else {
+        ret = hmx_mat_mul_permuted_qk_0_d16a32(octx->ctx,
+                    (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
+                    m_hmx, k, n, (int) src0->type);
+    }
+
+    if (ret != 0) {
+        FARF(HIGH, "HMX matmul failed (ret=%d), falling back to HVX", ret);
+        return op_matmul(octx);
+    }
+
+    // --- Phase 2: HVX on the remaining m_tail rows ---
+    if (m_tail > 0) {
+        // copy of src1 and dst
+        struct htp_tensor src1_tail = *src1;
+        struct htp_tensor dst_tail  = *dst;
+
+        src1_tail.ne[1] = m_tail; // only tail rows
+        dst_tail.ne[1]  = m_tail; // only tail rows
+
+        // Offset activation and dst pointers past the HMX-processed rows.
+        // Use nb[1] (row stride in bytes) to compute the byte offset.
+        src1_tail.data += (uint32_t) m_hmx * src1->nb[1];
+        dst_tail.data  += (uint32_t) m_hmx * dst->nb[1];
+
+        octx->src[1] = &src1_tail;
+        octx->dst    = &dst_tail;
+
+        FARF(HIGH, "hmx-matmul: HVX tail m_tail %d src1 %p dst %p", m_tail, (void *) src1_tail.data, (void *) dst_tail.data);
+        return op_matmul_hvx(octx);
+    }
+
+    return 0;
+#endif // HTP_HAS_HMX
 }
 
 int op_matmul_id(struct htp_ops_context * octx) {
@@ -2950,7 +3093,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
     struct htp_matmul_context * mmctx = &mmctx_struct;
     mmctx->octx = octx;
 
-    struct htp_tensor * restrict ids = &octx->src2;
+    const struct htp_tensor * restrict ids = octx->src[2];
 
     const size_t src0_row_size = nb01;
     const size_t dst_row_size  = nb1;
@@ -3003,10 +3146,16 @@ int op_matmul_id(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-    octx->src2_spad.data = octx->src1_spad.data + octx->src1_spad.size;
+    // Place src1 spad first. We use it for dyn.quant and may reuse in subseq ops.
+    octx->src1_spad.data = octx->ctx->vtcm_base;
+    octx->src0_spad.data = octx->src1_spad.data + octx->src1_spad.size;
+    octx->src2_spad.data = octx->src0_spad.data + octx->src0_spad.size;
     octx->dst_spad.data  = octx->src2_spad.data + octx->src2_spad.size;
+
+    octx->src1_spad.src  = (src1 == octx->src1_spad.src) ? src1 : NULL;
+    octx->src0_spad.src  = NULL;
+    octx->src2_spad.src  = NULL;
+    octx->dst_spad.src   = NULL;
 
     octx->src0_spad.stride = src0_row_size_padded;
     octx->src1_spad.stride = src1_row_size;
@@ -3031,20 +3180,18 @@ int op_matmul_id(struct htp_ops_context * octx) {
         }
     }
 
-    // Setup worker pool callbacks
-    if (!(octx->flags & HTP_OPFLAGS_SKIP_QUANTIZE)) {
+    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
+        return HTP_STATUS_OK;
+
+    if (octx->src1_spad.src != src1) {
         const uint32_t n_quant_jobs = MIN(src1_nrows, octx->n_threads);
         mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
         worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
-        octx->ctx->prev_src1_spad = octx->src1_spad.data;
-    } else {
-        octx->src1_spad.data = octx->ctx->prev_src1_spad;
+        octx->src1_spad.src = src1;
     }
 
-    if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        const uint32_t n_matmul_jobs = octx->n_threads;
-        worker_pool_run_func(octx->ctx->worker_pool, matmul_id_job_func, mmctx, n_matmul_jobs);
-    }
+    const uint32_t n_matmul_jobs = octx->n_threads;
+    worker_pool_run_func(octx->ctx->worker_pool, matmul_id_job_func, mmctx, n_matmul_jobs);
 
     return HTP_STATUS_OK;
 }

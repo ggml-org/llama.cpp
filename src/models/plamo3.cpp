@@ -73,7 +73,7 @@ llm_build_plamo3<iswa>::llm_build_plamo3(const llama_model & model, const llm_gr
         const float attn_scale = 1.0f / sqrtf(float(head_dim_q));
 
         cur = build_attn(inp_attn,
-                model.layers[il].wo, NULL,
+                model.layers[il].wo, NULL, model.layers[il].wo_s,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, attn_scale, il);
         cb(cur, "attn_out", il);
 

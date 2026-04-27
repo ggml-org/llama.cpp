@@ -198,35 +198,38 @@ struct img_tool {
 private:
     // Bilinear resize function
     static void resize_bilinear(const clip_image_u8 & src, clip_image_u8 & dst, int target_width, int target_height) {
-        GGML_ASSERT(src.nx >= 2 && src.ny >= 2);
+        if (src.nx == 0 || src.ny == 0) { dst.nx = dst.ny = 0; dst.buf.clear(); return; }
+        if (target_width  <= 0) target_width  = 1;
+        if (target_height <= 0) target_height = 1;
+
         dst.nx = target_width;
         dst.ny = target_height;
         dst.buf.resize(3 * target_width * target_height);
 
-        float x_ratio = static_cast<float>(src.nx - 1) / target_width;
-        float y_ratio = static_cast<float>(src.ny - 1) / target_height;
+        float x_ratio = target_width  > 1 ? static_cast<float>(src.nx - 1) / (target_width  - 1) : 0.0f;
+        float y_ratio = target_height > 1 ? static_cast<float>(src.ny - 1) / (target_height - 1) : 0.0f;
 
-        for (int y = 0; y < target_height; y++) {
-            for (int x = 0; x < target_width; x++) {
-                float px = x_ratio * x;
-                float py = y_ratio * y;
-                int x_floor = std::min(static_cast<int>(px), src.nx - 2);
-                int y_floor = std::min(static_cast<int>(py), src.ny - 2);
-                float x_lerp = px - x_floor;
-                float y_lerp = py - y_floor;
+        for (int y = 0; y < target_height; ++y) {
+            for (int x = 0; x < target_width; ++x) {
+                float px = x * x_ratio;
+                float py = y * y_ratio;
 
-                for (int c = 0; c < 3; c++) {
-                    float top = lerp(
-                        static_cast<float>(src.buf[3 * (y_floor * src.nx + x_floor) + c]),
-                        static_cast<float>(src.buf[3 * (y_floor * src.nx + (x_floor + 1)) + c]),
-                        x_lerp
-                    );
-                    float bottom = lerp(
-                        static_cast<float>(src.buf[3 * ((y_floor + 1) * src.nx + x_floor) + c]),
-                        static_cast<float>(src.buf[3 * ((y_floor + 1) * src.nx + (x_floor + 1)) + c]),
-                        x_lerp
-                    );
-                    dst.buf[3 * (y * target_width + x) + c] = static_cast<uint8_t>(lerp(top, bottom, y_lerp));
+                int x0 = std::min(static_cast<int>(px), src.nx - 1);
+                int y0 = std::min(static_cast<int>(py), src.ny - 1);
+                int x1 = std::min(x0 + 1, src.nx - 1);
+                int y1 = std::min(y0 + 1, src.ny - 1);
+
+                float xf = px - x0;
+                float yf = py - y0;
+
+                for (int c = 0; c < 3; ++c) {
+                    float top    = lerp(static_cast<float>(src.buf[3 * (y0 * src.nx + x0) + c]),
+                                        static_cast<float>(src.buf[3 * (y0 * src.nx + x1) + c]),
+                                        xf);
+                    float bottom = lerp(static_cast<float>(src.buf[3 * (y1 * src.nx + x0) + c]),
+                                        static_cast<float>(src.buf[3 * (y1 * src.nx + x1) + c]),
+                                        xf);
+                    dst.buf[3 * (y * target_width + x) + c] = static_cast<uint8_t>(lerp(top, bottom, yf));
                 }
             }
         }
@@ -1111,6 +1114,260 @@ bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, 
 
     output.grid_x = 1;
     output.grid_y = 1;
+    return true;
+}
+
+//
+// mtmd_image_preprocessor_step3vl
+//
+
+void mtmd_image_preprocessor_step3vl::img_u8_resize_bilinear_to_f32(
+        const clip_image_u8 & src,
+        clip_image_f32 & dst,
+        int target_width,
+        int target_height,
+        const float mean[3],
+        const float std[3]) {
+    if (src.nx == target_width && src.ny == target_height) {
+        img_u8_to_f32(src, dst, mean, std);
+        return;
+    }
+
+    dst.nx = target_width;
+    dst.ny = target_height;
+    dst.buf.resize(3 * target_width * target_height);
+
+    const float scale_x = static_cast<float>(src.nx) / target_width;
+    const float scale_y = static_cast<float>(src.ny) / target_height;
+
+    for (int y = 0; y < target_height; ++y) {
+        const float src_y = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
+        const int y0_floor = static_cast<int>(std::floor(src_y));
+        const int y0 = std::max(0, std::min(y0_floor, src.ny - 1));
+        const int y1 = std::max(0, std::min(y0_floor + 1, src.ny - 1));
+        const float ly = src_y - y0_floor;
+
+        for (int x = 0; x < target_width; ++x) {
+            const float src_x = (static_cast<float>(x) + 0.5f) * scale_x - 0.5f;
+            const int x0_floor = static_cast<int>(std::floor(src_x));
+            const int x0 = std::max(0, std::min(x0_floor, src.nx - 1));
+            const int x1 = std::max(0, std::min(x0_floor + 1, src.nx - 1));
+            const float lx = src_x - x0_floor;
+
+            const size_t idx00 = 3 * (y0 * src.nx + x0);
+            const size_t idx01 = 3 * (y0 * src.nx + x1);
+            const size_t idx10 = 3 * (y1 * src.nx + x0);
+            const size_t idx11 = 3 * (y1 * src.nx + x1);
+            const size_t idx_dst = 3 * (y * target_width + x);
+
+            for (int c = 0; c < 3; ++c) {
+                const float v00 = (static_cast<float>(src.buf[idx00 + c]) / 255.0f - mean[c]) / std[c];
+                const float v01 = (static_cast<float>(src.buf[idx01 + c]) / 255.0f - mean[c]) / std[c];
+                const float v10 = (static_cast<float>(src.buf[idx10 + c]) / 255.0f - mean[c]) / std[c];
+                const float v11 = (static_cast<float>(src.buf[idx11 + c]) / 255.0f - mean[c]) / std[c];
+
+                const float top = v00 + (v01 - v00) * lx;
+                const float bot = v10 + (v11 - v10) * lx;
+                dst.buf[idx_dst + c] = top + (bot - top) * ly;
+            }
+        }
+    }
+}
+
+int mtmd_image_preprocessor_step3vl::get_image_longest_edge(const clip_hparams & params) {
+    return params.image_longest_edge > 0 ? params.image_longest_edge : default_image_longest_edge;
+}
+
+int mtmd_image_preprocessor_step3vl::determine_window_size(const clip_hparams & params, int longer, int shorter) {
+    const int image_size = params.image_size;
+    const int crop_size  = default_image_crop_size;
+    const float aspect_ratio = static_cast<float>(longer) / shorter;
+
+    if (longer <= image_size) {
+        return aspect_ratio > small_aspect_ratio_limit ? shorter : 0;
+    }
+
+    return aspect_ratio > wide_aspect_ratio_limit ? std::min(shorter, crop_size) : crop_size;
+}
+
+int mtmd_image_preprocessor_step3vl::calc_crop_extent(int length, int window_size) {
+    const float ratio = static_cast<float>(length) / window_size;
+    if (ratio < 1.0f) {
+        return length;
+    }
+
+    const float decimal = ratio - std::floor(ratio);
+    const int rounded = decimal > crop_rounding_threshold
+        ? static_cast<int>(std::floor(ratio)) + 1
+        : static_cast<int>(std::floor(ratio));
+    return window_size * rounded;
+}
+
+std::vector<int> mtmd_image_preprocessor_step3vl::calc_grid(int length, int window_size) {
+    const int n = length <= window_size
+        ? 1
+        : static_cast<int>(std::ceil(static_cast<float>(length - window_size) / window_size + 1.0f));
+    std::vector<int> starts(n);
+
+    for (int i = 0; i < n; ++i) {
+        starts[i] = window_size * i;
+    }
+
+    if (n > 1 && starts.back() + window_size > length) {
+        starts.back() = length - window_size;
+    }
+
+    return starts;
+}
+
+clip_image_u8 mtmd_image_preprocessor_step3vl::prepare_image(const clip_image_u8 & img, const clip_hparams & params) {
+    clip_image_u8 resized = img;
+    const float aspect_ratio = img.ny > 0 ? static_cast<float>(img.nx) / img.ny : 1.0f;
+    if (std::min(img.nx, img.ny) < 32 &&
+        (aspect_ratio > wide_aspect_ratio_limit ||
+         aspect_ratio < 1.0f / wide_aspect_ratio_limit)) {
+        const int square_size = std::max(img.nx, img.ny);
+        clip_image_u8 padded;
+        padded.nx = square_size;
+        padded.ny = square_size;
+        padded.buf.resize(3 * square_size * square_size);
+        img_tool::fill(padded, {0, 0, 0});
+        img_tool::composite(padded, img, 0, 0);
+        resized = std::move(padded);
+    }
+
+    const int max_image_size = get_image_longest_edge(params);
+    if (std::max(resized.nx, resized.ny) > max_image_size) {
+        const float scale = static_cast<float>(max_image_size) / std::max(resized.nx, resized.ny);
+        const clip_image_size new_size = {
+            std::max(1, static_cast<int>(std::floor(resized.nx * scale))),
+            std::max(1, static_cast<int>(std::floor(resized.ny * scale))),
+        };
+        clip_image_u8 scaled;
+        img_tool::resize(resized, scaled, new_size, RESIZE_ALGO_BILINEAR, false);
+        resized = std::move(scaled);
+    }
+
+    return resized;
+}
+
+clip_image_u8 mtmd_image_preprocessor_step3vl::crop_with_black_padding(const clip_image_u8 & image, int x, int y, int w, int h) {
+    clip_image_u8 dst;
+    dst.nx = w;
+    dst.ny = h;
+    dst.buf.resize(3 * w * h, 0);
+
+    const int src_x0 = std::max(0, x);
+    const int src_y0 = std::max(0, y);
+    const int src_x1 = std::min(image.nx, x + w);
+    const int src_y1 = std::min(image.ny, y + h);
+
+    if (src_x0 >= src_x1 || src_y0 >= src_y1) {
+        return dst;
+    }
+
+    const int dst_x0 = src_x0 - x;
+    const int dst_y0 = src_y0 - y;
+
+    for (int yy = 0; yy < src_y1 - src_y0; ++yy) {
+        for (int xx = 0; xx < src_x1 - src_x0; ++xx) {
+            const int src_idx = 3 * ((src_y0 + yy) * image.nx + (src_x0 + xx));
+            const int dst_idx = 3 * ((dst_y0 + yy) * w + (dst_x0 + xx));
+            dst.buf[dst_idx + 0] = image.buf[src_idx + 0];
+            dst.buf[dst_idx + 1] = image.buf[src_idx + 1];
+            dst.buf[dst_idx + 2] = image.buf[src_idx + 2];
+        }
+    }
+
+    return dst;
+}
+
+mtmd_image_preprocessor_step3vl::slice_instructions mtmd_image_preprocessor_step3vl::build_slice_instructions(
+        const clip_hparams & params,
+        const clip_image_size & prepared_size) {
+    slice_instructions instructions;
+    instructions.overview_size = prepared_size;
+
+    const int window_size = determine_window_size(
+        params,
+        std::max(prepared_size.width, prepared_size.height),
+        std::min(prepared_size.width, prepared_size.height));
+    if (window_size <= 0) {
+        instructions.refined_size = clip_image_size{0, 0};
+        instructions.grid_size    = clip_image_size{0, 0};
+        return instructions;
+    }
+
+    const int crop_width  = calc_crop_extent(prepared_size.width,  window_size);
+    const int crop_height = calc_crop_extent(prepared_size.height, window_size);
+    instructions.refined_size = clip_image_size{crop_width, crop_height};
+
+    const auto xs = calc_grid(crop_width,  window_size);
+    const auto ys = calc_grid(crop_height, window_size);
+    instructions.grid_size = clip_image_size{
+        static_cast<int>(xs.size()),
+        static_cast<int>(ys.size()),
+    };
+
+    for (int y : ys) {
+        for (int x : xs) {
+            instructions.slices.push_back(slice_coordinates{
+                /* x    */ x,
+                /* y    */ y,
+                /* size */ clip_image_size{window_size, window_size},
+            });
+        }
+    }
+
+    return instructions;
+}
+
+bool mtmd_image_preprocessor_step3vl::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+    clip_image_u8 prepared = prepare_image(img, hparams);
+    const auto instructions = build_slice_instructions(hparams, {prepared.nx, prepared.ny});
+
+    clip_image_f32_ptr overview_f32(clip_image_f32_init());
+    img_u8_resize_bilinear_to_f32(
+        prepared,
+        *overview_f32,
+        hparams.image_size,
+        hparams.image_size,
+        hparams.image_mean,
+        hparams.image_std);
+    output.entries.push_back(std::move(overview_f32));
+
+    if (instructions.slices.empty()) {
+        output.grid_x = 0;
+        output.grid_y = 0;
+        return true;
+    }
+
+    clip_image_u8 img_for_crop = prepared;
+    if (instructions.refined_size.width != prepared.nx || instructions.refined_size.height != prepared.ny) {
+        clip_image_u8 refined;
+        img_tool::resize(prepared, refined, instructions.refined_size, RESIZE_ALGO_BILINEAR, false);
+        img_for_crop = std::move(refined);
+    }
+
+    const int crop_size = default_image_crop_size;
+    for (const auto & slice : instructions.slices) {
+        // If the requested patch extends past the source image, pad the out-of-bounds area with black.
+        clip_image_u8 patch = crop_with_black_padding(img_for_crop, slice.x, slice.y, slice.size.width, slice.size.height);
+
+        clip_image_f32_ptr patch_f32(clip_image_f32_init());
+        img_u8_resize_bilinear_to_f32(
+            patch,
+            *patch_f32,
+            crop_size,
+            crop_size,
+            hparams.image_mean,
+            hparams.image_std);
+        output.entries.push_back(std::move(patch_f32));
+    }
+
+    output.grid_x = instructions.grid_size.width;
+    output.grid_y = instructions.grid_size.height;
+
     return true;
 }
 

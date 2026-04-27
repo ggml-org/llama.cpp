@@ -19,8 +19,10 @@
 #include <vector>
 #include <unordered_set>
 
+#include "build-info.h"
 #include "common.h"
 #include "download.h"
+#include "fit.h"
 #include "ggml.h"
 #include "llama.h"
 
@@ -260,6 +262,8 @@ static const char * split_mode_str(llama_split_mode mode) {
             return "layer";
         case LLAMA_SPLIT_MODE_ROW:
             return "row";
+        case LLAMA_SPLIT_MODE_TENSOR:
+            return "tensor";
         default:
             GGML_ABORT("invalid split mode");
     }
@@ -444,7 +448,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --poll <0...100>                            (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>                    (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  -ncmoe, --n-cpu-moe <n>                     (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
-    printf("  -sm, --split-mode <none|layer|row>          (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
+    printf("  -sm, --split-mode <none|layer|row|tensor>   (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                         (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>                (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>                     (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
@@ -743,6 +747,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                         mode = LLAMA_SPLIT_MODE_LAYER;
                     } else if (m == "row") {
                         mode = LLAMA_SPLIT_MODE_ROW;
+                    } else if (m == "tensor") {
+                        mode = LLAMA_SPLIT_MODE_TENSOR;
                     } else {
                         invalid_param = true;
                         break;
@@ -1010,7 +1016,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 model.hf_file = params.hf_file[i];
             }
 
-            auto download_result = common_download_model(model, params.hf_token);
+            common_download_opts opts;
+            opts.bearer_token = params.hf_token;
+            auto download_result = common_download_model(model, opts);
             if (download_result.model_path.empty()) {
                 fprintf(stderr, "error: failed to download model from HuggingFace\n");
                 exit(1);
@@ -1618,8 +1626,8 @@ struct test {
     }
 };
 
-const std::string test::build_commit = LLAMA_COMMIT;
-const int         test::build_number = LLAMA_BUILD_NUMBER;
+const std::string test::build_commit = llama_commit();
+const int         test::build_number = llama_build_number();
 
 struct printer {
     virtual ~printer() {}
@@ -1768,7 +1776,7 @@ struct markdown_printer : public printer {
             return 6;
         }
         if (field == "split_mode") {
-            return 5;
+            return 6;
         }
         if (field == "flash_attn") {
             return 2;
@@ -2218,7 +2226,7 @@ int main(int argc, char ** argv) {
                 prev_inst = nullptr;
             }
 
-            // use default n_gpu_layers and n_ctx so llama_params_fit can adjust them
+            // use default n_gpu_layers and n_ctx so common_fit_params can adjust them
             mparams.n_gpu_layers          = llama_model_default_params().n_gpu_layers;
             mparams.tensor_split          = fit_tensor_split.data();
             mparams.tensor_buft_overrides = fit_overrides.data();
@@ -2229,7 +2237,7 @@ int main(int argc, char ** argv) {
             uint32_t n_ctx_needed = inst.n_prompt + inst.n_gen + inst.n_depth;
             cparams.n_ctx = std::max(cparams.n_ctx, n_ctx_needed);
 
-            llama_params_fit(inst.model.c_str(), &mparams, &cparams,
+            common_fit_params(inst.model.c_str(), &mparams, &cparams,
                 fit_tensor_split.data(),
                 fit_overrides.data(),
                 margins.data(),

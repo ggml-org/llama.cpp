@@ -5,7 +5,9 @@
 #include "server-tools.h"
 
 #include "arg.h"
+#include "build-info.h"
 #include "common.h"
+#include "fit.h"
 #include "llama.h"
 #include "log.h"
 
@@ -108,7 +110,7 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    LOG_INF("build_info: %s\n", build_info.c_str());
+    LOG_INF("build_info: %s\n", llama_build_info());
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());
 
     server_http_context ctx_http;
@@ -140,11 +142,11 @@ int main(int argc, char ** argv) {
         // note: routes.get_health stays the same
         routes.get_metrics                 = models_routes->proxy_get;
         routes.post_props                  = models_routes->proxy_post;
-        routes.get_api_show                = models_routes->proxy_get;
         routes.post_completions            = models_routes->proxy_post;
         routes.post_completions_oai        = models_routes->proxy_post;
         routes.post_chat_completions       = models_routes->proxy_post;
         routes.post_responses_oai          = models_routes->proxy_post;
+        routes.post_transcriptions_oai     = models_routes->proxy_post;
         routes.post_anthropic_messages     = models_routes->proxy_post;
         routes.post_anthropic_count_tokens = models_routes->proxy_post;
         routes.post_infill                 = models_routes->proxy_post;
@@ -160,48 +162,48 @@ int main(int argc, char ** argv) {
         routes.post_slots                  = models_routes->proxy_post;
 
         // custom routes for router
-        routes.get_props  = models_routes->get_router_props;
-        routes.get_models = models_routes->get_router_models;
-        ctx_http.post("/models/load",   ex_wrapper(models_routes->post_router_models_load));
-        ctx_http.post("/models/unload", ex_wrapper(models_routes->post_router_models_unload));
+        routes.get_props                   = models_routes->get_router_props;
+        routes.get_models                  = models_routes->get_router_models;
+
+        ctx_http.post("/models/load",          ex_wrapper(models_routes->post_router_models_load));
+        ctx_http.post("/models/unload",        ex_wrapper(models_routes->post_router_models_unload));
     }
 
-    ctx_http.get ("/health",              ex_wrapper(routes.get_health)); // public endpoint (no API key check)
-    ctx_http.get ("/v1/health",           ex_wrapper(routes.get_health)); // public endpoint (no API key check)
-    ctx_http.get ("/metrics",             ex_wrapper(routes.get_metrics));
-    ctx_http.get ("/props",               ex_wrapper(routes.get_props));
-    ctx_http.post("/props",               ex_wrapper(routes.post_props));
-    ctx_http.post("/api/show",            ex_wrapper(routes.get_api_show));
-    ctx_http.get ("/models",              ex_wrapper(routes.get_models)); // public endpoint (no API key check)
-    ctx_http.get ("/v1/models",           ex_wrapper(routes.get_models)); // public endpoint (no API key check)
-    ctx_http.get ("/api/tags",            ex_wrapper(routes.get_models)); // ollama specific endpoint. public endpoint (no API key check)
-    ctx_http.post("/completion",          ex_wrapper(routes.post_completions)); // legacy
-    ctx_http.post("/completions",         ex_wrapper(routes.post_completions));
-    ctx_http.post("/v1/completions",      ex_wrapper(routes.post_completions_oai));
-    ctx_http.post("/chat/completions",    ex_wrapper(routes.post_chat_completions));
-    ctx_http.post("/v1/chat/completions", ex_wrapper(routes.post_chat_completions));
-    ctx_http.post("/api/chat",            ex_wrapper(routes.post_chat_completions)); // ollama specific endpoint
-    ctx_http.post("/v1/responses",        ex_wrapper(routes.post_responses_oai));
-    ctx_http.post("/responses",           ex_wrapper(routes.post_responses_oai));
-    ctx_http.post("/v1/messages",         ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
+    ctx_http.get ("/health",                   ex_wrapper(routes.get_health)); // public endpoint (no API key check)
+    ctx_http.get ("/v1/health",                ex_wrapper(routes.get_health)); // public endpoint (no API key check)
+    ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));
+    ctx_http.get ("/props",                    ex_wrapper(routes.get_props));
+    ctx_http.post("/props",                    ex_wrapper(routes.post_props));
+    ctx_http.get ("/models",                   ex_wrapper(routes.get_models)); // public endpoint (no API key check)
+    ctx_http.get ("/v1/models",                ex_wrapper(routes.get_models)); // public endpoint (no API key check)
+    ctx_http.post("/completion",               ex_wrapper(routes.post_completions)); // legacy
+    ctx_http.post("/completions",              ex_wrapper(routes.post_completions));
+    ctx_http.post("/v1/completions",           ex_wrapper(routes.post_completions_oai));
+    ctx_http.post("/chat/completions",         ex_wrapper(routes.post_chat_completions));
+    ctx_http.post("/v1/chat/completions",      ex_wrapper(routes.post_chat_completions));
+    ctx_http.post("/v1/responses",             ex_wrapper(routes.post_responses_oai));
+    ctx_http.post("/responses",                ex_wrapper(routes.post_responses_oai));
+    ctx_http.post("/v1/audio/transcriptions",  ex_wrapper(routes.post_transcriptions_oai));
+    ctx_http.post("/audio/transcriptions",     ex_wrapper(routes.post_transcriptions_oai));
+    ctx_http.post("/v1/messages",              ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
     ctx_http.post("/v1/messages/count_tokens", ex_wrapper(routes.post_anthropic_count_tokens)); // anthropic token counting
-    ctx_http.post("/infill",              ex_wrapper(routes.post_infill));
-    ctx_http.post("/embedding",           ex_wrapper(routes.post_embeddings)); // legacy
-    ctx_http.post("/embeddings",          ex_wrapper(routes.post_embeddings));
-    ctx_http.post("/v1/embeddings",       ex_wrapper(routes.post_embeddings_oai));
-    ctx_http.post("/rerank",              ex_wrapper(routes.post_rerank));
-    ctx_http.post("/reranking",           ex_wrapper(routes.post_rerank));
-    ctx_http.post("/v1/rerank",           ex_wrapper(routes.post_rerank));
-    ctx_http.post("/v1/reranking",        ex_wrapper(routes.post_rerank));
-    ctx_http.post("/tokenize",            ex_wrapper(routes.post_tokenize));
-    ctx_http.post("/detokenize",          ex_wrapper(routes.post_detokenize));
-    ctx_http.post("/apply-template",      ex_wrapper(routes.post_apply_template));
+    ctx_http.post("/infill",                   ex_wrapper(routes.post_infill));
+    ctx_http.post("/embedding",                ex_wrapper(routes.post_embeddings)); // legacy
+    ctx_http.post("/embeddings",               ex_wrapper(routes.post_embeddings));
+    ctx_http.post("/v1/embeddings",            ex_wrapper(routes.post_embeddings_oai));
+    ctx_http.post("/rerank",                   ex_wrapper(routes.post_rerank));
+    ctx_http.post("/reranking",                ex_wrapper(routes.post_rerank));
+    ctx_http.post("/v1/rerank",                ex_wrapper(routes.post_rerank));
+    ctx_http.post("/v1/reranking",             ex_wrapper(routes.post_rerank));
+    ctx_http.post("/tokenize",                 ex_wrapper(routes.post_tokenize));
+    ctx_http.post("/detokenize",               ex_wrapper(routes.post_detokenize));
+    ctx_http.post("/apply-template",           ex_wrapper(routes.post_apply_template));
     // LoRA adapters hotswap
-    ctx_http.get ("/lora-adapters",       ex_wrapper(routes.get_lora_adapters));
-    ctx_http.post("/lora-adapters",       ex_wrapper(routes.post_lora_adapters));
+    ctx_http.get ("/lora-adapters",            ex_wrapper(routes.get_lora_adapters));
+    ctx_http.post("/lora-adapters",            ex_wrapper(routes.post_lora_adapters));
     // Save & load slots
-    ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
-    ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));
+    ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
+    ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
     if (params.webui_mcp_proxy) {
         SRV_WRN("%s", "-----------------\n");
@@ -343,7 +345,7 @@ int main(int argc, char ** argv) {
 
         auto * ll_ctx = ctx_server.get_llama_context();
         if (ll_ctx != nullptr) {
-            llama_memory_breakdown_print(ll_ctx);
+            common_memory_breakdown_print(ll_ctx);
         }
     }
 

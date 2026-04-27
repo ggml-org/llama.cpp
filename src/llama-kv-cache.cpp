@@ -169,6 +169,18 @@ llama_kv_cache::llama_kv_cache(
             continue;
         }
 
+        if (n_embd_head_k_all == 0) {
+            n_embd_head_k_all = (int32_t) hparams.n_embd_head_k(il);
+        } else if (n_embd_head_k_all > 0 && n_embd_head_k_all != (int32_t) hparams.n_embd_head_k(il)) {
+            n_embd_head_k_all = -1;
+        }
+
+        if (n_embd_head_v_all == 0) {
+            n_embd_head_v_all = (int32_t) hparams.n_embd_head_v(il);
+        } else if (n_embd_head_v_all > 0 && n_embd_head_v_all != (int32_t) hparams.n_embd_head_v(il)) {
+            n_embd_head_v_all = -1;
+        }
+
         // [TAG_V_CACHE_VARIABLE]
         const uint32_t n_embd_k_gqa =            hparams.n_embd_k_gqa(il);
         const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max();
@@ -276,23 +288,23 @@ llama_kv_cache::llama_kv_cache(
 
     attn_rot_k =
         !attn_rot_disable &&
+        n_embd_head_k_all > 0 &&
         ggml_is_quantized(type_k) &&
-        !hparams.is_n_embd_k_gqa_variable() &&
         hparams.n_embd_head_k() % 64 == 0;
 
     attn_rot_v =
         !attn_rot_disable &&
+        n_embd_head_v_all > 0 &&
         ggml_is_quantized(type_v) &&
-        !hparams.is_n_embd_v_gqa_variable() &&
         hparams.n_embd_head_v() % 64 == 0;
 
-    LLAMA_LOG_INFO("%s: attn_rot_k = %d\n", __func__, attn_rot_k);
-    LLAMA_LOG_INFO("%s: attn_rot_v = %d\n", __func__, attn_rot_v);
+    LLAMA_LOG_INFO("%s: attn_rot_k = %d, n_embd_head_k_all = %d\n", __func__, attn_rot_k, n_embd_head_k_all);
+    LLAMA_LOG_INFO("%s: attn_rot_v = %d, n_embd_head_k_all = %d\n", __func__, attn_rot_v, n_embd_head_v_all);
 
     // pre-compute the haramard matrices and keep them in host memory
     // TODO: in the future, we can make copies in the backend buffers to avoid host -> device transfers
     if (attn_rot_k || attn_rot_v) {
-        for (int64_t n = 64; n <= std::max(hparams.n_embd_head_k(), hparams.n_embd_head_v()); n *= 2) {
+        for (int64_t n = 64; n <= std::max(n_embd_head_k_all, n_embd_head_v_all); n *= 2) {
             attn_rot_hadamard[n] = std::vector<float>(n*n);
 
             ggml_init_params params = {
@@ -1308,7 +1320,7 @@ ggml_tensor * llama_kv_cache::build_input_k_rot(ggml_context * ctx) const {
         // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
         do {
             nrot *= 2;
-        } while (hparams.n_embd_head_k() % nrot == 0);
+        } while (n_embd_head_k_all % nrot == 0);
         nrot /= 2;
 
         res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nrot, nrot);

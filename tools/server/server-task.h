@@ -34,6 +34,7 @@ enum task_response_type {
     TASK_RESPONSE_TYPE_OAI_CHAT,
     TASK_RESPONSE_TYPE_OAI_CMPL,
     TASK_RESPONSE_TYPE_OAI_RESP,
+    TASK_RESPONSE_TYPE_OAI_ASR, // transcriptions API
     TASK_RESPONSE_TYPE_OAI_EMBD,
     TASK_RESPONSE_TYPE_ANTHROPIC,
 };
@@ -209,6 +210,7 @@ struct server_task {
         const llama_vocab * vocab,
         const common_params & params_base,
         const int n_ctx_slot,
+        const std::vector<llama_logit_bias> & logit_bias_eog,
         const json & data);
 
     // utility function
@@ -400,6 +402,8 @@ struct server_task_result_cmpl_final : server_task_result {
 
     json to_json_oaicompat_resp_stream();
 
+    json to_json_oaicompat_asr();
+
     json to_json_anthropic();
 
     json to_json_anthropic_stream();
@@ -455,6 +459,8 @@ struct server_task_result_cmpl_partial : server_task_result {
     json to_json_oaicompat_chat();
 
     json to_json_oaicompat_resp();
+
+    json to_json_oaicompat_asr();
 
     json to_json_anthropic();
 };
@@ -569,6 +575,17 @@ struct server_prompt_checkpoint {
 
     size_t size() const {
         return data.size();
+    }
+
+    bool empty() const {
+        return data.empty();
+    }
+
+    void clear() {
+        pos_min = 0;
+        pos_max = 0;
+        n_tokens = 0;
+        data.clear();
     }
 };
 
