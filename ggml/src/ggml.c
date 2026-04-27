@@ -7073,7 +7073,7 @@ static size_t ggml_graph_nbytes(size_t size, bool grads) {
 }
 
 size_t ggml_graph_overhead_custom(size_t size, bool grads) {
-    return GGML_OBJECT_SIZE + GGML_PAD(ggml_graph_nbytes(size, grads), GGML_MEM_ALIGN);
+    return 2*GGML_OBJECT_SIZE + GGML_PAD(ggml_graph_nbytes(size, grads), GGML_MEM_ALIGN);
 }
 
 size_t ggml_graph_overhead(void) {
