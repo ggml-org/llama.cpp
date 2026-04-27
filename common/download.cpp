@@ -207,6 +207,29 @@ public:
     ProgressBar & operator=(const ProgressBar &) = delete;
 };
 
+// chains a ProgressBar with a user callback so both receive events
+class CallbackChain : public common_download_callback {
+    ProgressBar tty_cb;
+    common_download_callback * user_cb;
+public:
+    explicit CallbackChain(common_download_callback * cb) : user_cb(cb) {}
+    void on_start(const common_download_progress & p) override {
+        tty_cb.on_start(p);
+        if (user_cb) user_cb->on_start(p);
+    }
+    void on_update(const common_download_progress & p) override {
+        tty_cb.on_update(p);
+        if (user_cb) user_cb->on_update(p);
+    }
+    void on_done(const common_download_progress & p, bool ok) override {
+        tty_cb.on_done(p, ok);
+        if (user_cb) user_cb->on_done(p, ok);
+    }
+    bool is_cancelled() const override {
+        return user_cb && user_cb->is_cancelled();
+    }
+};
+
 static bool common_pull_file(httplib::Client & cli,
                              const std::string & resolve_path,
                              const std::string & path_tmp,
@@ -472,11 +495,12 @@ int common_download_file_single(const std::string & url,
                                 const common_download_opts & opts,
                                 bool skip_etag) {
     if (!opts.offline) {
-        ProgressBar tty_cb;
         common_download_opts online_opts = opts;
-        if (!online_opts.callback) {
-            online_opts.callback = &tty_cb;
+        CallbackChain chain(online_opts.callback);
+        if (opts.progress_bar) {
+            online_opts.callback = &chain;
         }
+
         return common_download_file_single_online(url, path, online_opts, skip_etag);
     }
 

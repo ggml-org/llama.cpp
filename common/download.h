@@ -52,6 +52,7 @@ struct common_download_opts {
     std::string bearer_token;
     common_header_list headers;
     bool offline = false;
+    bool progress_bar = true;
     common_download_callback * callback = nullptr;
 };
 
