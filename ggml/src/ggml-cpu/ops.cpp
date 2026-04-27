@@ -3782,6 +3782,68 @@ void ggml_compute_forward_rms_norm(
     }
 }
 
+// Fused RMS_NORM + MUL: computes dst = rms_norm(src0) * src1 in a single pass.
+// This avoids materializing the intermediate rms_norm result in memory.
+void ggml_compute_forward_rms_norm_mul_fused(
+        const ggml_compute_params * params,
+        ggml_tensor * rms_norm_dst,
+        ggml_tensor * mul_dst) {
+
+    //   src0 = rms_norm input, src1 = mul weight, dst = mul output
+    const ggml_tensor * src0 = rms_norm_dst->src[0];
+    const ggml_tensor * src1 = (mul_dst->src[0] == rms_norm_dst) ? mul_dst->src[1] : mul_dst->src[0];
+    ggml_tensor       * dst  = mul_dst;
+    GGML_ASSERT(mul_dst->src[0] == rms_norm_dst || mul_dst->src[1] == rms_norm_dst);
+
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    GGML_ASSERT(ne10 == ne00); // no column broadcasting on the weight
+
+    float eps;
+    memcpy(&eps, rms_norm_dst->op_params, sizeof(float));
+    GGML_ASSERT(eps >= 0.0f);
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+
+                ggml_float sum = 0.0;
+                // worth switching to explicit SIMD?
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    sum += (ggml_float)(x[i00] * x[i00]);
+                }
+
+                const float mean = sum/ne00;
+                const float scale = 1.0f / sqrtf(mean + eps);
+
+                assert(scale > 0.0f);
+
+                const int64_t i11 = i01 % ne11;
+                const int64_t i12 = i02 % ne12;
+                const int64_t i13 = i03 % ne13;
+                const float * w = (float *) ((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13);
+
+                float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
+
+                // worth switching to explicit SIMD?
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    y[i00] = x[i00] * scale * w[i00];
+                }
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_rms_norm_back_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
