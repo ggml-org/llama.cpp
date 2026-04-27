@@ -1903,6 +1903,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     struct ggml_backend_sched_split * splits = sched->splits;
 
     ggml_tensor * prev_ids_tensor = nullptr;
+    int64_t prev_ids_n_expert = -1;
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
     const bool moe_log = ggml_backend_sched_moe_log_enabled();
@@ -1964,7 +1965,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         }
                     }
 
-                    if (ids_tensor != prev_ids_tensor) {
+                    if (ids_tensor != prev_ids_tensor || n_expert != prev_ids_n_expert) {
                         ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
                         ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
                         ggml_backend_synchronize(ids_backend);
@@ -1981,6 +1982,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         }
 
                         prev_ids_tensor = ids_tensor;
+                        prev_ids_n_expert = n_expert;
                     }
 
                     const bool moe_cache_used = ggml_backend_sched_moe_cache_prepare(
