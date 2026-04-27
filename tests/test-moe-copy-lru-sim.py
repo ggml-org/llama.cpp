@@ -31,6 +31,7 @@ def test_parser(sim) -> None:
     assert len(events) == 4
     assert events[0].key == "CUDA0:blk.0.ffn_down_exps.weight"
     assert events[0].expert_size == 100
+    assert events[0].used_bytes == 200
     assert events[0].copy_bytes == 200
     assert events[0].expert_ids == (1, 2)
 
@@ -92,6 +93,24 @@ ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_dow
         raise AssertionError("accepted inconsistent expert_size for a single cache key")
 
 
+def test_rejects_inconsistent_copy_accounting(sim) -> None:
+    bad_used_bytes = "ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk src_backend=CPU dst_backend=CUDA0 n_expert=4 expert_size=100 used=2 used_bytes=100 ranges=1 copy_bytes=200 ids=[1,2]"
+    try:
+        list(sim.read_events_from_lines([bad_used_bytes]))
+    except ValueError as exc:
+        assert "used_bytes" in str(exc)
+    else:
+        raise AssertionError("accepted inconsistent used_bytes")
+
+    bad_copy_bytes = "ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk src_backend=CPU dst_backend=CUDA0 n_expert=4 expert_size=100 used=2 used_bytes=200 ranges=1 copy_bytes=150 ids=[1,2]"
+    try:
+        list(sim.read_events_from_lines([bad_copy_bytes]))
+    except ValueError as exc:
+        assert "copy_bytes" in str(exc)
+    else:
+        raise AssertionError("accepted copy_bytes smaller than used_bytes")
+
+
 def main() -> None:
     repo_root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
     sim = load_sim(repo_root)
@@ -99,6 +118,7 @@ def main() -> None:
     test_lru_batch_eviction(sim)
     test_cli(repo_root)
     test_rejects_inconsistent_expert_size(sim)
+    test_rejects_inconsistent_copy_accounting(sim)
 
 
 if __name__ == "__main__":

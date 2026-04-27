@@ -19,6 +19,7 @@ class MoeCopyEvent:
     tensor: str
     dst_backend: str
     expert_size: int
+    used_bytes: int
     copy_bytes: int
     expert_ids: Tuple[int, ...]
 
@@ -60,6 +61,7 @@ def parse_moe_copy_line(line: str) -> Optional[MoeCopyEvent]:
         tensor = fields["tensor"]
         dst_backend = fields["dst_backend"]
         expert_size = int(fields["expert_size"])
+        used_bytes = int(fields["used_bytes"])
         copy_bytes = int(fields["copy_bytes"])
     except KeyError as exc:
         raise ValueError(f"missing moe_copy field: {exc.args[0]}") from exc
@@ -68,12 +70,21 @@ def parse_moe_copy_line(line: str) -> Optional[MoeCopyEvent]:
     expert_ids = tuple(int(item) for item in expert_ids_raw.split(",") if item.strip())
     if len(expert_ids) != len(set(expert_ids)):
         raise ValueError(f"moe_copy line has duplicate expert ids: {expert_ids_raw}")
+    expected_used_bytes = len(expert_ids) * expert_size
+    if used_bytes != expected_used_bytes:
+        raise ValueError(
+            f"used_bytes={used_bytes} does not match "
+            f"{len(expert_ids)} expert ids * expert_size={expert_size}"
+        )
+    if copy_bytes < used_bytes:
+        raise ValueError(f"copy_bytes={copy_bytes} is smaller than used_bytes={used_bytes}")
 
     return MoeCopyEvent(
         key=f"{dst_backend}:{tensor}",
         tensor=tensor,
         dst_backend=dst_backend,
         expert_size=expert_size,
+        used_bytes=used_bytes,
         copy_bytes=copy_bytes,
         expert_ids=expert_ids,
     )
