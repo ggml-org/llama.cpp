@@ -87,6 +87,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     rms_norm_f32
     rms_norm_mul_f32
     rope_f32
+    softmax_f32
     unary_f32
 )
 
