@@ -484,14 +484,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         epilog=(
             "Examples:\n"
             "  scripts/moe-copy-lru-sim.py --slots 32,64,128 trace.log\n"
-            "  scripts/moe-copy-lru-sim.py --runtime --details cache-enabled.log"
+            "  scripts/moe-copy-lru-sim.py --runtime --details cache-enabled.log\n"
+            "  # --runtime accepts moe_cache, moe_cache_bypass, or mixed logs"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("logs", nargs="*", help="log files to parse; omit or use '-' for stdin")
     parser.add_argument("--slots", type=parse_slots, default=parse_slots("32,64,96,128"), help="comma-separated slot counts for moe_copy LRU simulation")
     parser.add_argument("--details", action="store_true", help="also print per backend/tensor stats")
-    parser.add_argument("--runtime", action="store_true", help="summarize actual moe_cache runtime events instead of simulating moe_copy events")
+    parser.add_argument("--runtime", action="store_true", help="summarize actual moe_cache/moe_cache_bypass runtime events instead of simulating moe_copy events")
     args = parser.parse_args(argv)
 
     if args.runtime:

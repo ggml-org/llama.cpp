@@ -154,6 +154,28 @@ def test_runtime_cache_bypass_parser_and_summary(sim) -> None:
     assert stats[("CUDA1:blk.3.ffn_down_exps.weight", "too_many_experts")] == 1
 
 
+def test_runtime_bypass_only_cli(repo_root: Path) -> None:
+    log = """\
+ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.2.ffn_down_exps.weight node=ffn_down ids=topk backend=CUDA0 slots=2 reason=too_many_experts n_expert=4 expert_size=100
+ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.2.ffn_down_exps.weight node=ffn_down ids=topk backend=CUDA0 slots=2 reason=ids_alloc_failed n_expert=4 expert_size=100
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = Path(tmp) / "moe-runtime-bypass.log"
+        log_path.write_text(log, encoding="utf-8")
+        script = repo_root / "scripts" / "moe-copy-lru-sim.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--runtime", "--details", str(log_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    assert "key\tslots\tevents\taccesses\thits\tmisses" not in result.stdout
+    assert "bypass_key\treason\tevents" in result.stdout
+    assert "ALL\tids_alloc_failed\t1" in result.stdout
+    assert "ALL\ttoo_many_experts\t1" in result.stdout
+    assert "CUDA0:blk.2.ffn_down_exps.weight\ttoo_many_experts\t1" in result.stdout
+
+
 def test_rejects_inconsistent_expert_size(sim) -> None:
     log = """\
 ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk src_backend=CPU dst_backend=CUDA0 n_expert=4 expert_size=100 used=1 used_bytes=100 ranges=1 copy_bytes=100 ids=[1]
@@ -233,6 +255,7 @@ def main() -> None:
     test_runtime_cache_parser_and_summary(sim)
     test_runtime_cache_cli(repo_root)
     test_runtime_cache_bypass_parser_and_summary(sim)
+    test_runtime_bypass_only_cli(repo_root)
     test_rejects_inconsistent_expert_size(sim)
     test_rejects_inconsistent_copy_accounting(sim)
     test_rejects_inconsistent_runtime_cache_accounting(sim)
