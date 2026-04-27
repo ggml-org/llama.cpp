@@ -92,7 +92,7 @@ add_dependencies(uberkernel.elf et-uberkernel-map)
 # (uberkernel.c) calls the renamed entries via extern declarations.
 #
 # HACK: we need to supresse _me kernels from setting up SCP themselves
-set(_UBER_ME_KERNELS mul_mat_f16_matrix_engine mul_mat_f32_matrix_engine)
+set(_UBER_ME_KERNELS mul_mat_f16_matrix_engine mul_mat_f32_matrix_engine flash_attn_ext_f16_me)
 
 foreach(UK_KERNEL ${UBERKERNEL_SUPPORTED_KERNELS})
     set(_obj uber_${UK_KERNEL})
