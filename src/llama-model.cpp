@@ -5453,14 +5453,20 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
                     }
 
+                    int64_t hc_mult = 0;
                     {
-                        const auto * meta_base = ml.require_tensor_meta(tn(LLM_TENSOR_HC_HEAD_BASE).str());
-                        const auto * meta_fn = ml.require_tensor_meta(tn(LLM_TENSOR_HC_HEAD_FN).str());
-                        const auto * meta_scale = ml.require_tensor_meta(tn(LLM_TENSOR_HC_HEAD_SCALE).str());
+                        const auto * meta_base  = ml.get_tensor_meta(tn(LLM_TENSOR_HC_HEAD_BASE).str().c_str());
+                        const auto * meta_fn    = ml.get_tensor_meta(tn(LLM_TENSOR_HC_HEAD_FN).str().c_str());
+                        const auto * meta_scale = ml.get_tensor_meta(tn(LLM_TENSOR_HC_HEAD_SCALE).str().c_str());
 
-                        hc_head_base = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE), { meta_base->ne[0] }, 0);
-                        hc_head_fn = create_tensor(tn(LLM_TENSOR_HC_HEAD_FN), { meta_fn->ne[0], meta_fn->ne[1] }, 0);
-                        hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE), { meta_scale->ne[0] }, 0);
+                        hc_mult = meta_base ? meta_base->ne[0] : (meta_fn ? meta_fn->ne[1] : 4);
+                        const int64_t hc_fn_in     = meta_fn    ? meta_fn->ne[0]    : n_embd * hc_mult;
+                        const int64_t hc_fn_out    = meta_fn    ? meta_fn->ne[1]    : hc_mult;
+                        const int64_t hc_scale_len = meta_scale ? meta_scale->ne[0] : 1;
+
+                        hc_head_base  = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE),  { hc_mult }, 0);
+                        hc_head_fn    = create_tensor(tn(LLM_TENSOR_HC_HEAD_FN),    { hc_fn_in, hc_fn_out }, 0);
+                        hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE), { hc_scale_len }, 0);
                     }
 
                     for (int i = 0; i < n_layer; ++i) {
@@ -5475,10 +5481,17 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.attn_kv_latent = create_tensor(tn(LLM_TENSOR_ATTN_KV_LATENT, "weight", i), { n_embd, n_embd_head }, 0);
 
                         {
-                            const auto * meta_wo_a = ml.require_tensor_meta(tn(LLM_TENSOR_ATTN_OUT_A, "weight", i).str());
-                            const auto * meta_wo_b = ml.require_tensor_meta(tn(LLM_TENSOR_ATTN_OUT_B, "weight", i).str());
-                            layer.attn_out_a = create_tensor(tn(LLM_TENSOR_ATTN_OUT_A, "weight", i), { meta_wo_a->ne[0], meta_wo_a->ne[1] }, 0);
-                            layer.attn_out_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT_B, "weight", i), { meta_wo_b->ne[0], meta_wo_b->ne[1] }, 0);
+                            const auto * meta_wo_a = ml.get_tensor_meta(tn(LLM_TENSOR_ATTN_OUT_A, "weight", i).str().c_str());
+                            const auto * meta_wo_b = ml.get_tensor_meta(tn(LLM_TENSOR_ATTN_OUT_B, "weight", i).str().c_str());
+                            const int64_t group_dim = n_embd_head;
+                            const int64_t n_groups = n_head * n_embd_head / group_dim;
+                            const int64_t o_rank = std::max<int64_t>(1, group_dim / 2);
+                            const int64_t wo_a_ne0 = meta_wo_a ? meta_wo_a->ne[0] : group_dim;
+                            const int64_t wo_a_ne1 = meta_wo_a ? meta_wo_a->ne[1] : n_groups * o_rank;
+                            const int64_t wo_b_ne0 = meta_wo_b ? meta_wo_b->ne[0] : n_groups * o_rank;
+                            const int64_t wo_b_ne1 = meta_wo_b ? meta_wo_b->ne[1] : n_embd;
+                            layer.attn_out_a = create_tensor(tn(LLM_TENSOR_ATTN_OUT_A, "weight", i), { wo_a_ne0, wo_a_ne1 }, 0);
+                            layer.attn_out_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT_B, "weight", i), { wo_b_ne0, wo_b_ne1 }, 0);
                         }
 
                         layer.attn_sinks = create_tensor(tn(LLM_TENSOR_ATTN_SINKS, i), { n_head }, 0);
@@ -5505,19 +5518,28 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         }
 
                         {
-                            const auto * meta_hc_attn_base = ml.require_tensor_meta(tn(LLM_TENSOR_HC_ATTN_BASE, i).str());
-                            const auto * meta_hc_attn_fn = ml.require_tensor_meta(tn(LLM_TENSOR_HC_ATTN_FN, i).str());
-                            const auto * meta_hc_attn_scale = ml.require_tensor_meta(tn(LLM_TENSOR_HC_ATTN_SCALE, i).str());
-                            const auto * meta_hc_ffn_base = ml.require_tensor_meta(tn(LLM_TENSOR_HC_FFN_BASE, i).str());
-                            const auto * meta_hc_ffn_fn = ml.require_tensor_meta(tn(LLM_TENSOR_HC_FFN_FN, i).str());
-                            const auto * meta_hc_ffn_scale = ml.require_tensor_meta(tn(LLM_TENSOR_HC_FFN_SCALE, i).str());
+                            const auto * meta_hc_attn_base  = ml.get_tensor_meta(tn(LLM_TENSOR_HC_ATTN_BASE, i).str().c_str());
+                            const auto * meta_hc_attn_fn    = ml.get_tensor_meta(tn(LLM_TENSOR_HC_ATTN_FN, i).str().c_str());
+                            const auto * meta_hc_attn_scale = ml.get_tensor_meta(tn(LLM_TENSOR_HC_ATTN_SCALE, i).str().c_str());
+                            const auto * meta_hc_ffn_base   = ml.get_tensor_meta(tn(LLM_TENSOR_HC_FFN_BASE, i).str().c_str());
+                            const auto * meta_hc_ffn_fn     = ml.get_tensor_meta(tn(LLM_TENSOR_HC_FFN_FN, i).str().c_str());
+                            const auto * meta_hc_ffn_scale  = ml.get_tensor_meta(tn(LLM_TENSOR_HC_FFN_SCALE, i).str().c_str());
+                            const int64_t hc_pre_out = 2 * hc_mult + hc_mult * hc_mult;
+                            const int64_t hc_attn_base_ne  = meta_hc_attn_base  ? meta_hc_attn_base->ne[0]  : hc_pre_out;
+                            const int64_t hc_attn_fn_ne0   = meta_hc_attn_fn    ? meta_hc_attn_fn->ne[0]    : n_embd * hc_mult;
+                            const int64_t hc_attn_fn_ne1   = meta_hc_attn_fn    ? meta_hc_attn_fn->ne[1]    : hc_pre_out;
+                            const int64_t hc_attn_scale_ne = meta_hc_attn_scale ? meta_hc_attn_scale->ne[0] : 3;
+                            const int64_t hc_ffn_base_ne   = meta_hc_ffn_base   ? meta_hc_ffn_base->ne[0]   : hc_pre_out;
+                            const int64_t hc_ffn_fn_ne0    = meta_hc_ffn_fn     ? meta_hc_ffn_fn->ne[0]     : n_embd * hc_mult;
+                            const int64_t hc_ffn_fn_ne1    = meta_hc_ffn_fn     ? meta_hc_ffn_fn->ne[1]     : hc_pre_out;
+                            const int64_t hc_ffn_scale_ne  = meta_hc_ffn_scale  ? meta_hc_ffn_scale->ne[0]  : 3;
 
-                            layer.hc_attn_base = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE, i), { meta_hc_attn_base->ne[0] }, 0);
-                            layer.hc_attn_fn = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN, i), { meta_hc_attn_fn->ne[0], meta_hc_attn_fn->ne[1] }, 0);
-                            layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, i), { meta_hc_attn_scale->ne[0] }, 0);
-                            layer.hc_ffn_base = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE, i), { meta_hc_ffn_base->ne[0] }, 0);
-                            layer.hc_ffn_fn = create_tensor(tn(LLM_TENSOR_HC_FFN_FN, i), { meta_hc_ffn_fn->ne[0], meta_hc_ffn_fn->ne[1] }, 0);
-                            layer.hc_ffn_scale = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE, i), { meta_hc_ffn_scale->ne[0] }, 0);
+                            layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE, i),  { hc_attn_base_ne }, 0);
+                            layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN, i),    { hc_attn_fn_ne0, hc_attn_fn_ne1 }, 0);
+                            layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, i), { hc_attn_scale_ne }, 0);
+                            layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE, i),   { hc_ffn_base_ne }, 0);
+                            layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN, i),     { hc_ffn_fn_ne0, hc_ffn_fn_ne1 }, 0);
+                            layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE, i),  { hc_ffn_scale_ne }, 0);
                         }
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
