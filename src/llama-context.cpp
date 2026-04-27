@@ -3281,7 +3281,7 @@ void llama_memory_seq_div(
           llama_seq_id seq_id,
              llama_pos p0,
              llama_pos p1,
-                   int d) {
+               int32_t d) {
     if (!mem) {
         return;
     }
