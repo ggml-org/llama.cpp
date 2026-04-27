@@ -3,13 +3,14 @@
 import argparse
 import re
 import sys
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 
 MOE_COPY_RE = re.compile(r"\bmoe_copy\b(?P<fields>.*)\sids=\[(?P<expert_ids>[^\]]*)\]")
+MOE_CACHE_BYPASS_RE = re.compile(r"\bmoe_cache_bypass\b(?P<fields>.*)")
 MOE_CACHE_RE = re.compile(r"\bmoe_cache\b(?P<fields>.*)")
 FIELD_RE = re.compile(r"(\w+)=([^\s]+)")
 
@@ -38,6 +39,17 @@ class MoeCacheEvent:
     total_hits: int
     total_misses: int
     total_copied: int
+
+
+@dataclass(frozen=True)
+class MoeCacheBypassEvent:
+    key: str
+    tensor: str
+    backend: str
+    slots: int
+    reason: str
+    n_expert: int
+    expert_size: int
 
 
 @dataclass
@@ -161,6 +173,38 @@ def parse_moe_cache_line(line: str) -> Optional[MoeCacheEvent]:
     )
 
 
+def parse_moe_cache_bypass_line(line: str) -> Optional[MoeCacheBypassEvent]:
+    match = MOE_CACHE_BYPASS_RE.search(line)
+    if match is None:
+        return None
+
+    fields = dict(FIELD_RE.findall(match.group("fields")))
+    try:
+        tensor = fields["tensor"]
+        backend = fields["backend"]
+        slots = int(fields["slots"])
+        reason = fields["reason"]
+        n_expert = int(fields["n_expert"])
+        expert_size = int(fields["expert_size"])
+    except KeyError as exc:
+        raise ValueError(f"missing moe_cache_bypass field: {exc.args[0]}") from exc
+
+    if slots < 0 or n_expert < 0 or expert_size < 0:
+        raise ValueError("moe_cache_bypass numeric fields must be non-negative")
+    if not reason:
+        raise ValueError("moe_cache_bypass reason must be non-empty")
+
+    return MoeCacheBypassEvent(
+        key=f"{backend}:{tensor}",
+        tensor=tensor,
+        backend=backend,
+        slots=slots,
+        reason=reason,
+        n_expert=n_expert,
+        expert_size=expert_size,
+    )
+
+
 def read_events(paths: Sequence[str]) -> Iterator[MoeCopyEvent]:
     if not paths:
         yield from read_events_from_lines(sys.stdin)
@@ -184,6 +228,36 @@ def read_events_from_lines(lines: Iterable[str]) -> Iterator[MoeCopyEvent]:
             yield event
 
 
+def read_runtime_events(paths: Sequence[str]) -> Tuple[List[MoeCacheEvent], List[MoeCacheBypassEvent]]:
+    cache_events: List[MoeCacheEvent] = []
+    bypass_events: List[MoeCacheBypassEvent] = []
+
+    def read_lines(lines: Iterable[str]) -> None:
+        for line_no, line in enumerate(lines, 1):
+            try:
+                cache_event = parse_moe_cache_line(line)
+                bypass_event = parse_moe_cache_bypass_line(line)
+            except ValueError as exc:
+                raise ValueError(f"line {line_no}: {exc}") from exc
+            if cache_event is not None:
+                cache_events.append(cache_event)
+            if bypass_event is not None:
+                bypass_events.append(bypass_event)
+
+    if not paths:
+        read_lines(sys.stdin)
+        return cache_events, bypass_events
+
+    for path_str in paths:
+        if path_str == "-":
+            read_lines(sys.stdin)
+        else:
+            with Path(path_str).open("r", encoding="utf-8") as f:
+                read_lines(f)
+
+    return cache_events, bypass_events
+
+
 def read_cache_events(paths: Sequence[str]) -> Iterator[MoeCacheEvent]:
     if not paths:
         yield from read_cache_events_from_lines(sys.stdin)
@@ -201,6 +275,16 @@ def read_cache_events_from_lines(lines: Iterable[str]) -> Iterator[MoeCacheEvent
     for line_no, line in enumerate(lines, 1):
         try:
             event = parse_moe_cache_line(line)
+        except ValueError as exc:
+            raise ValueError(f"line {line_no}: {exc}") from exc
+        if event is not None:
+            yield event
+
+
+def read_cache_bypass_events_from_lines(lines: Iterable[str]) -> Iterator[MoeCacheBypassEvent]:
+    for line_no, line in enumerate(lines, 1):
+        try:
+            event = parse_moe_cache_bypass_line(line)
         except ValueError as exc:
             raise ValueError(f"line {line_no}: {exc}") from exc
         if event is not None:
@@ -280,6 +364,10 @@ def summarize_runtime_cache(events: Sequence[MoeCacheEvent]) -> Dict[str, Runtim
         stat.max_total_misses = max(stat.max_total_misses, event.total_misses)
         stat.max_total_copied = max(stat.max_total_copied, event.total_copied)
     return stats
+
+
+def summarize_runtime_bypasses(events: Sequence[MoeCacheBypassEvent]) -> Counter:
+    return Counter((event.key, event.reason) for event in events)
 
 
 def aggregate_stats(stats: Dict[Tuple[int, str], SimStats]) -> Dict[int, SimStats]:
@@ -374,6 +462,22 @@ def print_runtime_report(stats: Dict[str, RuntimeStats], show_details: bool) -> 
         print(runtime_stats_row(key, stat))
 
 
+def print_runtime_bypass_report(stats: Counter, show_details: bool) -> None:
+    print("bypass_key\treason\tevents")
+
+    aggregate = Counter()
+    for (_, reason), count in stats.items():
+        aggregate[reason] += count
+    for reason, count in sorted(aggregate.items()):
+        print(f"ALL\t{reason}\t{count}")
+
+    if not show_details:
+        return
+
+    for (key, reason), count in sorted(stats.items()):
+        print(f"{key}\t{reason}\t{count}")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Analyze GGML_SCHED_MOE_LOG output for MoE expert-copy and runtime-cache behavior.",
@@ -391,11 +495,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if args.runtime:
-        events = list(read_cache_events(args.logs))
-        if not events:
-            print("no moe_cache events found", file=sys.stderr)
+        events, bypass_events = read_runtime_events(args.logs)
+        if not events and not bypass_events:
+            print("no moe_cache or moe_cache_bypass events found", file=sys.stderr)
             return 1
-        print_runtime_report(summarize_runtime_cache(events), args.details)
+        if events:
+            print_runtime_report(summarize_runtime_cache(events), args.details)
+        if bypass_events:
+            print_runtime_bypass_report(summarize_runtime_bypasses(bypass_events), args.details)
         return 0
 
     events = list(read_events(args.logs))
