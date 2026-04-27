@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <string>
 #include <vector>
 
 #ifdef __APPLE__
@@ -1538,6 +1539,18 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     return true;
 }
 
+static bool ggml_backend_sched_moe_log_enabled() {
+    static const bool enabled = []() {
+        const char * env = getenv("GGML_SCHED_MOE_LOG");
+        return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+    }();
+    return enabled;
+}
+
+static const char * ggml_backend_sched_tensor_name(const ggml_tensor * tensor) {
+    return tensor->name[0] != '\0' ? tensor->name : "<unnamed>";
+}
+
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
@@ -1545,6 +1558,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     ggml_tensor * prev_ids_tensor = nullptr;
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
+    const bool moe_log = ggml_backend_sched_moe_log_enabled();
 
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
@@ -1621,18 +1635,26 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     }
 
                     // group consecutive experts and copy them together
+                    size_t copy_bytes = 0;
+                    int copy_ranges = 0;
                     auto copy_experts = [&](int32_t first_id, int32_t last_id) {
                         const size_t expert_offset = first_id * expert_size;
                         const size_t expert_size_copy =  (last_id - first_id + 1) * expert_size;
                         const size_t padding = std::min<size_t>(expert_size, 512);
                         const size_t padding_end = last_id < n_expert - 1 ? padding : 0;
+                        const size_t bytes = expert_size_copy + padding_end;
 
                         ggml_backend_tensor_set_async(split_backend,
                             input_cpy,
                             (const uint8_t *)input->data + expert_offset, expert_offset,
                             // copy a bit extra at the to ensure there are no NaNs in the padding of the last expert
                             // this is necessary for MMQ in the CUDA backend
-                            expert_size_copy + padding_end);
+                            bytes);
+
+                        if (moe_log) {
+                            copy_bytes += bytes;
+                            copy_ranges++;
+                        }
                     };
 
                     int id = 0;
@@ -1658,6 +1680,39 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         last_id = id;
                     }
                     copy_experts(first_id, last_id);
+
+                    if (moe_log) {
+                        std::string used_ids_str;
+                        size_t used_count = 0;
+                        for (int64_t i = 0; i < n_expert; ++i) {
+                            if (!ggml_bitset_get(used_ids.data(), i)) {
+                                continue;
+                            }
+                            if (!used_ids_str.empty()) {
+                                used_ids_str += ",";
+                            }
+                            used_ids_str += std::to_string(i);
+                            used_count++;
+                        }
+
+                        GGML_LOG_INFO(
+                            "%s: moe_copy split=%d input=%d tensor=%s node=%s ids=%s src_backend=%s dst_backend=%s n_expert=%lld expert_size=%zu used=%zu used_bytes=%zu ranges=%d copy_bytes=%zu ids=[%s]\n",
+                            __func__,
+                            split_id,
+                            input_id,
+                            ggml_backend_sched_tensor_name(input),
+                            ggml_backend_sched_tensor_name(node),
+                            ggml_backend_sched_tensor_name(ids_tensor),
+                            ggml_backend_name(input_backend),
+                            ggml_backend_name(split_backend),
+                            (long long) n_expert,
+                            expert_size,
+                            used_count,
+                            used_count * expert_size,
+                            copy_ranges,
+                            copy_bytes,
+                            used_ids_str.c_str());
+                    }
                 } else {
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
