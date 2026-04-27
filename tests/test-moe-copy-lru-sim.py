@@ -134,9 +134,10 @@ def test_runtime_cache_cli(repo_root: Path) -> None:
     assert "key\tslots\tevents\taccesses\thits\tmisses" in result.stdout
     assert "ALL\t-\t3\t5\t1\t4\t0.200000\t350\t1\t4\t350" in result.stdout
     assert "CUDA0:blk.0.ffn_down_exps.weight\t2\t2\t4\t1\t3\t0.250000\t300\t1\t3\t300" in result.stdout
-    assert "bypass_key\treason\tevents" in result.stdout
-    assert "ALL\ttoo_many_experts\t2" in result.stdout
-    assert "CUDA0:blk.2.ffn_down_exps.weight\tids_alloc_failed\t1" in result.stdout
+    assert "bypass_key\tslots\treason\tevents" in result.stdout
+    assert "ALL\t1\ttoo_many_experts\t1" in result.stdout
+    assert "ALL\t2\ttoo_many_experts\t1" in result.stdout
+    assert "CUDA0:blk.2.ffn_down_exps.weight\t2\tids_alloc_failed\t1" in result.stdout
 
 
 def test_runtime_cache_bypass_parser_and_summary(sim) -> None:
@@ -149,9 +150,9 @@ def test_runtime_cache_bypass_parser_and_summary(sim) -> None:
     assert events[0].expert_size == 100
 
     stats = sim.summarize_runtime_bypasses(events)
-    assert stats[("CUDA0:blk.2.ffn_down_exps.weight", "too_many_experts")] == 1
-    assert stats[("CUDA0:blk.2.ffn_down_exps.weight", "ids_alloc_failed")] == 1
-    assert stats[("CUDA1:blk.3.ffn_down_exps.weight", "too_many_experts")] == 1
+    assert stats[("CUDA0:blk.2.ffn_down_exps.weight", 2, "too_many_experts")] == 1
+    assert stats[("CUDA0:blk.2.ffn_down_exps.weight", 2, "ids_alloc_failed")] == 1
+    assert stats[("CUDA1:blk.3.ffn_down_exps.weight", 1, "too_many_experts")] == 1
 
 
 def test_runtime_bypass_only_cli(repo_root: Path) -> None:
@@ -170,10 +171,10 @@ ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.2.ffn_down_exps.w
             text=True,
         )
     assert "key\tslots\tevents\taccesses\thits\tmisses" not in result.stdout
-    assert "bypass_key\treason\tevents" in result.stdout
-    assert "ALL\tids_alloc_failed\t1" in result.stdout
-    assert "ALL\ttoo_many_experts\t1" in result.stdout
-    assert "CUDA0:blk.2.ffn_down_exps.weight\ttoo_many_experts\t1" in result.stdout
+    assert "bypass_key\tslots\treason\tevents" in result.stdout
+    assert "ALL\t2\tids_alloc_failed\t1" in result.stdout
+    assert "ALL\t2\ttoo_many_experts\t1" in result.stdout
+    assert "CUDA0:blk.2.ffn_down_exps.weight\t2\ttoo_many_experts\t1" in result.stdout
 
 
 def test_rejects_inconsistent_expert_size(sim) -> None:

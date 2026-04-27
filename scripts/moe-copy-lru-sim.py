@@ -367,7 +367,7 @@ def summarize_runtime_cache(events: Sequence[MoeCacheEvent]) -> Dict[str, Runtim
 
 
 def summarize_runtime_bypasses(events: Sequence[MoeCacheBypassEvent]) -> Counter:
-    return Counter((event.key, event.reason) for event in events)
+    return Counter((event.key, event.slots, event.reason) for event in events)
 
 
 def aggregate_stats(stats: Dict[Tuple[int, str], SimStats]) -> Dict[int, SimStats]:
@@ -463,19 +463,19 @@ def print_runtime_report(stats: Dict[str, RuntimeStats], show_details: bool) -> 
 
 
 def print_runtime_bypass_report(stats: Counter, show_details: bool) -> None:
-    print("bypass_key\treason\tevents")
+    print("bypass_key\tslots\treason\tevents")
 
     aggregate = Counter()
-    for (_, reason), count in stats.items():
-        aggregate[reason] += count
-    for reason, count in sorted(aggregate.items()):
-        print(f"ALL\t{reason}\t{count}")
+    for (_, slots, reason), count in stats.items():
+        aggregate[(slots, reason)] += count
+    for (slots, reason), count in sorted(aggregate.items()):
+        print(f"ALL\t{slots}\t{reason}\t{count}")
 
     if not show_details:
         return
 
-    for (key, reason), count in sorted(stats.items()):
-        print(f"{key}\t{reason}\t{count}")
+    for (key, slots, reason), count in sorted(stats.items()):
+        print(f"{key}\t{slots}\t{reason}\t{count}")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
