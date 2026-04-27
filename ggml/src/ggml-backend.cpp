@@ -14,6 +14,7 @@
 #include "ggml-impl.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -1588,7 +1589,16 @@ static int ggml_backend_sched_moe_cache_slots() {
         if (env == nullptr || env[0] == '\0') {
             return 0;
         }
-        return std::max(0, atoi(env));
+
+        errno = 0;
+        char * end = nullptr;
+        const long value = strtol(env, &end, 10);
+        if (errno != 0 || end == env || *end != '\0' || value < 0 || value > INT_MAX) {
+            GGML_LOG_WARN("%s: ignoring invalid GGML_SCHED_MOE_CACHE_SLOTS=%s\n", __func__, env);
+            return 0;
+        }
+
+        return (int) value;
     }();
     return slots;
 }
