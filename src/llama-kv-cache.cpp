@@ -158,6 +158,75 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
+    if (model.is_pshard()) {
+        std::vector<llama_memory_pshard::tensor_spec> specs;
+        for (uint32_t il = 0; il < hparams.n_layer; il++) {
+            if (!hparams.has_kv(il)) continue;
+            if (filter && !filter(il)) continue;
+
+            // MLA caches only the compressed latent + rope part in K; V is derived at attn time via wv_b
+            const uint32_t n_embd_k_gqa = is_mla
+                ? (hparams.n_lora_kv + hparams.n_rot())
+                : hparams.n_embd_k_gqa(il);
+            const uint32_t n_embd_v_gqa = is_mla
+                ? 0u  // MLA: no separate V cache; dim_t2=0 signals "skip t2"
+                : (!v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max());
+
+            specs.push_back({
+                /*.il       =*/ il,
+                /*.type_t1  =*/ type_k,
+                /*.type_t2  =*/ type_v,
+                /*.dim_t1   =*/ n_embd_k_gqa,
+                /*.dim_t2   =*/ n_embd_v_gqa,
+                /*.seq_len  =*/ kv_size,
+                /*.n_stream =*/ n_stream,
+                /*.is_1d    =*/ false,
+                /*.name_t1  =*/ "cache_k",
+                /*.name_t2  =*/ "cache_v",
+            });
+        }
+
+        pipe_shard_kv = std::make_unique<llama_memory_pshard>();
+        auto * ps = pipe_shard_kv.get();
+
+        pipe_shard_kv->on_activate_gpu = [this, ps](int32_t il, ggml_tensor * k, ggml_tensor * v) {
+            auto idx = map_layer_ids[il];
+            layers[idx].k = k;
+            layers[idx].v = v;
+            const auto & sv = ps->get_stream(idx);
+            layers[idx].k_stream = sv.t1_stream_gpu;
+            layers[idx].v_stream = sv.t2_stream_gpu;
+        };
+
+        pipe_shard_kv->on_activate_cpu = [this, ps](int32_t il, ggml_tensor * k, ggml_tensor * v) {
+            auto idx = map_layer_ids[il];
+            layers[idx].k = k;
+            layers[idx].v = v;
+            const auto & sv = ps->get_stream(idx);
+            layers[idx].k_stream = sv.t1_stream_cpu;
+            layers[idx].v_stream = sv.t2_stream_cpu;
+        };
+
+        const int32_t cpu_bid = pshard_dev_layout::compute_cpu_backend_id(model.devices.size());
+        if (!pipe_shard_kv->init(specs, model.get_layer_backend_ids(), cpu_bid, hparams.no_alloc)) {
+            throw std::runtime_error("failed to initialize KV pipe shard");
+        }
+
+        const auto & ps_layers = pipe_shard_kv->get_layers();
+        layers.resize(ps_layers.size());
+        for (size_t i = 0; i < ps_layers.size(); ++i) {
+            layers[i].il = ps_layers[i].il;
+            const bool cpu = pipe_shard_kv->is_cpu_only(ps_layers[i].il);
+            layers[i].k = cpu ? ps_layers[i].t1_cpu : ps_layers[i].t1_gpu;
+            layers[i].v = cpu ? ps_layers[i].t2_cpu : ps_layers[i].t2_gpu;
+            const auto & sv = ps->get_stream(i);
+            layers[i].k_stream = cpu ? sv.t1_stream_cpu : sv.t1_stream_gpu;
+            layers[i].v_stream = cpu ? sv.t2_stream_cpu : sv.t2_stream_gpu;
+            map_layer_ids[ps_layers[i].il] = (int32_t)i;
+        }
+        return;
+    }
+
     for (uint32_t il = 0; il < hparams.n_layer; il++) {
         if (!hparams.has_kv(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: does not have KV cache\n", __func__, il);
@@ -620,7 +689,22 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() 
         }
     }
 
+    if (pipe_shard_kv) {
+        const auto & bufs  = pipe_shard_kv->get_bufs();
+        const auto & sizes = pipe_shard_kv->get_bufs_planned_sizes();
+        for (size_t i = 0; i < bufs.size(); i++) {
+            if (!bufs[i]) continue;
+            ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(bufs[i].get());
+            ret[buft] += sizes[i];
+        }
+    }
+
     return ret;
+}
+
+std::vector<llama_memory_pipe_shard_i *> llama_kv_cache::get_pipe_shards() {
+    if (pipe_shard_kv) return { pipe_shard_kv.get() };
+    return {};
 }
 
 llama_memory_context_ptr llama_kv_cache::init_batch(

@@ -17,6 +17,8 @@
 struct llama_cparams;
 struct llama_ubatch;
 struct llama_model_loader;
+struct llama_pshard_plan;
+struct llama_pshard_plan_registry;
 
 // available models
 enum llm_type {
@@ -615,6 +617,13 @@ struct llama_model {
     ggml_backend_buffer_type_t select_buft(int il) const;
 
     bool has_tensor_overrides() const;
+
+    bool is_pshard() const;
+
+    llama_pshard_plan_registry * get_plan_registry() const;
+
+    const std::unordered_map<struct ggml_tensor *, int32_t> & get_tensor_backend_ids() const;
+    const std::unordered_map<int, int32_t> & get_layer_backend_ids() const;
 
     const struct ggml_tensor * get_tensor(const char * name) const;
 

@@ -3,6 +3,7 @@
 #include "llama-batch.h"
 #include "llama-graph.h"
 #include "llama-memory.h"
+#include "llama-memory-pshard.h"
 
 #include <map>
 #include <set>
@@ -102,6 +103,10 @@ public:
     // per layer
     std::vector<ggml_tensor *> r_l;
     std::vector<ggml_tensor *> s_l;
+
+    std::unique_ptr<llama_memory_pshard> pipe_shard_rs;
+    llama_memory_pshard * get_pipe_shard() { return pipe_shard_rs.get(); }
+    std::vector<llama_memory_pipe_shard_i *> get_pipe_shards() override;
 
 private:
     //const llama_model & model;

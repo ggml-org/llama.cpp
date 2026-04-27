@@ -182,6 +182,13 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_memory_hybrid_iswa::memory_br
     return mb;
 }
 
+std::vector<llama_memory_pipe_shard_i *> llama_memory_hybrid_iswa::get_pipe_shards() {
+    std::vector<llama_memory_pipe_shard_i *> result;
+    for (auto * ps : mem_attn->get_pipe_shards()) { result.push_back(ps); }
+    for (auto * ps : mem_recr->get_pipe_shards()) { result.push_back(ps); }
+    return result;
+}
+
 void llama_memory_hybrid_iswa::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     mem_attn->state_write(io, seq_id, flags);
     mem_recr->state_write(io, seq_id, flags);

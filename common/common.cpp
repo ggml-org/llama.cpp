@@ -1444,6 +1444,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
 
+    mparams.max_vram_alloc  = params.max_vram_alloc;
     return mparams;
 }
 

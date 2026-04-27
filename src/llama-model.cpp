@@ -6,6 +6,7 @@
 #include "llama-mmap.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
+#include "llama-pshard-plan.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -661,6 +662,11 @@ struct llama_model::impl {
     std::vector<layer_dev> dev_layer;
 
     bool has_tensor_overrides;
+
+    std::unordered_map<ggml_tensor *, int32_t> tensor_backend_ids;
+    std::unordered_map<int, int32_t> layer_backend_ids;
+
+    llama_pshard_plan_registry * plan_registry = nullptr;
 };
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
@@ -8115,6 +8121,38 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // build tensor -> backend_id map from overrides (for pshard scheduling)
+    if (params.tensor_buft_overrides) {
+        for (const auto & [name, tensor] : tensors_by_name) {
+            for (const auto * ov = params.tensor_buft_overrides; ov->pattern; ++ov) {
+                if (ov->backend_id >= 0 && std::regex_search(name, std::regex(ov->pattern))) {
+                    pimpl->tensor_backend_ids[tensor] = ov->backend_id;
+                    break;
+                }
+            }
+        }
+        if (!pimpl->tensor_backend_ids.empty()) {
+            LLAMA_LOG_INFO("%s: built tensor backend_id map: %zu tensors\n",
+                __func__, pimpl->tensor_backend_ids.size());
+        }
+
+        // build layer -> backend_id map from override patterns (blk\.N\..*)
+        for (const auto * ov = params.tensor_buft_overrides; ov->pattern; ++ov) {
+            if (ov->backend_id >= 0) {
+                std::smatch m;
+                std::string pat(ov->pattern);
+                if (std::regex_search(pat, m, std::regex(R"(blk\\\.(\d+)\\\.)"))) {
+                    int layer = std::stoi(m[1].str());
+                    pimpl->layer_backend_ids[layer] = ov->backend_id;
+                }
+            }
+        }
+        if (!pimpl->layer_backend_ids.empty()) {
+            LLAMA_LOG_INFO("%s: built layer backend_id map: %zu layers\n",
+                __func__, pimpl->layer_backend_ids.size());
+        }
+    }
+
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
@@ -8249,6 +8287,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             pimpl->mappings.emplace_back(std::move(mapping));
         }
     }
+
+    pimpl->plan_registry = params.pshard_registry;
 
     return true;
 }
@@ -8572,6 +8612,22 @@ ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
 
 bool llama_model::has_tensor_overrides() const {
     return pimpl->has_tensor_overrides;
+}
+
+bool llama_model::is_pshard() const {
+    return params.pshard;
+}
+
+llama_pshard_plan_registry * llama_model::get_plan_registry() const {
+    return pimpl->plan_registry;
+}
+
+const std::unordered_map<ggml_tensor *, int32_t> & llama_model::get_tensor_backend_ids() const {
+    return pimpl->tensor_backend_ids;
+}
+
+const std::unordered_map<int, int32_t> & llama_model::get_layer_backend_ids() const {
+    return pimpl->layer_backend_ids;
 }
 
 const ggml_tensor * llama_model::get_tensor(const char * name) const {
@@ -9304,6 +9360,10 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.pshard                      =*/ false,
+        /*.pshard_cache_skip_load      =*/ false,
+        /*.max_vram_alloc              =*/ 0,
+        /*.pshard_registry             =*/ nullptr,
     };
 
     return result;

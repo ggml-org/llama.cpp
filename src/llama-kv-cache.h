@@ -4,6 +4,7 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-memory-pshard.h"
 
 #include <unordered_map>
 #include <vector>
@@ -152,6 +153,10 @@ public:
 
     bool get_has_shift() const;
 
+    // pshard dual-buffer KV
+    llama_memory_pshard * get_pipe_shard() { return pipe_shard_kv.get(); }
+    std::vector<llama_memory_pipe_shard_i *> get_pipe_shards() override;
+
     ggml_type type_k() const;
     ggml_type type_v() const;
 
@@ -269,6 +274,8 @@ private:
     stream_copy_info sc_info;
 
     std::vector<kv_layer> layers;
+
+    std::unique_ptr<llama_memory_pshard> pipe_shard_kv;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;

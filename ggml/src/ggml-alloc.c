@@ -623,6 +623,13 @@ static void ggml_gallocr_allocate_node(ggml_gallocr_t galloc, struct ggml_tensor
     GGML_ASSERT(buffer_id >= 0);
     struct hash_node * hn = ggml_gallocr_hash_get(galloc, node);
 
+    // reach a deferred writeback leaf through its consumer view
+    if (ggml_impl_is_view(node) && node->view_src != NULL &&
+        (node->view_src->flags & GGML_TENSOR_FLAG_WRITEBACK)) {
+        ggml_gallocr_allocate_node(galloc, node->view_src, buffer_id);
+        return;
+    }
+
     if (!ggml_gallocr_is_allocated(galloc, node) && !ggml_impl_is_view(node)) {
         hn->allocated = true;
         assert(hn->addr.offset == 0);
@@ -723,6 +730,7 @@ static void ggml_gallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
     // these may be tensors that the application is not using in the graph, but may still want to allocate for other purposes
     for (int i = 0; i < graph->n_leafs; i++) {
         struct ggml_tensor * leaf = graph->leafs[i];
+        if (leaf->flags & GGML_TENSOR_FLAG_WRITEBACK) {continue;} // writeback leafs: deferred, allocated via consumer
         ggml_gallocr_allocate_node(galloc, leaf, get_node_buffer_id(leaf_buffer_ids, i));
     }
 
@@ -737,7 +745,10 @@ static void ggml_gallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
         // itself is never used and should not be considered a dependency
         if (ggml_impl_is_view(node) && node->op != GGML_OP_NONE) {
             struct ggml_tensor * view_src = node->view_src;
-            ggml_gallocr_hash_get(galloc, view_src)->n_views += 1;
+            // FLAG_WRITEBACK roots: lifetime is n_children-only, fenced by scheduler keepalives
+            if (!(view_src->flags & GGML_TENSOR_FLAG_WRITEBACK)) {
+                ggml_gallocr_hash_get(galloc, view_src)->n_views += 1;
+            }
         }
 
         if (node->flags & GGML_TENSOR_FLAG_INPUT) {
@@ -758,6 +769,23 @@ static void ggml_gallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
             }
         }
     }
+
+#ifndef NDEBUG
+    // every FLAG_WRITEBACK leaf must have an OP_NONE keepalive consumer
+    for (int i = 0; i < graph->n_leafs; i++) {
+        struct ggml_tensor * leaf = graph->leafs[i];
+        if (!(leaf->flags & GGML_TENSOR_FLAG_WRITEBACK)) continue;
+        bool fenced = false;
+        for (int n = 0; n < graph->n_nodes && !fenced; n++) {
+            struct ggml_tensor * node = graph->nodes[n];
+            if (node->op != GGML_OP_NONE) continue;
+            for (int s = 0; s < GGML_MAX_SRC; s++) {
+                if (node->src[s] == leaf) { fenced = true; break; }
+            }
+        }
+        GGML_ASSERT(fenced);
+    }
+#endif
 
     // allocate tensors
     for (int i = 0; i < graph->n_nodes; i++) {
@@ -804,12 +832,15 @@ static void ggml_gallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
             if (p_hn->n_children == 0 && p_hn->n_views == 0) {
                 if (ggml_impl_is_view(parent)) {
                     struct ggml_tensor * view_src = parent->view_src;
-                    struct hash_node * view_src_hn = ggml_gallocr_hash_get(galloc, view_src);
-                    view_src_hn->n_views -= 1;
-                    AT_PRINTF("view_src %s: %d children, %d views\n",
-                        view_src->name, view_src_hn->n_children, view_src_hn->n_views);
-                    if (view_src_hn->n_views == 0 && view_src_hn->n_children == 0 && view_src_hn->allocated) {
-                        ggml_gallocr_free_node(galloc, view_src);
+                    // FLAG_WRITEBACK roots: skip n_views accounting, leaf freed on keepalive
+                    if (!(view_src->flags & GGML_TENSOR_FLAG_WRITEBACK)) {
+                        struct hash_node * view_src_hn = ggml_gallocr_hash_get(galloc, view_src);
+                        view_src_hn->n_views -= 1;
+                        AT_PRINTF("view_src %s: %d children, %d views\n",
+                            view_src->name, view_src_hn->n_children, view_src_hn->n_views);
+                        if (view_src_hn->n_views == 0 && view_src_hn->n_children == 0 && view_src_hn->allocated) {
+                            ggml_gallocr_free_node(galloc, view_src);
+                        }
                     }
                 }
                 else if (p_hn->allocated) {
@@ -951,9 +982,19 @@ void ggml_gallocr_reserve_n_size(
         ggml_gallocr_t galloc, struct ggml_cgraph * graph, const int * node_buffer_ids, const int * leaf_buffer_ids, size_t * sizes) {
     GGML_ASSERT(ggml_gallocr_reserve_n_impl(galloc, graph, node_buffer_ids, leaf_buffer_ids, /*no_alloc =*/ true));
     for (int i = 0; i < galloc->n_buffers; i++) {
+        // mirror get_buffer_size: skip slots whose talloc is already counted by an earlier slot
+        bool shared = false;
+        for (int j = 0; j < i; j++) {
+            if (galloc->buf_tallocs[j] == galloc->buf_tallocs[i]) {
+                shared = true;
+                break;
+            }
+        }
         sizes[i] = 0;
-        for (int c = 0; c < galloc->buf_tallocs[i]->n_chunks; c++) {
-            sizes[i] += galloc->buf_tallocs[i]->chunks[c]->max_size;
+        if (!shared) {
+            for (int c = 0; c < galloc->buf_tallocs[i]->n_chunks; c++) {
+                sizes[i] += galloc->buf_tallocs[i]->chunks[c]->max_size;
+            }
         }
     }
 }

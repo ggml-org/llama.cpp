@@ -9,6 +9,7 @@
 #include "llama-model-loader.h"
 #include "llama-model-saver.h"
 #include "llama-model.h"
+#include "llama-pshard-plan.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"
@@ -23,6 +24,8 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <map>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -46,16 +49,12 @@ const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_ty
     GGML_ABORT("fatal error");
 }
 
-struct llama_device_memory_data {
-    int64_t total;
-    int64_t free;
-    llama_memory_breakdown_data mb;
-};
-
-static std::vector<llama_device_memory_data> llama_get_device_memory_data(
+std::vector<llama_device_memory_data> llama_get_device_memory_data(
         const char * path_model, const llama_model_params * mparams, const llama_context_params * cparams,
         std::vector<llama_device> & devs, uint32_t & hp_ngl, uint32_t & hp_n_ctx_train, uint32_t & hp_n_expert,
-        const ggml_log_level log_level) {
+        uint32_t & hp_n_embd_r,
+        enum ggml_log_level log_level,
+        llama_probe_hook_t probe_hook, void * probe_hook_data) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -63,6 +62,9 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
         } original_logger;
         ggml_log_level min_level; // prints below this log level go to debug log
     };
+    static std::mutex log_mutex;
+    std::unique_lock<std::mutex> log_lock(log_mutex);
+
     user_data_t ud;
     llama_log_get(&ud.original_logger.callback, &ud.original_logger.user_data);
     ud.min_level = log_level;
@@ -72,6 +74,8 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
         const ggml_log_level level_eff = level >= ud->min_level ? level : GGML_LOG_LEVEL_DEBUG;
         ud->original_logger.callback(level_eff, text, ud->original_logger.user_data);
     }, &ud);
+
+    log_lock.unlock();
 
     llama_model_params mparams_copy = *mparams;
     mparams_copy.no_alloc  = true;
@@ -136,33 +140,34 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
     hp_ngl         = model->hparams.n_layer;
     hp_n_ctx_train = model->hparams.n_ctx_train;
     hp_n_expert    = model->hparams.n_expert;
+    hp_n_embd_r    = model->hparams.n_embd_r();
 
     llama_memory_breakdown_print(ctx); // goes to debug log
 
+    if (probe_hook) {
+        probe_hook(ctx, probe_hook_data);
+    }
+
     llama_free(ctx);
     llama_model_free(model);
-    llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
+
+    {
+        std::lock_guard<std::mutex> lg(log_mutex);
+        llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
+    }
+
     return ret;
 }
-
-// enum to identify part of a layer for distributing its tensors:
-enum layer_fraction_t {
-    LAYER_FRACTION_NONE = 0, // nothing
-    LAYER_FRACTION_ATTN = 1, // attention
-    LAYER_FRACTION_UP   = 2, // attention + up
-    LAYER_FRACTION_GATE = 3, // attention + up + gate
-    LAYER_FRACTION_MOE  = 4, // everything but sparse MoE weights
-};
-// this enum is only used in llama_params_fit_impl but needs to be defined outside of it to fix a Windows compilation issue
 
 class llama_params_fit_exception : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-static void llama_params_fit_impl(
+void llama_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level,
+        bool fill_front_to_back) {
     if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
         throw llama_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
     }
@@ -174,11 +179,12 @@ static void llama_params_fit_impl(
     uint32_t hp_ngl = 0; // hparams.n_gpu_layers
     uint32_t hp_nct = 0; // hparams.n_ctx_train
     uint32_t hp_nex = 0; // hparams.n_expert
+    uint32_t hp_nr  = 0; // hparams.n_embd_r
 
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LLAMA_LOG_DEBUG("%s: getting device memory data for initial parameters:\n", __func__);
-    const dmds_t dmds_full = llama_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+    const dmds_t dmds_full = llama_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, hp_nr, log_level);
     const size_t nd = devs.size(); // number of devices
     if (nd == 0) {
         LLAMA_LOG_INFO("%s: no devices with dedicated memory found\n", __func__);
@@ -189,6 +195,13 @@ static void llama_params_fit_impl(
     margins.reserve(nd);
     for (size_t id = 0; id < nd; id++) {
         margins.push_back(margins_s[id]);
+    }
+
+    if (mparams->max_vram_alloc > 0 && nd > 0) {
+        const int64_t budget = (int64_t)mparams->max_vram_alloc * 1024LL * 1024LL;
+        margins[0] = (dmds_full[0].free > budget) ? (dmds_full[0].free - budget) : 0;
+        LLAMA_LOG_INFO("%s: max_vram_alloc %" PRId64 " MiB budget, margin %" PRId64 " MiB (%" PRId64 " MiB free)\n",
+            __func__, budget / (1024*1024), margins[0] / (1024*1024), dmds_full[0].free / (1024*1024));
     }
 
     std::vector<std::string> dev_names;
@@ -292,7 +305,7 @@ static void llama_params_fit_impl(
 
                     int64_t sum_projected_used_min_ctx = 0;
                     cparams->n_ctx = n_ctx_min;
-                    const dmds_t dmds_min_ctx = llama_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+                    const dmds_t dmds_min_ctx = llama_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, hp_nr, log_level);
                     for (const auto & dmd : dmds_min_ctx) {
                         sum_projected_used_min_ctx += dmd.mb.total();
                     }
@@ -359,52 +372,12 @@ static void llama_params_fit_impl(
     //   - for a dense model simply fill full layers, giving each device a contiguous slice of the model
     //   - for a MoE model, same as dense model but with all MoE tensors in system memory
 
-    // utility function that returns a static C string matching the tensors for a specific layer index and layer fraction:
-    auto get_overflow_pattern = [&](const size_t il, const layer_fraction_t lf) -> const char * {
-        constexpr size_t n_strings = 1000;
-        if (il >= n_strings) {
-            throw std::runtime_error("at most " + std::to_string(n_strings) + " model layers are supported");
-        }
-        switch (lf) {
-            case LAYER_FRACTION_ATTN: {
-                static std::array<std::string, n_strings> patterns;
-                if (patterns[il].empty()) {
-                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(gate|up|gate_up|down).*";
-                }
-                return patterns[il].c_str();
-            }
-            case LAYER_FRACTION_UP: {
-                static std::array<std::string, n_strings> patterns;
-                if (patterns[il].empty()) {
-                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(gate|gate_up|down).*";
-                }
-                return patterns[il].c_str();
-            }
-            case LAYER_FRACTION_GATE: {
-                static std::array<std::string, n_strings> patterns;
-                if (patterns[il].empty()) {
-                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_down.*";
-                }
-                return patterns[il].c_str();
-            }
-            case LAYER_FRACTION_MOE: {
-                static std::array<std::string, n_strings> patterns;
-                if (patterns[il].empty()) {
-                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(up|down|gate_up|gate)_(ch|)exps";
-                }
-                return patterns[il].c_str();
-            }
-            default:
-                GGML_ABORT("fatal error");
-        }
-    };
-
     struct ngl_t {
         uint32_t n_layer = 0; // number of total layers
         uint32_t n_part  = 0; // number of partial layers, <= n_layer
 
-        // for the first partial layer varying parts can overflow, all further layers use LAYER_FRACTION_MOE:
-        layer_fraction_t overflow_type = LAYER_FRACTION_MOE;
+        // for the first partial layer varying parts can overflow, all further layers use LLAMA_LAYER_FRACTION_MOE:
+        llama_layer_fraction overflow_type = LLAMA_LAYER_FRACTION_MOE;
 
         uint32_t n_full() const {
             assert(n_layer >= n_part);
@@ -415,42 +388,106 @@ static void llama_params_fit_impl(
     const size_t ntbo = llama_max_tensor_buft_overrides();
 
     // utility function to set n_gpu_layers and tensor_split
+    // when fill_front_to_back: layers 0..N-1 on GPU, override layers N+ to CPU
+    // when back-to-front (default): layers (n_layer-N)..n_layer on GPU
+    static std::array<std::string, 1000> ftb_patterns;
+
     auto set_ngl_tensor_split_tbo = [&](
             const std::vector<ngl_t> & ngl_per_device,
             const std::vector<ggml_backend_buffer_type_t> & overflow_bufts,
             llama_model_params & mparams) {
-        mparams.n_gpu_layers = 0;
+        uint32_t total_ngl = 0;
         for (size_t id = 0; id < nd; id++) {
-            mparams.n_gpu_layers += ngl_per_device[id].n_layer;
+            total_ngl += ngl_per_device[id].n_layer;
             if (nd > 1) {
                 tensor_split[id] = ngl_per_device[id].n_layer;
             }
         }
-        assert(uint32_t(mparams.n_gpu_layers) <= hp_ngl + 1);
-        uint32_t il0 = hp_ngl + 1 - mparams.n_gpu_layers; // start index for tensor buft overrides
+        assert(total_ngl <= hp_ngl + 1);
 
         mparams.tensor_split = tensor_split;
 
         size_t itbo = 0;
-        for (size_t id = 0; id < nd; id++) {
-            il0 += ngl_per_device[id].n_full();
-            for (uint32_t il = il0; il < il0 + ngl_per_device[id].n_part; il++) {
-                if (itbo + 1 >= ntbo) {
-                    tensor_buft_overrides[itbo].pattern = nullptr;
-                    tensor_buft_overrides[itbo].buft    = nullptr;
-                    itbo++;
-                    mparams.tensor_buft_overrides = tensor_buft_overrides;
-                    throw llama_params_fit_exception("llama_max_tensor_buft_overrides() == "
-                        + std::to_string(ntbo) + " is insufficient for model");
+
+        if (fill_front_to_back) {
+            mparams.n_gpu_layers = total_ngl;
+
+            uint32_t n_gpu = std::min(total_ngl, hp_ngl);
+
+            uint32_t il_part_start = UINT32_MAX, il_part_end = 0;
+            for (size_t id = 0; id < nd; id++) {
+                if (ngl_per_device[id].n_part > 0) {
+                    uint32_t base = ngl_per_device[id].n_full();
+                    for (size_t id2 = 0; id2 < id; id2++) base += ngl_per_device[id2].n_layer;
+                    il_part_start = std::min(il_part_start, base);
+                    il_part_end   = std::max(il_part_end, base + ngl_per_device[id].n_part);
                 }
-                tensor_buft_overrides[itbo].pattern = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
-                tensor_buft_overrides[itbo].buft = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
-                itbo++;
             }
-            il0 += ngl_per_device[id].n_part;
+
+            for (uint32_t il = 0; il < hp_ngl; il++) {
+                if (ftb_patterns[il].empty()) {
+                    ftb_patterns[il] = "blk\\." + std::to_string(il) + "\\..*";
+                }
+
+                if (il < n_gpu) {
+                    if (il >= il_part_start && il < il_part_end) {
+                        llama_layer_fraction ov_type = LLAMA_LAYER_FRACTION_MOE;
+                        ggml_backend_buffer_type_t ov_buft = ggml_backend_cpu_buffer_type();
+                        for (size_t id = 0; id < nd; id++) {
+                            uint32_t base = ngl_per_device[id].n_full();
+                            for (size_t id2 = 0; id2 < id; id2++) base += ngl_per_device[id2].n_layer;
+                            if (il == base) {
+                                ov_type = ngl_per_device[id].overflow_type;
+                                ov_buft = overflow_bufts[id];
+                            }
+                        }
+                        const char * pat = llama_get_overflow_pattern(il, ov_type);
+                        if (pat) {
+                            tensor_buft_overrides[itbo].pattern    = pat;
+                            tensor_buft_overrides[itbo].buft       = ov_buft;
+                            tensor_buft_overrides[itbo].backend_id = -1;
+                            itbo++;
+                        }
+                    }
+                    tensor_buft_overrides[itbo].pattern    = ftb_patterns[il].c_str();
+                    tensor_buft_overrides[itbo].buft       = ggml_backend_dev_buffer_type(devs[0].dev);
+                    tensor_buft_overrides[itbo].backend_id = -1;
+                    itbo++;
+                } else {
+                    tensor_buft_overrides[itbo].pattern    = ftb_patterns[il].c_str();
+                    tensor_buft_overrides[itbo].buft       = ggml_backend_cpu_buffer_type();
+                    tensor_buft_overrides[itbo].backend_id = -1;
+                    itbo++;
+                }
+            }
+        } else {
+            mparams.n_gpu_layers = total_ngl;
+            uint32_t il0 = hp_ngl + 1 - total_ngl;
+
+            for (size_t id = 0; id < nd; id++) {
+                il0 += ngl_per_device[id].n_full();
+                for (uint32_t il = il0; il < il0 + ngl_per_device[id].n_part; il++) {
+                    if (itbo + 1 >= ntbo) {
+                        tensor_buft_overrides[itbo].pattern    = nullptr;
+                        tensor_buft_overrides[itbo].buft       = nullptr;
+                        tensor_buft_overrides[itbo].backend_id = -1;
+                        itbo++;
+                        mparams.tensor_buft_overrides = tensor_buft_overrides;
+                        throw llama_params_fit_exception("llama_max_tensor_buft_overrides() == "
+                            + std::to_string(ntbo) + " is insufficient for model");
+                    }
+                    tensor_buft_overrides[itbo].pattern    = llama_get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LLAMA_LAYER_FRACTION_MOE);
+                    tensor_buft_overrides[itbo].buft       = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
+                    tensor_buft_overrides[itbo].backend_id = -1;
+                    itbo++;
+                }
+                il0 += ngl_per_device[id].n_part;
+            }
         }
-        tensor_buft_overrides[itbo].pattern = nullptr;
-        tensor_buft_overrides[itbo].buft    = nullptr;
+
+        tensor_buft_overrides[itbo].pattern    = nullptr;
+        tensor_buft_overrides[itbo].buft       = nullptr;
+        tensor_buft_overrides[itbo].backend_id = -1;
         itbo++;
         mparams.tensor_buft_overrides = tensor_buft_overrides;
     };
@@ -464,7 +501,7 @@ static void llama_params_fit_impl(
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, mparams_copy);
 
         const dmds_t dmd_nl = llama_get_device_memory_data(
-            path_model, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+            path_model, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, hp_nr, log_level);
 
         LLAMA_LOG_DEBUG("%s: memory for test allocation by device:\n", func_name);
         for (size_t id = 0; id < nd; id++) {
@@ -486,13 +523,13 @@ static void llama_params_fit_impl(
     if (hp_nex > 0) {
         const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate_up|gate)_(ch|)exps"; // matches all MoE tensors
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
-        tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft};
-        tensor_buft_overrides[1] = {nullptr, nullptr};
+        tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft, -1};
+        tensor_buft_overrides[1] = {nullptr, nullptr, -1};
         mparams->tensor_buft_overrides = tensor_buft_overrides;
 
         LLAMA_LOG_DEBUG("%s: getting device memory data with all MoE tensors moved to system memory:\n", __func__);
         const dmds_t dmds_cpu_moe = llama_get_device_memory_data(
-            path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+            path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, hp_nr, log_level);
 
         for (size_t id = 0; id < nd; id++) {
             global_surplus_cpu_moe += dmds_cpu_moe[id].free;
@@ -508,7 +545,7 @@ static void llama_params_fit_impl(
         }
 
         // reset
-        tensor_buft_overrides[0] = {nullptr, nullptr};
+        tensor_buft_overrides[0] = {nullptr, nullptr, -1};
         mparams->tensor_buft_overrides = tensor_buft_overrides;
     }
 
@@ -535,10 +572,11 @@ static void llama_params_fit_impl(
     //   - check memory use of our guess, replace either the low or high bound
     //   - once we only have a difference of a single layer, stop and return the lower bound that just barely still fits
     //   - the last device has the output layer, which cannot be a partial layer
+    const char * fill_dir = fill_front_to_back ? "front-to-back" : "back-to-front";
     if (hp_nex == 0) {
-        LLAMA_LOG_INFO("%s: filling dense layers back-to-front:\n", __func__);
+        LLAMA_LOG_INFO("%s: filling dense layers %s:\n", __func__, fill_dir);
     } else {
-        LLAMA_LOG_INFO("%s: filling dense-only layers back-to-front:\n", __func__);
+        LLAMA_LOG_INFO("%s: filling dense-only layers %s:\n", __func__, fill_dir);
     }
     for (int id = nd - 1; id >= 0; id--) {
         uint32_t n_unassigned = hp_ngl + 1;
@@ -686,12 +724,12 @@ static void llama_params_fit_impl(
             if (ngl_per_device_test[id_dense_start_test].n_part == 0) {
                 id_dense_start_test++;
             }
-            ngl_per_device_test[id].overflow_type = LAYER_FRACTION_UP;
+            ngl_per_device_test[id].overflow_type = LLAMA_LAYER_FRACTION_UP;
             std::vector<ggml_backend_buffer_type_t> overflow_bufts_test = overflow_bufts;
             if (id < nd - 1) {
                 overflow_bufts_test[id] = ggml_backend_dev_buffer_type(devs[id + 1].dev);
             }
-            LLAMA_LOG_DEBUG("%s: trying to fit one extra layer with overflow_type=LAYER_FRACTION_UP\n", __func__);
+            LLAMA_LOG_DEBUG("%s: trying to fit one extra layer with overflow_type=LLAMA_LAYER_FRACTION_UP\n", __func__);
             std::vector<int64_t> mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts_test);
             if (mem_test[id] < targets[id] && (id + 1 == nd || mem_test[id + 1] < targets[id + 1])) {
                 ngl_per_device = ngl_per_device_test;
@@ -701,8 +739,8 @@ static void llama_params_fit_impl(
                 LLAMA_LOG_DEBUG("%s: set ngl_per_device[%zu].(n_layer, n_part, overflow_type)=(%" PRIu32 ", %" PRIu32 ", UP), id_dense_start=%zu\n",
                     __func__, id, ngl_per_device[id].n_layer, ngl_per_device[id].n_part, id_dense_start);
 
-                ngl_per_device_test[id].overflow_type = LAYER_FRACTION_GATE;
-                LLAMA_LOG_DEBUG("%s: trying to fit one extra layer with overflow_type=LAYER_FRACTION_GATE\n", __func__);
+                ngl_per_device_test[id].overflow_type = LLAMA_LAYER_FRACTION_GATE;
+                LLAMA_LOG_DEBUG("%s: trying to fit one extra layer with overflow_type=LLAMA_LAYER_FRACTION_GATE\n", __func__);
                 mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts_test);
                 if (mem_test[id] < targets[id] && (id + 1 == nd || mem_test[id + 1] < targets[id + 1])) {
                     ngl_per_device = ngl_per_device_test;
@@ -713,8 +751,8 @@ static void llama_params_fit_impl(
                         __func__, id, ngl_per_device[id].n_layer, ngl_per_device[id].n_part, id_dense_start);
                 }
             } else {
-                ngl_per_device_test[id].overflow_type = LAYER_FRACTION_ATTN;
-                LLAMA_LOG_DEBUG("%s: trying to fit one extra layer with overflow_type=LAYER_FRACTION_ATTN\n", __func__);
+                ngl_per_device_test[id].overflow_type = LLAMA_LAYER_FRACTION_ATTN;
+                LLAMA_LOG_DEBUG("%s: trying to fit one extra layer with overflow_type=LLAMA_LAYER_FRACTION_ATTN\n", __func__);
                 mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts_test);
                 if (mem_test[id] < targets[id] && (id + 1 == nd || mem_test[id + 1] < targets[id + 1])) {
                     ngl_per_device = ngl_per_device_test;
@@ -751,7 +789,7 @@ enum llama_params_fit_status llama_params_fit(
     const int64_t t0_us = llama_time_us();
     llama_params_fit_status status = LLAMA_PARAMS_FIT_STATUS_SUCCESS;
     try {
-        llama_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level);
+        llama_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level, false);
         LLAMA_LOG_INFO("%s: successfully fit params to free device memory\n", __func__);
     } catch (const llama_params_fit_exception & e) {
         LLAMA_LOG_WARN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
@@ -875,6 +913,8 @@ static int llama_model_load(struct gguf_context * metadata, llama_model_set_tens
             LLAMA_LOG_INFO("%s: vocab only - skipping tensors\n", __func__);
             return 0;
         }
+
+        ml.force_duplicate_tied = params.pshard;
 
         if (!model.load_tensors(ml)) {
             return -2;

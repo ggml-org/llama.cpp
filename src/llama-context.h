@@ -313,6 +313,8 @@ private:
 
     bool sched_need_reserve = true;
 
+    pshard_dev_layout pshard_layout = {};
+
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
 
@@ -357,3 +359,14 @@ private:
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
 };
+
+// pshard free functions (implemented in llama-context-pshard.cpp)
+struct llama_memory_i;
+
+void pshard_assign_tensors(
+        ggml_backend_sched_t                              sched,
+        const llama_model                               & model,
+        llama_memory_i                                  * memory,
+        const std::vector<ggml_backend_ptr>             & backends,
+        const pshard_dev_layout                         & layout,
+        ggml_cgraph                                     * gf);

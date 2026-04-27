@@ -154,6 +154,8 @@ extern "C" {
         bool buffer_from_host_ptr;
         // event synchronization
         bool events;
+        // separate copy stream for compute/transfer overlap
+        bool copy_stream;
     };
 
     // all the device properties
@@ -347,6 +349,25 @@ extern "C" {
 
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
+
+    // Enable async weight prefetching to overlap CPU->GPU transfers with compute
+    GGML_API void                 ggml_backend_sched_set_prefetch_weights(ggml_backend_sched_t sched, bool enabled);
+
+    // Register a tensor for pre/post-compute split callbacks.
+    GGML_API void ggml_backend_sched_add_writeback(ggml_backend_sched_t sched, struct ggml_tensor * tensor);
+
+    // Per-split info snapshot for timing prediction.
+    struct ggml_backend_sched_split_info {
+        struct ggml_cgraph * graph;
+        int                  backend_id;
+        size_t               input_weight_bytes;
+        size_t               input_activ_bytes;
+        size_t               writeback_bytes;
+    };
+
+    GGML_API bool ggml_backend_sched_get_split_info(
+        ggml_backend_sched_t sched, int split_id,
+        struct ggml_backend_sched_split_info * out);
 
     //
     // Meta backend

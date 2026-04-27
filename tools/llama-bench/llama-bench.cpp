@@ -382,7 +382,7 @@ static const cmd_params cmd_params_defaults = {
     /* flash_attn           */ { false },
     /* devices              */ { {} },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
-    /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
+    /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr, -1 } } },
     /* use_mmap             */ { true },
     /* use_direct_io        */ { false },
     /* embeddings           */ { false },
@@ -922,13 +922,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                             invalid_param = true;
                             break;
                         }
-                        group_tensor_buft_overrides.push_back({tensor_name, buft_list.at(buffer_type)});
+                        group_tensor_buft_overrides.push_back({tensor_name, buft_list.at(buffer_type), -1});
                         override_span_len = std::strcspn(override_group, ";");
                     }
                     if (invalid_param) {
                         break;
                     }
-                    group_tensor_buft_overrides.push_back({nullptr,nullptr});
+                    group_tensor_buft_overrides.push_back({nullptr, nullptr, -1});
                     params.tensor_buft_overrides.push_back(group_tensor_buft_overrides);
                     override_group_span_len = std::strcspn(value, ",");
                 } while (!last_group);
@@ -1193,7 +1193,7 @@ struct cmd_params_instance {
                                 ggml_backend_cpu_buffer_type() });
             }
 
-            merged.push_back({ nullptr, nullptr });
+            merged.push_back({ nullptr, nullptr, -1 });
 
             mparams.tensor_buft_overrides = merged.data();
         }
