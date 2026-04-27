@@ -67,6 +67,16 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
                                    std::shared_ptr<ov::InferRequest> infer_request,
                                    int output_index,
                                    const ggml_tensor * ggml_tensor) {
+    if (ggml_tensor->extra != nullptr && !ggml_decoder->is_splited_model()) {
+        auto * extra_base = static_cast<ggml_openvino_extra_base *>(ggml_tensor->extra);
+        if (extra_base->type != ggml_openvino_extra_base::Type::TENSOR) {
+            throw std::runtime_error("ggml tensor extra is not of type TENSOR for output: " +
+                                     std::string(ggml_tensor->name));
+        }
+        auto * tensor_extra = static_cast<ggml_openvino_tensor_extra *>(extra_base);
+        return *tensor_extra->tensor;
+    }
+
     auto output_type = ggml_decoder->get_ov_type(ggml_tensor);
     ov::Shape output_shape;
     if (ggml_decoder->is_static()) {
@@ -585,6 +595,9 @@ bool is_model_splitted(ggml_cgraph * cgraph) {
             if (src != nullptr && model_nodes.find(src) == model_nodes.end() &&
                 model_weights.find(std::string(src->name)) == model_weights.end() && !model_leafs.empty() == false &&
                 model_leafs.find(src) == model_leafs.end()) {
+                if (GgmlOvDecoder::is_inp_tok(src, node)) {
+                    return false;
+                }
                 return true;
             }
         }
