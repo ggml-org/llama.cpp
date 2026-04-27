@@ -27,6 +27,7 @@ class MoeCopyEvent:
 class SimStats:
     events: int = 0
     bypasses: int = 0
+    cache_bytes: int = 0
     accesses: int = 0
     hits: int = 0
     misses: int = 0
@@ -115,6 +116,7 @@ def simulate_lru(events: Sequence[MoeCopyEvent], slots: Sequence[int]) -> Dict[T
             needed_set = set(needed)
 
             stat.events += 1
+            stat.cache_bytes = max(stat.cache_bytes, slot_count * event.expert_size)
             stat.accesses += len(needed)
             stat.baseline_bytes += event.copy_bytes
 
@@ -153,6 +155,7 @@ def aggregate_stats(stats: Dict[Tuple[int, str], SimStats]) -> Dict[int, SimStat
         dst = aggregate.setdefault(slot_count, SimStats())
         dst.events += stat.events
         dst.bypasses += stat.bypasses
+        dst.cache_bytes += stat.cache_bytes
         dst.accesses += stat.accesses
         dst.hits += stat.hits
         dst.misses += stat.misses
@@ -168,6 +171,7 @@ def stats_row(slot_count: int, key: str, stat: SimStats) -> str:
     return "\t".join((
         str(slot_count),
         key,
+        str(stat.cache_bytes),
         str(stat.events),
         str(stat.bypasses),
         str(stat.accesses),
@@ -182,7 +186,7 @@ def stats_row(slot_count: int, key: str, stat: SimStats) -> str:
 
 
 def print_report(stats: Dict[Tuple[int, str], SimStats], show_details: bool) -> None:
-    print("slots\tkey\tevents\tbypasses\taccesses\thits\tmisses\thit_rate\tbaseline_bytes\tcache_copy_bytes\tsaved_bytes\tsaved_pct")
+    print("slots\tkey\tcache_bytes\tevents\tbypasses\taccesses\thits\tmisses\thit_rate\tbaseline_bytes\tcache_copy_bytes\tsaved_bytes\tsaved_pct")
 
     for slot_count, stat in sorted(aggregate_stats(stats).items()):
         print(stats_row(slot_count, "ALL", stat))

@@ -44,6 +44,7 @@ def test_lru_batch_eviction(sim) -> None:
     assert k1.bypasses == 3
     assert k1.hits == 0
     assert k1.misses == 6
+    assert k1.cache_bytes == 100
     assert k1.baseline_bytes == 600
     assert k1.cache_copy_bytes == 600
 
@@ -52,10 +53,12 @@ def test_lru_batch_eviction(sim) -> None:
     assert k2.bypasses == 0
     assert k2.hits == 2
     assert k2.misses == 4
+    assert k2.cache_bytes == 200
     assert k2.baseline_bytes == 600
     assert k2.cache_copy_bytes == 400
 
     aggregate = sim.aggregate_stats(stats)
+    assert aggregate[2].cache_bytes == 300
     assert aggregate[2].baseline_bytes == 650
     assert aggregate[2].cache_copy_bytes == 450
 
@@ -71,8 +74,8 @@ def test_cli(repo_root: Path) -> None:
             capture_output=True,
             text=True,
         )
-    assert "slots\tkey\tevents" in result.stdout
-    assert "2\tALL\t4\t0\t7\t2\t5\t0.285714\t650\t450\t200\t0.307692" in result.stdout
+    assert "slots\tkey\tcache_bytes\tevents" in result.stdout
+    assert "2\tALL\t300\t4\t0\t7\t2\t5\t0.285714\t650\t450\t200\t0.307692" in result.stdout
 
 
 def main() -> None:
