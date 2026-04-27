@@ -10,6 +10,7 @@ from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 
 MOE_COPY_RE = re.compile(r"\bmoe_copy\b(?P<fields>.*)\sids=\[(?P<expert_ids>[^\]]*)\]")
+MOE_CACHE_RE = re.compile(r"\bmoe_cache\b(?P<fields>.*)")
 FIELD_RE = re.compile(r"(\w+)=([^\s]+)")
 
 
@@ -24,6 +25,21 @@ class MoeCopyEvent:
     expert_ids: Tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class MoeCacheEvent:
+    key: str
+    tensor: str
+    backend: str
+    slots: int
+    used: int
+    hits: int
+    misses: int
+    copied: int
+    total_hits: int
+    total_misses: int
+    total_copied: int
+
+
 @dataclass
 class SimStats:
     events: int = 0
@@ -34,6 +50,19 @@ class SimStats:
     misses: int = 0
     baseline_bytes: int = 0
     cache_copy_bytes: int = 0
+
+
+@dataclass
+class RuntimeStats:
+    slots: Optional[int] = None
+    events: int = 0
+    accesses: int = 0
+    hits: int = 0
+    misses: int = 0
+    copied: int = 0
+    max_total_hits: int = 0
+    max_total_misses: int = 0
+    max_total_copied: int = 0
 
 
 def parse_slots(value: str) -> List[int]:
@@ -90,6 +119,48 @@ def parse_moe_copy_line(line: str) -> Optional[MoeCopyEvent]:
     )
 
 
+def parse_moe_cache_line(line: str) -> Optional[MoeCacheEvent]:
+    match = MOE_CACHE_RE.search(line)
+    if match is None:
+        return None
+
+    fields = dict(FIELD_RE.findall(match.group("fields")))
+    try:
+        tensor = fields["tensor"]
+        backend = fields["backend"]
+        slots = int(fields["slots"])
+        used = int(fields["used"])
+        hits = int(fields["hits"])
+        misses = int(fields["misses"])
+        copied = int(fields["copied"])
+        total_hits = int(fields["total_hits"])
+        total_misses = int(fields["total_misses"])
+        total_copied = int(fields["total_copied"])
+    except KeyError as exc:
+        raise ValueError(f"missing moe_cache field: {exc.args[0]}") from exc
+
+    if slots < 0 or used < 0 or hits < 0 or misses < 0 or copied < 0:
+        raise ValueError("moe_cache counters must be non-negative")
+    if used != hits + misses:
+        raise ValueError(f"used={used} does not match hits={hits} + misses={misses}")
+    if total_hits < hits or total_misses < misses or total_copied < copied:
+        raise ValueError("moe_cache total counters are smaller than per-event counters")
+
+    return MoeCacheEvent(
+        key=f"{backend}:{tensor}",
+        tensor=tensor,
+        backend=backend,
+        slots=slots,
+        used=used,
+        hits=hits,
+        misses=misses,
+        copied=copied,
+        total_hits=total_hits,
+        total_misses=total_misses,
+        total_copied=total_copied,
+    )
+
+
 def read_events(paths: Sequence[str]) -> Iterator[MoeCopyEvent]:
     if not paths:
         yield from read_events_from_lines(sys.stdin)
@@ -107,6 +178,29 @@ def read_events_from_lines(lines: Iterable[str]) -> Iterator[MoeCopyEvent]:
     for line_no, line in enumerate(lines, 1):
         try:
             event = parse_moe_copy_line(line)
+        except ValueError as exc:
+            raise ValueError(f"line {line_no}: {exc}") from exc
+        if event is not None:
+            yield event
+
+
+def read_cache_events(paths: Sequence[str]) -> Iterator[MoeCacheEvent]:
+    if not paths:
+        yield from read_cache_events_from_lines(sys.stdin)
+        return
+
+    for path_str in paths:
+        if path_str == "-":
+            yield from read_cache_events_from_lines(sys.stdin)
+        else:
+            with Path(path_str).open("r", encoding="utf-8") as f:
+                yield from read_cache_events_from_lines(f)
+
+
+def read_cache_events_from_lines(lines: Iterable[str]) -> Iterator[MoeCacheEvent]:
+    for line_no, line in enumerate(lines, 1):
+        try:
+            event = parse_moe_cache_line(line)
         except ValueError as exc:
             raise ValueError(f"line {line_no}: {exc}") from exc
         if event is not None:
@@ -168,6 +262,26 @@ def simulate_lru(events: Sequence[MoeCopyEvent], slots: Sequence[int]) -> Dict[T
     return stats
 
 
+def summarize_runtime_cache(events: Sequence[MoeCacheEvent]) -> Dict[str, RuntimeStats]:
+    stats: Dict[str, RuntimeStats] = {}
+    for event in events:
+        stat = stats.setdefault(event.key, RuntimeStats())
+        if stat.slots is None:
+            stat.slots = event.slots
+        elif stat.slots != event.slots:
+            raise ValueError(f"inconsistent slots for {event.key}: saw {event.slots}, expected {stat.slots}")
+
+        stat.events += 1
+        stat.accesses += event.used
+        stat.hits += event.hits
+        stat.misses += event.misses
+        stat.copied += event.copied
+        stat.max_total_hits = max(stat.max_total_hits, event.total_hits)
+        stat.max_total_misses = max(stat.max_total_misses, event.total_misses)
+        stat.max_total_copied = max(stat.max_total_copied, event.total_copied)
+    return stats
+
+
 def aggregate_stats(stats: Dict[Tuple[int, str], SimStats]) -> Dict[int, SimStats]:
     aggregate: Dict[int, SimStats] = {}
     for (slot_count, _), stat in stats.items():
@@ -180,6 +294,20 @@ def aggregate_stats(stats: Dict[Tuple[int, str], SimStats]) -> Dict[int, SimStat
         dst.misses += stat.misses
         dst.baseline_bytes += stat.baseline_bytes
         dst.cache_copy_bytes += stat.cache_copy_bytes
+    return aggregate
+
+
+def aggregate_runtime_stats(stats: Dict[str, RuntimeStats]) -> RuntimeStats:
+    aggregate = RuntimeStats()
+    for stat in stats.values():
+        aggregate.events += stat.events
+        aggregate.accesses += stat.accesses
+        aggregate.hits += stat.hits
+        aggregate.misses += stat.misses
+        aggregate.copied += stat.copied
+        aggregate.max_total_hits += stat.max_total_hits
+        aggregate.max_total_misses += stat.max_total_misses
+        aggregate.max_total_copied += stat.max_total_copied
     return aggregate
 
 
@@ -204,6 +332,24 @@ def stats_row(slot_count: int, key: str, stat: SimStats) -> str:
     ))
 
 
+def runtime_stats_row(key: str, stat: RuntimeStats) -> str:
+    hit_rate = stat.hits / stat.accesses if stat.accesses else 0.0
+    slots = "-" if stat.slots is None else str(stat.slots)
+    return "\t".join((
+        key,
+        slots,
+        str(stat.events),
+        str(stat.accesses),
+        str(stat.hits),
+        str(stat.misses),
+        f"{hit_rate:.6f}",
+        str(stat.copied),
+        str(stat.max_total_hits),
+        str(stat.max_total_misses),
+        str(stat.max_total_copied),
+    ))
+
+
 def print_report(stats: Dict[Tuple[int, str], SimStats], show_details: bool) -> None:
     print("slots\tkey\tcache_bytes\tevents\tbypasses\taccesses\thits\tmisses\thit_rate\tbaseline_bytes\tcache_copy_bytes\tsaved_bytes\tsaved_pct")
 
@@ -217,6 +363,17 @@ def print_report(stats: Dict[Tuple[int, str], SimStats], show_details: bool) -> 
         print(stats_row(slot_count, key, stat))
 
 
+def print_runtime_report(stats: Dict[str, RuntimeStats], show_details: bool) -> None:
+    print("key\tslots\tevents\taccesses\thits\tmisses\thit_rate\tcopied\tmax_total_hits\tmax_total_misses\tmax_total_copied")
+    print(runtime_stats_row("ALL", aggregate_runtime_stats(stats)))
+
+    if not show_details:
+        return
+
+    for key, stat in sorted(stats.items()):
+        print(runtime_stats_row(key, stat))
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Simulate byte-weighted LRU MoE expert caches from GGML_SCHED_MOE_LOG output.",
@@ -224,7 +381,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("logs", nargs="*", help="log files to parse; omit or use '-' for stdin")
     parser.add_argument("--slots", type=parse_slots, default=parse_slots("32,64,96,128"), help="comma-separated slot counts")
     parser.add_argument("--details", action="store_true", help="also print per backend/tensor stats")
+    parser.add_argument("--runtime", action="store_true", help="summarize actual moe_cache runtime events instead of simulating moe_copy events")
     args = parser.parse_args(argv)
+
+    if args.runtime:
+        events = list(read_cache_events(args.logs))
+        if not events:
+            print("no moe_cache events found", file=sys.stderr)
+            return 1
+        print_runtime_report(summarize_runtime_cache(events), args.details)
+        return 0
 
     events = list(read_events(args.logs))
     if not events:
