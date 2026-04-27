@@ -856,7 +856,7 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
         ggml_backend_dev_memory(dev, &free, &total);
 
         const size_t self = mb.model + mb.context + mb.compute;
-        const size_t unaccounted = total - self - free;
+        const int64_t unaccounted = static_cast<int64_t>(total) - static_cast<int64_t>(free) - static_cast<int64_t>(self);
 
         table_data.push_back({
             template_gpu,
@@ -867,7 +867,7 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb.model / MiB),
             std::to_string(mb.context / MiB),
             std::to_string(mb.compute / MiB),
-            std::to_string(unaccounted / MiB)});
+            std::to_string(unaccounted / static_cast<int64_t>(MiB))});
     }
 
     // print memory breakdown for host:
