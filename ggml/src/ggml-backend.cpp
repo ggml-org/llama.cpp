@@ -1977,6 +1977,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     ggml_tensor * prev_ids_tensor = nullptr;
     int64_t prev_ids_n_expert = -1;
     std::vector<int32_t> ids;
+    std::vector<int32_t> id_counts;
     std::vector<ggml_bitset_t> used_ids;
     const bool moe_log = ggml_backend_sched_moe_log_enabled();
     const int moe_cache_slots = ggml_backend_sched_moe_cache_slots();
@@ -2050,11 +2051,14 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         // find the used experts
                         used_ids.clear();
                         used_ids.resize(ggml_bitset_size(n_expert));
+                        id_counts.clear();
+                        id_counts.resize(n_expert);
                         for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
                             for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
                                 int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
                                 GGML_ASSERT(id >= 0 && id < n_expert);
                                 ggml_bitset_set(used_ids.data(), id);
+                                id_counts[id]++;
                             }
                         }
 
@@ -2133,6 +2137,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                         if (moe_log) {
                             std::string used_ids_str;
+                            std::string used_id_counts_str;
                             size_t used_count = 0;
                             for (int64_t i = 0; i < n_expert; ++i) {
                                 if (!ggml_bitset_get(used_ids.data(), i)) {
@@ -2142,11 +2147,17 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                                     used_ids_str += ",";
                                 }
                                 used_ids_str += std::to_string(i);
+                                if (!used_id_counts_str.empty()) {
+                                    used_id_counts_str += ",";
+                                }
+                                used_id_counts_str += std::to_string(i);
+                                used_id_counts_str += ":";
+                                used_id_counts_str += std::to_string(id_counts[i]);
                                 used_count++;
                             }
 
                             GGML_LOG_INFO(
-                                "%s: moe_copy split=%d input=%d tensor=%s node=%s ids=%s src_backend=%s dst_backend=%s n_expert=%lld expert_size=%zu used=%zu used_bytes=%zu ranges=%d copy_bytes=%zu ids=[%s]\n",
+                                "%s: moe_copy split=%d input=%d tensor=%s node=%s ids=%s src_backend=%s dst_backend=%s n_expert=%lld expert_size=%zu used=%zu used_bytes=%zu ranges=%d copy_bytes=%zu id_counts=[%s] ids=[%s]\n",
                                 __func__,
                                 split_id,
                                 input_id,
@@ -2161,6 +2172,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                                 used_count * expert_size,
                                 copy_ranges,
                                 copy_bytes,
+                                used_id_counts_str.c_str(),
                                 used_ids_str.c_str());
                         }
                     }

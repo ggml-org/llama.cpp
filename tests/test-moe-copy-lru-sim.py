@@ -26,6 +26,18 @@ ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.3.ffn_down_exps.w
 """
 
 
+SAMPLE_PROMPT_PRIME_LOG = """\
+ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk src_backend=CPU dst_backend=CUDA0 n_expert=4 expert_size=100 used=3 used_bytes=300 ranges=1 copy_bytes=300 id_counts=[0:5,1:4,2:1] ids=[0,1,2]
+ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk src_backend=CPU dst_backend=CUDA0 n_expert=4 expert_size=100 used=2 used_bytes=200 ranges=1 copy_bytes=200 ids=[0,1]
+"""
+
+
+SAMPLE_ORACLE_LOG = """\
+ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk src_backend=CPU dst_backend=CUDA0 n_expert=4 expert_size=100 used=2 used_bytes=200 ranges=1 copy_bytes=200 ids=[0,1]
+ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk src_backend=CPU dst_backend=CUDA0 n_expert=4 expert_size=100 used=2 used_bytes=200 ranges=1 copy_bytes=200 ids=[2,3]
+"""
+
+
 def load_sim(repo_root: Path):
     script = repo_root / "scripts" / "moe-copy-lru-sim.py"
     spec = importlib.util.spec_from_file_location("moe_copy_lru_sim", script)
@@ -44,6 +56,7 @@ def test_parser(sim) -> None:
     assert events[0].used_bytes == 200
     assert events[0].copy_bytes == 200
     assert events[0].expert_ids == (1, 2)
+    assert events[0].expert_counts == ((1, 1), (2, 1))
 
 
 def test_lru_batch_eviction(sim) -> None:
@@ -74,6 +87,59 @@ def test_lru_batch_eviction(sim) -> None:
     assert aggregate[2].cache_copy_bytes == 450
 
 
+def test_prompt_prefetch_uses_bypass_hot_set(sim) -> None:
+    events = list(sim.read_events_from_lines(SAMPLE_PROMPT_PRIME_LOG.splitlines()))
+    assert events[0].expert_counts == ((0, 5), (1, 4), (2, 1))
+    stats = sim.simulate_prefetch(events, [2], "prompt")
+    stat = stats[("prompt", 2, "CUDA0:blk.0.ffn_down_exps.weight")]
+
+    assert stat.events == 2
+    assert stat.bypasses == 1
+    assert stat.accesses == 5
+    assert stat.speculative_hits == 2
+    assert stat.demand_hits == 0
+    assert stat.misses == 3
+    assert stat.baseline_bytes == 500
+    assert stat.demand_copy_bytes == 300
+    assert stat.prefetch_copy_bytes == 200
+    assert stat.prefetches == 2
+
+
+def test_oracle_prefetch_bounds_next_event(sim) -> None:
+    events = list(sim.read_events_from_lines(SAMPLE_ORACLE_LOG.splitlines()))
+    stats = sim.simulate_prefetch(events, [2], "oracle")
+    stat = stats[("oracle", 2, "CUDA0:blk.0.ffn_down_exps.weight")]
+
+    assert stat.events == 2
+    assert stat.accesses == 4
+    assert stat.speculative_hits == 2
+    assert stat.misses == 2
+    assert stat.baseline_bytes == 400
+    assert stat.demand_copy_bytes == 200
+    assert stat.prefetch_copy_bytes == 200
+    assert stat.prefetches == 2
+    assert stat.wrong_prefetches == 0
+
+
+def test_markov_prefetch_learns_repeated_sequence(sim) -> None:
+    events = list(sim.read_events_from_lines(SAMPLE_ORACLE_LOG.splitlines())) * 2
+    stats = sim.simulate_prefetch(events, [2], "markov")
+    stat = stats[("markov", 2, "CUDA0:blk.0.ffn_down_exps.weight")]
+
+    assert stat.events == 4
+    assert stat.accesses == 8
+    assert stat.speculative_hits == 2
+    assert stat.misses == 6
+    assert stat.prefetches == 4
+    assert stat.demand_copy_bytes == 600
+    assert stat.prefetch_copy_bytes == 400
+
+    set_stats = sim.simulate_prefetch(events, [2], "setmarkov")
+    set_stat = set_stats[("setmarkov", 2, "CUDA0:blk.0.ffn_down_exps.weight")]
+    assert set_stat.speculative_hits == 2
+    assert set_stat.prefetches == 4
+
+
 def test_cli(repo_root: Path) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         log_path = Path(tmp) / "moe.log"
@@ -87,6 +153,21 @@ def test_cli(repo_root: Path) -> None:
         )
     assert "slots\tkey\tcache_bytes\tevents" in result.stdout
     assert "2\tALL\t300\t4\t0\t7\t2\t5\t0.285714\t650\t450\t200\t0.307692" in result.stdout
+
+
+def test_prefetch_cli(repo_root: Path) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = Path(tmp) / "moe-prompt.log"
+        log_path.write_text(SAMPLE_PROMPT_PRIME_LOG, encoding="utf-8")
+        script = repo_root / "scripts" / "moe-copy-lru-sim.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--slots", "2", "--policy", "prompt", str(log_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    assert "policy\tslots\tkey\tcache_bytes\tevents\tbypasses\taccesses" in result.stdout
+    assert "prompt\t2\tALL\t200\t2\t1\t5\t2\t0\t2\t3\t0.400000\t500\t300\t200\t500\t200\t0.400000\t0\t0.000000\t2\t0\t0" in result.stdout
 
 
 def test_runtime_cache_parser_and_summary(sim) -> None:
@@ -239,6 +320,14 @@ def test_rejects_inconsistent_copy_accounting(sim) -> None:
     else:
         raise AssertionError("accepted copy_bytes smaller than used_bytes")
 
+    bad_id_counts = "ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk src_backend=CPU dst_backend=CUDA0 n_expert=4 expert_size=100 used=2 used_bytes=200 ranges=1 copy_bytes=200 id_counts=[1:2] ids=[1,2]"
+    try:
+        list(sim.read_events_from_lines([bad_id_counts]))
+    except ValueError as exc:
+        assert "id_counts" in str(exc)
+    else:
+        raise AssertionError("accepted id_counts that did not match ids")
+
 
 def test_rejects_inconsistent_runtime_cache_accounting(sim) -> None:
     bad_used = "ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 used=2 hits=2 misses=1 copied=100 total_hits=2 total_misses=1 total_copied=100"
@@ -304,7 +393,11 @@ def main() -> None:
     sim = load_sim(repo_root)
     test_parser(sim)
     test_lru_batch_eviction(sim)
+    test_prompt_prefetch_uses_bypass_hot_set(sim)
+    test_oracle_prefetch_bounds_next_event(sim)
+    test_markov_prefetch_learns_repeated_sequence(sim)
     test_cli(repo_root)
+    test_prefetch_cli(repo_root)
     test_runtime_cache_parser_and_summary(sim)
     test_runtime_cache_cli(repo_root)
     test_cli_tolerates_invalid_utf8(repo_root)

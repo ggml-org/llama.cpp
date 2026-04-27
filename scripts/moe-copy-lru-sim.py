@@ -24,6 +24,7 @@ class MoeCopyEvent:
     used_bytes: int
     copy_bytes: int
     expert_ids: Tuple[int, ...]
+    expert_counts: Tuple[Tuple[int, int], ...]
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,23 @@ class SimStats:
 
 
 @dataclass
+class PrefetchStats:
+    events: int = 0
+    bypasses: int = 0
+    cache_bytes: int = 0
+    accesses: int = 0
+    demand_hits: int = 0
+    speculative_hits: int = 0
+    misses: int = 0
+    baseline_bytes: int = 0
+    demand_copy_bytes: int = 0
+    prefetch_copy_bytes: int = 0
+    prefetches: int = 0
+    wrong_prefetches: int = 0
+    prefetch_evictions: int = 0
+
+
+@dataclass
 class RuntimeStats:
     slots: Optional[int] = None
     expert_size: int = 0
@@ -96,6 +114,42 @@ def parse_slots(value: str) -> List[int]:
     return slots
 
 
+def parse_positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return parsed
+
+
+def parse_expert_counts(raw: Optional[str], expert_ids: Tuple[int, ...]) -> Tuple[Tuple[int, int], ...]:
+    if raw is None:
+        return tuple((expert_id, 1) for expert_id in expert_ids)
+
+    raw = raw.strip()
+    if not raw.startswith("[") or not raw.endswith("]"):
+        raise ValueError(f"malformed id_counts field: {raw}")
+
+    counts: Dict[int, int] = {}
+    body = raw[1:-1].strip()
+    if body:
+        for item in body.split(","):
+            if ":" not in item:
+                raise ValueError(f"malformed id_counts item: {item}")
+            expert_id_raw, count_raw = item.split(":", 1)
+            expert_id = int(expert_id_raw)
+            count = int(count_raw)
+            if count <= 0:
+                raise ValueError(f"id_counts entry for expert {expert_id} must be positive")
+            if expert_id in counts:
+                raise ValueError(f"id_counts has duplicate expert id: {expert_id}")
+            counts[expert_id] = count
+
+    expert_id_set = set(expert_ids)
+    if set(counts) != expert_id_set:
+        raise ValueError("id_counts expert set does not match ids")
+    return tuple((expert_id, counts[expert_id]) for expert_id in expert_ids)
+
+
 def parse_moe_copy_line(line: str) -> Optional[MoeCopyEvent]:
     match = MOE_COPY_RE.search(line)
     if match is None:
@@ -115,6 +169,7 @@ def parse_moe_copy_line(line: str) -> Optional[MoeCopyEvent]:
     expert_ids = tuple(int(item) for item in expert_ids_raw.split(",") if item.strip())
     if len(expert_ids) != len(set(expert_ids)):
         raise ValueError(f"moe_copy line has duplicate expert ids: {expert_ids_raw}")
+    expert_counts = parse_expert_counts(fields.get("id_counts"), expert_ids)
     expected_used_bytes = len(expert_ids) * expert_size
     if used_bytes != expected_used_bytes:
         raise ValueError(
@@ -132,6 +187,7 @@ def parse_moe_copy_line(line: str) -> Optional[MoeCopyEvent]:
         used_bytes=used_bytes,
         copy_bytes=copy_bytes,
         expert_ids=expert_ids,
+        expert_counts=expert_counts,
     )
 
 
@@ -354,6 +410,183 @@ def simulate_lru(events: Sequence[MoeCopyEvent], slots: Sequence[int]) -> Dict[T
     return stats
 
 
+def _validate_expert_size(expert_sizes: Dict[str, int], event: MoeCopyEvent) -> None:
+    previous_expert_size = expert_sizes.setdefault(event.key, event.expert_size)
+    if previous_expert_size != event.expert_size:
+        raise ValueError(
+            f"inconsistent expert_size for {event.key}: "
+            f"saw {event.expert_size}, expected {previous_expert_size}"
+        )
+
+
+def _evict_one_for_insert(
+        cache: OrderedDict[int, bool],
+        protected: set,
+        stat: PrefetchStats,
+        prefetch_eviction: bool) -> bool:
+    victim: Optional[int] = None
+    for expert_id, speculative in cache.items():
+        if expert_id not in protected and speculative:
+            victim = expert_id
+            break
+    if victim is None:
+        for expert_id in cache:
+            if expert_id not in protected:
+                victim = expert_id
+                break
+    if victim is None:
+        return False
+
+    if cache[victim]:
+        stat.wrong_prefetches += 1
+    if prefetch_eviction:
+        stat.prefetch_evictions += 1
+    del cache[victim]
+    return True
+
+
+def _prefetch_candidates(
+        cache: OrderedDict[int, bool],
+        candidates: Iterable[int],
+        slot_count: int,
+        expert_size: int,
+        stat: PrefetchStats) -> None:
+    if slot_count <= 0:
+        return
+
+    protected = set(candidates)
+    for expert_id in candidates:
+        if expert_id in cache:
+            cache.move_to_end(expert_id)
+            continue
+
+        while len(cache) >= slot_count:
+            if not _evict_one_for_insert(cache, protected, stat, prefetch_eviction=True):
+                return
+
+        cache[expert_id] = True
+        stat.prefetches += 1
+        stat.prefetch_copy_bytes += expert_size
+
+
+def _next_event_by_key(events: Sequence[MoeCopyEvent]) -> List[Optional[MoeCopyEvent]]:
+    next_events: List[Optional[MoeCopyEvent]] = [None] * len(events)
+    last_by_key: Dict[str, MoeCopyEvent] = {}
+    for index in range(len(events) - 1, -1, -1):
+        event = events[index]
+        next_events[index] = last_by_key.get(event.key)
+        last_by_key[event.key] = event
+    return next_events
+
+
+def simulate_prefetch(
+        events: Sequence[MoeCopyEvent],
+        slots: Sequence[int],
+        policy: str,
+        prefetch_limit: Optional[int] = None) -> Dict[Tuple[str, int, str], PrefetchStats]:
+    if policy not in {"prompt", "freq", "markov", "setmarkov", "oracle"}:
+        raise ValueError(f"unsupported prefetch policy: {policy}")
+
+    stats: Dict[Tuple[str, int, str], PrefetchStats] = {}
+    expert_sizes: Dict[str, int] = {}
+    next_events = _next_event_by_key(events)
+
+    for slot_count in slots:
+        caches: Dict[Tuple[int, str], OrderedDict[int, bool]] = {}
+        frequencies: Dict[str, Counter] = {}
+        previous_ids: Dict[str, Tuple[int, ...]] = {}
+        transitions: Dict[str, Dict[int, Counter]] = {}
+        set_transitions: Dict[str, Dict[Tuple[int, ...], Counter]] = {}
+
+        for event_index, event in enumerate(events):
+            _validate_expert_size(expert_sizes, event)
+
+            stat_key = (policy, slot_count, event.key)
+            stat = stats.setdefault(stat_key, PrefetchStats())
+            cache = caches.setdefault((slot_count, event.key), OrderedDict())
+            frequency = frequencies.setdefault(event.key, Counter())
+
+            needed = event.expert_ids
+            needed_set = set(needed)
+            bypass = slot_count == 0 or len(needed) > slot_count
+
+            stat.events += 1
+            stat.cache_bytes = max(stat.cache_bytes, slot_count * event.expert_size)
+            stat.accesses += len(needed)
+            stat.baseline_bytes += event.copy_bytes
+
+            if bypass:
+                stat.bypasses += 1
+                stat.misses += len(needed)
+                stat.demand_copy_bytes += event.copy_bytes
+            else:
+                misses: List[int] = []
+                for expert_id in needed:
+                    if expert_id in cache:
+                        if cache[expert_id]:
+                            stat.speculative_hits += 1
+                        else:
+                            stat.demand_hits += 1
+                        cache[expert_id] = False
+                        cache.move_to_end(expert_id)
+                    else:
+                        misses.append(expert_id)
+
+                stat.misses += len(misses)
+                stat.demand_copy_bytes += len(misses) * event.expert_size
+
+                while len(cache) + len(misses) > slot_count:
+                    if not _evict_one_for_insert(cache, needed_set, stat, prefetch_eviction=False):
+                        break
+
+                for expert_id in misses:
+                    cache[expert_id] = False
+                    cache.move_to_end(expert_id)
+
+            frequency.update(dict(event.expert_counts))
+            candidate_limit = slot_count if prefetch_limit is None else min(slot_count, prefetch_limit)
+
+            if policy == "prompt":
+                if bypass:
+                    candidates = [expert_id for expert_id, _ in frequency.most_common(candidate_limit)]
+                else:
+                    candidates = []
+            elif policy == "freq":
+                candidates = [expert_id for expert_id, _ in frequency.most_common(candidate_limit)]
+            elif policy == "markov":
+                previous = previous_ids.get(event.key)
+                if previous is not None and len(previous) <= 64 and len(needed) <= 64:
+                    key_transitions = transitions.setdefault(event.key, {})
+                    for previous_id in previous:
+                        key_transitions.setdefault(previous_id, Counter()).update(needed)
+
+                scores = Counter()
+                for expert_id in needed:
+                    scores.update(transitions.get(event.key, {}).get(expert_id, Counter()))
+                candidates = [expert_id for expert_id, _ in scores.most_common(candidate_limit)]
+                previous_ids[event.key] = needed
+            elif policy == "setmarkov":
+                previous = previous_ids.get(event.key)
+                if previous is not None and len(previous) <= 64 and len(needed) <= 64:
+                    set_transitions.setdefault(event.key, {}).setdefault(previous, Counter()).update(needed)
+
+                candidates = [
+                    expert_id
+                    for expert_id, _ in set_transitions.get(event.key, {}).get(needed, Counter()).most_common(candidate_limit)
+                ]
+                previous_ids[event.key] = needed
+            else:
+                next_event = next_events[event_index]
+                if next_event is not None and len(next_event.expert_ids) <= slot_count:
+                    candidates = list(next_event.expert_ids[:candidate_limit])
+                else:
+                    candidates = []
+
+            _prefetch_candidates(cache, candidates, slot_count, event.expert_size, stat)
+
+    return stats
+
+
 def summarize_runtime_cache(events: Sequence[MoeCacheEvent]) -> Dict[Tuple[int, str], RuntimeStats]:
     stats: Dict[Tuple[int, str], RuntimeStats] = {}
     for event in events:
@@ -403,6 +636,26 @@ def aggregate_stats(stats: Dict[Tuple[int, str], SimStats]) -> Dict[int, SimStat
     return aggregate
 
 
+def aggregate_prefetch_stats(stats: Dict[Tuple[str, int, str], PrefetchStats]) -> Dict[Tuple[str, int], PrefetchStats]:
+    aggregate: Dict[Tuple[str, int], PrefetchStats] = {}
+    for (policy, slot_count, _), stat in stats.items():
+        dst = aggregate.setdefault((policy, slot_count), PrefetchStats())
+        dst.events += stat.events
+        dst.bypasses += stat.bypasses
+        dst.cache_bytes += stat.cache_bytes
+        dst.accesses += stat.accesses
+        dst.demand_hits += stat.demand_hits
+        dst.speculative_hits += stat.speculative_hits
+        dst.misses += stat.misses
+        dst.baseline_bytes += stat.baseline_bytes
+        dst.demand_copy_bytes += stat.demand_copy_bytes
+        dst.prefetch_copy_bytes += stat.prefetch_copy_bytes
+        dst.prefetches += stat.prefetches
+        dst.wrong_prefetches += stat.wrong_prefetches
+        dst.prefetch_evictions += stat.prefetch_evictions
+    return aggregate
+
+
 def aggregate_runtime_stats(stats: Dict[Tuple[int, str], RuntimeStats]) -> Dict[int, RuntimeStats]:
     aggregate: Dict[int, RuntimeStats] = {}
     for (slots, _), stat in stats.items():
@@ -440,6 +693,41 @@ def stats_row(slot_count: int, key: str, stat: SimStats) -> str:
     ))
 
 
+def prefetch_stats_row(policy: str, slot_count: int, key: str, stat: PrefetchStats) -> str:
+    hits = stat.demand_hits + stat.speculative_hits
+    hit_rate = hits / stat.accesses if stat.accesses else 0.0
+    critical_saved_bytes = stat.baseline_bytes - stat.demand_copy_bytes
+    critical_saved_pct = critical_saved_bytes / stat.baseline_bytes if stat.baseline_bytes else 0.0
+    total_copy_bytes = stat.demand_copy_bytes + stat.prefetch_copy_bytes
+    net_saved_bytes = stat.baseline_bytes - total_copy_bytes
+    net_saved_pct = net_saved_bytes / stat.baseline_bytes if stat.baseline_bytes else 0.0
+    return "\t".join((
+        policy,
+        str(slot_count),
+        key,
+        str(stat.cache_bytes),
+        str(stat.events),
+        str(stat.bypasses),
+        str(stat.accesses),
+        str(hits),
+        str(stat.demand_hits),
+        str(stat.speculative_hits),
+        str(stat.misses),
+        f"{hit_rate:.6f}",
+        str(stat.baseline_bytes),
+        str(stat.demand_copy_bytes),
+        str(stat.prefetch_copy_bytes),
+        str(total_copy_bytes),
+        str(critical_saved_bytes),
+        f"{critical_saved_pct:.6f}",
+        str(net_saved_bytes),
+        f"{net_saved_pct:.6f}",
+        str(stat.prefetches),
+        str(stat.wrong_prefetches),
+        str(stat.prefetch_evictions),
+    ))
+
+
 def runtime_stats_row(key: str, stat: RuntimeStats) -> str:
     hit_rate = stat.hits / stat.accesses if stat.accesses else 0.0
     slots = "-" if stat.slots is None else str(stat.slots)
@@ -470,6 +758,25 @@ def print_report(stats: Dict[Tuple[int, str], SimStats], show_details: bool) -> 
 
     for (slot_count, key), stat in sorted(stats.items()):
         print(stats_row(slot_count, key, stat))
+
+
+def print_prefetch_report(stats: Dict[Tuple[str, int, str], PrefetchStats], show_details: bool) -> None:
+    print(
+        "policy\tslots\tkey\tcache_bytes\tevents\tbypasses\taccesses\thits\t"
+        "demand_hits\tspeculative_hits\tmisses\thit_rate\tbaseline_bytes\t"
+        "demand_copy_bytes\tprefetch_copy_bytes\ttotal_copy_bytes\t"
+        "critical_saved_bytes\tcritical_saved_pct\tnet_saved_bytes\tnet_saved_pct\t"
+        "prefetches\twrong_prefetches\tprefetch_evictions"
+    )
+
+    for (policy, slot_count), stat in sorted(aggregate_prefetch_stats(stats).items()):
+        print(prefetch_stats_row(policy, slot_count, "ALL", stat))
+
+    if not show_details:
+        return
+
+    for (policy, slot_count, key), stat in sorted(stats.items()):
+        print(prefetch_stats_row(policy, slot_count, key, stat))
 
 
 def print_runtime_report(stats: Dict[Tuple[int, str], RuntimeStats], show_details: bool) -> None:
@@ -506,6 +813,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         epilog=(
             "Examples:\n"
             "  scripts/moe-copy-lru-sim.py --slots 32,64,128 trace.log\n"
+            "  scripts/moe-copy-lru-sim.py --slots 48 --repeat 4 --policy oracle trace.log\n"
+            "  scripts/moe-copy-lru-sim.py --slots 32 --policy prompt trace.log\n"
             "  scripts/moe-copy-lru-sim.py --runtime --details cache-enabled.log\n"
             "  # --runtime accepts moe_cache, moe_cache_bypass, or mixed logs"
         ),
@@ -513,6 +822,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument("logs", nargs="*", help="log files to parse; omit or use '-' for stdin")
     parser.add_argument("--slots", type=parse_slots, default=parse_slots("32,64,96,128"), help="comma-separated slot counts for moe_copy LRU simulation")
+    parser.add_argument("--repeat", type=parse_positive_int, default=1, help="repeat the parsed moe_copy event stream this many times with persistent simulated cache state")
+    parser.add_argument("--prefetch-limit", type=parse_positive_int, help="maximum experts to prefetch after each event for speculative policies; defaults to the slot count")
+    parser.add_argument(
+        "--policy",
+        choices=("lru", "prompt", "freq", "markov", "setmarkov", "oracle"),
+        default="lru",
+        help=(
+            "moe_copy simulation policy: lru is demand-only; prompt primes from bypass/prompt "
+            "events; freq keeps the most frequent experts hot; markov learns expert-to-expert "
+            "transitions; setmarkov learns expert-set transitions; oracle prefetches the next event "
+            "for an upper bound"
+        ),
+    )
     parser.add_argument("--details", action="store_true", help="also print per backend/tensor stats")
     parser.add_argument("--runtime", action="store_true", help="summarize actual moe_cache/moe_cache_bypass runtime events instead of simulating moe_copy events")
     args = parser.parse_args(argv)
@@ -532,8 +854,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not events:
         print("no moe_copy events found", file=sys.stderr)
         return 1
+    if args.repeat > 1:
+        events = events * args.repeat
 
-    print_report(simulate_lru(events, args.slots), args.details)
+    if args.policy == "lru":
+        print_report(simulate_lru(events, args.slots), args.details)
+    else:
+        print_prefetch_report(simulate_prefetch(events, args.slots, args.policy, args.prefetch_limit), args.details)
     return 0
 
 
