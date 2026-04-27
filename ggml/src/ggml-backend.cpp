@@ -781,6 +781,7 @@ struct ggml_backend_sched_moe_cache {
     int n_slots;
 
     size_t expert_size;
+    size_t slot_padding;
     size_t slot_stride;
     size_t weights_size;
     size_t ids_nbytes;
@@ -912,6 +913,11 @@ static char causes[GGML_DEFAULT_GRAPH_SIZE*16 + GGML_SCHED_MAX_SPLITS_DEBUG*GGML
 #define GET_CAUSE(node) ""
 #endif
 
+static int ggml_backend_sched_backend_from_non_weight_src(
+        ggml_backend_sched_t sched,
+        ggml_tensor * tensor,
+        int max_backend_id);
+
 // returns the backend that should be used for the node based on the current locations
 static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, struct ggml_tensor * tensor) {
     // assign pre-allocated nodes to their backend
@@ -955,6 +961,11 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
             int src_backend_id = ggml_backend_sched_backend_from_buffer(sched, src, tensor);
             // check if a backend with higher prio wants to offload the op
             if (sched->op_offload && src_backend_id == sched->n_backends - 1 && ggml_backend_buffer_is_host(src->buffer)) {
+                const int non_weight_src_backend_id = ggml_backend_sched_backend_from_non_weight_src(sched, tensor, src_backend_id);
+                if (non_weight_src_backend_id != -1) {
+                    SET_CAUSE(tensor, "1.off-src%d", non_weight_src_backend_id);
+                    return non_weight_src_backend_id;
+                }
                 for (int b = 0; b < src_backend_id; b++) {
                     if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
                         SET_CAUSE(tensor, "1.off");
@@ -1018,6 +1029,35 @@ static void ggml_backend_sched_print_assignments(ggml_backend_sched_t sched, str
             GGML_LOG_DEBUG("\n");
         }
     }
+}
+
+static int ggml_backend_sched_backend_from_non_weight_src(
+        ggml_backend_sched_t sched,
+        ggml_tensor * tensor,
+        int max_backend_id) {
+    for (int i = 0; i < GGML_MAX_SRC; ++i) {
+        ggml_tensor * src = tensor->src[i];
+        if (src == nullptr) {
+            continue;
+        }
+        ggml_backend_buffer_t src_buffer = src->view_src != nullptr ? src->view_src->buffer : src->buffer;
+        if (src_buffer != nullptr && src_buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+            continue;
+        }
+
+        int src_backend_id = tensor_backend_id(src);
+        if (src_backend_id == -1 && src->view_src != nullptr) {
+            src_backend_id = tensor_backend_id(src->view_src);
+        }
+        if (src_backend_id < 0 || src_backend_id >= max_backend_id) {
+            continue;
+        }
+        if (ggml_backend_supports_op(sched->backends[src_backend_id], tensor) &&
+                ggml_backend_offload_op(sched->backends[src_backend_id], tensor)) {
+            return src_backend_id;
+        }
+    }
+    return -1;
 }
 
 static bool ggml_backend_sched_buffer_supported(ggml_backend_sched_t sched, struct ggml_tensor * t, int backend_id) {
@@ -1632,6 +1672,15 @@ static ggml_backend_sched_moe_cache * ggml_backend_sched_moe_cache_find(
     return nullptr;
 }
 
+static size_t ggml_backend_sched_moe_cache_slot_padding(const ggml_tensor * input, size_t expert_size) {
+    const size_t type_size = ggml_type_size(input->type);
+    GGML_ASSERT(type_size > 0);
+    GGML_ASSERT(expert_size % type_size == 0);
+
+    const size_t padding = std::min<size_t>(expert_size, 512);
+    return ((padding + type_size - 1) / type_size) * type_size;
+}
+
 static ggml_backend_sched_moe_cache * ggml_backend_sched_moe_cache_new(
         ggml_backend_sched_t sched,
         ggml_backend_t backend,
@@ -1645,7 +1694,7 @@ static ggml_backend_sched_moe_cache * ggml_backend_sched_moe_cache_new(
     GGML_ASSERT(input->ne[3] == 1);
 
     ggml_backend_buffer_type_t buft = sched->bufts[backend_id];
-    const size_t padding = std::min<size_t>(expert_size, 512);
+    const size_t padding = ggml_backend_sched_moe_cache_slot_padding(input, expert_size);
 
     ggml_backend_sched_moe_cache * cache = new ggml_backend_sched_moe_cache();
     cache->input       = input;
@@ -1653,6 +1702,7 @@ static ggml_backend_sched_moe_cache * ggml_backend_sched_moe_cache_new(
     cache->n_expert    = n_expert;
     cache->n_slots     = n_slots;
     cache->expert_size = expert_size;
+    cache->slot_padding = padding;
     cache->slot_stride = expert_size + padding;
     cache->weights_size = 0;
 
@@ -1863,7 +1913,7 @@ static bool ggml_backend_sched_moe_cache_prepare(
             cache->slot_of[old_expert] = -1;
         }
 
-        const size_t padding = expert_id < n_expert - 1 ? std::min<size_t>(expert_size, 512) : 0;
+        const size_t padding = expert_id < n_expert - 1 ? cache->slot_padding : 0;
         const size_t copy_size = expert_size + padding;
         ggml_backend_tensor_set_async(split_backend,
                 &cache->weights_tensor,
@@ -1960,13 +2010,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
 
                 // when offloading MoE weights, we can reduce the amount of data copied by copying only the experts that are used
-                ggml_tensor * node = split->graph.nodes[0];
-                if (split->graph.n_nodes > 0 &&
-                    ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
-                    ggml_backend_buffer_is_host(input->buffer) && (
-                    (node->src[0] == input_cpy && node->op == GGML_OP_MUL_MAT_ID)
-                    //|| (node->src[1] == input_cpy && node->op == GGML_OP_ADD_ID) /* GGML_OP_ADD_ID weights are small and not worth splitting */
-                    )) {
+                ggml_tensor * node = nullptr;
+                if (ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+                    ggml_backend_buffer_is_host(input->buffer)) {
+                    for (int node_id = 0; node_id < split->graph.n_nodes; ++node_id) {
+                        ggml_tensor * candidate = split->graph.nodes[node_id];
+                        if (candidate->op == GGML_OP_MUL_MAT_ID && candidate->src[0] == input_cpy) {
+                            node = candidate;
+                            break;
+                        }
+                    }
+                }
+                if (node != nullptr) {
 
                     const int64_t n_expert   = node->op == GGML_OP_MUL_MAT_ID ? input->ne[2] : input->ne[1];
                     const size_t expert_size = node->op == GGML_OP_MUL_MAT_ID ? input->nb[2] : input->nb[1];

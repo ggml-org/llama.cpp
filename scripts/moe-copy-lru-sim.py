@@ -222,7 +222,7 @@ def read_events(paths: Sequence[str]) -> Iterator[MoeCopyEvent]:
         if path_str == "-":
             yield from read_events_from_lines(sys.stdin)
         else:
-            with Path(path_str).open("r", encoding="utf-8") as f:
+            with Path(path_str).open("r", encoding="utf-8", errors="replace") as f:
                 yield from read_events_from_lines(f)
 
 
@@ -260,7 +260,7 @@ def read_runtime_events(paths: Sequence[str]) -> Tuple[List[MoeCacheEvent], List
         if path_str == "-":
             read_lines(sys.stdin)
         else:
-            with Path(path_str).open("r", encoding="utf-8") as f:
+            with Path(path_str).open("r", encoding="utf-8", errors="replace") as f:
                 read_lines(f)
 
     return cache_events, bypass_events
@@ -275,7 +275,7 @@ def read_cache_events(paths: Sequence[str]) -> Iterator[MoeCacheEvent]:
         if path_str == "-":
             yield from read_cache_events_from_lines(sys.stdin)
         else:
-            with Path(path_str).open("r", encoding="utf-8") as f:
+            with Path(path_str).open("r", encoding="utf-8", errors="replace") as f:
                 yield from read_cache_events_from_lines(f)
 
 

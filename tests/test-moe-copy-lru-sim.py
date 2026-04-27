@@ -153,6 +153,24 @@ def test_runtime_cache_cli(repo_root: Path) -> None:
     assert "CUDA0:blk.2.ffn_down_exps.weight\t2\tids_alloc_failed\t1" in result.stdout
 
 
+def test_cli_tolerates_invalid_utf8(repo_root: Path) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = Path(tmp) / "moe-invalid-utf8.log"
+        log_path.write_bytes(
+            b"\xef\xbf\x00spinner\n"
+            b"ggml_backend_sched_moe_cache_prepare: moe_cache tensor=t backend=CUDA0 slots=2 expert_size=100 "
+            b"cache_bytes=300 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100\n"
+        )
+        script = repo_root / "scripts" / "moe-copy-lru-sim.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--runtime", str(log_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    assert "ALL\t2\t300\t1\t1\t0\t1\t0.000000\t100\t0\t1\t100" in result.stdout
+
+
 def test_runtime_cache_bypass_parser_and_summary(sim) -> None:
     events = list(sim.read_cache_bypass_events_from_lines(SAMPLE_RUNTIME_LOG.splitlines()))
     assert len(events) == 3
@@ -289,6 +307,7 @@ def main() -> None:
     test_cli(repo_root)
     test_runtime_cache_parser_and_summary(sim)
     test_runtime_cache_cli(repo_root)
+    test_cli_tolerates_invalid_utf8(repo_root)
     test_runtime_cache_bypass_parser_and_summary(sim)
     test_runtime_bypass_only_cli(repo_root)
     test_rejects_inconsistent_expert_size(sim)
