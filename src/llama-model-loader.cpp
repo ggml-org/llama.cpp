@@ -697,7 +697,9 @@ llama_model_loader::llama_model_loader(
     }
 
     n_kv      = gguf_get_n_kv(metadata);
-    n_tensors = weights_map.size();
+    n_tensors = files.empty()
+        ? gguf_get_n_tensors(metadata)
+        : weights_map.size();
 
     fver = (enum llama_fver) gguf_get_version(metadata);
 
@@ -1218,6 +1220,12 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         const int64_t tid = gguf_find_tensor(metadata, tn.str().c_str());
         if (tid != -1) {
             type = gguf_get_tensor_type(metadata, tid);
+        } else if (no_alloc) {
+            if (flags & TENSOR_NOT_REQUIRED) {
+                return nullptr;
+            }
+
+            throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
         }
 
         // for tensors that are not required some of the dimensions can be invalid:
@@ -1243,6 +1251,16 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
         GGML_ASSERT(buft != nullptr);
         ggml_context * ctx = ctx_for_buft(buft);
+
+        if (flags & TENSOR_DUPLICATED) {
+            ggml_tensor * t = ggml_get_tensor(ctx, tn.str().c_str());
+            if (t) {
+                return t;
+            }
+        } else {
+            n_created++;
+        }
+
         ggml_tensor * ret = ggml_dup_tensor(ctx, &t_meta);
         ggml_set_name(ret, tn.str().c_str());
         return ret;

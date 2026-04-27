@@ -243,6 +243,10 @@ llama_build_and_test(test-gguf.cpp)
 llama_build_and_test(test-backend-ops.cpp)
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
+
+llama_build_and_test(test-model-load-buffer.cpp LABEL "model" ARGS "${MODEL_DEST}")
+set_tests_properties(test-model-load-buffer PROPERTIES FIXTURES_REQUIRED test-download-model)
+
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 
