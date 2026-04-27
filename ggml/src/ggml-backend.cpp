@@ -1757,9 +1757,26 @@ static bool ggml_backend_sched_moe_cache_prepare(
         size_t expert_size,
         int requested_slots,
         bool moe_log,
+        const char ** fail_reason,
         std::vector<ggml_backend_sched_moe_restore> & restores) {
-    if (requested_slots <= 0 || input->ne[3] != 1 || n_expert <= 0 || n_expert > INT_MAX) {
+    if (fail_reason != nullptr) {
+        *fail_reason = nullptr;
+    }
+    auto fail = [fail_reason](const char * reason) {
+        if (fail_reason != nullptr) {
+            *fail_reason = reason;
+        }
         return false;
+    };
+
+    if (requested_slots <= 0) {
+        return fail("disabled");
+    }
+    if (input->ne[3] != 1) {
+        return fail("unsupported_shape");
+    }
+    if (n_expert <= 0 || n_expert > INT_MAX) {
+        return fail("invalid_expert_count");
     }
 
     const int n_slots = std::min<int>(requested_slots, (int) n_expert);
@@ -1771,27 +1788,27 @@ static bool ggml_backend_sched_moe_cache_prepare(
         }
     }
     if (needed.empty()) {
-        return false;
+        return fail("no_experts");
     }
 
     if ((int) needed.size() > n_slots) {
-        return false;
+        return fail("too_many_experts");
     }
 
     ggml_backend_sched_moe_cache * cache = ggml_backend_sched_moe_cache_find(sched, input, split_backend_id);
     if (cache != nullptr &&
             (cache->n_expert != n_expert || cache->n_slots != n_slots || cache->expert_size != expert_size)) {
-        return false;
+        return fail("cache_metadata_mismatch");
     }
     if (cache == nullptr) {
         cache = ggml_backend_sched_moe_cache_new(sched, split_backend, input, split_backend_id, (int) n_expert, n_slots, expert_size);
         if (cache == nullptr) {
-            return false;
+            return fail("cache_alloc_failed");
         }
     }
 
     if (!ggml_backend_sched_moe_cache_ensure_ids(cache, sched->bufts[split_backend_id], ids_tensor)) {
-        return false;
+        return fail("ids_alloc_failed");
     }
 
     std::vector<int32_t> misses;
@@ -1835,7 +1852,7 @@ static bool ggml_backend_sched_moe_cache_prepare(
 
         if (slot == -1) {
             cache->bypasses++;
-            return false;
+            return fail("no_evictable_slot");
         }
 
         const int32_t old_expert = cache->expert_in_slot[slot];
@@ -1985,11 +2002,26 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         prev_ids_n_expert = n_expert;
                     }
 
+                    const char * moe_cache_bypass_reason = nullptr;
                     const bool moe_cache_used = ggml_backend_sched_moe_cache_prepare(
                             sched, split_backend, split_backend_id, input, node, ids_tensor, ids, used_ids,
-                            n_expert, expert_size, moe_cache_slots, moe_log, moe_restores);
+                            n_expert, expert_size, moe_cache_slots, moe_log, &moe_cache_bypass_reason, moe_restores);
 
                     if (!moe_cache_used) {
+                        if (moe_log && moe_cache_slots > 0) {
+                            GGML_LOG_INFO(
+                                "%s: moe_cache_bypass tensor=%s node=%s ids=%s backend=%s slots=%d reason=%s n_expert=%lld expert_size=%zu\n",
+                                __func__,
+                                ggml_backend_sched_tensor_name(input),
+                                ggml_backend_sched_tensor_name(node),
+                                ggml_backend_sched_tensor_name(ids_tensor),
+                                ggml_backend_name(split_backend),
+                                moe_cache_slots,
+                                moe_cache_bypass_reason != nullptr ? moe_cache_bypass_reason : "unknown",
+                                (long long) n_expert,
+                                expert_size);
+                        }
+
                         // group consecutive experts and copy them together
                         size_t copy_bytes = 0;
                         int copy_ranges = 0;
