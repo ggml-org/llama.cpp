@@ -217,6 +217,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
 | `--models-max N` | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX) |
 | `--models-autoload, --no-models-autoload` | for router server, whether to automatically load models (default: enabled)<br/>(env: LLAMA_ARG_MODELS_AUTOLOAD) |
+| `--prefetch, --no-prefetch` | for router server, prefetch models with `hf=` preset option in the background on startup (default: disabled)<br/>(env: LLAMA_ARG_PREFETCH) |
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
 | `-rea, --reasoning [on\|off\|auto]` | Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))<br/>(env: LLAMA_ARG_REASONING) |
@@ -1563,6 +1564,17 @@ model-draft = /Users/abc/my-models/draft.gguf
 ; you need to specify at least the model path or HF repo
 [custom_model]
 model = /Users/abc/my-awesome-model-Q4_K_M.gguf
+
+; HF-based model with prefetch options
+[ggml-org/MY-HF-MODEL-GGUF:Q4_K_M]
+hf = ggml-org/MY-HF-MODEL-GGUF
+load-on-startup = true
+prefetch-priority = 10
+
+; Model that skips background prefetch
+[ggml-org/ANOTHER-MODEL-GGUF:Q4_K_M]
+hf = ggml-org/ANOTHER-MODEL-GGUF
+prefetch-skip = true
 ```
 
 Note: some arguments are controlled by router (e.g., host, port, API key, HF repo, model alias). They will be removed or overwritten upon loading.
@@ -1575,6 +1587,8 @@ The precedence rule for preset options is as follows:
 We also offer additional options that are exclusive to presets (these aren't treated as command-line arguments):
 - `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts
 - `stop-timeout` (int, seconds): After requested unload, wait for this many seconds before forcing termination (default: 10)
+- `prefetch-skip` (boolean): When `--prefetch` is enabled, skip background downloading for this model (default: false)
+- `prefetch-priority` (int): Priority for background prefetch queue — higher values are downloaded first (default: 0)
 
 ### Routing requests
 

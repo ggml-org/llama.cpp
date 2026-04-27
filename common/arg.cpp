@@ -3081,6 +3081,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_AUTOLOAD"));
     add_opt(common_arg(
+        {"--prefetch"},
+        {"--no-prefetch"},
+        string_format("for router server, prefetch models with hf= set in presets before starting (default: %s)", params.prefetch ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.prefetch = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PREFETCH"));
+    add_opt(common_arg(
         {"--jinja"},
         {"--no-jinja"},
         string_format("whether to use jinja template engine for chat (default: %s)", params.use_jinja ? "enabled" : "disabled"),
@@ -3929,6 +3937,18 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
         "in server router mode, force-kill model instance after this many seconds of graceful shutdown",
         [](common_params &, int) { /* unused */ }
     ).set_env(COMMON_ARG_PRESET_STOP_TIMEOUT).set_preset_only());
+
+    args.push_back(common_arg(
+        {"prefetch-skip"}, "BOOL",
+        "skip background prefetch download for this model (preset-only option)",
+        [](common_params &, const std::string &) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_PREFETCH_SKIP).set_preset_only());
+
+    args.push_back(common_arg(
+        {"prefetch-priority"}, "N",
+        "priority for background prefetch queue, higher = downloaded first, default: 0 (preset-only option)",
+        [](common_params &, int) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_PREFETCH_PRI).set_preset_only());
 
     // args.push_back(common_arg(
     //     {"pin"},

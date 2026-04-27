@@ -7,9 +7,12 @@
 
 #include <mutex>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
+#include <utility>
 
 /**
  * state diagram:
@@ -83,6 +86,24 @@ struct server_model_meta {
 
 struct subprocess_s;
 
+struct prefetch_queue_t {
+    std::deque<std::pair<std::string, int>> bg;  // (name, priority)
+    std::deque<std::string> pri;
+    std::string current;
+    int current_priority{0};
+    bool current_from_bg{false};
+
+public:
+    // insert into priority queue (auto-promotes from bg if present).
+    // returns true if caller must cancel the current bg download.
+    bool insert_pri(const std::string &name);
+    std::optional<std::pair<std::string, bool>> pop_front();
+    bool has_work() const;
+    void cancel();
+    void finish();
+    void enqueue_bg(const std::string &name, int priority);
+};
+
 struct server_models {
 private:
     struct instance_t {
@@ -99,6 +120,20 @@ private:
     // for stopping models
     std::condition_variable cv_stop;
     std::set<std::string> stopping_models;
+
+    // background prefetcher
+    std::thread prefetch_th;
+    prefetch_queue_t prefetch_queue;
+    std::set<std::string> prefetched;            // successfully downloaded models
+    std::set<std::string> prefetch_done;         // models whose download attempt finished (success or fail)
+    std::mutex prefetch_mutex;
+    std::condition_variable prefetch_cv;
+    std::atomic<bool> prefetch_cancel{false};
+    std::atomic<bool> prefetch_stop{false};
+
+    void prefetch_loop();
+    void prefetch_enqueue(const std::string & name, int priority);
+    void prefetch_ensure_ready(const std::string & name);
 
     common_preset_context ctx_preset;
 
@@ -117,6 +152,7 @@ private:
 
 public:
     server_models(const common_params & params, int argc, char ** argv);
+    ~server_models();
 
     void load_models();
 

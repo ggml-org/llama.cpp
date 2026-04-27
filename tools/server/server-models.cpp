@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <queue>
+
 #include <filesystem>
 #include <random>
 #include <sstream>
@@ -161,6 +162,209 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
 }
 
 //
+// prefetcher
+//
+
+bool prefetch_queue_t::insert_pri(const std::string &name) {
+    // already downloading or already in pri — no cancel needed
+    if (current == name || std::find(pri.begin(), pri.end(), name) != pri.end()) {
+        return false;
+    }
+    // auto-promote from bg if present
+    auto bg_it = std::find_if(bg.begin(), bg.end(),
+        [&name](const auto &p) { return p.first == name; });
+    if (bg_it != bg.end()) {
+        bg.erase(bg_it);
+    }
+    pri.push_front(name);
+    // return true if caller must cancel current bg download
+    return current_from_bg && current != name;
+}
+
+std::optional<std::pair<std::string, bool>> prefetch_queue_t::pop_front() {
+    if (!pri.empty()) {
+        std::string name = pri.front();
+        pri.pop_front();
+        current = name;
+        current_priority = 0;
+        current_from_bg = false;
+        return {std::make_pair(name, false)};
+    }
+    if (!bg.empty()) {
+        auto it = std::max_element(bg.begin(), bg.end(),
+            [](const auto &a, const auto &b) { return a.second < b.second; });
+        current = it->first;
+        current_priority = it->second;
+        bg.erase(it);
+        current_from_bg = true;
+        return {std::make_pair(current, true)};
+    }
+    return std::nullopt;
+}
+
+bool prefetch_queue_t::has_work() const {
+    return !pri.empty() || !bg.empty();
+}
+
+void prefetch_queue_t::cancel() {
+    bg.push_back({current, current_priority});
+}
+
+void prefetch_queue_t::finish() {
+    current.clear();
+    current_from_bg = false;
+}
+
+void prefetch_queue_t::enqueue_bg(const std::string &name, int priority) {
+    bg.push_back({name, priority});
+}
+
+// callback that signals cancellation to common_download_model
+class prefetch_callback : public common_download_callback {
+    std::atomic<bool> & cancelled;
+public:
+    explicit prefetch_callback(std::atomic<bool> & cancelled) : cancelled(cancelled) {}
+    void on_start(const common_download_progress &) override {}
+    void on_update(const common_download_progress &) override {}
+    void on_done(const common_download_progress &, bool) override {}
+    bool is_cancelled() const override { return cancelled.load(); }
+};
+
+// thread-safe: push a model name onto the background prefetch queue
+void server_models::prefetch_enqueue(const std::string & name, int priority) {
+    {
+        std::lock_guard<std::mutex> lk(prefetch_mutex);
+        prefetch_queue.enqueue_bg(name, priority);
+    }
+    prefetch_cv.notify_one();
+}
+
+// ensure a model is downloaded before spawning its child server
+// moves the model from background to priority queue, cancels bg download if needed, then waits
+void server_models::prefetch_ensure_ready(const std::string & name) {
+    // skip if model has no hf= preset
+    std::string hf_repo;
+    auto it = mapping.find(name);
+    if (it == mapping.end() || !it->second.meta.preset.get_option("LLAMA_ARG_HF_REPO", hf_repo)) {
+        return;
+    }
+
+    std::unique_lock<std::mutex> lk(prefetch_mutex);
+    if (prefetched.count(name)) {
+        SRV_DBG("%s already downloaded, skipping\n", name.c_str());
+        return;
+    }
+
+    // insert into priority queue
+    bool need_cancel = prefetch_queue.insert_pri(name);
+    SRV_DBG("prefetch_ensure_ready: %s need_cancel=%d\n", name.c_str(), (int)need_cancel);
+    prefetch_cv.notify_one();
+
+    if (need_cancel) {
+        if (!prefetch_queue.current.empty()) {
+            prefetch_cancel.store(true);
+            prefetch_cv.wait(lk, [this, &name]() {
+                return prefetch_queue.current != name;
+            });
+        }
+    }
+
+    prefetch_cv.wait(lk, [this, &name]() {
+        return prefetch_done.count(name);
+    });
+
+    SRV_DBG("prefetch_ensure_ready: %s download finished (prefetched=%zu)\n",
+        name.c_str(), prefetched.count(name));
+}
+
+// background thread: processes one model at a time, priority queue first
+void server_models::prefetch_loop() {
+    while (true) {
+        std::string name;
+        bool from_bg;
+        {
+            std::unique_lock<std::mutex> lk(prefetch_mutex);
+            prefetch_cv.wait(lk, [this]() {
+                return prefetch_queue.has_work() || prefetch_stop.load();
+            });
+            if (prefetch_stop.load() && !prefetch_queue.has_work()) {
+                return;
+            }
+            auto item = prefetch_queue.pop_front();
+            if (!item) {
+                continue;
+            }
+            name = item->first;
+            from_bg = item->second;
+            SRV_DBG("prefetch: picked %s from %s\n", name.c_str(), from_bg ? "bg" : "priority");
+        }
+
+        // look up hf_repo for this model under the main mutex
+        std::string hf_repo;
+        bool valid;
+        {
+            std::lock_guard<std::mutex> lk(mutex);
+            auto it = mapping.find(name);
+            if (it == mapping.end() || !it->second.meta.preset.get_option("LLAMA_ARG_HF_REPO", hf_repo)) {
+                valid = false;
+            } else {
+                valid = true;
+            }
+        }
+        if (!valid) {
+            {
+                std::lock_guard<std::mutex> lk(prefetch_mutex);
+                prefetch_queue.finish();
+                prefetch_done.insert(name);
+            }
+            prefetch_cv.notify_all();
+            continue;
+        }
+
+        common_params_model model;
+        model.hf_repo = hf_repo;
+        {
+            std::lock_guard<std::mutex> lk(mutex);
+            mapping.at(name).meta.preset.get_option("LLAMA_ARG_HF_FILE", model.hf_file);
+        }
+
+        common_download_opts opts;
+        opts.bearer_token = base_params.hf_token;
+        prefetch_callback cb(prefetch_cancel);
+        opts.callback = &cb;
+
+        auto download_result = common_download_model(model, opts, true);
+        bool was_cancelled = cb.is_cancelled();
+        {
+            std::lock_guard<std::mutex> lk(prefetch_mutex);
+            if (!was_cancelled) {
+                prefetch_done.insert(name);
+                SRV_DBG("prefetch: %s marked as done\n", name.c_str());
+            } else {
+                prefetch_cancel.store(false);
+                prefetch_queue.cancel();
+                SRV_DBG("prefetch: %s cancelled, re-enqueued\n", name.c_str());
+            }
+            if (!download_result.model_path.empty()) {
+                prefetched.insert(name);
+            }
+            prefetch_queue.finish();
+        }
+        prefetch_cv.notify_all();
+
+        if (download_result.model_path.empty()) {
+            if (was_cancelled) {
+                SRV_DBG("prefetch: download of %s was cancelled\n", name.c_str());
+            } else {
+                SRV_ERR("(prefetch) failed to download model %s from %s\n", name.c_str(), hf_repo.c_str());
+            }
+        } else {
+            SRV_INF("(prefetch) model %s downloaded to %s\n", name.c_str(), download_result.model_path.c_str());
+        }
+    }
+}
+
+//
 // server_models
 //
 
@@ -172,9 +376,7 @@ server_models::server_models(
               base_params(params),
               base_env(get_environment()),
               base_preset(ctx_preset.load_from_args(argc, argv)) {
-    // clean up base preset
     unset_reserved_args(base_preset, true);
-    // set binary path
     try {
         bin_path = get_server_exec_path().string();
     } catch (const std::exception & e) {
@@ -182,7 +384,24 @@ server_models::server_models(
         LOG_WRN("failed to get server executable path: %s\n", e.what());
         LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
+    // start background prefetch thread before loading models
+    if (base_params.prefetch) {
+        SRV_DBG("prefetch: starting background thread\n", "");
+        prefetch_th = std::thread([this]() {
+            prefetch_loop();
+        });
+    }
     load_models();
+}
+
+// shut down the prefetch thread before tearing down server_models
+server_models::~server_models() {
+    if (prefetch_th.joinable()) {
+        prefetch_stop.store(true);
+        prefetch_cancel.store(true);
+        prefetch_cv.notify_all();
+        prefetch_th.join();
+    }
 }
 
 void server_models::add_model(server_model_meta && meta) {
@@ -377,6 +596,28 @@ void server_models::load_models() {
         SRV_INF("(startup) loading model %s\n", name.c_str());
         load(name);
     }
+
+    // enqueue all models with hf= for background prefetch
+    // the prefetch thread starts in the constructor and will process this queue
+    if (base_params.prefetch) {
+        for (const auto & [name, inst] : mapping) {
+            std::string hf_repo;
+            if (!inst.meta.preset.get_option("LLAMA_ARG_HF_REPO", hf_repo)) {
+                continue;
+            }
+            std::string skip;
+            if (inst.meta.preset.get_option(COMMON_ARG_PRESET_PREFETCH_SKIP, skip) &&
+                common_arg_utils::is_truthy(skip)) {
+                continue;
+            }
+            int priority = 0;
+            std::string pri_str;
+            if (inst.meta.preset.get_option(COMMON_ARG_PRESET_PREFETCH_PRI, pri_str)) {
+                priority = std::stoi(pri_str);
+            }
+            prefetch_enqueue(name, priority);
+        }
+    }
 }
 
 void server_models::update_meta(const std::string & name, const server_model_meta & meta) {
@@ -535,6 +776,11 @@ void server_models::load(const std::string & name) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
     unload_lru();
+    // ensure the model is downloaded before spawning the child server
+    // this blocks if the prefetcher is downloading a different model
+    if (base_params.prefetch) {
+        prefetch_ensure_ready(name);
+    }
 
     std::lock_guard<std::mutex> lk(mutex);
 
