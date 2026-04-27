@@ -627,7 +627,7 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
     if (!tag.empty()) {
         tags.push_back(tag);
     } else {
-        tags = {"Q4_K_M", "Q4_0"};
+        tags = {"Q4_K_M", "Q8_0"};
     }
 
     for (const auto & t : tags) {
