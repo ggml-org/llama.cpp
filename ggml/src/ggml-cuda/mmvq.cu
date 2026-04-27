@@ -374,7 +374,7 @@ static constexpr __host__ __device__ int calc_rows_per_block(ggml_type type, int
     if (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_GCN) {
         switch (ncols_dst) {
             case 1:
-                if (type == GGML_TYPE_F8_E4M3_B128 && !small_k) {
+                if ((type == GGML_TYPE_F8_E4M3_B128 || type == GGML_TYPE_IQ4_XS) && !small_k) {
                     return 2;
                 }
                 return small_k ? nwarps : 1;
