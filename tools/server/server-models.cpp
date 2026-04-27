@@ -1,6 +1,7 @@
 #include "server-common.h"
 #include "server-models.h"
 
+#include "build-info.h"
 #include "preset.h"
 #include "download.h"
 
@@ -711,6 +712,11 @@ void server_models::unload(const std::string & name) {
         if (it->second.meta.is_running()) {
             SRV_INF("stopping model instance name=%s\n", name.c_str());
             stopping_models.insert(name);
+            if (it->second.meta.status == SERVER_MODEL_STATUS_LOADING) {
+                // special case: if model is in loading state, unloading means force-killing it
+                SRV_WRN("model name=%s is still loading, force-killing\n", name.c_str());
+                subprocess_terminate(it->second.subproc.get());
+            }
             cv_stop.notify_all();
             // status change will be handled by the managing thread
         } else {
@@ -936,7 +942,7 @@ void server_models_routes::init_routes() {
                     {"n_ctx",  0},
                 }},
                 {"webui_settings", webui_settings},
-                {"build_info",     build_info},
+                {"build_info",     std::string(llama_build_info())},
             });
             return res;
         }
@@ -1146,7 +1152,7 @@ server_http_proxy::server_http_proxy(
 
     // setup Client
     cli->set_follow_location(true);
-    cli->set_connection_timeout(5, 0); // 5 seconds
+    cli->set_connection_timeout(timeout_read, 0); // use --timeout value instead of hardcoded 5 s
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response

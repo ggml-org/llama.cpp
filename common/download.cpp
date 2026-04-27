@@ -1,5 +1,6 @@
 #include "arg.h"
 
+#include "build-info.h"
 #include "common.h"
 #include "log.h"
 #include "download.h"
@@ -303,7 +304,7 @@ static int common_download_file_single_online(const std::string & url,
         headers.emplace(h.first, h.second);
     }
     if (headers.find("User-Agent") == headers.end()) {
-        headers.emplace("User-Agent", "llama-cpp/" + build_info);
+        headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
     }
     if (!opts.bearer_token.empty()) {
         headers.emplace("Authorization", "Bearer " + opts.bearer_token);
@@ -441,7 +442,7 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
         headers.emplace(h.first, h.second);
     }
     if (headers.find("User-Agent") == headers.end()) {
-        headers.emplace("User-Agent", "llama-cpp/" + build_info);
+        headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
     }
 
     if (params.timeout > 0) {
@@ -626,7 +627,7 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
     if (!tag.empty()) {
         tags.push_back(tag);
     } else {
-        tags = {"Q4_K_M", "Q4_0"};
+        tags = {"Q4_K_M", "Q8_0"};
     }
 
     for (const auto & t : tags) {

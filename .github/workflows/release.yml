@@ -236,6 +236,75 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
+  android-arm64:
+    runs-on: ubuntu-latest
+
+    env:
+      NDK_VERSION: "29.0.14206865"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: android-arm64
+          evict-old-files: 1d
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: 17
+          distribution: temurin
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install NDK
+        run: |
+          sdkmanager "ndk;${{ env.NDK_VERSION }}"
+          echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz
+          name: llama-bin-android-arm64.tar.gz
+
   ubuntu-24-openvino:
     runs-on: ubuntu-24.04
 
@@ -529,14 +598,28 @@ jobs:
         shell: bash
 
     env:
-      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/24751ead-ddc5-4479-b9e6-f9fe2ff8b9f2/intel-deep-learning-essentials-2025.2.1.25_offline.exe
+      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
       WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
+      ONEAPI_INSTALLER_VERSION: "2025.3.3"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      - name: Use oneAPI Installation Cache
+        uses: actions/cache@v5
+        id: cache-sycl
+        with:
+          path: ${{ env.ONEAPI_ROOT }}
+          key: oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
+
+      - name: Download & Install oneAPI
+        shell: bash
+        if: steps.cache-sycl.outputs.cache-hit != 'true'
+        run: |
+          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -544,10 +627,6 @@ jobs:
           key: windows-latest-sycl
           variant: ccache
           evict-old-files: 1d
-
-      - name: Install
-        run:  |
-          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
 
       - name: Build
         id: cmake_build
@@ -601,6 +680,82 @@ jobs:
           path: llama-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
 
+  ubuntu-24-sycl:
+    strategy:
+      matrix:
+        build: [fp32, fp16]
+        include:
+          - build: fp32
+            fp16: OFF
+          - build: fp16
+            fp16: ON
+
+    runs-on: ubuntu-24.04
+
+    env:
+      ONEAPI_ROOT: /opt/intel/oneapi/
+      ONEAPI_INSTALLER_VERSION: "2025.3.3"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Use oneAPI Installation Cache
+        uses: actions/cache@v5
+        id: cache-sycl
+        with:
+          path: ${{ env.ONEAPI_ROOT }}
+          key: oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
+
+      - name: Download & Install oneAPI
+        shell: bash
+        if: steps.cache-sycl.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
+          sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-24-sycl-${{ matrix.build }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          cmake -B build \
+            -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_SYCL=ON \
+            -DCMAKE_C_COMPILER=icx \
+            -DCMAKE_CXX_COMPILER=icpx \
+            -DLLAMA_OPENSSL=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_SYCL_F16=${{ matrix.fp16 }}
+          time cmake --build build --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
+          name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
+
   ubuntu-22-rocm:
     runs-on: ubuntu-22.04
 
@@ -617,6 +772,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Free up disk space
+        uses: ggml-org/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -971,6 +1131,8 @@ jobs:
       - ubuntu-cpu
       - ubuntu-vulkan
       - ubuntu-24-openvino
+      - ubuntu-24-sycl
+      - android-arm64
       - macOS-cpu
       - ios-xcode-build
       - openEuler-cann
@@ -1058,6 +1220,11 @@ jobs:
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
             - [Ubuntu x64 (ROCm 7.2)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.2-x64.tar.gz)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
+            - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
+            - [Ubuntu x64 (SYCL FP16)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp16-x64.tar.gz)
+
+            **Android:**
+            - [Android arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz)
 
             **Windows:**
             - [Windows x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-x64.zip)
