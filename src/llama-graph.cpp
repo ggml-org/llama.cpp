@@ -925,7 +925,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     n_embd_head_v    (hparams.n_embd_head_v()),
     n_embd_v_gqa     (hparams.n_embd_v_gqa()),
     n_expert         (hparams.n_expert),
-    n_expert_used    (cparams.warmup ? hparams.n_expert : hparams.n_expert_used),
+    n_expert_used    (cparams.warmup && !cparams.pshard ? hparams.n_expert : hparams.n_expert_used),
     freq_base        (cparams.rope_freq_base),
     freq_scale       (cparams.rope_freq_scale),
     ext_factor       (cparams.yarn_ext_factor),
@@ -2128,8 +2128,12 @@ ggml_tensor * llm_graph_context::build_attn(
         const auto & k_idxs = inp->get_k_idxs();
         const auto & v_idxs = inp->get_v_idxs();
 
-        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
-        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+        auto * set_k = mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il);
+        auto * set_v = mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il);
+        cb(set_k, "cache_k", il);
+        cb(set_v, "cache_v", il);
+        ggml_build_forward_expand(gf, set_k);
+        ggml_build_forward_expand(gf, set_v);
     }
 
     const auto & kq_mask = inp->get_kq_mask();
@@ -2214,7 +2218,9 @@ ggml_tensor * llm_graph_context::build_attn(
     {
         const auto & k_idxs = inp->get_k_idxs();
 
-        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        auto * set_k = mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il);
+        cb(set_k, "cache_k", il);
+        ggml_build_forward_expand(gf, set_k);
     }
 
     const auto & kq_mask = inp->get_kq_mask();
@@ -2290,13 +2296,17 @@ ggml_tensor * llm_graph_context::build_attn(
     if (k_cur) {
         const auto & k_idxs = is_swa ? inp->get_k_idxs_swa() : inp->get_k_idxs();
 
-        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        auto * set_k = mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il);
+        cb(set_k, "cache_k", il);
+        ggml_build_forward_expand(gf, set_k);
     }
 
     if (v_cur) {
         const auto & v_idxs = is_swa ? inp->get_v_idxs_swa() : inp->get_v_idxs();
 
-        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+        auto * set_v = mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il);
+        cb(set_v, "cache_v", il);
+        ggml_build_forward_expand(gf, set_v);
     }
 
     const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();

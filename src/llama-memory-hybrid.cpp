@@ -198,6 +198,13 @@ llama_memory_recurrent * llama_memory_hybrid::get_mem_recr() const {
     return mem_recr.get();
 }
 
+std::vector<llama_memory_pipe_shard_i *> llama_memory_hybrid::get_pipe_shards() {
+    std::vector<llama_memory_pipe_shard_i *> result;
+    for (auto * ps : mem_attn->get_pipe_shards()) { result.push_back(ps); }
+    for (auto * ps : mem_recr->get_pipe_shards()) { result.push_back(ps); }
+    return result;
+}
+
 llama_memory_hybrid_context::llama_memory_hybrid_context(llama_memory_status status) : status(status) {}
 
 llama_memory_hybrid_context::llama_memory_hybrid_context(llama_memory_hybrid * mem) :

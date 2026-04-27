@@ -247,6 +247,13 @@ llama_kv_cache * llama_kv_cache_iswa::get_swa() const {
     return kv_swa.get();
 }
 
+std::vector<llama_memory_pipe_shard_i *> llama_kv_cache_iswa::get_pipe_shards() {
+    std::vector<llama_memory_pipe_shard_i *> result;
+    if (kv_base && kv_base->get_pipe_shard()) result.push_back(kv_base->get_pipe_shard());
+    if (kv_swa  && kv_swa->get_pipe_shard())  result.push_back(kv_swa->get_pipe_shard());
+    return result;
+}
+
 //
 // llama_kv_cache_iswa_context
 //

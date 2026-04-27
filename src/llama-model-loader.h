@@ -17,6 +17,12 @@
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
+struct weight_preload_entry {
+    void *                    cpu_addr    = nullptr;
+    void *                    gpu_addr    = nullptr;
+    ggml_backend_buffer_t     host_buffer = nullptr;
+};
+
 // lists of buffer types used for each layer
 using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
 
@@ -79,6 +85,7 @@ struct llama_model_loader {
     bool use_direct_io = false;
     bool check_tensors;
     bool no_alloc;
+    bool force_duplicate_tied = false;
 
     llama_files files;
     llama_ftype ftype;
@@ -200,6 +207,15 @@ struct llama_model_loader {
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
             void * progress_callback_user_data);
+
+    bool preload_weights_to_device(
+            const std::unordered_map<struct ggml_tensor *, int32_t> & tensor_backend_ids,
+            int target_backend_id,
+            size_t buf_size,
+            ggml_backend_buffer_t * out_buf,
+            ggml_backend_t * out_backend,
+            std::unordered_map<struct ggml_tensor *, weight_preload_entry> * out_preload_map,
+            size_t * out_preloaded_size);
 
     std::string ftype_name() const;
 

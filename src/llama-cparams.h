@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama.h"
+#include "ggml-backend.h"
 
 #include <cstdint>
 
@@ -44,4 +45,30 @@ struct llama_cparams {
 
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
+    bool    pshard = false;
+    int32_t cpu_backend_id = -1;
+};
+
+inline constexpr int32_t PSHARD_BACKENDS_PER_DEV = 3;
+
+struct pshard_dev_layout {
+    int32_t compute;
+    int32_t shard_a;
+    int32_t shard_b;
+    int32_t cpu;
+
+    int32_t shard(uint32_t il) const { return shard_a + (il % 2); }
+
+    static pshard_dev_layout for_device(size_t dev_idx, int32_t cpu_backend_id) {
+        const int32_t base = (int32_t)(dev_idx * PSHARD_BACKENDS_PER_DEV);
+        return { base, base + 1, base + 2, cpu_backend_id };
+    }
+
+    static int32_t compute_cpu_backend_id(size_t n_devices) {
+        int32_t n_accel = 0;
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            if (ggml_backend_dev_type(ggml_backend_dev_get(i)) == GGML_BACKEND_DEVICE_TYPE_ACCEL) n_accel++;
+        }
+        return (int32_t)(n_devices * PSHARD_BACKENDS_PER_DEV) + n_accel;
+    }
 };

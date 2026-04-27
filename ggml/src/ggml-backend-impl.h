@@ -137,6 +137,9 @@ extern "C" {
 
         // (optional) sort/optimize the nodes in the graph
         void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph);
+
+        // (optional) asynchronous tensor memset on the backend's stream
+        void (*memset_tensor_async)(ggml_backend_t backend, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size);
     };
 
     struct ggml_backend {

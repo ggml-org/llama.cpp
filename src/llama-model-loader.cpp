@@ -1154,7 +1154,11 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
         // check overrides
         if (tensor_buft_overrides) {
-            std::string tensor_name = tn.str();
+            // when a tensor is remapped (e.g. token_embd duplicated as output),
+            // match overrides against the remapped name so each copy can be
+            // placed independently (e.g. token_embd on CPU, output on GPU)
+            std::string tensor_name = (tn_tensor != tn.tensor)
+                ? LLM_TN_IMPL(tn.arch, tn_tensor, tn.suffix, tn.bid, tn.xid).str() : tn.str();
             for (const auto * overrides = tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
                 std::regex pattern(overrides->pattern);
                 if (std::regex_search(tensor_name, pattern)) {
@@ -1256,7 +1260,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     ggml_context * ctx = ctx_for_buft(buft);
 
     // if duplicated, check if the original tensor was allocated in the same buffer type context and avoid creating a new one
-    if (flags & TENSOR_DUPLICATED) {
+    // pshard needs separate tensors for output vs token_embd (different GPU/CPU placement)
+    if ((flags & TENSOR_DUPLICATED) && !force_duplicate_tied) {
         ggml_tensor * t = ggml_get_tensor(ctx, tn.str().c_str());
         if (t) {
             return t;
@@ -1273,7 +1278,18 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     const bool duplicated = flags & TENSOR_DUPLICATED;
 
     struct ggml_tensor * tensor = ggml_dup_tensor(ctx, cur);
-    ggml_set_name(tensor, ggml_get_name(cur));
+
+    if (duplicated && force_duplicate_tied) {
+        ggml_set_name(tensor, "output.weight");
+        if (weights_map.find("output.weight") == weights_map.end()) {
+            auto it = weights_map.find(ggml_get_name(cur));
+            if (it != weights_map.end()) {
+                weights_map.emplace("output.weight", it->second);
+            }
+        }
+    } else {
+        ggml_set_name(tensor, ggml_get_name(cur));
+    }
 
     if (duplicated) {
         size_data += ggml_nbytes(cur);
@@ -1692,4 +1708,101 @@ void llama_model_loader::print_info() const {
     } else {
         LLAMA_LOG_INFO("%s: file size   = %.2f GiB (%.2f BPW) \n", __func__, n_bytes/1024.0/1024.0/1024.0, n_bytes*8.0/n_elements);
     }
+}
+
+bool llama_model_loader::preload_weights_to_device(
+        const std::unordered_map<ggml_tensor *, int32_t> & tensor_backend_ids,
+        int target_backend_id,
+        size_t buf_size,
+        ggml_backend_buffer_t * out_buf,
+        ggml_backend_t * out_backend,
+        std::unordered_map<ggml_tensor *, weight_preload_entry> * out_preload_map,
+        size_t * out_preloaded_size) {
+
+    auto * gpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    if (!gpu_dev) {
+        return false;
+    }
+
+    auto * buft = ggml_backend_dev_buffer_type(gpu_dev);
+
+    std::vector<ggml_tensor *> pinned;
+    for (const auto & [tensor, bid] : tensor_backend_ids) {
+        if (bid == target_backend_id && tensor->data != nullptr) {
+            pinned.push_back(tensor);
+        }
+    }
+
+    {
+        size_t pinned_bytes = 0;
+        for (const auto * t : pinned) { pinned_bytes += ggml_nbytes(t); }
+        LLAMA_LOG_INFO("%s: %zu tensors with bid=%d (%.2f MiB), %zu total in map\n",
+            __func__, pinned.size(), target_backend_id,
+            pinned_bytes / (1024.0 * 1024.0), tensor_backend_ids.size());
+    }
+
+    auto get_layer = [](const ggml_tensor * t) -> int {
+        const char * blk = strstr(ggml_get_name(t), "blk.");
+        return blk ? atoi(blk + 4) : 9999;
+    };
+    auto get_cat = [](const ggml_tensor * t) -> int {
+        const char * name = ggml_get_name(t);
+        if (strstr(name, "attn_")) return 0;
+        if (strstr(name, "exps"))  return 4;
+        if (strstr(name, "ffn_"))  return 1;
+        if (strstr(name, "norm"))  return 2;
+        return 3;
+    };
+    std::sort(pinned.begin(), pinned.end(),
+        [&](const ggml_tensor * a, const ggml_tensor * b) {
+            int ca = get_cat(a), cb = get_cat(b);
+            if (ca != cb) return ca < cb;
+            int la = get_layer(a), lb = get_layer(b);
+            if (la != lb) return la < lb;
+            return strcmp(ggml_get_name(a), ggml_get_name(b)) < 0;
+        });
+
+    *out_buf = ggml_backend_buft_alloc_buffer(buft, buf_size);
+    if (!*out_buf) {
+        LLAMA_LOG_WARN("%s: failed to allocate %.2f MiB device buffer\n",
+            __func__, buf_size / (1024.0 * 1024.0));
+        return false;
+    }
+
+    ggml_backend_buffer_set_usage(*out_buf, GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+
+    for (const auto & [tensor, bid] : tensor_backend_ids) {
+        if (bid >= 0 && tensor->data != nullptr) {
+            (*out_preload_map)[tensor] = { tensor->data, nullptr, tensor->buffer };
+        }
+    }
+
+    struct ggml_tallocr talloc = ggml_tallocr_new(*out_buf);
+    ggml_backend_t gpu = ggml_backend_dev_init(gpu_dev, nullptr);
+
+    size_t n_packed = 0;
+    for (auto * tensor : pinned) {
+        size_t tsize = ggml_backend_buffer_get_alloc_size(*out_buf, tensor);
+        if (talloc.offset + tsize > buf_size) {
+            break;
+        }
+
+        tensor->buffer = NULL;
+        tensor->data   = NULL;
+        ggml_tallocr_alloc(&talloc, tensor);
+
+        (*out_preload_map)[tensor].gpu_addr = tensor->data;
+        ggml_backend_tensor_set_async(gpu, tensor, (*out_preload_map)[tensor].cpu_addr, 0, ggml_nbytes(tensor));
+        n_packed++;
+    }
+
+    if (n_packed < pinned.size()) {
+        LLAMA_LOG_WARN("%s: %zu/%zu pinned tensors did not fit in %.2f MiB buffer\n",
+            __func__, pinned.size() - n_packed, pinned.size(), buf_size / (1024.0 * 1024.0));
+    }
+
+    *out_preloaded_size = talloc.offset;
+    *out_backend = gpu;
+
+    return true;
 }

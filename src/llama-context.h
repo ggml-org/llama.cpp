@@ -13,6 +13,7 @@
 #include <vector>
 
 struct llama_model;
+struct llama_pshard_plan;
 class llama_batch_allocr;
 
 class llama_io_read_i;
@@ -243,6 +244,17 @@ private:
 
     llm_graph_cb graph_get_cb() const;
 
+    void pshard_setup_sched();
+    void pshard_pack_cache_region();
+    void pshard_apply_plan(const llama_pshard_plan & plan, bool with_upload = true);
+    void pshard_reapply_active_plan();
+    void pshard_reserve_and_save(const llama_pshard_plan & plan);
+    void pshard_save_alloc_state(const llama_pshard_plan & plan);
+    void pshard_warmup_plans();
+    void pshard_switch_plan(const llama_pshard_plan & old_plan, const llama_pshard_plan & new_plan);
+    void pshard_maybe_switch(uint32_t n_tokens);
+    void pshard_update_write_cells(llama_memory_context_i * mctx);
+
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
     size_t state_read_data (llama_io_read_i  & io);
@@ -313,6 +325,9 @@ private:
 
     bool sched_need_reserve = true;
 
+    const llama_pshard_plan * pshard_active_plan = nullptr;
+    pshard_dev_layout   pshard_layout = {};
+
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
 
@@ -357,3 +372,16 @@ private:
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
 };
+
+// pshard free functions (implemented in llama-context-pshard.cpp)
+struct llama_memory_i;
+
+void pshard_assign_tensors(
+        ggml_backend_sched_t                              sched,
+        const llama_model                               & model,
+        llama_memory_i                                  * memory,
+        const std::vector<ggml_backend_ptr>             & backends,
+        const pshard_dev_layout                         & layout,
+        ggml_cgraph                                     * gf);
+
+void pshard_refresh_stream_views(llama_memory_i * memory);

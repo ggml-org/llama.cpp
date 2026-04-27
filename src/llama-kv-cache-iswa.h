@@ -70,6 +70,8 @@ public:
     llama_kv_cache * get_base() const;
     llama_kv_cache * get_swa () const;
 
+    std::vector<llama_memory_pipe_shard_i *> get_pipe_shards() override;
+
 private:
     const llama_hparams & hparams;
 

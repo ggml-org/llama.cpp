@@ -73,6 +73,21 @@ GGML_API bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph
 
 GGML_API size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id);
 
+// per-chunk introspection (after reserve_n / reserve_n_size)
+GGML_API int    ggml_gallocr_get_n_chunks(ggml_gallocr_t galloc, int buffer_id);
+GGML_API size_t ggml_gallocr_get_chunk_max_size(ggml_gallocr_t galloc, int buffer_id, int chunk_id);
+
+// set an externally-owned buffer for a buffer slot (must be called before reserve)
+GGML_API void ggml_gallocr_set_buffer(ggml_gallocr_t galloc, int buffer_id, ggml_backend_buffer_t buffer, size_t alloc_offset, size_t alloc_size);
+
+// update the allocation range for an external buffer (e.g. on plan switch)
+GGML_API void ggml_gallocr_set_alloc_range(ggml_gallocr_t galloc, int buffer_id, size_t alloc_offset, size_t alloc_size);
+
+// save/restore allocator state (for plan switch without re-reserve)
+GGML_API void ggml_gallocr_get_state_sizes(ggml_gallocr_t galloc, size_t * node_size, size_t * leaf_size);
+GGML_API void ggml_gallocr_save_state(ggml_gallocr_t galloc, void * node_buf, void * leaf_buf, int * n_nodes, int * n_leafs);
+GGML_API void ggml_gallocr_restore_state(ggml_gallocr_t galloc, const void * node_buf, size_t node_size, const void * leaf_buf, size_t leaf_size, int n_nodes, int n_leafs);
+
 // Utils
 // Create a buffer and allocate all the tensors in a ggml_context
 // ggml_backend_alloc_ctx_tensors_from_buft_size returns the size of the buffer that would be allocated by ggml_backend_alloc_ctx_tensors_from_buft

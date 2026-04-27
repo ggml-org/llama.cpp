@@ -6,6 +6,7 @@
 #include "llama-mmap.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
+#include "llama-pshard-plan.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -16,6 +17,7 @@
 #include "models/models.h"
 
 #include "ggml.h"
+#include "ggml-alloc.h"
 #include "ggml-cpp.h"
 
 #include <algorithm>
@@ -661,6 +663,16 @@ struct llama_model::impl {
     std::vector<layer_dev> dev_layer;
 
     bool has_tensor_overrides;
+
+    std::unordered_map<ggml_tensor *, int32_t> tensor_backend_ids;
+    std::unordered_map<int, int32_t> layer_backend_ids;
+
+    llama_pshard_plan_registry * plan_registry = nullptr;
+
+    ggml_backend_buffer_t dev_preload_buf = nullptr;
+    ggml_backend_t dev_preload_backend = nullptr;
+    std::unordered_map<ggml_tensor *, weight_preload_entry> weight_preload_map;
+    size_t dev_preloaded_size = 0;
 };
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
@@ -671,6 +683,11 @@ llama_model::~llama_model() {
     for (auto * lora : loras) {
         delete lora;
     }
+    if (pimpl->dev_preload_backend) {
+        ggml_backend_synchronize(pimpl->dev_preload_backend);
+        ggml_backend_free(pimpl->dev_preload_backend);
+    }
+    ggml_backend_buffer_free(pimpl->dev_preload_buf);
 }
 
 void llama_model::load_stats(llama_model_loader & ml) {
@@ -8115,6 +8132,38 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // build tensor -> backend_id map from overrides (for pshard scheduling)
+    if (params.tensor_buft_overrides) {
+        for (const auto & [name, tensor] : tensors_by_name) {
+            for (const auto * ov = params.tensor_buft_overrides; ov->pattern; ++ov) {
+                if (ov->backend_id >= 0 && std::regex_search(name, std::regex(ov->pattern))) {
+                    pimpl->tensor_backend_ids[tensor] = ov->backend_id;
+                    break;
+                }
+            }
+        }
+        if (!pimpl->tensor_backend_ids.empty()) {
+            LLAMA_LOG_INFO("%s: built tensor backend_id map: %zu tensors\n",
+                __func__, pimpl->tensor_backend_ids.size());
+        }
+
+        // build layer -> backend_id map from override patterns (blk\.N\..*)
+        for (const auto * ov = params.tensor_buft_overrides; ov->pattern; ++ov) {
+            if (ov->backend_id >= 0) {
+                std::smatch m;
+                std::string pat(ov->pattern);
+                if (std::regex_search(pat, m, std::regex(R"(blk\\\.(\d+)\\\.)"))) {
+                    int layer = std::stoi(m[1].str());
+                    pimpl->layer_backend_ids[layer] = ov->backend_id;
+                }
+            }
+        }
+        if (!pimpl->layer_backend_ids.empty()) {
+            LLAMA_LOG_INFO("%s: built layer backend_id map: %zu layers\n",
+                __func__, pimpl->layer_backend_ids.size());
+        }
+    }
+
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
@@ -8249,6 +8298,23 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             pimpl->mappings.emplace_back(std::move(mapping));
         }
     }
+
+    if (params.pshard && params.max_vram_alloc > 0) {
+        size_t buf_size = params.max_vram_alloc * 1024ULL * 1024ULL;
+        if (ml.preload_weights_to_device(
+                pimpl->tensor_backend_ids, 0, buf_size,
+                &pimpl->dev_preload_buf,
+                &pimpl->dev_preload_backend,
+                &pimpl->weight_preload_map,
+                &pimpl->dev_preloaded_size)) {
+            LLAMA_LOG_INFO("%s: preloaded %zu weights (%.2f MiB) into %.2f MiB device buffer\n",
+                __func__, pimpl->weight_preload_map.size(),
+                pimpl->dev_preloaded_size / (1024.0 * 1024.0),
+                buf_size / (1024.0 * 1024.0));
+        }
+    }
+
+    pimpl->plan_registry = params.pshard_registry;
 
     return true;
 }
@@ -8572,6 +8638,266 @@ ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
 
 bool llama_model::has_tensor_overrides() const {
     return pimpl->has_tensor_overrides;
+}
+
+bool llama_model::is_pshard() const {
+    return params.pshard;
+}
+
+llama_pshard_plan_registry * llama_model::get_plan_registry() const {
+    return pimpl->plan_registry;
+}
+
+const std::unordered_map<ggml_tensor *, int32_t> & llama_model::get_tensor_backend_ids() const {
+    return pimpl->tensor_backend_ids;
+}
+
+const std::unordered_map<int, int32_t> & llama_model::get_layer_backend_ids() const {
+    return pimpl->layer_backend_ids;
+}
+
+ggml_backend_buffer_t llama_model::get_dev_preload_buf() const {
+    return pimpl->dev_preload_buf;
+}
+
+size_t llama_model::get_dev_preloaded_size() const {
+    return pimpl->dev_preloaded_size;
+}
+
+void llama_model::sync_dev_preload() {
+    if (pimpl->dev_preload_backend) {
+        ggml_backend_synchronize(pimpl->dev_preload_backend);
+        ggml_backend_free(pimpl->dev_preload_backend);
+        pimpl->dev_preload_backend = nullptr;
+    }
+}
+
+size_t llama_model::pshard_compute_scratch_off(const llama_pshard_plan & plan) {
+    if (plan.addrs_cached) {
+        return plan.cached_scratch_off;
+    }
+    if (!pimpl->dev_preload_buf) {
+        return 0;
+    }
+
+    pshard_set_backend_maps(plan);
+
+    void * buf_base = ggml_backend_buffer_get_base(pimpl->dev_preload_buf);
+
+    std::vector<std::pair<ggml_tensor *, std::pair<void *, ggml_backend_buffer_t>>> saved;
+    saved.reserve(pimpl->weight_preload_map.size());
+    for (auto & [tensor, entry] : pimpl->weight_preload_map) {
+        saved.push_back({tensor, {tensor->data, tensor->buffer}});
+    }
+
+    std::vector<ggml_tensor *> pinned;
+    for (auto & [tensor, entry] : pimpl->weight_preload_map) {
+        auto it = pimpl->tensor_backend_ids.find(tensor);
+        if (it != pimpl->tensor_backend_ids.end() && it->second == 0) {
+            pinned.push_back(tensor);
+        }
+    }
+
+    auto get_layer = [](const ggml_tensor * t) -> int {
+        const char * blk = strstr(ggml_get_name(t), "blk.");
+        return blk ? atoi(blk + 4) : 9999;
+    };
+    auto get_cat = [](const ggml_tensor * t) -> int {
+        const char * name = ggml_get_name(t);
+        if (strstr(name, "attn_")) return 0;
+        if (strstr(name, "exps"))  return 4;
+        if (strstr(name, "ffn_"))  return 1;
+        if (strstr(name, "norm"))  return 2;
+        return 3;
+    };
+    std::sort(pinned.begin(), pinned.end(),
+        [&](const ggml_tensor * a, const ggml_tensor * b) {
+            int ca = get_cat(a), cb = get_cat(b);
+            if (ca != cb) return ca < cb;
+            int la = get_layer(a), lb = get_layer(b);
+            if (la != lb) return la < lb;
+            return strcmp(ggml_get_name(a), ggml_get_name(b)) < 0;
+        });
+
+    struct ggml_tallocr talloc = ggml_tallocr_new(pimpl->dev_preload_buf);
+    size_t buf_size = ggml_backend_buffer_get_size(pimpl->dev_preload_buf);
+
+    for (auto * tensor : pinned) {
+        size_t tsize = ggml_backend_buffer_get_alloc_size(pimpl->dev_preload_buf, tensor);
+        if (talloc.offset + tsize > buf_size) break;
+        tensor->buffer = NULL;
+        tensor->data   = NULL;
+        ggml_tallocr_alloc(&talloc, tensor);
+    }
+
+    size_t scratch_off = talloc.offset;
+
+    plan.cached_weight_offsets.clear();
+    for (auto * tensor : pinned) {
+        if (tensor->data) {
+            plan.cached_weight_offsets[std::string(ggml_get_name(tensor))] =
+                (size_t)((char *)tensor->data - (char *)buf_base);
+        }
+    }
+    plan.cached_scratch_off = scratch_off;
+    plan.addrs_cached = true;
+
+    for (auto & [tensor, state] : saved) {
+        tensor->data   = state.first;
+        tensor->buffer = state.second;
+    }
+
+    return scratch_off;
+}
+
+void llama_model::pshard_set_backend_maps(const llama_pshard_plan & plan) {
+    if (plan.maps_cached) {
+        pimpl->tensor_backend_ids.clear();
+        for (const auto & [name, tensor] : tensors_by_name) {
+            auto it = plan.cached_tensor_bids.find(name);
+            if (it != plan.cached_tensor_bids.end()) {
+                pimpl->tensor_backend_ids[tensor] = it->second;
+            }
+        }
+        pimpl->layer_backend_ids = plan.cached_layer_bids;
+    } else {
+        pimpl->tensor_backend_ids.clear();
+        for (const auto & [name, tensor] : tensors_by_name) {
+            for (const auto & ov : plan.overrides) {
+                if (ov.backend_id >= 0 && std::regex_search(name, std::regex(ov.pattern))) {
+                    pimpl->tensor_backend_ids[tensor] = ov.backend_id;
+                    plan.cached_tensor_bids[name] = ov.backend_id;
+                    break;
+                }
+            }
+        }
+
+        pimpl->layer_backend_ids.clear();
+        for (const auto & ov : plan.overrides) {
+            if (ov.backend_id >= 0) {
+                std::smatch m;
+                if (std::regex_search(ov.pattern, m, std::regex(R"(blk\\\.(\d+)\\\.)"))) {
+                    int layer = std::stoi(m[1].str());
+                    pimpl->layer_backend_ids[layer] = ov.backend_id;
+                }
+            }
+        }
+        plan.cached_layer_bids = pimpl->layer_backend_ids;
+        plan.maps_cached = true;
+    }
+}
+
+size_t llama_model::pshard_apply_plan(const llama_pshard_plan & plan, ggml_backend_t gpu) {
+    pshard_set_backend_maps(plan);
+
+    LLAMA_LOG_DEBUG("%s: rebuilt maps: %zu tensors, %zu layers (cached=%d)\n",
+        __func__, pimpl->tensor_backend_ids.size(), pimpl->layer_backend_ids.size(),
+        (int)plan.maps_cached);
+
+    size_t scratch_off = 0;
+    if (pimpl->dev_preload_buf) {
+        void * buf_base = ggml_backend_buffer_get_base(pimpl->dev_preload_buf);
+
+        std::unordered_map<ggml_tensor *, void *> old_addrs;
+        old_addrs.reserve(pimpl->weight_preload_map.size());
+        for (const auto & [tensor, entry] : pimpl->weight_preload_map) {
+            old_addrs[tensor] = tensor->data;
+        }
+
+        if (plan.addrs_cached) {
+            scratch_off = plan.cached_scratch_off;
+            for (auto & [tensor, entry] : pimpl->weight_preload_map) {
+                auto it = plan.cached_weight_offsets.find(std::string(ggml_get_name(tensor)));
+                if (it != plan.cached_weight_offsets.end()) {
+                    tensor->data   = (char *)buf_base + it->second;
+                    tensor->buffer = pimpl->dev_preload_buf;
+                } else {
+                    tensor->data   = entry.cpu_addr;
+                    tensor->buffer = entry.host_buffer;
+                }
+            }
+        } else {
+            std::vector<ggml_tensor *> pinned;
+            for (auto & [tensor, entry] : pimpl->weight_preload_map) {
+                auto it = pimpl->tensor_backend_ids.find(tensor);
+                if (it != pimpl->tensor_backend_ids.end() && it->second == 0) {
+                    pinned.push_back(tensor);
+                }
+            }
+
+            auto get_layer = [](const ggml_tensor * t) -> int {
+                const char * blk = strstr(ggml_get_name(t), "blk.");
+                return blk ? atoi(blk + 4) : 9999;
+            };
+            auto get_cat = [](const ggml_tensor * t) -> int {
+                const char * name = ggml_get_name(t);
+                if (strstr(name, "attn_")) return 0;
+                if (strstr(name, "exps"))  return 4;
+                if (strstr(name, "ffn_"))  return 1;
+                if (strstr(name, "norm"))  return 2;
+                return 3;
+            };
+            std::sort(pinned.begin(), pinned.end(),
+                [&](const ggml_tensor * a, const ggml_tensor * b) {
+                    int ca = get_cat(a), cb = get_cat(b);
+                    if (ca != cb) return ca < cb;
+                    int la = get_layer(a), lb = get_layer(b);
+                    if (la != lb) return la < lb;
+                    return strcmp(ggml_get_name(a), ggml_get_name(b)) < 0;
+                });
+
+            struct ggml_tallocr talloc = ggml_tallocr_new(pimpl->dev_preload_buf);
+            size_t buf_size = ggml_backend_buffer_get_size(pimpl->dev_preload_buf);
+
+            for (auto * tensor : pinned) {
+                size_t tsize = ggml_backend_buffer_get_alloc_size(pimpl->dev_preload_buf, tensor);
+                if (talloc.offset + tsize > buf_size) break;
+                tensor->buffer = NULL;
+                tensor->data   = NULL;
+                ggml_tallocr_alloc(&talloc, tensor);
+                pimpl->weight_preload_map[tensor].gpu_addr = tensor->data;
+            }
+            scratch_off = talloc.offset;
+
+            plan.cached_weight_offsets.clear();
+            for (auto * tensor : pinned) {
+                if (tensor->data) {
+                    plan.cached_weight_offsets[std::string(ggml_get_name(tensor))] =
+                        (size_t)((char *)tensor->data - (char *)buf_base);
+                }
+            }
+            plan.cached_scratch_off = scratch_off;
+            plan.addrs_cached = true;
+
+            for (auto & [tensor, entry] : pimpl->weight_preload_map) {
+                auto it = pimpl->tensor_backend_ids.find(tensor);
+                bool is_pinned = (it != pimpl->tensor_backend_ids.end() && it->second == 0);
+                if (!is_pinned) {
+                    tensor->data   = entry.cpu_addr;
+                    tensor->buffer = entry.host_buffer;
+                }
+            }
+        }
+
+        size_t n_uploaded = 0;
+        size_t bytes_uploaded = 0;
+
+        for (auto & [tensor, entry] : pimpl->weight_preload_map) {
+            if (tensor->data == entry.cpu_addr) continue;
+            void * old = old_addrs[tensor];
+            if (old != tensor->data && gpu) {
+                ggml_backend_tensor_set_async(gpu, tensor, entry.cpu_addr, 0, ggml_nbytes(tensor));
+                n_uploaded++;
+                bytes_uploaded += ggml_nbytes(tensor);
+            }
+        }
+
+        LLAMA_LOG_DEBUG("%s: scratch_off=%.2f MiB, %zu uploaded (%.2f MiB), cached=%d\n",
+            __func__, scratch_off / (1024.0 * 1024.0),
+            n_uploaded, bytes_uploaded / (1024.0 * 1024.0), (int)plan.addrs_cached);
+    }
+
+    return scratch_off;
 }
 
 const ggml_tensor * llama_model::get_tensor(const char * name) const {
@@ -9304,6 +9630,10 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.pshard                      =*/ false,
+        /*.pshard_cache_skip_load      =*/ false,
+        /*.max_vram_alloc              =*/ 0,
+        /*.pshard_registry             =*/ nullptr,
     };
 
     return result;

@@ -1144,7 +1144,24 @@ common_init_result::common_init_result(common_params & params) :
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
-    if (params.fit_params) {
+    if (params.pshard) {
+        LOG_INF("%s: pshard enabled, probing and loading plan cache\n", __func__);
+        params.tensor_buft_overrides.resize(4096);
+        const uint32_t tier_max = std::min(std::max(cparams.n_batch, (uint32_t)16384), cparams.n_ctx);
+        mparams.pshard_registry = llama_pshard_registry_create(tier_max, cparams.n_seq_max);
+        llama_params_fit_pshard(params.model.path.c_str(), &mparams, &cparams,
+            params.tensor_buft_overrides.data(), params.max_vram_alloc);
+        if (!mparams.pshard) {
+            LOG_WRN("%s: pshard not active for this configuration\n", __func__);
+            llama_pshard_registry_free(mparams.pshard_registry);
+            mparams.pshard_registry = nullptr;
+        } else {
+            params.n_batch  = (int32_t) cparams.n_batch;
+            params.n_ubatch = (int32_t) cparams.n_ubatch;
+            LOG_INF("%s: pshard runtime batch/ubatch set to selected cache_ubatch=%u\n",
+                __func__, cparams.n_ubatch);
+        }
+    } else if (params.fit_params) {
         LOG_INF("%s: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on\n", __func__);
         llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
             params.tensor_split,
@@ -1444,6 +1461,8 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
 
+    mparams.pshard          = params.pshard;
+    mparams.max_vram_alloc  = params.max_vram_alloc;
     return mparams;
 }
 
@@ -1479,6 +1498,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
+    cparams.pshard            = params.pshard;
 
     return cparams;
 }

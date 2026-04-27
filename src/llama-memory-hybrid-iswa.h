@@ -82,6 +82,8 @@ public:
     llama_kv_cache_iswa * get_mem_attn() const;
     llama_memory_recurrent * get_mem_recr() const;
 
+    std::vector<llama_memory_pipe_shard_i *> get_pipe_shards() override;
+
 private:
     const llama_hparams & hparams;
 

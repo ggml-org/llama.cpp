@@ -94,6 +94,7 @@ extern "C" {
     GGML_API void ggml_backend_tensor_set_2d(      struct ggml_tensor * tensor, const void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
     GGML_API void ggml_backend_tensor_get_2d(const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
     GGML_API void ggml_backend_tensor_memset(      struct ggml_tensor * tensor,     uint8_t value, size_t offset, size_t size);
+    GGML_API void ggml_backend_tensor_memset_async(ggml_backend_t backend, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size);
 
     GGML_API void ggml_backend_synchronize(ggml_backend_t backend);
 
@@ -154,6 +155,8 @@ extern "C" {
         bool buffer_from_host_ptr;
         // event synchronization
         bool events;
+        // separate copy stream for compute/transfer overlap
+        bool copy_stream;
     };
 
     // all the device properties
@@ -347,6 +350,53 @@ extern "C" {
 
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
+
+    // set an externally-owned buffer for a backend (see ggml_gallocr_set_buffer)
+    GGML_API void                 ggml_backend_sched_set_buffer(ggml_backend_sched_t sched, ggml_backend_t backend, ggml_backend_buffer_t buffer, size_t alloc_offset, size_t alloc_size);
+
+    // update the allocation range for an external buffer (see ggml_gallocr_set_alloc_range)
+    GGML_API void                 ggml_backend_sched_set_alloc_range(ggml_backend_sched_t sched, ggml_backend_t backend, size_t alloc_offset, size_t alloc_size);
+
+    // per-chunk introspection (see ggml_gallocr_get_n_chunks / get_chunk_max_size)
+    GGML_API int                  ggml_backend_sched_get_n_chunks(ggml_backend_sched_t sched, ggml_backend_t backend);
+    GGML_API size_t               ggml_backend_sched_get_chunk_max_size(ggml_backend_sched_t sched, ggml_backend_t backend, int chunk_id);
+
+    // save/restore gallocr + backend_id state (for plan switch without re-reserve)
+    GGML_API ggml_gallocr_t       ggml_backend_sched_get_galloc(ggml_backend_sched_t sched);
+    GGML_API void                 ggml_backend_sched_save_backend_ids(ggml_backend_sched_t sched, int * node_buf, int * leaf_buf, int * n_nodes, int * n_leafs);
+    GGML_API void                 ggml_backend_sched_restore_backend_ids(ggml_backend_sched_t sched, const int * node_buf, int n_nodes, const int * leaf_buf, int n_leafs);
+
+    // Enable async weight prefetching to overlap CPU->GPU transfers with compute
+    GGML_API void                 ggml_backend_sched_set_prefetch_weights(ggml_backend_sched_t sched, bool enabled);
+
+    // Per-split callbacks for stateful tensors (e.g. KV cache, recurrent state).
+    typedef void (*ggml_backend_sched_split_cb)(struct ggml_tensor * tensor, ggml_backend_t backend, void * user_data);
+
+    GGML_API void ggml_backend_sched_set_split_callbacks(
+        ggml_backend_sched_t sched,
+        ggml_backend_sched_split_cb pre_compute,
+        ggml_backend_sched_split_cb post_compute,
+        void * user_data);
+
+    GGML_API void ggml_backend_sched_set_prefetch_cb(
+        ggml_backend_sched_t sched,
+        ggml_backend_sched_split_cb prefetch_cb);
+
+    // Register a tensor for pre/post-compute split callbacks.
+    GGML_API void ggml_backend_sched_add_writeback(ggml_backend_sched_t sched, struct ggml_tensor * tensor);
+
+    // Per-split info snapshot for timing prediction.
+    struct ggml_backend_sched_split_info {
+        struct ggml_cgraph * graph;
+        int                  backend_id;
+        size_t               input_weight_bytes;
+        size_t               input_activ_bytes;
+        size_t               writeback_bytes;
+    };
+
+    GGML_API bool ggml_backend_sched_get_split_info(
+        ggml_backend_sched_t sched, int split_id,
+        struct ggml_backend_sched_split_info * out);
 
     //
     // Meta backend

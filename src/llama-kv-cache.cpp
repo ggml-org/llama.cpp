@@ -158,6 +158,83 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
+    if (model.is_pshard()) {
+        std::vector<llama_memory_pshard::tensor_spec> specs;
+        for (uint32_t il = 0; il < hparams.n_layer; il++) {
+            if (!hparams.has_kv(il)) continue;
+            if (filter && !filter(il)) continue;
+
+            map_layer_ids[il] = (int32_t)specs.size();
+
+            // MLA caches only the compressed latent + rope part in K; V is derived at attn time via wv_b
+            const uint32_t n_embd_k_gqa = is_mla
+                ? (hparams.n_lora_kv + hparams.n_rot())
+                : hparams.n_embd_k_gqa(il);
+            const uint32_t n_embd_v_gqa = is_mla
+                ? 0u  // MLA: no separate V cache; dim_t2=0 signals "skip t2"
+                : (!v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max());
+
+            specs.push_back({
+                /*.il       =*/ il,
+                /*.type_t1  =*/ type_k,
+                /*.type_t2  =*/ type_v,
+                /*.dim_t1   =*/ n_embd_k_gqa,
+                /*.dim_t2   =*/ n_embd_v_gqa,
+                /*.seq_len  =*/ kv_size,
+                /*.n_stream =*/ n_stream,
+                /*.is_1d    =*/ false,
+                /*.name_t1  =*/ "cache_k",
+                /*.name_t2  =*/ "cache_v",
+            });
+        }
+
+        pipe_shard_kv = std::make_unique<llama_memory_pshard>();
+        pipe_shard_kv->mode = v_trans ? llama_memory_pshard::FULL : llama_memory_pshard::CELL_GRANULAR;
+
+        auto * ps = pipe_shard_kv.get();
+
+        pipe_shard_kv->on_activate_gpu = [this, ps](int32_t il, ggml_tensor * k, ggml_tensor * v) {
+            auto idx = map_layer_ids[il];
+            layers[idx].k = k;
+            layers[idx].v = v;
+            const auto & sv = ps->get_stream(idx);
+            layers[idx].k_stream = sv.t1_stream_gpu;
+            layers[idx].v_stream = sv.t2_stream_gpu;
+        };
+
+        pipe_shard_kv->on_activate_cpu = [this, ps](int32_t il, ggml_tensor * k, ggml_tensor * v) {
+            auto idx = map_layer_ids[il];
+            layers[idx].k = k;
+            layers[idx].v = v;
+            const auto & sv = ps->get_stream(idx);
+            layers[idx].k_stream = sv.t1_stream_cpu;
+            layers[idx].v_stream = sv.t2_stream_cpu;
+        };
+
+        pipe_shard_kv->on_cells_used = [this](uint32_t s) -> uint32_t {
+            return v_cells[s].used_max_p1();
+        };
+
+        const int32_t cpu_bid = pshard_dev_layout::compute_cpu_backend_id(model.devices.size());
+        if (!pipe_shard_kv->init(specs, model.get_layer_backend_ids(), cpu_bid, hparams.no_alloc, model.get_dev_preload_buf())) {
+            throw std::runtime_error("failed to initialize KV pipe shard");
+        }
+
+        const auto & ps_layers = pipe_shard_kv->get_layers();
+        layers.resize(ps_layers.size());
+        for (size_t i = 0; i < ps_layers.size(); ++i) {
+            layers[i].il = ps_layers[i].il;
+            const bool cpu = pipe_shard_kv->is_cpu_only(ps_layers[i].il);
+            layers[i].k = cpu ? ps_layers[i].t1_cpu : ps_layers[i].t1_gpu;
+            layers[i].v = cpu ? ps_layers[i].t2_cpu : ps_layers[i].t2_gpu;
+            const auto & sv = ps->get_stream(i);
+            layers[i].k_stream = cpu ? sv.t1_stream_cpu : sv.t1_stream_gpu;
+            layers[i].v_stream = cpu ? sv.t2_stream_cpu : sv.t2_stream_gpu;
+            map_layer_ids[ps_layers[i].il] = (int32_t)i;
+        }
+        return;
+    }
+
     for (uint32_t il = 0; il < hparams.n_layer; il++) {
         if (!hparams.has_kv(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: does not have KV cache\n", __func__, il);
@@ -620,6 +697,16 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() 
         }
     }
 
+    if (pipe_shard_kv) {
+        const auto & bufs  = pipe_shard_kv->get_bufs();
+        const auto & sizes = pipe_shard_kv->get_bufs_planned_sizes();
+        for (size_t i = 0; i < bufs.size(); i++) {
+            if (!bufs[i]) continue;
+            ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(bufs[i].get());
+            ret[buft] += sizes[i];
+        }
+    }
+
     return ret;
 }
 
@@ -776,6 +863,11 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
     if (do_shift) {
         if (!get_can_shift()) {
             GGML_ABORT("The current KV cache / model configuration does not support K-shift");
+        }
+
+        if (pipe_shard_kv) {
+            LLAMA_LOG_WARN("%s: pshard + KV shift -- testing pending, results may be incorrect\n", __func__);
+            pipe_shard_kv->prepare_for_host_access();
         }
 
         LLAMA_LOG_DEBUG("%s: applying K-shift\n", __func__);
@@ -1844,6 +1936,10 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     GGML_UNUSED(flags);
 
+    if (pipe_shard_kv) {
+        pipe_shard_kv->prepare_for_host_access();
+    }
+
     io.write(&n_stream, sizeof(n_stream));
 
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -1896,6 +1992,10 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
 
 void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     GGML_UNUSED(flags);
+
+    if (pipe_shard_kv) {
+        pipe_shard_kv->prepare_for_host_access();
+    }
 
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
 
@@ -2501,4 +2601,25 @@ void llama_kv_cache_context::set_input_k_rot(ggml_tensor * dst) const {
 
 void llama_kv_cache_context::set_input_v_rot(ggml_tensor * dst) const {
     kv->set_input_v_rot(dst);
+}
+
+std::vector<std::vector<uint32_t>> llama_kv_cache_context::get_write_cells() const {
+    if (i_cur >= sinfos.size()) {
+        return {};
+    }
+    const auto & sinfo = sinfos[i_cur];
+    const uint32_t ns = kv->get_n_stream();
+    std::vector<std::vector<uint32_t>> result(ns);
+    for (size_t i = 0; i < sinfo.idxs.size(); ++i) {
+        uint32_t s = sinfo.s0 + (uint32_t)i;
+        if (s < ns) {
+            result[s] = sinfo.idxs[i];
+        }
+    }
+    return result;
+}
+
+std::vector<llama_memory_pipe_shard_i *> llama_kv_cache::get_pipe_shards() {
+    if (pipe_shard_kv) return { pipe_shard_kv.get() };
+    return {};
 }

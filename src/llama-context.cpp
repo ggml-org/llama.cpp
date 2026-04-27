@@ -5,12 +5,16 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache.h"
 #include "llama-memory.h"
+#include "llama-memory-hybrid.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-pshard-plan.h"
 #include "llama-ext.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -53,6 +57,7 @@ llama_context::llama_context(
     cparams.no_perf          = params.no_perf;
     cparams.pooling_type     = params.pooling_type;
     cparams.warmup           = false;
+    cparams.pshard           = params.pshard;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
     cparams.rope_freq_base   = params.rope_freq_base  == 0.0f ? hparams.rope_freq_base_train  : params.rope_freq_base;
@@ -153,6 +158,11 @@ llama_context::llama_context(
     cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
     cparams.auto_fa    = params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO;
 
+    // pshard remaps kv by layer so auto_fa cannot use device matching
+    if (cparams.pshard) {
+        cparams.auto_fa = false;
+    }
+
     cparams.fused_gdn_ar = true;
     cparams.fused_gdn_ch = true;
     cparams.auto_fgdn    = true;
@@ -219,12 +229,24 @@ llama_context::llama_context(
 
     if (!hparams.vocab_only) {
         // GPU backends
-        for (const auto & dev : model.devices) {
-            ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
-            if (backend == nullptr) {
-                throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
+        if (cparams.pshard && !model.devices.empty()) {
+            for (const auto & dev : model.devices) {
+                for (int i = 0; i < PSHARD_BACKENDS_PER_DEV; i++) {
+                    ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
+                    if (backend == nullptr) {
+                        throw std::runtime_error(format("failed to initialize %s backend for pshard", ggml_backend_dev_name(dev.dev)));
+                    }
+                    backends.emplace_back(backend);
+                }
             }
-            backends.emplace_back(backend);
+        } else {
+            for (const auto & dev : model.devices) {
+                ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
+                if (backend == nullptr) {
+                    throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
+                }
+                backends.emplace_back(backend);
+            }
         }
 
         // add ACCEL backends (such as BLAS)
@@ -245,6 +267,11 @@ llama_context::llama_context(
             throw std::runtime_error("failed to initialize CPU backend");
         }
         backends.emplace_back(backend_cpu);
+
+        if (cparams.pshard) {
+            cparams.cpu_backend_id = (int32_t)(backends.size() - 1);
+            pshard_layout = pshard_dev_layout::for_device(0, cparams.cpu_backend_id);
+        }
 
         // create a list of the set_n_threads functions in the backends
         for (auto & backend : backends) {
@@ -346,7 +373,16 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         }
 
+        if (cparams.pshard && !model.hparams.no_alloc) {
+            const_cast<llama_model &>(model).sync_dev_preload();
+            pshard_pack_cache_region();
+        }
+
         sched_reserve();
+
+        if (cparams.pshard && !model.hparams.no_alloc) {
+            pshard_warmup_plans();
+        }
 
         if (!cparams.flash_attn) {
             if (ggml_is_quantized(params.type_v)) {
@@ -400,7 +436,15 @@ void llama_context::sched_reserve() {
     const int64_t t_start_us = ggml_time_us();
 
     const uint32_t n_seqs = cparams.n_seq_max;
-    const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+    uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+
+    // pshard planner probes graphs up to the largest tier batch, which can exceed n_ubatch
+    if (cparams.pshard) {
+        const auto * registry = model.get_plan_registry();
+        if (registry && !registry->tier_sizes.empty()) {
+            n_tokens = std::max(n_tokens, registry->tier_sizes.back());
+        }
+    }
 
     const size_t max_nodes = this->graph_max_nodes(n_tokens);
 
@@ -410,6 +454,10 @@ void llama_context::sched_reserve() {
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
 
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
+
+    if (cparams.pshard) {
+        pshard_setup_sched();
+    }
 
     llama_memory_context_ptr mctx;
     if (memory) {
@@ -555,73 +603,75 @@ void llama_context::sched_reserve() {
     int n_splits_tg = -1;
     int n_nodes_tg  = -1;
 
-    // reserve pp (prompt processing) graph first so that buffers are only allocated once
-    {
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(),
-                model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr);
-        if (!gf) {
-            if (cparams.pipeline_parallel) {
-                LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
-                cparams.pipeline_parallel = false;
-                sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
-                gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+    if (cparams.pshard) {
+        LLAMA_LOG_INFO("%s: pshard enabled, skipping baseline reserves (deferred to first plan apply)\n", __func__);
+    } else {
+
+        // reserve pp (prompt processing) graph first so that buffers are only allocated once
+        {
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(),
+                    model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr);
+            if (!gf) {
+                if (cparams.pipeline_parallel) {
+                    LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
+                    cparams.pipeline_parallel = false;
+                    sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
+                    gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+                }
+                if (!gf) {
+                    throw std::runtime_error("failed to allocate compute pp buffers");
+                }
             }
+
+            n_splits_pp = ggml_backend_sched_get_n_splits(sched.get());
+            n_nodes_pp  = ggml_graph_n_nodes(gf);
+        }
+
+        // reserve with tg (token generation) graph to get the number of splits and nodes
+        {
+            auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), model.hparams.no_alloc);
+            if (!gf) {
+                throw std::runtime_error("failed to allocate compute tg buffers");
+            }
+
+            n_splits_tg = ggml_backend_sched_get_n_splits(sched.get());
+            n_nodes_tg  = ggml_graph_n_nodes(gf);
+        }
+
+        // reserve again with pp graph to avoid ggml-alloc reallocations during inference
+        {
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(), model.hparams.no_alloc);
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
         }
 
-        n_splits_pp = ggml_backend_sched_get_n_splits(sched.get());
-        n_nodes_pp  = ggml_graph_n_nodes(gf);
-    }
-
-    // reserve with tg (token generation) graph to get the number of splits and nodes
-    {
-        auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), model.hparams.no_alloc);
-        if (!gf) {
-            throw std::runtime_error("failed to allocate compute tg buffers");
+        for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+            ggml_backend_t             backend = backend_ptrs[i];
+            ggml_backend_buffer_type_t buft    = backend_buft[i];
+            if (!model.hparams.no_alloc) {
+                backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend);
+            }
+            if (backend_buf_exp_size[i] > 1) {
+                LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
+                        ggml_backend_buft_name(buft),
+                        backend_buf_exp_size[i] / 1024.0 / 1024.0);
+            }
         }
 
-        n_splits_tg = ggml_backend_sched_get_n_splits(sched.get());
-        n_nodes_tg  = ggml_graph_n_nodes(gf);
-    }
-
-    // reserve again with pp graph to avoid ggml-alloc reallocations during inference
-    {
-        // TODO: not sure if the following graph would be worst case for multi-stream KV caches:
-        //
-        // auto * gf = graph_reserve(n_tokens, 1, n_tokens, mctx.get());
-        //
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(), model.hparams.no_alloc);
-        if (!gf) {
-            throw std::runtime_error("failed to allocate compute pp buffers");
+        if (n_nodes_pp == n_nodes_tg) {
+            LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, n_nodes_pp);
+        } else {
+            LLAMA_LOG_INFO("%s: graph nodes  = %d (with bs=%d), %d (with bs=1)\n", __func__, n_nodes_pp, n_tokens, n_nodes_tg);
         }
-    }
 
-    for (size_t i = 0; i < backend_ptrs.size(); ++i) {
-        ggml_backend_t             backend = backend_ptrs[i];
-        ggml_backend_buffer_type_t buft    = backend_buft[i];
-        if (!model.hparams.no_alloc) {
-            backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend);
+        if (n_splits_pp == n_splits_tg) {
+            LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits_pp);
+        } else {
+            LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=1)\n", __func__, n_splits_pp, n_tokens, n_splits_tg);
         }
-        if (backend_buf_exp_size[i] > 1) {
-            LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
-                    ggml_backend_buft_name(buft),
-                    backend_buf_exp_size[i] / 1024.0 / 1024.0);
-        }
-    }
 
-    if (n_nodes_pp == n_nodes_tg) {
-        LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, n_nodes_pp);
-    } else {
-        LLAMA_LOG_INFO("%s: graph nodes  = %d (with bs=%d), %d (with bs=1)\n", __func__, n_nodes_pp, n_tokens, n_nodes_tg);
-    }
-
-    if (n_splits_pp == n_splits_tg) {
-        LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits_pp);
-    } else {
-        LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=1)\n", __func__, n_splits_pp, n_tokens, n_splits_tg);
-    }
+    } // !cparams.pshard
 
     const int64_t t_end_us = ggml_time_us();
 
@@ -1197,7 +1247,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         res->reset();
 
         ggml_backend_sched_reset(sched.get());
-        ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+        if (cparams.cb_eval) {
+            ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+        }
 
         //const auto t_start_us = ggml_time_us();
 
@@ -1211,10 +1263,18 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             return nullptr;
         }
 
+        if (cparams.pshard) {
+            pshard_assign_tensors(sched.get(), model, memory.get(), backends, pshard_layout, gf);
+        }
+
         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
+        }
+
+        if (cparams.pshard) {
+            pshard_refresh_stream_views(memory.get());
         }
     }
 
@@ -1226,6 +1286,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         res->set_inputs(&ubatch);
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+    }
+
+    if (cparams.pshard) {
+        pshard_update_write_cells(mctx);
     }
 
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
@@ -1609,6 +1673,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
     embd_seq.clear();
     output_swaps.clear();
 
+    if (cparams.pshard) {
+        pshard_maybe_switch(n_tokens_all);
+    }
+
     sched_reserve();
 
     bool did_optimize = false;
@@ -1616,10 +1684,19 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // handle any pending shifts/copies
     memory_update(false);
 
+    uint32_t n_ubatch_eff = cparams.n_ubatch;
+    if (cparams.pshard && n_tokens_all >= 512) {
+        auto * registry = model.get_plan_registry();
+        if (registry && !registry->tier_sizes.empty()) {
+            const uint32_t max_ubatch = std::min(cparams.n_ubatch, registry->tier_sizes.back());
+            n_ubatch_eff = registry->find_optimal_ubatch(n_tokens_all, max_ubatch);
+        }
+    }
+
     llama_memory_context_ptr mctx;
 
     while (true) {
-        mctx = memory->init_batch(*balloc, cparams.n_ubatch, output_all);
+        mctx = memory->init_batch(*balloc, n_ubatch_eff, output_all);
         if (!mctx) {
             return -2;
         }
@@ -2129,6 +2206,10 @@ ggml_cgraph * llama_context::graph_reserve(
 
     this->n_outputs = save_n_outputs;
 
+    if (cparams.pshard) {
+        pshard_assign_tensors(sched.get(), model, memory.get(), backends, pshard_layout, gf);
+    }
+
     // initialize scheduler with the specified graph
     if (split_only) {
         if (sizes) {
@@ -2199,17 +2280,104 @@ ggml_status llama_context::graph_compute(
 }
 
 llm_graph_cb llama_context::graph_get_cb() const {
-    return [&](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
+    // keep weight islands on last_weight_bid and return mixed tails to layer_bid
+    int32_t last_weight_bid = -1;
+    int     last_il         = -2;
+    return [&, last_weight_bid, last_il](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) mutable {
         if (il >= 0) {
             ggml_format_name(cur, "%s-%d", name, il);
         } else {
             ggml_set_name(cur, name);
         }
 
+        if (cparams.pshard) {
+            auto sched_backend_id = [&](ggml_backend_t backend) -> int32_t {
+                if (backend == nullptr) {
+                    return -1;
+                }
+                for (int32_t i = 0; i < (int32_t) backends.size(); i++) {
+                    if (backends[i].get() == backend) {
+                        return i;
+                    }
+                }
+                return -1;
+            };
+
+            int32_t bid = -1;
+            bool has_tensor_backend = false;
+
+            if (il != last_il) {
+                last_il = il;
+                last_weight_bid = -1;
+            }
+
+            const auto & tbids = model.get_tensor_backend_ids();
+            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                if (!cur->src[j]) {
+                    continue;
+                }
+                auto it = tbids.find(cur->src[j]);
+                if (it != tbids.end() && it->second >= 0) {
+                    bid = it->second;
+                    has_tensor_backend = true;
+                    break;
+                }
+            }
+
+            const auto & lbids = model.get_layer_backend_ids();
+            auto lit = lbids.find(il);
+            const int32_t layer_bid = (lit != lbids.end()) ? lit->second : -1;
+
+            bool mixed_src_backends = false;
+            if (!has_tensor_backend) {
+                int32_t src_bid = -1;
+                for (int j = 0; j < GGML_MAX_SRC; j++) {
+                    if (!cur->src[j]) {
+                        continue;
+                    }
+
+                    ggml_tensor * src = cur->src[j];
+                    ggml_backend_t src_backend = ggml_backend_sched_get_tensor_backend(sched.get(), src);
+                    while (src_backend == nullptr && src->view_src != nullptr) {
+                        src = src->view_src;
+                        src_backend = ggml_backend_sched_get_tensor_backend(sched.get(), src);
+                    }
+
+                    const int32_t cur_src_bid = sched_backend_id(src_backend);
+                    if (cur_src_bid < 0) {
+                        continue;
+                    }
+
+                    if (src_bid < 0) {
+                        src_bid = cur_src_bid;
+                    } else if (src_bid != cur_src_bid) {
+                        mixed_src_backends = true;
+                        break;
+                    }
+                }
+            }
+
+            if (has_tensor_backend) {
+                last_weight_bid = bid;
+            } else if (mixed_src_backends && last_weight_bid >= 0 && layer_bid >= 0) {
+                bid = layer_bid;
+                last_weight_bid = bid;
+            } else if (last_weight_bid >= 0) {
+                bid = last_weight_bid;
+            } else {
+                bid = layer_bid;
+            }
+
+            // views keep following their source storage.
+            if (bid >= 0 && bid < (int32_t)backends.size() && cur->view_src == nullptr) {
+                ggml_backend_sched_set_tensor_backend(sched.get(), cur, backends[bid].get());
+            }
+        }
+
         // norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
         // FIXME: fix in ggml_backend_sched
         const bool full_offload = model.n_gpu_layers() > model.hparams.n_layer;
-        if (ubatch.n_tokens < 32 || full_offload) {
+        if (!cparams.pshard && (ubatch.n_tokens < 32 || full_offload)) {
             if (il != -1 && strcmp(name, "norm") == 0) {
                 const auto & dev_layer = model.dev_layer(il);
                 for (const auto & backend : backends) {
@@ -2918,6 +3086,7 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
+        /*.pshard                      =*/ false,
     };
 
     return result;

@@ -9,6 +9,7 @@
 #include "llama-model-loader.h"
 #include "llama-model-saver.h"
 #include "llama-model.h"
+#include "llama-pshard-plan.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"
@@ -46,13 +47,7 @@ const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_ty
     GGML_ABORT("fatal error");
 }
 
-struct llama_device_memory_data {
-    int64_t total;
-    int64_t free;
-    llama_memory_breakdown_data mb;
-};
-
-static std::vector<llama_device_memory_data> llama_get_device_memory_data(
+std::vector<llama_device_memory_data> llama_get_device_memory_data(
         const char * path_model, const llama_model_params * mparams, const llama_context_params * cparams,
         std::vector<llama_device> & devs, uint32_t & hp_ngl, uint32_t & hp_n_ctx_train, uint32_t & hp_n_expert,
         const ggml_log_level log_level) {
@@ -436,21 +431,24 @@ static void llama_params_fit_impl(
             il0 += ngl_per_device[id].n_full();
             for (uint32_t il = il0; il < il0 + ngl_per_device[id].n_part; il++) {
                 if (itbo + 1 >= ntbo) {
-                    tensor_buft_overrides[itbo].pattern = nullptr;
-                    tensor_buft_overrides[itbo].buft    = nullptr;
+                    tensor_buft_overrides[itbo].pattern    = nullptr;
+                    tensor_buft_overrides[itbo].buft       = nullptr;
+                    tensor_buft_overrides[itbo].backend_id = -1;
                     itbo++;
                     mparams.tensor_buft_overrides = tensor_buft_overrides;
                     throw llama_params_fit_exception("llama_max_tensor_buft_overrides() == "
                         + std::to_string(ntbo) + " is insufficient for model");
                 }
-                tensor_buft_overrides[itbo].pattern = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
-                tensor_buft_overrides[itbo].buft = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
+                tensor_buft_overrides[itbo].pattern    = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
+                tensor_buft_overrides[itbo].buft       = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
+                tensor_buft_overrides[itbo].backend_id = -1;
                 itbo++;
             }
             il0 += ngl_per_device[id].n_part;
         }
-        tensor_buft_overrides[itbo].pattern = nullptr;
-        tensor_buft_overrides[itbo].buft    = nullptr;
+        tensor_buft_overrides[itbo].pattern    = nullptr;
+        tensor_buft_overrides[itbo].buft       = nullptr;
+        tensor_buft_overrides[itbo].backend_id = -1;
         itbo++;
         mparams.tensor_buft_overrides = tensor_buft_overrides;
     };
@@ -486,8 +484,8 @@ static void llama_params_fit_impl(
     if (hp_nex > 0) {
         const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate_up|gate)_(ch|)exps"; // matches all MoE tensors
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
-        tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft};
-        tensor_buft_overrides[1] = {nullptr, nullptr};
+        tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft, -1};
+        tensor_buft_overrides[1] = {nullptr, nullptr, -1};
         mparams->tensor_buft_overrides = tensor_buft_overrides;
 
         LLAMA_LOG_DEBUG("%s: getting device memory data with all MoE tensors moved to system memory:\n", __func__);
@@ -508,7 +506,7 @@ static void llama_params_fit_impl(
         }
 
         // reset
-        tensor_buft_overrides[0] = {nullptr, nullptr};
+        tensor_buft_overrides[0] = {nullptr, nullptr, -1};
         mparams->tensor_buft_overrides = tensor_buft_overrides;
     }
 
@@ -875,6 +873,8 @@ static int llama_model_load(struct gguf_context * metadata, llama_model_set_tens
             LLAMA_LOG_INFO("%s: vocab only - skipping tensors\n", __func__);
             return 0;
         }
+
+        ml.force_duplicate_tied = params.pshard;
 
         if (!model.load_tensors(ml)) {
             return -2;
