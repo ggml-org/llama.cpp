@@ -967,10 +967,8 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
             my_stats[0] = M;
             my_stats[1] = S;
             FENCE;
-#ifndef UBERKERNEL_SUPPRESS_SCP_SETUP
             evict_range_to_l2(acc, (int64_t)dv * (int64_t)sizeof(float));
             evict_to_l2((const void *)my_stats, 1, 64);
-#endif
             WAIT_CACHEOPS;
 
             // A: team members have all written their partials.

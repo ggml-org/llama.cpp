@@ -565,9 +565,9 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 struct uber_flash_attn_ext_params *p = (struct uber_flash_attn_ext_params *) inst_params;
                 evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
                 evict_region_past_l2(p->src1.data, tensor_bytes(&p->src1));
-                evict_region_past_l2(p->src2.data, tensor_bytes(&p->src2));
+                // evict_region_past_l2(p->src2.data, tensor_bytes(&p->src2));
                 if (p->mask.data) {
-                    evict_region_past_l2(p->mask.data, tensor_bytes(&p->mask));
+                    // evict_region_past_l2(p->mask.data, tensor_bytes(&p->mask));
                 }
                 rc = flash_attn_ext_f16_me_entry((struct ggml_et_flash_attn_ext_params *) inst_params, env);
                 break;
