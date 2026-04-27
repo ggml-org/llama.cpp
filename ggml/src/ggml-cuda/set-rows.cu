@@ -211,6 +211,9 @@ static void set_rows_cuda(
 
 template<typename src_t, typename idx_t>
 static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    if (dst->type == GGML_TYPE_IQ1_S) {
+        return; // Handled by TurboQuant
+    }
     const src_t * src0_d = (const src_t *)src0->data;
     const idx_t * src1_d = (const idx_t *)src1->data;
 

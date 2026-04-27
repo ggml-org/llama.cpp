@@ -14,6 +14,12 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(GGML_USE_HIP) && defined(LLAMA_TURBOQUANT)
+namespace turboquant_integration {
+struct llama_tq_integration;
+}
+#endif
+
 struct llama_cparams;
 struct llama_ubatch;
 struct llama_model_loader;
@@ -576,6 +582,10 @@ struct llama_model {
 
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;
+
+#if defined(GGML_USE_HIP) && defined(LLAMA_TURBOQUANT)
+    struct turboquant_integration::llama_tq_integration * tq = nullptr;
+#endif
 
     explicit llama_model(const struct llama_model_params & params);
     ~llama_model();

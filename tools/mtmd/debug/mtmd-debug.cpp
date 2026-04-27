@@ -72,7 +72,7 @@ int main(int argc, char ** argv) {
 
     mtmd::context_ptr ctx_mtmd;
     common_init_result_ptr llama_init;
-    common_debug_cb_user_data cb_data;
+    base_callback_data cb_data;
 
     llama_init = common_init_from_params(params);
     {
@@ -89,7 +89,7 @@ int main(int argc, char ** argv) {
         {
             // always enable debug callback
             mparams.cb_eval_user_data = &cb_data;
-            mparams.cb_eval = common_debug_cb_eval;
+            mparams.cb_eval = common_debug_cb_eval<false>;
         }
         ctx_mtmd.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_mtmd.get()) {

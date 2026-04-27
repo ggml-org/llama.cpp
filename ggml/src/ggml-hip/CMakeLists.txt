@@ -155,3 +155,15 @@ if (GGML_HIP_RCCL)
 endif()
 
 target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)
+
+if (LLAMA_TURBOQUANT)
+    set(TQ_DIR "../turboquant_rocm")
+    target_sources(ggml-hip PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/${TQ_DIR}/turboquant.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/${TQ_DIR}/llama_tq_hook.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/${TQ_DIR}/tq_hooks.hip"
+    )
+    target_include_directories(ggml-hip PRIVATE ${CMAKE_SOURCE_DIR}/ggml/src/turboquant_rocm)
+    target_include_directories(ggml-hip PRIVATE ${CMAKE_SOURCE_DIR}/ggml/src)
+    add_compile_definitions(LLAMA_TURBOQUANT)
+endif()

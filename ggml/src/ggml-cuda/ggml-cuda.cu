@@ -48,6 +48,10 @@
 #include "ggml-cuda/top-k.cuh"
 #include "ggml-cuda/mean.cuh"
 #include "ggml-cuda/tsembd.cuh"
+
+#ifdef LLAMA_TURBOQUANT
+#include "../turboquant_rocm/tq_hooks.hip"
+#endif
 #include "ggml-cuda/topk-moe.cuh"
 #include "ggml-cuda/unary.cuh"
 #include "ggml-cuda/upscale.cuh"
@@ -2917,6 +2921,11 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_argsort(ctx, dst);
             break;
         case GGML_OP_FLASH_ATTN_EXT:
+#ifdef LLAMA_TURBOQUANT
+            if (tq_on_flash_attn(ctx, dst)) {
+                break;
+            }
+#endif
             ggml_cuda_flash_attn_ext(ctx, dst);
             break;
         case GGML_OP_CROSS_ENTROPY_LOSS:

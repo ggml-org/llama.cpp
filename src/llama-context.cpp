@@ -11,6 +11,10 @@
 #include "llama-ext.h"
 #include "llama.h"
 
+#if defined(GGML_USE_HIP) && defined(LLAMA_TURBOQUANT)
+#include "turboquant_integration.h"
+#endif
+
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -1198,6 +1202,24 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
         ggml_backend_sched_reset(sched.get());
         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+
+#if defined(GGML_USE_HIP) && defined(LLAMA_TURBOQUANT)
+        if (!model.tq && model.hparams.n_layer > 0) {
+            model.tq = new turboquant_integration::llama_tq_integration();
+            if (!model.tq->init(
+                    model.hparams.n_layer,
+                    model.hparams.n_head_kv(0),
+                    model.hparams.n_embd_head_k(0),
+                    cparams.n_ctx,
+                    3,  // key bits
+                    2)) // val bits
+            {
+                delete model.tq;
+                model.tq = nullptr;
+                LLAMA_LOG_WARN("%s: TurboQuant initialization failed, continuing without TQ\n", __func__);
+            }
+        }
+#endif
 
         //const auto t_start_us = ggml_time_us();
 
