@@ -206,6 +206,11 @@ if (Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-deepseek4-native-packers.py ${PROJECT_SOURCE_DIR})
     set_tests_properties(test-deepseek4-native-packers PROPERTIES LABELS python SKIP_RETURN_CODE 77)
+    add_test(
+        NAME test-moe-copy-lru-sim
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-moe-copy-lru-sim.py ${PROJECT_SOURCE_DIR})
+    set_tests_properties(test-moe-copy-lru-sim PROPERTIES LABELS python)
 endif()
 llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-chat-template.cpp)
