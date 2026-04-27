@@ -3017,6 +3017,10 @@ int op_matmul(struct htp_ops_context * octx) {
     const int act_stride = (int)(src1->nb[1] / sizeof(float));
     const int wgt_stride = (int)(src0->nb[1] / sizeof(__fp16));
 
+    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
+        return HTP_STATUS_OK;
+    }
+
     if (src0->type == HTP_TYPE_F16) {
         if (is_batched) {
             hmx_matmul_w16a32_batched_params_t batch_params = {

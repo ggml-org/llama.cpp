@@ -270,6 +270,7 @@ task_params server_task::params_from_json_cmpl(
     params.n_indent         = json_value(data,       "n_indent",           defaults.n_indent);
     params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
+    params.n_discard        = std::max(0, params.n_discard);
     params.n_cmpl           = json_value(data,       "n_cmpl",             json_value(data, "n", 1));
     params.n_cache_reuse    = json_value(data,       "n_cache_reuse",      defaults.n_cache_reuse);
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
