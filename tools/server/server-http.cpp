@@ -438,7 +438,7 @@ void server_http_context::get(const std::string & path, const server_http_contex
 void server_http_context::post(const std::string & path, const server_http_context::handler_t & handler) const {
     pimpl->srv->Post(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
         std::string body = req.body;
-        std::map<std::string, raw_buffer> files;
+        std::map<std::string, uploaded_file> files;
 
         if (req.is_multipart_form_data()) {
             // translate text fields to a JSON object and use it as the body
@@ -459,7 +459,11 @@ void server_http_context::post(const std::string & path, const server_http_conte
 
             // populate files from multipart form
             for (const auto & [key, file] : req.form.files) {
-                files[key] = raw_buffer(file.content.begin(), file.content.end());
+                files[key] = uploaded_file{
+                    raw_buffer(file.content.begin(), file.content.end()),
+                    file.filename,
+                    file.content_type,
+                };
             }
         }
 

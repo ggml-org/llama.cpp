@@ -36,13 +36,19 @@ struct server_http_res {
 using server_http_res_ptr = std::unique_ptr<server_http_res>;
 using raw_buffer = std::vector<uint8_t>;
 
+struct uploaded_file {
+    raw_buffer data;
+    std::string filename;
+    std::string content_type;
+};
+
 struct server_http_req {
     std::map<std::string, std::string> params; // path_params + query_params
     std::map<std::string, std::string> headers; // used by MCP proxy
     std::string path;
     std::string query_string; // query parameters string (e.g. "action=save")
     std::string body;
-    std::map<std::string, raw_buffer> files; // used for file uploads (form data)
+    std::map<std::string, uploaded_file> files; // used for file uploads (form data)
     const std::function<bool()> & should_stop;
 
     std::string get_param(const std::string & key, const std::string & def = "") const {
