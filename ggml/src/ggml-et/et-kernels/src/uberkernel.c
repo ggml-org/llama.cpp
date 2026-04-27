@@ -4,6 +4,7 @@
 #include "ggml-et-uberkernel-kernel-map.h"
 #include "ggml_tensor.h"
 #include "platform.h"
+#include "math_fp.h"
 
 
 struct ggml_et_glu_params;
@@ -114,6 +115,97 @@ struct uber_cont_params {
     struct ggml_tensor src0;
     struct ggml_tensor dst;
 };
+
+static void copy_f32_to_f16_row(uint16_t* dst, const float* src, int64_t num_elements) {
+    for (int64_t i = 0; i < num_elements; i++) {
+        dst[i] = fp32_to_fp16(src[i]);
+    }
+}
+
+static void copy_f32_row(float* dst, const float* src, int64_t num_elements) {
+    for (int64_t i = 0; i < num_elements; i++) {
+        dst[i] = src[i];
+    }
+}
+
+static int set_rows_f32_impl(struct uber_set_rows_params* params, void* env) {
+    kernel_environment_t* kernel_env = (kernel_environment_t*)env;
+    if (!kernel_env) return -1;
+
+    int thread_id = get_relative_thread_id(kernel_env->shire_mask);
+    if (thread_id < 0) return 0;
+    if (thread_id != 0) return 0; // Single-threaded for now
+
+    if (params == 0 || ((uint64_t)params & 0x7) != 0) return -1;
+
+    struct ggml_tensor* src0 = &params->src0;
+    struct ggml_tensor* src1 = &params->src1;
+    struct ggml_tensor* dst = &params->dst;
+
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_I64) return -1;
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) return -1;
+
+    float* src0_data = (float*)src0->data;
+    int64_t* src1_data = (int64_t*)src1->data;
+    void* dst_data = dst->data;
+
+    if (!src0_data || !src1_data || !dst_data) return -1;
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne01 = src0->ne[1];
+    const int64_t ne02 = src0->ne[2];
+    const int64_t ne03 = src0->ne[3];
+
+    const int64_t nb01 = src0->nb[1];
+    const int64_t nb02 = src0->nb[2];
+    const int64_t nb03 = src0->nb[3];
+
+    const int64_t ne10 = src1->ne[0];
+    const int64_t ne11 = src1->ne[1];
+    const int64_t ne12 = src1->ne[2];
+
+    const int64_t nb10 = src1->nb[0];
+    const int64_t nb11 = src1->nb[1];
+    const int64_t nb12 = src1->nb[2];
+
+    const int64_t ne_dst1 = dst->ne[1];
+    const int64_t nb1 = dst->nb[1];
+    const int64_t nb2 = dst->nb[2];
+    const int64_t nb3 = dst->nb[3];
+
+    if (ne10 != ne01) return -1;
+
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = 0; i01 < ne01; i01++) {
+                const int64_t i12 = i03 % ne12;
+                const int64_t i11 = i02 % ne11;
+                const int64_t i10 = i01;
+
+                const int64_t index_byte_offset = i10*nb10 + i11*nb11 + i12*nb12;
+                const int64_t dst_row_index = *(int64_t*)((char*)src1_data + index_byte_offset);
+
+                if (dst_row_index < 0 || dst_row_index >= ne_dst1) return -1;
+
+                const char* src_row_ptr = (char*)src0_data + i01*nb01 + i02*nb02 + i03*nb03;
+                const float* src_row = (const float*)src_row_ptr;
+
+                char* dst_row_ptr = (char*)dst_data + dst_row_index*nb1 + i02*nb2 + i03*nb3;
+
+                if (dst->type == GGML_TYPE_F32) {
+                    float* dst_row = (float*)dst_row_ptr;
+                    copy_f32_row(dst_row, src_row, ne00);
+                } else if (dst->type == GGML_TYPE_F16) {
+                    uint16_t* dst_row = (uint16_t*)dst_row_ptr;
+                    copy_f32_to_f16_row(dst_row, src_row, ne00);
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
 int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
     kernel_environment_t * kernel_env = (kernel_environment_t *) env;
 
@@ -199,13 +291,13 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 break;
             }
 
-            // case GGML_ET_UBERKERNEL_KERNEL_SET_ROWS_F32: {
-            //     struct uber_set_rows_params *p = (struct uber_set_rows_params *) inst_params;
-            //     evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
-            //     evict_region_past_l2(p->src1.data, tensor_bytes(&p->src1));
-            //     rc = set_rows_f32_entry((struct ggml_et_set_rows_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_SET_ROWS_F32: {
+                struct uber_set_rows_params *p = (struct uber_set_rows_params *) inst_params;
+                evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
+                evict_region_past_l2(p->src1.data, tensor_bytes(&p->src1));
+                rc = set_rows_f32_impl((struct uber_set_rows_params *) inst_params, env);
+                break;
+            }
 
             case GGML_ET_UBERKERNEL_KERNEL_GET_ROWS_F32: {
                 struct uber_get_rows_params *p = (struct uber_get_rows_params *) inst_params;
