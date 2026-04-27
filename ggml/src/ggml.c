@@ -5392,6 +5392,25 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
+void ggml_flash_attn_ext_add_top_k(
+        struct ggml_tensor * a,
+        struct ggml_tensor * top_k) {
+    if (!top_k) {
+        a->src[5] = NULL;
+        return;
+    }
+
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(a->src[5] == NULL);
+    GGML_ASSERT(a->src[3] != NULL);
+    GGML_ASSERT(a->src[3]->ne[1] == top_k->ne[1]);
+    GGML_ASSERT(a->src[3]->ne[2] == top_k->ne[2]);
+    GGML_ASSERT(a->src[3]->ne[3] == top_k->ne[3]);
+    GGML_ASSERT(top_k->type == GGML_TYPE_I32);
+
+    a->src[5] = top_k;
+}
+
 // ggml_flash_attn_back
 
 struct ggml_tensor * ggml_flash_attn_back(
