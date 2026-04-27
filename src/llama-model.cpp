@@ -8150,7 +8150,7 @@ void llama_model::print_info() const {
             }
             ss << "]";
         } else {
-            ss << v[0];
+            ss << std::to_string(v[0]);
         }
 
         return ss.str();
