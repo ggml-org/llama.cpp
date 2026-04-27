@@ -12,6 +12,7 @@ struct ggml_et_rope_params;
 struct ggml_et_rms_norm_params;
 struct ggml_et_rms_norm_mul_params;
 struct ggml_et_softmax_params;
+struct ggml_et_set_rows_params;
 
 extern int el_map_f32_entry(struct ggml_et_binary_params *, void *);
 extern int glu_f32_entry(struct ggml_et_glu_params *, void *);
@@ -20,6 +21,7 @@ extern int rope_f32_entry(struct ggml_et_rope_params *, void *);
 extern int rms_norm_f32_entry(struct ggml_et_rms_norm_params *, void *);
 extern int rms_norm_mul_f32_entry(struct ggml_et_rms_norm_mul_params *, void *);
 extern int softmax_f32_entry(struct ggml_et_softmax_params *, void *);
+extern int set_rows_f32_entry(struct ggml_et_set_rows_params *, void *);
 extern int mul_mat_f16_entry(struct ggml_et_binary_params *, void *);
 extern int mul_mat_f16_matrix_engine_entry(struct ggml_et_binary_params *, void *);
 extern int mul_mat_f32_entry(struct ggml_et_binary_params *, void *);
@@ -89,6 +91,12 @@ struct uber_softmax_params {
     struct ggml_tensor src0;
     struct ggml_tensor src1;
     struct ggml_tensor src2;
+    struct ggml_tensor dst;
+};
+
+struct uber_set_rows_params {
+    struct ggml_tensor src0;
+    struct ggml_tensor src1;
     struct ggml_tensor dst;
 };
 int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
@@ -173,6 +181,14 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                     evict_region_past_l2(p->src2.data, tensor_bytes(&p->src2));
                 }
                 rc = softmax_f32_entry((struct ggml_et_softmax_params *) inst_params, env);
+                break;
+            }
+
+            case GGML_ET_UBERKERNEL_KERNEL_SET_ROWS_F32: {
+                struct uber_set_rows_params *p = (struct uber_set_rows_params *) inst_params;
+                evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
+                evict_region_past_l2(p->src1.data, tensor_bytes(&p->src1));
+                rc = set_rows_f32_entry((struct ggml_et_set_rows_params *) inst_params, env);
                 break;
             }
 
