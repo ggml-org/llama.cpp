@@ -105,9 +105,17 @@ def read_events_from_lines(lines: Iterable[str]) -> Iterator[MoeCopyEvent]:
 def simulate_lru(events: Sequence[MoeCopyEvent], slots: Sequence[int]) -> Dict[Tuple[int, str], SimStats]:
     stats: Dict[Tuple[int, str], SimStats] = {}
     caches: Dict[Tuple[int, str], OrderedDict[int, None]] = {}
+    expert_sizes: Dict[str, int] = {}
 
     for slot_count in slots:
         for event in events:
+            previous_expert_size = expert_sizes.setdefault(event.key, event.expert_size)
+            if previous_expert_size != event.expert_size:
+                raise ValueError(
+                    f"inconsistent expert_size for {event.key}: "
+                    f"saw {event.expert_size}, expected {previous_expert_size}"
+                )
+
             stat_key = (slot_count, event.key)
             stat = stats.setdefault(stat_key, SimStats())
             cache = caches.setdefault(stat_key, OrderedDict())

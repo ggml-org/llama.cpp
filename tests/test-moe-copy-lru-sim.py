@@ -78,12 +78,27 @@ def test_cli(repo_root: Path) -> None:
     assert "2\tALL\t300\t4\t0\t7\t2\t5\t0.285714\t650\t450\t200\t0.307692" in result.stdout
 
 
+def test_rejects_inconsistent_expert_size(sim) -> None:
+    log = """\
+ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk src_backend=CPU dst_backend=CUDA0 n_expert=4 expert_size=100 used=1 used_bytes=100 ranges=1 copy_bytes=100 ids=[1]
+ggml_backend_sched_compute_splits: moe_copy split=1 input=0 tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk src_backend=CPU dst_backend=CUDA0 n_expert=4 expert_size=200 used=1 used_bytes=200 ranges=1 copy_bytes=200 ids=[2]
+"""
+    events = list(sim.read_events_from_lines(log.splitlines()))
+    try:
+        sim.simulate_lru(events, [2])
+    except ValueError as exc:
+        assert "inconsistent expert_size" in str(exc)
+    else:
+        raise AssertionError("accepted inconsistent expert_size for a single cache key")
+
+
 def main() -> None:
     repo_root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
     sim = load_sim(repo_root)
     test_parser(sim)
     test_lru_batch_eviction(sim)
     test_cli(repo_root)
+    test_rejects_inconsistent_expert_size(sim)
 
 
 if __name__ == "__main__":
