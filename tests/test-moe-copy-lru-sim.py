@@ -94,6 +94,7 @@ def test_runtime_cache_parser_and_summary(sim) -> None:
     assert len(events) == 3
     assert events[0].key == "CUDA0:blk.0.ffn_down_exps.weight"
     assert events[0].slots == 2
+    assert events[0].expert_size == 100
     assert events[0].cache_bytes == 300
     assert events[0].used == 2
     assert events[0].hits == 0
@@ -103,6 +104,7 @@ def test_runtime_cache_parser_and_summary(sim) -> None:
     stats = sim.summarize_runtime_cache(events)
     k0 = stats[(2, "CUDA0:blk.0.ffn_down_exps.weight")]
     assert k0.slots == 2
+    assert k0.expert_size == 100
     assert k0.cache_bytes == 300
     assert k0.events == 2
     assert k0.accesses == 4
@@ -247,6 +249,28 @@ ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weigh
     assert stats[(3, "CUDA0:blk.0.ffn_down_exps.weight")].events == 1
     assert stats[(2, "CUDA0:blk.0.ffn_down_exps.weight")].cache_bytes == 200
     assert stats[(3, "CUDA0:blk.0.ffn_down_exps.weight")].cache_bytes == 300
+
+    inconsistent_cache_bytes = """\
+ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 expert_size=100 cache_bytes=200 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100
+ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 expert_size=100 cache_bytes=300 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100
+"""
+    try:
+        sim.summarize_runtime_cache(list(sim.read_cache_events_from_lines(inconsistent_cache_bytes.splitlines())))
+    except ValueError as exc:
+        assert "cache_bytes" in str(exc)
+    else:
+        raise AssertionError("accepted inconsistent runtime cache footprint")
+
+    inconsistent_expert_size = """\
+ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 expert_size=100 cache_bytes=200 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100
+ggml_backend_sched_moe_cache_prepare: moe_cache tensor=blk.0.ffn_down_exps.weight backend=CUDA0 slots=2 expert_size=101 cache_bytes=200 used=1 hits=0 misses=1 copied=100 total_hits=0 total_misses=1 total_copied=100
+"""
+    try:
+        sim.summarize_runtime_cache(list(sim.read_cache_events_from_lines(inconsistent_expert_size.splitlines())))
+    except ValueError as exc:
+        assert "expert_size" in str(exc)
+    else:
+        raise AssertionError("accepted inconsistent runtime cache expert size")
 
     bad_bypass = "ggml_backend_sched_compute_splits: moe_cache_bypass tensor=blk.0.ffn_down_exps.weight node=ffn_down ids=topk backend=CUDA0 slots=-1 reason=too_many_experts n_expert=4 expert_size=100"
     try:

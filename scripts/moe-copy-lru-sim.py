@@ -32,6 +32,7 @@ class MoeCacheEvent:
     tensor: str
     backend: str
     slots: int
+    expert_size: int
     cache_bytes: int
     used: int
     hits: int
@@ -68,6 +69,7 @@ class SimStats:
 @dataclass
 class RuntimeStats:
     slots: Optional[int] = None
+    expert_size: int = 0
     cache_bytes: int = 0
     events: int = 0
     accesses: int = 0
@@ -143,6 +145,7 @@ def parse_moe_cache_line(line: str) -> Optional[MoeCacheEvent]:
         tensor = fields["tensor"]
         backend = fields["backend"]
         slots = int(fields["slots"])
+        expert_size = int(fields.get("expert_size", "0"))
         cache_bytes = int(fields.get("cache_bytes", "0"))
         used = int(fields["used"])
         hits = int(fields["hits"])
@@ -154,7 +157,7 @@ def parse_moe_cache_line(line: str) -> Optional[MoeCacheEvent]:
     except KeyError as exc:
         raise ValueError(f"missing moe_cache field: {exc.args[0]}") from exc
 
-    if slots < 0 or cache_bytes < 0 or used < 0 or hits < 0 or misses < 0 or copied < 0:
+    if slots < 0 or expert_size < 0 or cache_bytes < 0 or used < 0 or hits < 0 or misses < 0 or copied < 0:
         raise ValueError("moe_cache counters must be non-negative")
     if used != hits + misses:
         raise ValueError(f"used={used} does not match hits={hits} + misses={misses}")
@@ -166,6 +169,7 @@ def parse_moe_cache_line(line: str) -> Optional[MoeCacheEvent]:
         tensor=tensor,
         backend=backend,
         slots=slots,
+        expert_size=expert_size,
         cache_bytes=cache_bytes,
         used=used,
         hits=hits,
@@ -356,7 +360,18 @@ def summarize_runtime_cache(events: Sequence[MoeCacheEvent]) -> Dict[Tuple[int, 
         stat = stats.setdefault((event.slots, event.key), RuntimeStats(slots=event.slots))
         if stat.slots is None:
             stat.slots = event.slots
-        stat.cache_bytes = max(stat.cache_bytes, event.cache_bytes)
+        if stat.expert_size and event.expert_size and stat.expert_size != event.expert_size:
+            raise ValueError(
+                f"inconsistent expert_size for runtime cache {event.key} slots={event.slots}: "
+                f"saw {event.expert_size}, expected {stat.expert_size}"
+            )
+        if stat.cache_bytes and event.cache_bytes and stat.cache_bytes != event.cache_bytes:
+            raise ValueError(
+                f"inconsistent cache_bytes for runtime cache {event.key} slots={event.slots}: "
+                f"saw {event.cache_bytes}, expected {stat.cache_bytes}"
+            )
+        stat.expert_size = stat.expert_size or event.expert_size
+        stat.cache_bytes = stat.cache_bytes or event.cache_bytes
 
         stat.events += 1
         stat.accesses += event.used
