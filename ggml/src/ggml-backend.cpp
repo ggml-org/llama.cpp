@@ -2014,28 +2014,30 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         };
 
                         int id = 0;
-                        while (!ggml_bitset_get(used_ids.data(), id)) {
+                        while (id < n_expert && !ggml_bitset_get(used_ids.data(), id)) {
                             id++;
                         }
-                        int32_t first_id = id;
-                        int32_t last_id = first_id;
+                        if (id < n_expert) {
+                            int32_t first_id = id;
+                            int32_t last_id = first_id;
 
-                        for (++id; id < n_expert; ++id) {
-                            if (!ggml_bitset_get(used_ids.data(), id)) {
-                                continue;
-                            }
+                            for (++id; id < n_expert; ++id) {
+                                if (!ggml_bitset_get(used_ids.data(), id)) {
+                                    continue;
+                                }
 
-                            if (id == last_id + 1) {
+                                if (id == last_id + 1) {
+                                    last_id = id;
+                                    continue;
+                                }
+
+                                copy_experts(first_id, last_id);
+
+                                first_id = id;
                                 last_id = id;
-                                continue;
                             }
-
                             copy_experts(first_id, last_id);
-
-                            first_id = id;
-                            last_id = id;
                         }
-                        copy_experts(first_id, last_id);
 
                         if (moe_log) {
                             std::string used_ids_str;
