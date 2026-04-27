@@ -137,29 +137,12 @@ static ggml_sycl_device_info ggml_sycl_init() {
     return info;
 }
 
-#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO) && defined(__linux__) && (defined(__x86_64__) || defined(_M_X64))
-static void ggml_sycl_flush_range(void *ptr, size_t size) {
-    const size_t cache_line_size = 64;
-    char *p = (char *)((uintptr_t)ptr & ~(cache_line_size - 1));
-    char *end = (char *)ptr + size;
-
-#if defined(__CLFLUSHOPT__)
-    static bool has_clflushopt = __builtin_cpu_supports("clflushopt");
-    if (has_clflushopt) {
-        for (; p < end; p += cache_line_size) {
-            _mm_clflushopt(p);
-        }
-    } else {
-        for (; p < end; p += cache_line_size) {
-            _mm_clflush(p);
-        }
-    }
-#else
-    for (; p < end; p += cache_line_size) {
-        _mm_clflush(p);
-    }
-#endif
-    _mm_sfence();
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO) && defined(__linux__)
+static void ggml_sycl_system_barrier(sycl::queue & q) {
+    // Level Zero System Barrier ensures visibility between CPU and GPU on UMA
+    auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
+    auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
+    zeContextSystemBarrier(ze_ctx, ze_dev);
 }
 #endif
 
@@ -548,21 +531,13 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
 #if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO) && defined(__linux__)
     if (ctx->is_zero_copy) {
-        // Zero-copy path: the buffer was imported via DMA-BUF — the GPU already
-        // has a mapping to the same physical pages as ctx->memfd_mmap_ptr.
-        // Just copy from the mmap source (host model data) into the pinned memfd
-        // region. No sycl::memcpy needed: the GPU reads via tensor->data (L0 ptr)
-        // from the exact same physical pages we write to here.
-        //
-        // tensor->data == ctx->dev_ptr + tensor_byte_offset_within_buffer
-        // We reproduce that offset on the CPU side via memfd_mmap_ptr.
+        // Zero-copy path: CPU and GPU share the same physical pages via DMA-BUF.
         size_t tensor_buf_offset = (size_t)((char *)tensor->data - (char *)ctx->dev_ptr);
         void *dst_ptr = (char *)ctx->memfd_mmap_ptr + tensor_buf_offset + offset;
         memcpy(dst_ptr, data, size);
 
-#if defined(__x86_64__) || defined(_M_X64)
-        ggml_sycl_flush_range(dst_ptr, size);
-#endif
+        // Ensure iGPU sees CPU writes (essential for UMA coherence)
+        ggml_sycl_system_barrier(*(ctx->stream));
         return;
     }
 #endif
@@ -572,9 +547,11 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     bool is_integrated = stream->get_device().get_info<sycl::info::device::host_unified_memory>();
     if (is_integrated) {
-        // Direct copy for integrated GPU using shared memory (UMA)
-        // avoids double-copy and synchronous wait() overhead.
+        // Shared memory (malloc_shared) path for integrated GPUs.
         memcpy((char *)tensor->data + offset, data, size);
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO) && defined(__linux__)
+        ggml_sycl_system_barrier(*stream);
+#endif
         return;
     }
 
