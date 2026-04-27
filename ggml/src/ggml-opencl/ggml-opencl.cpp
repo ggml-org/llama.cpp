@@ -479,9 +479,6 @@ struct ggml_backend_opencl_context {
     cl_program program_conv_2d_f16_f32;
     cl_program program_tsembd;
     cl_program program_gemv_moe_mxfp4_f32, program_gemm_moe_mxfp4_f32;
-    cl_program program_gemv_moe_mxfp4_f32_ns, program_gemm_moe_mxfp4_f32_ns;
-    cl_program program_moe_reorder_b;
-    cl_program program_moe_sort_by_expert;
     cl_program program_mul_mv_id_q4_0_f32_8x_flat;
     cl_program program_mul_mv_id_q8_0_f32, program_mul_mv_id_q8_0_f32_flat;
     cl_program program_mul_mv_id_mxfp4_f32;
@@ -2891,10 +2888,11 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 #else
         const std::string kernel_src = read_file("gemv_moe_mxfp4_f32_ns.cl");
 #endif
-        backend_ctx->program_gemv_moe_mxfp4_f32_ns =
+        cl_program prog =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), CL_moe_compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_gemv_moe_mxfp4_f32_ns = clCreateKernel(backend_ctx->program_gemv_moe_mxfp4_f32_ns, "kernel_gemv_moe_mxfp4_f32_ns", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemv_moe_mxfp4_f32_ns = clCreateKernel(prog, "kernel_gemv_moe_mxfp4_f32_ns", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
@@ -2907,10 +2905,11 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 #else
         const std::string kernel_src = read_file("gemm_moe_mxfp4_f32_ns.cl");
 #endif
-        backend_ctx->program_gemm_moe_mxfp4_f32_ns =
+        cl_program prog =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), CL_moe_compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_gemm_moe_mxfp4_f32_ns = clCreateKernel(backend_ctx->program_gemm_moe_mxfp4_f32_ns, "kernel_gemm_moe_mxfp4_f32_ns", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemm_moe_mxfp4_f32_ns = clCreateKernel(prog, "kernel_gemm_moe_mxfp4_f32_ns", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
@@ -2923,10 +2922,11 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 #else
         const std::string kernel_src = read_file("moe_reorder_b.cl");
 #endif
-        backend_ctx->program_moe_reorder_b =
+        cl_program prog =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), CL_moe_compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_moe_reorder_b = clCreateKernel(backend_ctx->program_moe_reorder_b, "kernel_moe_reorder_b", &err), err));
+        CL_CHECK((backend_ctx->kernel_moe_reorder_b = clCreateKernel(prog, "kernel_moe_reorder_b", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
@@ -2939,13 +2939,14 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 #else
         const std::string kernel_src = read_file("moe_sort_by_expert.cl");
 #endif
-        backend_ctx->program_moe_sort_by_expert =
+        cl_program prog =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), CL_moe_compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_moe_histogram = clCreateKernel(backend_ctx->program_moe_sort_by_expert, "kernel_moe_histogram", &err), err));
-        CL_CHECK((backend_ctx->kernel_moe_scan = clCreateKernel(backend_ctx->program_moe_sort_by_expert, "kernel_moe_scan", &err), err));
-        CL_CHECK((backend_ctx->kernel_moe_fill = clCreateKernel(backend_ctx->program_moe_sort_by_expert, "kernel_moe_fill", &err), err));
-        CL_CHECK((backend_ctx->kernel_moe_scatter = clCreateKernel(backend_ctx->program_moe_sort_by_expert, "kernel_moe_scatter", &err), err));
+        CL_CHECK((backend_ctx->kernel_moe_histogram = clCreateKernel(prog, "kernel_moe_histogram", &err), err));
+        CL_CHECK((backend_ctx->kernel_moe_scan = clCreateKernel(prog, "kernel_moe_scan", &err), err));
+        CL_CHECK((backend_ctx->kernel_moe_fill = clCreateKernel(prog, "kernel_moe_fill", &err), err));
+        CL_CHECK((backend_ctx->kernel_moe_scatter = clCreateKernel(prog, "kernel_moe_scatter", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
