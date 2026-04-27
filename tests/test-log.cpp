@@ -36,5 +36,9 @@ int main() {
     }
 
     common_log_flush(common_log_main());
+    // We explicitly free the logger singleton because the
+    // common_log destructor called at DLL teardown phase may cause hanging on Windows.
+    // Refer to https://github.com/ggml-org/llama.cpp/issues/22142 for details.
+    common_log_free(common_log_main());
     return 0;
 }
