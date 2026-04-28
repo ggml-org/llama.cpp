@@ -1051,6 +1051,11 @@ int subprocess_terminate(struct subprocess_s *const process) {
   return success_terminate;
 #else
   int result;
+
+  if (process->child <= 0) {
+    return -1;
+  }
+
   result = kill(process->child, 9);
   return result;
 #endif
