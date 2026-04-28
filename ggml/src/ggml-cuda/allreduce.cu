@@ -9,19 +9,27 @@
 // ---------------------------------------------------------------------------
 // Cross-GPU signal mechanism
 //
-// One int per (slot, rank) pair in pinned host memory: 0 = not arrived,
-// 1 = arrived.  There is exactly one writer (the owning GPU) and one reader
-// (the peer), so we don't need atomics.  A volatile store paired with
-// __threadfence_system() provides the release ordering that makes the D2H
-// writes visible system-wide before the arrival flag is observed.
+// One int per (slot, rank) pair in pinned host memory.  Each AR call writes a
+// strictly increasing token (= the AR call number) into its own arrival int.
+// The peer spins until its read of the other's arrival int equals the token
+// it expects for this call — a mismatch means the peer hasn't arrived yet.
+// Tokens never repeat over realistic call rates (32-bit int wraps in tens of
+// days at thousands of ARs/sec), so arrival ints don't need to be reset
+// between calls; we initialize once at pipeline init and let the values
+// accumulate.
+//
+// There is exactly one writer (the owning GPU) and one reader (the peer), so
+// we don't need atomics.  A volatile store paired with __threadfence_system()
+// provides the release ordering that makes the D2H writes visible system-wide
+// before the arrival token is observed.
 //
 // atomicAdd_system() requires hostNativeAtomicSupported, which is unavailable
 // on PCIe-attached consumer GPUs without NVLink, so the volatile path is the
 // portable choice.
 // ---------------------------------------------------------------------------
 
-static __device__ __forceinline__ void ggml_cuda_ar_signal_set(int * p) {
-    *(volatile int *)p = 1;
+static __device__ __forceinline__ void ggml_cuda_ar_signal_set(int * p, int token) {
+    *(volatile int *)p = token;
 }
 static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
     return *(const volatile int *)p;
@@ -34,7 +42,8 @@ static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
 //
 //   Phase 1 (all threads): copy sendbuf → host_mine via float4 loads.
 //                          __threadfence_system() commits writes to host.
-//   Phase 2 (thread 0):   set arrival_mine = 1; spin on arrival_other == 1.
+//   Phase 2 (thread 0):   write token to arrival_mine; spin until
+//                          arrival_other == token.
 //   Phase 3 (all threads): reduce: recvbuf[i] = sendbuf[i] + host_other[i].
 //
 // The single-block configuration means __syncthreads() is sufficient for
@@ -63,7 +72,8 @@ static __global__ void ggml_cuda_ar_kernel(
         const Twire * __restrict__ host_other,
         int                        count,
         int *                      arrival_mine,
-        int *                      arrival_other) {
+        int *                      arrival_other,
+        int                        token) {
 
     // 16-byte vector unit for the wire type.  Each phase-1 iter writes one
     // vector to host memory; each phase-3 iter reads one and produces
@@ -98,11 +108,11 @@ static __global__ void ggml_cuda_ar_kernel(
 
     // Phase 2: thread 0 signals arrival, then spins for the peer.
     if (tid == 0) {
-        ggml_cuda_ar_signal_set(arrival_mine);
+        ggml_cuda_ar_signal_set(arrival_mine, token);
 
         __threadfence_system(); // ensure the signal itself is visible across all GPUs
 
-        while (ggml_cuda_ar_signal_get(arrival_other) == 0) {
+        while (ggml_cuda_ar_signal_get(arrival_other) != token) {
             __nanosleep(100);
         }
     }
@@ -160,9 +170,9 @@ static __global__ void ggml_cuda_ar_add_kernel(
 // Number of slots in the event / arrival ring.  Two slots is sufficient:
 // lockstep guarantees the two GPUs are at most one AR (or chunk) apart, so
 // slot[N%2] is always safe to reuse — peer has already consumed slot[N%2]
-// from AR N-2 by the time we get to AR N.  The slot wraparound's
-// cudaEventSynchronize on ev.ker covers the host-side arrival reset against
-// the prior AR's kernel.
+// from AR N-2 by the time we get to AR N.  acquire_slot's
+// cudaEventSynchronize on ev.ker for both devices makes that consumption
+// explicit before we overwrite host_buf[slot] for the new AR.
 static constexpr int GGML_CUDA_AR_POOL_SIZE = 2;
 
 // Maximum chunk size (bytes per GPU) handled by one chunked-kernel launch.
@@ -238,7 +248,12 @@ static uint64_t ggml_cuda_ar_env_u64(const char * name, uint64_t default_value) 
     return end != value ? (uint64_t) parsed : default_value;
 }
 
-static int ggml_cuda_ar_acquire_slot(ggml_cuda_ar_pipeline * p) {
+struct ggml_cuda_ar_slot_info {
+    int slot;
+    int token;
+};
+
+static ggml_cuda_ar_slot_info ggml_cuda_ar_acquire_slot(ggml_cuda_ar_pipeline * p) {
     const int  slot        = static_cast<int>(p->call_count % GGML_CUDA_AR_POOL_SIZE);
     const bool pool_lapped = p->call_count >= GGML_CUDA_AR_POOL_SIZE;
     p->call_count++;
@@ -250,11 +265,7 @@ static int ggml_cuda_ar_acquire_slot(ggml_cuda_ar_pipeline * p) {
         }
     }
 
-    for (int i = 0; i < p->n_devices; ++i) {
-        *ggml_cuda_ar_arrival_ptr(p, slot, i) = 0;
-    }
-
-    return slot;
+    return { slot, (int) p->call_count };
 }
 
 static void ggml_cuda_ar_wait_for_compute(
@@ -458,7 +469,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
     GGML_ASSERT(ne <= std::numeric_limits<int>::max());
     GGML_ASSERT(p->copy_chunk_bytes > 0);
 
-    const int slot = ggml_cuda_ar_acquire_slot(p);
+    const int slot = ggml_cuda_ar_acquire_slot(p).slot;
     const size_t copy_chunks = (nbytes + p->copy_chunk_bytes - 1) / p->copy_chunk_bytes;
     GGML_ASSERT(copy_chunks <= GGML_CUDA_AR_COPY_MAX_CHUNKS);
 
@@ -685,7 +696,7 @@ bool ggml_cuda_ar_allreduce(
             const size_t chunk_elems = remaining_elems < max_chunk_elems ? remaining_elems : max_chunk_elems;
             const size_t chunk_dst_bytes  = chunk_elems * input_type_size;
 
-            const int slot = ggml_cuda_ar_acquire_slot(p);
+            const auto [slot, token] = ggml_cuda_ar_acquire_slot(p);
             const bool last_chunk = chunk_start + (int64_t) chunk_elems == ne;
 
             for (int i = 0; i < n; ++i) {
@@ -711,7 +722,8 @@ bool ggml_cuda_ar_allreduce(
                     reinterpret_cast<const Twire *>(p->host_buf[peer] + (size_t) slot * p->buf_bytes), \
                     static_cast<int>(chunk_elems), \
                     ggml_cuda_ar_arrival_ptr(p, slot, i), \
-                    ggml_cuda_ar_arrival_ptr(p, slot, peer))
+                    ggml_cuda_ar_arrival_ptr(p, slot, peer), \
+                    token)
 
                 if (use_bf16) {
                     GGML_ASSERT(input_type == GGML_TYPE_F32);
