@@ -330,9 +330,15 @@ void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, siz
         return;
     }
 
-    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
-    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
+    // tensor->data may be NULL for device-only buffers (e.g. Vulkan unified memory).
+    // The backend's set_tensor iface handles the device write without a host pointer.
+    if (tensor->data == NULL) {
+        GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
+        buf->iface.set_tensor(buf, tensor, data, offset, size);
+        return;
+    }
 
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
     buf->iface.set_tensor(buf, tensor, data, offset, size);
 }
 
@@ -345,9 +351,15 @@ void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, siz
         return;
     }
 
-    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
-    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
+    // tensor->data may be NULL for device-only buffers (e.g. Vulkan unified memory).
+    // The backend's get_tensor iface handles the device read without a host pointer.
+    if (tensor->data == NULL) {
+        GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
+        buf->iface.get_tensor(buf, tensor, data, offset, size);
+        return;
+    }
 
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
     buf->iface.get_tensor(buf, tensor, data, offset, size);
 }
 
