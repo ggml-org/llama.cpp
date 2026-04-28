@@ -7,6 +7,30 @@
 #include <limits>
 
 // ---------------------------------------------------------------------------
+// CUDA AllReduce for tensor-parallel inference across two GPUs.
+//
+// Provides a peer-to-peer, in-place sum reduction over matching tensors on
+// two CUDA devices in the same process.  Used by the tensor-split path
+// alongside NCCL; targets setups without NVLink, where peer-to-peer transfers
+// must go through pinned host memory over PCIe.
+//
+// Two reduction strategies are selected per call by tensor size:
+//
+//   * Chunked-kernel path (small reductions): a single CUDA kernel both
+//     stages data through pinned host memory and performs the local sum.
+//     Cross-GPU synchronization happens *inside the kernel* (busy-wait on
+//     a host-memory flag), which keeps launch overhead low for the
+//     latency-sensitive token-generation case.
+//
+//   * Copy-engine path (large reductions): the transfer is split into
+//     D2H + H2D cudaMemcpyAsync chunks driven by the GPU's copy engine,
+//     followed by a small device-side add kernel.  Cross-GPU
+//     synchronization happens *outside the kernel*, via CUDA events
+//     between streams.  This keeps the compute engine free while large
+//     transfers are in flight, which matters for prefill-sized tensors.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // Cross-GPU signal mechanism
 //
 // One int per (slot, rank) pair in pinned host memory.  Each AR call writes a
