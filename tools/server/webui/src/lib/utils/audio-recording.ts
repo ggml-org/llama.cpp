@@ -203,12 +203,20 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
 	writeString(36, 'data'); // Subchunk2ID
 	view.setUint32(40, dataSize, true); // Subchunk2Size
 
-	let offset = 44;
+	// Cache channel arrays, write PCM via Int16Array (native little-endian, matches WAV)
+	const channels: Float32Array[] = new Array(numberOfChannels);
+	for (let c = 0; c < numberOfChannels; c++) {
+		channels[c] = buffer.getChannelData(c);
+	}
+
+	const pcm = new Int16Array(arrayBuffer, 44, length * numberOfChannels);
+	let p = 0;
 	for (let i = 0; i < length; i++) {
-		for (let channel = 0; channel < numberOfChannels; channel++) {
-			const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
-			view.setInt16(offset, sample * 0x7fff, true);
-			offset += 2;
+		for (let c = 0; c < numberOfChannels; c++) {
+			let s = channels[c][i];
+			if (s > 1) s = 1;
+			else if (s < -1) s = -1;
+			pcm[p++] = s * 0x7fff;
 		}
 	}
 
