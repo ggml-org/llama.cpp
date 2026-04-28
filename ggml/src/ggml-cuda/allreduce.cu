@@ -629,16 +629,19 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     }
     memset(p->arrival, 0, arrival_bytes);
 
-    // Per-device pinned staging buffers.
+    // Per-device pinned staging buffers — POOL_SIZE-deep ring so the chunked-
+    // kernel can write the next slot's data while the peer is still reading
+    // the previous slot's. Indexed by (slot * buf_bytes) at the call site.
     p->buf_bytes = GGML_CUDA_AR_MAX_BYTES;
+    const size_t host_buf_total = (size_t) GGML_CUDA_AR_POOL_SIZE * p->buf_bytes;
     for (int i = 0; i < n_devices; ++i) {
-        if (cudaHostAlloc(&p->host_buf[i], p->buf_bytes, cudaHostAllocPortable) != cudaSuccess) {
+        if (cudaHostAlloc(&p->host_buf[i], host_buf_total, cudaHostAllocPortable) != cudaSuccess) {
             GGML_LOG_ERROR("%s: cudaHostAlloc for staging failed (%zu bytes)\n",
-                           __func__, p->buf_bytes);
+                           __func__, host_buf_total);
             ggml_cuda_ar_pipeline_free(p);
             return nullptr;
         }
-        memset(p->host_buf[i], 0, p->buf_bytes);
+        memset(p->host_buf[i], 0, host_buf_total);
     }
 
     // Prototype copy-engine path resources. Keep these deliberately large for
@@ -1021,8 +1024,8 @@ bool ggml_cuda_ar_allreduce(
                 ggml_cuda_ar_kernel<Tdst, Twire><<<dim3(1), dim3(256), 0, stream>>>( \
                     reinterpret_cast<const Tdst *>(data), \
                     reinterpret_cast<Tdst *>(data), \
-                    reinterpret_cast<Twire *>(p->host_buf[i]), \
-                    reinterpret_cast<const Twire *>(p->host_buf[peer]), \
+                    reinterpret_cast<Twire *>(p->host_buf[i]    + (size_t) slot * p->buf_bytes), \
+                    reinterpret_cast<const Twire *>(p->host_buf[peer] + (size_t) slot * p->buf_bytes), \
                     static_cast<int>(chunk_elems), \
                     ggml_cuda_ar_arrival_ptr(p, slot, i), \
                     ggml_cuda_ar_arrival_ptr(p, slot, peer) \
