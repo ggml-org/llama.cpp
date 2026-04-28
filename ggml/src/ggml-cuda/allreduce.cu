@@ -248,7 +248,12 @@ static __global__ void ggml_cuda_ar_add_kernel(
 
 // Number of slots in the event / arrival ring.  128 is well above the actual
 // in-flight depth (single digits in practice) while keeping init cost low.
-static constexpr int GGML_CUDA_AR_POOL_SIZE = 128;
+// Two-slot ring is sufficient: lockstep guarantees the two GPUs are at most
+// one AR (or chunk) apart, so slot[N%2] is always safe to reuse — peer has
+// already consumed slot[N%2] from AR N-2 by the time we get to AR N.  The
+// slot wraparound's cudaEventSynchronize on ev.ker covers the host-side
+// arrival reset against the prior AR's kernel.
+static constexpr int GGML_CUDA_AR_POOL_SIZE = 2;
 
 // Maximum chunk size (bytes per GPU) handled by one internal kernel launch.
 // Larger tensors are reduced by issuing multiple chunked launches.
