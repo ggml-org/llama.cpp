@@ -27,6 +27,9 @@
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmf.cuh"
 #include "ggml-cuda/mmq.cuh"
+#ifdef GGML_CUDA_MXFP4_REPACK
+#include "ggml-cuda/mxfp4-repack.cuh"
+#endif
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
 #include "ggml-cuda/norm.cuh"
@@ -674,11 +677,51 @@ static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
+#ifdef GGML_CUDA_MXFP4_REPACK
+// In-place repack of a fully-uploaded MXFP4 tensor into the per-row SoA
+// layout expected by load_tiles_mxfp4_fp4_soa. Allocates a transient device
+// staging buffer, copies the current AoS bytes into it, launches the repack
+// kernel writing back over tensor->data, and frees. Synchronizes the provided
+// stream so staging is safe to free on return.
+static void ggml_cuda_mxfp4_repack_tensor_inplace(ggml_tensor * tensor, cudaStream_t stream) {
+    const int64_t ne0   = tensor->ne[0];
+    const int64_t nrow  = ggml_nrows(tensor);
+    const int     B_src = (int) (ne0 / QK_MXFP4);
+    constexpr int blocks_per_iter = MMQ_ITER_K_MXFP4_FP4 / QK_MXFP4;  // 16
+    const int     B_dst = (B_src + blocks_per_iter - 1) / blocks_per_iter * blocks_per_iter;
+
+    const size_t src_bytes = (size_t) 17 * B_src * nrow;
+
+    void * staging = nullptr;
+    CUDA_CHECK(cudaMallocAsync(&staging, src_bytes, stream));
+    CUDA_CHECK(cudaMemcpyAsync(staging, tensor->data, src_bytes,
+                               cudaMemcpyDeviceToDevice, stream));
+    ggml_cuda_mxfp4_repack_soa_launch(tensor->data, staging,
+                                      (int) nrow, B_src, B_dst, stream);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaFreeAsync(staging, stream));
+}
+
+static inline bool ggml_cuda_mxfp4_should_repack(const ggml_tensor * tensor,
+                                                 size_t offset, size_t size) {
+    // Fires exactly once per tensor: when a write ends at ggml_nbytes(tensor)
+    // the loader has finished uploading this tensor's data.
+    return tensor->type == GGML_TYPE_MXFP4 &&
+           ggml_n_dims(tensor) >= 2 &&
+           offset + size == ggml_nbytes(tensor);
+}
+#endif // GGML_CUDA_MXFP4_REPACK
+
 static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
 
     ggml_cuda_set_device(ctx->device);
     CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+#ifdef GGML_CUDA_MXFP4_REPACK
+    if (ggml_cuda_mxfp4_should_repack(tensor, offset, size)) {
+        ggml_cuda_mxfp4_repack_tensor_inplace(tensor, cudaStreamPerThread);
+    }
+#endif
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
@@ -801,7 +844,17 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_t
     if (ggml_is_quantized(tensor->type)) {
         if (ne0 % MATRIX_ROW_PADDING != 0) {
             GGML_ASSERT(tensor->nb[0] == ggml_element_size(tensor));
-            size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+            const size_t pad_bytes_per_row = ggml_row_size(
+                tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+
+            // MXFP4 weights get repacked per-row into an SoA layout with each
+            // row padded to MATRIX_ROW_PADDING elements, so we need padding
+            // space for every row rather than only the tensor tail.
+            if (tensor->type == GGML_TYPE_MXFP4 && ggml_n_dims(tensor) >= 2) {
+                size += pad_bytes_per_row * ggml_nrows(tensor);
+            } else {
+                size += pad_bytes_per_row;
+            }
         }
     }
 
@@ -2989,6 +3042,11 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
     CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
+#ifdef GGML_CUDA_MXFP4_REPACK
+    if (ggml_cuda_mxfp4_should_repack(tensor, offset, size)) {
+        ggml_cuda_mxfp4_repack_tensor_inplace(tensor, cuda_ctx->stream());
+    }
+#endif
 }
 
 static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {

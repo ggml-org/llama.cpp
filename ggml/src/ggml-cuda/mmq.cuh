@@ -934,6 +934,73 @@ static __device__ __forceinline__ void load_tiles_mxfp4_fp4(const char * __restr
     }
 }
 
+// SoA variant of load_tiles_mxfp4_fp4. Source tensor must already be repacked
+// per-row into [qs_0..qs_{B_dst-1} | e_0..e_{B_dst-1}] with
+// B_dst = GGML_PAD(B_src, iter_k/QK_MXFP4). qs region is 16B aligned so the
+// per-thread 16B qs load is a single coalesced 128-bit transaction.
+//
+// kbx0 is the flat AoS block index at which this tile starts (it already
+// includes sample*stride_sample_x + channel*stride_channel_x + tile_row*stride).
+// stride is the source-side block count per row (B_src). We decompose kbx0
+// into (flat_row_base, kb0_in_row) and advance by local tile row i.
+template <int mmq_y, bool need_check>
+static __device__ __forceinline__ void load_tiles_mxfp4_fp4_soa(const char * __restrict__ x,
+                                                                int * __restrict__ x_tile,
+                                                                const int kbx0,
+                                                                const int i_max,
+                                                                const int stride) {
+    constexpr int nwarps = mmq_get_nwarps_device();
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+
+    int *      x_qs = (int *) x_tile;
+    uint32_t * x_sc = (uint32_t *) (x_qs + 2 * MMQ_TILE_NE_K);
+
+    const int txi = threadIdx.x;
+
+    constexpr int iter_k = get_iter_k(GGML_TYPE_MXFP4);
+
+    constexpr int threads_per_row = iter_k / QK_MXFP4;  // 16 on Blackwell
+    constexpr int rows_per_warp   = warp_size / threads_per_row;
+    const int     kbx             = txi % threads_per_row;
+    const int     row_in_warp     = txi / threads_per_row;
+
+    // Derive padded blocks-per-row. threads_per_row equals blocks_per_iter for
+    // MXFP4_FP4, so rounding stride to this multiple matches how the repack
+    // kernel pads.
+    constexpr int blocks_per_iter = threads_per_row;
+    const int B_src     = stride;
+    const int B_dst     = (B_src + blocks_per_iter - 1) / blocks_per_iter * blocks_per_iter;
+    const int row_bytes = 17 * B_dst;
+
+    const int flat_row_base = kbx0 / B_src;
+    const int kb0_in_row    = kbx0 - flat_row_base * B_src;
+    const int kbx_in_row    = kb0_in_row + kbx;
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += rows_per_warp * nwarps) {
+        int i = i0 + threadIdx.y * rows_per_warp + row_in_warp;
+
+        if constexpr (need_check) {
+            i = min(i, i_max);
+        }
+
+        const uint8_t * row_base = reinterpret_cast<const uint8_t *>(x)
+                                   + (size_t) (flat_row_base + i) * row_bytes;
+        const uint8_t * qs_base  = row_base;
+        const uint8_t * sc_base  = row_base + 16 * B_dst;
+
+        const int k0 = kbx * 4;
+        const uint4 q = reinterpret_cast<const uint4 *>(qs_base)[kbx_in_row];
+        memcpy(x_qs + i * MMQ_MMA_TILE_X_K_FP4 + k0, &q, 16);
+
+        if (kbx % 2 == 0) {
+            uint32_t e = sc_base[kbx_in_row];
+            e |= ((uint32_t) sc_base[kbx_in_row + 1]) << 8;
+            x_sc[i * MMQ_MMA_TILE_X_K_FP4 + kbx / 2] = e;
+        }
+    }
+}
+
 
 template <int mmq_y, bool need_check>
 static __device__ __forceinline__ void load_tiles_nvfp4(const char * __restrict__ x,
@@ -3258,7 +3325,11 @@ template <int mmq_x, int mmq_y, bool need_check>
 struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_MXFP4> {
     static constexpr int              vdr          = VDR_MXFP4_Q8_1_MMQ;
 #ifdef BLACKWELL_MMA_AVAILABLE
+#ifdef GGML_CUDA_MXFP4_REPACK
+    static constexpr load_tiles_mmq_t load_tiles  = load_tiles_mxfp4_fp4_soa<mmq_y, need_check>;
+#else
     static constexpr load_tiles_mmq_t load_tiles  = load_tiles_mxfp4_fp4<mmq_y, need_check>;
+#endif // GGML_CUDA_MXFP4_REPACK
     static constexpr vec_dot_mmq_t    vec_dot_mma = vec_dot_mxfp4_mxfp4_mma<mmq_x, mmq_y>;
 #else
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_mxfp4<mmq_y, need_check>;
