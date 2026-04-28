@@ -5,7 +5,8 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
-	import { MessageRole, AttachmentType } from '$lib/enums';
+	import { REASONING_TAGS } from '$lib/constants/agentic';
+	import { MessageRole, AttachmentType, AgenticSectionType } from '$lib/enums';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatMessageAssistant,
@@ -14,6 +15,7 @@
 		ChatMessageMcpPrompt
 	} from '$lib/components/app/chat';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
+	import { deriveAgenticSections } from '$lib/utils';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
@@ -40,7 +42,51 @@
 		assistantMessages: number;
 		messageTypes: string[];
 	} | null>(null);
-	let editedContent = $derived(message.content);
+	let editedContent = $state(message.content);
+
+	let rawEditContent = $derived.by(() => {
+		if (message.role !== MessageRole.ASSISTANT) return undefined;
+
+		const sections = deriveAgenticSections(message, toolMessages, [], false);
+		const parts: string[] = [];
+
+		for (const section of sections) {
+			switch (section.type) {
+				case AgenticSectionType.REASONING:
+				case AgenticSectionType.REASONING_PENDING:
+					parts.push(`${REASONING_TAGS.START}\n${section.content}\n${REASONING_TAGS.END}`);
+					break;
+
+				case AgenticSectionType.TEXT:
+					parts.push(section.content);
+					break;
+
+				case AgenticSectionType.TOOL_CALL:
+				case AgenticSectionType.TOOL_CALL_PENDING:
+				case AgenticSectionType.TOOL_CALL_STREAMING: {
+					const callObj: Record<string, unknown> = { name: section.toolName };
+
+					if (section.toolArgs) {
+						try {
+							callObj.arguments = JSON.parse(section.toolArgs);
+						} catch {
+							callObj.arguments = section.toolArgs;
+						}
+					}
+
+					parts.push(JSON.stringify(callObj, null, 2));
+
+					if (section.toolResult) {
+						parts.push(`[Tool Result]\n${section.toolResult}`);
+					}
+
+					break;
+				}
+			}
+		}
+
+		return parts.join('\n\n\n');
+	});
 	let editedExtras = $derived<DatabaseMessageExtra[]>(message.extra ? [...message.extra] : []);
 	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
 	let isEditing = $state(false);
@@ -49,6 +95,7 @@
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
 	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
+	let showBranchAfterEditOption = $derived(message.role === MessageRole.ASSISTANT);
 
 	setMessageEditContext({
 		get isEditing() {
@@ -64,13 +111,27 @@
 			return editedUploadedFiles;
 		},
 		get originalContent() {
-			return message.content;
+			return message.role === MessageRole.ASSISTANT
+				? (rawEditContent ?? message.content)
+				: message.content;
 		},
 		get originalExtras() {
 			return message.extra || [];
 		},
 		get showSaveOnlyOption() {
 			return showSaveOnlyOption;
+		},
+		get showBranchAfterEditOption() {
+			return showBranchAfterEditOption;
+		},
+		get shouldBranchAfterEdit() {
+			return shouldBranchAfterEdit;
+		},
+		get messageRole() {
+			return message.role;
+		},
+		get rawEditContent() {
+			return rawEditContent;
 		},
 		setContent: (content: string) => {
 			editedContent = content;
@@ -80,6 +141,9 @@
 		},
 		setUploadedFiles: (files: ChatUploadedFile[]) => {
 			editedUploadedFiles = files;
+		},
+		setShouldBranchAfterEdit: (value: boolean) => {
+			shouldBranchAfterEdit = value;
 		},
 		save: handleSaveEdit,
 		saveOnly: handleSaveEditOnly,
@@ -124,7 +188,10 @@
 			return;
 		}
 
-		editedContent = message.content;
+		editedContent =
+			message.role === MessageRole.ASSISTANT
+				? rawEditContent || message.content || ''
+				: message.content;
 		editedExtras = message.extra ? [...message.extra] : [];
 		editedUploadedFiles = [];
 	}
@@ -155,10 +222,14 @@
 	function handleEdit() {
 		isEditing = true;
 		// Clear temporary placeholder content for system messages
-		editedContent =
-			message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER
-				? ''
-				: message.content;
+		if (message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER) {
+			editedContent = '';
+		} else if (message.role === MessageRole.ASSISTANT) {
+			editedContent = rawEditContent || message.content || '';
+		} else {
+			editedContent = message.content;
+		}
+
 		textareaElement?.focus();
 		editedExtras = message.extra ? [...message.extra] : [];
 		editedUploadedFiles = [];

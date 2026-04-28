@@ -2,6 +2,7 @@
 	import {
 		ChatMessageAgenticContent,
 		ChatMessageActionIcons,
+		ChatMessageEditForm,
 		ChatMessageStatistics,
 		ModelBadge,
 		ModelsSelectorDropdown
@@ -9,22 +10,12 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import {
-		autoResizeTextarea,
-		copyToClipboard,
-		isIMEComposing,
-		deriveAgenticSections
-	} from '$lib/utils';
+	import { copyToClipboard, deriveAgenticSections } from '$lib/utils';
 	import { AgenticSectionType } from '$lib/enums';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
 	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
-	import { Check, X } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { INPUT_CLASSES } from '$lib/constants';
-	import { MessageRole, KeyboardKey, ChatMessageStatsView } from '$lib/enums';
-	import Label from '$lib/components/ui/label/label.svelte';
+	import { MessageRole, ChatMessageStatsView } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
@@ -81,19 +72,6 @@
 
 	// Get edit context
 	const editCtx = getMessageEditContext();
-
-	// Local state for assistant-specific editing
-	let shouldBranchAfterEdit = $state(false);
-
-	function handleEditKeydown(event: KeyboardEvent) {
-		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
-			event.preventDefault();
-			editCtx.save();
-		} else if (event.key === KeyboardKey.ESCAPE) {
-			event.preventDefault();
-			editCtx.cancel();
-		}
-	}
 
 	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
 	const hasReasoning = $derived(!!message.reasoningContent);
@@ -228,12 +206,6 @@
 	}
 
 	$effect(() => {
-		if (editCtx.isEditing && textareaElement) {
-			autoResizeTextarea(textareaElement);
-		}
-	});
-
-	$effect(() => {
 		if (showProcessingInfoTop || showProcessingInfoBottom) {
 			processingState.startMonitoring();
 		}
@@ -258,48 +230,7 @@
 	{/if}
 
 	{#if editCtx.isEditing}
-		<div class="w-full">
-			<textarea
-				bind:this={textareaElement}
-				value={editCtx.editedContent}
-				class="min-h-[50vh] w-full resize-y rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
-				onkeydown={handleEditKeydown}
-				oninput={(e) => {
-					autoResizeTextarea(e.currentTarget);
-					editCtx.setContent(e.currentTarget.value);
-				}}
-				placeholder="Edit assistant message..."
-			></textarea>
-
-			<div class="mt-2 flex items-center justify-between">
-				<div class="flex items-center space-x-2">
-					<Checkbox
-						id="branch-after-edit"
-						bind:checked={shouldBranchAfterEdit}
-						onCheckedChange={(checked) => (shouldBranchAfterEdit = checked === true)}
-					/>
-					<Label for="branch-after-edit" class="cursor-pointer text-sm text-muted-foreground">
-						Branch conversation after edit
-					</Label>
-				</div>
-				<div class="flex gap-2">
-					<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
-						<X class="mr-1 h-3 w-3" />
-						Cancel
-					</Button>
-
-					<Button
-						class="h-8 px-3"
-						onclick={editCtx.save}
-						disabled={!editCtx.editedContent?.trim()}
-						size="sm"
-					>
-						<Check class="mr-1 h-3 w-3" />
-						Save
-					</Button>
-				</div>
-			</div>
-		</div>
+		<ChatMessageEditForm />
 	{:else if message.role === MessageRole.ASSISTANT}
 		{#if showRawOutput}
 			<pre class="raw-output">{rawOutputContent || ''}</pre>

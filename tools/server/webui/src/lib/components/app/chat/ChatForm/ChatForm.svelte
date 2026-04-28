@@ -54,6 +54,8 @@
 		isLoading?: boolean;
 		placeholder?: string;
 		showMcpPromptButton?: boolean;
+		showAddButton?: boolean;
+		showModelSelector?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -73,6 +75,8 @@
 		isLoading = false,
 		placeholder = 'Type a message...',
 		showMcpPromptButton = false,
+		showAddButton = true,
+		showModelSelector = true,
 		uploadedFiles = $bindable([]),
 		value = $bindable(''),
 		onAttachmentRemove,
@@ -628,6 +632,8 @@
 				{disabled}
 				{isLoading}
 				{isRecording}
+				{showAddButton}
+				{showModelSelector}
 				{uploadedFiles}
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}

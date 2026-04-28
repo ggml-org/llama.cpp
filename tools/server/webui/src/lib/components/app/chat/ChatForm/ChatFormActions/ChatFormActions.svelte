@@ -21,6 +21,8 @@
 		disabled?: boolean;
 		isLoading?: boolean;
 		isRecording?: boolean;
+		showAddButton?: boolean;
+		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
@@ -37,6 +39,8 @@
 		disabled = false,
 		isLoading = false,
 		isRecording = false,
+		showAddButton = true,
+		showModelSelector = true,
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
@@ -78,33 +82,40 @@
 	}
 </script>
 
-<div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
-	<div class="mr-auto flex items-center gap-2">
-		<ChatFormActionsAdd
-			{disabled}
-			{hasAudioModality}
-			{hasVisionModality}
-			{hasMcpPromptsSupport}
-			{hasMcpResourcesSupport}
-			{onFileUpload}
-			{onSystemPromptClick}
-			{onMcpPromptClick}
-			{onMcpResourcesClick}
-			onMcpSettingsClick={() => goto('#/settings/mcp')}
-		/>
-	</div>
+<div
+	class="flex w-full items-center gap-3 {className} {showAddButton ? '' : 'justify-end'}"
+	style="container-type: inline-size"
+>
+	{#if showAddButton}
+		<div class="mr-auto flex items-center gap-2">
+			<ChatFormActionsAdd
+				{disabled}
+				{hasAudioModality}
+				{hasVisionModality}
+				{hasMcpPromptsSupport}
+				{hasMcpResourcesSupport}
+				{onFileUpload}
+				{onSystemPromptClick}
+				{onMcpPromptClick}
+				{onMcpResourcesClick}
+				onMcpSettingsClick={() => goto('#/settings/mcp')}
+			/>
+		</div>
+	{/if}
 
-	<ChatFormActionModels
-		{disabled}
-		bind:this={selectorModelRef}
-		bind:hasAudioModality
-		bind:hasVisionModality
-		bind:hasModelSelected
-		bind:isSelectedModelInCache
-		bind:submitTooltip
-		forceForegroundText
-		useGlobalSelection
-	/>
+	{#if showModelSelector}
+		<ChatFormActionModels
+			{disabled}
+			bind:this={selectorModelRef}
+			bind:hasAudioModality
+			bind:hasVisionModality
+			bind:hasModelSelected
+			bind:isSelectedModelInCache
+			bind:submitTooltip
+			forceForegroundText
+			useGlobalSelection
+		/>
+	{/if}
 
 	{#if isLoading && !canSubmit}
 		<Button
@@ -123,10 +134,10 @@
 		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
 	{:else}
 		<ChatFormActionSubmit
-			canSend={canSend && hasModelSelected && isSelectedModelInCache}
+			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
 			{disabled}
 			tooltipLabel={submitTooltip}
-			showErrorState={hasModelSelected && !isSelectedModelInCache}
+			showErrorState={showModelSelector && hasModelSelected && !isSelectedModelInCache}
 		/>
 	{/if}
 </div>
