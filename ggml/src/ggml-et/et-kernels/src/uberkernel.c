@@ -82,30 +82,6 @@ extern int mul_mat_f32_entry(struct ggml_et_binary_params *, void *);
 extern int mul_mat_f32_matrix_engine_entry(struct ggml_et_binary_params *, void *);
 extern int mul_mat_Q8_0_entry(struct ggml_et_mm_q8_params *, void *);
 
-// Evict a contiguous region from both L1 and L2 so subsequent loads fetch
-// from L3/DRAM.  Both L1 and L2 are incoherent on ET-SoC-1 (L2 is per-shire),
-// so every op must evict its inputs before reading if a prior op in the same
-// uberkernel batch may have written to them via fsw.ps or tensor_store.
-//
-// Handles regions larger than the 16-line hardware limit by issuing multiple
-// evict_past_l2 calls.
-static void evict_region_past_l2(const void *addr, size_t bytes) {
-    if (!addr || bytes == 0) return;
-
-    const uint64_t CL = 64;
-    uint64_t base = (uint64_t)addr & ~(CL - 1);
-    uint64_t end  = ((uint64_t)addr + bytes + CL - 1) & ~(CL - 1);
-    uint64_t nlines = (end - base) / CL;
-
-    FENCE;
-    for (uint64_t off = 0; off < nlines; off += 16) {
-        uint64_t batch = nlines - off;
-        if (batch > 16) batch = 16;
-        evict_past_l2((const void *)(base + off * CL), batch, CL);
-    }
-    WAIT_CACHEOPS;
-}
-
 // Compute contiguous byte footprint of a tensor (ne[0..3] * element_size).
 static inline size_t tensor_bytes(const struct ggml_tensor *t) {
     return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
@@ -562,16 +538,19 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 break;
             }
             case GGML_ET_UBERKERNEL_KERNEL_FLASH_ATTN_EXT_F16_ME: {
-                struct uber_flash_attn_ext_params *p = (struct uber_flash_attn_ext_params *) inst_params;
-                evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
-                evict_region_past_l2(p->src1.data, tensor_bytes(&p->src1));
+                // struct uber_flash_attn_ext_params *p = (struct uber_flash_attn_ext_params *) inst_params;
+                // evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
+                // evict_region_past_l2(p->src1.data, tensor_bytes(&p->src1));
                 // evict_region_past_l2(p->src2.data, tensor_bytes(&p->src2));
-                if (p->mask.data) {
-                    // evict_region_past_l2(p->mask.data, tensor_bytes(&p->mask));
-                }
+                // if (p->mask.data) {
+                //     evict_region_past_l2(p->mask.data, tensor_bytes(&p->mask));
+                // }
                 rc = flash_attn_ext_f16_me_entry((struct ggml_et_flash_attn_ext_params *) inst_params, env);
                 break;
             }
+
+
+            
             case GGML_ET_UBERKERNEL_KERNEL_GATED_DELTA_NET_F32: {
                 struct uber_gated_delta_net_params *p = (struct uber_gated_delta_net_params *) inst_params;
                 evict_region_past_l2(p->q.data, tensor_bytes(&p->q));

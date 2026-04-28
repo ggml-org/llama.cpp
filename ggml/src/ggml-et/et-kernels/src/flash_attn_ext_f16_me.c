@@ -314,6 +314,10 @@ normalize_store_vec(float * out, float * acc, int64_t dv, float inv, int use_fas
     __asm__ volatile("mova.m.x %0" :: "r"(old_mask));
 }
 
+static inline size_t tensor_bytes_fa(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 // Evict a byte range from L1D to L2 SCP, splitting into batches of ≤16
 // cache lines (the hw limit for evict_to_l2). Use before a barrier when
 // another minion in the shire needs to read the region, or after a barrier
@@ -398,6 +402,16 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     const char * v_data   = (const char *) v->data;
     char * dst_data       = (char *) dst->data;
 
+    // et_barrier(ET_BARRIER_GLOBAL);
+    evict_region_past_l2(q->data,   tensor_bytes_fa(q));
+    evict_region_past_l2(k->data,   tensor_bytes_fa(k));
+    evict_region_past_l2(v->data,   tensor_bytes_fa(v));
+    if (mask) {
+        evict_region_past_l2(mask->data, tensor_bytes_fa(mask));
+    }
+    et_barrier(ET_BARRIER_GLOBAL);
+
+
     const int64_t dk  = q->ne[0];
     const int64_t nq  = q->ne[1];
     const int64_t nhq = q->ne[2];
@@ -428,7 +442,7 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     // never spans shires — L2 SCP is shire-local) and at nk_tiles (so each
     // team member gets at least one KV tile).
     const int64_t nk_tiles      = (nk + TILE_KV - 1) / TILE_KV;
-    const int64_t total_minions = NUM_COMPUTE_SHIRES * MINIONS_PER_SHIRE;
+    const int64_t total_minions = 2 * NUM_COMPUTE_SHIRES * MINIONS_PER_SHIRE;
     int64_t k_splits = 1;
     if (total_rows < total_minions) {
         int64_t target = total_minions / total_rows;
