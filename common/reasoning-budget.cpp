@@ -122,6 +122,20 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
             }
             break;
         case REASONING_BUDGET_DONE:
+            // Re-arm on a new start tag: some models emit multiple <think> blocks
+            // per response, and each should get a fresh budget window.
+            if (ctx->start_matcher.advance(token)) {
+                ctx->state = REASONING_BUDGET_COUNTING;
+                ctx->remaining = ctx->budget;
+                ctx->end_matcher.reset();
+                LOG_INF("reasoning-budget: re-activated on new start tag, budget=%d tokens\n", ctx->budget);
+
+                if (ctx->remaining <= 0) {
+                    ctx->state = REASONING_BUDGET_FORCING;
+                    ctx->force_pos = 0;
+                    LOG_INF("reasoning-budget: budget=0, forcing immediately\n");
+                }
+            }
             break;
     }
 }
