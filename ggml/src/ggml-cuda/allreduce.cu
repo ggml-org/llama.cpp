@@ -60,34 +60,31 @@ static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
 }
 
 // ---------------------------------------------------------------------------
-// Single-kernel AllReduce — 2 GPUs, supports float, half, and bfloat16.
+// Chunked-kernel AllReduce — 2 GPUs, supports float, half, and bfloat16.
 //
-// Both GPUs run this kernel simultaneously in independent streams.  Each GPU:
+// Both GPUs run this kernel simultaneously on independent streams.  sendbuf
+// and recvbuf live in Tdst (the caller's tensor type); host_mine / host_other
+// carry data in Twire (the on-wire type, possibly narrower than Tdst — e.g.
+// Tdst=F32 with Twire=BF16 halves the bytes pushed across PCIe).  When
+// Tdst == Twire the casts below are no-ops.
 //
-//   Phase 1 (all threads): copy sendbuf → host_mine via float4 loads.
-//                          __threadfence_system() commits writes to host.
-//   Phase 2 (thread 0):   write token to arrival_mine; spin until
+// Each GPU runs three phases:
+//
+//   Phase 1 (all threads): cast sendbuf (Tdst) → Twire and store as 16-byte
+//                          vectors into host_mine.  __threadfence_system()
+//                          commits these writes to host memory.
+//   Phase 2 (thread 0):    write token to arrival_mine; spin until
 //                          arrival_other == token.
-//   Phase 3 (all threads): reduce: recvbuf[i] = sendbuf[i] + host_other[i].
+//   Phase 3 (all threads): read 16-byte Twire vectors from host_other, cast
+//                          each element to Tdst, and sum with the local
+//                          sendbuf value (also rounded through Twire so that
+//                          both GPUs truncate identically — this guarantees
+//                          bit-equivalent results across the two devices).
 //
 // The single-block configuration means __syncthreads() is sufficient for
 // intra-block coordination and we can use the cheaper non-cooperative launch.
 // 256 threads gives good occupancy while keeping register pressure low.
 // ---------------------------------------------------------------------------
-
-// Combined chunked-kernel AllReduce.  sendbuf/recvbuf live in Tdst (the
-// caller's tensor type); host_mine/host_other carry data in Twire (the
-// on-wire type, possibly narrower than Tdst).
-//
-// Phase 1 reads Tdst from sendbuf, casts each element to Twire, and packs
-// 16-byte vectors into host_mine — for Tdst=F32, Twire=BF16 this halves the
-// host bytes written.
-//
-// Phase 3 reads 16-byte Twire vectors from host_other, casts each element to
-// Tdst, then sums with the local sendbuf value (also rounded through Twire
-// for bit-equivalence between GPUs since both sides truncate).  When
-// Tdst == Twire the casts are no-ops and behaviour matches the original
-// homogeneous kernel.
 template <typename Tdst, typename Twire>
 static __global__ void ggml_cuda_ar_kernel(
         const Tdst  * __restrict__ sendbuf,
