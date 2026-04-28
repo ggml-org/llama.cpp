@@ -572,4 +572,28 @@ evict_past_l2(const void *addr, uint64_t nlines, uint64_t stride)
     );
 }
 
+// Evict a contiguous region from both L1 and L2 so subsequent loads fetch
+// from L3/DRAM.  Both L1 and L2 are incoherent on ET-SoC-1 (L2 is per-shire),
+// so every op must evict its inputs before reading if a prior op in the same
+// uberkernel batch may have written to them via fsw.ps or tensor_store.
+//
+// Handles regions larger than the 16-line hardware limit by issuing multiple
+// evict_past_l2 calls.
+static void evict_region_past_l2(const void *addr, size_t bytes) {
+    if (!addr || bytes == 0) return;
+
+    const uint64_t CL = 64;
+    uint64_t base = (uint64_t)addr & ~(CL - 1);
+    uint64_t end  = ((uint64_t)addr + bytes + CL - 1) & ~(CL - 1);
+    uint64_t nlines = (end - base) / CL;
+
+    FENCE;
+    for (uint64_t off = 0; off < nlines; off += 16) {
+        uint64_t batch = nlines - off;
+        if (batch > 16) batch = 16;
+        evict_past_l2((const void *)(base + off * CL), batch, CL);
+    }
+    WAIT_CACHEOPS;
+}
+
 #endif // PLATFORM_H

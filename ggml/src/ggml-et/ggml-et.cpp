@@ -713,15 +713,6 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_MUL_MAT:
                 ggml_et_op_mul_mat(dev_ctx, node);
-
-                // if (once < 100){
-                //     uint64_t * host_data = (uint64_t *) node->data;
-
-                //     // printf("Tensor error: %lu\n", host_data[0]);
-
-                //     // printf("Tensor error:");
-                //     once++;
-                // }
                 break;
 
             case GGML_OP_MUL_MAT_ID:

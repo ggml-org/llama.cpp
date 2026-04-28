@@ -39,6 +39,10 @@
 #define CACHE_LINE_F32_ELEMS  16   // 64 / 4
 #define CACHE_LINE_F16_ELEMS  32   // 64 / 2
 
+static inline size_t tensor_bytes_sr(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 static int64_t gcd64(int64_t a, int64_t b) {
     while (b) { int64_t t = b; b = a % b; a = t; }
     return a;
@@ -139,6 +143,9 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
     if (!src0_data || !src1_data || !dst_data) {
         return -1; // Null data pointer
     }
+
+    // evict_region_past_l2(src0_data, tensor_bytes_sr(src0));
+    // evict_region_past_l2(src1_data, tensor_bytes_sr(src1));
 
     const int64_t ne00 = src0->ne[0];  // Source columns (row width)
     const int64_t ne01 = src0->ne[1];  // Source rows (number of rows to write)
