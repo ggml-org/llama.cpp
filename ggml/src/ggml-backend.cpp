@@ -345,9 +345,16 @@ void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, siz
         return;
     }
 
-    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
-    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
+    // tensor->data may be NULL for device-only buffers (e.g. Vulkan with unified memory)
+    // where tensor data lives exclusively on the device. The backend get_tensor iface
+    // handles the device-to-host transfer without needing a host data pointer.
+    if (tensor->data == NULL) {
+        GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
+        buf->iface.get_tensor(buf, tensor, data, offset, size);
+        return;
+    }
 
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
     buf->iface.get_tensor(buf, tensor, data, offset, size);
 }
 
