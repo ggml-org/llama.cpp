@@ -25,7 +25,7 @@ int main(int argc, char ** argv){
     }
 
     // max. number of additional tokens to draft if match is found
-    const int n_draft = params.speculative.n_max;
+    const int n_draft = params.speculative.draft.n_max;
 
     // init llama.cpp
     llama_backend_init();
@@ -54,18 +54,18 @@ int main(int argc, char ** argv){
         const int64_t t_start_draft_us = ggml_time_us();
         common_ngram_cache_update(ngram_cache_context, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX, inp, inp.size(), false);
 
-        if (!params.speculative.lookup_cache_static.empty()) {
+        if (!params.speculative.ngram_cache.lookup_cache_static.empty()) {
             try {
-                ngram_cache_static = common_ngram_cache_load(params.speculative.lookup_cache_static);
+                ngram_cache_static = common_ngram_cache_load(params.speculative.ngram_cache.lookup_cache_static);
             } catch (std::ifstream::failure const &) {
-                LOG_ERR("failed to open static lookup cache: %s", params.speculative.lookup_cache_static.c_str());
+                LOG_ERR("failed to open static lookup cache: %s", params.speculative.ngram_cache.lookup_cache_static.c_str());
                 exit(1);
             }
         }
 
-        if (!params.speculative.lookup_cache_dynamic.empty()) {
+        if (!params.speculative.ngram_cache.lookup_cache_dynamic.empty()) {
             try {
-                ngram_cache_dynamic = common_ngram_cache_load(params.speculative.lookup_cache_dynamic);
+                ngram_cache_dynamic = common_ngram_cache_load(params.speculative.ngram_cache.lookup_cache_dynamic);
             } catch (std::ifstream::failure const &) {} // if the file does not exist it will simply be created at the end of the program
         }
 
@@ -213,7 +213,7 @@ int main(int argc, char ** argv){
 
     // Update dynamic ngram cache with context ngram cache and save it to disk:
     common_ngram_cache_merge(ngram_cache_dynamic, ngram_cache_context);
-    common_ngram_cache_save(ngram_cache_dynamic, params.speculative.lookup_cache_dynamic);
+    common_ngram_cache_save(ngram_cache_dynamic, params.speculative.ngram_cache.lookup_cache_dynamic);
 
     LOG("\n\n");
 

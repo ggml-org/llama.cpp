@@ -76,13 +76,7 @@ json task_params::to_json(bool only_metrics) const {
             {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
             {"generation_prompt",         chat_parser_params.generation_prompt},
             {"samplers",                  samplers},
-            {"speculative.n_max",         speculative.n_max},
-            {"speculative.n_min",         speculative.n_min},
-            {"speculative.p_min",         speculative.p_min},
             {"speculative.type",          common_speculative_type_to_str(speculative.type)},
-            {"speculative.ngram_size_n",  speculative.ngram_size_n},
-            {"speculative.ngram_size_m",  speculative.ngram_size_m},
-            {"speculative.ngram_m_hits",  speculative.ngram_min_hits},
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
             {"backend_sampling",          sampling.backend_sampling},
@@ -139,13 +133,7 @@ json task_params::to_json(bool only_metrics) const {
         {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
         {"generation_prompt",         chat_parser_params.generation_prompt},
         {"samplers",                  samplers},
-        {"speculative.n_max",         speculative.n_max},
-        {"speculative.n_min",         speculative.n_min},
-        {"speculative.p_min",         speculative.p_min},
         {"speculative.type",          common_speculative_type_to_str(speculative.type)},
-        {"speculative.ngram_size_n",  speculative.ngram_size_n},
-        {"speculative.ngram_size_m",  speculative.ngram_size_m},
-        {"speculative.ngram_m_hits",  speculative.ngram_min_hits},
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
         {"backend_sampling",          sampling.backend_sampling},
@@ -308,14 +296,17 @@ task_params server_task::params_from_json_cmpl(
 
     params.speculative = defaults.speculative;
 
-    params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
-    params.speculative.n_max = json_value(data, "speculative.n_max", defaults.speculative.n_max);
-    params.speculative.p_min = json_value(data, "speculative.p_min", defaults.speculative.p_min);
+    // TODO: for now, be able to adjust only the draft-model based speculative parameters
+    params.speculative.draft.n_min = json_value(data, "speculative.n_min", defaults.speculative.draft.n_min);
+    params.speculative.draft.n_max = json_value(data, "speculative.n_max", defaults.speculative.draft.n_max);
+    params.speculative.draft.p_min = json_value(data, "speculative.p_min", defaults.speculative.draft.p_min);
 
-    params.speculative.n_min = std::min(params.speculative.n_max, params.speculative.n_min);
-    params.speculative.n_min = std::max(params.speculative.n_min, 0);
-    params.speculative.n_max = std::max(params.speculative.n_max, 0);
+    params.speculative.draft.n_min = std::min(params.speculative.draft.n_max, params.speculative.draft.n_min);
+    params.speculative.draft.n_min = std::max(params.speculative.draft.n_min, 0);
+    params.speculative.draft.n_max = std::max(params.speculative.draft.n_max, 0);
 
+#if 0
+    // for debugging and research purposes
     params.speculative.type = common_speculative_type_from_name(json_value(data, "speculative.type", common_speculative_type_to_str(defaults.speculative.type)));
 
     params.speculative.ngram_size_n     = json_value(data, "speculative.ngram_size_n", defaults.speculative.ngram_size_n);
@@ -325,6 +316,7 @@ task_params server_task::params_from_json_cmpl(
     params.speculative.ngram_size_n     = std::max(std::min(1, (int) params.speculative.ngram_size_n),     1024);
     params.speculative.ngram_size_m     = std::max(std::min(1, (int) params.speculative.ngram_size_m),     1024);
     params.speculative.ngram_min_hits   = std::max(std::min(1, (int) params.speculative.ngram_min_hits),   1024);
+#endif
 
     // Use OpenAI API logprobs only if n_probs wasn't provided
     if (data.contains("logprobs") && params.sampling.n_probs == defaults.sampling.n_probs){
