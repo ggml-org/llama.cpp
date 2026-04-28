@@ -70,7 +70,7 @@
 				{/if}
 			</div>
 
-			<div class="relative w-full md:max-w-md">
+			<div class="relative w-full">
 				<Input
 					id={field.key}
 					value={currentValue}
@@ -117,7 +117,7 @@
 				value={String(localConfig[field.key] ?? '')}
 				onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
 				placeholder=""
-				class="min-h-[10rem] w-full md:max-w-2xl"
+				class="min-h-[10rem] w-full md:max-w-3xl"
 			/>
 
 			{#if field.help || SETTING_CONFIG_INFO[field.key]}
@@ -176,7 +176,7 @@
 					}
 				}}
 			>
-				<div class="relative w-full md:w-auto md:max-w-md">
+				<div class="relative w-full md:w-auto">
 					<Select.Trigger class="w-full">
 						<div class="flex items-center gap-2">
 							{#if selectedOption?.icon}

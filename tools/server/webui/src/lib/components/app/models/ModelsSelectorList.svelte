@@ -27,7 +27,7 @@
 	let render = $derived(renderOption ?? defaultOption);
 </script>
 
-{#snippet defaultOption(item: ModelItem, showOrgName: boolean)}
+{#snippet defaultOption(item: ModelItem, hideOrgName: boolean)}
 	{@const { option } = item}
 	{@const isSelected = currentModel === option.model || activeId === option.id}
 	{@const isFav = modelsStore.favoriteModelIds.has(option.model)}
@@ -37,7 +37,7 @@
 		{isSelected}
 		isHighlighted={false}
 		{isFav}
-		{showOrgName}
+		{hideOrgName}
 		{onSelect}
 		{onInfoClick}
 		onMouseEnter={() => {}}
@@ -48,7 +48,7 @@
 {#if groups.loaded.length > 0}
 	<p class={sectionHeaderClass}>Loaded models</p>
 	{#each groups.loaded as item (`loaded-${item.option.id}`)}
-		{@render render(item, true)}
+		{@render render(item, false)}
 	{/each}
 {/if}
 
@@ -66,7 +66,7 @@
 			<p class={orgHeaderClass}>{group.orgName}</p>
 		{/if}
 		{#each group.items as item (item.option.id)}
-			{@render render(item, false)}
+			{@render render(item, true)}
 		{/each}
 	{/each}
 {/if}

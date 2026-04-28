@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
 	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 	import { MessageRole, AttachmentType } from '$lib/enums';
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatMessageAssistant,
 		ChatMessageUser,
@@ -118,7 +118,7 @@
 			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
-				goto(`${base}/`);
+				goto(`#/`);
 			}
 
 			return;
@@ -138,7 +138,7 @@
 			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
-				goto(`${base}/`);
+				goto(`#/`);
 			}
 		} else {
 			chatActions.delete(message);
@@ -200,7 +200,7 @@
 				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 				isEditing = false;
 				if (conversationDeleted) {
-					goto(`${base}/`);
+					goto(`#/`);
 				}
 				return;
 			}
@@ -252,70 +252,72 @@
 	}
 </script>
 
-{#if message.role === MessageRole.SYSTEM}
-	<ChatMessageSystem
-		bind:textareaElement
-		class={className}
-		{deletionInfo}
-		{message}
-		onConfirmDelete={handleConfirmDelete}
-		onCopy={handleCopy}
-		onDelete={handleDelete}
-		onEdit={handleEdit}
-		onNavigateToSibling={handleNavigateToSibling}
-		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{showDeleteDialog}
-		{siblingInfo}
-	/>
-{:else if mcpPromptExtra}
-	<ChatMessageMcpPrompt
-		class={className}
-		{deletionInfo}
-		{message}
-		mcpPrompt={mcpPromptExtra}
-		onConfirmDelete={handleConfirmDelete}
-		onCopy={handleCopy}
-		onDelete={handleDelete}
-		onEdit={handleEdit}
-		onNavigateToSibling={handleNavigateToSibling}
-		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{showDeleteDialog}
-		{siblingInfo}
-	/>
-{:else if message.role === MessageRole.USER}
-	<ChatMessageUser
-		class={className}
-		{deletionInfo}
-		{message}
-		onConfirmDelete={handleConfirmDelete}
-		onCopy={handleCopy}
-		onDelete={handleDelete}
-		onEdit={handleEdit}
-		onForkConversation={handleForkConversation}
-		onNavigateToSibling={handleNavigateToSibling}
-		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{showDeleteDialog}
-		{siblingInfo}
-	/>
-{:else}
-	<ChatMessageAssistant
-		bind:textareaElement
-		class={className}
-		{deletionInfo}
-		{isLastAssistantMessage}
-		{message}
-		{toolMessages}
-		messageContent={message.content}
-		onConfirmDelete={handleConfirmDelete}
-		onContinue={handleContinue}
-		onCopy={handleCopy}
-		onDelete={handleDelete}
-		onEdit={handleEdit}
-		onForkConversation={handleForkConversation}
-		onNavigateToSibling={handleNavigateToSibling}
-		onRegenerate={handleRegenerate}
-		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{showDeleteDialog}
-		{siblingInfo}
-	/>
-{/if}
+<div use:fadeInView>
+	{#if message.role === MessageRole.SYSTEM}
+		<ChatMessageSystem
+			bind:textareaElement
+			class={className}
+			{deletionInfo}
+			{message}
+			onConfirmDelete={handleConfirmDelete}
+			onCopy={handleCopy}
+			onDelete={handleDelete}
+			onEdit={handleEdit}
+			onNavigateToSibling={handleNavigateToSibling}
+			onShowDeleteDialogChange={handleShowDeleteDialogChange}
+			{showDeleteDialog}
+			{siblingInfo}
+		/>
+	{:else if mcpPromptExtra}
+		<ChatMessageMcpPrompt
+			class={className}
+			{deletionInfo}
+			{message}
+			mcpPrompt={mcpPromptExtra}
+			onConfirmDelete={handleConfirmDelete}
+			onCopy={handleCopy}
+			onDelete={handleDelete}
+			onEdit={handleEdit}
+			onNavigateToSibling={handleNavigateToSibling}
+			onShowDeleteDialogChange={handleShowDeleteDialogChange}
+			{showDeleteDialog}
+			{siblingInfo}
+		/>
+	{:else if message.role === MessageRole.USER}
+		<ChatMessageUser
+			class={className}
+			{deletionInfo}
+			{message}
+			onConfirmDelete={handleConfirmDelete}
+			onCopy={handleCopy}
+			onDelete={handleDelete}
+			onEdit={handleEdit}
+			onForkConversation={handleForkConversation}
+			onNavigateToSibling={handleNavigateToSibling}
+			onShowDeleteDialogChange={handleShowDeleteDialogChange}
+			{showDeleteDialog}
+			{siblingInfo}
+		/>
+	{:else}
+		<ChatMessageAssistant
+			bind:textareaElement
+			class={className}
+			{deletionInfo}
+			{isLastAssistantMessage}
+			{message}
+			{toolMessages}
+			messageContent={message.content}
+			onConfirmDelete={handleConfirmDelete}
+			onContinue={handleContinue}
+			onCopy={handleCopy}
+			onDelete={handleDelete}
+			onEdit={handleEdit}
+			onForkConversation={handleForkConversation}
+			onNavigateToSibling={handleNavigateToSibling}
+			onRegenerate={handleRegenerate}
+			onShowDeleteDialogChange={handleShowDeleteDialogChange}
+			{showDeleteDialog}
+			{siblingInfo}
+		/>
+	{/if}
+</div>

@@ -1,18 +1,20 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button';
+	import { Button, type ButtonVariant, type ButtonSize } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import type { Component } from 'svelte';
+	import { TooltipSide } from '$lib/enums';
 
 	interface Props {
 		icon: Component;
 		tooltip: string;
-		variant?: 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link';
-		size?: 'default' | 'sm' | 'lg' | 'icon';
+		variant?: ButtonVariant;
+		size?: ButtonSize;
 		iconSize?: string;
 		class?: string;
 		disabled?: boolean;
 		onclick: (e?: MouseEvent) => void;
 		'aria-label'?: string;
+		tooltipSide?: TooltipSide;
 	}
 
 	let {
@@ -23,6 +25,7 @@
 		class: className = '',
 		disabled = false,
 		iconSize = 'h-3 w-3',
+		tooltipSide = TooltipSide.TOP,
 		onclick,
 		'aria-label': ariaLabel
 	}: Props = $props();
@@ -35,7 +38,7 @@
 			{size}
 			{disabled}
 			{onclick}
-			class="h-6 w-6 p-0 {className} flex"
+			class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
 			aria-label={ariaLabel || tooltip}
 		>
 			{@const IconComponent = icon}
@@ -44,7 +47,7 @@
 		</Button>
 	</Tooltip.Trigger>
 
-	<Tooltip.Content>
+	<Tooltip.Content side={tooltipSide}>
 		<p>{tooltip}</p>
 	</Tooltip.Content>
 </Tooltip.Root>

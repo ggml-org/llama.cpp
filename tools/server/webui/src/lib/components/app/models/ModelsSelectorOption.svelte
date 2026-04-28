@@ -20,7 +20,7 @@
 		isSelected: boolean;
 		isHighlighted: boolean;
 		isFav: boolean;
-		showOrgName?: boolean;
+		hideOrgName?: boolean;
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
 		onKeyDown: (e: KeyboardEvent) => void;
@@ -32,7 +32,7 @@
 		isSelected,
 		isHighlighted,
 		isFav,
-		showOrgName = false,
+		hideOrgName = false,
 		onSelect,
 		onMouseEnter,
 		onKeyDown,
@@ -71,7 +71,7 @@
 >
 	<ModelId
 		modelId={option.model}
-		{showOrgName}
+		{hideOrgName}
 		aliases={option.aliases}
 		tags={option.tags}
 		class="flex-1"
