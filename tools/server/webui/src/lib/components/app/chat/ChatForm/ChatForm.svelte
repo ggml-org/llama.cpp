@@ -528,19 +528,15 @@
 
 		if (isRecording) {
 			isRecording = false;
-			const blobPromise = audioRecorder.stopRecording();
-			// Defer the heavy decode and PCM encode to a new task so the button repaints first
-			setTimeout(async () => {
-				try {
-					const audioBlob = await blobPromise;
-					const wavBlob = await convertToWav(audioBlob);
-					const audioFile = createAudioFile(wavBlob);
+			try {
+				const audioBlob = await audioRecorder.stopRecording();
+				const wavBlob = await convertToWav(audioBlob);
+				const audioFile = createAudioFile(wavBlob);
 
-					onFilesAdd?.([audioFile]);
-				} catch (error) {
-					console.error('Failed to stop recording:', error);
-				}
-			}, 0);
+				onFilesAdd?.([audioFile]);
+			} catch (error) {
+				console.error('Failed to stop recording:', error);
+			}
 		} else {
 			try {
 				await audioRecorder.startRecording();

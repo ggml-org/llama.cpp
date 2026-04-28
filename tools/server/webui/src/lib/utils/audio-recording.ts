@@ -93,10 +93,26 @@ export class AudioRecorder {
 	}
 
 	cancelRecording(): void {
-		if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-			this.mediaRecorder.stop();
+		const recorder = this.mediaRecorder;
+		const stream = this.stream;
+
+		this.mediaRecorder = null;
+		this.audioChunks = [];
+		this.stream = null;
+		this.recordingState = false;
+
+		if (recorder && recorder.state !== 'inactive') {
+			// Drop the original handlers so the pending stop event does not touch the instance
+			recorder.onstop = null;
+			recorder.onerror = null;
+			recorder.stop();
 		}
-		this.cleanup();
+
+		if (stream) {
+			for (const track of stream.getTracks()) {
+				track.stop();
+			}
+		}
 	}
 
 	private initializeRecorder(stream: MediaStream): void {
@@ -131,19 +147,6 @@ export class AudioRecorder {
 			this.recordingState = false;
 		};
 	}
-
-	private cleanup(): void {
-		if (this.stream) {
-			for (const track of this.stream.getTracks()) {
-				track.stop();
-			}
-
-			this.stream = null;
-		}
-		this.mediaRecorder = null;
-		this.audioChunks = [];
-		this.recordingState = false;
-	}
 }
 
 export async function convertToWav(audioBlob: Blob): Promise<Blob> {
@@ -157,13 +160,12 @@ export async function convertToWav(audioBlob: Blob): Promise<Blob> {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
-		const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-		const wavBlob = audioBufferToWav(audioBuffer);
-
-		audioContext.close();
-
-		return wavBlob;
+		try {
+			const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+			return audioBufferToWav(audioBuffer);
+		} finally {
+			audioContext.close();
+		}
 	} catch (error) {
 		console.error('Failed to convert audio to WAV:', error);
 		return audioBlob;
