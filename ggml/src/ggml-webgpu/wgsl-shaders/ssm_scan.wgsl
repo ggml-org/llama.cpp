@@ -137,20 +137,20 @@ fn main(
             s_prev = s;
 
 #ifdef USE_SUBGROUP_REDUCTION
-    #ifdef XBC_OVERLAP
+#ifdef XBC_OVERLAP
             let subgroup_partial = subgroupAdd(s * x_B_C_merged[c_idx]);
-    #else
+#else
             let subgroup_partial = subgroupAdd(s * C[c_idx]);
-    #endif
+#endif
             if (subgroup_invocation_id == 0u) {
                 shared_reduce[reduce_idx - tid + subgroup_id] = subgroup_partial;
             }
 #else
-    #ifdef XBC_OVERLAP
+#ifdef XBC_OVERLAP
             shared_reduce[reduce_idx] = s * x_B_C_merged[c_idx];
-    #else
+#else
             shared_reduce[reduce_idx] = s * C[c_idx];
-    #endif
+#endif
 #endif
 
             workgroupBarrier();
