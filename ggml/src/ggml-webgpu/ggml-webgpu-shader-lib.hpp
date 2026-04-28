@@ -26,21 +26,21 @@
 // Matrix multiplication parameters
 
 // Register tiling parameters
-#define WEBGPU_MUL_MAT_TILE_M    4
-#define WEBGPU_MUL_MAT_TILE_N    4
-#define WEBGPU_MUL_MAT_WG_SIZE_M 8
-#define WEBGPU_MUL_MAT_WG_SIZE_N 8
+#define WEBGPU_MUL_MAT_TILE_M           4
+#define WEBGPU_MUL_MAT_TILE_N           4
+#define WEBGPU_MUL_MAT_WG_SIZE_M        8
+#define WEBGPU_MUL_MAT_WG_SIZE_N        8
 #define WEBGPU_MUL_MAT_REG_TILE_K_FLOAT 8
 #define WEBGPU_MUL_MAT_REG_TILE_K_QUANT 32
 
 // Subgroup matrix parameters
 // The number of subgroups in the M dimension
-#define WEBGPU_MUL_MAT_SUBGROUP_M        2
+#define WEBGPU_MUL_MAT_SUBGROUP_M            2
 // The number of subgroups in the N dimension
-#define WEBGPU_MUL_MAT_SUBGROUP_N        4
+#define WEBGPU_MUL_MAT_SUBGROUP_N            4
 // The number of subgroup matrices each subgroup accumulates over
-#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M 4
-#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N 2
+#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M     4
+#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N     2
 #define WEBGPU_MUL_MAT_SUBGROUP_TILE_K_FLOAT 32
 #define WEBGPU_MUL_MAT_SUBGROUP_TILE_K_QUANT 32
 
@@ -59,20 +59,19 @@ template <typename T> inline void ggml_webgpu_hash_combine(size_t & seed, const 
     seed ^= std::hash<T>{}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
 
-inline size_t ggml_webgpu_tensor_offset(const ggml_tensor * tensor) {
-    constexpr uintptr_t webgpu_ptr_base = 0x1000;
-    const ggml_tensor * base_tensor     = tensor->view_src ? tensor->view_src : tensor;
-    return (size_t) ((uintptr_t) base_tensor->data - webgpu_ptr_base) + tensor->view_offs;
+// Calculates base address of a tensor ignoring the fake base pointer
+inline uintptr_t ggml_webgpu_tensor_addr(const ggml_tensor * tensor) {
+    const ggml_tensor * base_tensor = tensor->view_src ? tensor->view_src : tensor;
+    return (uintptr_t) base_tensor->data + tensor->view_offs;
 }
 
 inline bool ggml_webgpu_tensor_equal(const ggml_tensor * a, const ggml_tensor * b) {
-    return a->buffer == b->buffer && ggml_webgpu_tensor_offset(a) == ggml_webgpu_tensor_offset(b);
+    return a->buffer == b->buffer && ggml_webgpu_tensor_addr(a) == ggml_webgpu_tensor_addr(b);
 }
 
-inline bool ggml_webgpu_tensor_overlap_for_key(const ggml_tensor * a, const ggml_tensor * b) {
-    return a->buffer == b->buffer &&
-           ggml_webgpu_tensor_offset(a) < ggml_webgpu_tensor_offset(b) + ggml_nbytes(b) &&
-           ggml_webgpu_tensor_offset(b) < ggml_webgpu_tensor_offset(a) + ggml_nbytes(a);
+inline bool ggml_webgpu_tensor_overlap(const ggml_tensor * a, const ggml_tensor * b) {
+    return a->buffer == b->buffer && ggml_webgpu_tensor_addr(a) < ggml_webgpu_tensor_addr(b) + ggml_nbytes(b) &&
+           ggml_webgpu_tensor_addr(b) < ggml_webgpu_tensor_addr(a) + ggml_nbytes(a);
 }
 
 struct ggml_webgpu_shader_lib_context {
@@ -102,10 +101,6 @@ struct webgpu_pipeline {
 
 struct ggml_webgpu_generic_shader_decisions {
     uint32_t wg_size = 0;
-};
-
-struct ggml_webgpu_inplace_shader_decisions {
-    uint32_t wg_size = 0;
     bool     inplace = false;
 };
 
@@ -128,8 +123,8 @@ struct ggml_webgpu_ssm_conv_shader_decisions {
 };
 
 struct ggml_webgpu_ssm_scan_pipeline_key {
-    int type;
-    int d_state;
+    int  type;
+    int  d_state;
     bool xbc_overlap;
 
     bool operator==(const ggml_webgpu_ssm_scan_pipeline_key & other) const {
@@ -539,11 +534,11 @@ struct ggml_webgpu_flash_attn_pipeline_key_hash {
 };
 
 struct ggml_webgpu_flash_attn_decisions {
-    uint32_t path      = GGML_WEBGPU_FLASH_ATTN_PATH_SUBGROUP_MATRIX;
-    uint32_t q_tile    = 0;
-    uint32_t kv_tile   = 0;
-    uint32_t wg_size   = 0;
-    bool     kv_direct = false;
+    uint32_t path       = GGML_WEBGPU_FLASH_ATTN_PATH_SUBGROUP_MATRIX;
+    uint32_t q_tile     = 0;
+    uint32_t kv_tile    = 0;
+    uint32_t wg_size    = 0;
+    bool     kv_direct  = false;
     bool     kv_overlap = false;
 };
 
@@ -589,44 +584,12 @@ inline ggml_webgpu_flash_attn_pipeline_key ggml_webgpu_flash_attn_make_pipeline_
     key.head_dim_qk                         = (uint32_t) context.src0->ne[0];
     key.head_dim_v                          = (uint32_t) context.src2->ne[0];
     key.kv_direct                           = kv_direct;
-    key.kv_overlap                          = ggml_webgpu_tensor_overlap_for_key(context.src1, context.src2) &&
-                                             context.src1->type == context.src2->type;
+    key.kv_overlap                          = ggml_webgpu_tensor_overlap(context.src1, context.src2);
     key.has_mask                            = has_mask;
     key.has_sinks                           = has_sinks;
     key.uses_logit_softcap                  = ggml_get_op_params_f32(context.dst, 2) != 0.0f;
     key.path                                = path;
     return key;
-}
-
-inline ggml_webgpu_binary_shader_decisions ggml_webgpu_binary_get_decisions(
-    const ggml_webgpu_shader_lib_context & context) {
-    ggml_webgpu_binary_shader_decisions decisions = {};
-    decisions.inplace                             = ggml_webgpu_tensor_equal(context.src0, context.dst);
-    decisions.overlap                             = ggml_webgpu_tensor_overlap_for_key(context.src1, context.dst);
-    decisions.src_overlap                         = ggml_webgpu_tensor_overlap_for_key(context.src0, context.src1);
-    return decisions;
-}
-
-inline ggml_webgpu_rms_norm_mul_shader_decisions ggml_webgpu_rms_norm_mul_get_decisions(
-    const ggml_webgpu_shader_lib_context & context) {
-    ggml_webgpu_rms_norm_mul_shader_decisions decisions = {};
-    decisions.inplace                                   = ggml_webgpu_tensor_equal(context.src0, context.dst);
-    decisions.overlap                                   = ggml_webgpu_tensor_equal(context.src1, context.dst);
-    decisions.src_overlap                               = ggml_webgpu_tensor_overlap_for_key(context.src0, context.src1);
-    return decisions;
-}
-
-inline bool ggml_webgpu_inplace_src0_dst(const ggml_webgpu_shader_lib_context & context) {
-    return ggml_webgpu_tensor_equal(context.src0, context.dst);
-}
-
-inline bool ggml_webgpu_unary_is_inplace(const ggml_webgpu_shader_lib_context & context) {
-    return ggml_webgpu_inplace_src0_dst(context) || context.dst->op == GGML_OP_FILL;
-}
-
-inline bool ggml_webgpu_ssm_scan_has_xbc_overlap(const ggml_webgpu_shader_lib_context & context) {
-    return ggml_webgpu_tensor_overlap_for_key(context.src1, context.src4) &&
-           ggml_webgpu_tensor_overlap_for_key(context.src1, context.src5);
 }
 
 struct ggml_webgpu_flash_attn_vec_reduce_pipeline_key {
@@ -1090,7 +1053,7 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_row_norm_pipeline_key key = {};
         key.op                                = context.dst->op;
-        key.inplace                           = ggml_webgpu_inplace_src0_dst(context);
+        key.inplace                           = ggml_webgpu_tensor_equal(context.src0, context.dst);
 
         auto it = row_norm_pipelines.find(key);
         if (it != row_norm_pipelines.end()) {
@@ -1120,11 +1083,11 @@ class ggml_webgpu_shader_lib {
         const uint32_t row_norm_wg_size = 128u;
         uint32_t       wg_size          = std::min(context.max_wg_size, row_norm_wg_size);
         defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
-        auto processed          = preprocessor.preprocess(wgsl_row_norm, defines);
-        auto decisions          = std::make_shared<ggml_webgpu_inplace_shader_decisions>();
-        decisions->wg_size      = wg_size;
-        decisions->inplace      = key.inplace;
-        row_norm_pipelines[key] = ggml_webgpu_create_pipeline(device, processed, variant);
+        auto processed                  = preprocessor.preprocess(wgsl_row_norm, defines);
+        auto decisions                  = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size              = wg_size;
+        decisions->inplace              = key.inplace;
+        row_norm_pipelines[key]         = ggml_webgpu_create_pipeline(device, processed, variant);
         row_norm_pipelines[key].context = decisions;
         return row_norm_pipelines[key];
     }
@@ -1200,7 +1163,7 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_set_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_set_pipeline_key key = {};
         key.type                         = context.dst->type;
-        key.inplace                      = ggml_webgpu_inplace_src0_dst(context);
+        key.inplace                      = ggml_webgpu_tensor_equal(context.src0, context.dst);
 
         auto it = set_pipelines.find(key);
         if (it != set_pipelines.end()) {
@@ -1231,7 +1194,7 @@ class ggml_webgpu_shader_lib {
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
         auto processed           = preprocessor.preprocess(wgsl_set, defines);
-        auto decisions           = std::make_shared<ggml_webgpu_inplace_shader_decisions>();
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
         decisions->wg_size       = context.max_wg_size;
         decisions->inplace       = key.inplace;
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
@@ -1426,7 +1389,7 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_scale_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_scale_pipeline_key key = {};
-        key.inplace                        = ggml_webgpu_inplace_src0_dst(context);
+        key.inplace                        = ggml_webgpu_tensor_equal(context.src0, context.dst);
 
         auto it = scale_pipelines.find(key);
         if (it != scale_pipelines.end()) {
@@ -1444,7 +1407,7 @@ class ggml_webgpu_shader_lib {
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
         auto processed           = preprocessor.preprocess(wgsl_scale, defines);
-        auto decisions           = std::make_shared<ggml_webgpu_inplace_shader_decisions>();
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
         decisions->wg_size       = context.max_wg_size;
         decisions->inplace       = key.inplace;
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
@@ -1537,11 +1500,11 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_ssm_scan_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        const bool xbc_overlap                  = ggml_webgpu_ssm_scan_has_xbc_overlap(context);
         ggml_webgpu_ssm_scan_pipeline_key key = {};
         key.type                              = context.dst->type;
         key.d_state                           = (int) context.src0->ne[0];
-        key.xbc_overlap                       = xbc_overlap;
+        key.xbc_overlap                       = ggml_webgpu_tensor_overlap(context.src1, context.src4) &&
+                          ggml_webgpu_tensor_overlap(context.src1, context.src5);
 
         auto it = ssm_scan_pipelines.find(key);
         if (it != ssm_scan_pipelines.end()) {
@@ -1583,7 +1546,7 @@ class ggml_webgpu_shader_lib {
         auto decisions             = std::make_shared<ggml_webgpu_ssm_scan_shader_decisions>();
         decisions->wg_size         = wg_size;
         decisions->tokens_per_tile = tokens_per_tile;
-        decisions->xbc_overlap     = xbc_overlap;
+        decisions->xbc_overlap     = key.xbc_overlap;
         webgpu_pipeline pipeline   = ggml_webgpu_create_pipeline(device, processed, variant);
         pipeline.context           = decisions;
         ssm_scan_pipelines[key]    = pipeline;
@@ -1841,11 +1804,9 @@ class ggml_webgpu_shader_lib {
 
         uint32_t tile_k;
         if (key.use_subgroup_matrix) {
-            tile_k = is_quant ? WEBGPU_MUL_MAT_SUBGROUP_TILE_K_QUANT
-                              : WEBGPU_MUL_MAT_SUBGROUP_TILE_K_FLOAT;
+            tile_k = is_quant ? WEBGPU_MUL_MAT_SUBGROUP_TILE_K_QUANT : WEBGPU_MUL_MAT_SUBGROUP_TILE_K_FLOAT;
         } else {
-            tile_k = is_quant ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT
-                              : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
+            tile_k = is_quant ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
         }
 
         // Tiles
@@ -2078,9 +2039,8 @@ class ggml_webgpu_shader_lib {
         defines.push_back("SCALAR");
 
         // mul_mat_id is register-tile only.
-        const uint32_t tile_k = ggml_is_quantized(context.src0->type)
-                                    ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT
-                                    : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
+        const uint32_t tile_k =
+            ggml_is_quantized(context.src0->type) ? WEBGPU_MUL_MAT_REG_TILE_K_QUANT : WEBGPU_MUL_MAT_REG_TILE_K_FLOAT;
 
         // Tiles
         defines.push_back("TILE_M=" + std::to_string(WEBGPU_MUL_MAT_TILE_M) + "u");
@@ -2116,8 +2076,8 @@ class ggml_webgpu_shader_lib {
         key.type                                = context.dst->type;
         key.op                                  = op;
         key.is_unary                            = is_unary;
-        key.inplace                             = ggml_webgpu_unary_is_inplace(context);
-        key.ttype                               = (ggml_tri_type) ggml_get_op_params_i32(context.dst, 0);
+        key.inplace = ggml_webgpu_tensor_equal(context.src0, context.dst) || context.dst->op == GGML_OP_FILL;
+        key.ttype   = (ggml_tri_type) ggml_get_op_params_i32(context.dst, 0);
 
         auto it = unary_pipelines.find(key);
         if (it != unary_pipelines.end()) {
@@ -2173,7 +2133,7 @@ class ggml_webgpu_shader_lib {
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
         auto processed           = preprocessor.preprocess(wgsl_unary, defines);
-        auto decisions           = std::make_shared<ggml_webgpu_inplace_shader_decisions>();
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
         decisions->wg_size       = context.max_wg_size;
         decisions->inplace       = key.inplace;
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
@@ -2183,12 +2143,10 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_rms_norm_mul_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        const ggml_webgpu_rms_norm_mul_shader_decisions decisions =
-            ggml_webgpu_rms_norm_mul_get_decisions(context);
         ggml_webgpu_rms_norm_mul_pipeline_key key = {};
-        key.inplace                               = decisions.inplace;
-        key.overlap                               = decisions.overlap;
-        key.src_overlap                           = decisions.src_overlap;
+        key.inplace                               = ggml_webgpu_tensor_equal(context.src0, context.dst);
+        key.overlap                               = ggml_webgpu_tensor_equal(context.src1, context.dst);
+        key.src_overlap                           = ggml_webgpu_tensor_overlap(context.src0, context.src1);
 
         auto it = rms_norm_mul_pipelines.find(key);
         if (it != rms_norm_mul_pipelines.end()) {
@@ -2212,23 +2170,25 @@ class ggml_webgpu_shader_lib {
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
-        auto processed              = preprocessor.preprocess(wgsl_rms_norm_mul, defines);
-        auto pipeline_decisions     = std::make_shared<ggml_webgpu_rms_norm_mul_shader_decisions>(decisions);
-        pipeline_decisions->wg_size = context.max_wg_size;
-        webgpu_pipeline pipeline    = ggml_webgpu_create_pipeline(device, processed, variant);
-        pipeline.context            = pipeline_decisions;
-        rms_norm_mul_pipelines[key] = pipeline;
+        auto processed                  = preprocessor.preprocess(wgsl_rms_norm_mul, defines);
+        auto pipeline_decisions         = std::make_shared<ggml_webgpu_rms_norm_mul_shader_decisions>();
+        pipeline_decisions->wg_size     = context.max_wg_size;
+        pipeline_decisions->inplace     = key.inplace;
+        pipeline_decisions->overlap     = key.overlap;
+        pipeline_decisions->src_overlap = key.src_overlap;
+        webgpu_pipeline pipeline        = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context                = pipeline_decisions;
+        rms_norm_mul_pipelines[key]     = pipeline;
         return rms_norm_mul_pipelines[key];
     }
 
     webgpu_pipeline get_binary_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        const ggml_webgpu_binary_shader_decisions decisions = ggml_webgpu_binary_get_decisions(context);
         ggml_webgpu_binary_pipeline_key key = {};
         key.type                            = context.dst->type;
         key.op                              = context.dst->op;
-        key.inplace                         = decisions.inplace;
-        key.overlap                         = decisions.overlap;
-        key.src_overlap                     = decisions.src_overlap;
+        key.inplace                         = ggml_webgpu_tensor_equal(context.src0, context.dst);
+        key.overlap                         = ggml_webgpu_tensor_equal(context.src1, context.dst);
+        key.src_overlap                     = ggml_webgpu_tensor_overlap(context.src0, context.src1);
 
         auto it = binary_pipelines.find(key);
         if (it != binary_pipelines.end()) {
@@ -2267,9 +2227,13 @@ class ggml_webgpu_shader_lib {
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
-        auto processed           = preprocessor.preprocess(wgsl_binary, defines);
-        auto pipeline_decisions  = std::make_shared<ggml_webgpu_binary_shader_decisions>(decisions);
-        pipeline_decisions->wg_size = context.max_wg_size;
+        auto processed                  = preprocessor.preprocess(wgsl_binary, defines);
+        auto pipeline_decisions         = std::make_shared<ggml_webgpu_binary_shader_decisions>();
+        pipeline_decisions->wg_size     = context.max_wg_size;
+        pipeline_decisions->inplace     = key.inplace;
+        pipeline_decisions->overlap     = key.overlap;
+        pipeline_decisions->src_overlap = key.src_overlap;
+
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
         pipeline.context         = pipeline_decisions;
         binary_pipelines[key]    = pipeline;
@@ -2432,7 +2396,7 @@ class ggml_webgpu_shader_lib {
             defines.push_back(std::string("SG_MAT_K=") + std::to_string(context.sg_mat_k));
         }
 
-        auto pipeline_decisions = std::make_shared<ggml_webgpu_flash_attn_decisions>(decisions);
+        auto pipeline_decisions        = std::make_shared<ggml_webgpu_flash_attn_decisions>(decisions);
         pipeline_decisions->kv_overlap = key.kv_overlap;
         defines.push_back(std::string("Q_TILE=") + std::to_string(decisions.q_tile));
         defines.push_back(std::string("KV_TILE=") + std::to_string(decisions.kv_tile));
@@ -2625,7 +2589,7 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_rope_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_rope_pipeline_key key = {};
         key.type                          = context.dst->type;
-        key.inplace                       = ggml_webgpu_inplace_src0_dst(context);
+        key.inplace                       = ggml_webgpu_tensor_equal(context.src0, context.dst);
         key.has_ff                        = (context.src2 != nullptr);
 
         auto it = rope_pipelines.find(key);
@@ -2662,7 +2626,7 @@ class ggml_webgpu_shader_lib {
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
         auto processed           = preprocessor.preprocess(wgsl_rope, defines);
-        auto decisions           = std::make_shared<ggml_webgpu_inplace_shader_decisions>();
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
         decisions->wg_size       = context.max_wg_size;
         decisions->inplace       = key.inplace;
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
@@ -2676,7 +2640,7 @@ class ggml_webgpu_shader_lib {
         key.mask_type                         = context.src1 ? context.src1->type : GGML_TYPE_F32;
         key.has_mask                          = (context.src1 != nullptr);
         key.has_sink                          = (context.src2 != nullptr);
-        key.inplace                           = ggml_webgpu_inplace_src0_dst(context);
+        key.inplace                           = ggml_webgpu_tensor_equal(context.src0, context.dst);
 
         auto it = soft_max_pipelines.find(key);
         if (it != soft_max_pipelines.end()) {
@@ -2715,7 +2679,7 @@ class ggml_webgpu_shader_lib {
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
         auto processed           = preprocessor.preprocess(wgsl_soft_max, defines);
-        auto decisions           = std::make_shared<ggml_webgpu_inplace_shader_decisions>();
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
         decisions->wg_size       = context.max_wg_size;
         decisions->inplace       = key.inplace;
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
