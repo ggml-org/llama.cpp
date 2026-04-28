@@ -2974,7 +2974,6 @@ static int ggml_cpu_try_fuse_ops(
         const struct ggml_compute_params * params,
         const struct ggml_cplan * cplan) {
 
-    // Read env GGML_CPU_DISABLE_FUSION once and cache it
     static bool disable_fusion  = false;
     static bool disable_fusion_initialized = false;
     if (!disable_fusion_initialized) {

@@ -3730,7 +3730,6 @@ static void ggml_compute_forward_rms_norm_f32(
     const ggml_tensor * src1 = nullptr;
     ggml_tensor       * dst  = rms_norm_dst;
 
-    // ggml_compute_forward_rms_norm_mul_fused should do the graph fusion check.
     if constexpr (FUSE_OP == GGML_RMS_NORM_FUSE_MUL) {
         src1 = (fused_dst->src[0] == rms_norm_dst) ? fused_dst->src[1] : fused_dst->src[0];
         dst  = fused_dst;
