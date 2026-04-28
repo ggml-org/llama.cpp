@@ -658,6 +658,13 @@ bool ggml_cuda_ar_allreduce(
                         p, backends, buf, buf, inner_compute, ne, nbytes);
                     break;
                 }
+                case GGML_TYPE_F16: {
+                    half * buf[GGML_CUDA_MAX_DEVICES];
+                    for (int i = 0; i < n; ++i) buf[i] = static_cast<half *>(tensors[i]->data);
+                    ok = ggml_cuda_ar_allreduce_copy_impl<half, half>(
+                        p, backends, buf, buf, inner_compute, ne, nbytes);
+                    break;
+                }
                 default:
                     GGML_ASSERT(false);
             }
