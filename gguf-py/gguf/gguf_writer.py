@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from math import prod
 from pathlib import Path
-from io import BufferedWriter
 from typing import IO, Any, Sequence, Mapping
 from string import ascii_letters, digits
 
@@ -64,7 +63,7 @@ class WriterState(Enum):
 
 
 class GGUFWriter:
-    fout: list[BufferedWriter] | None
+    fout: list[IO[bytes]] | None
     path: Path | None
     temp_file: tempfile.SpooledTemporaryFile[bytes] | None
     tensors: list[dict[str, TensorInfo]]
@@ -385,10 +384,11 @@ class GGUFWriter:
             # Don't byteswap inplace since lazy copies cannot handle it
             tensor = tensor.byteswap(inplace=False)
         if self.use_temp_file and self.temp_file is None:
+            temp_dir = (self.path if self.path.is_dir() else self.path.parent) if self.path is not None else None
             fp = tempfile.SpooledTemporaryFile(
                 mode="w+b",
                 max_size=256 * 1024 * 1024,
-                dir=(self.path if self.path.is_dir() else self.path.parent) if self.path is not None else None,
+                dir=str(temp_dir) if temp_dir is not None else None,
             )
             fp.seek(0)
             self.temp_file = fp

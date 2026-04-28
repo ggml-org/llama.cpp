@@ -156,6 +156,20 @@ common_chat_msg task_result_state::update_chat_msg(
         generated_text,
         is_partial,
         chat_parser_params);
+
+    if (is_partial &&
+            chat_parser_params.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK &&
+            string_ends_with(chat_parser_params.generation_prompt, "<think>") &&
+            generated_text.find("</think>") == std::string::npos) {
+        std::string reasoning = generated_text;
+        if (string_starts_with(reasoning, "<think>")) {
+            reasoning.erase(0, std::string("<think>").size());
+        }
+
+        new_msg.role = "assistant";
+        new_msg.reasoning_content = std::move(reasoning);
+    }
+
     if (!new_msg.empty()) {
         new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
         chat_msg = new_msg;

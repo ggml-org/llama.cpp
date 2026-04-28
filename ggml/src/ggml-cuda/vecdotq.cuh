@@ -141,6 +141,25 @@ static const __device__ float kvalues_f8_e4m3fn[256] = {
     -256.0f, -288.0f, -320.0f, -352.0f, -384.0f, -416.0f, -448.0f, NAN,
 };
 
+static const __device__ int8_t kvalues_f8_e4m3fn_i8_approx[256] = {
+       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    1,
+       1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    2,    2,    2,    2,    2,
+       2,    3,    3,    3,    3,    4,    4,    4,    5,    5,    6,    6,    7,    7,    8,    9,
+       9,   10,   11,   12,   14,   15,   16,   17,   18,   20,   23,   25,   27,   29,   32,   34,
+      36,   41,   45,   50,   54,   59,   64,   68,   73,   82,   91,  100,  109,  118,  127,    0,
+       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,   -1,
+      -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -2,   -2,   -2,   -2,   -2,
+      -2,   -3,   -3,   -3,   -3,   -4,   -4,   -4,   -5,   -5,   -6,   -6,   -7,   -7,   -8,   -9,
+      -9,  -10,  -11,  -12,  -14,  -15,  -16,  -17,  -18,  -20,  -23,  -25,  -27,  -29,  -32,  -34,
+     -36,  -41,  -45,  -50,  -54,  -59,  -64,  -68,  -73,  -82,  -91, -100, -109, -118, -127,    0,
+};
+
 #define VDR_Q1_0_Q8_1_MMVQ 1  // Process one 32-element chunk at a time for parallelism
 #define VDR_Q1_0_Q8_1_MMQ  4  // Q1_0 has 128 bits (4 ints) per block
 
@@ -168,6 +187,50 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_
     }
 
     return d8 * __half2float(d_q8_1) * sum;
+}
+
+template <int vdr> static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_q8_1_impl_approx_dp4a(
+    const int * v, const int * u, const float & d8, const half & d_q8_1) {
+
+    int sumi = 0;
+
+#pragma unroll
+    for (int i = 0; i < vdr; ++i) {
+        int x_i8 = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const uint8_t q = (uint32_t(v[i]) >> (8*j)) & 0xFF;
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+            const int8_t x = kvalues_f8_e4m3fn_i8_approx[q];
+#else
+            const int8_t x = __ldg(&kvalues_f8_e4m3fn_i8_approx[q]);
+#endif
+            x_i8 |= (uint8_t) x << (8*j);
+        }
+        sumi = ggml_cuda_dp4a(x_i8, u[i], sumi);
+    }
+
+    return (448.0f / 127.0f) * d8 * __half2float(d_q8_1) * sumi;
+}
+
+template <int vdr> static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_q8_1_impl_approx_dp4a_shared_lut(
+    const int * v, const int * u, const float & d8, const half & d_q8_1, const int8_t * __restrict__ values) {
+
+    int sumi = 0;
+
+#pragma unroll
+    for (int i = 0; i < vdr; ++i) {
+        int x_i8 = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const uint8_t q = (uint32_t(v[i]) >> (8*j)) & 0xFF;
+            const int8_t  x = values[q];
+            x_i8 |= (uint8_t) x << (8*j);
+        }
+        sumi = ggml_cuda_dp4a(x_i8, u[i], sumi);
+    }
+
+    return (448.0f / 127.0f) * d8 * __half2float(d_q8_1) * sumi;
 }
 
 template <int vdr> static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_q8_1_impl_shared_lut(
@@ -931,6 +994,51 @@ static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_q8_1_shared_lut(
     }
 
     return vec_dot_f8_e4m3_b128_q8_1_impl_shared_lut<VDR_F8_E4M3_B128_Q8_1_MMVQ>(
+        v, u, ggml_cuda_e8m0_to_fp32(bq->e), __low2half(bq8_1[y_block].ds), values);
+}
+
+static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_q8_1_approx_dp4a(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_f8_e4m3_b128 * bq = (const block_f8_e4m3_b128 *) vbq + kbx;
+
+    static_assert(VDR_F8_E4M3_B128_Q8_1_MMVQ <= QI8_1, "VDR must not span multiple Q8_1 blocks");
+    const int y_block = iqs / QI8_1;
+    const int y_iqs   = iqs % QI8_1;
+
+    int v[VDR_F8_E4M3_B128_Q8_1_MMVQ];
+    int u[VDR_F8_E4M3_B128_Q8_1_MMVQ];
+
+#pragma unroll
+    for (int i = 0; i < VDR_F8_E4M3_B128_Q8_1_MMVQ; ++i) {
+        v[i] = get_int_b1(bq->qs, iqs + i);
+        u[i] = get_int_b4(bq8_1[y_block].qs, y_iqs + i);
+    }
+
+    return vec_dot_f8_e4m3_b128_q8_1_impl_approx_dp4a<VDR_F8_E4M3_B128_Q8_1_MMVQ>(
+        v, u, ggml_cuda_e8m0_to_fp32(bq->e), __low2half(bq8_1[y_block].ds));
+}
+
+static __device__ __forceinline__ float vec_dot_f8_e4m3_b128_q8_1_approx_dp4a_shared_lut(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs,
+    const int8_t * __restrict__ values) {
+
+    const block_f8_e4m3_b128 * bq = (const block_f8_e4m3_b128 *) vbq + kbx;
+
+    static_assert(VDR_F8_E4M3_B128_Q8_1_MMVQ <= QI8_1, "VDR must not span multiple Q8_1 blocks");
+    const int y_block = iqs / QI8_1;
+    const int y_iqs   = iqs % QI8_1;
+
+    int v[VDR_F8_E4M3_B128_Q8_1_MMVQ];
+    int u[VDR_F8_E4M3_B128_Q8_1_MMVQ];
+
+#pragma unroll
+    for (int i = 0; i < VDR_F8_E4M3_B128_Q8_1_MMVQ; ++i) {
+        v[i] = get_int_b1(bq->qs, iqs + i);
+        u[i] = get_int_b4(bq8_1[y_block].qs, y_iqs + i);
+    }
+
+    return vec_dot_f8_e4m3_b128_q8_1_impl_approx_dp4a_shared_lut<VDR_F8_E4M3_B128_Q8_1_MMVQ>(
         v, u, ggml_cuda_e8m0_to_fp32(bq->e), __low2half(bq8_1[y_block].ds), values);
 }
 

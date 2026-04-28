@@ -2758,6 +2758,28 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.2.jinja", detailed_debug);
 
+        {
+            auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V3.2.jinja");
+            common_chat_templates_inputs inputs;
+            inputs.messages = { message_user };
+            inputs.add_generation_prompt = true;
+            inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+
+            inputs.enable_thinking = true;
+            auto thinking_params = common_chat_templates_apply(tmpls.get(), inputs);
+            assert_equals(true, thinking_params.supports_thinking);
+            if (!string_ends_with(thinking_params.prompt, "<think>")) {
+                throw std::runtime_error("DeepSeek V3.2 thinking prompt must end with <think>, got: " + thinking_params.prompt);
+            }
+
+            inputs.enable_thinking = false;
+            auto no_thinking_params = common_chat_templates_apply(tmpls.get(), inputs);
+            assert_equals(true, no_thinking_params.supports_thinking);
+            if (!string_ends_with(no_thinking_params.prompt, "<think></think>")) {
+                throw std::runtime_error("DeepSeek V3.2 non-thinking prompt must end with <think></think>, got: " + no_thinking_params.prompt);
+            }
+        }
+
         // Pure content (non-thinking mode)
         tst.test("Hello, world!\nWhat's up?")
             .enable_thinking(false)

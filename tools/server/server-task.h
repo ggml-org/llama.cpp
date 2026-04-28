@@ -619,6 +619,18 @@ struct server_prompt {
     }
 };
 
+inline const server_prompt_checkpoint * server_prompt_find_checkpoint_before_pos(
+        const server_prompt & prompt,
+        llama_pos             p0) {
+    for (auto it = prompt.checkpoints.rbegin(); it != prompt.checkpoints.rend(); ++it) {
+        if (it->pos_max < p0 && it->n_tokens >= 0 && (size_t) it->n_tokens <= prompt.tokens.size()) {
+            return &*it;
+        }
+    }
+
+    return nullptr;
+}
+
 struct server_prompt_cache {
     server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
