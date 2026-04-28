@@ -2804,8 +2804,9 @@ static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal});
         } else if (device->uma) {
-            // Fall back to host memory type
-            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal,
+            // Prefer host-visible device-local memory on UMA to maximize direct host access.
+            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                                                       vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
         } else if (device->disable_host_visible_vidmem) {
             if (device->allow_sysmem_fallback) {
@@ -6840,6 +6841,19 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
 
 static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t width, size_t height, bool sync_staging = false) {
     VK_LOG_DEBUG("ggml_vk_buffer_write_2d_async(" << width << ", " << height << ")");
+
+    if (dst->device->uma && (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+        GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+        if (width == spitch) {
+            deferred_memcpy((uint8_t *) dst->ptr + offset, src, width * height, &subctx->in_memcpys);
+        } else {
+            for (size_t i = 0; i < height; i++) {
+                deferred_memcpy((uint8_t *) dst->ptr + offset + i * width, (const uint8_t *) src + i * spitch, width, &subctx->in_memcpys);
+            }
+        }
+        return true;
+    }
+
     // Check if src is pinned memory
     vk_buffer buf = nullptr;
     size_t buf_offset = 0;
@@ -6946,6 +6960,30 @@ static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size
     GGML_ASSERT(height > 0);
     GGML_ASSERT(src != nullptr);
 
+    if (src->device->uma && (src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+        GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+        const bool host_cached = (src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) != vk::MemoryPropertyFlags{};
+        constexpr size_t uma_non_cached_direct_read_threshold = 1024 * 1024;
+        const size_t copy_size = width * height;
+
+        // On some UMA devices, direct mapped reads from non-host-cached memory are
+        // significantly slower for small transfers than going through the GPU copy path.
+        if (!host_cached && copy_size <= uma_non_cached_direct_read_threshold) {
+            if (!sync_staging) {
+                return false;
+            }
+        } else {
+            if (width == spitch && width == dpitch) {
+                deferred_memcpy(dst, (uint8_t *) src->ptr + offset, width * height, &subctx->out_memcpys);
+            } else {
+                for (size_t i = 0; i < height; i++) {
+                    deferred_memcpy((uint8_t *) dst + i * dpitch, (uint8_t *) src->ptr + offset + i * spitch, width, &subctx->out_memcpys);
+                }
+            }
+            return true;
+        }
+    }
+
     // TODO: staging_offset is not used
 
     // Check if dst is pinned memory
@@ -6983,15 +7021,15 @@ static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size
     }
 
     // Fall back to staging buffer
-    const size_t copy_size = dpitch * height;
-    ggml_vk_ensure_sync_staging_buffer(src->device, copy_size);
+    const size_t staging_copy_size = dpitch * height;
+    ggml_vk_ensure_sync_staging_buffer(src->device, staging_copy_size);
 
     vk_buffer& staging_buffer = src->device->sync_staging;
 
     ggml_vk_sync_buffers(nullptr, subctx);
     subctx->s->buffer->buf.copyBuffer(src->buffer, staging_buffer->buffer, slices);
 
-    deferred_memcpy(dst, staging_buffer->ptr, copy_size, &subctx->out_memcpys);
+    deferred_memcpy(dst, staging_buffer->ptr, staging_copy_size, &subctx->out_memcpys);
     return true;
 }
 
@@ -7007,25 +7045,30 @@ static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_
     // the HW device to host copy path.
     if(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible && src->device->uma) {
         GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+        const bool host_cached = (src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) != vk::MemoryPropertyFlags{};
+        constexpr size_t uma_non_cached_direct_read_threshold = 1024 * 1024;
 
-        memcpy(dst, (uint8_t *) src->ptr + offset, size);
-    } else {
-        std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
-
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
-        ggml_vk_ctx_begin(src->device, subctx);
-        bool ret = ggml_vk_buffer_read_async(subctx, src, offset, dst, size, true);
-        GGML_ASSERT(ret);
-        ggml_vk_ctx_end(subctx);
-
-        ggml_vk_submit(subctx, src->device->fence);
-        VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_read waitForFences");
-        src->device->device.resetFences({ src->device->fence });
-        ggml_vk_queue_command_pools_cleanup(src->device);
-
-        for (auto& cpy : subctx->out_memcpys) {
-            memcpy(cpy.dst, cpy.src, cpy.n);
+        if (host_cached || size > uma_non_cached_direct_read_threshold) {
+            memcpy(dst, (uint8_t *) src->ptr + offset, size);
+            return;
         }
+    }
+
+    std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
+
+    vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
+    ggml_vk_ctx_begin(src->device, subctx);
+    bool ret = ggml_vk_buffer_read_async(subctx, src, offset, dst, size, true);
+    GGML_ASSERT(ret);
+    ggml_vk_ctx_end(subctx);
+
+    ggml_vk_submit(subctx, src->device->fence);
+    VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_read waitForFences");
+    src->device->device.resetFences({ src->device->fence });
+    ggml_vk_queue_command_pools_cleanup(src->device);
+
+    for (auto& cpy : subctx->out_memcpys) {
+        memcpy(cpy.dst, cpy.src, cpy.n);
     }
 }
 
@@ -13844,6 +13887,13 @@ static void ggml_backend_vk_set_tensor_async(ggml_backend_t backend, ggml_tensor
     bool ret = ggml_vk_buffer_write_async(cpy_ctx, buf, dst_offset, data, size);
 
     if (!ret) {
+        if (ctx->device->uma && (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+            GGML_ASSERT(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+            ggml_vk_synchronize(ctx);
+            memcpy((uint8_t *) buf->ptr + dst_offset, data, size);
+            return;
+        }
+
         ggml_vk_ensure_sync_staging_buffer(ctx, size);
         ggml_vk_sync_buffers(nullptr, cpy_ctx);
 
@@ -13878,6 +13928,18 @@ static void ggml_backend_vk_get_tensor_async(ggml_backend_t backend, const ggml_
 
     // If that failed, copy synchronously through a staging buffer
     if (!ret) {
+        if (ctx->device->uma && (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+            GGML_ASSERT(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+            const bool host_cached = (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) != vk::MemoryPropertyFlags{};
+            constexpr size_t uma_non_cached_direct_read_threshold = 1024 * 1024;
+
+            if (host_cached || size > uma_non_cached_direct_read_threshold) {
+                ggml_vk_synchronize(ctx);
+                memcpy(data, (uint8_t *) buf->ptr + src_offset, size);
+                return;
+            }
+        }
+
         ggml_vk_ensure_sync_staging_buffer(ctx, size);
         ggml_vk_sync_buffers(nullptr, compute_ctx);
 
