@@ -974,10 +974,12 @@ bool ggml_cuda_ar_allreduce(
         const size_t input_type_size = ggml_type_size(input_type);
         ggml_cuda_ar_trace_call(p, reduce_id, label, tensors, kernel_type, ne, nbytes, max_chunk_elems, chunks);
 
-        // Chunked-kernel path.  The combined kernel reads Tdst (input_type)
-        // from tensors[i]->data, casts on-the-fly to Twire (kernel_type) for
-        // the host transfer, and accumulates the peer's Twire contribution
-        // back into tensors[i]->data — no pre/post-conversion needed.
+        // Chunked-kernel path runs entirely on the caller's compute stream:
+        // since AR is a barrier here, same-stream ordering replaces the
+        // wait_for_compute / record_chunk_done event pairs and skips the
+        // cross-stream scheduling overhead that was hurting the small-tensor
+        // (tg) latency on the AR-stream variant.  Only ev.ker is still
+        // recorded at end-of-AR for acquire_slot's pool-wraparound check.
         size_t chunk_index = 0;
         for (int64_t chunk_start = 0; chunk_start < ne; chunk_start += (int64_t) max_chunk_elems, ++chunk_index) {
             const size_t remaining_elems = (size_t) (ne - chunk_start);
@@ -993,10 +995,7 @@ bool ggml_cuda_ar_allreduce(
                 const int peer = 1 - i;  // valid for n == 2 only
                 ggml_cuda_set_device(p->devices[i]);
                 auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
-
-                if (chunk_start == 0) {
-                    ggml_cuda_ar_wait_for_compute(p, cuda_ctx, i, slot);
-                }
+                cudaStream_t stream = cuda_ctx->stream();
 
                 char * data = static_cast<char *>(tensors[i]->data) + chunk_start * (int64_t) input_type_size;
 
@@ -1004,7 +1003,7 @@ bool ggml_cuda_ar_allreduce(
                 // zeros.  On the BF16 path the F32 tensor data was already
                 // zeroed up-front (above), so per-chunk zeroing isn't needed.
                 if (!compute_flag[i] && !use_bf16) {
-                    CUDA_CHECK(cudaMemsetAsync(data, 0, chunk_dst_bytes, p->streams[i]));
+                    CUDA_CHECK(cudaMemsetAsync(data, 0, chunk_dst_bytes, stream));
                 }
 
 #if GGML_CUDA_AR_WATCHDOG
@@ -1014,7 +1013,7 @@ bool ggml_cuda_ar_allreduce(
 #endif
 
 #define LAUNCH_AR_KERNEL(Tdst, Twire) \
-                ggml_cuda_ar_kernel<Tdst, Twire><<<dim3(1), dim3(256), 0, p->streams[i]>>>( \
+                ggml_cuda_ar_kernel<Tdst, Twire><<<dim3(1), dim3(256), 0, stream>>>( \
                     reinterpret_cast<const Tdst *>(data), \
                     reinterpret_cast<Tdst *>(data), \
                     reinterpret_cast<Twire *>(p->host_buf[i]), \
@@ -1040,7 +1039,9 @@ bool ggml_cuda_ar_allreduce(
 #undef GGML_CUDA_AR_WDOG_EXTRA_ARGS
                 CUDA_CHECK(cudaGetLastError());
 
-                ggml_cuda_ar_record_chunk_done(p, cuda_ctx, i, slot, last_chunk);
+                if (last_chunk) {
+                    CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].ker, stream));
+                }
             }
         }
     }
