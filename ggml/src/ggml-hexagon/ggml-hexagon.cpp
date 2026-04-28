@@ -3578,7 +3578,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
         GGML_LOG_INFO("ggml-hex: Profiling mode %u : pmu-evt [ %s ]\n", opt_profile,
                 vec_to_str<uint32_t, 16>(opt_pmu_evt).c_str());
     }
- 
+
     reg->context = new ggml_hexagon_registry(reg);
 }
 
