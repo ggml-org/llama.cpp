@@ -43,27 +43,48 @@ export class AudioRecorder {
 
 	async stopRecording(): Promise<Blob> {
 		return new Promise((resolve, reject) => {
-			if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
+			const recorder = this.mediaRecorder;
+			const chunks = this.audioChunks;
+			const stream = this.stream;
+
+			if (!recorder || recorder.state === 'inactive') {
 				reject(new Error('No active recording to stop'));
 				return;
 			}
 
-			this.mediaRecorder.onstop = () => {
-				const mimeType = this.mediaRecorder?.mimeType || MimeTypeAudio.WAV;
-				const audioBlob = new Blob(this.audioChunks, { type: mimeType });
+			// Detach instance state right away so a new startRecording can take over without race
+			this.mediaRecorder = null;
+			this.audioChunks = [];
+			this.stream = null;
+			this.recordingState = false;
 
-				this.cleanup();
+			recorder.onstop = () => {
+				const audioBlob = new Blob(chunks, {
+					type: recorder.mimeType || MimeTypeAudio.WAV
+				});
+
+				if (stream) {
+					for (const track of stream.getTracks()) {
+						track.stop();
+					}
+				}
 
 				resolve(audioBlob);
 			};
 
-			this.mediaRecorder.onerror = (event) => {
+			recorder.onerror = (event) => {
 				console.error('Recording error:', event);
-				this.cleanup();
+
+				if (stream) {
+					for (const track of stream.getTracks()) {
+						track.stop();
+					}
+				}
+
 				reject(new Error('Recording failed'));
 			};
 
-			this.mediaRecorder.stop();
+			recorder.stop();
 		});
 	}
 
