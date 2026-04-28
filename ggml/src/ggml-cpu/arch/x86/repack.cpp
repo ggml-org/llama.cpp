@@ -2253,51 +2253,32 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m512i scale_2367ABEF_1 = _mm512_shuffle_epi32(scales_1, (_MM_PERM_ENUM)238);
 
                     for (int rp = 0; rp < 4; rp++) {
-
                         // Load the four block_q8_k quantized values interleaved with each other in chunks of eight bytes - A0,A1,A2,A3
-                        // Loaded as set of 128 bit vectors and repeated and stored into a 256 bit vector before again repeating into 512 bit vector
-                        __m256i lhs_mat_ymm_0123_00 = _mm256_loadu_si256((const __m256i * )((a_ptrs[rp][b].qs + 256 * sb)));
-                        __m256i lhs_mat_ymm_01_00 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_00, lhs_mat_ymm_0123_00, 0);
-                        __m256i lhs_mat_ymm_23_00 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_00, lhs_mat_ymm_0123_00, 17);
-                        __m256i lhs_mat_ymm_0123_01 = _mm256_loadu_si256((const __m256i * )((a_ptrs[rp][b].qs + 32 + 256 * sb)));
-                        __m256i lhs_mat_ymm_01_01 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_01, lhs_mat_ymm_0123_01, 0);
-                        __m256i lhs_mat_ymm_23_01 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_01, lhs_mat_ymm_0123_01, 17);
-                        __m256i lhs_mat_ymm_0123_02 = _mm256_loadu_si256((const __m256i * )((a_ptrs[rp][b].qs + 64 + 256 * sb)));
-                        __m256i lhs_mat_ymm_01_02 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_02, lhs_mat_ymm_0123_02, 0);
-                        __m256i lhs_mat_ymm_23_02 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_02, lhs_mat_ymm_0123_02, 17);
-                        __m256i lhs_mat_ymm_0123_03 = _mm256_loadu_si256((const __m256i * )((a_ptrs[rp][b].qs + 96 + 256 * sb)));
-                        __m256i lhs_mat_ymm_01_03 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_03, lhs_mat_ymm_0123_03, 0);
-                        __m256i lhs_mat_ymm_23_03 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_03, lhs_mat_ymm_0123_03, 17);
-                        __m256i lhs_mat_ymm_0123_10 = _mm256_loadu_si256((const __m256i * )((a_ptrs[rp][b].qs + 128 + 256 * sb)));
-                        __m256i lhs_mat_ymm_01_10 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_10, lhs_mat_ymm_0123_10, 0);
-                        __m256i lhs_mat_ymm_23_10 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_10, lhs_mat_ymm_0123_10, 17);
-                        __m256i lhs_mat_ymm_0123_11 = _mm256_loadu_si256((const __m256i * )((a_ptrs[rp][b].qs + 160 + 256 * sb)));
-                        __m256i lhs_mat_ymm_01_11 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_11, lhs_mat_ymm_0123_11, 0);
-                        __m256i lhs_mat_ymm_23_11 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_11, lhs_mat_ymm_0123_11, 17);
-                        __m256i lhs_mat_ymm_0123_12 = _mm256_loadu_si256((const __m256i * )((a_ptrs[rp][b].qs + 192 + 256 * sb)));
-                        __m256i lhs_mat_ymm_01_12 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_12, lhs_mat_ymm_0123_12, 0);
-                        __m256i lhs_mat_ymm_23_12 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_12, lhs_mat_ymm_0123_12, 17);
-                        __m256i lhs_mat_ymm_0123_13 = _mm256_loadu_si256((const __m256i * )((a_ptrs[rp][b].qs + 224 + 256 * sb)));
-                        __m256i lhs_mat_ymm_01_13 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_13, lhs_mat_ymm_0123_13, 0);
-                        __m256i lhs_mat_ymm_23_13 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_13, lhs_mat_ymm_0123_13, 17);
+                        __m512i lhs_mat_zmm_0123_00_01 = _mm512_loadu_si512((const __m512i * )((a_ptrs[rp][b].qs + sb * 256)));
+                        __m512i lhs_mat_zmm_0123_02_03 = _mm512_loadu_si512((const __m512i * )((a_ptrs[rp][b].qs + 64 + sb * 256)));
+                        __m512i lhs_mat_zmm_0123_10_11 = _mm512_loadu_si512((const __m512i * )((a_ptrs[rp][b].qs + 128 + sb * 256)));
+                        __m512i lhs_mat_zmm_0123_12_13 = _mm512_loadu_si512((const __m512i * )((a_ptrs[rp][b].qs + 192 + sb * 256)));
 
-                        __m512i lhs_mat_01_00 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_00), lhs_mat_ymm_01_00, 1);
-                        __m512i lhs_mat_23_00 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_00), lhs_mat_ymm_23_00, 1);
-                        __m512i lhs_mat_01_01 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_01), lhs_mat_ymm_01_01, 1);
-                        __m512i lhs_mat_23_01 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_01), lhs_mat_ymm_23_01, 1);
-                        __m512i lhs_mat_01_02 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_02), lhs_mat_ymm_01_02, 1);
-                        __m512i lhs_mat_23_02 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_02), lhs_mat_ymm_23_02, 1);
-                        __m512i lhs_mat_01_03 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_03), lhs_mat_ymm_01_03, 1);
-                        __m512i lhs_mat_23_03 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_03), lhs_mat_ymm_23_03, 1);
+                        // Loaded as set of 128 bit vectors and repeated and stored into a 512 bit vector
+                        __m512i lhs_mat_01_00 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_00_01, lhs_mat_zmm_0123_00_01, 0b00000000);
+                        __m512i lhs_mat_23_00 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_00_01, lhs_mat_zmm_0123_00_01, 0b01010101);
+                        __m512i lhs_mat_01_01 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_00_01, lhs_mat_zmm_0123_00_01, 0b10101010);
+                        __m512i lhs_mat_23_01 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_00_01, lhs_mat_zmm_0123_00_01, 0b11111111);
 
-                        __m512i lhs_mat_01_10 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_10), lhs_mat_ymm_01_10, 1);
-                        __m512i lhs_mat_23_10 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_10), lhs_mat_ymm_23_10, 1);
-                        __m512i lhs_mat_01_11 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_11), lhs_mat_ymm_01_11, 1);
-                        __m512i lhs_mat_23_11 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_11), lhs_mat_ymm_23_11, 1);
-                        __m512i lhs_mat_01_12 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_12), lhs_mat_ymm_01_12, 1);
-                        __m512i lhs_mat_23_12 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_12), lhs_mat_ymm_23_12, 1);
-                        __m512i lhs_mat_01_13 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_13), lhs_mat_ymm_01_13, 1);
-                        __m512i lhs_mat_23_13 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_13), lhs_mat_ymm_23_13, 1);
+                        __m512i lhs_mat_01_02 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_02_03, lhs_mat_zmm_0123_02_03, 0b00000000);
+                        __m512i lhs_mat_23_02 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_02_03, lhs_mat_zmm_0123_02_03, 0b01010101);
+                        __m512i lhs_mat_01_03 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_02_03, lhs_mat_zmm_0123_02_03, 0b10101010);
+                        __m512i lhs_mat_23_03 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_02_03, lhs_mat_zmm_0123_02_03, 0b11111111);
+
+                        __m512i lhs_mat_01_10 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_10_11, lhs_mat_zmm_0123_10_11, 0b00000000);
+                        __m512i lhs_mat_23_10 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_10_11, lhs_mat_zmm_0123_10_11, 0b01010101);
+                        __m512i lhs_mat_01_11 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_10_11, lhs_mat_zmm_0123_10_11, 0b10101010);
+                        __m512i lhs_mat_23_11 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_10_11, lhs_mat_zmm_0123_10_11, 0b11111111);
+
+                        __m512i lhs_mat_01_12 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_12_13, lhs_mat_zmm_0123_12_13, 0b00000000);
+                        __m512i lhs_mat_23_12 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_12_13, lhs_mat_zmm_0123_12_13, 0b01010101);
+                        __m512i lhs_mat_01_13 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_12_13, lhs_mat_zmm_0123_12_13, 0b10101010);
+                        __m512i lhs_mat_23_13 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_12_13, lhs_mat_zmm_0123_12_13, 0b11111111);
 
                         // Bsums are loaded - four bsums are loaded (for two sub blocks) for the different Q8_K blocks
                         __m256i lhs_bsums_0123_01 = _mm256_loadu_si256((const __m256i * )((a_ptrs[rp][b].bsums + 16 * sb)));
@@ -2591,50 +2572,31 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m512i scale_2367ABEF_1 = _mm512_shuffle_epi32(scales_1, (_MM_PERM_ENUM)238);
 
                     // Load the four block_q8_k quantized values interleaved with each other in chunks of eight bytes - A0,A1,A2,A3
-                    // Loaded as set of 128 bit vectors and repeated into a 256 bit vector
-                    __m256i lhs_mat_ymm_0123_00 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 256 * sb)));
-                    __m256i lhs_mat_ymm_01_00 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_00, lhs_mat_ymm_0123_00, 0);
-                    __m256i lhs_mat_ymm_23_00 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_00, lhs_mat_ymm_0123_00, 17);
-                    __m256i lhs_mat_ymm_0123_01 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 32 + 256 * sb)));
-                    __m256i lhs_mat_ymm_01_01 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_01, lhs_mat_ymm_0123_01, 0);
-                    __m256i lhs_mat_ymm_23_01 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_01, lhs_mat_ymm_0123_01, 17);
-                    __m256i lhs_mat_ymm_0123_02 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 64 + 256 * sb)));
-                    __m256i lhs_mat_ymm_01_02 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_02, lhs_mat_ymm_0123_02, 0);
-                    __m256i lhs_mat_ymm_23_02 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_02, lhs_mat_ymm_0123_02, 17);
-                    __m256i lhs_mat_ymm_0123_03 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 96 + 256 * sb)));
-                    __m256i lhs_mat_ymm_01_03 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_03, lhs_mat_ymm_0123_03, 0);
-                    __m256i lhs_mat_ymm_23_03 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_03, lhs_mat_ymm_0123_03, 17);
-                    __m256i lhs_mat_ymm_0123_10 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 128 + 256 * sb)));
-                    __m256i lhs_mat_ymm_01_10 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_10, lhs_mat_ymm_0123_10, 0);
-                    __m256i lhs_mat_ymm_23_10 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_10, lhs_mat_ymm_0123_10, 17);
-                    __m256i lhs_mat_ymm_0123_11 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 160 + 256 * sb)));
-                    __m256i lhs_mat_ymm_01_11 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_11, lhs_mat_ymm_0123_11, 0);
-                    __m256i lhs_mat_ymm_23_11 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_11, lhs_mat_ymm_0123_11, 17);
-                    __m256i lhs_mat_ymm_0123_12 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 192 + 256 * sb)));
-                    __m256i lhs_mat_ymm_01_12 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_12, lhs_mat_ymm_0123_12, 0);
-                    __m256i lhs_mat_ymm_23_12 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_12, lhs_mat_ymm_0123_12, 17);
-                    __m256i lhs_mat_ymm_0123_13 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 224 + 256 * sb)));
-                    __m256i lhs_mat_ymm_01_13 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_13, lhs_mat_ymm_0123_13, 0);
-                    __m256i lhs_mat_ymm_23_13 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_13, lhs_mat_ymm_0123_13, 17);
+                    __m512i lhs_mat_zmm_0123_00_01 = _mm512_loadu_si512((const __m512i * )((a_ptr[b].qs + sb * 256)));
+                    __m512i lhs_mat_zmm_0123_02_03 = _mm512_loadu_si512((const __m512i * )((a_ptr[b].qs + 64 + sb * 256)));
+                    __m512i lhs_mat_zmm_0123_10_11 = _mm512_loadu_si512((const __m512i * )((a_ptr[b].qs + 128 + sb * 256)));
+                    __m512i lhs_mat_zmm_0123_12_13 = _mm512_loadu_si512((const __m512i * )((a_ptr[b].qs + 192 + sb * 256)));
 
-                    //Loaded as set of 128 bit vectors and repeated and stored into a 256 bit vector before again repeating into a 512 bit vector
-                    __m512i lhs_mat_01_00 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_00), lhs_mat_ymm_01_00, 1);
-                    __m512i lhs_mat_23_00 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_00), lhs_mat_ymm_23_00, 1);
-                    __m512i lhs_mat_01_01 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_01), lhs_mat_ymm_01_01, 1);
-                    __m512i lhs_mat_23_01 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_01), lhs_mat_ymm_23_01, 1);
-                    __m512i lhs_mat_01_02 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_02), lhs_mat_ymm_01_02, 1);
-                    __m512i lhs_mat_23_02 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_02), lhs_mat_ymm_23_02, 1);
-                    __m512i lhs_mat_01_03 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_03), lhs_mat_ymm_01_03, 1);
-                    __m512i lhs_mat_23_03 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_03), lhs_mat_ymm_23_03, 1);
+                    // Loaded as set of 128 bit vectors and repeated and stored into a 512 bit vector
+                    __m512i lhs_mat_01_00 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_00_01, lhs_mat_zmm_0123_00_01, 0b00000000);
+                    __m512i lhs_mat_23_00 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_00_01, lhs_mat_zmm_0123_00_01, 0b01010101);
+                    __m512i lhs_mat_01_01 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_00_01, lhs_mat_zmm_0123_00_01, 0b10101010);
+                    __m512i lhs_mat_23_01 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_00_01, lhs_mat_zmm_0123_00_01, 0b11111111);
 
-                    __m512i lhs_mat_01_10 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_10), lhs_mat_ymm_01_10, 1);
-                    __m512i lhs_mat_23_10 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_10), lhs_mat_ymm_23_10, 1);
-                    __m512i lhs_mat_01_11 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_11), lhs_mat_ymm_01_11, 1);
-                    __m512i lhs_mat_23_11 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_11), lhs_mat_ymm_23_11, 1);
-                    __m512i lhs_mat_01_12 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_12), lhs_mat_ymm_01_12, 1);
-                    __m512i lhs_mat_23_12 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_12), lhs_mat_ymm_23_12, 1);
-                    __m512i lhs_mat_01_13 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_13), lhs_mat_ymm_01_13, 1);
-                    __m512i lhs_mat_23_13 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_13), lhs_mat_ymm_23_13, 1);
+                    __m512i lhs_mat_01_02 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_02_03, lhs_mat_zmm_0123_02_03, 0b00000000);
+                    __m512i lhs_mat_23_02 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_02_03, lhs_mat_zmm_0123_02_03, 0b01010101);
+                    __m512i lhs_mat_01_03 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_02_03, lhs_mat_zmm_0123_02_03, 0b10101010);
+                    __m512i lhs_mat_23_03 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_02_03, lhs_mat_zmm_0123_02_03, 0b11111111);
+
+                    __m512i lhs_mat_01_10 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_10_11, lhs_mat_zmm_0123_10_11, 0b00000000);
+                    __m512i lhs_mat_23_10 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_10_11, lhs_mat_zmm_0123_10_11, 0b01010101);
+                    __m512i lhs_mat_01_11 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_10_11, lhs_mat_zmm_0123_10_11, 0b10101010);
+                    __m512i lhs_mat_23_11 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_10_11, lhs_mat_zmm_0123_10_11, 0b11111111);
+
+                    __m512i lhs_mat_01_12 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_12_13, lhs_mat_zmm_0123_12_13, 0b00000000);
+                    __m512i lhs_mat_23_12 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_12_13, lhs_mat_zmm_0123_12_13, 0b01010101);
+                    __m512i lhs_mat_01_13 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_12_13, lhs_mat_zmm_0123_12_13, 0b10101010);
+                    __m512i lhs_mat_23_13 = _mm512_shuffle_i32x4(lhs_mat_zmm_0123_12_13, lhs_mat_zmm_0123_12_13, 0b11111111);
 
                     // Bsums are loaded - four bsums are loaded (for two sub blocks) for the different Q8_K blocks
                     __m256i lhs_bsums_0123_01 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].bsums + 16 * sb)));
