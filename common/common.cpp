@@ -1420,13 +1420,17 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
         goto done;
     }
 
+    // bounded-rollback architectures: classify before the seq_rm probe, since
+    // the probe (distance = 1) would silently take the rollback path and look
+    // like unbounded PART support
+    if (llama_n_rollback_max(ctx) > 0 &&
+        llama_model_supports_recurrent_partial_rollback(llama_get_model(ctx))) {
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_PART_BOUNDED;
+        goto done;
+    }
+
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
-        if (llama_n_rollback_max(ctx) > 0 &&
-            llama_model_supports_recurrent_partial_rollback(llama_get_model(ctx))) {
-            res = COMMON_CONTEXT_SEQ_RM_TYPE_PART;
-            goto done;
-        }
         LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
         res = COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
         goto done;
