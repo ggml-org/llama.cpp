@@ -9292,9 +9292,82 @@ class MiniMaxM2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("MiMoV2FlashForCausalLM")
+@ModelBase.register("MiMoV2FlashForCausalLM", "MiMoV2ForCausalLM")
 class MimoV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MIMO2
+
+    @staticmethod
+    def _tp_aware_qkv_dequant(weight: Tensor, scale_inv: Tensor,
+                              n_q: int, n_kv: int, hd: int, vhd: int,
+                              tp: int = 4, bs: int = 128) -> Tensor:
+        # MiMo-V2.5 ships qkv_proj sharded TP=4: rows are stacked per-rank as
+        # [Q_per | K_per | V_per] for r in 0..3. weight_scale_inv has
+        # ceil(rows_per_rank/bs) block-rows per rank (last may extend past
+        # rows_per_rank with phantom rows that don't appear in the weight).
+        # Existing repeat_interleave aligns rank 0 only and mis-applies scales
+        # to ranks 1..3 once rows_per_rank isn't a multiple of bs.
+        q_per = (n_q * hd) // tp
+        k_per = (n_kv * hd) // tp
+        v_per = (n_kv * vhd) // tp
+        rows_per_rank = q_per + k_per + v_per
+        blocks_per_rank = (rows_per_rank + bs - 1) // bs
+        total_rows = tp * rows_per_rank
+        if weight.shape[0] != total_rows:
+            raise ValueError(f"qkv_proj weight rows {weight.shape[0]} != tp*rows_per_rank {total_rows}")
+        if scale_inv.shape[0] != tp * blocks_per_rank:
+            raise ValueError(f"scale_inv rows {scale_inv.shape[0]} != tp*blocks_per_rank {tp * blocks_per_rank}")
+
+        scale_inv = scale_inv.float()
+        # per-row scale-row index: rank * blocks_per_rank + (rr_in_rank // bs)
+        row_idx = torch.arange(total_rows)
+        rr = row_idx % rows_per_rank
+        rank = row_idx // rows_per_rank
+        scale_row_idx = rank * blocks_per_rank + (rr // bs)
+        # gather: (total_rows, n_col_blocks)
+        scale_per_row_block = scale_inv[scale_row_idx]
+        # expand col-blocks → cols: each block-col covers `bs` weight cols
+        scale_full = scale_per_row_block.repeat_interleave(bs, dim=1)
+        # crop to weight col count (in case last col-block isn't full)
+        scale_full = scale_full[:, : weight.shape[1]]
+        return weight.float() * scale_full
+
+    def dequant_model(self):
+        # Capture raw FP8 (weight, scale_inv) lambdas for qkv_proj BEFORE super
+        # rewrites them with the existing dequant. Replace super's lambda after
+        # it runs so scale_inv removal still happens via the standard path.
+        qkv_overrides: dict[str, tuple[Callable, Callable, int]] = {}
+        qc = self.hparams.get("quantization_config")
+        if isinstance(qc, dict) and qc.get("quant_method") == "fp8":
+            pat = re.compile(r"^model\.layers\.(\d+)\.self_attn\.qkv_proj\.weight_scale_inv$")
+            for name in list(self.model_tensors.keys()):
+                m = pat.match(name)
+                if not m:
+                    continue
+                weight_name = name.removesuffix("_scale_inv")
+                if weight_name not in self.model_tensors:
+                    continue
+                qkv_overrides[weight_name] = (
+                    self.model_tensors[weight_name],
+                    self.model_tensors[name],
+                    int(m.group(1)),
+                )
+
+        super().dequant_model()
+
+        if not qkv_overrides:
+            return
+
+        n_q = self.hparams["num_attention_heads"]
+        hd = self.hparams["head_dim"]
+        vhd = self.hparams["v_head_dim"]
+        hybrid = self.hparams["hybrid_layer_pattern"]
+        for weight_name, (w_fn, s_fn, bid) in qkv_overrides.items():
+            is_swa = hybrid[bid] == 1
+            n_kv = self.hparams["swa_num_key_value_heads" if is_swa else "num_key_value_heads"]
+            self.model_tensors[weight_name] = (
+                lambda w_fn=w_fn, s_fn=s_fn, n_q=n_q, n_kv=n_kv, hd=hd, vhd=vhd:
+                    MimoV2Model._tp_aware_qkv_dequant(w_fn(), s_fn(), n_q, n_kv, hd, vhd)
+            )
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -9320,6 +9393,10 @@ class MimoV2Model(TextModel):
 
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("layernorm_epsilon", 1e-5))
 
+        v_scale = self.hparams.get("attention_value_scale")
+        if v_scale is not None:
+            self.gguf_writer.add_attn_value_scale(float(v_scale))
+
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch, name, bid):
@@ -9331,6 +9408,29 @@ class MimoV2Model(TextModel):
 
         # TODO: mimo v2 does not indicate the number of next-token-prediction layers, therefore we cannot do the same way as GLM4_MOE
         if "model.mtp." in name:
+            return
+
+        # MiMo-V2.5 (non-Pro) ships audio/visual modules we don't run in llama.cpp
+        if name.startswith(("audio_encoder.", "visual.", "speech_embeddings.")):
+            return
+
+        # split fused qkv_proj into separate q/k/v tensors (MiMoV2ForCausalLM uses fused_qkv layout)
+        if "self_attn.qkv_proj" in name:
+            assert bid is not None
+            is_swa = self.hparams["hybrid_layer_pattern"][bid] == 1
+            num_q_heads = self.hparams["swa_num_attention_heads" if is_swa else "num_attention_heads"]
+            num_kv_heads = self.hparams["swa_num_key_value_heads" if is_swa else "num_key_value_heads"]
+            head_dim = self.hparams["swa_head_dim" if is_swa else "head_dim"]
+            v_head_dim = self.hparams["swa_v_head_dim" if is_swa else "v_head_dim"]
+            q_size = num_q_heads * head_dim
+            k_size = num_kv_heads * head_dim
+            v_size = num_kv_heads * v_head_dim
+            q, k, v = data_torch.split([q_size, k_size, v_size], dim=0)
+            suffix = ".weight" if name.endswith(".weight") else ".bias"
+            base = name.replace(f"qkv_proj{suffix}", "")
+            yield from super().modify_tensors(q, f"{base}q_proj{suffix}", bid)
+            yield from super().modify_tensors(k, f"{base}k_proj{suffix}", bid)
+            yield from super().modify_tensors(v, f"{base}v_proj{suffix}", bid)
             return
 
         # process the experts separately

@@ -166,6 +166,9 @@ struct llama_hparams {
     float    f_attn_out_scale = 0.0f;
     uint32_t attn_temp_length = 0;
 
+    // mimo-v2: per-head V scalar applied before attention (1.0 = disabled)
+    float    f_attn_value_scale = 1.0f;
+
     bool causal_attn   = true;
     bool use_alibi     = false;
     bool attn_soft_cap = false;
