@@ -9425,6 +9425,24 @@ class MimoV2Model(TextModel):
             q_size = num_q_heads * head_dim
             k_size = num_kv_heads * head_dim
             v_size = num_kv_heads * v_head_dim
+            # MiMo-V2.5 ships qkv_proj sharded TP=4: rows are stacked per-rank as
+            # [Q_per | K_per | V_per] for r in 0..3, not as a single [Q | K | V].
+            # Re-group rows from each rank into a unified [Q | K | V] before split.
+            tp = 4
+            total_rows = data_torch.shape[0]
+            if data_torch.ndim == 2 and total_rows == q_size + k_size + v_size and total_rows % tp == 0:
+                q_per = q_size // tp
+                k_per = k_size // tp
+                v_per = v_size // tp
+                rows_per_rank = q_per + k_per + v_per
+                if rows_per_rank * tp == total_rows:
+                    qs, ks, vs = [], [], []
+                    for r in range(tp):
+                        base = r * rows_per_rank
+                        qs.append(data_torch[base : base + q_per])
+                        ks.append(data_torch[base + q_per : base + q_per + k_per])
+                        vs.append(data_torch[base + q_per + k_per : base + rows_per_rank])
+                    data_torch = torch.cat(qs + ks + vs, dim=0)
             q, k, v = data_torch.split([q_size, k_size, v_size], dim=0)
             suffix = ".weight" if name.endswith(".weight") else ".bias"
             base = name.replace(f"qkv_proj{suffix}", "")
