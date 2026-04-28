@@ -288,7 +288,6 @@ struct ggml_cuda_ar_pipeline {
     size_t   copy_threshold;
     size_t   copy_chunk_bytes;
     size_t   bf16_threshold; // tensors >= this size (bytes) are reduced via FP32->BF16 round-trip; 0 disables
-    bool     use_peer;       // for tensors in the copy-engine size range, use the cudaMemcpyPeerAsync path instead of D2H/H2D staging
     uint64_t call_count;
     uint64_t reduce_count;
 
@@ -558,7 +557,6 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
         p->copy_chunk_bytes = GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN;
     }
     p->bf16_threshold    = ggml_cuda_ar_env_u64("GGML_CUDA_AR_BF16_THRESHOLD", 128 * 1024); // 128 KB default
-    p->use_peer          = ggml_cuda_ar_env_u64("GGML_CUDA_AR_PEER", 1) != 0;
     p->call_count        = 0;
     p->reduce_count      = 0;
     p->arrival           = nullptr;
@@ -744,113 +742,6 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-// Asymmetric P2P AllReduce for two GPUs.  GPU 0 issues both a D2H of its own
-// data and a cudaMemcpyPeerAsync that pulls GPU 1's data directly to its
-// device tmp; once both are done it records a single event and runs its
-// reduction.  GPU 1 waits on that event, does an H2D from the host buffer
-// GPU 0 just filled, then runs its reduction.  Five events total, no
-// chunking — minimises the cross-device sync count that dominates the
-// chunked copy path.
-template <typename T>
-static bool ggml_cuda_ar_allreduce_peer_impl(
-        ggml_cuda_ar_pipeline * p,
-        ggml_backend_t        * backends,
-        T * const               buf[GGML_CUDA_MAX_DEVICES],
-        const bool              compute[GGML_CUDA_MAX_DEVICES],
-        uint64_t                reduce_id,
-        int64_t                 ne,
-        size_t                  nbytes,
-        const char *            trace_label) {
-    GGML_ASSERT(p->n_devices == 2);
-    GGML_ASSERT(nbytes <= p->copy_bytes);
-    GGML_ASSERT(ne <= std::numeric_limits<int>::max());
-
-    const int slot = ggml_cuda_ar_acquire_slot(p);
-    ggml_cuda_ar_trace_chunk(p, reduce_id, trace_label, 0, slot, 0, ne, nbytes, true);
-
-    ggml_backend_cuda_context * cuda_ctx[2] = {};
-    for (int i = 0; i < 2; ++i) {
-        cuda_ctx[i] = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
-    }
-
-    // Inactive shards: zero on each device's compute stream so the wait below
-    // picks up the zero before any subsequent read of buf[i].
-    for (int i = 0; i < 2; ++i) {
-        if (!compute[i]) {
-            ggml_cuda_set_device(p->devices[i]);
-            CUDA_CHECK(cudaMemsetAsync(buf[i], 0, nbytes, cuda_ctx[i]->stream()));
-        }
-    }
-
-    // Each AR stream waits on its own compute stream (records ev.app per rank).
-    // Note: the cross-device wait on rank 1's compute is deferred to just
-    // before the PeerCopy below, so GPU 0's D2H can start as soon as its own
-    // compute is done — it doesn't depend on GPU 1.
-    for (int i = 0; i < 2; ++i) {
-        ggml_cuda_set_device(p->devices[i]);
-        ggml_cuda_ar_wait_for_compute(p, cuda_ctx[i], i, slot);
-    }
-
-    // GPU 0 stream:  D2H(buf[0] -> host_large[0])
-    //                EventRecord(cpy[0])                — signals "host_large[0] is ready"
-    //                WaitEvent(rank 1's compute)         — only the PeerCopy needs this
-    //                PeerCopy(buf[1] -> dev_tmp[0])
-    //                EventRecord(cpy[1])                — signals "buf[1] safe to overwrite"
-    //                Reduction(buf[0] += dev_tmp[0])
-    {
-        ggml_cuda_set_device(p->devices[0]);
-
-        CUDA_CHECK(cudaMemcpyAsync(p->host_large[0], buf[0], nbytes,
-                                   cudaMemcpyDeviceToHost, p->streams[0]));
-        CUDA_CHECK(cudaEventRecord(p->ev_pool[0][slot].cpy[0], p->streams[0]));
-
-        CUDA_CHECK(cudaStreamWaitEvent(p->streams[0], p->ev_pool[1][slot].app));
-        CUDA_CHECK(cudaMemcpyPeerAsync(p->dev_tmp[0], p->devices[0],
-                                       buf[1],         p->devices[1],
-                                       nbytes, p->streams[0]));
-        CUDA_CHECK(cudaEventRecord(p->ev_pool[0][slot].cpy[1], p->streams[0]));
-
-        const int block_size = 256;
-        int n_blocks = (int) ((ne + block_size - 1) / block_size);
-        if (n_blocks > 1024) n_blocks = 1024;
-        ggml_cuda_ar_add_kernel<T><<<n_blocks, block_size, 0, p->streams[0]>>>(
-            buf[0],
-            reinterpret_cast<const T *>(p->dev_tmp[0]),
-            (int) ne);
-        CUDA_CHECK(cudaGetLastError());
-    }
-
-    // GPU 1 stream:  WaitEvent(cpy[0])                  — D2H is done, host_large[0] ready
-    //                H2D(host_large[0] -> dev_tmp[1])    — runs concurrently with GPU 0's PeerCopy
-    //                WaitEvent(cpy[1])                  — PeerCopy done, safe to write buf[1]
-    //                Reduction(buf[1] += dev_tmp[1])
-    {
-        ggml_cuda_set_device(p->devices[1]);
-
-        CUDA_CHECK(cudaStreamWaitEvent(p->streams[1], p->ev_pool[0][slot].cpy[0]));
-        CUDA_CHECK(cudaMemcpyAsync(p->dev_tmp[1], p->host_large[0], nbytes,
-                                   cudaMemcpyHostToDevice, p->streams[1]));
-        CUDA_CHECK(cudaStreamWaitEvent(p->streams[1], p->ev_pool[0][slot].cpy[1]));
-
-        const int block_size = 256;
-        int n_blocks = (int) ((ne + block_size - 1) / block_size);
-        if (n_blocks > 1024) n_blocks = 1024;
-        ggml_cuda_ar_add_kernel<T><<<n_blocks, block_size, 0, p->streams[1]>>>(
-            buf[1],
-            reinterpret_cast<const T *>(p->dev_tmp[1]),
-            (int) ne);
-        CUDA_CHECK(cudaGetLastError());
-    }
-
-    // Per-device end events: AR stream → compute stream.
-    for (int i = 0; i < 2; ++i) {
-        ggml_cuda_set_device(p->devices[i]);
-        ggml_cuda_ar_record_chunk_done(p, cuda_ctx[i], i, slot, true);
-    }
-
-    return true;
-}
-
 template <typename T>
 static bool ggml_cuda_ar_allreduce_copy_impl(
         ggml_cuda_ar_pipeline * p,
@@ -1005,12 +896,9 @@ bool ggml_cuda_ar_allreduce(
 
     bool ok = true;
     if (use_copy_engine) {
-        const bool   use_peer = p->use_peer;
-        const char * label = use_peer
-            ? (use_bf16 ? "peer-bf16" : "peer")
-            : (use_bf16 ? "copy_engine-bf16" : "copy_engine");
-        const size_t copy_chunk_elems = use_peer ? (size_t) ne : (p->copy_chunk_bytes / type_size);
-        const size_t copy_chunks = use_peer ? 1 : ((nbytes + p->copy_chunk_bytes - 1) / p->copy_chunk_bytes);
+        const char * label = use_bf16 ? "copy_engine-bf16" : "copy_engine";
+        const size_t copy_chunk_elems = p->copy_chunk_bytes / type_size;
+        const size_t copy_chunks = (nbytes + p->copy_chunk_bytes - 1) / p->copy_chunk_bytes;
         ggml_cuda_ar_trace_call(p, reduce_id, label, tensors, kernel_type, ne, nbytes, copy_chunk_elems, copy_chunks);
 
         // After up-front BF16 conversion, the tmp buffers already hold the
@@ -1025,17 +913,13 @@ bool ggml_cuda_ar_allreduce(
             case GGML_TYPE_F32: {
                 float * buf[GGML_CUDA_MAX_DEVICES];
                 for (int i = 0; i < n; ++i) buf[i] = static_cast<float *>(data_ptr[i]);
-                ok = use_peer
-                    ? ggml_cuda_ar_allreduce_peer_impl<float>(p, backends, buf, inner_compute, reduce_id, ne, nbytes, label)
-                    : ggml_cuda_ar_allreduce_copy_impl<float>(p, backends, buf, inner_compute, reduce_id, ne, nbytes, label);
+                ok = ggml_cuda_ar_allreduce_copy_impl<float>(p, backends, buf, inner_compute, reduce_id, ne, nbytes, label);
                 break;
             }
             case GGML_TYPE_BF16: {
                 __nv_bfloat16 * buf[GGML_CUDA_MAX_DEVICES];
                 for (int i = 0; i < n; ++i) buf[i] = static_cast<__nv_bfloat16 *>(data_ptr[i]);
-                ok = use_peer
-                    ? ggml_cuda_ar_allreduce_peer_impl<__nv_bfloat16>(p, backends, buf, inner_compute, reduce_id, ne, nbytes, label)
-                    : ggml_cuda_ar_allreduce_copy_impl<__nv_bfloat16>(p, backends, buf, inner_compute, reduce_id, ne, nbytes, label);
+                ok = ggml_cuda_ar_allreduce_copy_impl<__nv_bfloat16>(p, backends, buf, inner_compute, reduce_id, ne, nbytes, label);
                 break;
             }
             default:
