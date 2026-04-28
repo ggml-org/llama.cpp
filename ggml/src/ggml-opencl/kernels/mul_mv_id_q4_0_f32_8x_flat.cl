@@ -94,7 +94,7 @@ inline float block_q_4_0_dot_y_flat(
 #define N_SIMDWIDTH 32
 #endif
 
-inline void mul_vec_q_n_f32_8x_flat(
+void mul_vec_q_n_f32_8x_flat(
         global char  * src0_q,
         global half  * src0_d,
         global float * src1,
