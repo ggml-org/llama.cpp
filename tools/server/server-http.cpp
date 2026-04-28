@@ -137,17 +137,21 @@ bool server_http_context::init(const common_params & params) {
     // Middlewares
     //
 
-    auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
-        static const std::unordered_set<std::string> public_endpoints = {
-            "/health",
-            "/v1/health",
-            "/models",
-            "/v1/models",
-            "/",
-            "/index.html",
-            "/bundle.js",
-            "/bundle.css",
-        };
+    // Public endpoints (skip --api-key validation). Built at init time so the
+    // set reflects --api-prefix; otherwise paths under a non-empty prefix
+    // (e.g. /myapi/index.html) wouldn't match and the WebUI would 401.
+    const std::unordered_set<std::string> public_endpoints = {
+        params.api_prefix + "/health",
+        params.api_prefix + "/v1/health",
+        params.api_prefix + "/models",
+        params.api_prefix + "/v1/models",
+        params.api_prefix + "/",
+        params.api_prefix + "/index.html",
+        params.api_prefix + "/bundle.js",
+        params.api_prefix + "/bundle.css",
+    };
+
+    auto middleware_validate_api_key = [api_keys = params.api_keys, public_endpoints = public_endpoints](const httplib::Request & req, httplib::Response & res) {
 
         // If API key is not set, skip validation
         if (api_keys.empty()) {
