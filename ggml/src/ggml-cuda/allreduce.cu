@@ -304,6 +304,13 @@ struct ggml_cuda_ar_pipeline {
     cudaStream_t             streams[GGML_CUDA_MAX_DEVICES];   // non-blocking
     ggml_cuda_ar_event_slot *ev_pool[GGML_CUDA_MAX_DEVICES];   // [device][slot]
 
+    // Copy-engine: per-device "I finished reading my peer's host_large"
+    // event.  Indexed by RECORDER device.  Recorded same-device on streams[i]
+    // after stage 2's last H2D from host_large[peer].  Waited cross-device
+    // by peer's stage-1 stream before the next AR overwrites host_large[peer].
+    cudaEvent_t              host_large_read_done[GGML_CUDA_MAX_DEVICES];
+    bool                     host_large_read_done_valid;
+
     // Arrival ring: pinned, ARRIVAL_STRIDE bytes between adjacent ints.
     // Use ggml_cuda_ar_arrival_ptr() to index.
     char * arrival;
@@ -579,7 +586,9 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
         p->dev_tmp[i]  = nullptr;
         p->streams[i]  = nullptr;
         p->ev_pool[i]  = nullptr;
+        p->host_large_read_done[i] = nullptr;
     }
+    p->host_large_read_done_valid = false;
 #if GGML_CUDA_AR_WATCHDOG
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         p->debug_ring[i] = nullptr;
@@ -614,6 +623,13 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
                 ggml_cuda_ar_pipeline_free(p);
                 return nullptr;
             }
+        }
+
+        if (cudaEventCreateWithFlags(&p->host_large_read_done[i], cudaEventDisableTiming) != cudaSuccess) {
+            GGML_LOG_ERROR("%s: cudaEventCreate for host_large_read_done failed for device %d\n",
+                           __func__, p->devices[i]);
+            ggml_cuda_ar_pipeline_free(p);
+            return nullptr;
         }
     }
 
@@ -733,6 +749,10 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
             }
             delete[] p->ev_pool[i];
         }
+        if (p->host_large_read_done[i]) {
+            ggml_cuda_set_device(p->devices[i]);
+            cudaEventDestroy(p->host_large_read_done[i]);
+        }
         if (p->streams[i]) {
             ggml_cuda_set_device(p->devices[i]);
             cudaStreamDestroy(p->streams[i]);
@@ -786,6 +806,15 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
 
         ggml_cuda_ar_wait_for_compute(p, cuda_ctx[i], i, slot);
 
+        // Wait for peer's H2D from our host_large[i] (recorded in the
+        // previous AR's stage 2) to complete before we overwrite host_large[i].
+        // host_large_read_done[peer] = peer finished reading host_large[i].
+        // No-op on the first AR — no prior record exists.
+        if (p->host_large_read_done_valid) {
+            const int peer = 1 - i;
+            CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->host_large_read_done[peer]));
+        }
+
         if (!compute[i]) {
             CUDA_CHECK(cudaMemsetAsync(src_buf[i], 0, nbytes, p->streams[i]));
         }
@@ -825,6 +854,11 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
                 cudaMemcpyHostToDevice, p->streams[i]));
         }
 
+        // Mark our reads of host_large[peer] complete so peer's next AR can
+        // safely overwrite it.  Same-device record (event[i] on stream[i]);
+        // peer waits cross-device on event[i] before its next stage 1 D2H.
+        CUDA_CHECK(cudaEventRecord(p->host_large_read_done[i], p->streams[i]));
+
         const int block_size = 256;
         int n_blocks = (int) ((ne + block_size - 1) / block_size);
         if (n_blocks > 1024) {
@@ -838,6 +872,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
 
         ggml_cuda_ar_record_chunk_done(p, cuda_ctx[i], i, slot, true);
     }
+    p->host_large_read_done_valid = true;
 
     return true;
 }
