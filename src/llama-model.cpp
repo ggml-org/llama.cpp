@@ -737,6 +737,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
     ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT, hparams.n_group_used,    false);
 
+    if (arch == LLM_ARCH_HUNYUAN_VL || arch == LLM_ARCH_HUNYUAN_DENSE) {
+        if (hparams.n_expert <= 1) {
+            hparams.n_expert      = 0;
+            hparams.n_expert_used = 0;
+        }
+    }
+
     if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
         ml.get_key(LLM_KV_FEATURES_LENGTH,  hparams.n_embd);
         ml.get_key(LLM_KV_EMBEDDING_LENGTH, hparams.n_embd_out_impl);
@@ -815,6 +822,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     hparams.rope_freq_scale_train = ropescale == 0.0f ? 1.0f : 1.0f/ropescale;
 
     ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR, hparams.rope_attn_factor, false);
+    ml.get_key(LLM_KV_ROPE_SCALING_ALPHA,       hparams.rope_scaling_alpha, false);
 
     // non-transformer models do not have attention heads
     if (hparams.n_head() > 0) {
@@ -2592,9 +2600,18 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_HUNYUAN_VL:
         case LLM_ARCH_HUNYUAN_DENSE:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
+
+                // XDRoPE / NTK-aware scaling: base = rope_theta * alpha^(dim / (dim - 2))
+                if (hparams.rope_scaling_alpha > 0.0f) {
+                    const int dim = hparams.n_embd_head_k();
+                    hparams.rope_freq_base_train = hparams.rope_freq_base_train
+                        * powf(hparams.rope_scaling_alpha, (float)dim / (float)(dim - 2));
+                }
 
                 switch (hparams.n_embd) {
                     case 1024: type = LLM_TYPE_0_5B; break;
@@ -6947,6 +6964,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, 0);
                     }
                 } break;
+            case LLM_ARCH_HUNYUAN_VL:
             case LLM_ARCH_HUNYUAN_DENSE:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -8967,6 +8985,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_hunyuan_moe>(*this, params);
             } break;
+        case LLM_ARCH_HUNYUAN_VL:
         case LLM_ARCH_HUNYUAN_DENSE:
             {
                 llm = std::make_unique<llm_build_hunyuan_dense>(*this, params);
@@ -9314,6 +9333,9 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GLM4:
             return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NORM;
         case LLM_ARCH_GLM4_MOE:
+            return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NEOX;
+
+        case LLM_ARCH_HUNYUAN_VL:
             return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NEOX;
 
         // all model arches should be listed explicitly here

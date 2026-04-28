@@ -35,15 +35,23 @@ struct mtmd_bitmap {
 
 // position indexing for decoder model
 enum mtmd_pos_type {
-    MTMD_POS_TYPE_NORMAL, // number of positions equals to number of tokens
-    MTMD_POS_TYPE_MROPE, // qwen-vl mrope style, each image takes max(t,h,w) position indexes
+    MTMD_POS_TYPE_NORMAL,    // number of positions equals to number of tokens
+    MTMD_POS_TYPE_MROPE,     // qwen-vl mrope style, each image takes max(t,h,w) position indexes
+    MTMD_POS_TYPE_HUNYUANVL, // HunyuanVL mrope + BOI/EOI/newline layout with XD-RoPE dim-3
 };
 
 struct mtmd_image_tokens {
     uint32_t nx; // number of tokens in x direction
     uint32_t ny; // number of tokens in y direction
     mtmd_pos_type pos = MTMD_POS_TYPE_NORMAL;
-    uint32_t n_tokens() const { return nx * ny; }
+    uint32_t image_idx = 0; // 0-based position of this image among image chunks in the prompt(used by pos == MTMD_POS_TYPE_HUNYUANVL)
+    uint32_t n_tokens() const {
+        if (pos == MTMD_POS_TYPE_HUNYUANVL) {
+            // [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
+            return (nx + 1) * ny + 2;
+        }
+        return nx * ny;
+    }
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
 
@@ -52,6 +60,7 @@ struct mtmd_image_tokens {
             nx,
             ny,
             pos,
+            image_idx,
             batch_f32.clone(),
             id
         };
@@ -186,6 +195,7 @@ struct mtmd_context {
 
         auto decoder_rope_type = llama_model_rope_type(text_model);
         switch (decoder_rope_type) {
+            case LLAMA_ROPE_TYPE_NONE:
             case LLAMA_ROPE_TYPE_NORM:
             case LLAMA_ROPE_TYPE_NEOX:
                 {
@@ -466,6 +476,7 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_HUNYUANOCR:
+            case PROJECTOR_TYPE_HUNYUANVL:
                 {
                     // note: these use fullwidth ｜ (U+FF5C) and ▁ (U+2581) to match the tokenizer vocabulary
                     img_beg = "<｜hy_place▁holder▁no▁100｜>";
@@ -611,6 +622,7 @@ struct mtmd_tokenizer {
     const llama_vocab * vocab;
 
     mtmd_input_chunks cur;
+    uint32_t n_images_added = 0; // 0-based index assigned to the next image chunk
 
     mtmd_tokenizer(mtmd_context * ctx,
             const mtmd_input_text * text,
@@ -819,6 +831,14 @@ struct mtmd_tokenizer {
                     image_tokens->ny = 1;
                 }
                 image_tokens->pos = ctx->pos_type;
+                // HunyuanVL wraps the image grid with BOI/EOI and adds one newline per row,
+                // and uses XD-RoPE (dim-3 = image index). Override the position type so that
+                // n_tokens() and mtmd_image_tokens_get_decoder_pos pick the HunyuanVL layout.
+                if (ctx->proj_type_v() == PROJECTOR_TYPE_HUNYUANVL) {
+                    image_tokens->pos       = MTMD_POS_TYPE_HUNYUANVL;
+                    image_tokens->image_idx = n_images_added;
+                    GGML_ASSERT(n_tokens == (size_t)image_tokens->n_tokens());
+                }
                 image_tokens->batch_f32 = std::move(batch_f32);
                 image_tokens->id = bitmap->id; // optional
 
@@ -838,6 +858,9 @@ struct mtmd_tokenizer {
             if (!ctx->img_end.empty()) {
                 add_text(ctx->img_end, true); // add image end token
             }
+
+            // advance image-chunk counter so the next image gets the next XD-RoPE dim-3 slot
+            n_images_added++;
 
         } else {
             // handle audio
@@ -1286,6 +1309,38 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
                 pos.y = pos_0 + i;
                 pos.z = pos_0 + i;
             } break;
+        case MTMD_POS_TYPE_HUNYUANVL:
+            {
+                // HunyuanVL layout: [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
+                // Total = 1 + ny*(nx+1) + 1. BOI and EOI use sequential positions in every dim;
+                // content and row-newline tokens use (row, col) with XD-RoPE dim-3 = image_idx.
+                const uint32_t nx      = image_tokens->nx;
+                const uint32_t n_total = image_tokens->n_tokens();
+                if (i == 0) {
+                    // BOI
+                    pos.t = pos_0 + i;
+                    pos.x = pos_0 + i;
+                    pos.y = pos_0 + i;
+                    pos.z = pos_0 + i;
+                } else if (i == n_total - 1) {
+                    // EOI
+                    pos.t = pos_0 + i;
+                    pos.x = pos_0 + i;
+                    pos.y = pos_0 + i;
+                    pos.z = pos_0 + i;
+                } else {
+                    // content token at (row, col), or the trailing newline of a row (col == nx)
+                    //   section 0 = sequential, section 1 = w(col), section 2 = h(row), section 3 = image_count.
+                    // set_position_mrope_2d writes .y -> section 1 and .x -> section 2
+                    const uint32_t offset = (uint32_t)i - 1;
+                    const uint32_t row    = offset / (nx + 1);
+                    const uint32_t col    = offset % (nx + 1);
+                    pos.t = pos_0 + i;
+                    pos.x = row;
+                    pos.y = col;
+                    pos.z = image_tokens->image_idx;
+                }
+            } break;
         default:
             GGML_ABORT("invalid position type");
     }
@@ -1301,6 +1356,10 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
         case MTMD_POS_TYPE_MROPE:
             return std::max(image_tokens->nx, image_tokens->ny);
         case MTMD_POS_TYPE_NORMAL:
+            return image_tokens->n_tokens();
+        case MTMD_POS_TYPE_HUNYUANVL:
+            // HunyuanVL: the sequential (dim-0) position advances by the full token count
+            // (includes BOI/EOI and row newline tokens), not by max(nx, ny)
             return image_tokens->n_tokens();
         default:
             GGML_ABORT("invalid position type");
