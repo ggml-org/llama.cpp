@@ -2,8 +2,6 @@
 #include "convert.cuh"
 #include "ggml-impl.h"
 
-#include <cinttypes>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -17,8 +15,9 @@
 // __threadfence_system() provides the release ordering that makes the D2H
 // writes visible system-wide before the arrival flag is observed.
 //
-// atomicAdd_system() is broken on RTX 5090 (hostNativeAtomicSupported = 0),
-// so we use the volatile path throughout.
+// atomicAdd_system() requires hostNativeAtomicSupported, which is unavailable
+// on PCIe-attached consumer GPUs without NVLink, so the volatile path is the
+// portable choice.
 // ---------------------------------------------------------------------------
 
 static __device__ __forceinline__ void ggml_cuda_ar_signal_set(int * p) {
@@ -379,8 +378,8 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     }
 
     GGML_LOG_INFO("%s: initialized AllReduce pipeline: %d GPUs, "
-                  "%zu KB staging per GPU\n",
-                  __func__, n_devices, p->buf_bytes >> 10);
+                  "%zu KB chunked-kernel staging + %zu MB copy-engine staging per GPU\n",
+                  __func__, n_devices, p->buf_bytes >> 10, p->copy_bytes >> 20);
 
     return p;
 }
