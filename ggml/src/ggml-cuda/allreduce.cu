@@ -9,10 +9,10 @@
 // ---------------------------------------------------------------------------
 // CUDA AllReduce for tensor-parallel inference across two GPUs.
 //
-// Provides a peer-to-peer, in-place sum reduction over matching tensors on
-// two CUDA devices in the same process.  Used by the tensor-split path
-// alongside NCCL; targets setups without NVLink, where peer-to-peer transfers
-// must go through pinned host memory over PCIe.
+// Provides an in-place sum reduction over matching tensors on two CUDA
+// devices in the same process.  Used by the tensor-split path alongside
+// NCCL; targets setups without NVLink, where data is exchanged between the
+// GPUs by staging it through pinned host memory over PCIe.
 //
 // Two reduction strategies are selected per call by tensor size:
 //
