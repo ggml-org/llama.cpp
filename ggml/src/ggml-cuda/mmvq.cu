@@ -115,6 +115,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_pascal_older(gg
         case GGML_TYPE_IQ4_NL:  return 6;
         case GGML_TYPE_IQ4_XS:  return 5;
         case GGML_TYPE_MXFP4:   return 4;
+        case GGML_TYPE_NVFP4:   return 4;
         case GGML_TYPE_Q2_K:    return 4;
         case GGML_TYPE_Q3_K:    return 4;
         case GGML_TYPE_Q4_0:    return 6;
@@ -135,6 +136,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_turing_plus(ggm
         case GGML_TYPE_IQ3_S:   return 6;
         case GGML_TYPE_IQ3_XXS: return 7;
         case GGML_TYPE_MXFP4:   return 7;
+        case GGML_TYPE_NVFP4:   return 8;
         case GGML_TYPE_Q2_K:    return 7;
         case GGML_TYPE_Q3_K:    return 5;
         default:                return MMVQ_MAX_BATCH_SIZE;
@@ -221,6 +223,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
         case GGML_TYPE_IQ4_NL:  return 7;
         case GGML_TYPE_IQ4_XS:  return 5;
         case GGML_TYPE_MXFP4:   return 5;
+        case GGML_TYPE_NVFP4:   return 5;
         case GGML_TYPE_Q3_K:    return 4;
         case GGML_TYPE_Q4_0:    return 7;
         case GGML_TYPE_Q4_1:    return 7;
