@@ -22,6 +22,7 @@
 #endif
 
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <time.h>
 #include <math.h>
@@ -2966,26 +2967,36 @@ struct ggml_cplan ggml_graph_plan(
 }
 
 
-// Read env GGML_CPU_DISABLE_FUSION once and cache it
-static bool get_disable_fusion(void) {
-    static bool value = false;
-    static bool initialized = false;
-    if (!initialized) {
-        value = (getenv("GGML_CPU_DISABLE_FUSION") != NULL);
-        initialized = true;
-    }
-    return value;
-}
-
 // Try to fuse the current node with subsequent nodes for better performance.
-// Returns true if fusion was applied.
-static bool ggml_cpu_try_fuse_ops(
+// Returns the number of nodes consumed by fusion (>=2), or 0 if no fusion was applied.
+static int ggml_cpu_try_fuse_ops(
         const struct ggml_cgraph * cgraph,
         const int node_n,
         const struct ggml_compute_params * params,
         const struct ggml_cplan * cplan) {
-    if (get_disable_fusion() || cplan->use_ref) {
-        return false;
+
+    // Read env GGML_CPU_DISABLE_FUSION once and cache it
+    static bool disable_fusion  = false;
+    static bool disable_fusion_initialized = false;
+    if (!disable_fusion_initialized) {
+        const char * env = getenv("GGML_CPU_DISABLE_FUSION");
+        if (env != NULL) {
+            // accept: "1", "on", "true" (case-insensitive)
+            char buf[8] = {0};
+            size_t i = 0;
+            for (; env[i] != '\0' && i < sizeof(buf) - 1; ++i) {
+                buf[i] = (char) tolower((unsigned char) env[i]);
+            }
+            buf[i] = '\0';
+            disable_fusion = (strcmp(buf, "1")    == 0 ||
+                              strcmp(buf, "on")   == 0 ||
+                              strcmp(buf, "true") == 0);
+        }
+        disable_fusion_initialized = true;
+    }
+
+    if (disable_fusion || cplan->use_ref) {
+        return 0;
     }
 
     struct ggml_tensor * node = cgraph->nodes[node_n];
@@ -3004,12 +3015,12 @@ static bool ggml_cpu_try_fuse_ops(
                 mul_w->nb[0]        == sizeof(float)) {
 
                 ggml_compute_forward_rms_norm_mul_fused(params, node, mul_node);
-                return true;
+                return 2;
             }
         }
     }
 
-    return false;
+    return 0;
 }
 
 static thread_ret_t ggml_graph_compute_thread(void * data) {
@@ -3048,9 +3059,11 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             continue;
         }
 
+        // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
         // Try fused ops, fall back to normal compute
-        if (ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan)) {
-            node_n++;
+        const int n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan);
+        if (n_fused > 0) {
+            node_n += n_fused - 1;
         } else {
             ggml_compute_forward(&params, node);
         }
