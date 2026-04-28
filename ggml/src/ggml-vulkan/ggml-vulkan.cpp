@@ -665,6 +665,8 @@ struct vk_device_struct {
 
     bool pipeline_executable_properties_support {};
 
+    vk::PipelineCache pipeline_cache = VK_NULL_HANDLE;
+
     size_t idx;
 
     bool mul_mat_l[GGML_TYPE_COUNT];
@@ -895,6 +897,11 @@ struct vk_device_struct {
         all_pipelines.clear();
 
         device.destroyDescriptorSetLayout(dsl);
+
+        if (pipeline_cache) {
+            device.destroyPipelineCache(pipeline_cache);
+            pipeline_cache = VK_NULL_HANDLE;
+        }
 
         device.destroy();
     }
@@ -2274,7 +2281,7 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 #endif
 
     try {
-        pipeline->pipeline = device->device.createComputePipeline(VK_NULL_HANDLE, compute_pipeline_create_info).value;
+        pipeline->pipeline = device->device.createComputePipeline(device->pipeline_cache, compute_pipeline_create_info).value;
     } catch (const vk::SystemError& e) {
         std::cerr << "ggml_vulkan: Compute pipeline creation failed for " << pipeline->name << std::endl;
         std::cerr << "ggml_vulkan: " << e.what() << std::endl;
@@ -5524,6 +5531,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
             .setPEnabledExtensionNames(device_extensions);
         device_create_info.setPNext(&device_features2);
         device->device = device->physical_device.createDevice(device_create_info);
+
+        vk::PipelineCacheCreateInfo pipeline_cache_create_info;
+        device->pipeline_cache = device->device.createPipelineCache(pipeline_cache_create_info);
 
         // Queues
         ggml_vk_create_queue(device, device->compute_queue, compute_queue_family_index, 0, { vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer }, false);
