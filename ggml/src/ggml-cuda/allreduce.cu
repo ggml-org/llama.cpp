@@ -82,59 +82,40 @@ struct ggml_cuda_ar_debug_ring {
 };
 #endif // GGML_CUDA_AR_WATCHDOG
 
-// ---------------------------------------------------------------------------
-// Vectorised add helpers for Phase 3 reduction.  All types use float4
-// (16 bytes) as the vector load unit for maximum PCIe throughput.
-// ---------------------------------------------------------------------------
-template <typename T>
-static __device__ __forceinline__ float4 ggml_cuda_ar_vec_add(float4 a, float4 b);
-
-template <>
-__device__ __forceinline__ float4 ggml_cuda_ar_vec_add<float>(float4 a, float4 b) {
-    return make_float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
-}
-
-template <>
-__device__ __forceinline__ float4 ggml_cuda_ar_vec_add<half>(float4 a, float4 b) {
-    float4 r;
-    half2 * ha = reinterpret_cast<half2 *>(&a);
-    half2 * hb = reinterpret_cast<half2 *>(&b);
-    half2 * hr = reinterpret_cast<half2 *>(&r);
-    #pragma unroll
-    for (int k = 0; k < 4; ++k) { hr[k] = ha[k] + hb[k]; }
-    return r;
-}
-
-template <>
-__device__ __forceinline__ float4 ggml_cuda_ar_vec_add<__nv_bfloat16>(float4 a, float4 b) {
-    float4 r;
-    __nv_bfloat162 * ba = reinterpret_cast<__nv_bfloat162 *>(&a);
-    __nv_bfloat162 * bb = reinterpret_cast<__nv_bfloat162 *>(&b);
-    __nv_bfloat162 * br = reinterpret_cast<__nv_bfloat162 *>(&r);
-    #pragma unroll
-    for (int k = 0; k < 4; ++k) { br[k] = ba[k] + bb[k]; }
-    return r;
-}
-
-template <typename T>
+// Combined chunked-kernel AllReduce.  sendbuf/recvbuf live in Tdst (the
+// caller's tensor type); host_mine/host_other carry data in Twire (the
+// on-wire type, possibly narrower than Tdst).
+//
+// Phase 1 reads Tdst from sendbuf, casts each element to Twire, and packs
+// 16-byte vectors into host_mine — for Tdst=F32, Twire=BF16 this halves the
+// host bytes written.
+//
+// Phase 3 reads 16-byte Twire vectors from host_other, casts each element to
+// Tdst, then sums with the local sendbuf value (also rounded through Twire
+// for bit-equivalence between GPUs since both sides truncate).  When
+// Tdst == Twire the casts are no-ops and behaviour matches the original
+// homogeneous kernel.
+template <typename Tdst, typename Twire>
 static __global__ void ggml_cuda_ar_kernel(
-        const T * __restrict__ sendbuf,
-        T       * __restrict__ recvbuf,
-        T       * __restrict__ host_mine,
-        const T * __restrict__ host_other,
-        int                    count,
-        int *                  arrival_mine,
-        int *                  arrival_other
+        const Tdst  * __restrict__ sendbuf,
+        Tdst        * __restrict__ recvbuf,
+        Twire       * __restrict__ host_mine,
+        const Twire * __restrict__ host_other,
+        int                        count,
+        int *                      arrival_mine,
+        int *                      arrival_other
 #if GGML_CUDA_AR_WATCHDOG
        ,ggml_cuda_ar_debug_ring * ring,
-        int                    max_spin,
-        int                    rank,
-        int                    ar_slot
+        int                       max_spin,
+        int                       rank,
+        int                       ar_slot
 #endif
         ) {
 
-    // Number of elements of T per float4 vector (16 bytes).
-    constexpr int ELEMS_PER_VEC = 16 / sizeof(T);
+    // 16-byte vector unit for the wire type.  Each phase-1 iter writes one
+    // vector to host memory; each phase-3 iter reads one and produces
+    // ELEMS_PER_VEC sums.
+    constexpr int ELEMS_PER_VEC = 16 / sizeof(Twire);
 
 #if GGML_CUDA_AR_WATCHDOG
     __shared__ int bail;
@@ -150,15 +131,20 @@ static __global__ void ggml_cuda_ar_kernel(
     __syncthreads();
 #endif
 
-    // Phase 1: vectorised D2H copy using float4 (16 bytes per load/store).
+    // Phase 1: cast sendbuf (Tdst) -> host_mine (Twire) and store as 16-byte vectors.
     {
-        const float4 * s4 = reinterpret_cast<const float4 *>(sendbuf);
-        float4       * d4 = reinterpret_cast<float4 *>(host_mine);
         for (int i = tid; i < count_vec; i += nt) {
-            d4[i] = s4[i];
+            const int off = i * ELEMS_PER_VEC;
+            Twire wire[ELEMS_PER_VEC];
+            #pragma unroll
+            for (int k = 0; k < ELEMS_PER_VEC; ++k) {
+                wire[k] = static_cast<Twire>(sendbuf[off + k]);
+            }
+            *reinterpret_cast<float4 *>(&host_mine[off]) =
+                *reinterpret_cast<const float4 *>(wire);
         }
         if (tid < count - tail) {
-            host_mine[tail + tid] = sendbuf[tail + tid];
+            host_mine[tail + tid] = static_cast<Twire>(sendbuf[tail + tid]);
         }
     }
 
@@ -215,16 +201,24 @@ static __global__ void ggml_cuda_ar_kernel(
     // Broadcast "peer has arrived" and acquire peer's host_other writes.
     __threadfence_system();
 
-    // Phase 3: reduce.
+    // Phase 3: read peer's Twire vector, cast both sides through Twire for
+    // bit-equivalence, sum in Tdst precision, and write back to recvbuf.
     {
-        const float4 * s4 = reinterpret_cast<const float4 *>(sendbuf);
-        const float4 * o4 = reinterpret_cast<const float4 *>(host_other);
-        float4       * r4 = reinterpret_cast<float4 *>(recvbuf);
         for (int i = tid; i < count_vec; i += nt) {
-            r4[i] = ggml_cuda_ar_vec_add<T>(s4[i], o4[i]);
+            const int off = i * ELEMS_PER_VEC;
+            Twire wire[ELEMS_PER_VEC];
+            *reinterpret_cast<float4 *>(wire) =
+                *reinterpret_cast<const float4 *>(&host_other[off]);
+            #pragma unroll
+            for (int k = 0; k < ELEMS_PER_VEC; ++k) {
+                const Twire d_low = static_cast<Twire>(sendbuf[off + k]);
+                recvbuf[off + k] = static_cast<Tdst>(d_low) + static_cast<Tdst>(wire[k]);
+            }
         }
         if (tid < count - tail) {
-            recvbuf[tail + tid] = sendbuf[tail + tid] + host_other[tail + tid];
+            const Twire d_low = static_cast<Twire>(sendbuf[tail + tid]);
+            recvbuf[tail + tid] =
+                static_cast<Tdst>(d_low) + static_cast<Tdst>(host_other[tail + tid]);
         }
     }
 }
@@ -877,10 +871,34 @@ bool ggml_cuda_ar_allreduce(
         compute_flag[i] = (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
     }
 
-    ggml_cuda_pool_alloc<nv_bfloat16> bf16_tmp[GGML_CUDA_MAX_DEVICES];
-    void * data_ptr[GGML_CUDA_MAX_DEVICES];
+    // Decide between copy-engine and chunked-kernel paths based on the working
+    // type's actual byte count.
+    const bool use_copy_engine =
+        p->copy_threshold > 0 &&
+        nbytes >= p->copy_threshold &&
+        nbytes <= p->copy_bytes;
 
+    // BF16 inactive-shard zeroing: when use_bf16 is on, the combined kernel
+    // (chunked-kernel path) and the combined add kernel (copy_engine path)
+    // both accumulate into the F32 tensor data directly, so an inactive
+    // shard's accumulator must start at zero.
     if (use_bf16) {
+        for (int i = 0; i < n; ++i) {
+            if (!compute_flag[i]) {
+                auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+                ggml_cuda_set_device(p->devices[i]);
+                CUDA_CHECK(cudaMemsetAsync(tensors[i]->data, 0, (size_t) ne * sizeof(float), cuda_ctx->stream()));
+            }
+        }
+    }
+
+    // Pre-convert F32 -> BF16 into bf16_tmp ONLY for the copy_engine + use_bf16
+    // path; the chunked-kernel path's combined kernel does the conversion
+    // inline as it writes to host_buf.
+    ggml_cuda_pool_alloc<nv_bfloat16> bf16_tmp[GGML_CUDA_MAX_DEVICES];
+    void * copy_src_ptr[GGML_CUDA_MAX_DEVICES] = {};
+
+    if (use_copy_engine && use_bf16) {
         to_bf16_cuda_t to_bf16 = ggml_get_to_bf16_cuda(GGML_TYPE_F32);
         for (int i = 0; i < n; ++i) {
             auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
@@ -891,27 +909,11 @@ bool ggml_cuda_ar_allreduce(
                 to_bf16(tensors[i]->data, bf16_tmp[i].get(), ne, cuda_ctx->stream());
             } else {
                 CUDA_CHECK(cudaMemsetAsync(bf16_tmp[i].get(), 0, nbytes, cuda_ctx->stream()));
-                // The copy_engine path's combined add kernel reads/writes the
-                // F32 tensor data directly, so an inactive shard's accumulator
-                // must start at zero too. (The chunked-kernel path's
-                // post-conversion would also overwrite this with zero.)
-                CUDA_CHECK(cudaMemsetAsync(tensors[i]->data, 0, (size_t) ne * sizeof(float), cuda_ctx->stream()));
             }
             CUDA_CHECK(cudaGetLastError());
-            data_ptr[i] = bf16_tmp[i].get();
-        }
-    } else {
-        for (int i = 0; i < n; ++i) {
-            data_ptr[i] = tensors[i]->data;
+            copy_src_ptr[i] = bf16_tmp[i].get();
         }
     }
-
-    // Decide between copy-engine and chunked-kernel paths based on the working
-    // type's actual byte count.
-    const bool use_copy_engine =
-        p->copy_threshold > 0 &&
-        nbytes >= p->copy_threshold &&
-        nbytes <= p->copy_bytes;
 
     bool ok = true;
     if (use_copy_engine) {
@@ -938,7 +940,7 @@ bool ggml_cuda_ar_allreduce(
             __nv_bfloat16 * src[GGML_CUDA_MAX_DEVICES];
             float         * dst[GGML_CUDA_MAX_DEVICES];
             for (int i = 0; i < n; ++i) {
-                src[i] = static_cast<__nv_bfloat16 *>(data_ptr[i]);
+                src[i] = static_cast<__nv_bfloat16 *>(copy_src_ptr[i]);
                 dst[i] = static_cast<float *>(tensors[i]->data);
             }
             ok = ggml_cuda_ar_allreduce_copy_impl<__nv_bfloat16, float>(
@@ -947,14 +949,14 @@ bool ggml_cuda_ar_allreduce(
             switch (kernel_type) {
                 case GGML_TYPE_F32: {
                     float * buf[GGML_CUDA_MAX_DEVICES];
-                    for (int i = 0; i < n; ++i) buf[i] = static_cast<float *>(data_ptr[i]);
+                    for (int i = 0; i < n; ++i) buf[i] = static_cast<float *>(tensors[i]->data);
                     ok = ggml_cuda_ar_allreduce_copy_impl<float, float>(
                         p, backends, buf, buf, inner_compute, reduce_id, ne, nbytes, label);
                     break;
                 }
                 case GGML_TYPE_BF16: {
                     __nv_bfloat16 * buf[GGML_CUDA_MAX_DEVICES];
-                    for (int i = 0; i < n; ++i) buf[i] = static_cast<__nv_bfloat16 *>(data_ptr[i]);
+                    for (int i = 0; i < n; ++i) buf[i] = static_cast<__nv_bfloat16 *>(tensors[i]->data);
                     ok = ggml_cuda_ar_allreduce_copy_impl<__nv_bfloat16, __nv_bfloat16>(
                         p, backends, buf, buf, inner_compute, reduce_id, ne, nbytes, label);
                     break;
@@ -965,28 +967,27 @@ bool ggml_cuda_ar_allreduce(
         }
     } else {
         const char * label = use_bf16 ? "kernel-bf16" : "kernel";
+        // host_buf carries Twire-typed data; max_chunk_elems is the count that
+        // fits in one host_buf at the wire size.
         const size_t max_chunk_elems = p->buf_bytes / type_size;
         const size_t chunks = ((size_t) ne + max_chunk_elems - 1) / max_chunk_elems;
+        const size_t input_type_size = ggml_type_size(input_type);
         ggml_cuda_ar_trace_call(p, reduce_id, label, tensors, kernel_type, ne, nbytes, max_chunk_elems, chunks);
 
-        // Chunked-kernel path. Insert per-chunk kernels into each GPU's
-        // existing compute stream via events:
-        //   record(app, compute_stream)       — capture "upstream done"
-        //                                       (incl. F32->BF16 conversion when applicable)
-        //   wait(internal_stream, app)        — internal stream defers until then
-        //   launch one or more chunk kernels on internal_stream
-        //   record(ker, internal_stream)      — capture "final chunk done"
-        //   wait(compute_stream, ker)         — compute stream resumes
-        //                                       (then runs BF16->F32 when applicable)
+        // Chunked-kernel path.  The combined kernel reads Tdst (input_type)
+        // from tensors[i]->data, casts on-the-fly to Twire (kernel_type) for
+        // the host transfer, and accumulates the peer's Twire contribution
+        // back into tensors[i]->data — no pre/post-conversion needed.
         size_t chunk_index = 0;
         for (int64_t chunk_start = 0; chunk_start < ne; chunk_start += (int64_t) max_chunk_elems, ++chunk_index) {
             const size_t remaining_elems = (size_t) (ne - chunk_start);
             const size_t chunk_elems = remaining_elems < max_chunk_elems ? remaining_elems : max_chunk_elems;
-            const size_t chunk_bytes = chunk_elems * type_size;
+            const size_t chunk_wire_bytes = chunk_elems * type_size;
+            const size_t chunk_dst_bytes  = chunk_elems * input_type_size;
 
             const int slot = ggml_cuda_ar_acquire_slot(p);
             const bool last_chunk = chunk_start + (int64_t) chunk_elems == ne;
-            ggml_cuda_ar_trace_chunk(p, reduce_id, label, chunk_index, slot, chunk_start, chunk_elems, chunk_bytes, last_chunk);
+            ggml_cuda_ar_trace_chunk(p, reduce_id, label, chunk_index, slot, chunk_start, chunk_elems, chunk_wire_bytes, last_chunk);
 
             for (int i = 0; i < n; ++i) {
                 const int peer = 1 - i;  // valid for n == 2 only
@@ -997,12 +998,13 @@ bool ggml_cuda_ar_allreduce(
                     ggml_cuda_ar_wait_for_compute(p, cuda_ctx, i, slot);
                 }
 
-                char * data = static_cast<char *>(data_ptr[i]) + chunk_start * (int64_t) type_size;
+                char * data = static_cast<char *>(tensors[i]->data) + chunk_start * (int64_t) input_type_size;
 
                 // Match NCCL/meta-backend semantics: inactive shards contribute
-                // zeros. On the BF16 path the tmp buffer was already zeroed.
+                // zeros.  On the BF16 path the F32 tensor data was already
+                // zeroed up-front (above), so per-chunk zeroing isn't needed.
                 if (!compute_flag[i] && !use_bf16) {
-                    CUDA_CHECK(cudaMemsetAsync(data, 0, chunk_bytes, p->streams[i]));
+                    CUDA_CHECK(cudaMemsetAsync(data, 0, chunk_dst_bytes, p->streams[i]));
                 }
 
 #if GGML_CUDA_AR_WATCHDOG
@@ -1011,22 +1013,27 @@ bool ggml_cuda_ar_allreduce(
 #define GGML_CUDA_AR_WDOG_EXTRA_ARGS
 #endif
 
-#define LAUNCH_AR_KERNEL(T) \
-                ggml_cuda_ar_kernel<T><<<dim3(1), dim3(256), 0, p->streams[i]>>>( \
-                    reinterpret_cast<const T *>(data), \
-                    reinterpret_cast<T *>(data), \
-                    reinterpret_cast<T *>(p->host_buf[i]), \
-                    reinterpret_cast<const T *>(p->host_buf[peer]), \
+#define LAUNCH_AR_KERNEL(Tdst, Twire) \
+                ggml_cuda_ar_kernel<Tdst, Twire><<<dim3(1), dim3(256), 0, p->streams[i]>>>( \
+                    reinterpret_cast<const Tdst *>(data), \
+                    reinterpret_cast<Tdst *>(data), \
+                    reinterpret_cast<Twire *>(p->host_buf[i]), \
+                    reinterpret_cast<const Twire *>(p->host_buf[peer]), \
                     static_cast<int>(chunk_elems), \
                     ggml_cuda_ar_arrival_ptr(p, slot, i), \
                     ggml_cuda_ar_arrival_ptr(p, slot, peer) \
                     GGML_CUDA_AR_WDOG_EXTRA_ARGS)
 
-                switch (kernel_type) {
-                    case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float);           break;
-                    case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half);            break;
-                    case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(__nv_bfloat16);   break;
-                    default: GGML_ASSERT(false);
+                if (use_bf16) {
+                    GGML_ASSERT(input_type == GGML_TYPE_F32);
+                    LAUNCH_AR_KERNEL(float, __nv_bfloat16);
+                } else {
+                    switch (input_type) {
+                        case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float,         float);         break;
+                        case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half,          half);          break;
+                        case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(__nv_bfloat16, __nv_bfloat16); break;
+                        default: GGML_ASSERT(false);
+                    }
                 }
 
 #undef LAUNCH_AR_KERNEL
@@ -1035,20 +1042,6 @@ bool ggml_cuda_ar_allreduce(
 
                 ggml_cuda_ar_record_chunk_done(p, cuda_ctx, i, slot, last_chunk);
             }
-        }
-    }
-
-    // Post-conversion BF16 -> F32 is needed only for the chunked-kernel path,
-    // which leaves its result in bf16_tmp.  The copy_engine path's combined
-    // add kernel writes the F32 result directly into tensors[i]->data, so
-    // we can skip the post-conversion entirely.
-    if (use_bf16 && ok && !use_copy_engine) {
-        to_fp32_cuda_t to_fp32 = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
-        for (int i = 0; i < n; ++i) {
-            auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
-            ggml_cuda_set_device(p->devices[i]);
-            to_fp32(bf16_tmp[i].get(), (float *) tensors[i]->data, ne, cuda_ctx->stream());
-            CUDA_CHECK(cudaGetLastError());
         }
     }
 
