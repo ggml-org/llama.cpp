@@ -84,16 +84,15 @@ for ncols in [8, 16, 32, 64]:
                     continue
                 if head_size_kq == 72:
                     continue
-                if head_size_kq == 320:
-                    # Mistral Small 4: only instantiate ncols2=32 variants for MMA f16.
+                # Skip compilation of unused ncols2 values for niche head sizes:
+                if head_size_kq == 320: # Mistral Small 4
                     if ncols2 != 32:
                         continue
-                if head_size_kq == 512 and ncols2 not in (4, 8):
+                if head_size_kq == 512 and ncols2 not in (4, 8): # Gemma 4
                     continue
-                # Only 576 (and 320 with ncols2=32 only, see above) use ncols2 in {16,32}; skip for all other KQ sizes.
+                if head_size_kq == 576 and ncols2 not in (4, 16, 32): # Deepseek, GLM 4.7 Flash
+                    continue
                 if head_size_kq not in (320, 576) and ncols2 in (16, 32):
-                    continue
-                if head_size_kq == 576 and ncols2 not in (4, 16, 32):
                     continue
                 head_size_v = 256 if head_size_kq == 320 else (head_size_kq if head_size_kq != 576 else 512)
                 f.write(SOURCE_FATTN_MMA_CASE.format(ncols1=ncols1, ncols2=ncols2, head_size_kq=head_size_kq, head_size_v=head_size_v))

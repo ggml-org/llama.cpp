@@ -1152,9 +1152,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
         }
     }
 
-    // cols_per_block must be >= ncols2 so ncols1 = cols_per_block/ncols2 is never 0 (integer division).
-    // Without if constexpr, NVCC/MSVC still instantiate flash_attn_tile<..., 0, ncols2, ...> when ncols2 > 16.
-    if constexpr (16 >= ncols2) {
+    if constexpr (ncols2 <= 16) {
         if (Q->ne[1] > 8/ncols2) {
             constexpr int cols_per_block = 16;
             const int nwarps    = ggml_cuda_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
@@ -1222,8 +1220,7 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_cuda_context & ctx, ggm
     const int gqa_limit = nvidia && gqa_ratio <= 4 && DV <= 256 ? 16 : INT_MAX;
     const bool use_gqa_opt = mask && max_bias == 0.0f && Q->ne[1] <= gqa_limit && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
-    if constexpr (DKQ == 320 && DV == 256) {
-        // Mistral Small 4: only build/dispatch ncols2=32
+    if constexpr (DKQ == 320) { // Mistral Small 4
         if (use_gqa_opt && gqa_ratio % 32 == 0) {
             launch_fattn_tile_switch_ncols1<DKQ, DV, 32, use_logit_softcap>(ctx, dst);
             return;
@@ -1242,9 +1239,7 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_cuda_context & ctx, ggm
         }
     }
 
-    // (320, 256) is handled above (ncols2=32 only); DKQ==320 satisfies DKQ<=512 so exclude it here to avoid
-    // instantiating generic ncols2 ladders that have no kernel config / flash_attn_tile_iter specializations.
-    if constexpr (DKQ <= 512 && !(DKQ == 320 && DV == 256)) {
+    if constexpr (DKQ <= 512 && DKQ != 320) {
         if (use_gqa_opt && gqa_ratio % 8 == 0) {
             launch_fattn_tile_switch_ncols1<DKQ, DV, 8, use_logit_softcap>(ctx, dst);
             return;

@@ -144,14 +144,12 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<256, 256>(ctx, dst);
             break;
         case 320:
-            // Go straight to the ncols1 switch (ncols2=32-only build).
+            // For Mistral Small 4, go straight to the ncols1 switch (ncols2=32-only build).
             GGML_ASSERT(V->ne[0] == 256);
             {
                 float max_bias = 0.0f;
                 memcpy(&max_bias, (const float *) KQV->op_params + 1, sizeof(float));
 
-                // The detailed alignment / KV-padding checks are handled centrally in ggml_cuda_get_best_fattn_kernel().
-                // Here we only re-check the semantic preconditions for the GQA-optimized variant.
                 const bool use_gqa_opt = mask && max_bias == 0.0f;
                 GGML_ASSERT(use_gqa_opt);
                 GGML_ASSERT(Q->ne[2] % K->ne[2] == 0);
@@ -374,7 +372,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             if (V->ne[0] != 256 || !gqa_opt_applies) {
                 return BEST_FATTN_KERNEL_NONE;
             }
-            // MMA/tile fast paths for 320/256 only implement the ncols2=32 GQA layout (gqa_ratio multiple of 32).
             if (gqa_ratio % 32 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }
