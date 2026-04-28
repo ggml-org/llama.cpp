@@ -1227,7 +1227,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         float KQ_max_scale[cols_per_thread];
 #pragma unroll
         for (int col = 0; col < cols_per_thread; ++col) {
-            const int jc = cols_per_warp == 8 ? T_C_KQ::get_j(col) : T_C_KQ::get_i(2*col);
+            // jc is the (local) Q-head index within the current ncols tile.
+            // For wide layouts (e.g. cols_per_warp=16, ncols=32) multiple warp-groups cover disjoint jc ranges.
+            // The sinks vector is indexed by Q head, so include the warp-group base in jc.
+            const int jc_base = (threadIdx.y / np) * cols_per_warp;
+            const int jc = jc_base + (cols_per_warp == 8 ? T_C_KQ::get_j(col) : T_C_KQ::get_i(2*col));
             const float sink = sinks_f[jc % ncols2];
 
             const float KQ_max_new = fmaxf(KQ_max[col], sink);
