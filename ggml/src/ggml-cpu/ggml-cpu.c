@@ -22,7 +22,6 @@
 #endif
 
 #include <assert.h>
-#include <ctype.h>
 #include <errno.h>
 #include <time.h>
 #include <math.h>
@@ -2980,18 +2979,7 @@ static int ggml_cpu_try_fuse_ops(
     static bool disable_fusion_initialized = false;
     if (!disable_fusion_initialized) {
         const char * env = getenv("GGML_CPU_DISABLE_FUSION");
-        if (env != NULL) {
-            // accept: "1", "on", "true" (case-insensitive)
-            char buf[8] = {0};
-            size_t i = 0;
-            for (; env[i] != '\0' && i < sizeof(buf) - 1; ++i) {
-                buf[i] = (char) tolower((unsigned char) env[i]);
-            }
-            buf[i] = '\0';
-            disable_fusion = (strcmp(buf, "1")    == 0 ||
-                              strcmp(buf, "on")   == 0 ||
-                              strcmp(buf, "true") == 0);
-        }
+        disable_fusion = (env != NULL && atoi(env) == 1);
         disable_fusion_initialized = true;
     }
 
