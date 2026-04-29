@@ -631,6 +631,32 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
                            "{%- if false %}");
     }
 
+    // Temporary workaround until fixed by Qwen
+    // even when reasoning_content is empty, on Qwen3.6, preserve_thinking wraps every past
+    // assistant turn with <think>. When preserve_thinking=true empty thinking blocks may thus appear in long conversations.
+    if (default_template_src.find("{%- if (preserve_thinking is defined and preserve_thinking is true) "
+                                  "or (loop.index0 > ns.last_query_index) %}") != std::string::npos
+        && default_template_src.find("{%- set reasoning_content = reasoning_content|trim %}") != std::string::npos) {
+        LOG_WRN(
+            "common_chat_templates_init: Qwen3.6 preserve_thinking template detected, applying workaround\n");
+        string_replace_all(default_template_src,
+                           "{%- if (preserve_thinking is defined and preserve_thinking is true) "
+                           "or (loop.index0 > ns.last_query_index) %}",
+                           "{%- if ((preserve_thinking is defined and preserve_thinking is true) "
+                           "or (loop.index0 > ns.last_query_index)) and reasoning_content %}");
+    }
+    if (template_tool_use_src.find("{%- if (preserve_thinking is defined and preserve_thinking is true) "
+                                   "or (loop.index0 > ns.last_query_index) %}") != std::string::npos
+        && template_tool_use_src.find("{%- set reasoning_content = reasoning_content|trim %}") != std::string::npos) {
+        LOG_WRN(
+            "common_chat_templates_init: Qwen3.6 preserve_thinking template detected, applying workaround\n");
+        string_replace_all(template_tool_use_src,
+                           "{%- if (preserve_thinking is defined and preserve_thinking is true) "
+                           "or (loop.index0 > ns.last_query_index) %}",
+                           "{%- if ((preserve_thinking is defined and preserve_thinking is true) "
+                           "or (loop.index0 > ns.last_query_index)) and reasoning_content %}");
+    }
+    
     std::string token_bos = bos_token_override;
     std::string token_eos = eos_token_override;
     bool        add_bos   = false;
