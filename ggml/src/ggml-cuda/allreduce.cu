@@ -239,7 +239,7 @@ struct ggml_cuda_ar_pipeline {
     char *                   host_large[GGML_CUDA_MAX_DEVICES]; // pinned staging for copy-engine path
     char *                   dev_tmp[GGML_CUDA_MAX_DEVICES];    // device scratch for copy-engine path
     cudaStream_t             streams[GGML_CUDA_MAX_DEVICES];   // non-blocking
-    ggml_cuda_ar_event_slot *ev_pool[GGML_CUDA_MAX_DEVICES];   // [device][slot]
+    ggml_cuda_ar_event_slot  ev_pool[GGML_CUDA_MAX_DEVICES][GGML_CUDA_AR_POOL_SIZE];
 
     // Copy-engine: per-device "I finished reading my peer's host_large"
     // event.  Indexed by RECORDER device.  Recorded same-device on streams[i]
@@ -349,7 +349,6 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
         }
         p->streams[i] = stream;
 
-        p->ev_pool[i] = new ggml_cuda_ar_event_slot[GGML_CUDA_AR_POOL_SIZE]();
         for (int s = 0; s < GGML_CUDA_AR_POOL_SIZE; ++s) {
             bool ok =
                 cudaEventCreateWithFlags(&p->ev_pool[i][s].app, cudaEventDisableTiming) == cudaSuccess &&
@@ -457,17 +456,14 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
             ggml_cuda_set_device(p->devices[i]);
             cudaFree(p->dev_tmp[i]);
         }
-        if (p->ev_pool[i]) {
-            ggml_cuda_set_device(p->devices[i]);
-            for (int s = 0; s < GGML_CUDA_AR_POOL_SIZE; ++s) {
-                if (p->ev_pool[i][s].app) { cudaEventDestroy(p->ev_pool[i][s].app); }
-                for (int c = 0; c < GGML_CUDA_AR_COPY_MAX_CHUNKS; ++c) {
-                    if (p->ev_pool[i][s].cpy[c]) { cudaEventDestroy(p->ev_pool[i][s].cpy[c]); }
-                }
-                if (p->ev_pool[i][s].h2d) { cudaEventDestroy(p->ev_pool[i][s].h2d); }
-                if (p->ev_pool[i][s].ker) { cudaEventDestroy(p->ev_pool[i][s].ker); }
+        ggml_cuda_set_device(p->devices[i]);
+        for (int s = 0; s < GGML_CUDA_AR_POOL_SIZE; ++s) {
+            if (p->ev_pool[i][s].app) { cudaEventDestroy(p->ev_pool[i][s].app); }
+            for (int c = 0; c < GGML_CUDA_AR_COPY_MAX_CHUNKS; ++c) {
+                if (p->ev_pool[i][s].cpy[c]) { cudaEventDestroy(p->ev_pool[i][s].cpy[c]); }
             }
-            delete[] p->ev_pool[i];
+            if (p->ev_pool[i][s].h2d) { cudaEventDestroy(p->ev_pool[i][s].h2d); }
+            if (p->ev_pool[i][s].ker) { cudaEventDestroy(p->ev_pool[i][s].ker); }
         }
         if (p->host_large_read_done[i]) {
             ggml_cuda_set_device(p->devices[i]);
