@@ -629,22 +629,30 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
             for (int64_t dk_chunk = 0; dk_chunk < dk; dk_chunk += TILE_K) {
                 int buf = chunk_id & 1;
 
-                // Load Q
+                // Issue Q load on wait_id=0. Q lives in stack/L1 so this
+                // mostly retires immediately; the issue still pairs with the
+                // sem_wait below for hart-1 overlap.
                 tensor_load(
                     false, false, A_L1_START, TENSOR_LOAD_PLAIN, 0,
                     (uint64_t)(q_f16 + dk_chunk), 0, 0, 64, 0);
 
-                // Wait for hart 1 to finish packing this K chunk. See the
-                // paired et_sem_post in the hart-1 pack loop
+                // Wait for hart 1 to finish packing this K chunk before we
+                // issue the K load. (Paired with et_sem_post in hart-1 pack.)
                 et_sem_wait(ET_BARRIER_MINION);
 
-                tensor_wait(TENSOR_LOAD_WAIT_0);
-
-                // Load K from L2 SCP (hart 1 already flushed it)
+                // Issue K load on wait_id=1, runs concurrently with the
+                // Q load above
                 tensor_load(
                     false, false, B_L1_START, TENSOR_LOAD_TRANSPOSE16, 0,
-                    (uint64_t)scp_kp[buf], 0, 15, 64, 0);
-                tensor_wait(TENSOR_LOAD_WAIT_0);
+                    (uint64_t)scp_kp[buf], 0, 15, 64, 1);
+
+                tensor_wait(TENSOR_LOAD_WAIT_0);  // Q in A_L1
+                tensor_wait(TENSOR_LOAD_WAIT_1);  // K in B_L1
+
+                // Release the K L2-SCP buffer back to hart 1 NOW: the data
+                // it published is already in L1 (we just waited WAIT_1), so
+                // hart 1 may overwrite scp_kp[buf] while our FMA runs.
+                et_sem_post(ET_BARRIER_MINION);
 
                 tensor_fma(
                     (kv_count < TILE_KV), 3, 0, 15, 0,
@@ -653,15 +661,15 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                     TENSOR_FMA_OP_FP16, (dk_chunk == 0));
                 tensor_wait(TENSOR_FMA_WAIT);
 
-                // Signal hart 1: this buf is consumed and may be reused.
-                et_sem_post(ET_BARRIER_MINION);
-
                 chunk_id++;
             }
 
-            // Prefetch V rows for this tile
-            for (int64_t d = 0; d < dv; d += 32)
-                prefetch_kv_to_l2(v_head, kv_base, d, kv_count, v->nb[1]);
+            // Prefetch V rows for this tile.
+            // Only useful for the partial-tile path below
+            if (kv_count < TILE_KV) {
+                for (int64_t d = 0; d < dv; d += 32)
+                    prefetch_kv_to_l2(v_head, kv_base, d, kv_count, v->nb[1]);
+            }
 
             // Extract QK^T scores from vector register file
             __asm__ volatile("" ::: "f0", "f1");
