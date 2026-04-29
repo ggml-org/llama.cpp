@@ -626,42 +626,82 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
             // QK^T via TensorFMA16A32
             // ============================================================
 
-            for (int64_t dk_chunk = 0; dk_chunk < dk; dk_chunk += TILE_K) {
+            // Pipelined QK^T:
+            //   - Q for the whole row is preloaded once into A_L1[0..n-1].
+            //     Each FMA picks its chunk via scp_loc_a = chunk_idx.
+            //   - K is double-buffered in L1: K_BUFS[0]=lines 16..31,
+            //     K_BUFS[1]=lines 32..47.
+            //   - In iteration i (1..N-1), the K[i] load runs concurrently
+            //     with the FMA on chunk i-1: they touch disjoint L1 regions
+            //     (FMA reads K_BUFS[(i-1)&1], load writes K_BUFS[i&1]; FMA
+            //     reads A_L1[i-1], load doesn't touch A_L1).
+            //
+            // L1 footprint: max dk=512 → Q uses 16 lines (0..15), K uses 32
+            // lines (16..47). Within ET-SoC-1 L1 SCP (≥128 lines per minion).
+            const int64_t n_dk_chunks = dk / TILE_K;
+            const uint64_t K_BUFS[2] = {
+                (uint64_t)B_L1_START,           // 16..31
+                (uint64_t)(B_L1_START + 16),    // 32..47
+            };
+
+            // Preload entire Q row into A_L1[0..n_dk_chunks-1] (one tensor_load,
+            // one wait, regardless of dk).
+            tensor_load(
+                false, false, A_L1_START, TENSOR_LOAD_PLAIN, 0,
+                (uint64_t)q_f16, 0, (uint64_t)(n_dk_chunks - 1), 64, 0);
+
+            // Prologue: wait hart 1's K[0], issue K[0] load, wait both loads.
+            {
                 int buf = chunk_id & 1;
-
-                // Issue Q load on wait_id=0. Q lives in stack/L1 so this
-                // mostly retires immediately; the issue still pairs with the
-                // sem_wait below for hart-1 overlap.
-                tensor_load(
-                    false, false, A_L1_START, TENSOR_LOAD_PLAIN, 0,
-                    (uint64_t)(q_f16 + dk_chunk), 0, 0, 64, 0);
-
-                // Wait for hart 1 to finish packing this K chunk before we
-                // issue the K load. (Paired with et_sem_post in hart-1 pack.)
                 et_sem_wait(ET_BARRIER_MINION);
-
-                // Issue K load on wait_id=1, runs concurrently with the
-                // Q load above
                 tensor_load(
-                    false, false, B_L1_START, TENSOR_LOAD_TRANSPOSE16, 0,
+                    false, false, K_BUFS[0], TENSOR_LOAD_TRANSPOSE16, 0,
                     (uint64_t)scp_kp[buf], 0, 15, 64, 1);
-
-                tensor_wait(TENSOR_LOAD_WAIT_0);  // Q in A_L1
-                tensor_wait(TENSOR_LOAD_WAIT_1);  // K in B_L1
-
-                // Release the K L2-SCP buffer back to hart 1 NOW: the data
-                // it published is already in L1 (we just waited WAIT_1), so
-                // hart 1 may overwrite scp_kp[buf] while our FMA runs.
+                tensor_wait(TENSOR_LOAD_WAIT_0);  // Q row complete
+                tensor_wait(TENSOR_LOAD_WAIT_1);  // K[0] complete
                 et_sem_post(ET_BARRIER_MINION);
+                chunk_id++;
+            }
+
+            // Main loop: in iter i, issue K[i] load and FMA chunk i-1 in
+            // parallel. The matrix engine is busy on FMA[i-1] while the
+            // load unit fetches K[i] from L2 SCP.
+            //
+            // Order of waits matters: wait K[i] load first, then sem_post
+            // immediately (frees scp_kp[buf] for hart 1 to refill chunk i+2),
+            // then wait FMA. Putting sem_post after FMA wait would stall
+            // hart 1 by a full FMA latency — defeating the producer pipeline.
+            for (int64_t i = 1; i < n_dk_chunks; i++) {
+                int buf            = chunk_id & 1;
+                int k_slot_prev    = (int)((i - 1) & 1);
+                int k_slot         = (int)(i & 1);
+
+                et_sem_wait(ET_BARRIER_MINION);
+                tensor_load(
+                    false, false, K_BUFS[k_slot], TENSOR_LOAD_TRANSPOSE16, 0,
+                    (uint64_t)scp_kp[buf], 0, 15, 64, 1);
 
                 tensor_fma(
                     (kv_count < TILE_KV), 3, 0, 15, 0,
                     false, false, false, false,
-                    B_L1_START, A_L1_START,
-                    TENSOR_FMA_OP_FP16, (dk_chunk == 0));
-                tensor_wait(TENSOR_FMA_WAIT);
+                    K_BUFS[k_slot_prev], (uint64_t)(i - 1),
+                    TENSOR_FMA_OP_FP16, (i == 1));
 
+                tensor_wait(TENSOR_LOAD_WAIT_1);   // K[i] in L1
+                et_sem_post(ET_BARRIER_MINION);    // release scp_kp[buf] EARLY
+                tensor_wait(TENSOR_FMA_WAIT);      // then wait FMA[i-1]
                 chunk_id++;
+            }
+
+            // Epilogue: FMA on the last chunk (no overlapping load).
+            {
+                int k_slot_last = (int)((n_dk_chunks - 1) & 1);
+                tensor_fma(
+                    (kv_count < TILE_KV), 3, 0, 15, 0,
+                    false, false, false, false,
+                    K_BUFS[k_slot_last], (uint64_t)(n_dk_chunks - 1),
+                    TENSOR_FMA_OP_FP16, (n_dk_chunks == 1));
+                tensor_wait(TENSOR_FMA_WAIT);
             }
 
             // Prefetch V rows for this tile.
@@ -792,26 +832,36 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
                         flush_to_l2(w_f16_buf, 1, 64);
                         WAIT_CACHEOPS;
 
-                        // Load A (weights)
+                        // Issue weights load (wait_id=0) and the first V chunk
+                        // load (wait_id=1) concurrently. Weights comes from
+                        // L2 SCP (just flushed); V[0] comes from DRAM via
+                        // INTERLEAVE16 — running them in parallel hides the
+                        // shorter load behind the longer one. For partial
+                        // tiles, V is software-packed below — we only kick
+                        // off the early V load on the full-tile fast path.
                         tensor_load(false, false, A_L1_START,
                                     TENSOR_LOAD_PLAIN, 0,
                                     (uint64_t)w_f16_buf, 0, 0, 64, 0);
-                        tensor_wait(TENSOR_LOAD_WAIT_0);
 
-                        // B2: process dv in chunks of 16
-                        if (kv_count == TILE_KV) {
-                            // Full tile: pipelined with double-buffered B
-                            const uintptr_t v_base = (uintptr_t)v_head
-                                + kv_base * v->nb[1];
-                            const uint64_t nb1_v = (uint64_t)v->nb[1];
-                            uint64_t b_cur = 8;
+                        const int v_full_tile = (kv_count == TILE_KV);
+                        const uintptr_t v_base = (uintptr_t)v_head + kv_base * v->nb[1];
+                        const uint64_t nb1_v = (uint64_t)v->nb[1];
+                        uint64_t b_cur = 8;
 
-                            // Preload first chunk
+                        if (v_full_tile) {
                             tensor_load(false, false, b_cur,
                                         TENSOR_LOAD_INTERLEAVE16, 0,
                                         (uint64_t)v_base,
-                                        0, 7, nb1_v, 0);
-                            tensor_wait(TENSOR_LOAD_WAIT_0);
+                                        0, 7, nb1_v, 1);
+                        }
+
+                        tensor_wait(TENSOR_LOAD_WAIT_0);   // weights in A_L1
+                        if (v_full_tile) {
+                            tensor_wait(TENSOR_LOAD_WAIT_1);  // V[0] in b_cur
+                        }
+
+                        // B2: process dv in chunks of 16
+                        if (v_full_tile) {
 
                             for (int64_t dv_off = 0; dv_off < dv; dv_off += 16) {
                                 const uint64_t b_nxt = b_cur ^ 24;
