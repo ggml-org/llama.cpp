@@ -445,11 +445,14 @@ void common_sampler_accept(struct common_sampler * gsmpl, llama_token token, boo
 
     const auto tm = gsmpl->tm();
 
+    // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
+    const auto accept_grammar = is_generated && grammar_should_apply(gsmpl);
+
     if (gsmpl->rbudget && is_generated) {
         llama_sampler_accept(gsmpl->rbudget, token);
     }
 
-    if (gsmpl->grmr && is_generated && grammar_should_apply(gsmpl)) {
+    if (gsmpl->grmr && accept_grammar) {
         llama_sampler_accept(gsmpl->grmr, token);
     }
 
