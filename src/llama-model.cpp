@@ -1,6 +1,7 @@
 #include "llama-model.h"
 
 #include "llama-arch.h"
+#include "llama-ext.h"
 #include "llama-hparams.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
@@ -77,11 +78,23 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         const ggml_tensor * tensor_axis_0;
 
         uint32_t il;
-        size_t   rotation;
+        size_t   rotation; // when assigning tensor slices, rotate how the rounding is done for more even allocation
     };
 
     auto get_tensor_config_impl = [&](
                 const ggml_backend_meta_split_axis axis, const std::string & suffix = "", const std::string & suffix_fallback = "") -> tensor_config {
+        // the layers in a tensor can be inhomogeneous, if the pattern is cleanly divided by the number of GPUs there can be aliasing effects,
+        //     count only the same type of previous layers to avoid this
+        auto get_il_eff = [&](const size_t il){
+            size_t ret = 0;
+            const bool il_is_recurrent = hparams.is_recurrent(il);
+            const bool il_is_swa       = hparams.is_swa(il);
+            for (size_t il_prev = 0; il_prev < il; il_prev++) {
+                ret += hparams.is_recurrent(il_prev) == il_is_recurrent && hparams.is_swa(il_prev) == il_is_swa;
+            }
+            return ret;
+        };
+
         uint32_t il;
         std::string prefix;
         size_t rotation;
@@ -90,13 +103,13 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             GGML_ASSERT(length_prefix != std::string::npos);
             prefix = tensor_name.substr(0, length_prefix + 1);
             il = std::stoull(tensor_name.substr(4, length_prefix));
-            rotation = il % ud->n_devices;
+            rotation = get_il_eff(il) % ud->n_devices;
         } else if (tensor_name.substr(0, 6) == "cache_") {
             const size_t layer_index_start = tensor_name.find("_l", 6);
             GGML_ASSERT(layer_index_start != std::string::npos);
             il = std::stoull(tensor_name.substr(layer_index_start + 2));
             prefix = "blk." + std::to_string(il) + ".";
-            rotation = il % ud->n_devices;
+            rotation = get_il_eff(il) % ud->n_devices;
         } else {
             il = 0;
             rotation = hparams.n_layer % ud->n_devices;
@@ -724,6 +737,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
     ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT, hparams.n_group_used,    false);
 
+    if (arch == LLM_ARCH_HUNYUAN_VL || arch == LLM_ARCH_HUNYUAN_DENSE) {
+        if (hparams.n_expert <= 1) {
+            hparams.n_expert      = 0;
+            hparams.n_expert_used = 0;
+        }
+    }
+
     if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
         ml.get_key(LLM_KV_FEATURES_LENGTH,  hparams.n_embd);
         ml.get_key(LLM_KV_EMBEDDING_LENGTH, hparams.n_embd_out_impl);
@@ -802,6 +822,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     hparams.rope_freq_scale_train = ropescale == 0.0f ? 1.0f : 1.0f/ropescale;
 
     ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR, hparams.rope_attn_factor, false);
+    ml.get_key(LLM_KV_ROPE_SCALING_ALPHA,       hparams.rope_scaling_alpha, false);
 
     // non-transformer models do not have attention heads
     if (hparams.n_head() > 0) {
@@ -2579,9 +2600,18 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_HUNYUAN_VL:
         case LLM_ARCH_HUNYUAN_DENSE:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
+
+                // XDRoPE / NTK-aware scaling: base = rope_theta * alpha^(dim / (dim - 2))
+                if (hparams.rope_scaling_alpha > 0.0f) {
+                    const int dim = hparams.n_embd_head_k();
+                    hparams.rope_freq_base_train = hparams.rope_freq_base_train
+                        * powf(hparams.rope_scaling_alpha, (float)dim / (float)(dim - 2));
+                }
 
                 switch (hparams.n_embd) {
                     case 1024: type = LLM_TYPE_0_5B; break;
@@ -6934,6 +6964,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, 0);
                     }
                 } break;
+            case LLM_ARCH_HUNYUAN_VL:
             case LLM_ARCH_HUNYUAN_DENSE:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -8954,6 +8985,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_hunyuan_moe>(*this, params);
             } break;
+        case LLM_ARCH_HUNYUAN_VL:
         case LLM_ARCH_HUNYUAN_DENSE:
             {
                 llm = std::make_unique<llm_build_hunyuan_dense>(*this, params);
@@ -9303,6 +9335,9 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GLM4_MOE:
             return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NEOX;
 
+        case LLM_ARCH_HUNYUAN_VL:
+            return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NEOX;
+
         // all model arches should be listed explicitly here
         case LLM_ARCH_UNKNOWN:
             GGML_ABORT("unknown architecture");
@@ -9436,4 +9471,19 @@ bool llama_model_is_diffusion(const llama_model * model) {
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
     return model->tensors_by_name;
+}
+
+int32_t llama_model_n_expert(const struct llama_model * model) {
+    return model->hparams.n_expert;
+}
+
+int32_t llama_model_n_devices(const struct llama_model * model) {
+    return (int32_t)model->devices.size();
+}
+
+ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i) {
+    if (i < 0 || i >= (int)model->devices.size()) {
+        return nullptr;
+    }
+    return model->devices[i].dev;
 }

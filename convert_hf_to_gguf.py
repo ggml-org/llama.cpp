@@ -272,6 +272,22 @@ class ModelBase:
 
         return tensors
 
+    @staticmethod
+    def _scale_is_trivial(scale: Tensor) -> bool:
+        return scale.numel() <= 1 and abs(float(scale.float().sum()) - 1.0) < 1e-6
+
+    def _write_scale_tensor(self, scale_name: str, scale: Tensor):
+        if not self._scale_is_trivial(scale):
+            scale_f32 = scale.float().numpy().flatten()
+            logger.info(f"  + {scale_name} (per-tensor scale, shape [{scale_f32.size}])")
+            self.gguf_writer.add_tensor(scale_name, scale_f32)
+
+    def _write_scales_tensor(self, scale_name: str, scales: list[float]):
+        if not np.allclose(scales, 1.0, atol=1e-6):
+            scale_vals = np.array(scales, dtype=np.float32)
+            logger.info(f"  + {scale_name} (per-expert scale, shape [{len(scales)}])")
+            self.gguf_writer.add_tensor(scale_name, scale_vals)
+
     def dequant_model(self):
         # If all quantized tensors were already handled (e.g. pure NVFP4), skip
         if self._is_nvfp4 and not any(k.endswith((".weight_scale", ".weight_scale_inv")) for k in self.model_tensors):
@@ -494,7 +510,7 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), None)
                         tensors_to_remove.append(name)
-                    if name.endswith((".k_scale", ".v_scale")):
+                    if name.endswith((".input_scale", ".k_scale", ".v_scale")):
                         tensors_to_remove.append(name)
             elif quant_method is not None:
                 raise NotImplementedError(f"Quant method is not yet supported: {quant_method!r}")
@@ -602,10 +618,6 @@ class ModelBase:
         raw = np.concatenate([d_grouped, qs_grouped], axis=-1).reshape(out_features, n_super * 36)
         return raw, [out_features, n_super * 64]
 
-    @staticmethod
-    def _nvfp4_scale2_is_trivial(scale2: Tensor) -> bool:
-        return scale2.numel() <= 1 and abs(float(scale2.float().sum()) - 1.0) < 1e-6
-
     def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
         if "language_model." in name:
             name = name.replace("language_model.", "")
@@ -616,19 +628,8 @@ class ModelBase:
         logger.info(f"Repacked {new_name} with shape {shape} and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, raw, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
 
-        # Emit per-tensor scale2 as a separate F32 tensor when non-trivial
-        if not self._nvfp4_scale2_is_trivial(scale2):
-            scale2_f32 = scale2.float().numpy().flatten()
-            scale_name = new_name.replace(".weight", ".scale")
-            logger.info(f"  + {scale_name} (per-tensor NVFP4 scale2, shape [{scale2_f32.size}])")
-            self.gguf_writer.add_tensor(scale_name, scale2_f32)
-
-        # Emit per-tensor input_scale as a separate F32 tensor when non-trivial
-        if not self._nvfp4_scale2_is_trivial(input_scale):
-            input_scale_f32 = input_scale.float().numpy().flatten()
-            input_scale_name = new_name.replace(".weight", ".input_scale")
-            logger.info(f"  + {input_scale_name} (per-tensor NVFP4 input_scale, shape [{input_scale_f32.size}])")
-            self.gguf_writer.add_tensor(input_scale_name, input_scale_f32)
+        self._write_scale_tensor(new_name.replace(".weight", ".scale"), scale2)
+        self._write_scale_tensor(new_name.replace(".weight", ".input_scale"), input_scale)
 
     def _generate_nvfp4_tensors(self):
         # Per-layer expert merging to avoid holding all experts in memory
@@ -719,23 +720,16 @@ class ModelBase:
         logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
 
-        # Emit per-expert scale2 tensor if any expert has non-trivial scale2
         scales.sort(key=lambda x: x[0])
-        scale_vals = np.array([s[1] for s in scales], dtype=np.float32)
-        if not np.allclose(scale_vals, 1.0, atol=1e-6):
-            scale_name = new_name.replace(".weight", ".scale")
-            logger.info(f"  + {scale_name} (per-expert NVFP4 scale2, shape [{len(scales)}])")
-            self.gguf_writer.add_tensor(scale_name, scale_vals)
+        self._write_scales_tensor(new_name.replace(".weight", ".scale"), [s[1] for s in scales])
 
-        # Emit per-expert input_scale tensor if any expert has non-trivial input_scale
         input_scales.sort(key=lambda x: x[0])
-        input_scale_vals = np.array([s[1] for s in input_scales], dtype=np.float32)
-        if not np.allclose(input_scale_vals, 1.0, atol=1e-6):
-            input_scale_name = new_name.replace(".weight", ".input_scale")
-            logger.info(f"  + {input_scale_name} (per-expert NVFP4 input_scale, shape [{len(input_scales)}])")
-            self.gguf_writer.add_tensor(input_scale_name, input_scale_vals)
+        self._write_scales_tensor(new_name.replace(".weight", ".input_scale"), [s[1] for s in input_scales])
 
         del experts, merged
+
+    def _needs_nvfp4_processing(self) -> bool:
+        return True
 
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
@@ -746,7 +740,12 @@ class ModelBase:
 
         if (not quant_algo or not quant_layers) and quant_config_file.is_file():
             with open(quant_config_file, "r", encoding="utf-8") as f:
-                quant_config = json.load(f).get("quantization") or {}
+                hf_quant_config = json.load(f)
+                quant_config = hf_quant_config.get("quantization") or {}
+                producer = hf_quant_config.get("producer") or {}
+                producer_name = (producer.get("name") or "").lower()
+                if quant_method is None:
+                    self.hparams.setdefault("quantization_config", {})["quant_method"] = producer_name
                 quant_algo = quant_config.get("quant_algo", quant_algo)
                 quant_layers = quant_config.get("quantized_layers", quant_layers) or {}
 
@@ -762,7 +761,7 @@ class ModelBase:
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
         # from model_tensors, leaving only non-NVFP4 (e.g. FP8) for dequant.
-        if self._is_nvfp4:
+        if self._is_nvfp4 and self._needs_nvfp4_processing():
             self._generate_nvfp4_tensors()
 
         self.dequant_model()
@@ -2193,6 +2192,10 @@ class MmprojModel(ModelBase):
                     }
                 # merge configs
                 self.preprocessor_config = {**self.preprocessor_config, **cfg}
+
+    def _needs_nvfp4_processing(self) -> bool:
+        # nvfp4 quantization applies to the text model only.
+        return False
 
     def get_vision_config(self) -> dict[str, Any] | None:
         config_name = "vision_config" if not self.is_mistral_format else "vision_encoder"
@@ -4454,6 +4457,12 @@ class NemotronNanoV2VLModel(MmprojModel):
         }
         return vision_config
 
+    def dequant_model(self):
+        if self._is_nvfp4:
+            # Skip nvfp4 quantization for vision/audio model.
+            return
+        super().dequant_model()
+
     def set_gguf_parameters(self):
         if "image_mean" not in self.preprocessor_config:
             self.preprocessor_config["image_mean"] = [0.485, 0.456, 0.406]
@@ -4475,6 +4484,10 @@ class NemotronNanoV2VLModel(MmprojModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "input_conditioner" in name:
+            return
+
+        # mtmd does not support video yet so skip tensors related to video.
+        if "radio_model.model.patch_generator.video_embedder" in name:
             return
 
         # RADIO's pos_embed doesn't have .weight suffix, but clip.cpp expects it
@@ -10824,7 +10837,11 @@ class NemotronHModel(GraniteHybridModel):
         # uses self.model_arch to build the tensor name map, and all MoE-specific
         # mappings would be missed if it were called with the default non-MoE arch.
         hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
-        if "num_experts_per_tok" in hparams:
+        has_moe_params = (
+            "num_experts_per_tok" in hparams
+            or (isinstance(hparams.get("llm_config"), dict) and "num_experts_per_tok" in hparams["llm_config"])
+        )
+        if has_moe_params:
             self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
             self.is_moe = True
 
@@ -10969,6 +10986,11 @@ class NemotronHModel(GraniteHybridModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip vision model and projector tensors for VLM models (handled by mmproj) (e.g., Nemotron Nano 12B v2 VL)
         if name.startswith(("vision_model.", "mlp1.")):
+            return
+
+        if name.startswith(("sound_encoder.")):
+            return
+        if name.startswith(("sound_projection.")):
             return
 
         # Strip language_model. prefix for VLM models (e.g., Nemotron Nano 12B v2 VL)
@@ -11855,7 +11877,7 @@ class LLaDAMoEModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("HunYuanDenseV1ForCausalLM", "HunYuanVLForConditionalGeneration")
+@ModelBase.register("HunYuanDenseV1ForCausalLM")
 class HunYuanModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
 
@@ -11994,28 +12016,58 @@ class HunYuanModel(TextModel):
 
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
-class HunyuanOCRVisionModel(MmprojModel):
+class HunyuanVLVisionModel(MmprojModel):
+    # Handles both HunyuanOCR and HunyuanVL, which share the HF architecture name
+    # "HunYuanVLForConditionalGeneration" and the `vit.perceive.*` vision layout.
+    # Each variant maps to a different projector type in clip.cpp so image
+    # preprocessing follows the correct code path.
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert self.hparams_vision is not None
-        # HunyuanOCR uses max_image_size instead of image_size
+        # HunyuanOCR / HunyuanVL uses max_image_size instead of image_size
         if "image_size" not in self.hparams_vision:
             self.hparams_vision["image_size"] = self.hparams_vision.get("max_image_size", 2048)
+
+    @staticmethod
+    def is_ocr_variant(hparams: dict) -> bool:
+        """Return True for HunyuanOCR, False for HunyuanVL.
+
+        The projector's output dim must equal the text model's hidden_size by
+        construction (that's what "projector" means). HunyuanOCR pairs a 1B text
+        backbone (hidden=1024); HunyuanVL pairs a 4B one (hidden=3072). So the
+        ViT -> LLM projection dim is a hard architectural signature, not a
+        magic number.
+        """
+        vision_out = int((hparams.get("vision_config") or {}).get("out_hidden_size", 0))
+        return vision_out == 1024
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         assert self.hparams_vision is not None
-        hparams = self.hparams_vision
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.HUNYUANOCR)
-        self.gguf_writer.add_vision_use_gelu(True)
-        self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("rms_norm_eps", 1e-5))
-        self.gguf_writer.add_vision_spatial_merge_size(hparams.get("spatial_merge_size", 2))
-        self.gguf_writer.add_vision_min_pixels(self.preprocessor_config["min_pixels"])
-        self.gguf_writer.add_vision_max_pixels(self.preprocessor_config["max_pixels"])
+        vcfg = self.hparams_vision
+
+        if self.is_ocr_variant(self.global_config):
+            # --- HunyuanOCR ---
+            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.HUNYUANOCR)
+            self.gguf_writer.add_vision_use_gelu(True)
+            self.gguf_writer.add_vision_attention_layernorm_eps(vcfg.get("rms_norm_eps", 1e-5))
+            self.gguf_writer.add_vision_spatial_merge_size(vcfg.get("spatial_merge_size", 2))
+            self.gguf_writer.add_vision_min_pixels(self.preprocessor_config["min_pixels"])
+            self.gguf_writer.add_vision_max_pixels(self.preprocessor_config["max_pixels"])
+            return
+
+        # --- HunyuanVL ---
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.HUNYUANVL)
+        self.gguf_writer.add_vision_use_gelu(str(vcfg["hidden_act"]).lower() == "gelu")
+        self.gguf_writer.add_vision_attention_layernorm_eps(float(vcfg["rms_norm_eps"]))
+        self.gguf_writer.add_vision_spatial_merge_size(int(vcfg["spatial_merge_size"]))
+        self.gguf_writer.add_vision_min_pixels(int(self.preprocessor_config["min_pixels"]))
+        self.gguf_writer.add_vision_max_pixels(int(self.preprocessor_config["max_pixels"]))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if not name.startswith("vit."):
-            return  # skip text tensors
+            return
         # strip CLS token (row 0) from position embeddings so resize_position_embeddings works
         if "position_embedding" in name:
             data_torch = data_torch[1:]  # [n_patches+1, n_embd] -> [n_patches, n_embd]
@@ -12023,9 +12075,64 @@ class HunyuanOCRVisionModel(MmprojModel):
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         # force conv weights to F32 or F16 to avoid BF16 IM2COL issues on Metal
+        # Both HunyuanOCR and HunyuanVL emit the ViT -> LLM projection as mm.0/mm.2.
         if ("mm.0." in new_name or "mm.2." in new_name) and new_name.endswith(".weight"):
             return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+
+@ModelBase.register("HunYuanVLForConditionalGeneration")
+class HunyuanVLTextModel(HunYuanModel):
+    # The "HunYuanVLForConditionalGeneration" HF architecture covers both HunyuanOCR
+    # and HunyuanVL. HunyuanOCR reuses the HunYuan-Dense text backbone (standard RoPE),
+    # while HunyuanVL introduces a new LLM arch with XD-RoPE. Detect the variant from
+    # the config and pick the matching GGUF architecture.
+    model_arch = gguf.MODEL_ARCH.HUNYUAN_VL
+
+    @staticmethod
+    def _is_ocr_config(hparams: dict) -> bool:
+        # OCR pairs a 1B text backbone (hidden=1024) with a ViT projector that
+        # outputs 1024-d; HunyuanVL uses 3072-d. Keep in sync with
+        # HunyuanVLVisionModel.is_ocr_variant.
+        return int((hparams.get("vision_config") or {}).get("out_hidden_size", 0)) == 1024
+
+    def __init__(self, dir_model: Path, *args, **kwargs):
+        raw_hparams = kwargs.get("hparams") or ModelBase.load_hparams(dir_model, is_mistral_format=False)
+        if self._is_ocr_config(raw_hparams):
+            self.model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
+        else:
+            self.model_arch = gguf.MODEL_ARCH.HUNYUAN_VL
+        super().__init__(dir_model, *args, **kwargs)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Only emit XD-RoPE metadata for the HunyuanVL backbone; HunyuanOCR uses
+        # the HunYuan-Dense arch which already handles standard rope in super().
+        if self.model_arch != gguf.MODEL_ARCH.HUNYUAN_VL:
+            return
+
+        if self.rope_parameters.get("rope_type") != "xdrope":
+            return
+
+        # defaults for HunyuanVL. The C++ side later computes:
+        #   freq_base = rope_theta * alpha ** (head_dim / (head_dim - 2))
+        self.gguf_writer.add_rope_freq_base(float(self.rope_parameters["rope_theta"]))
+        self.gguf_writer.add_rope_scaling_alpha(float(self.rope_parameters["alpha"]))
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+        self.gguf_writer.add_rope_scaling_factor(float(self.rope_parameters.get("factor", 1)))
+
+        ctx_len = int(self.hparams["max_position_embeddings"])
+        self.gguf_writer.add_rope_scaling_orig_ctx_len(ctx_len)
+        self.gguf_writer.add_context_length(ctx_len)
+
+        self.gguf_writer.add_rope_dimension_sections(list(self.rope_parameters["xdrope_section"]))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip vision tensors — they are written by HunyuanVLVisionModel
+        if name.startswith("vit."):
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("SmolLM3ForCausalLM")

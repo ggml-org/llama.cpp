@@ -249,18 +249,27 @@ build: 6a8cf8914 (6733)
   ```
 
 - `GGML_HEXAGON_PROFILE=1`
-  Generates a host-side profile for the ggml-hexagon Ops.
+  Enables Op profiling:
 
-- `GGML_HEXAGON_OPMASK=0x0`
-  Allows enabling specific stages of the processing pipeline:
+  - `1` Basic profile with per-op `usecs` and `cycles` counters
+  - `2` Extended profile with per-op `usecs`, `cycles` and default PMU counter data
+  - `0x1,...,0x8` Extended profile with per-op `usecs`, `cycles` and custom PMU counter data
+
+  The logging output can be either saved into a file for post-processing or it can be piped directly into the post-processing tool to generate the report.
+  Examples:
+
+      `GGML_HEXAGON_PROFILE=1 llama-completion ... |& ./scripts/snapdragon/ggml-hexagon-profile.py -`
+
+- `GGML_HEXAGON_OPSTAGE=0x0`
+  Allows enabling specific stages of the Op processing pipeline:
 
   - `0x1` Enable Op Queue (i.e., queuing Ops into NPU)
   - `0x2` Enable Op Compute (MUL_MAT, etc.)
 
   Examples:
 
-      `GGML_HEXAGON_OPMASK=0x1 llama-completion ...` - Ops are enqueued but NPU-side processing is stubbed out
-      `GGML_HEXAGON_OPMASK=0x3 llama-completion ...` - Full queuing and processing of Ops (default)
+      `GGML_HEXAGON_OPSTAGE=0x1 llama-completion ...` - Ops are enqueued to the NPU but dma & compute are disabled
+      `GGML_HEXAGON_OPSTAGE=0x3 llama-completion ...` - Full queuing and processing of Ops (default)
 
 - `GGML_HEXAGON_OPFILTER=regex`
   Allows filtering (disabling) Ops that match the regex pattern:

@@ -11,6 +11,12 @@
 			layout: 'centered'
 		}
 	});
+</script>
+
+<script lang="ts">
+	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
+
+	let sidebarOpen = $state(true);
 
 	// Mock conversations for the sidebar
 	const mockConversations: DatabaseConversation[] = [
@@ -58,9 +64,11 @@
 		}, 0));
 	}}
 >
-	<div class="flex-column h-full h-screen w-72 bg-background">
-		<ChatSidebar />
-	</div>
+	<Sidebar.Provider bind:open={sidebarOpen}>
+		<div class="flex-column h-full h-screen w-72 bg-background">
+			<ChatSidebar />
+		</div>
+	</Sidebar.Provider>
 </Story>
 
 <Story
@@ -77,9 +85,11 @@
 		userEvent.click(searchTrigger);
 	}}
 >
-	<div class="flex-column h-full h-screen w-72 bg-background">
-		<ChatSidebar />
-	</div>
+	<Sidebar.Provider bind:open={sidebarOpen}>
+		<div class="flex-column h-full h-screen w-72 bg-background">
+			<ChatSidebar />
+		</div>
+	</Sidebar.Provider>
 </Story>
 
 <Story
@@ -91,7 +101,9 @@
 		conversationsStore.conversations = [];
 	}}
 >
-	<div class="flex-column h-full h-screen w-72 bg-background">
-		<ChatSidebar />
-	</div>
+	<Sidebar.Provider bind:open={sidebarOpen}>
+		<div class="flex-column h-full h-screen w-72 bg-background">
+			<ChatSidebar />
+		</div>
+	</Sidebar.Provider>
 </Story>
