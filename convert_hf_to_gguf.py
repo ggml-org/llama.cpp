@@ -1529,6 +1529,9 @@ class TextModel(ModelBase):
         if chkhsh == "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4":
             # ref: https://huggingface.co/Qwen/Qwen3.5-9B-Instruct
             res = "qwen35"
+        if chkhsh == "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f":
+            # ref: MiniCPM-V 4.6 (Qwen3.5 Flash based)
+            res = "qwen35"
         if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
             # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
             res = "joyai-llm"
@@ -5432,14 +5435,150 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+class _Qwen35MRopeMixin:
+    # Qwen3.5 always applies interleaved MRoPE (see Qwen3_5RotaryEmbedding in transformers);
+    # the upstream default mrope_section is [11, 11, 10] and llama.cpp's QWEN35 / QWEN35MOE
+    # loaders treat qwen35.rope.dimension_sections as required, so make sure it is always
+    # written even when a particular checkpoint omits the field in `rope_parameters`.
+    _QWEN35_DEFAULT_MROPE_SECTION = [11, 11, 10, 0]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()  # type: ignore[misc]
+        if "mrope_section" not in self.rope_parameters:  # type: ignore[attr-defined]
+            self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)  # type: ignore[attr-defined]
+
+
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
-class Qwen3_5TextModel(_LinearAttentionVReorderBase):
+class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
-class Qwen3_5MoeTextModel(_LinearAttentionVReorderBase):
+class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
+
+
+# MiniCPM-V 4.6: text tower is Qwen3.5 (linear+full hybrid attention) wrapped under
+# `model.language_model.*`; vision tower is SigLIP + a window-attention insert merger
+# + a final DownsampleMLP merger. The same HF arch is registered twice below: once as
+# the LM (text mode) and once as the mmproj (vision mode), mirroring the Qwen3-VL setup.
+
+@ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
+class MiniCPMV4_6TextModel(Qwen3_5TextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # drop vision tower / multimodal merger tensors -- they belong to the mmproj file
+        if name.startswith(("model.vision_tower.", "model.merger.")):
+            return
+        # MTP tensors are not used at inference yet; align with Qwen3Next behaviour
+        if name.startswith("mtp"):
+            return
+        # strip the language-model wrapper so the underlying Qwen3.5 tensor mapping matches
+        if name.startswith("model.language_model."):
+            name = "model." + name[len("model.language_model."):]
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
+class MiniCPMV4_6VisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.hparams_vision is not None:
+            # In MiniCPM-V 4.6 `vision_config.image_size` (980) describes the SigLIP
+            # positional embedding bucket grid (70 x 70), while the per-slice processing
+            # resolution is the preprocessor's `scale_resolution` (typically 448).
+            # The CLIP loader in tools/mtmd/clip.cpp consumes `clip.vision.image_size`
+            # as the slice size and warmup resolution, so report `scale_resolution` there
+            # to match the upstream MiniCPMV4_6ImageProcessorPil slicing rules.
+            scale_resolution = self.preprocessor_config.get("scale_resolution")
+            if scale_resolution is not None:
+                self.hparams_vision["image_size"] = int(scale_resolution)
+
+    # GGUF tensor names mirror the C++ definitions in tools/mtmd/clip-impl.h:
+    #   TN_INSERT_MERGER_*  ->  v.insert_merger.*
+    #   TN_MERGER_*         ->  merger.*
+    _VIT_MERGER_MAP = {
+        "layer_norm1.weight":        "v.insert_merger.ln1.weight",
+        "layer_norm1.bias":          "v.insert_merger.ln1.bias",
+        "self_attn.q_proj.weight":   "v.insert_merger.attn_q.weight",
+        "self_attn.q_proj.bias":     "v.insert_merger.attn_q.bias",
+        "self_attn.k_proj.weight":   "v.insert_merger.attn_k.weight",
+        "self_attn.k_proj.bias":     "v.insert_merger.attn_k.bias",
+        "self_attn.v_proj.weight":   "v.insert_merger.attn_v.weight",
+        "self_attn.v_proj.bias":     "v.insert_merger.attn_v.bias",
+        "self_attn.out_proj.weight": "v.insert_merger.attn_out.weight",
+        "self_attn.out_proj.bias":   "v.insert_merger.attn_out.bias",
+        "pre_norm.weight":           "v.insert_merger.ds_ln.weight",
+        "pre_norm.bias":             "v.insert_merger.ds_ln.bias",
+        "linear_1.weight":           "v.insert_merger.ds_ffn_up.weight",
+        "linear_1.bias":             "v.insert_merger.ds_ffn_up.bias",
+        "linear_2.weight":           "v.insert_merger.ds_ffn_down.weight",
+        "linear_2.bias":             "v.insert_merger.ds_ffn_down.bias",
+    }
+    _MERGER_MAP = {
+        "pre_norm.weight": "merger.pre_norm.weight",
+        "pre_norm.bias":   "merger.pre_norm.bias",
+        "linear_1.weight": "merger.mlp_up.weight",
+        "linear_1.bias":   "merger.mlp_up.bias",
+        "linear_2.weight": "merger.mlp_down.weight",
+        "linear_2.bias":   "merger.mlp_down.bias",
+    }
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+
+        # projector type string is consumed by clip_projector_type_from_string() in clip.cpp
+        # (mapped to PROJECTOR_TYPE_MINICPMV_MERGER).
+        self.gguf_writer.add_clip_projector_type("merger")
+
+        # legacy version tag, used by mtmd.cpp to pick the slice template (MINICPMV_2_6).
+        # The clip loader reads this field via gguf_get_val_i32, so it must be written as int32.
+        self.gguf_writer.add_int32("clip.minicpmv_version", 46)
+        # fixed merger output token count per slice for the default 16x downsample mode.
+        self.gguf_writer.add_uint32("clip.minicpmv_query_num", 64)
+
+        # ViT layer index after which the window-attention merger is applied
+        insert_layer_id = int(self.global_config.get(
+            "insert_layer_id", self.hparams_vision.get("insert_layer_id", 6)))
+        self.gguf_writer.add_uint32("clip.vision.insert_layer_id", insert_layer_id)
+
+        # SigLIP vision body uses gelu_pytorch_tanh, which matches ggml_gelu (tanh approx).
+        self.gguf_writer.add_vision_use_gelu(True)
+        self.gguf_writer.add_vision_attention_layernorm_eps(
+            self.hparams_vision.get("layer_norm_eps", 1e-6))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # text tower / lm_head / MTP -> belong to the LM file
+        if name.startswith(("model.language_model.", "lm_head.")) or name.startswith("mtp"):
+            return
+
+        # final DownsampleMLP merger
+        if name.startswith("model.merger.mlp.0."):
+            sub = name[len("model.merger.mlp.0."):]
+            if (mapped := self._MERGER_MAP.get(sub)) is None:
+                logger.warning("unmapped merger tensor: %s", name)
+                return
+            yield (mapped, data_torch)
+            return
+
+        # ViT insert merger (window self-attention + ds MLP)
+        if name.startswith("model.vision_tower.vit_merger."):
+            sub = name[len("model.vision_tower.vit_merger."):]
+            if (mapped := self._VIT_MERGER_MAP.get(sub)) is None:
+                logger.warning("unmapped vit_merger tensor: %s", name)
+                return
+            yield (mapped, data_torch)
+            return
+
+        # SigLIP vision body: rewrite to `vision_tower.vision_model.*` so the standard
+        # SigLIP entries in tensor_mapping.py (V_ENC_EMBD_*, V_ENC_ATTN_*, V_POST_NORM,
+        # V_ENC_FFN_*) match.
+        if name.startswith("model.vision_tower."):
+            name = "vision_tower.vision_model." + name[len("model.vision_tower."):]
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
 
 
 @ModelBase.register("GPT2LMHeadModel")

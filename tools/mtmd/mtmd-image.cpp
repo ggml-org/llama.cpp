@@ -584,7 +584,7 @@ bool mtmd_image_preprocessor_llava_uhd::preprocess(const clip_image_u8 & img, cl
 
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_llava_uhd::get_slice_instructions(const clip_image_size & original_size) {
     mtmd_image_preprocessor_llava_uhd::slice_instructions res;
-    const int patch_size      = hparams.patch_size;
+    const int patch_size      = hparams.patch_size * slice_align_factor;
     const int slice_size      = hparams.image_size;
     const int original_width  = original_size.width;
     const int original_height = original_size.height;

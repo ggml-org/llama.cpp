@@ -126,6 +126,23 @@
 #define TN_MINICPMV_ATTN       "resampler.attn.%s.%s"
 #define TN_MINICPMV_LN         "resampler.ln_%s.%s"
 
+// MiniCPM-V 4.5 / 4.6 insert merger (window attention + MLP downsample)
+#define TN_INSERT_MERGER_LN1      "v.insert_merger.ln1.%s"
+#define TN_INSERT_MERGER_ATTN_Q   "v.insert_merger.attn_q.%s"
+#define TN_INSERT_MERGER_ATTN_K   "v.insert_merger.attn_k.%s"
+#define TN_INSERT_MERGER_ATTN_V   "v.insert_merger.attn_v.%s"
+#define TN_INSERT_MERGER_ATTN_O   "v.insert_merger.attn_out.%s"
+#define TN_INSERT_MERGER_DS_LN    "v.insert_merger.ds_ln.%s"
+#define TN_INSERT_MERGER_DS_UP    "v.insert_merger.ds_ffn_up.%s"
+#define TN_INSERT_MERGER_DS_DOWN  "v.insert_merger.ds_ffn_down.%s"
+
+// MiniCPM-V 4.5 / 4.6 final merger (DownsampleMLP, replaces resampler)
+#define TN_MERGER_PRE_NORM  "merger.pre_norm.%s"
+#define TN_MERGER_MLP_UP    "merger.mlp_up.%s"
+#define TN_MERGER_MLP_DOWN  "merger.mlp_down.%s"
+
+#define KEY_INSERT_LAYER_ID "clip.vision.insert_layer_id"
+
 #define TN_GLM_ADAPER_CONV      "adapter.conv.%s"
 #define TN_GLM_ADAPTER_LINEAR   "adapter.linear.linear.%s"
 #define TN_GLM_ADAPTER_NORM_1   "adapter.linear.norm1.%s"
@@ -304,6 +321,7 @@ enum projector_type {
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANOCR,
     PROJECTOR_TYPE_HUNYUANVL,
+    PROJECTOR_TYPE_MINICPMV_MERGER,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -351,6 +369,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
     { PROJECTOR_TYPE_HUNYUANOCR, "hunyuanocr"},
     { PROJECTOR_TYPE_HUNYUANVL,  "hunyuanvl"},
+    { PROJECTOR_TYPE_MINICPMV_MERGER, "merger"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

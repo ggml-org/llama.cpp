@@ -278,7 +278,9 @@ struct mtmd_context {
                     }
                 } break;
             case PROJECTOR_TYPE_MINICPMV:
+            case PROJECTOR_TYPE_MINICPMV_MERGER:
                 {
+                    const projector_type proj_local = proj;
                     int minicpmv_version = clip_is_minicpmv(ctx_v);
                     if (minicpmv_version == 2) {
                         // minicpmv 2.5 format:
@@ -293,7 +295,7 @@ struct mtmd_context {
                         tok_row_end       = {lookup_token("\n")};
                         tok_row_end_trail = false; // no trailing end-of-row token
                         ov_img_first      = true;
-                    } else if (minicpmv_version == 3 || minicpmv_version == 4 || minicpmv_version == 5 || minicpmv_version == 6 || minicpmv_version == 100045) {
+                    } else if (minicpmv_version == 3 || minicpmv_version == 4 || minicpmv_version == 5 || minicpmv_version == 6 || minicpmv_version == 100045 || minicpmv_version == 46) {
                         // minicpmv 2.6 format:
                         // <image> (overview) </image><slice> (slice) </slice><slice> (slice) </slice>\n ...
                         slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
@@ -308,7 +310,11 @@ struct mtmd_context {
                     } else if (minicpmv_version != 0) {
                         throw std::runtime_error(string_format("unsupported minicpmv version: %d\n", minicpmv_version));
                     }
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
+                    if (proj_local == PROJECTOR_TYPE_MINICPMV_MERGER) {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_minicpmv_merger>(ctx_v);
+                    } else {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
+                    }
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
