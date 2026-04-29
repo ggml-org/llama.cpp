@@ -720,12 +720,19 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     // get general kv
     ml.get_key(LLM_KV_GENERAL_NAME, name, false);
 
-    // read n_embd before vocab_only early return, needed by mmproj
-    ml.get_key(LLM_KV_EMBEDDING_LENGTH, hparams.n_embd, false);
+    // read n_embd before vocab_only early return only for architectures
+    // where LLM_KV_EMBEDDING_LENGTH directly represents hparams.n_embd
+    // (needed by mmproj/text-model vocab-only loading)
+    if (hparams.vocab_only &&
+        arch != LLM_ARCH_CLIP &&
+        arch != LLM_ARCH_WAVTOKENIZER_DEC) {
+        ml.get_key(LLM_KV_EMBEDDING_LENGTH,     hparams.n_embd,          false);
+        ml.get_key(LLM_KV_EMBEDDING_LENGTH_OUT,  hparams.n_embd_out_impl, false);
+    }
 
     // everything past this point is not vocab-related
     // for CLIP models, we only need to load tensors, no hparams
-    if (hparams.vocab_only || ml.get_arch() == LLM_ARCH_CLIP) {
+    if (hparams.vocab_only || arch == LLM_ARCH_CLIP) {
         return;
     }
 
