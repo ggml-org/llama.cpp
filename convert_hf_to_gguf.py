@@ -7084,8 +7084,11 @@ class Gemma2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA2
 
     def set_vocab(self):
-        self._set_vocab_sentencepiece()
-
+        # PaliGemmaForConditionalGeneration uses tokenizer.json (no tokenizer.model)
+        if (self.dir_model / "tokenizer.model").is_file():
+            self._set_vocab_sentencepiece()
+        else:
+            self._set_vocab_gpt2()
         self.gguf_writer.add_add_space_prefix(False)
 
     def set_gguf_parameters(self):
@@ -7115,6 +7118,13 @@ class Gemma2Model(TextModel):
         if name == "lm_head.weight":
             logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
             return
+
+        # PaliGemmaForConditionalGeneration wraps Gemma2 under language_model.*;
+        # strip the prefix so the standard tensor map works unchanged.
+        if name.startswith("language_model."):
+            name = name[len("language_model."):]
+        elif not name.startswith("model."):
+            return  # skip vision_tower.*, multi_modal_projector.* tensors
 
         # ref: https://github.com/huggingface/transformers/blob/fc37f38915372c15992b540dfcbbe00a916d4fc6/src/transformers/models/gemma/modeling_gemma.py#L89
         if name.endswith("norm.weight"):
@@ -7333,19 +7343,47 @@ class PaliGemma2VisionModel(MmprojModel):
 
 @ModelBase.register("PaliGemmaForConditionalGeneration")
 class PaliGemma2TextModel(Gemma2Model):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # PaliGemma2 nests LM params under "text_config"; redirect so parent methods work unchanged
-        if "text_config" in self.hparams:
-            self.hparams = self.hparams["text_config"]
+    model_arch = gguf.MODEL_ARCH.GEMMA2
+
+    def _tc(self) -> dict:
+        # PaliGemma2 nests LM params under "text_config"
+        return self.hparams.get("text_config", self.hparams)
+
+    @property
+    def block_count(self) -> int:
+        return self._tc()["num_hidden_layers"]
+
+    def set_vocab(self):
+        # PaliGemma2 uses tokenizer.json (HF fast tokenizer), not tokenizer.model
+        self._set_vocab_gpt2()
+        self.gguf_writer.add_add_space_prefix(False)
+
+    def set_gguf_parameters(self):
+        hp = self._tc()
+        self.gguf_writer.add_context_length(hp["max_position_embeddings"])
+        self.gguf_writer.add_embedding_length(hp["hidden_size"])
+        self.gguf_writer.add_block_count(hp["num_hidden_layers"])
+        self.gguf_writer.add_feed_forward_length(hp["intermediate_size"])
+        self.gguf_writer.add_head_count(hp["num_attention_heads"])
+        self.gguf_writer.add_head_count_kv(hp.get("num_key_value_heads", hp["num_attention_heads"]))
+        self.gguf_writer.add_layer_norm_rms_eps(hp["rms_norm_eps"])
+        self.gguf_writer.add_key_length(hp["head_dim"])
+        self.gguf_writer.add_value_length(hp["head_dim"])
+        self.gguf_writer.add_file_type(self.ftype)
+        self.gguf_writer.add_attn_logit_softcapping(hp["attn_logit_softcapping"])
+        self.gguf_writer.add_final_logit_softcapping(hp["final_logit_softcapping"])
+        self.gguf_writer.add_sliding_window(hp["sliding_window"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Strip the language_model. wrapper prefix added by PaliGemmaForConditionalGeneration
+        # PaliGemmaForConditionalGeneration wraps Gemma2 under language_model.*
         if name.startswith("language_model."):
             name = name[len("language_model."):]
         elif not name.startswith("model.") and name != "lm_head.weight":
             return  # skip vision_tower.*, multi_modal_projector.*
-        yield from super().modify_tensors(data_torch, name, bid)
+        # apply Gemma2 norm shift then map
+        if name.endswith("norm.weight"):
+            data_torch = data_torch + 1
+        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
 
 class ConformerAudioModel(MmprojModel):
