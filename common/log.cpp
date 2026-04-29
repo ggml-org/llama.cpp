@@ -49,7 +49,7 @@ enum common_log_col : int {
 };
 
 // disable colors by default
-static std::vector<const char *> g_col = {
+static const char* g_col[] = {
     "",
     "",
     "",
@@ -247,7 +247,6 @@ public:
 
             entries = std::move(new_entries);
         }
-
         cv.notify_one();
     }
 
@@ -265,7 +264,6 @@ public:
                 {
                     std::unique_lock<std::mutex> lock(mtx);
                     cv.wait(lock, [this]() { return head != tail; });
-
                     cur = entries[head];
 
                     head = (head + 1) % entries.size();
@@ -301,7 +299,6 @@ public:
 
                 tail = (tail + 1) % entries.size();
             }
-
             cv.notify_one();
         }
 
@@ -338,7 +335,7 @@ public:
             g_col[COMMON_LOG_COL_CYAN]    = LOG_COL_CYAN;
             g_col[COMMON_LOG_COL_WHITE]   = LOG_COL_WHITE;
         } else {
-            for (size_t i = 0; i < g_col.size(); i++) {
+            for (size_t i = 0; i < std::size(g_col); i++) {
                 g_col[i] = "";
             }
         }
@@ -368,14 +365,20 @@ struct common_log * common_log_init() {
 }
 
 struct common_log * common_log_main() {
-    static struct common_log log;
+    // We intentionally leak (i.e. do not delete) the logger singleton because
+    // common_log destructor called at DLL teardown phase will cause hanging on Windows.
+    // OS will release resources anyway so it should not be a significant issue,
+    // though this design may cause logs to be lost if not flushed before the program exits.
+    // Refer to https://github.com/ggml-org/llama.cpp/issues/22142 for details.
+    static struct common_log * log;
     static std::once_flag    init_flag;
     std::call_once(init_flag, [&]() {
+        log = new common_log;
         // Set default to auto-detect colors
-        log.set_colors(tty_can_use_colors());
+        log->set_colors(tty_can_use_colors());
     });
 
-    return &log;
+    return log;
 }
 
 void common_log_pause(struct common_log * log) {

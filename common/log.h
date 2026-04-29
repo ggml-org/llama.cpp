@@ -49,7 +49,11 @@ void common_log_default_callback(enum ggml_log_level level, const char * text, v
 struct common_log;
 
 struct common_log * common_log_init();
-struct common_log * common_log_main(); // singleton, automatically destroys itself on exit
+
+// Singleton, intentionally leaked to avoid Windows teardown hangs.
+// Call common_log_flush() before exit if you want to ensure all logs are flushed.
+struct common_log * common_log_main();
+
 void                common_log_pause (struct common_log * log); // pause  the worker thread, not thread-safe
 void                common_log_resume(struct common_log * log); // resume the worker thread, not thread-safe
 void                common_log_free  (struct common_log * log);
