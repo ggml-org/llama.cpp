@@ -334,6 +334,11 @@ struct common_speculative_state_draft : public common_speculative_state {
 
         const int i_start = std::max<int>(0, (int) prompt_cur.size() - n_ctx);
 
+        if (use_ckpt && i_start > 0) {
+            LOG_WRN("%s: context shift is not supported with checkpoint-based contexts - skipping\n", __func__);
+            return;
+        }
+
         // reuse as much as possible from the old draft context
         // ideally, the draft context should be as big as the target context and we will always reuse the entire prompt
         for (int i = 0; i < (int) prompt_dft.size(); ++i) {
@@ -348,13 +353,17 @@ struct common_speculative_state_draft : public common_speculative_state {
                 reuse_i = i;
                 reuse_n = cur;
             }
+
+            if (use_ckpt) {
+                break;
+            }
         }
 
         LOG_DBG("%s: reuse_i = %d, reuse_n = %d, #prompt_dft = %zu, #prompt_cur = %zu\n",
                 __func__, reuse_i, reuse_n, prompt_dft.size(), prompt_cur.size());
         if (use_ckpt && ckpt.n_tokens > reuse_n) {
-            LOG_DBG("%s: checkpoint is outdated -> delete it (reuse_i=%d, reuse_n=%d) -> (0, 0), ckpt.n_tokens = %lld\n",
-                    __func__, reuse_i, reuse_n, ckpt.n_tokens);
+            LOG_DBG("%s: checkpoint (n_tokens = %d) is outdated -> delete it\n", __func__, (int) ckpt.n_tokens);
+
             reuse_i = 0;
             reuse_n = 0;
 
@@ -382,39 +391,32 @@ struct common_speculative_state_draft : public common_speculative_state {
                 return;
             }
 
-            bool do_restore = false;
-            if (prompt_dft.size() > prompt_cur.size() && reuse_i + reuse_n < (int64_t) prompt_dft.size()) {
-                // This can happen after a partial acceptance (speculative decoding with checkpoints)
-                LOG_DBG("%s: #prompt_dft=%zu, #prompt_cur=%zu, shorten draft\n",
-                        __func__, prompt_dft.size(), prompt_cur.size());
-                prompt_dft.resize(prompt_cur.size());
-                do_restore = true;
-            }
-
             if (reuse_i > 0) {
+                GGML_ASSERT(!use_ckpt);
+
                 bool is_removed = llama_memory_seq_rm (mem_dft, 0, 0, reuse_i);
                 if (!is_removed) {
                     LOG_ERR("%s: llama_memory_seq_rm failed, reuse_i=%d\n", __func__, reuse_i);
+                    return;
                 }
                 llama_memory_seq_add(mem_dft, 0, reuse_i, -1, -reuse_i);
 
                 prompt_dft.erase(prompt_dft.begin(), prompt_dft.begin() + reuse_i);
             }
 
-            if (reuse_n < (int) prompt_dft.size() || do_restore) {
+            if (reuse_n < (int) prompt_dft.size()) {
                 if (use_ckpt) {
                     if (ckpt.n_tokens > 0) {
-                        LOG_DBG("%s: restoring checkpoint, reuse_n=%d, prompt_dft.size=%zu\n",
-                                __func__, reuse_n, prompt_dft.size());
+                        LOG_DBG("%s: restoring checkpoint, reuse_n=%d, prompt_dft.size=%zu\n", __func__, reuse_n, prompt_dft.size());
                         restore_checkpoint();
                         reuse_n = ckpt.n_tokens;
                         prompt_dft.resize(reuse_n);
                     }
                 } else {
-                    bool is_removed = llama_memory_seq_rm (mem_dft, 0, reuse_n, -1);
+                    const bool is_removed = llama_memory_seq_rm(mem_dft, 0, reuse_n, -1);
                     if (!is_removed) {
-                        LOG_ERR("%s: llama_memory_seq_rm failed, reuse_n=%d, prompt_dft.size=%zu\n",
-                                __func__, reuse_n, prompt_dft.size());
+                        LOG_ERR("%s: llama_memory_seq_rm failed, reuse_n=%d, prompt_dft.size=%zu\n", __func__, reuse_n, prompt_dft.size());
+                        return;
                     }
                     prompt_dft.erase(prompt_dft.begin() + reuse_n, prompt_dft.end());
                 }
@@ -773,10 +775,6 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
     }
 
     void accept(uint16_t n_accepted) override {
-        if (verbose) {
-            LOG_INF("%s: accepted %d tokens from %zu drafted tokens\n", __func__, n_accepted, n_draft_last);
-        }
-
         // compute acceptance fraction if we have a recorded draft length
         if (n_draft_last > 0) {
             const double f_acc = (double)n_accepted / (double)n_draft_last;
