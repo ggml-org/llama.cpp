@@ -17,7 +17,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 
 struct htp_unary_context {
     struct htp_ops_context * octx;
@@ -285,12 +284,14 @@ static void tri_f32(const float * restrict src,
                     const size_t   row_size,
                     int32_t *      op_params,
                     const uint32_t ir,
-                    const uint32_t ne01) {
+                    const struct htp_unary_context * uctx) {
 
     const int32_t ttype = op_params[0];
-    const HVX_Vector zero = Q6_V_vsplat_R(0);
+    const HVX_Vector zero = hvx_vec_splat_f32(0.0f);
     const uint32_t nvec  = row_elems / VLEN_FP32;
     const uint32_t nloe  = row_elems % VLEN_FP32;
+
+    const uint32_t ne01 = uctx->octx->src[0]->ne[1];
 
     for (uint32_t b = 0; b < num_rows; b++) {
         const uint32_t abs_row = ir + b;
@@ -588,7 +589,7 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
                 l2_norm_f32(src0_spad, dst_spad, NULL, block_size, ne0, src0_row_size_aligned, op_params);
                 break;
             case HTP_OP_TRI:
-                tri_f32(src0_spad, dst_spad, NULL, block_size, ne00, src0_row_size_aligned, op_params, ir, ne01);
+                tri_f32(src0_spad, dst_spad, NULL, block_size, ne00, src0_row_size_aligned, op_params, ir, uctx);
                 break;
             default:
                 break;
@@ -740,7 +741,19 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
 }
 
 int op_tri(struct htp_ops_context * octx) {
-    return op_unary(octx);
+    int err = HTP_STATUS_OK;
+
+    switch (octx->src[0]->type) {
+        case HTP_TYPE_F32:
+            err = execute_op_unary_f32(octx);
+            break;
+
+        default:
+            err = HTP_STATUS_NO_SUPPORT;
+            break;
+    }
+
+    return err;
 }
 
 int op_unary(struct htp_ops_context * octx) {
