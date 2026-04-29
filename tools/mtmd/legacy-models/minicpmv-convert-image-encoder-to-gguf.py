@@ -804,6 +804,7 @@ def _replace_name_resampler(s, v):
         }
     return {s: v}
 
+
 _MERGER_TENSOR_MAP = {
     # Insert Merger (ViTWindowAttentionMerger)
     "vit_merger.layer_norm1.weight":        "v.insert_merger.ln1.weight",
@@ -830,6 +831,7 @@ _MERGER_TENSOR_MAP = {
     "resampler.mlp.0.mlp.2.weight":         "merger.mlp_down.weight",
     "resampler.mlp.0.mlp.2.bias":           "merger.mlp_down.bias",
 }
+
 
 def _replace_name_merger(s, v):
     """Map PyTorch tensor names to GGUF tensor names for MiniCPM-V 4.5 / 4.6 merger."""
