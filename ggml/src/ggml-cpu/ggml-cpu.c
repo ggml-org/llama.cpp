@@ -2968,21 +2968,15 @@ struct ggml_cplan ggml_graph_plan(
 
 // Try to fuse the current node with subsequent nodes for better performance.
 // Returns the number of nodes consumed by fusion (>=2), or 0 if no fusion was applied.
+static bool ggml_cpu_disable_fusion = false;  // initialized once in ggml_cpu_init(), read-only afterwards
+
 static int ggml_cpu_try_fuse_ops(
         const struct ggml_cgraph * cgraph,
         const int node_n,
         const struct ggml_compute_params * params,
         const struct ggml_cplan * cplan) {
 
-    static bool disable_fusion  = false;
-    static bool disable_fusion_initialized = false;
-    if (!disable_fusion_initialized) {
-        const char * env = getenv("GGML_CPU_DISABLE_FUSION");
-        disable_fusion = (env != NULL && atoi(env) == 1);
-        disable_fusion_initialized = true;
-    }
-
-    if (disable_fusion || cplan->use_ref) {
+    if (ggml_cpu_disable_fusion || cplan->use_ref) {
         return 0;
     }
 
@@ -3814,6 +3808,11 @@ void ggml_cpu_init(void) {
 #if defined(__riscv)
         ggml_init_riscv_arch_features();
 #endif
+
+        {
+            const char * env = getenv("GGML_CPU_DISABLE_FUSION");
+            ggml_cpu_disable_fusion = (env != NULL && atoi(env) == 1);
+        }
 
         is_first_call = false;
     }
