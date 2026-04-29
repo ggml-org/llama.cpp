@@ -2220,6 +2220,13 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
         return false;
     }
 
+    // Contiguity guard, matching add_id and unary. Without it the scheduler
+    // can place a binary op on HTP whose source came from a non-contiguous
+    // view chain.
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
     return true;
 }
 
