@@ -5237,6 +5237,9 @@ class Qwen3ASRTextModel(Qwen3VLTextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_num_deepstack_layers(0)
+        # Qwen3-ASR requires bidirectional attention for audio transcription
+        # The HF config does not include is_causal=False, so we must set it explicitly
+        self.gguf_writer.add_causal_attention(False)
 
     def set_vocab(self):
         super().set_vocab()
