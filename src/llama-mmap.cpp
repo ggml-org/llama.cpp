@@ -226,7 +226,12 @@ struct llama_file::impl {
 
     size_t tell() const {
         if (fd == -1) {
+#ifdef __EMSCRIPTEN__
+            // in 32-bit WebAssembly, ftello (64-bit signed return value) is necessary to support files larger than 2GB
+            off_t ret = ftello(fp);
+#else
             long ret = std::ftell(fp);
+#endif
             if (ret == -1) {
                 throw std::runtime_error(format("ftell error: %s", strerror(errno)));
             }
@@ -244,7 +249,12 @@ struct llama_file::impl {
     void seek(size_t offset, int whence) const {
         off_t ret = 0;
         if (fd == -1) {
+#ifdef __EMSCRIPTEN__
+            // in 32-bit WebAssembly, fseeko (64-bit signed return value) is necessary to support files larger than 2GB
+            ret = fseeko(fp, (off_t) offset, whence);
+#else
             ret = std::fseek(fp, (long) offset, whence);
+#endif
         } else {
             ret = lseek(fd, offset, whence);
         }
