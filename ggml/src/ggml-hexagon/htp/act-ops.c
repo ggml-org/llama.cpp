@@ -78,6 +78,15 @@ struct htp_act_context {
     int                       nc;
 };
 
+static inline float htp_sigmoid_f32_precise(float x) {
+    if (x >= 0.0f) {
+        const float z = expf(-x);
+        return 1.0f / (1.0f + z);
+    }
+    const float z = expf(x);
+    return z / (1.0f + z);
+}
+
 static void glu_swiglu_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_act_context * actx = (struct htp_act_context *) data;
     htp_act_preamble;
@@ -157,9 +166,10 @@ static void glu_swiglu_f32_per_thread(unsigned int nth, unsigned int ith, void *
             float *       dst_spad_ptr  = dst_spad + ib * (dst_row_size_aligned / sizeof(float));
 
             //swiglu(x) = x1 * sigmoid(x0)
-            hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, nc);
-            hvx_mul_mul_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
-                                (const uint8_t *) src1_spad_ptr, nc);
+            for (int i = 0; i < nc; ++i) {
+                const float x = src0_spad_ptr[i];
+                dst_spad_ptr[i] = x * htp_sigmoid_f32_precise(x) * src1_spad_ptr[i];
+            }
         }
 
         dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad), dst_row_size,
