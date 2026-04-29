@@ -370,7 +370,7 @@ struct common_log * common_log_main() {
     // OS will release resources anyway so it should not be a significant issue,
     // though this design may cause logs to be lost if not flushed before the program exits.
     // Refer to https://github.com/ggml-org/llama.cpp/issues/22142 for details.
-    static struct common_log* log;
+    static struct common_log * log;
     static std::once_flag    init_flag;
     std::call_once(init_flag, [&]() {
         log = new common_log;
