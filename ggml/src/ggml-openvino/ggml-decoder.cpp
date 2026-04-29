@@ -433,7 +433,6 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         compute_params.output_len = 1;
     }
     model_params.ctx = model_params.ctx_per_seq * model_params.n_seq;
-    model_params.ctx_swa = model_params.ctx_per_seq_swa * model_params.n_seq;
     return {model_params, compute_params};
 }
 

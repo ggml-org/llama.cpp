@@ -14,7 +14,6 @@
 
 struct ModelParams {
     int ctx = -1;
-    int ctx_swa = -1;
     int ctx_per_seq = -1;
     int ctx_per_seq_swa = -1;
     int n_seq = 1;
@@ -155,8 +154,6 @@ public:
     const std::map<std::string, ggml_tensor *> & get_model_outputs() const { return m_model_outputs; }
 
     virtual int get_ctx_size() const { return m_model_params.ctx; }
-
-    virtual int get_ctx_swa_size() const { return m_model_params.ctx_swa; }
 
     virtual int get_ctx_per_seq() const { return m_model_params.ctx_per_seq; }
 
