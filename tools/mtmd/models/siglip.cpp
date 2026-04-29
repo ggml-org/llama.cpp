@@ -85,10 +85,9 @@ ggml_cgraph * clip_graph_siglip::build() {
 
     } else if (proj_type == PROJECTOR_TYPE_PALIGEMMA2) {
         // PaliGemma2: direct linear projection, no pooling, no norm before projector
+        // weight stored as [in=1152, out=2304] in ggml → mul_mat directly (no transpose)
         // ref: https://github.com/huggingface/transformers/blob/main/src/transformers/models/paligemma/modeling_paligemma.py
-        cur = ggml_mul_mat(ctx0,
-            ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_input_proj_w)),
-            cur);
+        cur = ggml_mul_mat(ctx0, model.mm_input_proj_w, cur);
         if (model.mm_input_proj_b) {
             cur = ggml_add(ctx0, cur, model.mm_input_proj_b);
         }

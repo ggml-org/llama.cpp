@@ -1322,6 +1322,13 @@ struct clip_model_loader {
                             hparams.set_limit_image_tokens(2, 4096);
                         }
                     } break;
+                case PROJECTOR_TYPE_PALIGEMMA2:
+                    {
+                        // PaliGemma2: no patch merging (n_merge=1), bilinear resize
+                        // 224px → 16x16 = 256 tokens; 448px → 32x32 = 1024 tokens
+                        hparams.n_merge = 1;
+                        hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
+                    } break;
                 case PROJECTOR_TYPE_GEMMA3:
                     {
                         // default value (used by all model sizes in gemma 3 family)
@@ -3536,6 +3543,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("rel_pos_indices_local", rel_pos_indices_local);
                 set_input_i32("rel_pos_indices_global", rel_pos_indices_global);
             } break;
+        case PROJECTOR_TYPE_PALIGEMMA2:
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
         case PROJECTOR_TYPE_IDEFICS3:

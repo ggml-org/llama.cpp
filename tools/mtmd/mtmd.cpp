@@ -339,6 +339,12 @@ struct mtmd_context {
                     // script.
                     image_preproc = std::make_unique<mtmd_image_preprocessor_fixed_size>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_PALIGEMMA2:
+                {
+                    // PaliGemma2: image embeddings injected as prefix tokens without wrapper
+                    // 224px → 256 tokens; 448px → 1024 tokens
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_fixed_size>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_GEMMA3:
             case PROJECTOR_TYPE_GEMMA3NV:
                 {
