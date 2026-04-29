@@ -3864,6 +3864,14 @@ struct test_ssm_scan : public test_case {
             bool xbc_overlap = false)
         : type(type), d_state(d_state), head_dim(head_dim), n_head(n_head), n_group(n_group), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), xbc_overlap(xbc_overlap) {}
 
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        // Per (seq, token, head, dim, state): ~3 fmadds (state recurrence + sum*C)
+        // + 1 exp ≈ 8 flops. Without this override perf falls back to op_size and
+        // queues a huge n_runs (decode op_size is tiny).
+        return (uint64_t)n_seqs * n_seq_tokens * n_head * head_dim * d_state * 8;
+    }
+
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * s   = ggml_new_tensor_4d(ctx, type, d_state,  head_dim,     n_head,       n_seqs);
         ggml_tensor * dt  = ggml_new_tensor_3d(ctx, type, n_head,   n_seq_tokens, n_seqs);
