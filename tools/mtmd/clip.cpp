@@ -832,6 +832,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
     std::unique_ptr<clip_graph> builder;
 
     switch (ctx->proj_type()) {
+        case PROJECTOR_TYPE_PALIGEMMA2:
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_LFM2:
@@ -1927,6 +1928,11 @@ struct clip_model_loader {
                     model.mm_patch_merger_w = get_tensor(string_format(TN_MM_PATCH_MERGER, "weight"));
                     model.mm_patch_merger_b = get_tensor(string_format(TN_MM_PATCH_MERGER, "bias"));
                 } break;
+            case PROJECTOR_TYPE_PALIGEMMA2:
+                {
+                    model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
+                    model.mm_input_proj_b = get_tensor(string_format(TN_MM_INP_PROJ_B, "bias"), false);
+                } break;
             case PROJECTOR_TYPE_GEMMA3:
                 {
                     model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
@@ -2977,6 +2983,8 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 int y_patch = img->ny / (params.patch_size * params.n_merge);
                 n_patches = x_patch * y_patch;
             } break;
+        case PROJECTOR_TYPE_PALIGEMMA2:
+            break; // no pooling: all patches pass through (256 for 224px, 1024 for 448px)
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA4V:
         case PROJECTOR_TYPE_IDEFICS3:
@@ -3809,6 +3817,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_1_b->ne[0] * (1 + ctx->model.n_deepstack_layers);
         case PROJECTOR_TYPE_STEP3VL:
             return ctx->model.mm_model_proj->ne[1];
+        case PROJECTOR_TYPE_PALIGEMMA2:
+            return ctx->model.mm_input_proj_w->ne[1]; // output dim = LM hidden_size
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
             return ctx->model.mm_input_proj_w->ne[0];

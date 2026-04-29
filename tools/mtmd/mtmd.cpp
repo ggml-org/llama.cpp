@@ -1079,6 +1079,7 @@ bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk
         proj_type = ctx->proj_type_a();
     }
     switch (proj_type) {
+        case PROJECTOR_TYPE_PALIGEMMA2:
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA4V:
             return true;

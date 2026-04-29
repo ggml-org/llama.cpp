@@ -7309,6 +7309,45 @@ class Gemma3VisionModel(MmprojModel):
         return # skip other tensors
 
 
+@ModelBase.register("PaliGemmaForConditionalGeneration")
+class PaliGemma2VisionModel(MmprojModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        vision_config = self.hparams.get("vision_config", self.hparams)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PALIGEMMA2)
+        self.gguf_writer.add_vision_attention_layernorm_eps(vision_config.get("layer_norm_eps", 1e-6))
+        self.gguf_writer.add_vision_use_gelu(True)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if "input_projection" in name:
+            return gguf.GGMLQuantizationType.F16
+        if ".embeddings." in name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("multi_modal_projector.") or name.startswith("vision_tower."):
+            yield from super().modify_tensors(data_torch, name, bid)
+        # skip language_model.* and all other tensors
+
+
+@ModelBase.register("PaliGemmaForConditionalGeneration")
+class PaliGemma2TextModel(Gemma2Model):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # PaliGemma2 nests LM params under "text_config"; redirect so parent methods work unchanged
+        if "text_config" in self.hparams:
+            self.hparams = self.hparams["text_config"]
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Strip the language_model. wrapper prefix added by PaliGemmaForConditionalGeneration
+        if name.startswith("language_model."):
+            name = name[len("language_model."):]
+        elif not name.startswith("model.") and name != "lm_head.weight":
+            return  # skip vision_tower.*, multi_modal_projector.*
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 class ConformerAudioModel(MmprojModel):
     _batch_norm_tensors: list[dict[str, Tensor]] | None = None
 

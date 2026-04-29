@@ -1678,6 +1678,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_INP_PROJ: (
             "multi_modal_projector.mm_input_projection",
+            "multi_modal_projector.linear", # paligemma2
         ),
 
         MODEL_TENSOR.V_MM_INP_NORM: (

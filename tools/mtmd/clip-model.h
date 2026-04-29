@@ -403,8 +403,9 @@ struct clip_model {
     ggml_tensor * mm_model_ln_post_w = nullptr;
     ggml_tensor * mm_model_ln_post_b = nullptr;
 
-    // gemma3
+    // gemma3 / paligemma2
     ggml_tensor * mm_input_proj_w = nullptr;
+    ggml_tensor * mm_input_proj_b = nullptr; // paligemma2: linear projector bias
     ggml_tensor * mm_soft_emb_norm_w = nullptr;
 
     // mobilenetv5 for gemma3n
