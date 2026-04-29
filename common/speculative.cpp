@@ -61,18 +61,26 @@ static bool common_speculative_are_compatible(
     LOG_DBG("%s: vocab_type dft: %d\n", __func__, vocab_type_dft);
 
     if (vocab_type_tgt != vocab_type_dft) {
-        LOG_DBG("%s: draft model vocab type must match target model to use speculation but ", __func__);
-        LOG_DBG("vocab_type_dft = %d while vocab_type_tgt = %d\n", vocab_type_dft, vocab_type_tgt);
+        LOG_WRN("%s: draft model vocab type must match target model to use speculation but "
+                "vocab_type_dft = %d while vocab_type_tgt = %d\n", __func__, vocab_type_dft, vocab_type_tgt);
         return false;
     }
 
-    if (
-        llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
-        llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
-        llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
-        llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)
-    ) {
-        LOG_DBG("%s: draft model special tokens must match target model to use speculation\n", __func__);
+    if (llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
+        (llama_vocab_get_add_bos(vocab_tgt) && llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft))) {
+        LOG_WRN("%s: draft model bos tokens must match target model to use speculation. add: %d - %d, id: %d - %d)\n",
+                __func__,
+                llama_vocab_get_add_bos(vocab_tgt), llama_vocab_get_add_bos(vocab_dft),
+                llama_vocab_bos(vocab_tgt), llama_vocab_bos(vocab_dft));
+        return false;
+    }
+
+    if (llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
+        (llama_vocab_get_add_eos(vocab_tgt) && llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft))) {
+        LOG_WRN("%s: draft model eos tokens must match target model to use speculation. add: %d - %d, id: %d - %d)\n",
+                __func__,
+                llama_vocab_get_add_eos(vocab_tgt), llama_vocab_get_add_eos(vocab_dft),
+                llama_vocab_eos(vocab_tgt), llama_vocab_eos(vocab_dft));
         return false;
     }
 
@@ -143,6 +151,9 @@ struct common_speculative_state {
             llama_tokens & result) = 0;
 
     virtual void accept(uint16_t n_accepted) = 0;
+
+    virtual int32_t n_max(const common_params_speculative & params) const = 0;
+    virtual int32_t n_min(const common_params_speculative & params) const = 0;
 };
 
 struct common_speculative_checkpoint {
@@ -288,6 +299,8 @@ struct common_speculative_state_draft : public common_speculative_state {
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
+        const auto & sparams = params.draft;
+
         auto * spec = this;
 
         auto & batch      = spec->batch;
@@ -301,7 +314,7 @@ struct common_speculative_state_draft : public common_speculative_state {
         int reuse_i = 0; // index of part to be reused in prompt_dft
         int reuse_n = 0; // length of part to be reused in prompt_dft
 
-        const int n_ctx = llama_n_ctx(ctx_dft) - params.n_max;
+        const int n_ctx = llama_n_ctx(ctx_dft) - sparams.n_max;
 
         llama_tokens prompt_cnv;
         if (!spec->vocab_cmpt) {
@@ -359,7 +372,7 @@ struct common_speculative_state_draft : public common_speculative_state {
         }
 
         result.clear();
-        result.reserve(params.n_max);
+        result.reserve(sparams.n_max);
 
         bool needs_ckpt = use_ckpt && prompt_dft.size() > 0;
         if (reuse_n == 0 || (use_ckpt && reuse_i > 0)) {
@@ -372,7 +385,7 @@ struct common_speculative_state_draft : public common_speculative_state {
                 for (int i = reuse_i + reuse_n + 1; i < (int) prompt_dft.size(); ++i) {
                     result.push_back(prompt_dft[i]);
 
-                    if (params.n_max <= (int) result.size()) {
+                    if (sparams.n_max <= (int) result.size()) {
                         break;
                     }
                 }
@@ -465,7 +478,7 @@ struct common_speculative_state_draft : public common_speculative_state {
         common_sampler_reset(smpl);
 
         // sample n_draft tokens from the draft model
-        for (int i = 0; i < params.n_max; ++i) {
+        for (int i = 0; i < sparams.n_max; ++i) {
             common_batch_clear(batch);
 
             common_sampler_sample(smpl, ctx_dft, 0, true);
@@ -484,12 +497,12 @@ struct common_speculative_state_draft : public common_speculative_state {
 
             result.push_back(id);
 
-            if (params.n_max <= (int) result.size()) {
+            if (sparams.n_max <= (int) result.size()) {
                 break;
             }
 
             // only collect very high-confidence draft tokens
-            if (cur_p->data[0].p < params.p_min) {
+            if (cur_p->data[0].p < sparams.p_min) {
                 break;
             }
 
@@ -510,15 +523,27 @@ struct common_speculative_state_draft : public common_speculative_state {
             detokenized = replace_to_tgt(detokenized);
             LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
             result = common_tokenize(ctx_tgt, detokenized, false, true);
-            if (result.size() > (size_t)params.n_max) {
-                result.resize(params.n_max);
+            if (result.size() > (size_t) sparams.n_max) {
+                result.resize(sparams.n_max);
             }
+        }
+
+        if (result.size() < (size_t) sparams.n_min) {
+            result.clear();
         }
     }
 
     void accept(uint16_t n_accepted) override {
         // noop
         GGML_UNUSED(n_accepted);
+    }
+
+    int32_t n_max(const common_params_speculative & params) const override {
+        return params.draft.n_max;
+    }
+
+    int32_t n_min(const common_params_speculative & params) const override {
+        return params.draft.n_min;
     }
 
     std::string replace_to_dft(const std::string & input) const {
@@ -573,6 +598,14 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
         // noop
         GGML_UNUSED(n_accepted);
     }
+
+    int32_t n_max(const common_params_speculative & params) const override {
+        return params.draft.n_max;
+    }
+
+    int32_t n_min(const common_params_speculative & params) const override {
+        return params.draft.n_min;
+    }
 };
 
 // state of self-speculation (simple implementation, not ngram-map)
@@ -602,19 +635,27 @@ struct common_speculative_state_ngram_simple : public common_speculative_state {
         // noop
         GGML_UNUSED(n_accepted);
     }
+
+    int32_t n_max(const common_params_speculative & /*params*/) const override {
+        return config.size_mgram;
+    }
+
+    int32_t n_min(const common_params_speculative & /*params*/) const override {
+        return config.size_mgram;
+    }
 };
 
 struct common_speculative_state_ngram_map_k : public common_speculative_state {
     // draft ngram map for speculative decoding without draft model
-    common_ngram_map map;
+    common_ngram_map config;
 
     common_speculative_state_ngram_map_k(
             enum common_speculative_type type,
-            common_ngram_map map)
-        : common_speculative_state(type), map(std::move(map)) {}
+            common_ngram_map config)
+        : common_speculative_state(type), config(std::move(config)) {}
 
     void begin(const llama_tokens & prompt) override {
-        common_ngram_map_begin(map, prompt);
+        common_ngram_map_begin(config, prompt);
     }
 
     void draft(
@@ -622,12 +663,20 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
-        common_ngram_map_draft(map, prompt_tgt, id_last, result);
+        common_ngram_map_draft(config, prompt_tgt, id_last, result);
         GGML_UNUSED(params);
     }
 
     void accept(uint16_t n_accepted) override {
-        common_ngram_map_accept(map, n_accepted);
+        common_ngram_map_accept(config, n_accepted);
+    }
+
+    int32_t n_max(const common_params_speculative & /*params*/) const override {
+        return config.size_value;
+    }
+
+    int32_t n_min(const common_params_speculative & /*params*/) const override {
+        return config.size_value;
     }
 };
 
@@ -684,7 +733,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
-        GGML_UNUSED(params);
+        const auto & sparams = params.ngram_mod;
 
         n_draft_last = 0;
 
@@ -704,16 +753,16 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
             i_last = cur_len - n;
         }
 
-        result.resize(n + params.n_max);
+        result.resize(n + sparams.n_max);
         for (size_t i = 0; i < n - 1; ++i) {
             result[i] = prompt_tgt[cur_len - n + 1 + i];
         }
         result[n - 1] = id_last;
 
-        for (int i = 0; i < params.n_max; ++i) {
+        for (int i = 0; i < sparams.n_max; ++i) {
             const llama_token token = mod.get(result.data() + i);
             if (token == common_ngram_mod::EMPTY) {
-                if (i < params.n_min) {
+                if (i < sparams.n_min) {
                     result.clear();
                     return;
                 }
@@ -755,6 +804,14 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
                 n_low = 0;
             }
         }
+    }
+
+    int32_t n_max(const common_params_speculative & params) const override {
+        return params.ngram_mod.n_max;
+    }
+
+    int32_t n_min(const common_params_speculative & params) const override {
+        return params.ngram_mod.n_min;
     }
 };
 
@@ -849,6 +906,14 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
         // TODO: noop
         GGML_UNUSED(n_accepted);
     }
+
+    int32_t n_max(const common_params_speculative & /*params*/) const override {
+        return n_draft;
+    }
+
+    int32_t n_min(const common_params_speculative & /*params*/) const override {
+        return 0;
+    }
 };
 
 struct common_speculative {
@@ -857,11 +922,13 @@ struct common_speculative {
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
 };
 
-static common_ngram_map get_common_ngram_map(const common_speculative_config & config) {
-    uint16_t size_key   = config.params.ngram_size_n;
-    uint16_t size_value = config.params.ngram_size_m;
-    bool     key_only   = (config.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
-    uint16_t min_hits   = config.params.ngram_min_hits;
+static common_ngram_map get_common_ngram_map(
+        common_speculative_type type,
+        const common_params_speculative_ngram_map & config) {
+    uint16_t size_key   = config.size_n;
+    uint16_t size_value = config.size_m;
+    bool     key_only   = type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K;
+    uint16_t min_hits   = config.min_hits;
 
     return common_ngram_map(size_key, size_value, key_only, min_hits);
 }
@@ -919,8 +986,8 @@ common_speculative * common_speculative_init(
         common_params_speculative & params,
         llama_context             * ctx_tgt) {
     llama_context * ctx_dft = nullptr;
-    if (params.model_dft) {
-        ctx_dft = llama_init_from_model(params.model_dft, params.cparams_dft);
+    if (params.draft.model) {
+        ctx_dft = llama_init_from_model(params.draft.model, params.draft.cparams);
         if (ctx_dft == nullptr) {
             LOG_ERR("%s", "failed to create draft context\n");
             return nullptr;
@@ -930,7 +997,7 @@ common_speculative * common_speculative_init(
     // Compute the implementations to use based on the config and their order of preference
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
-        bool has_draft = !params.mparams_dft.path.empty();
+        bool has_draft = !params.draft.mparams.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
 
         bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
@@ -953,16 +1020,17 @@ common_speculative * common_speculative_init(
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, params));
         }
         if (has_ngram_mod) {
-            // shared instance for all speculative decoding contexts
-            if (!params.ngram_mod) {
-                params.ngram_mod = std::make_shared<common_ngram_mod>(params.ngram_size_n, 4*1024*1024);
+            auto & sparams = params.ngram_mod;
 
-                LOG_INF("%s: initialized ngram_mod with n=%d, size=%zu (%.3f MB)\n", __func__,
-                        params.ngram_size_n, params.ngram_mod->size(),
-                        (float)(params.ngram_mod->size_bytes())/1024/1024);
+            if (!sparams.obj) {
+                sparams.obj = std::make_shared<common_ngram_mod>(sparams.n_match, 4*1024*1024);
 
-                if (params.ngram_size_n < 16) {
-                    LOG_WRN("%s: ngram_mod n=%d is too small - poor quality is possible, see: https://github.com/ggml-org/llama.cpp/pull/19164\n", __func__, params.ngram_size_n);
+                LOG_INF("%s: initialized ngram_mod with n_match=%d, size=%zu (%.3f MB)\n", __func__,
+                        sparams.n_match, sparams.obj->size(), (float)(sparams.obj->size_bytes())/1024/1024);
+
+                if (sparams.n_match < 16) {
+                    LOG_WRN("%s: ngram_mod n_match=%d is too small - poor quality is possible, "
+                            "see: https://github.com/ggml-org/llama.cpp/pull/19164\n", __func__, sparams.n_match);
                 }
             }
 
@@ -992,7 +1060,7 @@ common_speculative * common_speculative_init(
                 impls.push_back(std::make_unique<common_speculative_state_draft>(config.type,
                     /* .ctx_tgt      = */ ctx_tgt,
                     /* .ctx_dft      = */ ctx_dft,
-                    /* .replacements = */ params.replacements,
+                    /* .replacements = */ params.draft.replacements,
                     /* .use_ckpt     = */ use_ckpt
                 ));
                 break;
@@ -1002,18 +1070,18 @@ common_speculative * common_speculative_init(
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
-                common_ngram_map ngram_map = get_common_ngram_map(config);
+                common_ngram_map ngram_map = get_common_ngram_map(config.type, config.params.ngram_simple);
 
                 uint16_t ngram_size_key   = ngram_map.size_key;
                 uint16_t mgram_size_value = ngram_map.size_value;
 
                 auto config_simple = common_ngram_simple_config {
-                    /* .size_ngram      = */ ngram_size_key,
-                    /* .size_mgram      = */ mgram_size_value
+                    /* .size_ngram = */ ngram_size_key,
+                    /* .size_mgram = */ mgram_size_value
                 };
                 auto state = std::make_unique<common_speculative_state_ngram_simple>(
-                    /* .type            = */ config.type,
-                    /* .state           = */ config_simple
+                    /* .type  = */ config.type,
+                    /* .state = */ config_simple
                 );
                 impls.push_back(std::move(state));
                 break;
@@ -1022,18 +1090,17 @@ common_speculative * common_speculative_init(
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: {
                 impls.push_back(std::make_unique<common_speculative_state_ngram_map_k>(
                     (config.type),
-                    get_common_ngram_map(config)
+                    get_common_ngram_map(config.type, config.params.ngram_map_k)
                 ));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_MOD: {
-                GGML_ASSERT(config.params.ngram_mod);
-                impls.push_back(std::make_unique<common_speculative_state_ngram_mod>(config.type, *config.params.ngram_mod));
+                GGML_ASSERT(config.params.ngram_mod.obj);
+                impls.push_back(std::make_unique<common_speculative_state_ngram_mod>(config.type, *config.params.ngram_mod.obj));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE: {
-                auto state = create_state_ngram_cache(
-                        params.lookup_cache_static, params.lookup_cache_dynamic, config);
+                auto state = create_state_ngram_cache(params.ngram_cache.lookup_cache_static, params.ngram_cache.lookup_cache_dynamic, config);
                 impls.push_back(std::make_unique<common_speculative_state_ngram_cache>(state));
                 break;
             }
@@ -1091,6 +1158,15 @@ llama_tokens common_speculative_draft(
             impl->n_call_draft++;
         }
 
+        {
+            const int n_min = impl->n_min(params);
+
+            if (!result.empty() && (int) result.size() < n_min) {
+                LOG_DBG("%s: ignoring small draft: %d < %d\n", __func__, (int) result.size(), n_min);
+                result.clear();
+            }
+        }
+
         if (!result.empty()) {
             LOG_DBG("%s: called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
                     common_speculative_type_to_str(impl.get()->type).c_str(), prompt_tgt.size(),
@@ -1100,7 +1176,7 @@ llama_tokens common_speculative_draft(
             impl->n_gen_drafts++;
             impl->n_gen_tokens += result.size();
 
-            break; // We have a draft, so break out of the loop and return it.
+            break; // we have a draft, so break out of the loop and return it.
         }
     }
 
@@ -1126,6 +1202,32 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
         impl->accept(n_accepted);
         impl->n_call_accept++;
     }
+}
+
+int32_t common_speculative_n_max(const common_speculative * spec, const common_params_speculative & params) {
+    if (spec == nullptr) {
+        return 0;
+    }
+
+    int32_t n_max = 0;
+    for (const auto & impl : spec->impls) {
+        n_max = std::max(n_max, impl->n_max(params));
+    }
+
+    return n_max;
+}
+
+int32_t common_speculative_n_min(const common_speculative * spec, const common_params_speculative & params) {
+    if (spec == nullptr) {
+        return 0;
+    }
+
+    int32_t n_min = 0;
+    for (const auto & impl : spec->impls) {
+        n_min = std::max(n_min, impl->n_min(params));
+    }
+
+    return n_min;
 }
 
 void common_speculative_print_stats(const common_speculative * spec) {

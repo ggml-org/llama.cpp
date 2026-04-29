@@ -204,12 +204,6 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		canSync: true
 	},
 	{
-		key: 'autoShowSidebarOnNewChat',
-		serverKey: 'autoShowSidebarOnNewChat',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{
 		key: 'showRawModelNames',
 		serverKey: 'showRawModelNames',
 		type: SyncableParameterType.BOOLEAN,

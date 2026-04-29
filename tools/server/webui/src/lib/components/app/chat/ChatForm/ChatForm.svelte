@@ -300,7 +300,7 @@
 			if (sendOnEnter || isModifier) {
 				event.preventDefault();
 
-				if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
+				if (!canSubmit || disabled || hasLoadingAttachments) return;
 
 				onSubmit?.();
 			}
@@ -555,7 +555,7 @@
 	class="relative {className}"
 	onsubmit={(e) => {
 		e.preventDefault();
-		if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
+		if (!canSubmit || disabled || hasLoadingAttachments) return;
 		onSubmit?.();
 	}}
 >

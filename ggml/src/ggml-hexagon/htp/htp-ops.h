@@ -82,7 +82,7 @@ enum htp_op_code {
     HTP_OP_CUMSUM,
     HTP_OP_FILL,
     HTP_OP_DIAG,
-
+    HTP_OP_SOLVE_TRI,
     HTP_OP_INVALID
 };
 

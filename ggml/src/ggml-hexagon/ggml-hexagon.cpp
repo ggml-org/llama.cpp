@@ -2693,6 +2693,39 @@ static bool ggml_hexagon_supported_diag(const struct ggml_hexagon_session * sess
     return true;
 }
 
+static bool ggml_hexagon_supported_solve_tri(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0]; // A
+    const struct ggml_tensor * src1 = op->src[1]; // B
+    const struct ggml_tensor * dst  = op;         // X
+
+    if (!src0 || !src1) {
+        return false;
+    }
+
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (src0->ne[0] != src0->ne[1]) {
+        return false;
+    }
+
+    if (src0->ne[1] != src1->ne[1]) {
+        return false;
+    }
+
+    if (src0->ne[2] != src1->ne[2] || src0->ne[3] != src1->ne[3]) {
+        return false;
+    }
+
+    if (dst->ne[0] != src1->ne[0] || dst->ne[1] != src1->ne[1] || dst->ne[2] != src1->ne[2] || dst->ne[3] != src1->ne[3]) {
+        return false;
+    }
+
+    GGML_UNUSED(sess);
+    return true;
+}
+
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     return sess->c_name();
@@ -2731,7 +2764,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_CUMSUM:         return HTP_OP_CUMSUM;
         case GGML_OP_FILL:           return HTP_OP_FILL;
         case GGML_OP_DIAG:           return HTP_OP_DIAG;
-
+        case GGML_OP_SOLVE_TRI:      return HTP_OP_SOLVE_TRI;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
                 case GGML_UNARY_OP_SILU:     return HTP_OP_UNARY_SILU;
@@ -3275,6 +3308,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_DIAG:
             supp = ggml_hexagon_supported_diag(sess, op);
+            break;
+
+        case GGML_OP_SOLVE_TRI:
+            supp = ggml_hexagon_supported_solve_tri(sess, op);
             break;
 
         default:
