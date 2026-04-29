@@ -3579,13 +3579,12 @@ struct test_ssm_conv : public test_case {
     }
 };
 
-// GGML_OP_SSM_CONV + GGML_OP_ADD (channel-wise bias) + GGML_OP_UNARY(SILU) (fused operation)
+// GGML_OP_SSM_CONV + GGML_OP_ADD (channel-wise bias, optional) + GGML_OP_UNARY(SILU) (fused operation)
 struct test_ssm_conv_bias_silu : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
     const std::array<int64_t, 4> ne_b;
     const bool fuse_bias;
-    const bool fuse_silu;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -3595,15 +3594,12 @@ struct test_ssm_conv_bias_silu : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR5(type, ne_a, ne_b, fuse_bias, fuse_silu);
+        return VARS_TO_STR4(type, ne_a, ne_b, fuse_bias);
     }
 
-    test_ssm_conv_bias_silu(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne_a = {4, 128, 1, 1},
-            std::array<int64_t, 4> ne_b = {4, 128, 1, 1},
-            bool fuse_bias = true,
-            bool fuse_silu = true)
-        : type(type), ne_a(ne_a), ne_b(ne_b), fuse_bias(fuse_bias), fuse_silu(fuse_silu) {}
+    test_ssm_conv_bias_silu(ggml_type type, std::array<int64_t, 4> ne_a, std::array<int64_t, 4> ne_b,
+            bool fuse_bias)
+        : type(type), ne_a(ne_a), ne_b(ne_b), fuse_bias(fuse_bias) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
@@ -3619,9 +3615,7 @@ struct test_ssm_conv_bias_silu : public test_case {
             out = ggml_add(ctx, out, bias);
         }
 
-        if (fuse_silu) {
-            out = ggml_silu(ctx, out);
-        }
+        out = ggml_silu(ctx, out);
 
         ggml_set_name(out, "out");
         return out;
@@ -8031,19 +8025,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int64_t d_conv : {3, 4, 9}) {
         for (int64_t d_inner : {1024, 1536, 2048}) {
             for (bool fuse_bias : {false, true}) {
-                const bool fuse_silu = true;
                 // short token path (n_t <= 32)
                 test_cases.emplace_back(new test_ssm_conv_bias_silu(
-                    GGML_TYPE_F32, {d_conv, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}, fuse_bias, fuse_silu));
+                    GGML_TYPE_F32, {d_conv, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}, fuse_bias));
                 test_cases.emplace_back(new test_ssm_conv_bias_silu(
-                    GGML_TYPE_F32, {2 * d_conv, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}, fuse_bias, fuse_silu));
+                    GGML_TYPE_F32, {2 * d_conv, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}, fuse_bias));
                 test_cases.emplace_back(new test_ssm_conv_bias_silu(
-                    GGML_TYPE_F32, {d_conv, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}, fuse_bias, fuse_silu));
+                    GGML_TYPE_F32, {d_conv, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}, fuse_bias));
                 // long token path (n_t > 32)
                 test_cases.emplace_back(new test_ssm_conv_bias_silu(
-                    GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}, fuse_bias, fuse_silu));
+                    GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}, fuse_bias));
                 test_cases.emplace_back(new test_ssm_conv_bias_silu(
-                    GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}, fuse_bias, fuse_silu));
+                    GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}, fuse_bias));
             }
         }
     }
@@ -9064,8 +9057,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // Examples from granite-4.0-h-1b/ggml-model-Q8_0.gguf
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1})); // prefill
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1})); // generate
-    test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1}, true, true));  // prefill
-    test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1}, true, true));  // generate
+    test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1}, true));  // prefill
+    test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1}, true));  // generate
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, 512, 1)); // prefill
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, 1,   1)); // generate
 

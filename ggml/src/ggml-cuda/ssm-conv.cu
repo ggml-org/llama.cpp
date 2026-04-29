@@ -1,7 +1,7 @@
 #include "ssm-conv.cuh"
 #include "unary.cuh"
 
-template <bool apply_bias, bool apply_silu, size_t split_d_inner, size_t d_conv>
+template <bool apply_silu, size_t split_d_inner, size_t d_conv>
 static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float * __restrict__ src1,
                                     const float * __restrict__ bias,
                                     const int src0_nb0, const int src0_nb1, const int src0_nb2, const int src1_nb1,
@@ -28,7 +28,7 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
         w[j] = w_block[tid * stride_w + j];
     }
 
-    float b = apply_bias ? bias[bidy * split_d_inner + tid] : 0.0f;
+    float b = bias != nullptr ? bias[bidy * split_d_inner + tid] : 0.0f;
 
     for (int64_t i = 0; i < n_t; i++) {
         float sumf = 0.0f;
@@ -45,12 +45,12 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
         for (size_t j = 0; j < d_conv; j++) {
             sumf += x[(i + j) % d_conv] * w[j];
         }
-        sumf = apply_bias ? sumf + b : sumf;
+        sumf += b;
         y_block[i * stride_y + tid] = apply_silu ? ggml_cuda_op_silu_single(sumf) : sumf;
     }
 }
 
-template <bool apply_bias, bool apply_silu, size_t split_d_inner, size_t d_conv, int64_t split_n_t>
+template <bool apply_silu, size_t split_d_inner, size_t d_conv, int64_t split_n_t>
 static __global__ void ssm_conv_long_token_f32(const float * __restrict__ src0, const float * __restrict__ src1,
                                                const float * __restrict__ bias,
                                                const int src0_nb0, const int src0_nb1, const int src0_nb2,
@@ -102,7 +102,7 @@ static __global__ void ssm_conv_long_token_f32(const float * __restrict__ src0, 
         w[j] = w_block[tid * stride_w + j];
     }
 
-    float b = apply_bias ? bias[bidy * split_d_inner + tid] : 0.0f;
+    float b = bias != nullptr ? bias[bidy * split_d_inner + tid] : 0.0f;
 
     // Compute from shared memory
     for (int64_t i = 0; i < local_n_t; i++) {
@@ -111,12 +111,12 @@ static __global__ void ssm_conv_long_token_f32(const float * __restrict__ src0, 
         for (size_t j = 0; j < d_conv; j++) {
             sumf += smem[tid * n_cols + i + j] * w[j];
         }
-        sumf = apply_bias ? sumf + b : sumf;
+        sumf += b;
         y_block[i * stride_y + tid] = apply_silu ? ggml_cuda_op_silu_single(sumf) : sumf;
     }
 }
 
-template <bool apply_bias, bool apply_silu>
+template <bool apply_silu>
 static void ssm_conv_f32_cuda(const float * src0, const float * src1, const float * bias, const int src0_nb0, const int src0_nb1,
                               const int src0_nb2, const int src1_nb1, float * dst, const int dst_nb0, const int dst_nb1,
                               const int dst_nb2, const int64_t nc, const int64_t nr, const int64_t n_t,
@@ -128,13 +128,13 @@ static void ssm_conv_f32_cuda(const float * src0, const float * src1, const floa
         constexpr int kNC = decltype(NC)::value;
         if (n_t <= 32) {
             const dim3 blocks(n_s, (nr + threads - 1) / threads, 1);
-            ssm_conv_f32<apply_bias, apply_silu, threads, kNC><<<blocks, threads, 0, stream>>>(src0, src1, bias, src0_nb0, src0_nb1, src0_nb2, src1_nb1,
+            ssm_conv_f32<apply_silu, threads, kNC><<<blocks, threads, 0, stream>>>(src0, src1, bias, src0_nb0, src0_nb1, src0_nb2, src1_nb1,
                                                                        dst, dst_nb0, dst_nb1, dst_nb2, n_t);
         } else {
             const int64_t split_n_t = 32;
             dim3          blocks(n_s, (nr + threads - 1) / threads, (n_t + split_n_t - 1) / split_n_t);
             const size_t  smem_size = threads * (kNC - 1 + split_n_t) * sizeof(float);
-            ssm_conv_long_token_f32<apply_bias, apply_silu, threads, kNC, split_n_t><<<blocks, threads, smem_size, stream>>>(
+            ssm_conv_long_token_f32<apply_silu, threads, kNC, split_n_t><<<blocks, threads, smem_size, stream>>>(
                 src0, src1, bias, src0_nb0, src0_nb1, src0_nb2, src1_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t);
         }
     };
@@ -187,14 +187,11 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst, g
         GGML_ASSERT(ggml_nelements(bias) == nr);
     }
 
-    if (fuse_bias) {
-        ssm_conv_f32_cuda<true, true>(src0_d, src1_d, bias_d, src0->nb[0], src0->nb[1], src0->nb[2], src1->nb[1], dst_d, out->nb[0], out->nb[1],
-                          out->nb[2], nc, nr, n_t, n_s, stream);
-    } else if (fuse_silu) {
-        ssm_conv_f32_cuda<false, true>(src0_d, src1_d, nullptr, src0->nb[0], src0->nb[1], src0->nb[2], src1->nb[1], dst_d, out->nb[0], out->nb[1],
+    if (fuse_silu) {
+        ssm_conv_f32_cuda<true>(src0_d, src1_d, bias_d, src0->nb[0], src0->nb[1], src0->nb[2], src1->nb[1], dst_d, out->nb[0], out->nb[1],
                           out->nb[2], nc, nr, n_t, n_s, stream);
     } else {
-        ssm_conv_f32_cuda<false, false>(src0_d, src1_d, nullptr, src0->nb[0], src0->nb[1], src0->nb[2], src1->nb[1], dst_d, out->nb[0], out->nb[1],
+        ssm_conv_f32_cuda<false>(src0_d, src1_d, bias_d, src0->nb[0], src0->nb[1], src0->nb[2], src1->nb[1], dst_d, out->nb[0], out->nb[1],
                           out->nb[2], nc, nr, n_t, n_s, stream);
     }
 }
