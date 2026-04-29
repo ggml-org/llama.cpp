@@ -198,18 +198,48 @@ This may also make sense for a non-native build, for that one should look at the
 
 To override the default CUDA architectures:
 
-#### 1. Take note of the `Compute Capability` of your NVIDIA devices: ["CUDA: Your GPU Compute > Capability"](https://developer.nvidia.com/cuda-gpus).
+#### 0. Identify your NVIDIA devices
+
+If the `nvidia-smi` (NVIDIA System Management Interface) command-line utility is installed, to retrieve information and/or identify your GPU(s), you can run the following commands:
+
+```bash
+nvidia-smi --list-gpus
+nvidia-smi --query-gpu=index,uuid,serial,name,memory.total,compute_cap,driver_version,kmd_version
+```
+
+If you have multiple GPUs and you want to run the next commands on a specific one, you can use the `-i` parameter by specifying the `index` or `uuid` identifier.
+
+#### 1. Take note of the `Compute Capability` of your NVIDIA device(s)
+
+You can refer to ["CUDA GPU Compute Capability"](https://developer.nvidia.com/cuda-gpus) list on the NVIDIA’s official website
 
 ```text
+...
 GeForce RTX 4090      8.9
 GeForce RTX 3080 Ti   8.6
 GeForce RTX 3070      8.6
+...
 ```
 
-#### 2. Manually list each varying `Compute Capability` in the `CMAKE_CUDA_ARCHITECTURES` list.
+If the `nvidia-smi` (NVIDIA System Management Interface) command-line utility is installed, another option is to run the following command:
+
+```bash
+nvidia-smi --query-gpu=id,name,compute_cap
+```
+
+#### 2. List each varying `Compute Capability` in the `CMAKE_CUDA_ARCHITECTURES` list
+
+Manually list the desired `Compute Capability` in `CMAKE_CUDA_ARCHITECTURES`, removing the `.` (period) from the version and (if there are multiple) separating them with `;` (semicolon)
 
 ```bash
 cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="86;89"
+```
+
+If the `nvidia-smi` (NVIDIA System Management Interface) command-line utility is installed, you can run the following command to automatically retrieve the `Compute Capability` list:
+
+```bash
+CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | tr -d '.' | sort -u | tr '\n' ';' | sed 's/;$//')
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH"
 ```
 
 ### Overriding the CUDA Version
