@@ -55,10 +55,10 @@ opflt=
 [ "$OF" != "" ] && opflt="GGML_HEXAGON_OPFILTER=$OF"
 
 vmem=
-[ "$VM" != "" ] && opflt="GGML_HEXAGON_VMEM=$VM"
+[ "$VM" != "" ] && vmem="GGML_HEXAGON_VMEM=$VM"
 
 mbuf=
-[ "$MB" != "" ] && opflt="GGML_HEXAGON_MBUF=$MB"
+[ "$MB" != "" ] && mbuf="GGML_HEXAGON_MBUF=$MB"
 
 set -x
 
