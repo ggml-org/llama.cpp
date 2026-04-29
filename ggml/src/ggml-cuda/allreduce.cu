@@ -220,6 +220,7 @@ static constexpr size_t GGML_CUDA_AR_ARRIVAL_STRIDE = 128;
 struct ggml_cuda_ar_event_slot {
     cudaEvent_t app = nullptr;  // upstream computation complete
     cudaEvent_t cpy[GGML_CUDA_AR_COPY_MAX_CHUNKS] = {};  // copy-engine D2H chunks complete
+    cudaEvent_t h2d = nullptr;  // copy-engine H2Ds complete (handoff AR stream → compute stream)
     cudaEvent_t ker = nullptr;  // AllReduce kernel complete
 };
 
@@ -246,6 +247,13 @@ struct ggml_cuda_ar_pipeline {
     // by peer's stage-1 stream before the next AR overwrites host_large[peer].
     cudaEvent_t              host_large_read_done[GGML_CUDA_MAX_DEVICES];
     bool                     host_large_read_done_valid;
+
+    // Copy-engine: per-device "my add_kernel is done with dev_tmp" event.
+    // Recorded on the compute stream after each add_kernel; the AR stream
+    // waits on it before the next copy_impl's H2D overwrites dev_tmp.  Lets us
+    // single-buffer dev_tmp despite add_kernel running on a separate stream.
+    cudaEvent_t              dev_tmp_kernel_done[GGML_CUDA_MAX_DEVICES];
+    bool                     dev_tmp_kernel_done_valid;
 
     // Arrival ring: pinned, ARRIVAL_STRIDE bytes between adjacent ints.
     // Use ggml_cuda_ar_arrival_ptr() to index.
@@ -345,6 +353,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
         for (int s = 0; s < GGML_CUDA_AR_POOL_SIZE; ++s) {
             bool ok =
                 cudaEventCreateWithFlags(&p->ev_pool[i][s].app, cudaEventDisableTiming) == cudaSuccess &&
+                cudaEventCreateWithFlags(&p->ev_pool[i][s].h2d, cudaEventDisableTiming) == cudaSuccess &&
                 cudaEventCreateWithFlags(&p->ev_pool[i][s].ker, cudaEventDisableTiming) == cudaSuccess;
             for (int c = 0; ok && c < GGML_CUDA_AR_COPY_MAX_CHUNKS; ++c) {
                 ok = cudaEventCreateWithFlags(&p->ev_pool[i][s].cpy[c], cudaEventDisableTiming) == cudaSuccess;
@@ -359,6 +368,12 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
 
         if (cudaEventCreateWithFlags(&p->host_large_read_done[i], cudaEventDisableTiming) != cudaSuccess) {
             GGML_LOG_ERROR("%s: cudaEventCreate for host_large_read_done failed for device %d\n",
+                           __func__, p->devices[i]);
+            ggml_cuda_ar_pipeline_free(p);
+            return nullptr;
+        }
+        if (cudaEventCreateWithFlags(&p->dev_tmp_kernel_done[i], cudaEventDisableTiming) != cudaSuccess) {
+            GGML_LOG_ERROR("%s: cudaEventCreate for dev_tmp_kernel_done failed for device %d\n",
                            __func__, p->devices[i]);
             ggml_cuda_ar_pipeline_free(p);
             return nullptr;
@@ -393,6 +408,8 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
 
     // Copy-engine path: pinned host staging + device scratch, sized for the
     // largest tensor we accept on this path (GGML_CUDA_AR_COPY_MAX_BYTES).
+    // dev_tmp is single-buffered; cross-AR safety is enforced by an explicit
+    // cross-stream wait in copy_impl on the prior AR's add_kernel-done event.
     for (int i = 0; i < n_devices; ++i) {
         ggml_cuda_set_device(p->devices[i]);
         if (cudaHostAlloc(&p->host_large[i], p->copy_bytes, cudaHostAllocPortable) != cudaSuccess) {
@@ -447,6 +464,7 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
                 for (int c = 0; c < GGML_CUDA_AR_COPY_MAX_CHUNKS; ++c) {
                     if (p->ev_pool[i][s].cpy[c]) { cudaEventDestroy(p->ev_pool[i][s].cpy[c]); }
                 }
+                if (p->ev_pool[i][s].h2d) { cudaEventDestroy(p->ev_pool[i][s].h2d); }
                 if (p->ev_pool[i][s].ker) { cudaEventDestroy(p->ev_pool[i][s].ker); }
             }
             delete[] p->ev_pool[i];
@@ -454,6 +472,10 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
         if (p->host_large_read_done[i]) {
             ggml_cuda_set_device(p->devices[i]);
             cudaEventDestroy(p->host_large_read_done[i]);
+        }
+        if (p->dev_tmp_kernel_done[i]) {
+            ggml_cuda_set_device(p->devices[i]);
+            cudaEventDestroy(p->dev_tmp_kernel_done[i]);
         }
         if (p->streams[i]) {
             ggml_cuda_set_device(p->devices[i]);
@@ -529,10 +551,22 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
     }
 
     // Stage 2: each GPU waits for each peer D2H chunk, pulls that chunk back to
-    // local scratch, then performs one device-local add over the assembled peer tensor.
+    // local device scratch (dev_tmp), then performs one device-local add over
+    // the assembled peer tensor.  The H2Ds run on the AR stream (copy engine)
+    // and the add_kernel runs on the caller's compute stream, so the AR stream
+    // stays pure-copy and avoids an in-stream copy→compute engine switch every
+    // AR.  dev_tmp is single-buffered: the AR stream waits cross-stream on the
+    // prior AR's add_kernel-done event before overwriting it.
     for (int i = 0; i < 2; ++i) {
         const int peer = 1 - i;
         ggml_cuda_set_device(p->devices[i]);
+
+        // Wait for the previous AR's add_kernel (on the compute stream) to
+        // finish reading dev_tmp before our H2D overwrites it.  No-op on the
+        // first copy_impl call.
+        if (p->dev_tmp_kernel_done_valid) {
+            CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->dev_tmp_kernel_done[i]));
+        }
 
         for (size_t c = 0; c < copy_chunks; ++c) {
             const size_t offset = c * p->copy_chunk_bytes;
@@ -546,24 +580,33 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
         }
 
         // Mark our reads of host_large[peer] complete so peer's next AR can
-        // safely overwrite it.  Same-device record (event[i] on stream[i]);
-        // peer waits cross-device on event[i] before its next stage 1 D2H.
+        // safely overwrite it.
         CUDA_CHECK(cudaEventRecord(p->host_large_read_done[i], p->streams[i]));
+
+        // Hand off from AR stream (copy engine) to compute stream: compute
+        // stream waits for all H2Ds to finish, then runs the add_kernel.
+        CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].h2d, p->streams[i]));
+        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx[i]->stream(), p->ev_pool[i][slot].h2d));
 
         const int block_size = 256;
         int n_blocks = (int) ((ne + block_size - 1) / block_size);
         if (n_blocks > 1024) {
             n_blocks = 1024;
         }
-        ggml_cuda_ar_add_kernel<Tdst, Tsrc><<<n_blocks, block_size, 0, p->streams[i]>>>(
+        ggml_cuda_ar_add_kernel<Tdst, Tsrc><<<n_blocks, block_size, 0, cuda_ctx[i]->stream()>>>(
             dst_buf[i],
             reinterpret_cast<const Tsrc *>(p->dev_tmp[i]),
             (int) ne);
         CUDA_CHECK(cudaGetLastError());
 
-        ggml_cuda_ar_record_chunk_done(p, cuda_ctx[i], i, slot);
+        // Record dev_tmp-released on the compute stream so the next copy_impl
+        // can wait for the kernel to finish before overwriting dev_tmp.  Also
+        // record AR-done as ev.ker for acquire_slot's pool-wraparound sync.
+        CUDA_CHECK(cudaEventRecord(p->dev_tmp_kernel_done[i], cuda_ctx[i]->stream()));
+        CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].ker, cuda_ctx[i]->stream()));
     }
     p->host_large_read_done_valid = true;
+    p->dev_tmp_kernel_done_valid = true;
 
     return true;
 }
