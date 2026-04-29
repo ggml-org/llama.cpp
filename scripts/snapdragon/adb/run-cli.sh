@@ -59,7 +59,11 @@ vmem=
 
 mbuf=
 [ "$MB" != "" ] && opflt="GGML_HEXAGON_MBUF=$MB"
+vmem=
+[ "$VM" != "" ] && vmem="GGML_HEXAGON_VMEM=$VM"
 
+mbuf=
+[ "$MB" != "" ] && mbuf="GGML_HEXAGON_MBUF=$MB"
 set -x
 
 adb $adbserial $adbhost shell " \
