@@ -679,6 +679,7 @@ struct vk_device_struct {
     uint64_t suballocation_block_size;
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
+    bool external_memory_dma_buf {};
     bool external_semaphore_fd {};
     bool fp16;
     bool bf16;
@@ -5739,6 +5740,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->memory_priority = true;
             } else if (strcmp("VK_EXT_external_memory_host", properties.extensionName) == 0) {
                 device->external_memory_host = true;
+            } else if (strcmp("VK_EXT_external_memory_dma_buf", properties.extensionName) == 0) {
+                device->external_memory_dma_buf = true;
             } else if (strcmp("VK_KHR_external_semaphore_fd", properties.extensionName) == 0) {
                 device->external_semaphore_fd = true;
 #if defined(VK_EXT_shader_64bit_indexing)
@@ -6067,6 +6070,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         if (device->external_memory_host) {
             device_extensions.push_back("VK_EXT_external_memory_host");
+        }
+
+        if (device->external_memory_dma_buf) {
+            device_extensions.push_back("VK_KHR_external_memory_fd");
+            device_extensions.push_back("VK_EXT_external_memory_dma_buf");
         }
 
         if (device->external_semaphore_fd) {
@@ -14283,16 +14291,6 @@ struct vk_shared_staging {
     }
 };
 
-// Helper: run a benchmark and print results
-static void vk_bench_print(const char * name, std::vector<double> & times, size_t size) {
-    std::sort(times.begin(), times.end());
-    double median = times[times.size() / 2];
-    double bw = (size / (1024.0 * 1024.0 * 1024.0)) / (median / 1000.0);
-    std::cerr << "  " << std::left << std::setw(22) << name << " : "
-              << std::fixed << std::setprecision(3) << median << " ms  "
-              << std::setprecision(2) << bw << " GB/s" << std::endl;
-}
-
 // Results stored per (method, size) for table output
 struct vk_copy_result {
     std::string method;
@@ -14354,11 +14352,6 @@ static void ggml_vk_bench_pair(
         results[method].push_back({ method, median, bw });
     };
 
-    // Helper to record a skipped size (sentinel: negative ms)
-    auto skip = [&](const std::string & method) {
-        results[method].push_back({ method, -1.0, -1.0 });
-    };
-
     for (size_t size : test_sizes) {
 
         // =================================================================
@@ -14398,49 +14391,7 @@ static void ggml_vk_bench_pair(
         }
 
         // =================================================================
-        // 2. Diagnostics: individual hop timings
-        // =================================================================
-        {
-            std::vector<double> times;
-            for (size_t i = 0; i < num_it + warmup; i++) {
-                auto begin = std::chrono::high_resolution_clock::now();
-                {
-                    std::lock_guard<std::recursive_mutex> guard(dev0->mutex);
-                    vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
-                    ggml_vk_ctx_begin(dev0, subctx);
-                    ggml_vk_buffer_copy_async(subctx, staging_src, 0, buf_src, 0, size);
-                    ggml_vk_ctx_end(subctx);
-                    ggml_vk_submit(subctx, dev0->fence);
-                    VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "diag hop1");
-                    dev0->device.resetFences({ dev0->fence });
-                }
-                auto end = std::chrono::high_resolution_clock::now();
-                if (i >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
-            }
-            record("hop1_only", size, times);
-        }
-        {
-            std::vector<double> times;
-            for (size_t i = 0; i < num_it + warmup; i++) {
-                auto begin = std::chrono::high_resolution_clock::now();
-                {
-                    std::lock_guard<std::recursive_mutex> guard(dev1->mutex);
-                    vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
-                    ggml_vk_ctx_begin(dev1, subctx);
-                    ggml_vk_buffer_copy_async(subctx, buf_dst, 0, staging_dst, 0, size);
-                    ggml_vk_ctx_end(subctx);
-                    ggml_vk_submit(subctx, dev1->fence);
-                    VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "diag hop2");
-                    dev1->device.resetFences({ dev1->fence });
-                }
-                auto end = std::chrono::high_resolution_clock::now();
-                if (i >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
-            }
-            record("hop2_only", size, times);
-        }
-
-        // =================================================================
-        // 3. Shared staging: single host buffer imported into both devices
+        // 2. Shared staging: single host buffer imported into both devices
         // =================================================================
         if (has_shared_staging) {
             vk_shared_staging stg;
@@ -14481,30 +14432,21 @@ static void ggml_vk_bench_pair(
         }
 
         // =================================================================
-        // 4. Chunked pipeline: split into N chunks, overlap hop1/hop2
-        //    via full-duplex PCIe. Vary chunk count to find optimum.
+        // 3. Chunked pipeline: split into 2 chunks, overlap hop1/hop2
+        //    via full-duplex PCIe.
         // =================================================================
-        if (has_shared_staging) {
-            for (size_t n_chunks : { 2, 4, 8 }) {
-                char cname[32];
-                snprintf(cname, sizeof(cname), "chunked_%zu", n_chunks);
-                if (size < n_chunks * 4096) { skip(cname); continue; }
+        if (has_shared_staging && size >= 2 * 4096) {
+            constexpr size_t n_chunks = 2;
 
-                size_t align = std::max(dev0->min_imported_host_pointer_alignment,
-                                        dev1->min_imported_host_pointer_alignment);
-                size_t chunk_data = size / n_chunks;
-                size_t chunk_aligned = (chunk_data + align - 1) & ~(align - 1);
+            size_t align = std::max(dev0->min_imported_host_pointer_alignment,
+                                    dev1->min_imported_host_pointer_alignment);
+            size_t chunk_data = size / n_chunks;
+            size_t chunk_aligned = (chunk_data + align - 1) & ~(align - 1);
 
-                vk_shared_staging stg;
-                if (!stg.alloc(dev0, dev1, chunk_aligned * n_chunks)) {
-                    std::cerr << "  chunked_" << n_chunks << "             : SKIPPED (import failed)" << std::endl;
-                    stg.free_resources();
-                    continue;
-                }
-
-                // Per-chunk timeline semaphores
-                std::vector<vk::Semaphore> chunk_sems(n_chunks);
-                std::vector<uint64_t> sem_vals(n_chunks, 0);
+            vk_shared_staging stg;
+            if (stg.alloc(dev0, dev1, chunk_aligned * n_chunks)) {
+                vk::Semaphore chunk_sems[n_chunks];
+                uint64_t sem_vals[n_chunks] = {};
                 for (size_t c = 0; c < n_chunks; c++) {
                     vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eTimeline, 0 };
                     vk::SemaphoreCreateInfo sci{};
@@ -14516,7 +14458,6 @@ static void ggml_vk_bench_pair(
                 for (size_t iter = 0; iter < num_it + warmup; iter++) {
                     auto begin = std::chrono::high_resolution_clock::now();
 
-                    // Submit all hop1s upfront
                     for (size_t c = 0; c < n_chunks; c++) {
                         size_t off_src = c * chunk_data;
                         size_t off_stg = c * chunk_aligned;
@@ -14531,7 +14472,6 @@ static void ggml_vk_bench_pair(
                         ggml_vk_submit(subctx, {});
                     }
 
-                    // Per-chunk: CPU wait hop1, submit hop2
                     for (size_t c = 0; c < n_chunks; c++) {
                         size_t off_dst = c * chunk_data;
                         size_t off_stg = c * chunk_aligned;
@@ -14554,17 +14494,17 @@ static void ggml_vk_bench_pair(
                     if (iter >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
                 }
 
-                char name[32];
-                snprintf(name, sizeof(name), "chunked_%zu", n_chunks);
-                record(name, size, times);
+                record("chunked_2", size, times);
 
                 for (size_t c = 0; c < n_chunks; c++) dev0->device.destroySemaphore(chunk_sems[c]);
-                stg.free_resources();
+            } else {
+                std::cerr << "  chunked_2             : SKIPPED (import failed)" << std::endl;
             }
+            stg.free_resources();
         }
 
         // =================================================================
-        // 5. sync_fd async: fully GPU-synchronised via Linux sync_file
+        // 4. sync_fd async: fully GPU-synchronised via Linux sync_file
         // =================================================================
 #ifndef _WIN32
         if (has_shared_staging && has_syncfd) {
@@ -14647,35 +14587,26 @@ static void ggml_vk_bench_pair(
         }
 
         // =================================================================
-        // 6. sync_fd chunked: chunked pipeline with GPU-side sync_fd
+        // 5. sync_fd chunked: 2-chunk pipeline with GPU-side sync_fd
         //    between hops (no CPU waits between chunks)
         // =================================================================
-        if (has_shared_staging && has_syncfd) {
-            for (size_t n_chunks : { 2, 4, 8 }) {
-                char scname[48];
-                snprintf(scname, sizeof(scname), "syncfd_chunked_%zu", n_chunks);
-                if (size < n_chunks * 4096) { skip(scname); continue; }
+        if (has_shared_staging && has_syncfd && size >= 2 * 4096) {
+            constexpr size_t n_chunks = 2;
 
-                size_t align = std::max(dev0->min_imported_host_pointer_alignment,
-                                        dev1->min_imported_host_pointer_alignment);
-                size_t chunk_data = size / n_chunks;
-                size_t chunk_aligned = (chunk_data + align - 1) & ~(align - 1);
+            size_t align = std::max(dev0->min_imported_host_pointer_alignment,
+                                    dev1->min_imported_host_pointer_alignment);
+            size_t chunk_data = size / n_chunks;
+            size_t chunk_aligned = (chunk_data + align - 1) & ~(align - 1);
 
-                vk_shared_staging stg;
-                if (!stg.alloc(dev0, dev1, chunk_aligned * n_chunks)) {
-                    std::cerr << "  syncfd_chunked_" << n_chunks << "      : SKIPPED (import failed)" << std::endl;
-                    stg.free_resources();
-                    continue;
-                }
-
+            vk_shared_staging stg;
+            if (stg.alloc(dev0, dev1, chunk_aligned * n_chunks)) {
                 std::vector<double> times;
                 bool run_ok = true;
 
                 for (size_t iter = 0; iter < num_it + warmup && run_ok; iter++) {
                     auto begin = std::chrono::high_resolution_clock::now();
 
-                    // Create per-chunk exportable semaphores
-                    std::vector<vk::Semaphore> sems_dev0(n_chunks);
+                    vk::Semaphore sems_dev0[n_chunks];
                     for (size_t c = 0; c < n_chunks; c++) {
                         vk::ExportSemaphoreCreateInfo esci{};
                         esci.handleTypes = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd;
@@ -14684,7 +14615,6 @@ static void ggml_vk_bench_pair(
                         sems_dev0[c] = dev0->device.createSemaphore(sci);
                     }
 
-                    // Submit all hop1s with per-chunk signal
                     for (size_t c = 0; c < n_chunks; c++) {
                         size_t off_src = c * chunk_data;
                         size_t off_stg = c * chunk_aligned;
@@ -14698,7 +14628,6 @@ static void ggml_vk_bench_pair(
                         ggml_vk_submit(subctx, {});
                     }
 
-                    // Export all sync_fds and import on dev1, submit hop2s
                     for (size_t c = 0; c < n_chunks && run_ok; c++) {
                         size_t off_dst = c * chunk_data;
                         size_t off_stg = c * chunk_aligned;
@@ -14711,8 +14640,7 @@ static void ggml_vk_bench_pair(
                             gi.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd;
                             sync_fd = dev0->device.getSemaphoreFdKHR(gi);
                         } catch (vk::SystemError& e) {
-                            char nm[48]; snprintf(nm, sizeof(nm), "syncfd_chunked_%zu", n_chunks);
-                            std::cerr << "  " << nm << "      : SKIPPED (export: " << e.what() << ")" << std::endl;
+                            std::cerr << "  syncfd_chunked_2      : SKIPPED (export: " << e.what() << ")" << std::endl;
                             run_ok = false; break;
                         }
 
@@ -14725,8 +14653,7 @@ static void ggml_vk_bench_pair(
                             ii.fd = sync_fd;
                             dev1->device.importSemaphoreFdKHR(ii);
                         } catch (vk::SystemError& e) {
-                            char nm[48]; snprintf(nm, sizeof(nm), "syncfd_chunked_%zu", n_chunks);
-                            std::cerr << "  " << nm << "      : SKIPPED (import: " << e.what() << ")" << std::endl;
+                            std::cerr << "  syncfd_chunked_2      : SKIPPED (import: " << e.what() << ")" << std::endl;
                             dev1->device.destroySemaphore(sem_dev1);
                             close(sync_fd);
                             run_ok = false; break;
@@ -14753,13 +14680,157 @@ static void ggml_vk_bench_pair(
                     if (run_ok && iter >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
                 }
 
-                if (run_ok) {
-                    char name[48];
-                    snprintf(name, sizeof(name), "syncfd_chunked_%zu", n_chunks);
-                    record(name, size, times);
-                }
-                stg.free_resources();
+                if (run_ok) record("syncfd_chunked_2", size, times);
+            } else {
+                std::cerr << "  syncfd_chunked_2      : SKIPPED (import failed)" << std::endl;
             }
+            stg.free_resources();
+        }
+
+        // =================================================================
+        // 6. DMA-BUF P2P: import source device memory directly on dest
+        //    device via dma-buf fd — true zero-copy if PCIe P2P works.
+        //    Setup (export/import) is outside the timing loop.
+        // =================================================================
+        if (dev0->external_memory_dma_buf && dev1->external_memory_dma_buf) {
+            bool setup_ok = true;
+
+            // Create exportable source buffer on dev0
+            vk::Buffer exp_buffer{};
+            vk::DeviceMemory exp_mem{};
+
+            vk::ExternalMemoryBufferCreateInfo exp_ext_bci{};
+            exp_ext_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+            vk::BufferCreateInfo exp_bci{};
+            exp_bci.size = size;
+            exp_bci.usage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
+            exp_bci.setPNext(&exp_ext_bci);
+
+            try {
+                exp_buffer = dev0->device.createBuffer(exp_bci);
+                vk::MemoryRequirements exp_mem_req = dev0->device.getBufferMemoryRequirements(exp_buffer);
+
+                vk::PhysicalDeviceMemoryProperties mem_props = dev0->physical_device.getMemoryProperties();
+                uint32_t exp_mem_type = UINT32_MAX;
+                for (uint32_t m = 0; m < mem_props.memoryTypeCount; m++) {
+                    if ((exp_mem_req.memoryTypeBits & (1u << m)) &&
+                        (mem_props.memoryTypes[m].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+                        exp_mem_type = m;
+                        break;
+                    }
+                }
+                if (exp_mem_type == UINT32_MAX) {
+                    throw vk::SystemError(vk::make_error_code(vk::Result::eErrorInitializationFailed));
+                }
+
+                vk::ExportMemoryAllocateInfo export_ai{};
+                export_ai.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                vk::MemoryAllocateInfo exp_alloc{};
+                exp_alloc.allocationSize = exp_mem_req.size;
+                exp_alloc.memoryTypeIndex = exp_mem_type;
+                exp_alloc.setPNext(&export_ai);
+                exp_mem = dev0->device.allocateMemory(exp_alloc);
+                dev0->device.bindBufferMemory(exp_buffer, exp_mem, 0);
+
+                // Copy data from buf_src into exportable buffer
+                vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                ggml_vk_ctx_begin(dev0, subctx);
+                VkBufferCopy fill_bc{ 0, 0, size };
+                vkCmdCopyBuffer(subctx->s->buffer->buf, buf_src->buffer, exp_buffer, 1, &fill_bc);
+                ggml_vk_ctx_end(subctx);
+                ggml_vk_submit(subctx, dev0->fence);
+                VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf fill");
+                dev0->device.resetFences({ dev0->fence });
+            } catch (vk::SystemError& e) {
+                std::cerr << "  dmabuf_p2p            : SKIPPED (src alloc: " << e.what() << ")" << std::endl;
+                if (exp_buffer) dev0->device.destroyBuffer(exp_buffer);
+                if (exp_mem) dev0->device.freeMemory(exp_mem);
+                setup_ok = false;
+            }
+
+            // Export fd and import on dev1 — once, outside timing loop
+            vk::Buffer imported_buffer{};
+            vk::DeviceMemory imported_mem{};
+
+            if (setup_ok) {
+                try {
+                    vk::MemoryGetFdInfoKHR gi{};
+                    gi.memory = exp_mem;
+                    gi.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                    int dmabuf_fd = dev0->device.getMemoryFdKHR(gi);
+
+                    vk::MemoryFdPropertiesKHR fd_props = dev1->device.getMemoryFdPropertiesKHR(
+                        vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT, dmabuf_fd);
+
+                    if (fd_props.memoryTypeBits == 0) {
+                        close(dmabuf_fd);
+                        throw vk::SystemError(vk::make_error_code(vk::Result::eErrorFormatNotSupported));
+                    }
+
+                    vk::ExternalMemoryBufferCreateInfo imp_ext_bci{};
+                    imp_ext_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                    vk::BufferCreateInfo imp_bci{};
+                    imp_bci.size = size;
+                    imp_bci.usage = vk::BufferUsageFlagBits::eTransferSrc;
+                    imp_bci.setPNext(&imp_ext_bci);
+                    imported_buffer = dev1->device.createBuffer(imp_bci);
+
+                    vk::MemoryRequirements mem_req = dev1->device.getBufferMemoryRequirements(imported_buffer);
+                    uint32_t mem_type_idx = UINT32_MAX;
+                    for (uint32_t m = 0; m < 32; m++) {
+                        if ((fd_props.memoryTypeBits & (1u << m)) && (mem_req.memoryTypeBits & (1u << m))) {
+                            mem_type_idx = m;
+                            break;
+                        }
+                    }
+                    if (mem_type_idx == UINT32_MAX) {
+                        close(dmabuf_fd);
+                        throw vk::SystemError(vk::make_error_code(vk::Result::eErrorFormatNotSupported));
+                    }
+
+                    vk::ImportMemoryFdInfoKHR import_info{};
+                    import_info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                    import_info.fd = dmabuf_fd;
+                    vk::MemoryAllocateInfo alloc_info{};
+                    alloc_info.allocationSize = mem_req.size;
+                    alloc_info.memoryTypeIndex = mem_type_idx;
+                    alloc_info.setPNext(&import_info);
+                    imported_mem = dev1->device.allocateMemory(alloc_info);
+                    dev1->device.bindBufferMemory(imported_buffer, imported_mem, 0);
+                } catch (vk::SystemError& e) {
+                    std::cerr << "  dmabuf_p2p            : SKIPPED (import: " << e.what() << ")" << std::endl;
+                    if (imported_buffer) dev1->device.destroyBuffer(imported_buffer);
+                    if (imported_mem) dev1->device.freeMemory(imported_mem);
+                    imported_buffer = vk::Buffer{};
+                    imported_mem = vk::DeviceMemory{};
+                    setup_ok = false;
+                }
+            }
+
+            if (setup_ok) {
+                std::vector<double> times;
+                for (size_t i = 0; i < num_it + warmup; i++) {
+                    auto begin = std::chrono::high_resolution_clock::now();
+
+                    vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                    ggml_vk_ctx_begin(dev1, subctx);
+                    VkBufferCopy bc{ 0, 0, size };
+                    vkCmdCopyBuffer(subctx->s->buffer->buf, imported_buffer, buf_dst->buffer, 1, &bc);
+                    ggml_vk_ctx_end(subctx);
+                    ggml_vk_submit(subctx, dev1->fence);
+                    VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "dmabuf_p2p");
+                    dev1->device.resetFences({ dev1->fence });
+
+                    auto end = std::chrono::high_resolution_clock::now();
+                    if (i >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
+                }
+                record("dmabuf_p2p", size, times);
+            }
+
+            if (imported_buffer) dev1->device.destroyBuffer(imported_buffer);
+            if (imported_mem) dev1->device.freeMemory(imported_mem);
+            if (exp_buffer) dev0->device.destroyBuffer(exp_buffer);
+            if (exp_mem) dev0->device.freeMemory(exp_mem);
         }
 #endif
     }
@@ -14784,7 +14855,10 @@ static void ggml_vk_test_cross_device_copy(ggml_backend_vk_context * ctx) {
     std::vector<vk_device> devices(n_devices);
     for (size_t i = 0; i < n_devices; i++) {
         devices[i] = ggml_vk_get_device(i);
-        std::cerr << "  [" << i << "] " << devices[i]->name << std::endl;
+        std::cerr << "  [" << i << "] " << devices[i]->name
+                  << " (ext_mem_host=" << devices[i]->external_memory_host
+                  << " dma_buf=" << devices[i]->external_memory_dma_buf
+                  << " sem_fd=" << devices[i]->external_semaphore_fd << ")" << std::endl;
     }
 
     const std::vector<size_t> test_sizes = {
