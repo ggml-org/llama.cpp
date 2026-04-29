@@ -39,7 +39,6 @@
 		| { activateSearchMode?: () => void; editActiveConversation?: () => void }
 		| undefined = $state();
 
-	// Conversation title update dialog state
 	let titleUpdateDialogOpen = $state(false);
 	let titleUpdateCurrentTitle = $state('');
 	let titleUpdateNewTitle = $state('');
@@ -47,53 +46,34 @@
 
 	const panelNav = useSettingsNavigation();
 
+	function navigateToConversation(direction: -1 | 1) {
+		const allConvs = conversations();
+		if (allConvs.length === 0) return;
+
+		const currentId = page.params.id;
+
+		if (!currentId) {
+			goto(`#/chat/${allConvs[direction === 1 ? 0 : allConvs.length - 1].id}`);
+			return;
+		}
+
+		const idx = allConvs.findIndex((c) => c.id === currentId);
+		if (idx === -1) return;
+
+		const targetIdx = idx + direction;
+		if (targetIdx >= 0 && targetIdx < allConvs.length) {
+			goto(`#/chat/${allConvs[targetIdx].id}`);
+		} else {
+			goto('?new_chat=true#/');
+		}
+	}
+
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
 
-		navigateToPrevConversation: () => {
-			const allConvs = conversations();
-			const currentId = page.params.id;
-
-			if (allConvs.length === 0) return;
-
-			if (!currentId) {
-				goto(`#/chat/${allConvs[allConvs.length - 1].id}`);
-
-				return;
-			}
-
-			const idx = allConvs.findIndex((c) => c.id === currentId);
-			if (idx === -1) return;
-
-			if (idx > 0) {
-				goto(`#/chat/${allConvs[idx - 1].id}`);
-			} else {
-				goto('?new_chat=true#/');
-			}
-		},
-
-		navigateToNextConversation: () => {
-			const allConvs = conversations();
-			const currentId = page.params.id;
-
-			if (allConvs.length === 0) return;
-
-			if (!currentId) {
-				goto(`#/chat/${allConvs[0].id}`);
-
-				return;
-			}
-
-			const idx = allConvs.findIndex((c) => c.id === currentId);
-			if (idx === -1) return;
-
-			if (idx < allConvs.length - 1) {
-				goto(`#/chat/${allConvs[idx + 1].id}`);
-			} else {
-				goto('?new_chat=true#/');
-			}
-		}
+		navigateToPrevConversation: () => navigateToConversation(-1),
+		navigateToNextConversation: () => navigateToConversation(1)
 	});
 
 	function checkApiKey() {

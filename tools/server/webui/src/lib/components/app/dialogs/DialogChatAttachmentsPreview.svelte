@@ -30,23 +30,30 @@
 
 		function handleKeyDown(event: KeyboardEvent) {
 			const target = event.target as HTMLElement;
+
 			if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
 			switch (event.key) {
 				case KeyboardKey.ARROW_LEFT:
 					event.preventDefault();
 					event.stopPropagation();
+
 					document.dispatchEvent(new CustomEvent('chat-attachments-nav', { detail: -1 }));
+
 					break;
 				case KeyboardKey.ARROW_RIGHT:
 					event.preventDefault();
 					event.stopPropagation();
+
 					document.dispatchEvent(new CustomEvent('chat-attachments-nav', { detail: 1 }));
+
 					break;
 				case KeyboardKey.SPACE:
 					event.preventDefault();
 					event.stopPropagation();
+
 					document.dispatchEvent(new CustomEvent('chat-attachments-nav', { detail: 1 }));
+
 					break;
 			}
 		}

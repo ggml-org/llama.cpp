@@ -10,9 +10,9 @@
 		ChatFormPickerList,
 		ChatFormPickerListItem,
 		ChatFormPickerItemHeader,
-		ChatFormPickerListItemSkeleton
+		ChatFormPickerListItemSkeleton,
+		ChatFormPromptPickerArgumentForm
 	} from '$lib/components/app/chat';
-	import ChatFormPromptPickerArgumentForm from './ChatFormPromptPickerArgumentForm.svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 
 	interface Props {

@@ -77,6 +77,7 @@
 	function handleSystemPromptClick() {
 		onSystemPromptAdd?.({ message, files: uploadedFiles });
 	}
+
 	function handleUploadedFileRemove(fileId: string) {
 		onFileRemove?.(fileId);
 	}

@@ -240,6 +240,35 @@ export { default as DialogChatError } from './DialogChatError.svelte';
 export { default as DialogEmptyFileAlert } from './DialogEmptyFileAlert.svelte';
 
 /**
+ * **DialogFileUploadError** - File upload compatibility error
+ *
+ * Alert dialog shown when files cannot be uploaded due to type incompatibility
+ * or model modality restrictions. Displays a categorized list of problematic
+ * files with explanations and shows which file types the current model supports.
+ *
+ * **Architecture:**
+ * - Uses ShadCN AlertDialog for modal display
+ * - Receives structured file error data from ChatScreen
+ * - Triggered during file upload validation in processFiles()
+ *
+ * **Features:**
+ * - Categorized display: unsupported types vs modality restrictions
+ * - File name in monospace with contextual error messages
+ * - Summary of supported file types for the current model
+ * - Scrollable content area for large error lists
+ * - Single "Got it" dismiss button
+ *
+ * @example
+ * ```svelte
+ * <DialogFileUploadError
+ *   bind:open={showFileError}
+ *   fileErrorData={errorData}
+ * />
+ * ```
+ */
+export { default as DialogFileUploadError } from './DialogFileUploadError.svelte';
+
+/**
  * **DialogModelNotAvailable** - Model unavailable error
  *
  * Alert dialog shown when the requested model (from URL params or selection)

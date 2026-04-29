@@ -32,6 +32,7 @@
 	}: Props = $props();
 
 	let contentContainer: HTMLDivElement | undefined = $state();
+
 	const autoScroll = createAutoScrollController();
 
 	$effect(() => {
