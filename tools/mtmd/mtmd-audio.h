@@ -87,6 +87,16 @@ struct mtmd_audio_preprocessor_gemma4a : mtmd_audio_preprocessor {
     mtmd_audio_cache cache;
 };
 
+struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_parakeet(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx), ctx(ctx) { }
+    void initialize() override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+
+  private:
+    mtmd_audio_cache cache;
+    const clip_ctx * ctx;
+};
+
 //
 // streaming ISTFT - converts spectrogram frames back to audio one frame at a time
 //

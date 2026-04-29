@@ -952,6 +952,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_yasa2>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_PARAKEET:
+            {
+                builder = std::make_unique<clip_graph_parakeet>(ctx, img);
+            } break;
         default:
             GGML_ABORT("missing cgraph builder");
     }
@@ -1242,6 +1246,15 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                    } break;
+                case PROJECTOR_TYPE_PARAKEET:
+                    {
+                        get_u32(KEY_AUDIO_SUBSAMPLING_FACTOR, hparams.subsampling_factor, false);
+                        hparams.audio_chunk_len    = 0;
+                        hparams.audio_sample_rate  = 16000;
+                        hparams.audio_n_fft        = 512;
+                        hparams.audio_window_len   = 400;
+                        hparams.audio_hop_len      = 160;
                     } break;
                 case PROJECTOR_TYPE_IDEFICS3:
                     {
@@ -2415,6 +2428,69 @@ struct clip_model_loader {
                         layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
                 } break;
+            case PROJECTOR_TYPE_PARAKEET:
+                {
+                    // Preprocessing tensors
+                    model.mel_filters = get_tensor(TN_MEL_FILTERS);
+                    model.window = get_tensor(TN_WINDOW);
+
+                    // Subsampling layers (conv1d)
+                    for (int i : {0, 2, 3, 5, 6}) {
+                        model.pre_encode_conv_X_w[i] = get_tensor(string_format(TN_CONV1D, i, "weight"));
+                        model.pre_encode_conv_X_b[i] = get_tensor(string_format(TN_CONV1D, i, "bias"));
+                    }
+                    model.pre_encode_out_w = get_tensor(string_format(TN_PRE_ENCODE_OUT, "weight"));
+                    model.pre_encode_out_b = get_tensor(string_format(TN_PRE_ENCODE_OUT, "bias"));
+
+                    // Projection layers
+                    model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"), false);
+                    model.mm_0_w        = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"), false);
+                    model.mm_1_w        = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"), false);
+
+                    // Encoder layers
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        auto & layer = model.layers[il];
+
+                        // Attention (from shared above)
+
+                        // Relative position encoding
+                        layer.linear_pos_w = get_tensor(string_format(TN_LINEAR_POS, prefix, il, "weight"));
+                        layer.pos_bias_u   = get_tensor(string_format(TN_POS_BIAS_U, prefix, il));
+                        layer.pos_bias_v   = get_tensor(string_format(TN_POS_BIAS_V, prefix, il));
+
+                        // Convolution module
+                        layer.conv_pw1_w     = get_tensor(string_format(TN_CONV_PW1,       prefix, il, "weight"));
+                        layer.conv_pw1_b     = get_tensor(string_format(TN_CONV_PW1,       prefix, il, "bias"), false);
+                        layer.conv_dw_w      = get_tensor(string_format(TN_CONV_DW,        prefix, il, "weight"));
+                        layer.conv_dw_b      = get_tensor(string_format(TN_CONV_DW,        prefix, il, "bias"), false);
+                        layer.conv_norm_w    = get_tensor(string_format(TN_CONV_NORM,      prefix, il, "weight"));
+                        layer.conv_norm_b    = get_tensor(string_format(TN_CONV_NORM,      prefix, il, "bias"), false);
+                        layer.conv_norm_mean = get_tensor(string_format(TN_CONV_NORM_MEAN, prefix, il), false);
+                        layer.conv_norm_var  = get_tensor(string_format(TN_CONV_NORM_VAR,  prefix, il), false);
+                        layer.conv_pw2_w     = get_tensor(string_format(TN_CONV_PW2,       prefix, il, "weight"));
+                        layer.conv_pw2_b     = get_tensor(string_format(TN_CONV_PW2,       prefix, il, "bias"), false);
+
+                        // Feed-forward networks
+                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "weight"));
+                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "bias"), false);
+
+                        layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "weight"));
+                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "bias"), false);
+                        layer.ff_up_1_w   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "weight"));
+                        layer.ff_up_1_b   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "bias"), false);
+                        layer.ff_down_1_w = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "weight"));
+                        layer.ff_down_1_b = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "bias"), false);
+
+                        // Layer norms
+                        layer.norm_conv_w = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"));
+                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"), false);
+                    }
+
+                    model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
+                    model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
+                    model.mm_model_mlp_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
+
+                } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
         }
@@ -3105,6 +3181,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 }
                 n_patches = n;
             } break;
+        case PROJECTOR_TYPE_PARAKEET:
+            {
+                n_patches = (img->nx + (params.subsampling_factor - 1)) / params.subsampling_factor;
+            } break;
         default:
             GGML_ABORT("unsupported projector type");
     }
@@ -3225,7 +3305,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         const auto & mel_inp = imgs.entries[0];
         const int n_step = mel_inp->nx;
         const int n_mel  = mel_inp->ny;
+
         std::vector<float> inp_raw(n_step * n_mel);
+
         std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
         set_input_f32("inp_raw", inp_raw);
     }
@@ -3701,6 +3783,23 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_f32("pos_emb", pos_emb);
             } break;
+        case PROJECTOR_TYPE_PARAKEET:
+            {
+                struct ggml_tensor * attn_mask = ggml_graph_get_tensor(gf, "attn_mask");
+                const int n_q = attn_mask->ne[1];
+                const int n_k = attn_mask->ne[0];
+                const int n_tokens_real = (1101 + hparams.subsampling_factor-1) / hparams.subsampling_factor;
+                const float mask_value  = -1e30f;
+
+                std::vector<float> mask_data(n_q * n_k);
+                for (int q = 0; q < n_q; ++q) {
+                    for (int k = 0; k < n_k; ++k) {
+                        bool is_padding = (k >= n_tokens_real);
+                        mask_data[q * n_k + k] = (is_padding) ? mask_value : 0.0f;
+                    }
+                }
+                ggml_backend_tensor_set(attn_mask, mask_data.data(), 0, mask_data.size() * sizeof(float));
+            } break;
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -3851,6 +3950,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
+        case PROJECTOR_TYPE_PARAKEET:
+            return ctx->model.mm_1_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -3930,6 +4031,14 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
 const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx) {
     return &ctx->model.hparams;
+}
+
+struct ggml_tensor * clip_get_mel_filter_tensor(const struct clip_ctx * ctx) {
+    return ctx->model.mel_filters;
+}
+
+struct ggml_tensor * clip_get_window_tensor(const struct clip_ctx * ctx) {
+    return ctx->model.window;
 }
 
 //

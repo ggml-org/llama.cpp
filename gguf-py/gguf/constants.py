@@ -339,6 +339,7 @@ class Keys:
         FEED_FORWARD_LENGTH = "clip.audio.feed_forward_length"
         PROJECTION_DIM      = "clip.audio.projection_dim"
         BLOCK_COUNT         = "clip.audio.block_count"
+        SUBSAMPLING_FACTOR  = "clip.audio.subsampling_factor"
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
@@ -854,6 +855,10 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_CONV_NORM        = auto() # SSM conv
     A_ENC_CONV_PW1         = auto()
     A_ENC_CONV_PW2         = auto()
+    A_ENC_CONV_NORM_MEAN   = auto() # parakeet
+    A_ENC_CONV_NORM_VAR    = auto() # parakeet
+    A_ENC_MEL_FILTERS      = auto() # parakeet
+    A_ENC_WINDOW           = auto() # parakeet
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -1333,6 +1338,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_ENC_CONV_NORM:           "a.blk.{bid}.conv_norm",
     MODEL_TENSOR.A_ENC_CONV_PW1:            "a.blk.{bid}.conv_pw1",
     MODEL_TENSOR.A_ENC_CONV_PW2:            "a.blk.{bid}.conv_pw2",
+    MODEL_TENSOR.A_ENC_CONV_NORM_MEAN:      "a.blk.{bid}.conv_norm_mean",
+    MODEL_TENSOR.A_ENC_CONV_NORM_VAR:       "a.blk.{bid}.conv_norm_var",
+    MODEL_TENSOR.A_ENC_MEL_FILTERS:         "a.mel_filters",
+    MODEL_TENSOR.A_ENC_WINDOW:              "a.window",
     # NextN/MTP
     MODEL_TENSOR.NEXTN_EH_PROJ:             "blk.{bid}.nextn.eh_proj",
     MODEL_TENSOR.NEXTN_EMBED_TOKENS:        "blk.{bid}.nextn.embed_tokens",
@@ -1474,6 +1483,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_CONV_NORM,
         MODEL_TENSOR.A_ENC_CONV_PW1,
         MODEL_TENSOR.A_ENC_CONV_PW2,
+        MODEL_TENSOR.A_ENC_CONV_NORM_MEAN,
+        MODEL_TENSOR.A_ENC_CONV_NORM_VAR,
+        MODEL_TENSOR.A_ENC_MEL_FILTERS,
+        MODEL_TENSOR.A_ENC_WINDOW,
         MODEL_TENSOR.A_MM_INP_PROJ,
         MODEL_TENSOR.A_MM_SOFT_EMB_NORM,
         MODEL_TENSOR.A_MM_EMBEDDING,
@@ -4158,6 +4171,7 @@ class VisionProjectorType:
     NEMOTRON_V2_VL = "nemotron_v2_vl"
     HUNYUANOCR     = "hunyuanocr"
     HUNYUANVL      = "hunyuanvl"
+    PARAKEET       = "parakeet"
 
 
 # Items here are (block size, type size)

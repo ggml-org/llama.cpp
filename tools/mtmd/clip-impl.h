@@ -64,6 +64,8 @@
 #define KEY_A_NUM_MEL_BINS      "clip.audio.num_mel_bins"
 #define KEY_A_PROJ_STACK_FACTOR "clip.audio.projector.stack_factor"
 
+#define KEY_AUDIO_SUBSAMPLING_FACTOR "clip.audio.subsampling_factor"
+
 
 //
 // tensor name constants
@@ -252,6 +254,12 @@
 #define TN_YASA_STAGE_DOWN_CONV  "v.stage.%d.down.conv.%s"
 #define TN_YASA_STAGE_BLK        "v.stage.%d.blk.%d.%s.%s"
 
+// parakeet
+#define TN_MEL_FILTERS           "a.mel_filters"
+#define TN_WINDOW                "a.window"
+#define TN_CONV_NORM_MEAN        "%s.blk.%d.conv_norm_mean"
+#define TN_CONV_NORM_VAR         "%s.blk.%d.conv_norm_var"
+
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
@@ -304,6 +312,7 @@ enum projector_type {
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANOCR,
     PROJECTOR_TYPE_HUNYUANVL,
+    PROJECTOR_TYPE_PARAKEET,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -351,6 +360,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
     { PROJECTOR_TYPE_HUNYUANOCR, "hunyuanocr"},
     { PROJECTOR_TYPE_HUNYUANVL,  "hunyuanvl"},
+    { PROJECTOR_TYPE_PARAKEET,  "parakeet"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

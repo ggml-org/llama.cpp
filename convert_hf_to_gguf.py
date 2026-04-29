@@ -4463,15 +4463,28 @@ class NemotronNanoV2VLModel(MmprojModel):
             return
         super().dequant_model()
 
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return self.global_config.get("sound_config")
+
     def set_gguf_parameters(self):
         if "image_mean" not in self.preprocessor_config:
             self.preprocessor_config["image_mean"] = [0.485, 0.456, 0.406]
         if "image_std" not in self.preprocessor_config:
             self.preprocessor_config["image_std"] = [0.229, 0.224, 0.225]
 
+        if self.hparams_audio is not None:
+            self.has_vision_encoder = True
+            self.has_audio_encoder = True
+            self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["num_mel_bins"])
+            self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+            self.gguf_writer.add_audio_subsampling_factor(self.hparams_audio["subsampling_factor"])
+            self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.PARAKEET)
+            self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.NEMOTRON_V2_VL)
+        else:
+            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.NEMOTRON_V2_VL)
+
         super().set_gguf_parameters()
         hparams = self.global_config
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.NEMOTRON_V2_VL)
         self.gguf_writer.add_vision_attention_layernorm_eps(1e-6)
         self.gguf_writer.add_vision_use_gelu(True)
         downsample_ratio = hparams.get("downsample_ratio", 0.5)
@@ -4480,10 +4493,43 @@ class NemotronNanoV2VLModel(MmprojModel):
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".position_embd." in new_name or "pos_embed" in new_name:
             return gguf.GGMLQuantizationType.F32
+
+        if "sound_encoder" in name or new_name.startswith("mm.a."):
+            if "bias" in new_name or "norm" in new_name:
+                return gguf.GGMLQuantizationType.F32
+            if "conv" in new_name and "weight" in new_name:
+                return gguf.GGMLQuantizationType.F32
+
         return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        sound_config = self.global_config.get("sound_config")
+        if sound_config:
+            # Generate relative position embeddings.
+            d_model = sound_config.get("hidden_size")
+            max_len = 5000 * 2 - 1
+
+            pe = torch.zeros(max_len, d_model, dtype=torch.float32)
+            log_10000 = math.log(10000.0)
+
+            for idx in range(max_len):
+                position = float((max_len // 2) - idx)
+
+                for i in range(0, d_model, 2):
+                    div_term = math.exp(-(float(i) * log_10000 / float(d_model)))
+                    angle = position * div_term
+
+                    pe[idx, i] = math.sin(angle)
+                    if i + 1 < d_model:
+                        pe[idx, i + 1] = math.cos(angle)
+
+            yield ("a.position_embd.weight", pe)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "input_conditioner" in name:
+            return
+
+        if "language_model" in name:
             return
 
         # mtmd does not support video yet so skip tensors related to video.
@@ -4517,8 +4563,33 @@ class NemotronNanoV2VLModel(MmprojModel):
             n_embd = self.hparams["hidden_size"]
             data_torch = data_torch.reshape(n_embd, 3, patch_size, patch_size)
 
-        if name.startswith("vision_model.radio_model.model.") or name.startswith("mlp1."):
-            yield from super().modify_tensors(data_torch, name, bid)
+        # num_batches is only use for training not inference.
+        if "conv.norm" in name and "num_batches" in name:
+            return
+
+        if "depthwise_conv.weight" in name:
+            data_torch = data_torch.unsqueeze(-1)
+            data_torch = data_torch.permute(3, 1, 0, 2).contiguous()
+
+        if "pointwise_conv" in name and name.endswith(".weight"):
+            if len(data_torch.shape) == 3 and data_torch.shape[2] == 1:
+                data_torch = data_torch.reshape(data_torch.shape[0], data_torch.shape[1])
+
+        if "subsampling.layers" in name and name.endswith(".bias"):
+            if len(data_torch.shape) == 1:
+                data_torch = data_torch.reshape(1, -1, 1, 1)
+
+        if "pointwise_conv" in name and name.endswith(".bias"):
+            if len(data_torch.shape) == 1:
+                data_torch = data_torch.reshape(1, -1, 1, 1)
+
+        if name.startswith(("vision_model.radio_model.model.", "mlp1.", "sound_encoder.", "sound_projection.")):
+            for mapped_name, tensor in super().modify_tensors(data_torch, name, bid):
+                if name.startswith("sound_projection.") and mapped_name.startswith("mm.model.mlp."):
+                    mapped_name = mapped_name.replace("mm.model.mlp.", "mm.a.mlp.")
+                yield (mapped_name, tensor)
+        else:
+            yield (name, data_torch)
 
 
 @ModelBase.register("WavTokenizerDec")

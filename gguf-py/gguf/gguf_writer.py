@@ -1260,6 +1260,9 @@ class GGUFWriter:
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
 
+    def add_audio_subsampling_factor(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.SUBSAMPLING_FACTOR, value)
+
     def add_xielu_alpha_p(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.ALPHA_P, values)
 
