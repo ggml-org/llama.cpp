@@ -2680,7 +2680,7 @@ static bool ggml_hexagon_supported_set_rows(const struct ggml_hexagon_session * 
         return false;
     }
 
-    if (dst->type != GGML_TYPE_F16) {
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
         return false;
     }
 
