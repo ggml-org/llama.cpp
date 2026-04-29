@@ -392,6 +392,102 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
     }
 }
 
+void ggml_metal_set_tensor_2d_async(ggml_metal_t ctx, struct ggml_tensor * tensor, const void * data,
+        size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
+    @autoreleasepool {
+        // wrap the source data into a Metal buffer
+        id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
+        id<MTLBuffer> buf_src = [device newBufferWithBytes:data
+                                                    length:stride_data * n_copies
+                                                   options:MTLResourceStorageModeShared];
+
+        GGML_ASSERT(buf_src);
+
+        struct ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(tensor);
+        if (bid_dst.metal == nil) {
+            GGML_ABORT("%s: failed to find buffer for tensor '%s'\n", __func__, tensor->name);
+        }
+
+        bid_dst.offs += offset;
+
+        // queue the copy operation into the queue of the Metal context
+        id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx->dev);
+        id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+        id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+        [encoder copyFromBuffer:buf_src
+                   sourceOffset:0
+            sourceBytesPerRow:stride_data
+        sourceBytesPerImage:0
+               sourceHeight:n_copies
+              sourceDepth:1
+                  toBuffer:bid_dst.metal
+         destinationOffset:bid_dst.offs
+       destinationBytesPerRow:stride_tensor
+   destinationBytesPerImage:0
+          destinationHeight:n_copies
+       destinationDepth:1
+                     size:MTLSizeMake(size, 1, 1)];
+
+        [encoder endEncoding];
+        [cmd_buf commit];
+        [buf_src release];
+
+        [ctx->cmd_bufs_ext addObject:cmd_buf];
+        ctx->cmd_buf_last = cmd_buf;
+
+        [cmd_buf retain];
+    }
+}
+
+void ggml_metal_get_tensor_2d_async(ggml_metal_t ctx, const struct ggml_tensor * tensor, void * data,
+        size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
+    @autoreleasepool {
+        id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
+        id<MTLBuffer> buf_dst = [device newBufferWithBytesNoCopy:data
+                                                          length:stride_data * n_copies
+                                                         options:MTLResourceStorageModeShared
+                                                     deallocator:nil];
+
+        GGML_ASSERT(buf_dst);
+
+        struct ggml_metal_buffer_id bid_src = ggml_metal_get_buffer_id(tensor);
+        if (bid_src.metal == nil) {
+            GGML_ABORT("%s: failed to find buffer for tensor '%s'\n", __func__, tensor->name);
+        }
+
+        bid_src.offs += offset;
+
+        // queue the copy operation into the queue of the Metal context
+        id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx->dev);
+        id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+        id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+        [encoder copyFromBuffer:bid_src.metal
+                   sourceOffset:bid_src.offs
+            sourceBytesPerRow:stride_tensor
+        sourceBytesPerImage:0
+               sourceHeight:n_copies
+              sourceDepth:1
+                  toBuffer:buf_dst
+         destinationOffset:0
+       destinationBytesPerRow:stride_data
+   destinationBytesPerImage:0
+          destinationHeight:n_copies
+       destinationDepth:1
+                     size:MTLSizeMake(size, 1, 1)];
+
+        [encoder endEncoding];
+        [cmd_buf commit];
+        [buf_dst release];
+
+        [ctx->cmd_bufs_ext addObject:cmd_buf];
+        ctx->cmd_buf_last = cmd_buf;
+
+        [cmd_buf retain];
+    }
+}
+
 bool ggml_metal_cpy_tensor_async(ggml_metal_t ctx_src, ggml_metal_t ctx_dst, const struct ggml_tensor * src, struct ggml_tensor * dst) {
     @autoreleasepool {
         struct ggml_metal_buffer_id bid_src = ggml_metal_get_buffer_id(src);
