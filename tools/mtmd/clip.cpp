@@ -1938,7 +1938,7 @@ struct clip_model_loader {
             case PROJECTOR_TYPE_PALIGEMMA2:
                 {
                     model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
-                    model.mm_input_proj_b = get_tensor(string_format(TN_MM_INP_PROJ_B, "bias"), false);
+                    model.mm_input_proj_b = get_tensor(TN_MM_INP_PROJ_B, false);
                 } break;
             case PROJECTOR_TYPE_GEMMA3:
                 {

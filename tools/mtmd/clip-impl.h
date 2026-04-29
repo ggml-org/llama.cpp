@@ -108,7 +108,7 @@
 #define TN_MM_INP_NORM     "mm.input_norm.weight"
 #define TN_MM_INP_NORM_B   "mm.input_norm.bias"
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3, paligemma2
-#define TN_MM_INP_PROJ_B   "mm.input_projection.%s"    // paligemma2: bias
+#define TN_MM_INP_PROJ_B   "mm.input_projection.bias"  // paligemma2: projector has bias
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
 #define TN_MM_PROJECTOR    "mm.model.fc.%s"             // idefics3, deepseekocr
 #define TN_MM_PATCH_MERGER "mm.patch_merger.%s"         // mistral small 3.1, glm4v
