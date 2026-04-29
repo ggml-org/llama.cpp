@@ -297,37 +297,86 @@ int extract_layer_from_name(const std::string & name) {
 std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgraph * cgraph, bool is_static) {
     ModelParams model_params;
     ComputeParams compute_params;
+    auto get_attention_pattern_case = [](const ggml_tensor * node) -> int {
+        if (node == nullptr) {
+            return -1;
+        }
+
+        switch (node->op) {
+        case GGML_OP_FLASH_ATTN_EXT:
+            if (node->src[0] == nullptr || node->src[1] == nullptr || node->src[3] == nullptr) {
+                return -1;
+            }
+            switch (node->src[1]->op) {
+            case GGML_OP_PERMUTE:
+                // case 0: node op is FLASH_ATTN_EXT, src 1 not null & op is PERMUTE & the permuted tensor src is the view of cache k
+                if (node->src[1]->src[0] != nullptr && node->src[1]->src[0]->op == GGML_OP_VIEW) {
+                    return 0;
+                }
+                break;
+            case GGML_OP_CPY:
+                // case 1: node op is FLASH_ATTN_EXT, src 1 not null & op is CPY & the copied tensor src is PERMUTE & the permuted tensor src is the view of cache k
+                if (node->src[1]->src[0] != nullptr && node->src[1]->src[0]->op == GGML_OP_PERMUTE &&
+                    node->src[1]->src[0]->src[0] != nullptr && node->src[1]->src[0]->src[0]->op == GGML_OP_VIEW) {
+                    return 1;
+                }
+                break;
+            default:
+                break;
+            }
+            break;
+        case GGML_OP_SOFT_MAX:
+            // case 2: node op is SOFT_MAX, src 0 not null & op is MUL_MAT & the src 0 of MUL_MAT is PERMUTE & the permuted tensor src is the view of cache k
+            if (node->src[0] != nullptr && node->src[1] != nullptr && node->src[0]->op == GGML_OP_MUL_MAT &&
+                node->src[0]->src[0] != nullptr && node->src[0]->src[1] != nullptr &&
+                node->src[0]->src[0]->op == GGML_OP_PERMUTE && node->src[0]->src[0]->src[0] != nullptr &&
+                node->src[0]->src[0]->src[0]->op == GGML_OP_VIEW) {
+                return 2;
+            }
+            break;
+        default:
+            break;
+        }
+
+        return -1;
+    };
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
         std::string name = std::string(node->name);
-        if (node->op == GGML_OP_FLASH_ATTN_EXT || (node->op == GGML_OP_SOFT_MAX && node->src[1] != nullptr && node->src[0]->src[1] != nullptr)) {
+        const int attention_pattern_case = get_attention_pattern_case(node);
+        if (attention_pattern_case != -1) {
+            ggml_tensor * cache_k_view = nullptr;
+            ggml_tensor * mask = nullptr;
+
+            switch (attention_pattern_case) {
+            case 0:
+                cache_k_view = node->src[1]->src[0];
+                mask = node->src[3];
+                break;
+            case 1:
+                cache_k_view = node->src[1]->src[0]->src[0];
+                mask = node->src[3];
+                break;
+            case 2:
+                cache_k_view = node->src[0]->src[0]->src[0];
+                mask = node->src[1];
+                break;
+            default:
+                break;
+            }
+
+            assert(cache_k_view != nullptr && mask != nullptr);
+
+            model_params.head_size = cache_k_view->ne[0];
+            model_params.n_heads_kv = cache_k_view->ne[1];
+
             compute_params.input_len = node->src[0]->ne[1];
+            compute_params.token_len_per_seq = node->ne[2];
 
-            auto * q_perm = node->src[0];
-            auto * cache_k_perm = node->src[1];
-            if (node->op == GGML_OP_SOFT_MAX) {
-                q_perm = node->src[0]->src[1];
-                cache_k_perm = node->src[0]->src[0];
-            }
-            model_params.head_size = cache_k_perm->ne[0];
-            model_params.n_heads_kv = cache_k_perm->ne[2];
-            model_params.n_heads = q_perm->ne[2];
-            compute_params.token_len_per_seq = q_perm->ne[1];
-
-            if (cache_k_perm->op == GGML_OP_CPY) {
-                cache_k_perm = cache_k_perm->src[0];
-            }
-            assert(cache_k_perm->op == GGML_OP_PERMUTE);
-            auto * cache_k_view = cache_k_perm->src[0];
-            assert(cache_k_view->op == GGML_OP_VIEW);
-
-            auto * cache_k = cache_k_view->src[0];
+            ggml_tensor * cache_k = cache_k_view->src[0];
             int layer = extract_layer_from_name(cache_k->name);
 
-            auto * mask = node->src[3];
-            if (node->op == GGML_OP_SOFT_MAX) {
-                mask = node->src[1];
-            }
             std::string mask_name(mask->name);
 
             model_params.kv_buffer_ctx_id = ggml_backend_openvino_buffer_get_ctx_id(cache_k->buffer);

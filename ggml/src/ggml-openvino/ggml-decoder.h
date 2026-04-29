@@ -18,7 +18,6 @@ struct ModelParams {
     int ctx_per_seq = -1;
     int ctx_per_seq_swa = -1;
     int n_seq = 1;
-    int n_heads = -1;
     int n_heads_kv = -1;
     int head_size = -1;
     int32_t rope_params[15];

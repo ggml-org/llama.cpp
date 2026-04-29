@@ -407,7 +407,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
         std::shared_ptr<ov::Model> model;
         auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
-        if (m_params.n_heads == -1) {
+        if (m_params.n_heads_kv == -1) {
             // graph is not a LLM, e.g. context-shift graph
             prefill_chunk_size = inp_pos->ne[0];
         }
