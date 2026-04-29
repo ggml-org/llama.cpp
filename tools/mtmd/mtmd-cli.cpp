@@ -81,7 +81,8 @@ struct mtmd_cli_context {
     // chat template
     common_chat_templates_ptr tmpls;
     std::vector<common_chat_msg> chat_history;
-    bool use_jinja = false;
+    bool use_jinja   = false;
+    bool raw_prompt  = false; // true when model has no chat template (e.g. PaliGemma2 PT)
     // TODO: support for --system-prompt with /clear command
 
     // support for legacy templates (models not having EOT token)
@@ -105,12 +106,12 @@ struct mtmd_cli_context {
             exit(1);
         }
 
-        if (!llama_model_chat_template(model, nullptr) && params.chat_template.empty()) {
-            LOG_ERR("Model does not have chat template.\n");
-            LOG_ERR("  For old llava models, you may need to use '--chat-template vicuna'\n");
-            LOG_ERR("  For MobileVLM models, use '--chat-template deepseek'\n");
-            LOG_ERR("  For Mistral Small 3.1, use '--chat-template mistral-v7'\n");
-            exit(1);
+        raw_prompt = !llama_model_chat_template(model, nullptr) && params.chat_template.empty();
+        if (raw_prompt) {
+            LOG_WRN("Model does not have chat template — using raw prompt mode (e.g. PaliGemma2 PT).\n");
+            LOG_WRN("  For old llava models, you may need to use '--chat-template vicuna'\n");
+            LOG_WRN("  For MobileVLM models, use '--chat-template deepseek'\n");
+            LOG_WRN("  For Mistral Small 3.1, use '--chat-template mistral-v7'\n");
         }
 
         tmpls = common_chat_templates_init(model, params.chat_template);
@@ -230,7 +231,15 @@ static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg &
 
 static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     bool add_bos = ctx.chat_history.empty();
-    auto formatted_chat = chat_add_and_format(ctx, msg);
+    std::string formatted_chat;
+    if (ctx.raw_prompt) {
+        // raw mode: pass content directly without chat template wrapping
+        // (used by pre-trained models like PaliGemma2 PT)
+        formatted_chat = msg.content;
+        ctx.chat_history.push_back(msg);
+    } else {
+        formatted_chat = chat_add_and_format(ctx, msg);
+    }
     LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
 
     mtmd_input_text text;
