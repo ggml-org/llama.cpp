@@ -58,9 +58,6 @@ llm_build_qwen3moe::llm_build_qwen3moe(const llama_model & model, const llm_grap
             cur = build_attn(inp_attn,
                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
-            if (model.layers[il].wo_s) {
-                cur = ggml_mul(ctx0, cur, model.layers[il].wo_s);
-            }
         }
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);

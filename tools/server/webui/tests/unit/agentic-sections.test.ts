@@ -85,7 +85,7 @@ describe('deriveAgenticSections', () => {
 				{ id: 'call_1', type: 'function', function: { name: 'bash', arguments: '{}' } }
 			])
 		});
-		const sections = deriveAgenticSections(msg, []);
+		const sections = deriveAgenticSections(msg, [], [], true);
 		expect(sections).toHaveLength(1);
 		expect(sections[0].type).toBe(AgenticSectionType.TOOL_CALL_PENDING);
 		expect(sections[0].toolName).toBe('bash');

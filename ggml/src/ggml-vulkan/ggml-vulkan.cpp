@@ -20,12 +20,19 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #define VULKAN_HPP_DEFAULT_DISPATCHER ggml_vk_default_dispatcher()
 
 #include <vulkan/vulkan.hpp>
-// SPIRV-Headers: LunarG Windows SDK uses Include/spirv-headers/spirv.hpp (not spirv/unified1/). MinGW/MSYS2 and
-// Linux packages use Khronos layout spirv/unified1/spirv.hpp. See docs/build.md#vulkan.
-#if defined(_WIN32) && !defined(__MINGW32__)
-#include <spirv-headers/spirv.hpp>
+
+// SPIR-V Headers: different SDK installations expose different include paths.
+// LunarG Vulkan SDK on Windows typically provides <spirv-headers/spirv.hpp>.
+// Linux packages, MSYS2 and MinGW often use the Khronos layout <spirv/unified1/spirv.hpp>.
+#if __has_include(<spirv/unified1/spirv.hpp>)
+#    include <spirv/unified1/spirv.hpp>
+#elif __has_include(<spirv-headers/spirv.hpp>)
+#    include <spirv-headers/spirv.hpp>
+#elif __has_include(<spirv.hpp>)
+#    include <spirv.hpp>
 #else
-#include <spirv/unified1/spirv.hpp>
+     // Fallback to let the compiler throw a standard "file not found" error
+#    include <spirv/unified1/spirv.hpp>
 #endif
 
 #include <algorithm>
@@ -13007,6 +13014,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
             if (vk_perf_logger_enabled && vk_perf_logger_concurrent) {
                 ctx->query_node_idx[ctx->query_idx] = node_idx;
                 compute_ctx->s->buffer->buf.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->query_pool, ctx->query_idx++);
+                ggml_vk_sync_buffers(ctx, compute_ctx);
             }
         }
         // Add all fused nodes to the unsynchronized lists.
@@ -14496,6 +14504,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         compute_ctx = ggml_vk_get_compute_ctx(ctx);
         ctx->query_idx = 0;
         compute_ctx->s->buffer->buf.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->query_pool, ctx->query_idx++);
+        ggml_vk_sync_buffers(ctx, compute_ctx);
     }
 
     ctx->prealloc_y_last_pipeline_used = nullptr;
@@ -14732,6 +14741,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                 ctx->query_nodes[ctx->query_idx] = cgraph->nodes[i];
                 ctx->query_fusion_names[ctx->query_idx] = fusion_string;
                 compute_ctx->s->buffer->buf.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->query_pool, ctx->query_idx++);
+                ggml_vk_sync_buffers(ctx, compute_ctx);
             } else {
                 // track a fusion string and number of fused ops for the current node_idx
                 ctx->query_fusion_names[i] = fusion_string;

@@ -45,6 +45,14 @@ struct Params {
 };
 
 @group(0) @binding(0) var<storage, read_write> s_in: array<f32>;
+#ifdef XBC_OVERLAP
+@group(0) @binding(1) var<storage, read_write> x_B_C_merged: array<f32>;
+@group(0) @binding(2) var<storage, read_write> dt: array<f32>;
+@group(0) @binding(3) var<storage, read_write> A: array<f32>;
+@group(0) @binding(4) var<storage, read_write> ids: array<i32>;
+@group(0) @binding(5) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(6) var<uniform> params: Params;
+#else
 @group(0) @binding(1) var<storage, read_write> x: array<f32>;
 @group(0) @binding(2) var<storage, read_write> dt: array<f32>;
 @group(0) @binding(3) var<storage, read_write> A: array<f32>;
@@ -53,6 +61,7 @@ struct Params {
 @group(0) @binding(6) var<storage, read_write> ids: array<i32>;
 @group(0) @binding(7) var<storage, read_write> dst: array<f32>;
 @group(0) @binding(8) var<uniform> params: Params;
+#endif
 
 var<workgroup> shared_x_dt: array<f32, TOKENS_PER_TILE>;
 var<workgroup> shared_dtsp: array<f32, TOKENS_PER_TILE>;
@@ -98,7 +107,11 @@ fn main(
                 let dt0 = dt[dt_idx];
                 let dtsp = select(log(1.0 + exp(dt0)), dt0, dt0 > 20.0);
                 shared_dtsp[tid] = dtsp;
+#ifdef XBC_OVERLAP
+                shared_x_dt[tid] = x_B_C_merged[x_idx] * dtsp;
+#else
                 shared_x_dt[tid] = x[x_idx] * dtsp;
+#endif
             }
         }
 
@@ -116,16 +129,28 @@ fn main(
 
             let b_idx = params.offset_B + tid + g * params.stride_B1 + token * params.stride_B2 + i3 * params.stride_B3;
             let c_idx = params.offset_C + tid + g * params.stride_C1 + token * params.stride_C2 + i3 * params.stride_C3;
+#ifdef XBC_OVERLAP
+            let s = s_prev * dA + x_B_C_merged[b_idx] * x_dt;
+#else
             let s = s_prev * dA + B[b_idx] * x_dt;
+#endif
             s_prev = s;
 
 #ifdef USE_SUBGROUP_REDUCTION
+#ifdef XBC_OVERLAP
+            let subgroup_partial = subgroupAdd(s * x_B_C_merged[c_idx]);
+#else
             let subgroup_partial = subgroupAdd(s * C[c_idx]);
+#endif
             if (subgroup_invocation_id == 0u) {
                 shared_reduce[reduce_idx - tid + subgroup_id] = subgroup_partial;
             }
 #else
+#ifdef XBC_OVERLAP
+            shared_reduce[reduce_idx] = s * x_B_C_merged[c_idx];
+#else
             shared_reduce[reduce_idx] = s * C[c_idx];
+#endif
 #endif
 
             workgroupBarrier();
