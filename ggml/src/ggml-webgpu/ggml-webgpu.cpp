@@ -1404,7 +1404,6 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
                 case GGML_TYPE_Q5_0:
                 case GGML_TYPE_Q5_1:
                 case GGML_TYPE_Q8_0:
-                case GGML_TYPE_Q8_1:
                 case GGML_TYPE_Q6_K:
                 case GGML_TYPE_Q4_K:
                 case GGML_TYPE_Q5_K:
@@ -1597,10 +1596,35 @@ static webgpu_encoded_op ggml_webgpu_mul_mat_id(webgpu_context & ctx,
     // Determine if we should use mat-vec fast path
     if (is_vec) {
         switch (src1->type) {
+            case GGML_TYPE_F16:
+                if (src0->type == GGML_TYPE_F16) {
+                    return ggml_webgpu_mul_mat_id_vec(ctx, src0, src1, src2, dst);
+                }
+                break;
             case GGML_TYPE_F32:
                 switch (src0->type) {
+                    case GGML_TYPE_F32:
+                    case GGML_TYPE_F16:
+                    case GGML_TYPE_Q1_0:
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q5_0:
+                    case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_Q2_K:
+                    case GGML_TYPE_Q3_K:
+                    case GGML_TYPE_Q4_K:
+                    case GGML_TYPE_Q5_K:
                     case GGML_TYPE_Q6_K:
+                    case GGML_TYPE_IQ1_S:
+                    case GGML_TYPE_IQ1_M:
+                    case GGML_TYPE_IQ2_XXS:
+                    case GGML_TYPE_IQ2_XS:
+                    case GGML_TYPE_IQ2_S:
+                    case GGML_TYPE_IQ3_XXS:
+                    case GGML_TYPE_IQ3_S:
+                    case GGML_TYPE_IQ4_NL:
+                    case GGML_TYPE_IQ4_XS:
                         return ggml_webgpu_mul_mat_id_vec(ctx, src0, src1, src2, dst);
                     default:
                         break;
@@ -3960,6 +3984,17 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                         case GGML_TYPE_Q5_K:
                         case GGML_TYPE_Q6_K:
                             supports_op = true;
+                            break;
+                        case GGML_TYPE_IQ1_S:
+                        case GGML_TYPE_IQ1_M:
+                        case GGML_TYPE_IQ2_XXS:
+                        case GGML_TYPE_IQ2_XS:
+                        case GGML_TYPE_IQ2_S:
+                        case GGML_TYPE_IQ3_XXS:
+                        case GGML_TYPE_IQ3_S:
+                        case GGML_TYPE_IQ4_NL:
+                        case GGML_TYPE_IQ4_XS:
+                            supports_op = op->ne[2] == 1;  // only vec for now.
                             break;
                         default:
                             break;

@@ -864,9 +864,11 @@ struct ggml_webgpu_mul_mat_id_pipeline_key {
     ggml_type src0_type;
     ggml_type src1_type;
     uint32_t  n_experts;
+    int       vectorized;
 
     bool operator==(const ggml_webgpu_mul_mat_id_pipeline_key & other) const {
-        return src0_type == other.src0_type && src1_type == other.src1_type && n_experts == other.n_experts;
+        return src0_type == other.src0_type && src1_type == other.src1_type && n_experts == other.n_experts &&
+               vectorized == other.vectorized;
     }
 };
 
@@ -876,6 +878,7 @@ struct ggml_webgpu_mul_mat_id_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.src0_type);
         ggml_webgpu_hash_combine(seed, key.src1_type);
         ggml_webgpu_hash_combine(seed, key.n_experts);
+        ggml_webgpu_hash_combine(seed, key.vectorized);
         return seed;
     }
 };
@@ -2113,6 +2116,10 @@ class ggml_webgpu_shader_lib {
         key.src0_type                           = context.src0->type;
         key.src1_type                           = context.src1->type;
         key.n_experts                           = context.n_experts;
+        key.vectorized = (context.src0->ne[0] % 4 == 0 &&
+                          (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
+                             1 :
+                             0;
 
         auto it = mul_mat_id_vec_pipelines.find(key);
         if (it != mul_mat_id_vec_pipelines.end()) {
@@ -2139,10 +2146,12 @@ class ggml_webgpu_shader_lib {
         switch (context.src0->type) {
             case GGML_TYPE_F32:
                 defines.push_back("SRC0_INNER_TYPE=f32");
+                defines.push_back("MUL_ACC_FLOAT");
                 variant += "_f32";
                 break;
             case GGML_TYPE_F16:
                 defines.push_back("SRC0_INNER_TYPE=f16");
+                defines.push_back("MUL_ACC_FLOAT");
                 variant += "_f16";
                 break;
             default:
@@ -2158,18 +2167,37 @@ class ggml_webgpu_shader_lib {
                     defines.push_back("MUL_ACC_" + type_upper);
                     defines.push_back("U32_DEQUANT_HELPERS");
                     defines.push_back("SRC0_INNER_TYPE=u32");
+                    switch (context.src0->type) {
+                        case GGML_TYPE_IQ1_S:
+                        case GGML_TYPE_IQ1_M:
+                        case GGML_TYPE_IQ2_S:
+                        case GGML_TYPE_IQ3_S:
+                        case GGML_TYPE_IQ4_NL:
+                        case GGML_TYPE_IQ4_XS:
+                            defines.push_back(type_upper + "_GRID");
+                            break;
+                        case GGML_TYPE_IQ2_XXS:
+                        case GGML_TYPE_IQ2_XS:
+                        case GGML_TYPE_IQ3_XXS:
+                            defines.push_back(type_upper + "_GRID");
+                            defines.push_back(type_upper + "_TABLES");
+                            break;
+                        default:
+                            break;
+                    }
                     break;
                 }
         }
 
-        // supports only SCALAR for now.
-        defines.push_back("SCALAR");
+        // VEC/SCALAR controls
+        defines.push_back(key.vectorized ? "VEC" : "SCALAR");
 
         uint32_t wg_size        = WEBGPU_MUL_MAT_VEC_WG_SIZE;
         uint32_t outputs_per_wg = WEBGPU_MUL_MAT_VEC_FLOAT_OUTPUTS_PER_WG;
 
-        // supports Q8, Q6_K for now.
-        if (key.src0_type >= GGML_TYPE_Q2_K) {
+        if (key.src0_type == GGML_TYPE_Q1_0) {
+            outputs_per_wg = WEBGPU_MUL_MAT_VEC_LEGACY_Q_OUTPUTS_PER_WG;
+        } else if (key.src0_type >= GGML_TYPE_Q2_K) {
             outputs_per_wg = WEBGPU_MUL_MAT_VEC_K_Q_OUTPUTS_PER_WG;
         } else if (key.src0_type >= GGML_TYPE_Q4_0) {
             outputs_per_wg = WEBGPU_MUL_MAT_VEC_LEGACY_Q_OUTPUTS_PER_WG;
@@ -2182,13 +2210,16 @@ class ggml_webgpu_shader_lib {
         defines.push_back(std::string("OUTPUTS_PER_WG=") + std::to_string(outputs_per_wg));
         defines.push_back(context.supports_subgroups ? "USE_SUBGROUP_REDUCTION" : "USE_WORKGROUP_REDUCTION");
         variant += context.supports_subgroups ? "_sg_reduce" : "_wg_reduce";
+        if (key.vectorized) {
+            variant += "_vectorized";
+        }
 
         defines.push_back(std::string("N_EXPERTS=") + std::to_string(context.n_experts));
 
         auto processed = preprocessor.preprocess(shader_src, defines);
 
         auto decisions            = std::make_shared<ggml_webgpu_mul_mat_vec_shader_decisions>();
-        decisions->wg_size        = WEBGPU_MUL_MAT_WG_SIZE_M * WEBGPU_MUL_MAT_WG_SIZE_N;
+        decisions->wg_size        = wg_size;
         decisions->outputs_per_wg = outputs_per_wg;
 
         webgpu_pipeline pipeline      = ggml_webgpu_create_pipeline(device, processed, variant);
