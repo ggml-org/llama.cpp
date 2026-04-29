@@ -67,7 +67,6 @@
 
 		try {
 			const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
 			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
 
 			if (!initialized) {
@@ -88,6 +87,7 @@
 
 	function handleResourceClick(resource: MCPResourceInfo) {
 		mcpStore.attachResource(resource.uri);
+
 		onResourceSelect?.(resource);
 		onClose?.();
 	}
@@ -144,6 +144,7 @@
 		const sortedResources = [...resources].sort((a, b) => {
 			const orderA = serverOrderMap.get(a.serverName) ?? Number.MAX_SAFE_INTEGER;
 			const orderB = serverOrderMap.get(b.serverName) ?? Number.MAX_SAFE_INTEGER;
+
 			return orderA - orderB;
 		});
 

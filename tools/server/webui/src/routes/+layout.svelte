@@ -96,6 +96,34 @@
 		}
 	});
 
+	function checkApiKey() {
+		const apiKey = config().apiKey;
+
+		if (
+			(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
+			page.status !== 401 &&
+			page.status !== 403
+		) {
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json'
+			};
+
+			if (apiKey && apiKey.trim() !== '') {
+				headers.Authorization = `Bearer ${apiKey.trim()}`;
+			}
+
+			fetch(`${base}/props`, { headers })
+				.then((response) => {
+					if (response.status === 401 || response.status === 403) {
+						window.location.reload();
+					}
+				})
+				.catch((e) => {
+					console.error('Error checking API key:', e);
+				});
+		}
+	}
+
 	function handleTitleUpdateCancel() {
 		titleUpdateDialogOpen = false;
 
@@ -183,31 +211,7 @@
 
 	// Monitor API key changes and redirect to error page if removed or changed when required
 	$effect(() => {
-		const apiKey = config().apiKey;
-
-		if (
-			(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
-			page.status !== 401 &&
-			page.status !== 403
-		) {
-			const headers: Record<string, string> = {
-				'Content-Type': 'application/json'
-			};
-
-			if (apiKey && apiKey.trim() !== '') {
-				headers.Authorization = `Bearer ${apiKey.trim()}`;
-			}
-
-			fetch(`${base}/props`, { headers })
-				.then((response) => {
-					if (response.status === 401 || response.status === 403) {
-						window.location.reload();
-					}
-				})
-				.catch((e) => {
-					console.error('Error checking API key:', e);
-				});
-		}
+		checkApiKey();
 	});
 
 	// Set up title update confirmation callback

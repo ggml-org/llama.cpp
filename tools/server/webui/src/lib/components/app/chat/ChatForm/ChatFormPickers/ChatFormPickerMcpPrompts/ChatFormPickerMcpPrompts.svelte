@@ -5,7 +5,6 @@
 	import { KeyboardKey } from '$lib/enums';
 	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
-	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import {
 		ChatFormPickerPopover,
 		ChatFormPickerList,
@@ -14,6 +13,7 @@
 		ChatFormPickerListItemSkeleton
 	} from '$lib/components/app/chat';
 	import ChatFormPromptPickerArgumentForm from './ChatFormPromptPickerArgumentForm.svelte';
+	import Badge from '$lib/components/ui/badge/badge.svelte';
 
 	interface Props {
 		class?: string;

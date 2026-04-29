@@ -6,6 +6,7 @@
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import { getLanguageFromFilename } from '$lib/utils';
 	import { convertPDFToImage } from '$lib/utils/browser-only';
+	import { PdfViewMode } from '$lib/enums';
 
 	interface Props {
 		currentItem: ChatAttachmentDisplayItem | null;
@@ -18,7 +19,7 @@
 	let { currentItem, displayName, displayTextContent, hasVisionModality, activeModelId }: Props =
 		$props();
 
-	let pdfViewMode = $state<'text' | 'pages'>('pages');
+	let pdfViewMode = $state<PdfViewMode>(PdfViewMode.PAGES);
 	let pdfImages = $state<string[]>([]);
 	let pdfImagesLoading = $state(false);
 	let pdfImagesError = $state<string | null>(null);
@@ -74,7 +75,7 @@
 	}
 
 	$effect(() => {
-		if (pdfViewMode === 'pages') {
+		if (pdfViewMode === PdfViewMode.PAGES) {
 			loadPdfImages();
 		}
 	});
@@ -82,9 +83,9 @@
 
 <div class="mb-4 flex items-center justify-end gap-2">
 	<Button
-		variant={pdfViewMode === 'text' ? 'default' : 'outline'}
+		variant={pdfViewMode === PdfViewMode.TEXT ? 'default' : 'outline'}
 		size="sm"
-		onclick={() => (pdfViewMode = 'text')}
+		onclick={() => (pdfViewMode = PdfViewMode.TEXT)}
 		disabled={pdfImagesLoading}
 	>
 		<FileText class="mr-1 h-4 w-4" />
@@ -92,9 +93,9 @@
 	</Button>
 
 	<Button
-		variant={pdfViewMode === 'pages' ? 'default' : 'outline'}
+		variant={pdfViewMode === PdfViewMode.PAGES ? 'default' : 'outline'}
 		size="sm"
-		onclick={() => (pdfViewMode = 'pages')}
+		onclick={() => (pdfViewMode = PdfViewMode.PAGES)}
 		disabled={pdfImagesLoading}
 	>
 		{#if pdfImagesLoading}
@@ -117,7 +118,10 @@
 				The selected model does not support vision. Only the extracted
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<span class="mx-1 cursor-pointer underline" onclick={() => (pdfViewMode = 'text')}>
+				<span
+					class="mx-1 cursor-pointer underline"
+					onclick={() => (pdfViewMode = PdfViewMode.TEXT)}
+				>
 					text
 				</span>
 				will be sent to the model.
@@ -158,7 +162,7 @@
 	</div>
 {/if}
 
-{#if pdfViewMode === 'text' && displayTextContent}
+{#if pdfViewMode === PdfViewMode.TEXT && displayTextContent}
 	<div class="px-4 pb-4">
 		<SyntaxHighlightedCode
 			class="max-w-4xl"

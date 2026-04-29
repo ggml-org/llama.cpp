@@ -42,11 +42,13 @@
 	$effect(() => {
 		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
 			lastSyncedConversationModel = conversationModel;
+
 			modelsStore.selectModelByName(conversationModel);
 		} else if (isRouter && !modelsStore.selectedModelId && modelsStore.loadedModelIds.length > 0) {
 			lastSyncedConversationModel = null;
 			// auto-select the first loaded model only when nothing is selected yet
 			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
+
 			if (first) modelsStore.selectModelById(first.id);
 		}
 	});
@@ -59,13 +61,16 @@
 		}
 
 		const selectedId = selectedModelId();
+
 		if (selectedId) {
 			const model = options.find((m) => m.id === selectedId);
+
 			if (model) return model.model;
 		}
 
 		if (conversationModel) {
 			const model = options.find((m) => m.model === conversationModel);
+
 			if (model) return model.model;
 		}
 
@@ -92,6 +97,7 @@
 
 	$effect(() => {
 		void modelPropsVersion;
+
 		hasVisionModality = activeModelId ? modelsStore.modelSupportsVision(activeModelId) : false;
 	});
 
@@ -106,6 +112,7 @@
 			isSelectedModelInCache = modelOptions().some((option) => option.model === conversationModel);
 		} else {
 			const currentModelId = selectedModelId();
+
 			if (!currentModelId) {
 				isSelectedModelInCache = false;
 			} else {

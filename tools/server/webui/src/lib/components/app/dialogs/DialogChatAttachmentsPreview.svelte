@@ -3,6 +3,7 @@
 	import { X } from '@lucide/svelte';
 	import * as DialogUI from '$lib/components/ui/dialog';
 	import { ChatAttachmentsPreview } from '$lib/components/app';
+	import { KeyboardKey } from '$lib/enums';
 
 	interface Props {
 		open: boolean;
@@ -32,17 +33,17 @@
 			if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
 			switch (event.key) {
-				case 'ArrowLeft':
+				case KeyboardKey.ARROW_LEFT:
 					event.preventDefault();
 					event.stopPropagation();
 					document.dispatchEvent(new CustomEvent('chat-attachments-nav', { detail: -1 }));
 					break;
-				case 'ArrowRight':
+				case KeyboardKey.ARROW_RIGHT:
 					event.preventDefault();
 					event.stopPropagation();
 					document.dispatchEvent(new CustomEvent('chat-attachments-nav', { detail: 1 }));
 					break;
-				case ' ':
+				case KeyboardKey.SPACE:
 					event.preventDefault();
 					event.stopPropagation();
 					document.dispatchEvent(new CustomEvent('chat-attachments-nav', { detail: 1 }));

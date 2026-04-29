@@ -32,6 +32,7 @@
 	let { messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
+
 	const currentConfig = config();
 
 	setChatActionsContext({
