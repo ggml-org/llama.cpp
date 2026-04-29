@@ -238,34 +238,6 @@ struct llama_sampler * common_reasoning_budget_init(
         const std::vector<llama_token> & end_tokens,
         const std::vector<llama_token> & forced_tokens,
         int32_t                          budget,
-        const std::vector<llama_token> & prefill_tokens) {
-    // Determine initial state from prefill: COUNTING if the prefill begins with
-    // the start sequence but does not also contain the end sequence after it.
-    common_reasoning_budget_state initial_state = REASONING_BUDGET_IDLE;
-    if (!prefill_tokens.empty() && !start_tokens.empty() &&
-            prefill_tokens.size() >= start_tokens.size() &&
-            std::equal(start_tokens.begin(), start_tokens.end(), prefill_tokens.begin())) {
-        initial_state = REASONING_BUDGET_COUNTING;
-        // If the end sequence also follows the start in the prefill, reasoning
-        // was opened and immediately closed — stay IDLE.
-        if (!end_tokens.empty() &&
-                prefill_tokens.size() >= start_tokens.size() + end_tokens.size()) {
-            auto end_start = prefill_tokens.end() - (ptrdiff_t) end_tokens.size();
-            if (end_start >= prefill_tokens.begin() + (ptrdiff_t) start_tokens.size() &&
-                    std::equal(end_tokens.begin(), end_tokens.end(), end_start)) {
-                initial_state = REASONING_BUDGET_IDLE;
-            }
-        }
-    }
-    return common_reasoning_budget_init_state(vocab, start_tokens, end_tokens, forced_tokens, budget, initial_state);
-}
-
-struct llama_sampler * common_reasoning_budget_init(
-        const struct llama_vocab       * vocab,
-        const std::vector<llama_token> & start_tokens,
-        const std::vector<llama_token> & end_tokens,
-        const std::vector<llama_token> & forced_tokens,
-        int32_t                          budget,
         common_reasoning_budget_state    initial_state) {
     return common_reasoning_budget_init_state(vocab, start_tokens, end_tokens, forced_tokens, budget, initial_state);
 }
