@@ -248,6 +248,20 @@ bool server_http_context::init(const common_params & params) {
         auto key = params.api_keys[0];
         std::string substr = key.substr(std::max((int)(key.length() - 4), 0));
         LOG_INF("%s: api_keys: ****%s\n", __func__, substr.c_str());
+    } else if (params.api_keys.size() > 1) {
+        LOG_INF("%s: api_keys: %zu keys loaded\n", __func__, params.api_keys.size());
+    }
+
+    if (params.whitelist_ips.size() == 1) {
+        LOG_INF("%s: whitelist: 1 entry loaded\n", __func__);
+    } else if (params.whitelist_ips.size() > 1) {
+        LOG_INF("%s: whitelist: %zu entries loaded\n", __func__, params.whitelist_ips.size());
+    }
+
+    if (params.api_keys.size() == 1) {
+        auto key = params.api_keys[0];
+        std::string substr = key.substr(std::max((int)(key.length() - 4), 0));
+        LOG_INF("%s: api_keys: ****%s\n", __func__, substr.c_str());
     } 
     if (params.whitelist_ips.size() == 1) {
         LOG_INF("%s: whitelist: 1 IP loaded\n", __func__);
@@ -393,13 +407,13 @@ bool server_http_context::init(const common_params & params) {
             res.set_content("", "text/html"); // blank response, no data
             return httplib::Server::HandlerResponse::Handled; // skip further processing
         }
-        if (!middleware_server_state(req, res)) {
-            return httplib::Server::HandlerResponse::Handled;
-        }
         if (!middleware_validate_whitelist(req, res)) {
             return httplib::Server::HandlerResponse::Handled;
         }
-	if (!middleware_validate_api_key(req, res)) {
+        if (!middleware_validate_api_key(req, res)) {
+            return httplib::Server::HandlerResponse::Handled;
+        }
+        if (!middleware_server_state(req, res)) {
             return httplib::Server::HandlerResponse::Handled;
         }
         return httplib::Server::HandlerResponse::Unhandled;
