@@ -53,6 +53,44 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
     SRV_DBG("response: %s\n", res.body.c_str());
 }
 
+static std::string first_forwarded_for_ip(const httplib::Request & req) {
+    std::string forwarded = req.get_header_value("X-Forwarded-For");
+
+    if (forwarded.empty()) {
+        return "";
+    }
+
+    const size_t comma = forwarded.find(',');
+    if (comma != std::string::npos) {
+        forwarded = forwarded.substr(0, comma);
+    }
+
+    return trim_copy(forwarded);
+}
+
+static std::string get_client_ip(
+        const httplib::Request & req,
+        bool use_forwarded_for,
+        const std::vector<std::string> & trusted_proxy_ips) {
+    const std::string remote_ip = trim_copy(req.remote_addr);
+
+    if (!use_forwarded_for) {
+        return remote_ip;
+    }
+
+    if (!is_ip_allowed(remote_ip, trusted_proxy_ips)) {
+        return remote_ip;
+    }
+
+    const std::string forwarded_ip = first_forwarded_for_ip(req);
+
+    if (forwarded_ip.empty()) {
+        return remote_ip;
+    }
+
+    return forwarded_ip;
+}
+
 static std::string trim_copy(std::string value) {
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch) {
         return !std::isspace(ch);
@@ -221,12 +259,20 @@ bool server_http_context::init(const common_params & params) {
     // Middlewares
     //
 
-    auto middleware_validate_whitelist = [whitelist_ips = params.whitelist_ips](const httplib::Request & req, httplib::Response & res) {
+    auto middleware_validate_whitelist = [ whitelist_ips = params.whitelist_ips,trusted_proxy_ips = params.trusted_proxy_ips, use_forwarded_for = params.use_forwarded_for](const httplib::Request & req, httplib::Response & res) {
         if (whitelist_ips.empty()) {
             return true;
         }
 
-        const std::string client_ip = trim_copy(req.remote_addr);
+        const std::string client_ip = get_client_ip(
+            req,
+            params.use_forwarded_for,
+            params.trusted_proxy_ips
+        );
+
+	if (use_forwarded_for && is_ip_allowed(req.remote_addr, trusted_proxies)) {
+            client_ip = first_ip_from_x_forwarded_for(req);
+        }
 
         if (is_ip_allowed(client_ip, whitelist_ips)) {
             return true;

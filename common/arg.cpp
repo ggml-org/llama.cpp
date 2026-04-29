@@ -2910,6 +2910,33 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_API_KEY"));
     add_opt(common_arg(
+        {"--trusted-proxy"}, "IP1,IP2,CIDR,...",
+        "comma-separated list of trusted reverse proxy IP addresses or CIDR ranges",
+        [](common_params & params, const std::string & value) {
+            params.trusted_proxy_ips.clear();
+
+            for (auto ip : parse_csv_row(value)) {
+                ip.erase(ip.begin(), std::find_if(ip.begin(), ip.end(), [](unsigned char ch) {
+                    return !std::isspace(ch);
+                }));
+                ip.erase(std::find_if(ip.rbegin(), ip.rend(), [](unsigned char ch) {
+                    return !std::isspace(ch);
+                }).base(), ip.end());
+
+                if (!ip.empty()) {
+                    params.trusted_proxy_ips.push_back(ip);
+                }
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TRUSTED_PROXY"));
+    add_opt(common_arg(
+        {"--use-forwarded-for"},
+        "use X-Forwarded-For header only when request comes from a trusted proxy",
+        [](common_params & params) {
+            params.use_forwarded_for = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_USE_FORWARDED_FOR"));    
+    add_opt(common_arg(
         {"--whitelist"}, "IP1,IP2,CIDR...",
         "comma-separated list of allowed client IP addresses",
         [](common_params & params, const std::string & value) {

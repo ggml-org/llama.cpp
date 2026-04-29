@@ -587,6 +587,8 @@ struct common_params {
 
     std::vector<std::string> api_keys;
     std::vector<std::string> whitelist_ips;
+    std::vector<std::string> trusted_proxy_ips;
+    bool use_forwarded_for = false;
 
     std::string ssl_file_key  = "";                                                                         // NOLINT
     std::string ssl_file_cert = "";                                                                         // NOLINT
