@@ -9299,23 +9299,42 @@ class MimoV2Model(TextModel):
     @staticmethod
     def _tp_aware_qkv_dequant(weight: Tensor, scale_inv: Tensor,
                               n_q: int, n_kv: int, hd: int, vhd: int,
-                              tp: int = 4, bs: int = 128) -> Tensor:
-        # MiMo-V2.5 ships qkv_proj sharded TP=4: rows are stacked per-rank as
-        # [Q_per | K_per | V_per] for r in 0..3. weight_scale_inv has
-        # ceil(rows_per_rank/bs) block-rows per rank (last may extend past
-        # rows_per_rank with phantom rows that don't appear in the weight).
-        # Existing repeat_interleave aligns rank 0 only and mis-applies scales
-        # to ranks 1..3 once rows_per_rank isn't a multiple of bs.
-        q_per = (n_q * hd) // tp
-        k_per = (n_kv * hd) // tp
-        v_per = (n_kv * vhd) // tp
+                              bs: int = 128) -> Tensor:
+        # MiMo-V2.5 (TP=4) and V2.5-Pro (TP=8) ship qkv_proj sharded across TP
+        # ranks; per rank, rows are stacked as [Q_per | K_per | V_per].
+        # weight_scale_inv has ceil(rows_per_rank/bs) block-rows per rank (last
+        # may extend past rows_per_rank with phantom rows not in the weight).
+        # Naive repeat_interleave aligns rank 0 only and mis-applies scales to
+        # later ranks once rows_per_rank isn't a multiple of bs.
+        # Re-group the per-rank [Q_per|K_per|V_per] rows into a unified
+        # [Q | K | V] layout so the standard split in modify_tensors works.
+        q_size = n_q * hd
+        k_size = n_kv * hd
+        v_size = n_kv * vhd
+        total_rows = q_size + k_size + v_size
+        if weight.shape[0] != total_rows:
+            raise ValueError(f"qkv_proj weight rows {weight.shape[0]} != q+k+v {total_rows}")
+
+        # auto-detect TP from scale_inv shape
+        tp = None
+        for cand in (1, 2, 4, 8, 16):
+            if total_rows % cand != 0:
+                continue
+            rpr = total_rows // cand
+            bpr = (rpr + bs - 1) // bs
+            if scale_inv.shape[0] == cand * bpr:
+                tp = cand
+                break
+        if tp is None:
+            raise ValueError(
+                f"qkv_proj: cannot detect TP — scale_inv rows {scale_inv.shape[0]}, "
+                f"q+k+v {total_rows}")
+
+        q_per = q_size // tp
+        k_per = k_size // tp
+        v_per = v_size // tp
         rows_per_rank = q_per + k_per + v_per
         blocks_per_rank = (rows_per_rank + bs - 1) // bs
-        total_rows = tp * rows_per_rank
-        if weight.shape[0] != total_rows:
-            raise ValueError(f"qkv_proj weight rows {weight.shape[0]} != tp*rows_per_rank {total_rows}")
-        if scale_inv.shape[0] != tp * blocks_per_rank:
-            raise ValueError(f"scale_inv rows {scale_inv.shape[0]} != tp*blocks_per_rank {tp * blocks_per_rank}")
 
         scale_inv = scale_inv.float()
         # per-row scale-row index: rank * blocks_per_rank + (rr_in_rank // bs)
@@ -9329,7 +9348,19 @@ class MimoV2Model(TextModel):
         scale_full = scale_per_row_block.repeat_interleave(bs, dim=1)
         # crop to weight col count (in case last col-block isn't full)
         scale_full = scale_full[:, : weight.shape[1]]
-        return weight.float() * scale_full
+        dequant = weight.float() * scale_full
+
+        if tp == 1:
+            return dequant
+
+        # Re-group per-rank [Q_per|K_per|V_per] rows into unified [Q | K | V]
+        qs, ks, vs = [], [], []
+        for r in range(tp):
+            base = r * rows_per_rank
+            qs.append(dequant[base : base + q_per])
+            ks.append(dequant[base + q_per : base + q_per + k_per])
+            vs.append(dequant[base + q_per + k_per : base + rows_per_rank])
+        return torch.cat(qs + ks + vs, dim=0)
 
     def dequant_model(self):
         # Capture raw FP8 (weight, scale_inv) lambdas for qkv_proj BEFORE super
@@ -9425,24 +9456,6 @@ class MimoV2Model(TextModel):
             q_size = num_q_heads * head_dim
             k_size = num_kv_heads * head_dim
             v_size = num_kv_heads * v_head_dim
-            # MiMo-V2.5 ships qkv_proj sharded TP=4: rows are stacked per-rank as
-            # [Q_per | K_per | V_per] for r in 0..3, not as a single [Q | K | V].
-            # Re-group rows from each rank into a unified [Q | K | V] before split.
-            tp = 4
-            total_rows = data_torch.shape[0]
-            if data_torch.ndim == 2 and total_rows == q_size + k_size + v_size and total_rows % tp == 0:
-                q_per = q_size // tp
-                k_per = k_size // tp
-                v_per = v_size // tp
-                rows_per_rank = q_per + k_per + v_per
-                if rows_per_rank * tp == total_rows:
-                    qs, ks, vs = [], [], []
-                    for r in range(tp):
-                        base = r * rows_per_rank
-                        qs.append(data_torch[base : base + q_per])
-                        ks.append(data_torch[base + q_per : base + q_per + k_per])
-                        vs.append(data_torch[base + q_per + k_per : base + rows_per_rank])
-                    data_torch = torch.cat(qs + ks + vs, dim=0)
             q, k, v = data_torch.split([q_size, k_size, v_size], dim=0)
             suffix = ".weight" if name.endswith(".weight") else ".bias"
             base = name.replace(f"qkv_proj{suffix}", "")
