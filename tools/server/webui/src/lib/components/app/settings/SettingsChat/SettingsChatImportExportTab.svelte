@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Component } from 'svelte';
-	import { Download, Upload, Trash2, Database } from '@lucide/svelte';
+	import { Download, Upload, Trash2 } from '@lucide/svelte';
 	import { Button, type ButtonVariant } from '$lib/components/ui/button';
 	import { DialogConversationSelection, DialogConfirmation } from '$lib/components/app';
 	import { createMessageCountMap } from '$lib/utils';
@@ -230,12 +230,6 @@
 {/snippet}
 
 <div class="space-y-6" in:fade={{ duration: 150 }}>
-	<div class="flex items-center gap-2 pb-4">
-		<Database class="h-5 w-5 md:h-6 md:w-6" />
-
-		<h1 class="text-xl font-semibold md:text-2xl">Import / Export</h1>
-	</div>
-
 	<div class="space-y-6">
 		{@render section(
 			'Export Conversations',

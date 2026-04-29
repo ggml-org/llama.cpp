@@ -21,9 +21,9 @@ export { default as SettingsChatMobileHeader } from './SettingsChatMobileHeader.
 
 /**
  * Settings Import/Export panel.
- * Provides UI for importing and exporting chat settings configurations.
+ * Provides UI for importing and exporting chat conversations.
  */
-export { default as SettingsImportExport } from './SettingsImportExport.svelte';
+export { default as SettingsChatImportExportTab } from './SettingsChat/SettingsChatImportExportTab.svelte';
 
 /**
  * MCP Servers configuration panel.
