@@ -11,7 +11,7 @@ args = ap.parse_args()
 model = AutoModel.from_pretrained(args.model, trust_remote_code=True, local_files_only=True, torch_dtype=torch.bfloat16)
 checkpoint = model.state_dict()
 
-# get a list of mm tensor names (include vit_merger for MiniCPM-V 5.0)
+# get a list of mm tensor names (include vit_merger for MiniCPM-V 4.5 / 4.6)
 mm_tensors = [k for k, v in checkpoint.items() if k.startswith("resampler") or k.startswith("vit_merger")]
 
 # store these tensors in a new dictionary and torch.save them

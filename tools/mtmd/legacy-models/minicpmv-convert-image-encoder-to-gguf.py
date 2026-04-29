@@ -832,7 +832,7 @@ _MERGER_TENSOR_MAP = {
 }
 
 def _replace_name_merger(s, v):
-    """Map PyTorch tensor names to GGUF tensor names for MiniCPM-V 5.0 merger."""
+    """Map PyTorch tensor names to GGUF tensor names for MiniCPM-V 4.5 / 4.6 merger."""
     if s in _MERGER_TENSOR_MAP:
         return {_MERGER_TENSOR_MAP[s]: v}
     return None
