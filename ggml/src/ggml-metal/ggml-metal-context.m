@@ -415,19 +415,13 @@ void ggml_metal_set_tensor_2d_async(ggml_metal_t ctx, struct ggml_tensor * tenso
         id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-        [encoder copyFromBuffer:buf_src
-                   sourceOffset:0
-            sourceBytesPerRow:stride_data
-        sourceBytesPerImage:0
-               sourceHeight:n_copies
-              sourceDepth:1
-                  toBuffer:bid_dst.metal
-         destinationOffset:bid_dst.offs
-       destinationBytesPerRow:stride_tensor
-   destinationBytesPerImage:0
-          destinationHeight:n_copies
-       destinationDepth:1
-                     size:MTLSizeMake(size, 1, 1)];
+        for (size_t i = 0; i < n_copies; i++) {
+            [encoder copyFromBuffer:buf_src
+                       sourceOffset:i * stride_data
+                           toBuffer:bid_dst.metal
+                  destinationOffset:bid_dst.offs + i * stride_tensor
+                               size:size];
+        }
 
         [encoder endEncoding];
         [cmd_buf commit];
@@ -463,19 +457,13 @@ void ggml_metal_get_tensor_2d_async(ggml_metal_t ctx, const struct ggml_tensor *
         id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
-        [encoder copyFromBuffer:bid_src.metal
-                   sourceOffset:bid_src.offs
-            sourceBytesPerRow:stride_tensor
-        sourceBytesPerImage:0
-               sourceHeight:n_copies
-              sourceDepth:1
-                  toBuffer:buf_dst
-         destinationOffset:0
-       destinationBytesPerRow:stride_data
-   destinationBytesPerImage:0
-          destinationHeight:n_copies
-       destinationDepth:1
-                     size:MTLSizeMake(size, 1, 1)];
+        for (size_t i = 0; i < n_copies; i++) {
+            [encoder copyFromBuffer:bid_src.metal
+                       sourceOffset:bid_src.offs + i * stride_tensor
+                           toBuffer:buf_dst
+                  destinationOffset:i * stride_data
+                               size:size];
+        }
 
         [encoder endEncoding];
         [cmd_buf commit];
