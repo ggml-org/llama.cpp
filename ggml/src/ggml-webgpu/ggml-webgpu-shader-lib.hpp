@@ -724,6 +724,7 @@ inline ggml_webgpu_flash_attn_decisions ggml_webgpu_flash_attn_get_decisions(
     const uint32_t max_kv_tile                    = ggml_webgpu_flash_attn_max_kv_tile(context, key);
     // invalidate if even the smallest kv_tile doesn't fit in shared memory
     if (max_kv_tile == 0) {
+        decisions.path = GGML_WEBGPU_FLASH_ATTN_PATH_NONE;
         return decisions;
     }
 
