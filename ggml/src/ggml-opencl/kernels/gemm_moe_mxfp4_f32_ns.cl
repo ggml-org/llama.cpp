@@ -140,6 +140,12 @@ static inline half e8m0_to_fp16(uchar x) {
     return as_half(bits);
 }
 
+static inline float e8m0_to_fp32(uchar x) {
+    int bits;
+    bits = (x == 0) ? 0x00400000 : ((uint) x << 23);
+    return as_float(bits);
+}
+
 
 __attribute__((qcom_wave_pair_mode(1))) // 1=force single 2=force pair
 kernel void kernel_gemm_moe_mxfp4_f32_ns(
@@ -187,7 +193,7 @@ kernel void kernel_gemm_moe_mxfp4_f32_ns(
 
         // Load scale for current mxfp4 block
         uint s_offset = s_sub_offset + get_global_id(0);
-        half s = e8m0_to_fp16(src0_d[s_offset]);
+        float s = e8m0_to_fp32(src0_d[s_offset]);
 
         // Load 16 fp4 (64-bits) in transposed layout
         uint2 mxfp4x16;
