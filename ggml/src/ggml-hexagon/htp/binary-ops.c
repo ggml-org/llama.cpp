@@ -317,7 +317,8 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
 
         dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, 0);
         dma_queue_push(q, dma_make_ptr(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
-        dma_queue_push(q, dma_make_ptr(s1_spad, src1_curr), bctx->src1_row_size_aligned, nb11, row_size_bytes, current_block_size);
+        const uint32_t src1_fetch_rows = (ne11 == 1) ? 1 : current_block_size;
+        dma_queue_push(q, dma_make_ptr(s1_spad, src1_curr), bctx->src1_row_size_aligned, nb11, row_size_bytes, src1_fetch_rows);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -330,7 +331,7 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
 
         for (uint32_t r = 0; r < current_block_size; r++) {
             uint8_t * r_src0 = s0_spad + r * bctx->src0_row_size_aligned;
-            uint8_t * r_src1 = s1_spad + r * bctx->src1_row_size_aligned;
+            uint8_t * r_src1 = s1_spad + ((ne11 == 1) ? 0 : r * bctx->src1_row_size_aligned);
             uint8_t * r_dst  = d_spad  + r * bctx->dst_row_size_aligned;
             COMPUTE_VECTOR_OP_AAA(r_dst, r_src0, r_src1, src0_type, ne00);
         }
@@ -359,7 +360,8 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
              uint8_t * s1_next = (uint8_t *)src1->data + p13 * nb13 + p12 * nb12 + p11 * nb11;
 
              dma_queue_push(q, dma_make_ptr(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
-             dma_queue_push(q, dma_make_ptr(s1_spad, s1_next), bctx->src1_row_size_aligned, nb11, row_size_bytes, next_block_size);
+             const uint32_t src1_fetch_rows = (ne11 == 1) ? 1 : next_block_size;
+             dma_queue_push(q, dma_make_ptr(s1_spad, s1_next), bctx->src1_row_size_aligned, nb11, row_size_bytes, src1_fetch_rows);
 
              ir_prefetch += next_block_size;
         }
@@ -869,4 +871,3 @@ int op_binary(struct htp_ops_context * octx) {
 
     return HTP_STATUS_NO_SUPPORT;
 }
-
