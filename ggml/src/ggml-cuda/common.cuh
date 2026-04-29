@@ -109,20 +109,12 @@
 #    define GGML_CUDA_USE_CUB
 #endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-#   define GGML_CUDA_USE_PDL
-#endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-
 #if defined(GGML_CUDA_USE_PDL)
 #   define GGML_CUDA_PDL_SYNC() cudaGridDependencySynchronize()
-#else
-#   define GGML_CUDA_PDL_SYNC()  // no-op on HIP/MUSA
-#endif
-
-#if defined(GGML_CUDA_USE_PDL)
 #   define GGML_CUDA_PDL_LC() cudaTriggerProgrammaticLaunchCompletion()
 #else
-#   define GGML_CUDA_PDL_LC()  // no-op on HIP/MUSA
+#   define GGML_CUDA_PDL_SYNC()  // no-op when PDL disabled on HIP/MUSA/pre-Hopper
+#   define GGML_CUDA_PDL_LC()
 #endif
 
 #ifdef __CUDA_ARCH_LIST__
