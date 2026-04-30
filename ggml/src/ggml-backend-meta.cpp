@@ -176,7 +176,9 @@ static void ggml_backend_meta_device_event_free(ggml_backend_dev_t /*dev*/, ggml
 
 static void ggml_backend_meta_device_event_synchronize(ggml_backend_dev_t /*dev*/, ggml_backend_event_t event) {
     auto * ev_ctx = (ggml_backend_meta_event_context *) event->context;
-    for (auto * e : ev_ctx->simple_events) ggml_backend_event_synchronize(e);
+    for (ggml_backend_event_t e : ev_ctx->simple_events) {
+        ggml_backend_event_synchronize(e);
+    }
 }
 
 static ggml_backend_t ggml_backend_meta_device_init_backend(ggml_backend_dev_t dev, const char * params);
