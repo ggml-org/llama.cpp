@@ -2559,12 +2559,17 @@ private:
                     SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
                     if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, p0, -1)) {
-                        SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
-
-                        slot.prompt_clear(true);
-
-                        // there is no common part left
-                        slot.n_prompt_tokens_cache = 0;
+                        if (slot.ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL && slot.n_prompt_tokens_cache > 0) {
+                            // hybrid/recurrent: partial seq_rm always fails, but checkpoint restored valid state
+                            SLT_INF(slot, "seq_rm failed (expected for hybrid) - keeping %d cached tokens from checkpoint\n", slot.n_prompt_tokens_cache);
+                        } else {
+                            SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
+                    
+                            slot.prompt_clear(true);
+                    
+                            // there is no common part left
+                            slot.n_prompt_tokens_cache = 0;
+                        }
                     }
 
                     // If using an alora, there may be uncached tokens that come
