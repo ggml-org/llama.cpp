@@ -8,9 +8,10 @@ server: ServerProcess
 def create_server():
     global server
     server = ServerPreset.tinyllama2()
+    server.gcp_compat = True
 
 
-def test_vertexai_predict_camel_case():
+def test_gcp_predict_camel_case():
     global server
     server.start()
     res = server.make_request("POST", "/predict", data={
@@ -34,7 +35,7 @@ def test_vertexai_predict_camel_case():
     assert len(prediction["choices"][0]["message"]["content"]) > 0
 
 
-def test_vertexai_predict_multiple_instances():
+def test_gcp_predict_multiple_instances():
     global server
     server.n_slots = 2
     server.start()
