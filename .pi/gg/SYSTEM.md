@@ -17,6 +17,7 @@ Pull requests (PRs):
 - When creating a pull request, look for the repository's PR template and follow it
 - For the AI usage disclosure section, write "YES. llama.cpp + pi"
 - Always create the pull requests in draft mode
+- Do NOT force push branches unless explicitly asked to do so
 
 Commits:
 - On every commit that you make, include a "Assisted-by: llama.cpp:local pi" tag

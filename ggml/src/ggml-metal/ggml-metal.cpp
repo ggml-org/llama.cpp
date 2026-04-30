@@ -507,6 +507,20 @@ static void ggml_backend_metal_get_tensor_async(ggml_backend_t backend, const gg
     ggml_metal_get_tensor_async(ctx, tensor, data, offset, size);
 }
 
+static void ggml_backend_metal_set_tensor_2d_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data,
+        size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
+    ggml_metal_t ctx = (ggml_metal_t)backend->context;
+
+    ggml_metal_set_tensor_2d_async(ctx, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
+}
+
+static void ggml_backend_metal_get_tensor_2d_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data,
+        size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
+    ggml_metal_t ctx = (ggml_metal_t)backend->context;
+
+    ggml_metal_get_tensor_2d_async(ctx, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
+}
+
 static bool ggml_backend_metal_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
     if (!ggml_backend_is_metal(backend_src) || !ggml_backend_is_metal(backend_dst)) {
         return false;
@@ -567,8 +581,8 @@ static ggml_backend_i ggml_backend_metal_i = {
     /* .free                    = */ ggml_backend_metal_free,
     /* .set_tensor_async        = */ ggml_backend_metal_set_tensor_async,
     /* .get_tensor_async        = */ ggml_backend_metal_get_tensor_async,
-    /* .get_tensor_2d_async     = */ NULL,
-    /* .set_tensor_2d_async     = */ NULL,
+    /* .get_tensor_2d_async     = */ ggml_backend_metal_set_tensor_2d_async,
+    /* .set_tensor_2d_async     = */ ggml_backend_metal_get_tensor_2d_async,
     /* .cpy_tensor_async        = */ ggml_backend_metal_cpy_tensor_async, // only needed for multi-GPU setups
     /* .synchronize             = */ ggml_backend_metal_synchronize,
     /* .graph_plan_create       = */ NULL,
