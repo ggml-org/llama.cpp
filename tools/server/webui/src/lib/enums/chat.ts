@@ -49,3 +49,8 @@ export enum ErrorDialogType {
 	TIMEOUT = 'timeout',
 	SERVER = 'server'
 }
+
+export enum ConversationSelectionMode {
+	EXPORT = 'export',
+	IMPORT = 'import'
+}
