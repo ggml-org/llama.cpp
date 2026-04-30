@@ -19,26 +19,15 @@
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
-const std::vector<enum common_speculative_type> common_speculative_types = {
-    COMMON_SPECULATIVE_TYPE_NONE,
-    COMMON_SPECULATIVE_TYPE_DRAFT,
-    COMMON_SPECULATIVE_TYPE_EAGLE3,
-    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
-    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
-    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
-    COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
-    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE
-};
-
-const std::map<std::string, enum common_speculative_type> common_speculative_type_from_name_map = {
+const std::map<std::string, common_speculative_type> common_speculative_type_from_name_map = {
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
     {"eagle3",        COMMON_SPECULATIVE_TYPE_EAGLE3},
-    {"ngram_simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
-    {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
-    {"ngram_map_k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
-    {"ngram_mod",     COMMON_SPECULATIVE_TYPE_NGRAM_MOD},
-    {"ngram_cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
+    {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
+    {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
+    {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
+    {"ngram-mod",     COMMON_SPECULATIVE_TYPE_NGRAM_MOD},
+    {"ngram-cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
 };
 
 struct common_speculative_config {
@@ -802,37 +791,77 @@ static common_speculative_state_ngram_cache create_state_ngram_cache(
     return state;
 }
 
-std::string common_speculative_type_name_str() {
+std::string common_speculative_type_name_str(const std::vector<common_speculative_type> & types) {
     std::string result;
-    for (size_t i = 0; i < common_speculative_types.size(); i++) {
+
+    for (size_t i = 0; i < types.size(); i++) {
         if (i > 0) {
-            result += ", ";
+            result += ",";
         }
-        result += common_speculative_type_to_str(common_speculative_types[i]);
+        result += common_speculative_type_to_str(types[i]);
     }
     return result;
 }
 
-std::string common_speculative_type_to_str(enum common_speculative_type type) {
+const char * common_speculative_all_types_str() {
+    static std::string all_types_str = []() {
+        std::vector<common_speculative_type> types;
+        types.reserve(COMMON_SPECULATIVE_TYPE_COUNT);
+        for (int i = 0; i < COMMON_SPECULATIVE_TYPE_COUNT; i++) {
+            types.push_back((common_speculative_type) i);
+        }
+        return common_speculative_type_name_str(types);
+    }();
+    return all_types_str.c_str();
+}
+
+std::string common_speculative_type_to_str(common_speculative_type type) {
     switch (type) {
         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
         case COMMON_SPECULATIVE_TYPE_DRAFT:         return "draft";
         case COMMON_SPECULATIVE_TYPE_EAGLE3:        return "eagle3";
-        case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram_simple";
-        case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram_map_k";
-        case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram_map_k4v";
-        case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:     return "ngram_mod";
-        case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:   return "ngram_cache";
+        case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
+        case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram-map-k";
+        case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
+        case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:     return "ngram-mod";
+        case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:   return "ngram-cache";
         default:                                    return "unknown";
     }
 }
 
-enum common_speculative_type common_speculative_type_from_name(const std::string & name) {
+std::vector<common_speculative_type> common_speculative_types_from_names(const std::vector<std::string> & names) {
+    std::vector<common_speculative_type> types;
+    types.reserve(names.size());
+
+    for (const auto & name : names) {
+        auto type = common_speculative_type_from_name_map.find(name);
+        if (type != common_speculative_type_from_name_map.end()) {
+            if (type->second == COMMON_SPECULATIVE_TYPE_NONE) {
+                return std::vector<common_speculative_type> { COMMON_SPECULATIVE_TYPE_NONE };
+            }
+            types.push_back(type->second);
+            continue;
+        }
+        throw std::invalid_argument("unknown speculative type: " + name);
+    }
+
+    return types;
+}
+
+common_speculative_type common_speculative_type_from_name(const std::string & name) {
     const auto it = common_speculative_type_from_name_map.find(name);
     if (it == common_speculative_type_from_name_map.end()) {
         return COMMON_SPECULATIVE_TYPE_COUNT;
     }
     return it->second;
+}
+
+static uint32_t common_get_enabled_speculative_configs(const std::vector<common_speculative_type> & configs) {
+    uint32_t result = 0;
+    for (size_t i = 0; i < configs.size(); i++) {
+        result |= (1u << configs[i]);
+    }
+    return result;
 }
 
 // initialization of the speculative decoding system
@@ -841,17 +870,25 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     // Compute the implementations to use based on the config and their order of preference
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
-        bool has_draft = !params.draft.mparams.path.empty();
+        uint32_t enabled_configs = common_get_enabled_speculative_configs(params.types);
+
+        bool has_draft = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT));
+        bool has_draft_model = !params.draft.mparams.path.empty();
+
+        // bool has_mtp = false; // TODO: add MTP here
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
 
-        bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
-        bool has_ngram_simple  = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
-        bool has_ngram_map_k   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
-        bool has_ngram_map_k4v = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
-        bool has_ngram_mod     = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
+        bool has_ngram_cache   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_CACHE));
+        bool has_ngram_simple  = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE));
+        bool has_ngram_map_k   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K));
+        bool has_ngram_map_k4v = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V));
+        bool has_ngram_mod     = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MOD));
 
-        // In a more complex implementation we could use the same implementation but with different parameters.
-        // This was initially used in PR-18471 but removed to simplify the code.
+        // when adding a new type - update here the logic above
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 8);
+
+        // this list here defines the priority of the speculators
+        // the one with highest priority are listed first
         if (has_ngram_simple) {
             // This implementation can guess a lot of tokens without any draft model.
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, params));
@@ -870,8 +907,19 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
         }
         if (has_draft) {
+            if (!has_draft_model) {
+                LOG_WRN("%s: draft model is not specified - cannot use 'draft' type\n", __func__);
+                has_draft = false;
+            }
+        } else if (has_draft_model) {
+            LOG_WRN("%s: draft model is specified but 'draft' speculative type is not explicitly enabled - enabling it\n", __func__);
+            has_draft = true;
+        }
+
+        if (has_draft) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT, params));
         }
+        // TODO: add MTP here
         if (has_draft_eagle3) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_EAGLE3, params));
         }
@@ -880,7 +928,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
 
     for (const common_speculative_config & config : configs) {
-        LOG_DBG("%s: adding implementation %s\n", __func__, common_speculative_type_to_str(config.type).c_str());
+        LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(config.type).c_str());
         switch (config.type) {
             case COMMON_SPECULATIVE_TYPE_NONE:
                 break;

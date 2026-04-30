@@ -5,8 +5,14 @@
 
 struct common_speculative;
 
+// comma separated list the provided types
+std::string common_speculative_type_name_str(const std::vector<enum common_speculative_type> & types);
+
 // comma separated list of all types
-std::string common_speculative_type_name_str();
+const char * common_speculative_all_types_str();
+
+// parse user provided types
+std::vector<enum common_speculative_type> common_speculative_types_from_names(const std::vector<std::string> & names);
 
 // convert string to type
 enum common_speculative_type common_speculative_type_from_name(const std::string & name);
