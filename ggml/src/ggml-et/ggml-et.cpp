@@ -12,7 +12,11 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <list>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #if __has_include(<filesystem>)
@@ -558,6 +562,55 @@ static bool ggml_et_can_fuse(const struct ggml_cgraph * cgraph, int node_idx,
     }
 
     if (ops.size() == 2 &&
+        ops.begin()[0] == GGML_OP_MUL_MAT &&
+        ops.begin()[1] == GGML_OP_ADD) {
+
+        const ggml_tensor * mm  = cgraph->nodes[node_idx];
+        const ggml_tensor * add = cgraph->nodes[node_idx + 1];
+
+        // Only Q8_0 weights × F32 activations → F32 (the kernel that has
+        // the bias path).  Other MM variants must wait for their own kernel
+        // bias support.
+        if (mm->type != GGML_TYPE_F32 ||
+            mm->src[0]->type != GGML_TYPE_Q8_0 ||
+            mm->src[1]->type != GGML_TYPE_F32) {
+            return false;
+        }
+
+        // ADD must be F32 and one of its operands must be the MM output.
+        if (add->type != GGML_TYPE_F32) {
+            return false;
+        }
+        if (add->src[0] != mm && add->src[1] != mm) {
+            return false;
+        }
+
+        const ggml_tensor * bias = (add->src[0] == mm) ? add->src[1] : add->src[0];
+
+        if (bias->type != GGML_TYPE_F32) {
+            return false;
+        }
+
+        // No broadcasting: bias shape must equal MM output shape.
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (bias->ne[i] != mm->ne[i]) {
+                return false;
+            }
+        }
+
+        // Bias and dst must be contiguous and have identical strides — the
+        // kernel uses dst-style offset arithmetic against bias's nb[].
+        if (!ggml_is_contiguous(bias) || !ggml_is_contiguous(mm)) {
+            return false;
+        }
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if ((int64_t)bias->nb[i] != (int64_t)add->nb[i]) {
+                return false;
+            }
+        }
+    }
+
+    if (ops.size() == 2 &&
         ops.begin()[0] == GGML_OP_RMS_NORM &&
         ops.begin()[1] == GGML_OP_MUL) {
 
@@ -613,6 +666,11 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
         if (ggml_et_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
             ggml_et_op_rms_norm_mul(dev_ctx, node, cgraph->nodes[i + 1]);
             i++;  // skip the MUL node
+            continue;
+        }
+        if (ggml_et_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD })) {
+            ggml_et_op_mul_mat(dev_ctx, node, cgraph->nodes[i + 1]);
+            i++;  // skip the ADD node
             continue;
         }
 

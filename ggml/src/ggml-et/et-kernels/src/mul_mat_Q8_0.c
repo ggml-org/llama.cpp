@@ -19,7 +19,7 @@
 #define KSPLIT_GROUP_ROWS 4
 #define SIMPLE_X2_ROWS     2
 
-int entry_point(struct ggml_et_binary_params* params, void* env) {
+int entry_point(struct ggml_et_mm_q8_params* params, void* env) {
     uint64_t hart_id = get_hart_id();
 
     // Matrix dimensions
@@ -43,6 +43,12 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     const size_t nbd1 = params->dst.nb[1];
     const size_t nbd2 = params->dst.nb[2];
     const size_t nbd3 = params->dst.nb[3];
+
+    // Optional residual bias
+    const char* bias_base = (const char*)params->bias.data;
+    const size_t nbb1 = params->bias.nb[1];
+    const size_t nbb2 = params->bias.nb[2];
+    const size_t nbb3 = params->bias.nb[3];
 
     // Q8_0 block size is 32
     const int64_t K_blocks = K / 32;
@@ -93,15 +99,18 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
             const char* src0_ptr3 = (const char*)params->src0.data + i03 * nb03;
             const char* src1_ptr3 = (const char*)params->src1.data + i3 * nb13;
             char* dst_ptr3       = (char*)params->dst.data + i3 * nbd3;
+            const char* bias_ptr3 = bias_base ? bias_base + i3 * nbb3 : (const char*)0;
 
             for (int64_t i2 = 0; i2 < ne12; i2++) {
                 const int64_t i02 = i2 / r2;
                 const char* src0_ptr2 = src0_ptr3 + i02 * nb02;
                 const char* src1_ptr2 = src1_ptr3 + i2 * nb12;
                 char* dst_ptr2       = dst_ptr3 + i2 * nbd2;
+                const char* bias_ptr2 = bias_ptr3 ? bias_ptr3 + i2 * nbb2 : (const char*)0;
 
                 for (int64_t n = 0; n < N; n++) {
                     const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
+                    const float* bias_n = bias_ptr2 ? (const float*)(bias_ptr2 + n * nbb1) : (const float*)0;
 
                     for (int64_t m = minion_id; m < M; m += STRIDE_M_KSPLIT) {
                         const block_q8_0* q_row = (const block_q8_0*)(src0_ptr2 + m * nb01);
@@ -122,7 +131,9 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                             et_sem_post(ET_BARRIER_MINION);
 
                             float* dst_entry = (float*)(dst_ptr2 + n * nbd1 + m * sizeof(float));
-                            atomic_store_f32((volatile float*)dst_entry, partial + other);
+                            float sum = partial + other;
+                            if (bias_n) sum += bias_n[m];
+                            atomic_store_f32((volatile float*)dst_entry, sum);
                         }
                     }
                 }
@@ -147,15 +158,18 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
             const char* src0_ptr3 = (const char*)params->src0.data + i03 * nb03;
             const char* src1_ptr3 = (const char*)params->src1.data + i3 * nb13;
             char* dst_ptr3       = (char*)params->dst.data + i3 * nbd3;
+            const char* bias_ptr3 = bias_base ? bias_base + i3 * nbb3 : (const char*)0;
 
             for (int64_t i2 = 0; i2 < ne12; i2++) {
                 const int64_t i02 = i2 / r2;
                 const char* src0_ptr2 = src0_ptr3 + i02 * nb02;
                 const char* src1_ptr2 = src1_ptr3 + i2 * nb12;
                 char* dst_ptr2       = dst_ptr3 + i2 * nbd2;
+                const char* bias_ptr2 = bias_ptr3 ? bias_ptr3 + i2 * nbb2 : (const char*)0;
 
                 for (int64_t n = 0; n < N; n++) {
                     const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
+                    const float* bias_n = bias_ptr2 ? (const float*)(bias_ptr2 + n * nbb1) : (const float*)0;
 
                     for (int64_t m_base = minion_id; m_base < M;
                          m_base += STRIDE_M_KSPLIT * KSPLIT_GROUP_ROWS) {
@@ -216,10 +230,14 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                             et_sem_post(ET_BARRIER_MINION);
 
                             float* c_base = (float*)(dst_ptr2 + n * nbd1);
-                            if (m0 < M) atomic_store_f32((volatile float*)(c_base + m0), s0 + p0);
-                            if (m1 < M) atomic_store_f32((volatile float*)(c_base + m1), s1 + p1);
-                            if (m2 < M) atomic_store_f32((volatile float*)(c_base + m2), s2 + p2);
-                            if (m3 < M) atomic_store_f32((volatile float*)(c_base + m3), s3 + p3);
+                            const float b0 = bias_n ? bias_n[m0] : 0.0f;
+                            const float b1 = (bias_n && m1 < M) ? bias_n[m1] : 0.0f;
+                            const float b2 = (bias_n && m2 < M) ? bias_n[m2] : 0.0f;
+                            const float b3 = (bias_n && m3 < M) ? bias_n[m3] : 0.0f;
+                            if (m0 < M) atomic_store_f32((volatile float*)(c_base + m0), s0 + p0 + b0);
+                            if (m1 < M) atomic_store_f32((volatile float*)(c_base + m1), s1 + p1 + b1);
+                            if (m2 < M) atomic_store_f32((volatile float*)(c_base + m2), s2 + p2 + b2);
+                            if (m3 < M) atomic_store_f32((volatile float*)(c_base + m3), s3 + p3 + b3);
                         }
                     }
                 }
@@ -238,15 +256,18 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
             const char* src0_ptr3 = (const char*)params->src0.data + i03 * nb03;
             const char* src1_ptr3 = (const char*)params->src1.data + i3 * nb13;
             char* dst_ptr3       = (char*)params->dst.data + i3 * nbd3;
+            const char* bias_ptr3 = bias_base ? bias_base + i3 * nbb3 : (const char*)0;
 
             for (int64_t i2 = 0; i2 < ne12; i2++) {
                 const int64_t i02 = i2 / r2;
                 const char* src0_ptr2 = src0_ptr3 + i02 * nb02;
                 const char* src1_ptr2 = src1_ptr3 + i2 * nb12;
                 char* dst_ptr2       = dst_ptr3 + i2 * nbd2;
+                const char* bias_ptr2 = bias_ptr3 ? bias_ptr3 + i2 * nbb2 : (const char*)0;
 
                 for (int64_t n = 0; n < N; n++) {
                     const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
+                    const float* bias_n = bias_ptr2 ? (const float*)(bias_ptr2 + n * nbb1) : (const float*)0;
 
                     for (int64_t m0 = hart_id; m0 < M; m0 += STRIDE_M * 4) {
                         const int64_t m1 = m0 + STRIDE_M;
@@ -281,10 +302,14 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                         }
 
                         float* dst_base = (float*)(dst_ptr2 + n * nbd1);
-                        atomic_store_f32((volatile float*)(dst_base + m0), s0);
-                        if (m1 < M) atomic_store_f32((volatile float*)(dst_base + m1), s1);
-                        if (m2 < M) atomic_store_f32((volatile float*)(dst_base + m2), s2);
-                        if (m3 < M) atomic_store_f32((volatile float*)(dst_base + m3), s3);
+                        const float b0 = bias_n ? bias_n[m0] : 0.0f;
+                        const float b1 = (bias_n && m1 < M) ? bias_n[m1] : 0.0f;
+                        const float b2 = (bias_n && m2 < M) ? bias_n[m2] : 0.0f;
+                        const float b3 = (bias_n && m3 < M) ? bias_n[m3] : 0.0f;
+                        atomic_store_f32((volatile float*)(dst_base + m0), s0 + b0);
+                        if (m1 < M) atomic_store_f32((volatile float*)(dst_base + m1), s1 + b1);
+                        if (m2 < M) atomic_store_f32((volatile float*)(dst_base + m2), s2 + b2);
+                        if (m3 < M) atomic_store_f32((volatile float*)(dst_base + m3), s3 + b3);
                     }
                 }
             }
@@ -302,15 +327,18 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
             const char* src0_ptr3 = (const char*)params->src0.data + i03 * nb03;
             const char* src1_ptr3 = (const char*)params->src1.data + i3 * nb13;
             char* dst_ptr3       = (char*)params->dst.data + i3 * nbd3;
+            const char* bias_ptr3 = bias_base ? bias_base + i3 * nbb3 : (const char*)0;
 
             for (int64_t i2 = 0; i2 < ne12; i2++) {
                 const int64_t i02 = i2 / r2;
                 const char* src0_ptr2 = src0_ptr3 + i02 * nb02;
                 const char* src1_ptr2 = src1_ptr3 + i2 * nb12;
                 char* dst_ptr2       = dst_ptr3 + i2 * nbd2;
+                const char* bias_ptr2 = bias_ptr3 ? bias_ptr3 + i2 * nbb2 : (const char*)0;
 
                 for (int64_t n = 0; n < N; n++) {
                     const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
+                    const float* bias_n = bias_ptr2 ? (const float*)(bias_ptr2 + n * nbb1) : (const float*)0;
                     q8_dot_state q8_state;
                     q8_dot_begin(&q8_state);
 
@@ -326,11 +354,13 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
 
                                 float* dst0 = (float*)(dst_ptr2 + n * nbd1 + m0 * sizeof(float));
                                 float* dst1 = (float*)(dst_ptr2 + n * nbd1 + m1 * sizeof(float));
+                                if (bias_n) { s0 += bias_n[m0]; s1 += bias_n[m1]; }
                                 atomic_store_f32((volatile float*)dst0, s0);
                                 atomic_store_f32((volatile float*)dst1, s1);
                             } else {
                                 float sum = q8_dot_compute(q_row0, b_col_base, K_blocks);
                                 float* dst = (float*)(dst_ptr2 + n * nbd1 + m0 * sizeof(float));
+                                if (bias_n) sum += bias_n[m0];
                                 atomic_store_f32((volatile float*)dst, sum);
                             }
                         }
@@ -341,6 +371,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                             float sum = q8_dot_compute(q_row, b_col_base, K_blocks);
 
                             float* dst_entry = (float*)(dst_ptr2 + n * nbd1 + m * sizeof(float));
+                            if (bias_n) sum += bias_n[m];
                             atomic_store_f32((volatile float*)dst_entry, sum);
                         }
                     }

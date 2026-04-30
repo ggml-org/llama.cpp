@@ -22,7 +22,7 @@ extern int mul_mat_f16_entry(struct ggml_et_binary_params *, void *);
 extern int mul_mat_f16_matrix_engine_entry(struct ggml_et_binary_params *, void *);
 extern int mul_mat_f32_entry(struct ggml_et_binary_params *, void *);
 extern int mul_mat_f32_matrix_engine_entry(struct ggml_et_binary_params *, void *);
-extern int mul_mat_Q8_0_entry(struct ggml_et_binary_params *, void *);
+extern int mul_mat_Q8_0_entry(struct ggml_et_mm_q8_params *, void *);
 
 // Evict a contiguous region from both L1 and L2 so subsequent loads fetch
 // from L3/DRAM.  Both L1 and L2 are incoherent on ET-SoC-1 (L2 is per-shire),
@@ -181,8 +181,11 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 break;
             }
             case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_Q8_0: {
-                struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
+                struct ggml_et_mm_q8_params *p = (struct ggml_et_mm_q8_params *) inst_params;
                 evict_region_past_l2(p->src1.data, tensor_bytes(&p->src1));
+                if (p->bias.data) {
+                    evict_region_past_l2(p->bias.data, tensor_bytes(&p->bias));
+                }
                 rc = mul_mat_Q8_0_entry(p, env);
                 break;
             }
