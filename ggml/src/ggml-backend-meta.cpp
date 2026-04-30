@@ -154,7 +154,9 @@ static ggml_backend_event_t ggml_backend_meta_device_event_new(ggml_backend_dev_
     for (ggml_backend_dev_t simple_dev : meta_dev_ctx->simple_devs) {
         ggml_backend_event_t simple_ev = ggml_backend_event_new(simple_dev);
         if (simple_ev == nullptr) {
-            for (auto * e : ev_ctx->simple_events) ggml_backend_event_free(e);
+            for (ggml_backend_event_t e : ev_ctx->simple_events) {
+                ggml_backend_event_free(e);
+            }
             delete ev_ctx;
             return nullptr;
         }
