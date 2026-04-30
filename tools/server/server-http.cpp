@@ -598,7 +598,7 @@ void server_http_context::register_gcp_compat() {
     }
 
     post(gcp.path_predict, [this, alias_to_path = std::move(alias_to_path)](const server_http_req & req) -> server_http_res_ptr {
-        static const auto build_error = [](const std::string & message, error_type type = ERROR_TYPE_INVALID_REQUEST) -> json {
+        static const auto build_error = [](const std::string & message, error_type type) -> json {
             return json {{"error", format_error_response(message, type)}};
         };
 
@@ -639,10 +639,10 @@ void server_http_context::register_gcp_compat() {
         for (const auto & instance : instances) {
             futures.push_back(std::async(std::launch::async, [this, &req, &alias_to_path, instance]() -> json {
                 if (!instance.is_object()) {
-                    return build_error("each instance must be a JSON object");
+                    return build_error("each instance must be a JSON object", ERROR_TYPE_INVALID_REQUEST);
                 }
                 if (!instance.contains("@requestFormat") || !instance.at("@requestFormat").is_string()) {
-                    return build_error("each instance must include a string @requestFormat");
+                    return build_error("each instance must include a string @requestFormat", ERROR_TYPE_INVALID_REQUEST);
                 }
 
                 try {
@@ -663,7 +663,7 @@ void server_http_context::register_gcp_compat() {
                     } else if (handlers.count(format)) {
                         dispatch_path = format;
                     } else {
-                        return build_error("no handler registered for @requestFormat: " + format);
+                        return build_error("no handler registered for @requestFormat: " + format, ERROR_TYPE_INVALID_REQUEST);
                     }
 
                     const server_http_req internal_req {
@@ -679,7 +679,7 @@ void server_http_context::register_gcp_compat() {
                     server_http_res_ptr internal_res = handlers.at(dispatch_path)(internal_req);
                     return parse_gcp_predict_response(internal_res);
                 } catch (const std::invalid_argument & e) {
-                    return build_error(e.what());
+                    return build_error(e.what(), ERROR_TYPE_INVALID_REQUEST);
                 } catch (const std::exception & e) {
                     return build_error(e.what(), ERROR_TYPE_SERVER);
                 } catch (...) {
