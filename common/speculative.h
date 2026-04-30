@@ -6,10 +6,16 @@
 struct common_speculative;
 
 // comma separated list of all types
-std::string common_speculative_type_name_str();
+std::string common_speculative_type_name_str(const std::vector<enum common_speculative_type> & types);
+
+// parse user provided types
+std::vector<enum common_speculative_type> common_speculative_type_from_names(const std::vector<std::string> & names);
 
 // convert string to type
 enum common_speculative_type common_speculative_type_from_name(const std::string & name);
+
+// get all enabled speculative implementations
+uint32_t common_get_enabled_speculative_configs(const std::vector<enum common_speculative_type> & configs);
 
 // convert type to string
 std::string common_speculative_type_to_str(enum common_speculative_type type);

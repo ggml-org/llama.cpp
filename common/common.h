@@ -348,8 +348,7 @@ struct common_params_speculative_ngram_cache {
 };
 
 struct common_params_speculative {
-    // TODO: become a vector in order to support "chains of speculators"
-    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+    std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
 
     common_params_speculative_draft draft;
 

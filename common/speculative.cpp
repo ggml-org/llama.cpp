@@ -18,17 +18,6 @@
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
-const std::vector<enum common_speculative_type> common_speculative_types = {
-    COMMON_SPECULATIVE_TYPE_NONE,
-    COMMON_SPECULATIVE_TYPE_DRAFT,
-    COMMON_SPECULATIVE_TYPE_EAGLE3,
-    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
-    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
-    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
-    COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
-    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE
-};
-
 const std::map<std::string, enum common_speculative_type> common_speculative_type_from_name_map = {
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
@@ -936,13 +925,13 @@ static common_speculative_state_ngram_cache create_state_ngram_cache(
     return state;
 }
 
-std::string common_speculative_type_name_str() {
+std::string common_speculative_type_name_str(const std::vector<enum common_speculative_type> & types) {
     std::string result;
-    for (size_t i = 0; i < common_speculative_types.size(); i++) {
+    for (size_t i = 0; i < types.size(); i++) {
         if (i > 0) {
             result += ", ";
         }
-        result += common_speculative_type_to_str(common_speculative_types[i]);
+        result += common_speculative_type_to_str(types[i]);
     }
     return result;
 }
@@ -961,12 +950,39 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
     }
 }
 
+std::vector<enum common_speculative_type> common_speculative_type_from_names(const std::vector<std::string> & names) {
+    std::vector<enum common_speculative_type> types;
+    types.reserve(names.size());
+
+    for (const auto & name : names) {
+        auto type = common_speculative_type_from_name_map.find(name);
+        if (type != common_speculative_type_from_name_map.end()) {
+            if (type->second == COMMON_SPECULATIVE_TYPE_NONE) {
+                return std::vector<enum common_speculative_type> { COMMON_SPECULATIVE_TYPE_NONE };
+            }
+            types.push_back(type->second);
+            continue;
+        }
+        LOG_WRN("%s: unable to match speculative type by name '%s'\n", __func__, name.c_str());
+    }
+
+    return types;
+}
+
 enum common_speculative_type common_speculative_type_from_name(const std::string & name) {
     const auto it = common_speculative_type_from_name_map.find(name);
     if (it == common_speculative_type_from_name_map.end()) {
         return COMMON_SPECULATIVE_TYPE_COUNT;
     }
     return it->second;
+}
+
+uint32_t common_get_enabled_speculative_configs(const std::vector<enum common_speculative_type> & configs) {
+    uint32_t result = 0;
+    for (size_t i = 0; i < configs.size(); i++) {
+        result |= (1u << configs[i]);
+    }
+    return result;
 }
 
 // initialization of the speculative decoding system
@@ -989,11 +1005,13 @@ common_speculative * common_speculative_init(
         bool has_draft = !params.draft.mparams.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
 
-        bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
-        bool has_ngram_simple  = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
-        bool has_ngram_map_k   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
-        bool has_ngram_map_k4v = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
-        bool has_ngram_mod     = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
+        uint32_t enabled_configs = common_get_enabled_speculative_configs(params.types);
+
+        bool has_ngram_cache   = ((enabled_configs >> COMMON_SPECULATIVE_TYPE_NGRAM_CACHE) & 1);
+        bool has_ngram_simple  = ((enabled_configs >> COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE) & 1);
+        bool has_ngram_map_k   = ((enabled_configs >> COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K) & 1);
+        bool has_ngram_map_k4v = ((enabled_configs >> COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V) & 1);
+        bool has_ngram_mod     = ((enabled_configs >> COMMON_SPECULATIVE_TYPE_NGRAM_MOD) & 1);
 
         // In a more complex implementation we could use the same implementation but with different parameters.
         // This was initially used in PR-18471 but removed to simplify the code.
@@ -1137,10 +1155,13 @@ llama_tokens common_speculative_draft(
         const llama_tokens & prompt_tgt, // specified in target model vocab
         llama_token id_last) {
     llama_tokens result;
+    std::vector<std::pair<common_speculative_state *, llama_tokens>> results;
 
     spec->curr_impl = nullptr; // reset current implementation
 
     for (auto & impl : spec->impls) {
+        result.clear();
+
         {
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
             impl->draft(params, prompt_tgt, id_last, result);
@@ -1163,13 +1184,30 @@ llama_tokens common_speculative_draft(
 
             spec->curr_impl = impl.get(); // set current implementation for stats
             impl->n_gen_drafts++;
-            impl->n_gen_tokens += result.size();
 
-            break; // we have a draft, so break out of the loop and return it.
+            results.push_back({spec->curr_impl, result});
         }
     }
 
-    return result;
+    for (auto & [impl, tokens] : results) {
+        impl->n_gen_tokens += tokens.size();
+    }
+
+    auto best = std::max_element(results.begin(), results.end(), [](const auto & a, const auto & b) {
+        if (a.first->n_gen_tokens == 0) {
+            return b.first->n_gen_tokens > 0;
+        }
+        if (b.first->n_gen_tokens == 0) {
+            return false;
+        }
+        const double p1 = ((double) a.first->n_acc_tokens / a.first->n_gen_tokens) * a.second.size();
+        const double p2 = ((double) b.first->n_acc_tokens / b.first->n_gen_tokens) * b.second.size();
+        return p1 < p2;
+    });
+
+    spec->curr_impl = best->first;
+
+    return best->second;
 }
 
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
