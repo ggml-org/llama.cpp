@@ -159,6 +159,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
     COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
+    COMMON_SPECULATIVE_TYPE_MTP,           // multi-token prediction
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -347,11 +348,17 @@ struct common_params_speculative_ngram_cache {
     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding
 };
 
+struct common_params_speculative_mtp {
+    llama_model        * model = nullptr;
+    llama_context_params cparams;
+};
+
 struct common_params_speculative {
     // TODO: become a vector in order to support "chains of speculators"
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
 
     common_params_speculative_draft draft;
+    common_params_speculative_mtp   mtp;
 
     common_params_speculative_ngram_mod ngram_mod;
     common_params_speculative_ngram_map ngram_simple;
@@ -362,6 +369,10 @@ struct common_params_speculative {
 
     bool has_dft() const {
         return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
+    }
+
+    bool has_mtp() const {
+        return type == COMMON_SPECULATIVE_TYPE_MTP && mtp.model != nullptr;
     }
 };
 

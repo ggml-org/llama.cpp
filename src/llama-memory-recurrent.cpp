@@ -138,6 +138,8 @@ void llama_memory_recurrent::clear(bool data) {
     head = 0;
     used = 0;
 
+    std::fill(rs_idx.begin(), rs_idx.end(), 0);
+
     if (data) {
         for (auto & [_, buf] : ctxs_bufs) {
             ggml_backend_buffer_clear(buf.get(), 0);
@@ -180,6 +182,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             // invalidate tails which will be cleared
             if (p0 <= cell.pos && cell.pos < p1) {
                 tail_id = -1;
+                set_rs_idx(seq_id, 0);
             }
         }
     } else {
