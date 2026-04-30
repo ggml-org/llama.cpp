@@ -8,31 +8,31 @@ enable f16;
 
 #include "mul_mat_vec_acc.tmpl"
 
-struct MulMatParams {
+struct MulMatIdVecParams {
     offset_src0: u32,
     offset_src1: u32,
+    offset_ids: u32,
     offset_dst: u32,
-    m: u32,
-    n: u32,
+
     k: u32,
+    m: u32,
+    n_expert: u32,
+    n_expert_used: u32,
+    b_ne1: u32,
+
     stride_01: u32,
     stride_11: u32,
     stride_02: u32,
     stride_12: u32,
-    stride_03: u32,
-    stride_13: u32,
-    bs02: u32,
-    bs03: u32,
-    broadcast2: u32,
-    broadcast3: u32
 };
 
-@group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>;
-@group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>;
-@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>; // [cols, rows, n_expert]
+@group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>; // [cols, b_ne1, n_tokens(1)]
+@group(0) @binding(2) var<storage, read_write> ids: array<u32>;        // [n_experd_used, n_tokens(1)]
+@group(0) @binding(3) var<storage, read_write> dst: array<f32>;   // [rows, n_expert_used, n_tokens(1)]
 
 // "mul_mat_vec_acc.tmpl" requires params.k, params.m, params.stride_01
-@group(0) @binding(3) var<uniform> params: MulMatParams;
+@group(0) @binding(4) var<uniform> params: MulMatIdVecParams;
 
 // Flattened as [row][thread] to keep each row's reduction contiguous in memory.
 var<workgroup> partial_sums: array<f32, OUTPUTS_PER_WG * WG_SIZE>;
@@ -40,6 +40,9 @@ var<workgroup> partial_sums: array<f32, OUTPUTS_PER_WG * WG_SIZE>;
 fn partial_index(row: u32, thread: u32) -> u32 {
     return row * WG_SIZE + thread;
 }
+
+var<workgroup> gathered_count_ids: array<u32, N_EXPERTS>;
+var<workgroup> gathered_expert_used: array<u32, N_EXPERTS>;
 
 @compute @workgroup_size(WG_SIZE)
 fn main(
@@ -53,30 +56,48 @@ fn main(
     @builtin(subgroup_size) subgroup_size: u32
 #endif
 ) {
+
     let thread_id = local_id.x;
 
-    let total_batches = params.bs02 * params.broadcast2 * params.bs03 * params.broadcast3;
+    for (var i = thread_id;i < params.n_expert;i += WG_SIZE) {
+        gathered_count_ids[i] = 0;
+    }
+
+    workgroupBarrier();
+
+    // gather the selected experts for the target token.
+    for (var col = thread_id;col < params.n_expert_used;col += WG_SIZE) {
+        let expert = ids[params.offset_ids + col];
+        gathered_count_ids[expert] = 1;
+        gathered_expert_used[expert] = col;
+    }
+
+    workgroupBarrier();
+
+    let output_groups:u32 = (params.m + OUTPUTS_PER_WG - 1u) / OUTPUTS_PER_WG;
     let wg_linear = wg_id.y * num_wg.x + wg_id.x;
-    let output_groups = (params.m + OUTPUTS_PER_WG - 1u) / OUTPUTS_PER_WG;
-    let batch_idx = wg_linear / output_groups;
-    if (batch_idx >= total_batches) {
-        return;
+
+    var own_expert:u32 = 0;
+    var wg_in_batch:u32 = 0;
+    var wg_sum:u32 = 0;
+
+    for (var i = 0u;i < params.n_expert;i += 1) {
+        let wg_vec_count = gathered_count_ids[i]; // 1 or 0
+        let wg_per_matrix = output_groups * wg_vec_count;
+        if (wg_sum <= wg_linear && wg_linear < wg_sum + wg_per_matrix) {
+            own_expert = i;
+            wg_in_batch = wg_linear - wg_sum;
+            break;
+        }
+        wg_sum += wg_per_matrix;
     }
 
     let row_base = (wg_linear % output_groups) * OUTPUTS_PER_WG;
+    let dst1_stride = params.m;
 
-    let dst2_stride = params.m * params.n;
-    let dst2_idx = batch_idx % (params.bs02 * params.broadcast2);
-    let dst3_stride = dst2_stride * params.bs02 * params.broadcast2;
-    let dst3_idx = batch_idx / (params.bs02 * params.broadcast2);
-    let src03_idx = dst3_idx / params.broadcast3;
-    let src13_idx = dst3_idx;
-    let src02_idx = dst2_idx / params.broadcast2;
-    let src12_idx = dst2_idx;
-
-    let src0_batch_offset = params.offset_src0 + src03_idx * params.stride_03 + src02_idx * params.stride_02;
-    let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12;
-    let dst_idx_base = params.offset_dst + dst3_idx * dst3_stride + dst2_idx * dst2_stride + row_base;
+    let src0_batch_offset = params.offset_src0 + own_expert * params.stride_02;
+    let src1_idx_base = params.offset_src1 + (gathered_expert_used[own_expert] % params.b_ne1) * params.stride_11;
+    let dst_idx_base = params.offset_dst + gathered_expert_used[own_expert] * dst1_stride + row_base;
 
     let acc = accumulate_vec_dot(thread_id, row_base, src0_batch_offset, src1_idx_base);
 
@@ -110,7 +131,7 @@ fn main(
 
     workgroupBarrier();
 
-    var stride = WG_SIZE / 2u;
+    var stride:u32 = WG_SIZE / 2u;
 
     while (stride > 0) {
         if (thread_id < stride) {
