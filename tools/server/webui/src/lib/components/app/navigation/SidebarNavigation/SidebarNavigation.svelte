@@ -278,10 +278,10 @@
 		showEditDialog = false;
 		selectedConversation = null;
 	}}
-	onKeydown={(e) => {
-		if (e.key === 'Enter') {
-			e.preventDefault();
-			e.stopImmediatePropagation();
+	onKeydown={(event) => {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			event.stopImmediatePropagation();
 			handleConfirmEdit();
 		}
 	}}

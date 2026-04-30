@@ -47,9 +47,10 @@
 			class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
 			aria-label={ariaLabel || tooltip}
 		>
-			{@const IconComponent = icon}
-
-			<IconComponent class={iconSize} />
+			{#if icon}
+				{@const IconComponent = icon}
+				<IconComponent class={iconSize} />
+			{/if}
 		</Button>
 	</Tooltip.Trigger>
 

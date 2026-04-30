@@ -205,7 +205,7 @@
 {#snippet section(
 	title: string,
 	description: string,
-	Icon: Component,
+	IconComponent: Component,
 	buttonText: string,
 	onclick: () => void,
 	opts: SectionOpts
@@ -218,7 +218,7 @@
 		<p class="mb-4 text-sm text-muted-foreground">{description}</p>
 
 		<Button class={buttonClass} {onclick} variant={buttonVariant}>
-			<Icon class="mr-2 h-4 w-4" />
+			<IconComponent class="mr-2 h-4 w-4" />
 
 			{buttonText}
 		</Button>

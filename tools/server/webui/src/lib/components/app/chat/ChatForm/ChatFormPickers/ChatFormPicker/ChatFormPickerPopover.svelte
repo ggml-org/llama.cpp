@@ -39,7 +39,7 @@
 		sideOffset={12}
 		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl {className}"
 		onkeydown={onKeydown}
-		onOpenAutoFocus={(e) => e.preventDefault()}
+		onOpenAutoFocus={(event) => event.preventDefault()}
 	>
 		{@render children()}
 	</Popover.Content>

@@ -13,12 +13,12 @@
 	import { browser } from '$app/environment';
 	import { onDestroy, tick } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
-	import { rehypeEnhanceLinks } from '$lib/markdown/enhance-links';
-	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
-	import { rehypeResolveAttachmentImages } from '$lib/markdown/resolve-attachment-images';
-	import { rehypeRtlSupport } from '$lib/markdown/rehype-rtl-support';
-	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
+	import { rehypeRestoreTableHtml } from './plugins/rehype/table-html-restorer';
+	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
+	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
+	import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachment-images';
+	import { rehypeRtlSupport } from './plugins/rehype/rehype-rtl-support';
+	import { remarkLiteralHtml } from './plugins/remark/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
 	import {
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,

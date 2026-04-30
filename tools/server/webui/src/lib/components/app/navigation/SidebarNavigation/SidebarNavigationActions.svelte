@@ -37,8 +37,8 @@
 	}
 </script>
 
-{#snippet itemIcon(Icon: Component)}
-	<Icon class="h-4 w-4" />
+{#snippet itemIcon(IconComponent: Component)}
+	<IconComponent class="h-4 w-4" />
 {/snippet}
 
 <div class="my-1 space-y-1">

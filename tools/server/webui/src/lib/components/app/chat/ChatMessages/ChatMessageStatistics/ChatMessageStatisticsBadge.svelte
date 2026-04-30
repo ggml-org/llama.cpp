@@ -11,7 +11,7 @@
 		tooltipLabel?: string;
 	}
 
-	let { class: className = '', icon: Icon, value, tooltipLabel }: Props = $props();
+	let { class: className = '', icon: IconComponent, value, tooltipLabel }: Props = $props();
 
 	function handleClick() {
 		void copyToClipboard(String(value));
@@ -23,7 +23,7 @@
 		<Tooltip.Trigger>
 			<BadgeInfo class={className} onclick={handleClick}>
 				{#snippet icon()}
-					<Icon class="h-3 w-3" />
+					<IconComponent class="h-3 w-3" />
 				{/snippet}
 
 				{value}
@@ -36,7 +36,7 @@
 {:else}
 	<BadgeInfo class={className} onclick={handleClick}>
 		{#snippet icon()}
-			<Icon class="h-3 w-3" />
+			<IconComponent class="h-3 w-3" />
 		{/snippet}
 
 		{value}

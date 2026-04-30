@@ -54,6 +54,7 @@
 
 		if (!currentId) {
 			goto(`#/chat/${allConvs[direction === 1 ? 0 : allConvs.length - 1].id}`);
+
 			return;
 		}
 
@@ -61,6 +62,7 @@
 		if (idx === -1) return;
 
 		const targetIdx = idx + direction;
+
 		if (targetIdx >= 0 && targetIdx < allConvs.length) {
 			goto(`#/chat/${allConvs[targetIdx].id}`);
 		} else {
@@ -73,6 +75,7 @@
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
 
 		navigateToPrevConversation: () => navigateToConversation(-1),
+
 		navigateToNextConversation: () => navigateToConversation(1)
 	});
 

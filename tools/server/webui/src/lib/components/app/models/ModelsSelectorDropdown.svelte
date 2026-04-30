@@ -212,9 +212,9 @@
 									onSelect={ms.handleSelect}
 									onInfoClick={ms.handleInfoClick}
 									onMouseEnter={() => (highlightedIndex = flatIndex)}
-									onKeyDown={(e) => {
-										if (e.key === KeyboardKey.ENTER || e.key === KeyboardKey.SPACE) {
-											e.preventDefault();
+									onKeyDown={(event) => {
+										if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
+											event.preventDefault();
 											ms.handleSelect(option.id);
 										}
 									}}

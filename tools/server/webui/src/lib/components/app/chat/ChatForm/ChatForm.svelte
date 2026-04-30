@@ -470,8 +470,8 @@
 
 <form
 	class="relative {className}"
-	onsubmit={(e) => {
-		e.preventDefault();
+	onsubmit={(event) => {
+		event.preventDefault();
 
 		if (!canSubmit || disabled || hasLoadingAttachments) return;
 

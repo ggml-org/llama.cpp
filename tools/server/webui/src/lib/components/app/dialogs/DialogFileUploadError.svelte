@@ -16,6 +16,7 @@
 
 	function handleOpenChange(newOpen: boolean) {
 		open = newOpen;
+
 		onOpenChange?.(newOpen);
 	}
 </script>
