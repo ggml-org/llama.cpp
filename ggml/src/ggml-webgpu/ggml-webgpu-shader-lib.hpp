@@ -1806,6 +1806,25 @@ class ggml_webgpu_shader_lib {
                     defines.push_back("U32_DEQUANT_HELPERS");
                     defines.push_back("SRC0_INNER_TYPE=u32");
 
+                    switch (context.src0->type) {
+                        case GGML_TYPE_IQ1_S:
+                        case GGML_TYPE_IQ1_M:
+                        case GGML_TYPE_IQ4_NL:
+                        case GGML_TYPE_IQ4_XS:
+                            defines.push_back(type_upper + "_GRID");
+                            break;
+                        case GGML_TYPE_IQ2_XXS:
+                        case GGML_TYPE_IQ2_XS:
+                        case GGML_TYPE_IQ2_S:
+                        case GGML_TYPE_IQ3_XXS:
+                        case GGML_TYPE_IQ3_S:
+                            defines.push_back(type_upper + "_GRID");
+                            defines.push_back(type_upper + "_TABLES");
+                            break;
+                        default:
+                            break;
+                    }
+
                     variant += std::string("_") + src0_name;
                     break;
                 }
