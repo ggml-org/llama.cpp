@@ -119,8 +119,8 @@ struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
 // DownsampleMLP), so each slice's height and width must be divisible by
 // patch_size * 4 to keep the merger output grid integral. mirrors
 // `ensure_divide(.., patch_size * 4)` in MiniCPMV4_6ImageProcessorPil.find_best_resize.
-struct mtmd_image_preprocessor_minicpmv_merger : mtmd_image_preprocessor_llava_uhd {
-    mtmd_image_preprocessor_minicpmv_merger(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {
+struct mtmd_image_preprocessor_minicpmv4_6 : mtmd_image_preprocessor_llava_uhd {
+    mtmd_image_preprocessor_minicpmv4_6(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {
         slice_align_factor = 4;
     }
 };

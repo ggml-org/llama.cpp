@@ -874,9 +874,9 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_minicpmv>(ctx, img);
             } break;
-        case PROJECTOR_TYPE_MINICPMV_MERGER:
+        case PROJECTOR_TYPE_MINICPMV4_6:
             {
-                builder = std::make_unique<clip_graph_minicpmv_merger>(ctx, img);
+                builder = std::make_unique<clip_graph_minicpmv4_6>(ctx, img);
             } break;
         case PROJECTOR_TYPE_INTERNVL:
             {
@@ -1231,7 +1231,7 @@ struct clip_model_loader {
                             hparams.minicpmv_version = 2; // default to 2 if not set
                         }
                     } break;
-                case PROJECTOR_TYPE_MINICPMV_MERGER:
+                case PROJECTOR_TYPE_MINICPMV4_6:
                     {
                         // MiniCPM-V 4.5 / 4.6 unified merger projector
                         get_u32(KEY_INSERT_LAYER_ID, hparams.insert_layer_id, false);
@@ -1728,7 +1728,7 @@ struct clip_model_loader {
                     || model.proj_type == PROJECTOR_TYPE_GEMMA3
                     || model.proj_type == PROJECTOR_TYPE_IDEFICS3
                     || model.proj_type == PROJECTOR_TYPE_MINICPMV
-                    || model.proj_type == PROJECTOR_TYPE_MINICPMV_MERGER
+                    || model.proj_type == PROJECTOR_TYPE_MINICPMV4_6
                 ) && layer.ff_up_w && layer.ff_down_w && layer.ff_down_w->ne[0] == hparams.n_embd;
             if (is_ffn_swapped) {
                 // swap up and down weights
@@ -1830,7 +1830,7 @@ struct clip_model_loader {
                     model.mm_model_ln_post_w = get_tensor(string_format(TN_MINICPMV_LN, "post", "weight"));
                     model.mm_model_ln_post_b = get_tensor(string_format(TN_MINICPMV_LN, "post", "bias"));
                 } break;
-            case PROJECTOR_TYPE_MINICPMV_MERGER:
+            case PROJECTOR_TYPE_MINICPMV4_6:
                 {
                     // Insert Merger: window attention
                     model.insert_merger_ln1_w     = get_tensor(string_format(TN_INSERT_MERGER_LN1, "weight"));
@@ -2998,7 +2998,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                     }
                 }
             } break;
-        case PROJECTOR_TYPE_MINICPMV_MERGER:
+        case PROJECTOR_TYPE_MINICPMV4_6:
             {
                 // insert merger 4x + final merger 4x = 16x total spatial downsample
                 n_patches = n_patches / 16;
@@ -3319,7 +3319,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_f32("omega", omega);
             } break;
-        case PROJECTOR_TYPE_MINICPMV_MERGER:
+        case PROJECTOR_TYPE_MINICPMV4_6:
             {
                 // SigLIP position buckets (same as resampler path)
                 std::vector<int32_t> positions(pos_h * pos_w);
@@ -3913,7 +3913,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:
             return ctx->model.mm_model_proj->ne[0];
-        case PROJECTOR_TYPE_MINICPMV_MERGER:
+        case PROJECTOR_TYPE_MINICPMV4_6:
             return ctx->model.merger_mlp_down_w->ne[1];
         case PROJECTOR_TYPE_GLM_EDGE:
             return ctx->model.mm_model_mlp_3_w->ne[1];
@@ -3977,7 +3977,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
 int clip_is_minicpmv(const struct clip_ctx * ctx) {
     // TODO: remove this function
     if (ctx->proj_type() == PROJECTOR_TYPE_MINICPMV ||
-        ctx->proj_type() == PROJECTOR_TYPE_MINICPMV_MERGER) {
+        ctx->proj_type() == PROJECTOR_TYPE_MINICPMV4_6) {
         return ctx->model.hparams.minicpmv_version;
     }
     return 0;

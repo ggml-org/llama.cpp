@@ -321,7 +321,7 @@ enum projector_type {
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANOCR,
     PROJECTOR_TYPE_HUNYUANVL,
-    PROJECTOR_TYPE_MINICPMV_MERGER,
+    PROJECTOR_TYPE_MINICPMV4_6,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -369,7 +369,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
     { PROJECTOR_TYPE_HUNYUANOCR, "hunyuanocr"},
     { PROJECTOR_TYPE_HUNYUANVL,  "hunyuanvl"},
-    { PROJECTOR_TYPE_MINICPMV_MERGER, "merger"},
+    { PROJECTOR_TYPE_MINICPMV4_6, "minicpmv4_6"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

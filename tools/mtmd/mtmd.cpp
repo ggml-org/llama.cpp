@@ -278,7 +278,7 @@ struct mtmd_context {
                     }
                 } break;
             case PROJECTOR_TYPE_MINICPMV:
-            case PROJECTOR_TYPE_MINICPMV_MERGER:
+            case PROJECTOR_TYPE_MINICPMV4_6:
                 {
                     int minicpmv_version = clip_is_minicpmv(ctx_v);
                     if (minicpmv_version == 2) {
@@ -309,8 +309,8 @@ struct mtmd_context {
                     } else if (minicpmv_version != 0) {
                         throw std::runtime_error(string_format("unsupported minicpmv version: %d\n", minicpmv_version));
                     }
-                    if (proj == PROJECTOR_TYPE_MINICPMV_MERGER) {
-                        image_preproc = std::make_unique<mtmd_image_preprocessor_minicpmv_merger>(ctx_v);
+                    if (proj == PROJECTOR_TYPE_MINICPMV4_6) {
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_minicpmv4_6>(ctx_v);
                     } else {
                         image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
                     }

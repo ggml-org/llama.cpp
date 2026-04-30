@@ -5530,8 +5530,8 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         assert self.hparams_vision is not None
 
         # projector type string is consumed by clip_projector_type_from_string() in clip.cpp
-        # (mapped to PROJECTOR_TYPE_MINICPMV_MERGER).
-        self.gguf_writer.add_clip_projector_type("merger")
+        # (mapped to PROJECTOR_TYPE_MINICPMV4_6).
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MINICPMV4_6)
 
         # legacy version tag, used by mtmd.cpp to pick the slice template (MINICPMV_2_6).
         # The clip loader reads this field via gguf_get_val_i32, so it must be written as int32.

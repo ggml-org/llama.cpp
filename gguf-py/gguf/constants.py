@@ -4158,6 +4158,7 @@ class VisionProjectorType:
     NEMOTRON_V2_VL = "nemotron_v2_vl"
     HUNYUANOCR     = "hunyuanocr"
     HUNYUANVL      = "hunyuanvl"
+    MINICPMV4_6    = "minicpmv4_6"
 
 
 # Items here are (block size, type size)

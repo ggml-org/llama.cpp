@@ -113,7 +113,7 @@ ggml_cgraph * clip_graph_minicpmv::build() {
     return gf;
 }
 
-ggml_cgraph * clip_graph_minicpmv_merger::build() {
+ggml_cgraph * clip_graph_minicpmv4_6::build() {
     const int insert_lid = hparams.insert_layer_id;
     const int n_pos      = n_patches;
     const int half_h     = n_patches_y / 2;
