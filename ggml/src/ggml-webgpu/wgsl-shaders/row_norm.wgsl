@@ -18,13 +18,10 @@ struct Params {
     offset_src: u32, // in elements
     offset_dst: u32, // in elements
 
-    // Strides (in elements)
-    stride_src0: u32,
     stride_src1: u32,
     stride_src2: u32,
     stride_src3: u32,
 
-    stride_dst0: u32,
     stride_dst1: u32,
     stride_dst2: u32,
     stride_dst3: u32,
@@ -76,7 +73,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         if (col >= params.ne0) {
             break;
         }
-        let v = f32(src[i_src_row + col * params.stride_src0]);
+        let v = f32(src[i_src_row + col]);
 #ifdef NORM
         let val = v;
 #else
@@ -115,7 +112,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         if (col >= params.ne0) {
             break;
         }
-        let v = f32(src[i_src_row + col * params.stride_src0]);
+        let v = f32(src[i_src_row + col]);
         let d = v - mean;
         let val = d * d;
         let y = val - cum_sq_sum;
@@ -159,8 +156,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         if (col >= params.ne0) {
             break;
         }
-        let i_src = i_src_row + col * params.stride_src0;
-        let i_dst = i_dst_row + col * params.stride_dst0;
+        let i_src = i_src_row + col;
+        let i_dst = i_dst_row + col;
         let v = src[i_src];
 #ifdef INPLACE
         src[i_dst] = scale * (v - mean_val);
