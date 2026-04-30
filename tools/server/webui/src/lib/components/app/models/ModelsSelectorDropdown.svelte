@@ -1,19 +1,10 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
-	import {
-		modelsStore,
-		modelOptions,
-		modelsLoading,
-		modelsUpdating,
-		selectedModelId,
-		singleModelName
-	} from '$lib/stores/models.svelte';
 	import { KeyboardKey } from '$lib/enums';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import {
 		DialogModelInformation,
 		DropdownMenuSearchable,
@@ -21,8 +12,7 @@
 		ModelsSelectorList,
 		ModelsSelectorOption
 	} from '$lib/components/app';
-	import type { ModelOption } from '$lib/types/models';
-	import { filterModelOptions, groupModelOptions, type ModelItem } from './utils';
+	import type { ModelItem } from './utils';
 
 	interface Props {
 		class?: string;
@@ -42,90 +32,26 @@
 		useGlobalSelection = false
 	}: Props = $props();
 
-	let options = $derived(
-		modelOptions().filter((option) => {
-			const modelProps = modelsStore.getModelProps(option.model);
-
-			return modelProps?.webui !== false;
-		})
-	);
-	let loading = $derived(modelsLoading());
-	let updating = $derived(modelsUpdating());
-	let activeId = $derived(selectedModelId());
-	let isRouter = $derived(isRouterMode());
-	let serverModel = $derived(singleModelName());
-
-	let isHighlightedCurrentModelActive = $derived.by(() => {
-		if (!isRouter || !currentModel) return false;
-
-		const currentOption = options.find((option) => option.model === currentModel);
-
-		return currentOption ? currentOption.id === activeId : false;
-	});
-
-	let isCurrentModelInCache = $derived.by(() => {
-		if (!isRouter || !currentModel) return true;
-
-		return options.some((option) => option.model === currentModel);
-	});
-
-	let isLoadingModel = $state(false);
-
-	let searchTerm = $state('');
+	let isOpen = $state(false);
 	let highlightedIndex = $state<number>(-1);
 
-	let filteredOptions = $derived(filterModelOptions(options, searchTerm));
-
-	let groupedFilteredOptions = $derived(
-		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (m) =>
-			modelsStore.isModelLoaded(m)
-		)
-	);
+	const ms = useModelsSelector({
+		currentModel: () => currentModel,
+		useGlobalSelection: () => useGlobalSelection,
+		onModelChange: () => onModelChange,
+		onOpenChange: (open) => {
+			isOpen = open;
+			highlightedIndex = -1;
+		}
+	});
 
 	$effect(() => {
-		void searchTerm;
+		void ms.searchTerm;
 		highlightedIndex = -1;
 	});
 
-	let isOpen = $state(false);
-	let showModelDialog = $state(false);
-	let infoModelId = $state<string | null>(null);
-
-	function handleInfoClick(modelName: string) {
-		infoModelId = modelName;
-		showModelDialog = true;
-	}
-
-	onMount(() => {
-		modelsStore.fetch().catch((error) => {
-			console.error('Unable to load models:', error);
-		});
-	});
-
-	function handleOpenChange(open: boolean) {
-		if (loading || updating) return;
-
-		if (isRouter) {
-			if (open) {
-				isOpen = true;
-				searchTerm = '';
-				highlightedIndex = -1;
-
-				modelsStore.fetchRouterModels().then(() => {
-					modelsStore.fetchModalitiesForLoadedModels();
-				});
-			} else {
-				isOpen = false;
-				searchTerm = '';
-				highlightedIndex = -1;
-			}
-		} else {
-			showModelDialog = open;
-		}
-	}
-
 	export function open() {
-		handleOpenChange(true);
+		ms.handleOpenChange(true);
 	}
 
 	function handleSearchKeyDown(event: KeyboardEvent) {
@@ -134,9 +60,9 @@
 		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
 
-			if (filteredOptions.length === 0) return;
+			if (ms.filteredOptions.length === 0) return;
 
-			if (highlightedIndex === -1 || highlightedIndex === filteredOptions.length - 1) {
+			if (highlightedIndex === -1 || highlightedIndex === ms.filteredOptions.length - 1) {
 				highlightedIndex = 0;
 			} else {
 				highlightedIndex += 1;
@@ -144,146 +70,69 @@
 		} else if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
 
-			if (filteredOptions.length === 0) return;
+			if (ms.filteredOptions.length === 0) return;
 
 			if (highlightedIndex === -1 || highlightedIndex === 0) {
-				highlightedIndex = filteredOptions.length - 1;
+				highlightedIndex = ms.filteredOptions.length - 1;
 			} else {
 				highlightedIndex -= 1;
 			}
 		} else if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
 
-			if (highlightedIndex >= 0 && highlightedIndex < filteredOptions.length) {
-				const option = filteredOptions[highlightedIndex];
+			if (highlightedIndex >= 0 && highlightedIndex < ms.filteredOptions.length) {
+				const option = ms.filteredOptions[highlightedIndex];
 
-				handleSelect(option.id);
-			} else if (filteredOptions.length > 0) {
+				ms.handleSelect(option.id);
+			} else if (ms.filteredOptions.length > 0) {
 				highlightedIndex = 0;
 			}
 		}
 	}
-
-	async function handleSelect(modelId: string) {
-		const option = options.find((opt) => opt.id === modelId);
-		if (!option) return;
-
-		let shouldCloseMenu = true;
-
-		if (onModelChange) {
-			const result = await onModelChange(option.id, option.model);
-
-			if (result === false) {
-				shouldCloseMenu = false;
-			}
-		} else {
-			await modelsStore.selectModelById(option.id);
-		}
-
-		if (shouldCloseMenu) {
-			handleOpenChange(false);
-
-			requestAnimationFrame(() => {
-				const textarea = document.querySelector<HTMLTextAreaElement>(
-					'[data-slot="chat-form"] textarea'
-				);
-				textarea?.focus();
-			});
-		}
-
-		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
-			isLoadingModel = true;
-			modelsStore
-				.loadModel(option.model)
-				.catch((error) => console.error('Failed to load model:', error))
-				.finally(() => (isLoadingModel = false));
-		}
-	}
-
-	function getDisplayOption(): ModelOption | undefined {
-		if (!isRouter) {
-			const displayModel = serverModel || currentModel;
-			if (displayModel) {
-				return {
-					id: serverModel ? 'current' : 'offline-current',
-					model: displayModel,
-					name: displayModel.split('/').pop() || displayModel,
-					capabilities: []
-				};
-			}
-
-			return undefined;
-		}
-
-		if (useGlobalSelection && activeId) {
-			const selected = options.find((option) => option.id === activeId);
-
-			if (selected) return selected;
-		}
-
-		if (currentModel) {
-			if (!isCurrentModelInCache) {
-				return {
-					id: 'not-in-cache',
-					model: currentModel,
-					name: currentModel.split('/').pop() || currentModel,
-					capabilities: []
-				};
-			}
-
-			return options.find((option) => option.model === currentModel);
-		}
-
-		if (activeId) {
-			return options.find((option) => option.id === activeId);
-		}
-
-		return undefined;
-	}
 </script>
 
 <div class={cn('relative inline-flex flex-col items-end gap-1', className)}>
-	{#if loading && options.length === 0 && isRouter}
+	{#if ms.loading && ms.options.length === 0 && ms.isRouter}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
 
 			Loading models…
 		</div>
-	{:else if options.length === 0 && isRouter}
+	{:else if ms.options.length === 0 && ms.isRouter}
 		{#if currentModel}
 			<span
 				class={cn(
 					'inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground',
 					className
 				)}
-				style="max-width: min(calc(100cqw - 9rem), 20rem)"
+				style="max-width: min(calc(100cqw - 10rem), 20rem)"
 			>
 				<Package class="h-3.5 w-3.5" />
 
-				<ModelId modelId={currentModel} class="min-w-0" showOrgName />
+				<ModelId modelId={currentModel} class="min-w-0" hideQuantization />
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
 		{/if}
 	{:else}
-		{@const selectedOption = getDisplayOption()}
+		{@const selectedOption = ms.getDisplayOption()}
 
-		{#if isRouter}
-			<DropdownMenu.Root bind:open={isOpen} onOpenChange={handleOpenChange}>
+		{#if ms.isRouter}
+			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
 				<DropdownMenu.Trigger
 					class={cn(
 						`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-						!isCurrentModelInCache
+						!ms.isCurrentModelInCache
 							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 							: forceForegroundText
 								? 'text-foreground'
-								: isHighlightedCurrentModelActive
+								: ms.isHighlightedCurrentModelActive
 									? 'text-foreground'
 									: 'text-muted-foreground',
-						isOpen ? 'text-foreground' : ''
+						isOpen ? 'text-foreground' : '',
+						'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
 					)}
-					style="max-width: min(calc(100cqw - 9rem), 20rem)"
-					disabled={disabled || updating}
+					disabled={disabled || ms.updating}
 				>
 					<Package class="h-3.5 w-3.5" />
 
@@ -295,7 +144,7 @@
 									<ModelId
 										modelId={selectedOption.model}
 										class="min-w-0 overflow-hidden"
-										showOrgName
+										hideOrgName={false}
 										{...props}
 									/>
 								{/snippet}
@@ -309,7 +158,7 @@
 						<span class="min-w-0 font-medium">Select model</span>
 					{/if}
 
-					{#if updating || isLoadingModel}
+					{#if ms.updating || ms.isLoadingModel}
 						<Loader2 class="h-3 w-3.5 animate-spin" />
 					{:else}
 						<ChevronDown class="h-3 w-3.5" />
@@ -321,14 +170,15 @@
 					class="w-full max-w-[100vw] pt-0 sm:w-max sm:max-w-[calc(100vw-2rem)]"
 				>
 					<DropdownMenuSearchable
-						bind:searchValue={searchTerm}
+						searchValue={ms.searchTerm}
+						onSearchChange={(v) => ms.setSearchTerm(v)}
 						placeholder="Search models..."
 						onSearchKeyDown={handleSearchKeyDown}
 						emptyMessage="No models found."
-						isEmpty={filteredOptions.length === 0 && isCurrentModelInCache}
+						isEmpty={ms.filteredOptions.length === 0 && ms.isCurrentModelInCache}
 					>
 						<div class="models-list">
-							{#if !isCurrentModelInCache && currentModel}
+							{#if !ms.isCurrentModelInCache && currentModel}
 								<!-- Show unavailable model as first option (disabled) -->
 								<button
 									type="button"
@@ -338,47 +188,47 @@
 									aria-disabled="true"
 									disabled
 								>
-									<ModelId modelId={currentModel} class="flex-1" showOrgName />
+									<ModelId modelId={currentModel} class="flex-1" hideQuantization />
 
 									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
 								</button>
 							{/if}
 
-							{#if filteredOptions.length === 0}
+							{#if ms.filteredOptions.length === 0}
 								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
 							{/if}
 
-							{#snippet modelOption(item: ModelItem, showOrgName: boolean)}
+							{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
 								{@const { option, flatIndex } = item}
-								{@const isSelected = currentModel === option.model || activeId === option.id}
+								{@const isSelected = currentModel === option.model || ms.activeId === option.id}
 								{@const isHighlighted = flatIndex === highlightedIndex}
-								{@const isFav = modelsStore.favoriteModelIds.has(option.model)}
+								{@const isFav = ms.isFavorite(option.model)}
 
 								<ModelsSelectorOption
 									{option}
 									{isSelected}
 									{isHighlighted}
 									{isFav}
-									{showOrgName}
-									onSelect={handleSelect}
-									onInfoClick={handleInfoClick}
+									{hideOrgName}
+									onSelect={ms.handleSelect}
+									onInfoClick={ms.handleInfoClick}
 									onMouseEnter={() => (highlightedIndex = flatIndex)}
 									onKeyDown={(e) => {
 										if (e.key === KeyboardKey.ENTER || e.key === KeyboardKey.SPACE) {
 											e.preventDefault();
-											handleSelect(option.id);
+											ms.handleSelect(option.id);
 										}
 									}}
 								/>
 							{/snippet}
 
 							<ModelsSelectorList
-								groups={groupedFilteredOptions}
+								groups={ms.groupedFilteredOptions}
 								{currentModel}
-								{activeId}
+								activeId={ms.activeId}
 								sectionHeaderClass="my-1.5 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
-								onSelect={handleSelect}
-								onInfoClick={handleInfoClick}
+								onSelect={ms.handleSelect}
+								onInfoClick={ms.handleInfoClick}
 								renderOption={modelOption}
 							/>
 						</div>
@@ -389,18 +239,18 @@
 			<button
 				class={cn(
 					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-					!isCurrentModelInCache
+					!ms.isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
-							: isHighlightedCurrentModelActive
+							: ms.isHighlightedCurrentModelActive
 								? 'text-foreground'
 								: 'text-muted-foreground',
 					isOpen ? 'text-foreground' : ''
 				)}
 				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
-				onclick={() => handleOpenChange(true)}
-				disabled={disabled || updating}
+				onclick={() => ms.handleOpenChange(true)}
+				disabled={disabled || ms.updating}
 			>
 				<Package class="h-3.5 w-3.5" />
 
@@ -412,7 +262,7 @@
 								<ModelId
 									modelId={selectedOption.model}
 									class="min-w-0 overflow-hidden"
-									showOrgName
+									hideOrgName={false}
 									{...props}
 								/>
 							{/snippet}
@@ -424,7 +274,7 @@
 					</Tooltip.Root>
 				{/if}
 
-				{#if updating}
+				{#if ms.updating}
 					<Loader2 class="h-3 w-3.5 animate-spin" />
 				{/if}
 			</button>
@@ -432,6 +282,10 @@
 	{/if}
 </div>
 
-{#if showModelDialog}
-	<DialogModelInformation bind:open={showModelDialog} modelId={infoModelId} />
+{#if ms.showModelDialog}
+	<DialogModelInformation
+		open={ms.showModelDialog}
+		onOpenChange={(v) => ms.setShowModelDialog(v)}
+		modelId={ms.infoModelId}
+	/>
 {/if}

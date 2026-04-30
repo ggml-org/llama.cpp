@@ -54,7 +54,7 @@ struct common_control_vector_load_info;
 // CPU utils
 //
 
-struct cpu_params {
+struct common_cpu_params {
     int      n_threads                   = -1;
     bool     cpumask[GGML_MAX_N_THREADS] = {false}; // CPU affinity mask.
     bool     mask_valid                  = false;   // Default: any CPU
@@ -63,8 +63,8 @@ struct cpu_params {
     uint32_t poll                        = 50;      // Polling (busywait) level (0 - no polling, 100 - mostly polling)
 };
 
-int32_t cpu_get_num_physical_cores();
-int32_t cpu_get_num_math();
+int32_t common_cpu_get_num_physical_cores();
+int32_t common_cpu_get_num_math();
 
 //
 // Common params
@@ -297,34 +297,19 @@ struct common_params_model {
 
 struct common_ngram_mod;
 
-struct common_params_speculative {
-    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding
+// draft-model-based speculative decoding parameters
+struct common_params_speculative_draft {
+    int32_t n_max = 16; // maximum number of tokens to draft during speculative decoding
+    int32_t n_min = 0;  // minimum number of draft tokens to use for speculative decoding
 
-    // general-purpose speculative decoding parameters
+    float p_split = 0.1f;  // speculative decoding split probability
+    float p_min   = 0.75f; // minimum speculative decoding probability (greedy)
 
-    int32_t n_max   = 16; // maximum number of tokens to draft during speculative decoding
-    int32_t n_min   = 0;  // minimum number of draft tokens to use for speculative decoding
-    float   p_split = 0.1f; // speculative decoding split probability
-    float   p_min   = 0.75f; // minimum speculative decoding probability (greedy)
+    common_params_model mparams;
 
-    // ngram-based speculative decoding
+    llama_model * model = nullptr; // a llama_model that can be shared by multiple speculative contexts
 
-    uint16_t ngram_size_n   = 12; // ngram size for lookup
-    uint16_t ngram_size_m   = 48; // mgram size for speculative tokens
-    uint16_t ngram_min_hits = 1; // minimum hits at ngram/mgram lookup for mgram to be proposed
-
-    std::shared_ptr<common_ngram_mod> ngram_mod;
-
-    std::string lookup_cache_static;  // path of static ngram cache file for lookup decoding           // NOLINT
-    std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding          // NOLINT
-
-    // draft-model speculative decoding
-
-    struct common_params_model mparams_dft;
-
-    llama_model * model_dft = nullptr; // a llama_model that can be shared by multiple speculative contexts
-
-    llama_context_params cparams_dft; // these are the parameters for the draft llama_context
+    llama_context_params cparams; // these are the parameters for the draft llama_context
 
     int32_t n_ctx        = 0;  // draft context size
     int32_t n_gpu_layers = -1; // number of layers to store in VRAM for the draft model (-1 - use default)
@@ -332,25 +317,60 @@ struct common_params_speculative {
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
-    struct cpu_params cpuparams;
-    struct cpu_params cpuparams_batch;
+    common_cpu_params cpuparams;
+    common_cpu_params cpuparams_batch;
 
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
     std::vector<std::pair<std::string, std::string>> replacements; // main to speculative model replacements
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+};
+
+struct common_params_speculative_ngram_mod {
+    int32_t n_match = 24;
+
+    int32_t n_max = 64;
+    int32_t n_min = 48;
+
+    // shared instance of the ngram container for all speculative decoding contexts
+    std::shared_ptr<common_ngram_mod> obj;
+};
+
+struct common_params_speculative_ngram_map {
+    uint16_t size_n   = 12; // ngram size for lookup
+    uint16_t size_m   = 48; // mgram size for speculative tokens
+    uint16_t min_hits = 1;  // minimum hits at ngram/mgram lookup for mgram to be proposed
+};
+
+struct common_params_speculative_ngram_cache {
+    std::string lookup_cache_static;  // path of static ngram cache file for lookup decoding
+    std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding
+};
+
+struct common_params_speculative {
+    // TODO: become a vector in order to support "chains of speculators"
+    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+
+    common_params_speculative_draft draft;
+
+    common_params_speculative_ngram_mod ngram_mod;
+    common_params_speculative_ngram_map ngram_simple;
+    common_params_speculative_ngram_map ngram_map_k;
+    common_params_speculative_ngram_map ngram_map_k4v;
+
+    common_params_speculative_ngram_cache ngram_cache;
 
     bool has_dft() const {
-        return !mparams_dft.path.empty() || !mparams_dft.hf_repo.empty();
+        return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
     }
 };
 
 struct common_params_vocoder {
     struct common_params_model model;
 
-    std::string speaker_file = ""; // speaker file path                                      // NOLINT
+    std::string speaker_file; // speaker file path
 
-    bool use_guide_tokens = false; // enable guide tokens to improve TTS accuracy            // NOLINT
+    bool use_guide_tokens = false; // enable guide tokens to improve TTS accuracy
 };
 
 struct common_params_diffusion {
@@ -433,8 +453,8 @@ struct common_params {
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
-    struct cpu_params cpuparams;
-    struct cpu_params cpuparams_batch;
+    common_cpu_params cpuparams;
+    common_cpu_params cpuparams_batch;
 
     ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data                 = nullptr;
@@ -678,7 +698,7 @@ std::string common_params_get_system_info(const common_params & params);
 
 bool parse_cpu_range(const std::string & range, bool(&boolmask)[GGML_MAX_N_THREADS]);
 bool parse_cpu_mask(const std::string & mask, bool(&boolmask)[GGML_MAX_N_THREADS]);
-void postprocess_cpu_params(cpu_params & cpuparams, const cpu_params * role_model = nullptr);
+void postprocess_cpu_params(common_cpu_params & cpuparams, const common_cpu_params * role_model = nullptr);
 bool set_process_priority(enum ggml_sched_priority prio);
 
 //
@@ -846,7 +866,7 @@ common_init_result_ptr common_init_from_params(common_params & params);
 
 struct llama_model_params     common_model_params_to_llama  (      common_params & params);
 struct llama_context_params   common_context_params_to_llama(const common_params & params);
-struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_params & params);
+struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const common_cpu_params & params);
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
