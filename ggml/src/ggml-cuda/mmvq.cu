@@ -521,62 +521,28 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
     return sum;
 }
 
-static __device__ __forceinline__ float2 vec_dot_q4_K_q8_1_x4_x2(
-        const void * __restrict__ vbq_x,
-        const void * __restrict__ vbq_gate,
-        const block_q8_1_x4 * __restrict__ yx4,
-        const int & kby, const int & kbx, const int subblock_pair) {
-    const block_q4_K * bq4_K_x = (const block_q4_K *) vbq_x + kbx;
-    const block_q4_K * bq4_K_gate = (const block_q4_K *) vbq_gate + kbx;
-
-    const int subblock0 = 2 * subblock_pair;
-    const int subblock1 = subblock0 + 1;
-    const int qs_idx = subblock_pair * 8;
-
-    const uint4 packed_q4_x_lo = ((const uint4 *) ((const uint32_t *) bq4_K_x->qs + qs_idx + 0))[0];
-    const uint4 packed_q4_x_hi = ((const uint4 *) ((const uint32_t *) bq4_K_x->qs + qs_idx + 4))[0];
-    const uint4 packed_q4_gate_lo = ((const uint4 *) ((const uint32_t *) bq4_K_gate->qs + qs_idx + 0))[0];
-    const uint4 packed_q4_gate_hi = ((const uint4 *) ((const uint32_t *) bq4_K_gate->qs + qs_idx + 4))[0];
-    const q4_k_block_header header_x = load_q4_K_block_header(bq4_K_x);
-    const q4_k_block_header header_gate = load_q4_K_block_header(bq4_K_gate);
-
-    float sum_x = 0.0f;
-    float sum_gate = 0.0f;
-
-    {
-        const q4_k_q8_1_x4_rhs rhs = load_q4_K_q8_1_x4_rhs(yx4, kby, subblock0);
-        sum_x += vec_dot_q4_K_q8_1_x4_with_packed(header_x, packed_q4_x_lo, packed_q4_x_hi, rhs, subblock0);
-        sum_gate += vec_dot_q4_K_q8_1_x4_with_packed(header_gate, packed_q4_gate_lo, packed_q4_gate_hi, rhs, subblock0);
-    }
-    {
-        const q4_k_q8_1_x4_rhs rhs = load_q4_K_q8_1_x4_rhs(yx4, kby, subblock1);
-        sum_x += vec_dot_q4_K_q8_1_x4_with_packed(header_x, packed_q4_x_lo, packed_q4_x_hi, rhs, subblock1);
-        sum_gate += vec_dot_q4_K_q8_1_x4_with_packed(header_gate, packed_q4_gate_lo, packed_q4_gate_hi, rhs, subblock1);
-    }
-
-    return make_float2(sum_x, sum_gate);
-}
-
-template <bool has_gate_fusion>
+template <bool has_fusion>
 static __device__ __forceinline__ void accumulate_q4_K_q8_1_x4_iter(
         const void * __restrict__ vx_row,
         const void * __restrict__ vgate_row,
         const block_q8_1_x4 * __restrict__ y_row,
+        const bool use_gate,
         const int kby, const int kbx, const int subblock_pair,
         float & tmp, float & tmp_gate) {
-    if constexpr (has_gate_fusion) {
-        const float2 dots = vec_dot_q4_K_q8_1_x4_x2(vx_row, vgate_row, y_row, kby, kbx, subblock_pair);
-        tmp += dots.x;
-        tmp_gate += dots.y;
+    tmp += vec_dot_q4_K_q8_1_x4(vx_row, y_row, kby, kbx, subblock_pair);
+    if constexpr (has_fusion) {
+        if (use_gate) {
+            tmp_gate += vec_dot_q4_K_q8_1_x4(vgate_row, y_row, kby, kbx, subblock_pair);
+        }
     } else {
-        tmp += vec_dot_q4_K_q8_1_x4(vx_row, y_row, kby, kbx, subblock_pair);
         GGML_UNUSED(vgate_row);
+        GGML_UNUSED(use_gate);
         GGML_UNUSED(tmp_gate);
     }
 }
 
 
-template <bool has_fusion, bool has_gate_fusion, bool has_ids, int nwarps>
+template <bool has_fusion, bool has_ids, int nwarps>
 __launch_bounds__(nwarps*ggml_cuda_get_physical_warp_size(), 1)
 static __global__ void mul_mat_vec_q4_K_q8_1_x4(
         const void * __restrict__ vx, const void * __restrict__ vy, const int32_t * __restrict__ ids, const ggml_cuda_mm_fusion_args_device fusion, float * __restrict__ dst,
@@ -585,8 +551,6 @@ static __global__ void mul_mat_vec_q4_K_q8_1_x4(
         const uint32_t stride_channel_y, const uint32_t stride_channel_dst, const uint3 sample_ratio,
         const uint32_t stride_sample_x, const uint32_t stride_sample_y, const uint32_t stride_sample_dst,
         const uint32_t ids_stride) {
-
-    static_assert(!has_gate_fusion || has_fusion, "gate fusion requires fusion support");
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int qk = ggml_cuda_type_traits<GGML_TYPE_Q4_K>::qk;
@@ -622,9 +586,13 @@ static __global__ void mul_mat_vec_q4_K_q8_1_x4(
 
     const block_q8_1_x4 * y_row = ((const block_q8_1_x4 *) vy) + sample_y*stride_sample_y + channel_y*stride_channel_y;
     const void * vx_row = ((const block_q4_K *) vx) + kbx_offset;
+    bool use_gate = false;
     const void * vgate_row = nullptr;
-    if constexpr (has_gate_fusion) {
-        vgate_row = ((const block_q4_K *) fusion.gate) + kbx_offset;
+    if constexpr (has_fusion) {
+        use_gate = fusion.gate != nullptr;
+        if (use_gate) {
+            vgate_row = ((const block_q4_K *) fusion.gate) + kbx_offset;
+        }
     }
 
     float tmp = 0.0f;
@@ -637,63 +605,80 @@ static __global__ void mul_mat_vec_q4_K_q8_1_x4(
     int kby = kbx * q8_blocks_per_q4_block;
 
     for (; kbx + blocks_per_iter < blocks_per_row_x; kbx += 2*blocks_per_iter, kby += 2*kby_step) {
-        accumulate_q4_K_q8_1_x4_iter<has_gate_fusion>(vx_row, vgate_row, y_row, kby, kbx, subblock_pair, tmp, tmp_gate);
-        accumulate_q4_K_q8_1_x4_iter<has_gate_fusion>(vx_row, vgate_row, y_row, kby + kby_step, kbx + blocks_per_iter, subblock_pair, tmp, tmp_gate);
+        accumulate_q4_K_q8_1_x4_iter<has_fusion>(vx_row, vgate_row, y_row, use_gate, kby, kbx, subblock_pair, tmp, tmp_gate);
+        accumulate_q4_K_q8_1_x4_iter<has_fusion>(vx_row, vgate_row, y_row, use_gate, kby + kby_step, kbx + blocks_per_iter, subblock_pair, tmp, tmp_gate);
     }
 
     for (; kbx < blocks_per_row_x; kbx += blocks_per_iter, kby += kby_step) {
-        accumulate_q4_K_q8_1_x4_iter<has_gate_fusion>(vx_row, vgate_row, y_row, kby, kbx, subblock_pair, tmp, tmp_gate);
+        accumulate_q4_K_q8_1_x4_iter<has_fusion>(vx_row, vgate_row, y_row, use_gate, kby, kbx, subblock_pair, tmp, tmp_gate);
     }
 
     __shared__ float tmp_shared[(nwarps - 1 > 0) ? nwarps - 1 : 1][warp_size];
-    __shared__ float tmp_shared_gate[(has_gate_fusion && (nwarps - 1 > 0)) ? nwarps - 1 : 1][warp_size];
-    if constexpr (!has_gate_fusion) {
+    __shared__ float tmp_shared_gate[(has_fusion && (nwarps - 1 > 0)) ? nwarps - 1 : 1][warp_size];
+    if constexpr (!has_fusion) {
+        (void) tmp_shared_gate;
+    } else if (!use_gate) {
         (void) tmp_shared_gate;
     }
 
+
     if constexpr (nwarps > 1) {
+        //Warps > 1 write their partial sums into shared memory
         if (threadIdx.y > 0) {
-            tmp_shared[threadIdx.y - 1][threadIdx.x] = tmp;
-            if constexpr (has_gate_fusion) {
-                tmp_shared_gate[threadIdx.y - 1][threadIdx.x] = tmp_gate;
+            tmp_shared[threadIdx.y - 1][threadIdx.x] = tmp; //-1 because it doesnt include warp 0
+            if constexpr (has_fusion) {
+                if (use_gate) {
+                    tmp_shared_gate[threadIdx.y - 1][threadIdx.x] = tmp_gate;
+                }
             }
         }
         __syncthreads();
+        //the job is done for warps > 1
         if (threadIdx.y > 0) {
             return;
         }
 
 #pragma unroll
+        // warp 0 adds the matching lane’s partial sums from the other warps.
         for (int warp = 0; warp < nwarps - 1; ++warp) {
             tmp += tmp_shared[warp][threadIdx.x];
-            if constexpr (has_gate_fusion) {
-                tmp_gate += tmp_shared_gate[warp][threadIdx.x];
+            if constexpr (has_fusion) {
+                if (use_gate) {
+                    tmp_gate += tmp_shared_gate[warp][threadIdx.x];
+                }
             }
         }
     }
 
+    //adds up the partial sums from all lanes in warp 0.
     tmp = warp_reduce_sum<warp_size>(tmp);
-    if constexpr (has_gate_fusion) {
-        tmp_gate = warp_reduce_sum<warp_size>(tmp_gate);
+    if constexpr (has_fusion) {
+        if (use_gate) {
+            tmp_gate = warp_reduce_sum<warp_size>(tmp_gate);
+        }
     }
 
+    //write to destination
     if (threadIdx.y == 0 && threadIdx.x == 0) {
         float result = tmp;
 
         if constexpr (has_fusion) {
             const uint32_t channel_bias = has_ids ? channel_x : channel_dst;
 
+            //add bias
             if (fusion.x_bias != nullptr) {
                 const float * x_bias = (const float *) fusion.x_bias + sample_dst*stride_sample_dst + channel_bias*stride_channel_dst + row0;
                 result += x_bias[0];
             }
 
-            if constexpr (has_gate_fusion) {
+            //add gate bias
+            if (use_gate) {
                 float gate_value = tmp_gate;
                 if (fusion.gate_bias != nullptr) {
                     const float * gate_bias = (const float *) fusion.gate_bias + sample_dst*stride_sample_dst + channel_bias*stride_channel_dst + row0;
                     gate_value += gate_bias[0];
                 }
+                //choose activation for Gated Linear Unit (GLU)
                 switch (fusion.glu_op) {
                     case GGML_GLU_OP_SWIGLU:
                         result *= ggml_cuda_op_silu_single(gate_value);
@@ -716,10 +701,6 @@ static __global__ void mul_mat_vec_q4_K_q8_1_x4(
 
     if constexpr (!has_fusion) {
         GGML_UNUSED(fusion);
-    } else if constexpr (!has_gate_fusion) {
-        GGML_UNUSED(fusion.gate);
-        GGML_UNUSED(fusion.gate_bias);
-        GGML_UNUSED(fusion.glu_op);
     }
 
     if constexpr (!has_ids) {
@@ -731,7 +712,7 @@ static __global__ void mul_mat_vec_q4_K_q8_1_x4(
     GGML_UNUSED_VARS(stride_col_y, stride_col_dst, ids_stride);
 }
 
-template <bool has_fusion, bool has_gate_fusion, bool has_ids>
+template <bool has_fusion, bool has_ids>
 static void launch_mul_mat_vec_q4_K_q8_1_x4(
         const void * vx, const void * vy, const int32_t * ids, const ggml_cuda_mm_fusion_args_device fusion, float * dst,
         const uint32_t ncols_x, const uint3 nchannels_y, const uint32_t stride_row_x, const uint32_t stride_col_y,
@@ -742,11 +723,12 @@ static void launch_mul_mat_vec_q4_K_q8_1_x4(
         const uint32_t ids_stride, cudaStream_t stream) {
     const int device = ggml_cuda_get_device();
     const int cc = ggml_cuda_info().devices[device].cc;
-    const int nwarps = calc_q4_K_q8_1_x4_nwarps(cc, (int) block_nums.x, (int) ncols_x, has_gate_fusion);
+    const bool use_gate = has_fusion && fusion.gate != nullptr;
+    const int nwarps = calc_q4_K_q8_1_x4_nwarps(cc, (int) block_nums.x, (int) ncols_x, use_gate);
 
     if (nwarps == 4) {
         const dim3 block_dims(generic_block_dims.x, 4, 1);
-        mul_mat_vec_q4_K_q8_1_x4<has_fusion, has_gate_fusion, has_ids, 4><<<block_nums, block_dims, 0, stream>>>
+        mul_mat_vec_q4_K_q8_1_x4<has_fusion, has_ids, 4><<<block_nums, block_dims, 0, stream>>>
             (vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
              channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
              sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
@@ -755,7 +737,7 @@ static void launch_mul_mat_vec_q4_K_q8_1_x4(
 
     if (nwarps == 2) {
         const dim3 block_dims(generic_block_dims.x, 2, 1);
-        mul_mat_vec_q4_K_q8_1_x4<has_fusion, has_gate_fusion, has_ids, 2><<<block_nums, block_dims, 0, stream>>>
+        mul_mat_vec_q4_K_q8_1_x4<has_fusion, has_ids, 2><<<block_nums, block_dims, 0, stream>>>
             (vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
              channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
              sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
@@ -764,7 +746,7 @@ static void launch_mul_mat_vec_q4_K_q8_1_x4(
 
     {
         const dim3 block_dims(generic_block_dims.x, 1, 1);
-        mul_mat_vec_q4_K_q8_1_x4<has_fusion, has_gate_fusion, has_ids, 1><<<block_nums, block_dims, 0, stream>>>
+        mul_mat_vec_q4_K_q8_1_x4<has_fusion, has_ids, 1><<<block_nums, block_dims, 0, stream>>>
             (vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
              channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
              sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
@@ -783,21 +765,13 @@ static void dispatch_mul_mat_vec_q4_K_q8_1_x4(
 
     if (ids != nullptr) {
         if (has_fusion) {
-            if (fusion.gate != nullptr) {
-                launch_mul_mat_vec_q4_K_q8_1_x4<true, true, true>(
-                    vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                    channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                    sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
-                    block_nums, block_dims, ids_stride, stream);
-            } else {
-                launch_mul_mat_vec_q4_K_q8_1_x4<true, false, true>(
-                    vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                    channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                    sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
-                    block_nums, block_dims, ids_stride, stream);
-            }
+            launch_mul_mat_vec_q4_K_q8_1_x4<true, true>(
+                vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
+                channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
+                block_nums, block_dims, ids_stride, stream);
         } else {
-            launch_mul_mat_vec_q4_K_q8_1_x4<false, false, true>(
+            launch_mul_mat_vec_q4_K_q8_1_x4<false, true>(
                 vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
@@ -807,21 +781,13 @@ static void dispatch_mul_mat_vec_q4_K_q8_1_x4(
     }
 
     if (has_fusion) {
-        if (fusion.gate != nullptr) {
-            launch_mul_mat_vec_q4_K_q8_1_x4<true, true, false>(
-                vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
-                block_nums, block_dims, ids_stride, stream);
-        } else {
-            launch_mul_mat_vec_q4_K_q8_1_x4<true, false, false>(
-                vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
-                block_nums, block_dims, ids_stride, stream);
-        }
+        launch_mul_mat_vec_q4_K_q8_1_x4<true, false>(
+            vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
+            channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+            sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
+            block_nums, block_dims, ids_stride, stream);
     } else {
-        launch_mul_mat_vec_q4_K_q8_1_x4<false, false, false>(
+        launch_mul_mat_vec_q4_K_q8_1_x4<false, false>(
             vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
             channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
             sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
