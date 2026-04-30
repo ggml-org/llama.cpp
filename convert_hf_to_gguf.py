@@ -5459,7 +5459,7 @@ class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
 
 # MiniCPM-V 4.6: text tower is Qwen3.5 (linear+full hybrid attention) wrapped under
-# `model.language_model.*`; vision tower is SigLIP + a window-attention insert merger
+# `model.language_model.*`; vision tower is SigLIP + a window-attention ViT merger
 # + a final DownsampleMLP merger. The same HF arch is registered twice below: once as
 # the LM (text mode) and once as the mmproj (vision mode), mirroring the Qwen3-VL setup.
 
@@ -5495,36 +5495,6 @@ class MiniCPMV4_6VisionModel(MmprojModel):
             if scale_resolution is not None:
                 self.hparams_vision["image_size"] = int(scale_resolution)
 
-    # GGUF tensor names mirror the C++ definitions in tools/mtmd/clip-impl.h:
-    #   TN_INSERT_MERGER_*  ->  v.insert_merger.*
-    #   TN_MERGER_*         ->  merger.*
-    _VIT_MERGER_MAP = {
-        "layer_norm1.weight":        "v.insert_merger.ln1.weight",
-        "layer_norm1.bias":          "v.insert_merger.ln1.bias",
-        "self_attn.q_proj.weight":   "v.insert_merger.attn_q.weight",
-        "self_attn.q_proj.bias":     "v.insert_merger.attn_q.bias",
-        "self_attn.k_proj.weight":   "v.insert_merger.attn_k.weight",
-        "self_attn.k_proj.bias":     "v.insert_merger.attn_k.bias",
-        "self_attn.v_proj.weight":   "v.insert_merger.attn_v.weight",
-        "self_attn.v_proj.bias":     "v.insert_merger.attn_v.bias",
-        "self_attn.out_proj.weight": "v.insert_merger.attn_out.weight",
-        "self_attn.out_proj.bias":   "v.insert_merger.attn_out.bias",
-        "pre_norm.weight":           "v.insert_merger.ds_ln.weight",
-        "pre_norm.bias":             "v.insert_merger.ds_ln.bias",
-        "linear_1.weight":           "v.insert_merger.ds_ffn_up.weight",
-        "linear_1.bias":             "v.insert_merger.ds_ffn_up.bias",
-        "linear_2.weight":           "v.insert_merger.ds_ffn_down.weight",
-        "linear_2.bias":             "v.insert_merger.ds_ffn_down.bias",
-    }
-    _MERGER_MAP = {
-        "pre_norm.weight": "merger.pre_norm.weight",
-        "pre_norm.bias":   "merger.pre_norm.bias",
-        "linear_1.weight": "merger.mlp_up.weight",
-        "linear_1.bias":   "merger.mlp_up.bias",
-        "linear_2.weight": "merger.mlp_down.weight",
-        "linear_2.bias":   "merger.mlp_down.bias",
-    }
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         assert self.hparams_vision is not None
@@ -5554,27 +5524,12 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         if name.startswith(("model.language_model.", "lm_head.")) or name.startswith("mtp"):
             return
 
-        # final DownsampleMLP merger
-        if name.startswith("model.merger.mlp.0."):
-            sub = name[len("model.merger.mlp.0."):]
-            if (mapped := self._MERGER_MAP.get(sub)) is None:
-                logger.warning("unmapped merger tensor: %s", name)
-                return
-            yield (mapped, data_torch)
+        # final merger and ViT merger
+        if name.startswith(("model.merger.", "model.vision_tower.vit_merger.")):
+            yield from super().modify_tensors(data_torch, name, bid)
             return
 
-        # ViT insert merger (window self-attention + ds MLP)
-        if name.startswith("model.vision_tower.vit_merger."):
-            sub = name[len("model.vision_tower.vit_merger."):]
-            if (mapped := self._VIT_MERGER_MAP.get(sub)) is None:
-                logger.warning("unmapped vit_merger tensor: %s", name)
-                return
-            yield (mapped, data_torch)
-            return
-
-        # SigLIP vision body: rewrite to `vision_tower.vision_model.*` so the standard
-        # SigLIP entries in tensor_mapping.py (V_ENC_EMBD_*, V_ENC_ATTN_*, V_POST_NORM,
-        # V_ENC_FFN_*) match.
+        # SigLIP vision body
         if name.startswith("model.vision_tower."):
             name = "vision_tower.vision_model." + name[len("model.vision_tower."):]
             yield from super().modify_tensors(data_torch, name, bid)

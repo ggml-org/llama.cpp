@@ -126,20 +126,16 @@
 #define TN_MINICPMV_ATTN       "resampler.attn.%s.%s"
 #define TN_MINICPMV_LN         "resampler.ln_%s.%s"
 
-// MiniCPM-V 4.5 / 4.6 insert merger (window attention + MLP downsample)
-#define TN_INSERT_MERGER_LN1      "v.insert_merger.ln1.%s"
-#define TN_INSERT_MERGER_ATTN_Q   "v.insert_merger.attn_q.%s"
-#define TN_INSERT_MERGER_ATTN_K   "v.insert_merger.attn_k.%s"
-#define TN_INSERT_MERGER_ATTN_V   "v.insert_merger.attn_v.%s"
-#define TN_INSERT_MERGER_ATTN_O   "v.insert_merger.attn_out.%s"
-#define TN_INSERT_MERGER_DS_LN    "v.insert_merger.ds_ln.%s"
-#define TN_INSERT_MERGER_DS_UP    "v.insert_merger.ds_ffn_up.%s"
-#define TN_INSERT_MERGER_DS_DOWN  "v.insert_merger.ds_ffn_down.%s"
-
-// MiniCPM-V 4.5 / 4.6 final merger (DownsampleMLP, replaces resampler)
-#define TN_MERGER_PRE_NORM  "merger.pre_norm.%s"
-#define TN_MERGER_MLP_UP    "merger.mlp_up.%s"
-#define TN_MERGER_MLP_DOWN  "merger.mlp_down.%s"
+// MiniCPM-V 4.6 ViT merger (window attention + MLP downsample),
+// matching the upstream `vit_merger` module name in transformers.
+#define TN_VIT_MERGER_LN1      "v.vit_merger.ln1.%s"
+#define TN_VIT_MERGER_ATTN_Q   "v.vit_merger.attn_q.%s"
+#define TN_VIT_MERGER_ATTN_K   "v.vit_merger.attn_k.%s"
+#define TN_VIT_MERGER_ATTN_V   "v.vit_merger.attn_v.%s"
+#define TN_VIT_MERGER_ATTN_O   "v.vit_merger.attn_out.%s"
+#define TN_VIT_MERGER_DS_LN    "v.vit_merger.ds_ln.%s"
+#define TN_VIT_MERGER_DS_UP    "v.vit_merger.ds_ffn_up.%s"
+#define TN_VIT_MERGER_DS_DOWN  "v.vit_merger.ds_ffn_down.%s"
 
 #define KEY_INSERT_LAYER_ID "clip.vision.insert_layer_id"
 

@@ -1690,6 +1690,7 @@ class TensorNameMap:
             "mlp_AR.pre_norm", # PaddleOCR-VL
             "merger.ln_q",
             "vision_tower.merger.ln_q", # dots.ocr
+            "model.merger.mlp.0.pre_norm", # minicpmv4_6
         ),
 
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
@@ -1763,6 +1764,38 @@ class TensorNameMap:
             "model.visual.deepstack_merger_list.{bid}.linear_fc2", # deepstack in qwen3vl
         ),
 
+        MODEL_TENSOR.V_MERGER_LN1: (
+            "model.vision_tower.vit_merger.layer_norm1", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_ATTN_Q: (
+            "model.vision_tower.vit_merger.self_attn.q_proj", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_ATTN_K: (
+            "model.vision_tower.vit_merger.self_attn.k_proj", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_ATTN_V: (
+            "model.vision_tower.vit_merger.self_attn.v_proj", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_ATTN_O: (
+            "model.vision_tower.vit_merger.self_attn.out_proj", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_DS_LN: (
+            "model.vision_tower.vit_merger.pre_norm", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_DS_UP: (
+            "model.vision_tower.vit_merger.linear_1", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_DS_DOWN: (
+            "model.vision_tower.vit_merger.linear_2", # minicpmv4_6
+        ),
+
         MODEL_TENSOR.V_SAM_POS_EMBD: (
             "model.sam_model.pos_embed",
         ),
@@ -1822,11 +1855,13 @@ class TensorNameMap:
         MODEL_TENSOR.V_MM_UP: (
             "model.vision.linear_proj.dense_h_to_4h", # cogvlm
             "visual.merger.up_proj", # glm4v
+            "model.merger.mlp.0.linear_1", # minicpmv4_6
         ),
 
         MODEL_TENSOR.V_MM_DOWN: (
             "model.vision.linear_proj.dense_4h_to_h", # cogvlm
             "visual.merger.down_proj", # glm4v
+            "model.merger.mlp.0.linear_2", # minicpmv4_6
         ),
 
         MODEL_TENSOR.V_MM_GATE: (

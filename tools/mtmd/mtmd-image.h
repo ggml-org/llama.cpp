@@ -64,7 +64,7 @@ struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
 
 protected:
     // multiplier applied to patch_size when computing slice alignment.
-    // defaults to 1; MiniCPM-V 4.5 / 4.6 merger uses 4 to keep two successive
+    // defaults to 1; MiniCPM-V 4.6 merger uses 4 to keep two successive
     // 2x2 spatial merges integral.
     int slice_align_factor = 1;
 
@@ -114,8 +114,8 @@ struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
     bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
 };
 
-// llava-uhd slicing for MiniCPM-V 4.5 / 4.6 merger projector.
-// the merger applies two successive 2x2 spatial merges (insert merger + final
+// llava-uhd slicing for MiniCPM-V 4.6 merger projector.
+// the merger applies two successive 2x2 spatial merges (ViT merger + final
 // DownsampleMLP), so each slice's height and width must be divisible by
 // patch_size * 4 to keep the merger output grid integral. mirrors
 // `ensure_divide(.., patch_size * 4)` in MiniCPMV4_6ImageProcessorPil.find_best_resize.

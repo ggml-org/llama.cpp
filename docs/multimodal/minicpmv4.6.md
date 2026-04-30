@@ -4,7 +4,7 @@
 
 Download [MiniCPM-V-4_6](https://huggingface.co/openbmb/MiniCPM-V-4_6) PyTorch model from huggingface to "MiniCPM-V-4_6" folder.
 
-The model must be the standard `transformers` v5.7.0+ checkpoint (no `trust_remote_code`); the architecture in `config.json` is `MiniCPMV4_6ForConditionalGeneration` with a `qwen3_5_text` text model and a SigLIP-based vision tower with a window-attention insert merger.
+The model must be the standard `transformers` v5.7.0+ checkpoint (no `trust_remote_code`); the architecture in `config.json` is `MiniCPMV4_6ForConditionalGeneration` with a `qwen3_5_text` text model and a SigLIP-based vision tower plus a window-attention `vit_merger`.
 
 ### Build llama.cpp
 
@@ -31,7 +31,7 @@ Unlike older MiniCPM-V variants, MiniCPM-V 4.6 is converted directly through `co
 # language model
 python ./convert_hf_to_gguf.py ../MiniCPM-V-4_6 --outfile ../MiniCPM-V-4_6/ggml-model-f16.gguf
 
-# multimodal projector (vision tower + window-attention insert merger + DownsampleMLP merger)
+# multimodal projector (vision tower + window-attention vit_merger + DownsampleMLP merger)
 python ./convert_hf_to_gguf.py ../MiniCPM-V-4_6 --mmproj --outfile ../MiniCPM-V-4_6/mmproj-model-f16.gguf
 
 # optional: quantize to Q4_K_M

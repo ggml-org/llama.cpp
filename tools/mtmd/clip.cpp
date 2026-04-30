@@ -1233,7 +1233,7 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_MINICPMV4_6:
                     {
-                        // MiniCPM-V 4.5 / 4.6 unified merger projector
+                        // MiniCPM-V 4.6 unified merger projector
                         get_u32(KEY_INSERT_LAYER_ID, hparams.insert_layer_id, false);
                     } break;
                 case PROJECTOR_TYPE_INTERNVL:
@@ -1832,31 +1832,31 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_MINICPMV4_6:
                 {
-                    // Insert Merger: window attention
-                    model.insert_merger_ln1_w     = get_tensor(string_format(TN_INSERT_MERGER_LN1, "weight"));
-                    model.insert_merger_ln1_b     = get_tensor(string_format(TN_INSERT_MERGER_LN1, "bias"));
-                    model.insert_merger_attn_q_w  = get_tensor(string_format(TN_INSERT_MERGER_ATTN_Q, "weight"));
-                    model.insert_merger_attn_q_b  = get_tensor(string_format(TN_INSERT_MERGER_ATTN_Q, "bias"), false);
-                    model.insert_merger_attn_k_w  = get_tensor(string_format(TN_INSERT_MERGER_ATTN_K, "weight"));
-                    model.insert_merger_attn_k_b  = get_tensor(string_format(TN_INSERT_MERGER_ATTN_K, "bias"), false);
-                    model.insert_merger_attn_v_w  = get_tensor(string_format(TN_INSERT_MERGER_ATTN_V, "weight"));
-                    model.insert_merger_attn_v_b  = get_tensor(string_format(TN_INSERT_MERGER_ATTN_V, "bias"), false);
-                    model.insert_merger_attn_o_w  = get_tensor(string_format(TN_INSERT_MERGER_ATTN_O, "weight"));
-                    model.insert_merger_attn_o_b  = get_tensor(string_format(TN_INSERT_MERGER_ATTN_O, "bias"), false);
-                    // Insert Merger: ViT MLP downsample
-                    model.insert_merger_ds_ln_w   = get_tensor(string_format(TN_INSERT_MERGER_DS_LN, "weight"));
-                    model.insert_merger_ds_ln_b   = get_tensor(string_format(TN_INSERT_MERGER_DS_LN, "bias"));
-                    model.insert_merger_ds_up_w   = get_tensor(string_format(TN_INSERT_MERGER_DS_UP, "weight"));
-                    model.insert_merger_ds_up_b   = get_tensor(string_format(TN_INSERT_MERGER_DS_UP, "bias"), false);
-                    model.insert_merger_ds_down_w = get_tensor(string_format(TN_INSERT_MERGER_DS_DOWN, "weight"));
-                    model.insert_merger_ds_down_b = get_tensor(string_format(TN_INSERT_MERGER_DS_DOWN, "bias"), false);
+                    // ViT merger: window self-attention
+                    model.vit_merger_ln1_w     = get_tensor(string_format(TN_VIT_MERGER_LN1, "weight"));
+                    model.vit_merger_ln1_b     = get_tensor(string_format(TN_VIT_MERGER_LN1, "bias"));
+                    model.vit_merger_attn_q_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "weight"));
+                    model.vit_merger_attn_q_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "bias"), false);
+                    model.vit_merger_attn_k_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_K, "weight"));
+                    model.vit_merger_attn_k_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_K, "bias"), false);
+                    model.vit_merger_attn_v_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_V, "weight"));
+                    model.vit_merger_attn_v_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_V, "bias"), false);
+                    model.vit_merger_attn_o_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_O, "weight"));
+                    model.vit_merger_attn_o_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_O, "bias"), false);
+                    // ViT merger: MLP downsample
+                    model.vit_merger_ds_ln_w   = get_tensor(string_format(TN_VIT_MERGER_DS_LN, "weight"));
+                    model.vit_merger_ds_ln_b   = get_tensor(string_format(TN_VIT_MERGER_DS_LN, "bias"));
+                    model.vit_merger_ds_up_w   = get_tensor(string_format(TN_VIT_MERGER_DS_UP, "weight"));
+                    model.vit_merger_ds_up_b   = get_tensor(string_format(TN_VIT_MERGER_DS_UP, "bias"), false);
+                    model.vit_merger_ds_down_w = get_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "weight"));
+                    model.vit_merger_ds_down_b = get_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "bias"), false);
                     // Final Merger (DownsampleMLP)
-                    model.merger_pre_norm_w  = get_tensor(string_format(TN_MERGER_PRE_NORM, "weight"));
-                    model.merger_pre_norm_b  = get_tensor(string_format(TN_MERGER_PRE_NORM, "bias"));
-                    model.merger_mlp_up_w    = get_tensor(string_format(TN_MERGER_MLP_UP, "weight"));
-                    model.merger_mlp_up_b    = get_tensor(string_format(TN_MERGER_MLP_UP, "bias"), false);
-                    model.merger_mlp_down_w  = get_tensor(string_format(TN_MERGER_MLP_DOWN, "weight"));
-                    model.merger_mlp_down_b  = get_tensor(string_format(TN_MERGER_MLP_DOWN, "bias"), false);
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B, false);
+                    model.mm_ffn_up_w     = get_tensor(string_format(TN_MM_UP,   "weight"));
+                    model.mm_ffn_up_b     = get_tensor(string_format(TN_MM_UP,   "bias"), false);
+                    model.mm_ffn_down_w   = get_tensor(string_format(TN_MM_DOWN, "weight"));
+                    model.mm_ffn_down_b   = get_tensor(string_format(TN_MM_DOWN, "bias"), false);
                 } break;
             case PROJECTOR_TYPE_GLM_EDGE:
                 {
@@ -3000,7 +3000,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_MINICPMV4_6:
             {
-                // insert merger 4x + final merger 4x = 16x total spatial downsample
+                // ViT merger 4x + final merger 4x = 16x total spatial downsample
                 n_patches = n_patches / 16;
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
@@ -3358,23 +3358,23 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                         inv_window_idx[window_idx[i]] = i;
                     }
                 }
-                set_input_i32("im_window_idx",     window_idx);
-                set_input_i32("im_inv_window_idx", inv_window_idx);
+                set_input_i32("vit_merger_window_idx",     window_idx);
+                set_input_i32("vit_merger_inv_window_idx", inv_window_idx);
 
                 // block-diagonal attention mask: tokens in the same 4-token
                 // window attend to each other (mask = 0), all other positions
                 // are masked out (-inf). matches the window-major reorder above.
-                std::vector<float> im_window_mask_data(n_pos * n_pos, std::numeric_limits<float>::lowest());
+                std::vector<float> window_mask_data(n_pos * n_pos, std::numeric_limits<float>::lowest());
                 for (int wi = 0; wi < n_pos / 4; wi++) {
                     for (int i = 0; i < 4; i++) {
                         for (int j = 0; j < 4; j++) {
-                            im_window_mask_data[(wi*4 + i) * n_pos + (wi*4 + j)] = 0.0f;
+                            window_mask_data[(wi*4 + i) * n_pos + (wi*4 + j)] = 0.0f;
                         }
                     }
                 }
-                set_input_f32("im_window_mask", im_window_mask_data);
+                set_input_f32("vit_merger_window_mask", window_mask_data);
 
-                // insert merger 2x2 downsample indices
+                // ViT merger 2x2 downsample indices
                 auto make_ds_idx = [](int off_r, int off_c, int ds_h, int ds_w, int stride_w) {
                     std::vector<int32_t> idx(ds_h * ds_w);
                     for (int i = 0; i < ds_h; i++) {
@@ -3384,14 +3384,14 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                     }
                     return idx;
                 };
-                auto im_ds_0 = make_ds_idx(0, 0, half_h, half_w, pos_w);
-                auto im_ds_1 = make_ds_idx(0, 1, half_h, half_w, pos_w);
-                auto im_ds_2 = make_ds_idx(1, 0, half_h, half_w, pos_w);
-                auto im_ds_3 = make_ds_idx(1, 1, half_h, half_w, pos_w);
-                set_input_i32("im_ds_idx_0", im_ds_0);
-                set_input_i32("im_ds_idx_1", im_ds_1);
-                set_input_i32("im_ds_idx_2", im_ds_2);
-                set_input_i32("im_ds_idx_3", im_ds_3);
+                auto vit_merger_ds_0 = make_ds_idx(0, 0, half_h, half_w, pos_w);
+                auto vit_merger_ds_1 = make_ds_idx(0, 1, half_h, half_w, pos_w);
+                auto vit_merger_ds_2 = make_ds_idx(1, 0, half_h, half_w, pos_w);
+                auto vit_merger_ds_3 = make_ds_idx(1, 1, half_h, half_w, pos_w);
+                set_input_i32("vit_merger_ds_idx_0", vit_merger_ds_0);
+                set_input_i32("vit_merger_ds_idx_1", vit_merger_ds_1);
+                set_input_i32("vit_merger_ds_idx_2", vit_merger_ds_2);
+                set_input_i32("vit_merger_ds_idx_3", vit_merger_ds_3);
 
                 // final merger 2x2 downsample indices (operates on half_h x half_w grid)
                 const int qh = half_h / 2;
@@ -3927,7 +3927,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_MINICPMV:
             return ctx->model.mm_model_proj->ne[0];
         case PROJECTOR_TYPE_MINICPMV4_6:
-            return ctx->model.merger_mlp_down_w->ne[1];
+            return ctx->model.mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_GLM_EDGE:
             return ctx->model.mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:

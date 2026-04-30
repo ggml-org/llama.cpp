@@ -312,11 +312,6 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_MINICPMV4_6:
                 {
-                    // MiniCPM-V 4.6 reuses the same slice tokenization as the
-                    // v2.6+ family (the MTMD_SLICE_TMPL_MINICPMV_2_6 constant
-                    // denotes the slice format family, not the model version).
-                    // Configured directly here without going through
-                    // clip_is_minicpmv() / minicpmv_version dispatch.
                     slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
                     tok_ov_img_start  = {lookup_token("<image>")};
                     tok_ov_img_end    = {lookup_token("</image>")};

@@ -104,7 +104,7 @@ struct clip_hparams {
     bool has_llava_projector = false;
     int minicpmv_version = 0;
     int32_t minicpmv_query_num = 0;         // MiniCPM-V query number
-    int32_t insert_layer_id   = 0;          // MiniCPM-V 4.5 / 4.6 insert merger layer
+    int32_t insert_layer_id   = 0;          // MiniCPM-V 4.6 ViT merger insertion layer
 
     // custom value provided by user, can be undefined if not set
     int32_t custom_image_min_tokens = -1;
@@ -404,31 +404,23 @@ struct clip_model {
     ggml_tensor * mm_model_ln_post_w = nullptr;
     ggml_tensor * mm_model_ln_post_b = nullptr;
 
-    // MiniCPM-V 4.5 / 4.6 insert merger (window attention + ViT MLP downsample)
-    ggml_tensor * insert_merger_ln1_w     = nullptr;
-    ggml_tensor * insert_merger_ln1_b     = nullptr;
-    ggml_tensor * insert_merger_attn_q_w  = nullptr;
-    ggml_tensor * insert_merger_attn_q_b  = nullptr;
-    ggml_tensor * insert_merger_attn_k_w  = nullptr;
-    ggml_tensor * insert_merger_attn_k_b  = nullptr;
-    ggml_tensor * insert_merger_attn_v_w  = nullptr;
-    ggml_tensor * insert_merger_attn_v_b  = nullptr;
-    ggml_tensor * insert_merger_attn_o_w  = nullptr;
-    ggml_tensor * insert_merger_attn_o_b  = nullptr;
-    ggml_tensor * insert_merger_ds_ln_w   = nullptr;
-    ggml_tensor * insert_merger_ds_ln_b   = nullptr;
-    ggml_tensor * insert_merger_ds_up_w   = nullptr;
-    ggml_tensor * insert_merger_ds_up_b   = nullptr;
-    ggml_tensor * insert_merger_ds_down_w = nullptr;
-    ggml_tensor * insert_merger_ds_down_b = nullptr;
-
-    // MiniCPM-V 4.5 / 4.6 final merger (DownsampleMLP)
-    ggml_tensor * merger_pre_norm_w  = nullptr;
-    ggml_tensor * merger_pre_norm_b  = nullptr;
-    ggml_tensor * merger_mlp_up_w    = nullptr;
-    ggml_tensor * merger_mlp_up_b    = nullptr;
-    ggml_tensor * merger_mlp_down_w  = nullptr;
-    ggml_tensor * merger_mlp_down_b  = nullptr;
+    // MiniCPM-V 4.6 ViT merger (window self-attention + ViT MLP downsample)
+    ggml_tensor * vit_merger_ln1_w     = nullptr;
+    ggml_tensor * vit_merger_ln1_b     = nullptr;
+    ggml_tensor * vit_merger_attn_q_w  = nullptr;
+    ggml_tensor * vit_merger_attn_q_b  = nullptr;
+    ggml_tensor * vit_merger_attn_k_w  = nullptr;
+    ggml_tensor * vit_merger_attn_k_b  = nullptr;
+    ggml_tensor * vit_merger_attn_v_w  = nullptr;
+    ggml_tensor * vit_merger_attn_v_b  = nullptr;
+    ggml_tensor * vit_merger_attn_o_w  = nullptr;
+    ggml_tensor * vit_merger_attn_o_b  = nullptr;
+    ggml_tensor * vit_merger_ds_ln_w   = nullptr;
+    ggml_tensor * vit_merger_ds_ln_b   = nullptr;
+    ggml_tensor * vit_merger_ds_up_w   = nullptr;
+    ggml_tensor * vit_merger_ds_up_b   = nullptr;
+    ggml_tensor * vit_merger_ds_down_w = nullptr;
+    ggml_tensor * vit_merger_ds_down_b = nullptr;
 
     // gemma3
     ggml_tensor * mm_input_proj_w = nullptr;
