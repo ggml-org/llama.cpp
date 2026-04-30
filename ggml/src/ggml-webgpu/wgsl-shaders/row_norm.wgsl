@@ -1,32 +1,17 @@
-#ifdef INPLACE
-#ifdef NORM
-fn update(src_offset: u32, dst_offset: u32, scale: f32, mean: f32) {
-    src[dst_offset] = scale * (src[src_offset] - mean);
-}
-#else
-fn update(src_offset: u32, dst_offset: u32, scale: f32) {
-    src[dst_offset] = scale * src[src_offset];
-}
+#if defined(SRC_F16) || defined(DST_F16)
+enable f16;
 #endif
 
-@group(0) @binding(1)
-var<uniform> params: Params;
+#ifdef SRC_F16
+#define SRC_TYPE f16
 #else
-#ifdef NORM
-fn update(src_offset: u32, dst_offset: u32, scale: f32, mean: f32) {
-    dst[dst_offset] = scale * (src[src_offset] - mean);
-}
-#else
-fn update(src_offset: u32, dst_offset: u32, scale: f32) {
-    dst[dst_offset] = scale * src[src_offset];
-}
+#define SRC_TYPE f32
 #endif
 
-@group(0) @binding(1)
-var<storage, read_write> dst: array<f32>;
-
-@group(0) @binding(2)
-var<uniform> params: Params;
+#ifdef DST_F16
+#define DST_TYPE f16
+#else
+#define DST_TYPE f32
 #endif
 
 struct Params {
@@ -34,10 +19,12 @@ struct Params {
     offset_dst: u32, // in elements
 
     // Strides (in elements)
+    stride_src0: u32,
     stride_src1: u32,
     stride_src2: u32,
     stride_src3: u32,
 
+    stride_dst0: u32,
     stride_dst1: u32,
     stride_dst2: u32,
     stride_dst3: u32,
@@ -52,9 +39,20 @@ struct Params {
 };
 
 @group(0) @binding(0)
-var<storage, read_write> src: array<f32>;
+var<storage, read_write> src: array<SRC_TYPE>;
 
-var<workgroup> scratch: array<f32, WG_SIZE>;
+#ifdef INPLACE
+@group(0) @binding(1)
+var<uniform> params: Params;
+#else
+@group(0) @binding(1)
+var<storage, read_write> dst: array<DST_TYPE>;
+
+@group(0) @binding(2)
+var<uniform> params: Params;
+#endif
+
+var<workgroup> scratch: array<f32, WG_SIZE * 2u>;
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wid: vec3<u32>,
@@ -72,28 +70,38 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     let elems = (params.ne0 + WG_SIZE - 1) / WG_SIZE;
 
     var sum = 0.0f;
+    var cum_sum = 0.0f;
     var col = lid.x;
     for (var j: u32 = 0; j < elems; j++) {
         if (col >= params.ne0) {
             break;
         }
-        let v = f32(src[i_src_row + col]);
+        let v = f32(src[i_src_row + col * params.stride_src0]);
 #ifdef NORM
-        sum += v;
+        let val = v;
 #else
-        sum += v * v;
+        let val = v * v;
 #endif
+        let y = val - cum_sum;
+        let t = sum + y;
+        cum_sum = (t - sum) - y;
+        sum = t;
         col += WG_SIZE;
     }
 
     scratch[lid.x] = sum;
+    scratch[lid.x + WG_SIZE] = cum_sum;
     workgroupBarrier();
-    var offset: u32 = WG_SIZE / 2;
+
+    var offset: u32 = WG_SIZE / 2u;
     while (offset > 0) {
         if (lid.x < offset) {
-            scratch[lid.x] += scratch[lid.x + offset];
+            let y = scratch[lid.x + offset] - (scratch[lid.x + WG_SIZE] + scratch[lid.x + WG_SIZE + offset]);
+            let t = scratch[lid.x] + y;
+            scratch[lid.x + offset] = (t - scratch[lid.x]) - y;
+            scratch[lid.x] = t;
         }
-        offset = offset / 2;
+        offset /= 2u;
         workgroupBarrier();
     }
     sum = scratch[0];
@@ -101,26 +109,34 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
 #ifdef NORM
     let mean = sum / f32(params.ne0);
     var sq_sum = 0.0f;
+    var cum_sq_sum = 0.0f;
     col = lid.x;
     for (var j: u32 = 0; j < elems; j++) {
         if (col >= params.ne0) {
             break;
         }
-        let v = f32(src[i_src_row + col]);
+        let v = f32(src[i_src_row + col * params.stride_src0]);
         let d = v - mean;
-        sq_sum += d * d;
+        let val = d * d;
+        let y = val - cum_sq_sum;
+        let t = sq_sum + y;
+        cum_sq_sum = (t - sq_sum) - y;
+        sq_sum = t;
         col += WG_SIZE;
     }
 
-    workgroupBarrier();
     scratch[lid.x] = sq_sum;
+    scratch[lid.x + WG_SIZE] = cum_sq_sum;
     workgroupBarrier();
-    offset = WG_SIZE / 2;
+    offset = WG_SIZE / 2u;
     while (offset > 0) {
         if (lid.x < offset) {
-            scratch[lid.x] += scratch[lid.x + offset];
+            let y = scratch[lid.x + offset] - (scratch[lid.x + WG_SIZE] + scratch[lid.x + WG_SIZE + offset]);
+            let t = scratch[lid.x] + y;
+            scratch[lid.x + WG_SIZE] = (t - scratch[lid.x]) - y;
+            scratch[lid.x] = t;
         }
-        offset /= 2;
+        offset /= 2u;
         workgroupBarrier();
     }
 
@@ -132,15 +148,24 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     let scale = 1.0/max(sqrt(sum), params.eps);
 #endif
 
+#ifdef NORM
+    let mean_val = mean;
+#else
+    let mean_val = 0.0f;
+#endif
+
     col = lid.x;
     for (var j: u32 = 0; j < elems; j++) {
         if (col >= params.ne0) {
             break;
         }
-#ifdef NORM
-        update(i_src_row + col, i_dst_row + col, scale, mean);
+        let i_src = i_src_row + col * params.stride_src0;
+        let i_dst = i_dst_row + col * params.stride_dst0;
+        let v = src[i_src];
+#ifdef INPLACE
+        src[i_dst] = scale * (v - mean_val);
 #else
-        update(i_src_row + col, i_dst_row + col, scale);
+        dst[i_dst] = scale * (v - mean_val);
 #endif
         col += WG_SIZE;
     }
