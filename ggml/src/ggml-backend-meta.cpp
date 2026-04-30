@@ -167,7 +167,7 @@ static ggml_backend_event_t ggml_backend_meta_device_event_new(ggml_backend_dev_
 
 static void ggml_backend_meta_device_event_free(ggml_backend_dev_t /*dev*/, ggml_backend_event_t event) {
     auto * ev_ctx = (ggml_backend_meta_event_context *) event->context;
-    for (ggml_backend_event_t * e : ev_ctx->simple_events) {
+    for (ggml_backend_event_t e : ev_ctx->simple_events) {
         ggml_backend_event_free(e);
     }
     delete ev_ctx;
@@ -1526,35 +1526,10 @@ struct ggml_backend_meta_context {
     void *                               comm_ctx       = nullptr;
     ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
 
-    // Per-device pinned host buffers used by set_tensor_async to gather strided source data
-    // into contiguous layout for fast 1D async upload. Allocated lazily, grown on demand.
-    // Caller must ensure the buffer is not in use before reuse.
-    struct gather_buf {
-        ggml_backend_buffer_t buf  = nullptr;
-        void *                ptr  = nullptr;
-        size_t                size = 0;
-    };
-    std::vector<gather_buf> gather_bufs;
-
-    void * get_gather_buf(size_t j, size_t needed) {
-        if (j >= gather_bufs.size()) {
-            gather_bufs.resize(j + 1);
-        }
-        auto & gb = gather_bufs[j];
-        if (gb.size < needed) {
-            if (gb.buf) ggml_backend_buffer_free(gb.buf);
-            ggml_backend_dev_t simple_dev = ggml_backend_get_device(backend_configs[j].backend);
-            ggml_backend_buffer_type_t host_buft = ggml_backend_dev_host_buffer_type(simple_dev);
-            gb.buf  = ggml_backend_buft_alloc_buffer(host_buft, needed);
-            gb.ptr  = ggml_backend_buffer_get_base(gb.buf);
-            gb.size = needed;
-        }
-        return gb.ptr;
-    }
-
-    // Scratch for tensors set_tensor_async cannot route chunk-by-chunk (multi-segment,
-    // PARTIAL — the latter needs the whole tensor for 1/N scaling). Sequentially-arriving
-    // chunks are copied here, then dispatched via the sync set_tensor path when complete.
+    // Sync-fallback scratch for set_tensor_async on layouts the chunk-by-chunk path can't handle:
+    // multi-segment splits, and PARTIAL axis (per-device 1/N scaling needs the whole tensor).
+    // Sequentially-arriving chunks accumulate here, then dispatch via the sync set_tensor path
+    // once the last byte is in.
     struct fallback_accum {
         const ggml_tensor *  tensor = nullptr;
         std::vector<uint8_t> data;
@@ -1595,9 +1570,6 @@ struct ggml_backend_meta_context {
     }
 
     ~ggml_backend_meta_context() {
-        for (auto & gb : gather_bufs) {
-            if (gb.buf) ggml_backend_buffer_free(gb.buf);
-        }
         if (comm_ctx != nullptr) {
             ggml_backend_comm_free_t comm_free = (ggml_backend_comm_free_t) ggml_backend_reg_get_proc_address(
                 ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_configs[0].backend)), "ggml_backend_comm_free");
@@ -1658,14 +1630,6 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
         return;
     }
 
-    // GGML_META_ASYNC_2D=1 forces the strided 2D async copy path. Default is gather + 1D,
-    // which avoids backends where strided-source 2D async serialises. The host-side gather
-    // memcpy is small overhead where 2D works.
-    static const bool use_2d_path = []() {
-        const char * s = getenv("GGML_META_ASYNC_2D");
-        return s != nullptr && atoi(s) != 0;
-    }();
-
     switch (split_state.axis) {
         case GGML_BACKEND_SPLIT_AXIS_0:
         case GGML_BACKEND_SPLIT_AXIS_1:
@@ -1709,46 +1673,21 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
                 remaining -= len;
             }
 
-            // Aligned middle: full rows.
+            // Aligned middle: full rows. One strided 2D async dispatch per device.
             const int64_t i_first = (int64_t) (pos / chunk_size_full);
             const int64_t n_rows  = (int64_t) (remaining / chunk_size_full);
-            bool used_gather = false;
             if (n_rows > 0) {
-                if (use_2d_path) {
-                    // Strided 2D async copy: one dispatch per device, DMA does the gather.
-                    size_t offset_j = 0;
-                    for (size_t j = 0; j < n_backends; j++) {
-                        ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, j);
-                        ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
-                        const size_t chunk_size_j = simple_tensor->nb[split_state.axis + 1];
-                        ggml_backend_tensor_set_2d_async(simple_backend, simple_tensor, src + offset_j,
-                            i_first * chunk_size_j, chunk_size_j,
-                            n_rows, chunk_size_j, chunk_size_full);
-                        offset_j += chunk_size_j;
-                    }
-                    GGML_ASSERT(offset_j == chunk_size_full);
-                } else {
-                    // Gather strided source into a per-device contiguous pinned host buffer, then
-                    // dispatch a 1D async upload per device. Avoids backends where 2D async with a
-                    // strided source serialises. Sync at the end gates gather buffer reuse.
-                    ggml_backend_meta_context * be_ctx = (ggml_backend_meta_context *) backend->context;
-                    size_t offset_j = 0;
-                    for (size_t j = 0; j < n_backends; j++) {
-                        ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, j);
-                        ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
-                        const size_t chunk_size_j = simple_tensor->nb[split_state.axis + 1];
-                        const size_t total_j = (size_t) n_rows * chunk_size_j;
-                        char * dst = (char *) be_ctx->get_gather_buf(j, total_j);
-                        const char * gsrc = src + offset_j;
-                        for (int64_t r = 0; r < n_rows; r++) {
-                            memcpy(dst + (size_t) r * chunk_size_j, gsrc + (size_t) r * chunk_size_full, chunk_size_j);
-                        }
-                        ggml_backend_tensor_set_async(simple_backend, simple_tensor, dst, i_first * chunk_size_j, total_j);
-                        offset_j += chunk_size_j;
-                    }
-                    GGML_ASSERT(offset_j == chunk_size_full);
-                    used_gather = true;
+                size_t offset_j = 0;
+                for (size_t j = 0; j < n_backends; j++) {
+                    ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, j);
+                    ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
+                    const size_t chunk_size_j = simple_tensor->nb[split_state.axis + 1];
+                    ggml_backend_tensor_set_2d_async(simple_backend, simple_tensor, src + offset_j,
+                        i_first * chunk_size_j, chunk_size_j,
+                        n_rows, chunk_size_j, chunk_size_full);
+                    offset_j += chunk_size_j;
                 }
+                GGML_ASSERT(offset_j == chunk_size_full);
                 const size_t consumed = (size_t) n_rows * chunk_size_full;
                 src       += consumed;
                 pos       += consumed;
@@ -1760,13 +1699,6 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
                 GGML_ASSERT((pos % chunk_size_full) == 0);
                 const int64_t R = (int64_t) (pos / chunk_size_full);
                 write_partial_row(R, 0, remaining, src);
-            }
-
-            // Gather buffers must be free for reuse on the next call.
-            if (used_gather) {
-                for (size_t j = 0; j < n_backends; j++) {
-                    ggml_backend_synchronize(ggml_backend_meta_simple_backend(backend, j));
-                }
             }
         } break;
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
