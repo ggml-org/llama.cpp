@@ -117,6 +117,4 @@ bool clip_has_vision_encoder(const struct clip_ctx * ctx);
 bool clip_has_audio_encoder(const struct clip_ctx * ctx);
 bool clip_has_whisper_encoder(const struct clip_ctx * ctx);
 
-struct ggml_tensor * clip_get_mel_filter_tensor(const struct clip_ctx * ctx);
-
-struct ggml_tensor * clip_get_window_tensor(const struct clip_ctx * ctx);
+const struct clip_model & clip_get_model(const struct clip_ctx * ctx);

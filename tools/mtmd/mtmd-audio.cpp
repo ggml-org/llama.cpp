@@ -812,7 +812,8 @@ void mtmd_audio_preprocessor_parakeet::initialize() {
     cache.fill_sin_cos_table(hparams.audio_n_fft);
 
     // Use models mel filter bank tensor.
-    ggml_tensor * mel_filters = clip_get_mel_filter_tensor(ctx);
+    const clip_model & model = clip_get_model(ctx);
+    ggml_tensor * mel_filters = model.mel_filters;
     GGML_ASSERT(mel_filters);
 
     cache.filters.n_mel = mel_filters->ne[1];
@@ -821,7 +822,7 @@ void mtmd_audio_preprocessor_parakeet::initialize() {
     ggml_backend_tensor_get(mel_filters, cache.filters.data.data(), 0, ggml_nbytes(mel_filters));
 
     // Use models hann window tensor.
-    ggml_tensor * window = clip_get_window_tensor(ctx);
+    ggml_tensor * window = model.window;
     GGML_ASSERT(window);
     cache.hann_window.resize(ggml_nelements(window));
     ggml_backend_tensor_get(window, cache.hann_window.data(), 0, ggml_nbytes(window));

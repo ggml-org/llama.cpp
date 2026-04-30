@@ -4060,12 +4060,8 @@ const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx) {
     return &ctx->model.hparams;
 }
 
-struct ggml_tensor * clip_get_mel_filter_tensor(const struct clip_ctx * ctx) {
-    return ctx->model.mel_filters;
-}
-
-struct ggml_tensor * clip_get_window_tensor(const struct clip_ctx * ctx) {
-    return ctx->model.window;
+const struct clip_model & clip_get_model(const struct clip_ctx * ctx) {
+    return ctx->model;
 }
 
 //
