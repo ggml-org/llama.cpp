@@ -91,7 +91,6 @@ struct ggml_webgpu_shader_lib_context {
     uint32_t sg_mat_n                 = 0;
     uint32_t sg_mat_k                 = 0;
     uint32_t max_subgroup_size        = 0;
-    uint32_t n_experts                = 0;
 };
 
 struct webgpu_pipeline {
@@ -2020,7 +2019,7 @@ class ggml_webgpu_shader_lib {
         ggml_webgpu_mul_mat_id_pipeline_key key = {};
         key.src0_type                           = context.src0->type;
         key.src1_type                           = context.src1->type;
-        key.n_experts                           = context.n_experts;
+        key.n_experts                           = context.src0->ne[2];
         key.vectorized = (context.src0->ne[0] % 4 == 0 && context.src0->ne[1] % 4 == 0 &&
                           (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
                              1 :
@@ -2137,7 +2136,7 @@ class ggml_webgpu_shader_lib {
         ggml_webgpu_mul_mat_id_pipeline_key key = {};
         key.src0_type                           = context.src0->type;
         key.src1_type                           = context.src1->type;
-        key.n_experts                           = context.n_experts;
+        key.n_experts                           = context.src0->ne[2];
         key.vectorized = (context.src0->ne[0] % 4 == 0 &&
                           (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
                              1 :
@@ -2236,7 +2235,7 @@ class ggml_webgpu_shader_lib {
             variant += "_vectorized";
         }
 
-        defines.push_back(std::string("N_EXPERTS=") + std::to_string(context.n_experts));
+        defines.push_back(std::string("N_EXPERTS=") + std::to_string(key.n_experts));
 
         auto processed = preprocessor.preprocess(shader_src, defines);
 

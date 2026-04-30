@@ -1539,7 +1539,6 @@ static webgpu_encoded_op ggml_webgpu_mul_mat_id_vec(webgpu_context & ctx,
     shader_lib_ctx.src1                           = src1;
     shader_lib_ctx.src2                           = src2;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.n_experts                      = src0->ne[2];
     shader_lib_ctx.supports_subgroups             = ctx->global_ctx->capabilities.supports_subgroups;
     shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
@@ -1600,7 +1599,6 @@ static webgpu_encoded_op ggml_webgpu_mul_mat_id(webgpu_context & ctx,
     shader_lib_ctx.src1                           = src1;
     shader_lib_ctx.src2                           = src2;
     shader_lib_ctx.dst                            = dst;
-    shader_lib_ctx.n_experts                      = src0->ne[2];
     shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
     // Get or create pipeline
