@@ -4,39 +4,34 @@
 	import { browser } from '$app/environment';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
+	import { onMount } from 'svelte';
+	import { fade } from 'svelte/transition';
 	import {
 		ChatSidebar,
-		DialogConversationTitleUpdate,
-		DialogChatSettings
+		DesktopIconStrip,
+		DialogConversationTitleUpdate
 	} from '$lib/components/app';
-	import { isLoading } from '$lib/stores/chat.svelte';
-	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
-	import { goto } from '$app/navigation';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import type { SettingsSectionTitle } from '$lib/constants';
-	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
-	import { setChatSettingsDialogContext } from '$lib/contexts';
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
 
 	let { children } = $props();
 
-	let isChatRoute = $derived(page.route.id === '/chat/[id]');
-	let isHomeRoute = $derived(page.route.id === '/');
-	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
-	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
-	let autoShowSidebarOnNewChat = $derived(config().autoShowSidebarOnNewChat);
 	let isMobile = new IsMobile();
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
+	let mounted = $state(false);
 	let innerHeight = $state<number | undefined>();
 	let chatSidebar:
 		| { activateSearchMode?: () => void; editActiveConversation?: () => void }
@@ -48,41 +43,12 @@
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
-	let chatSettingsDialogOpen = $state(false);
-	let chatSettingsDialogInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
-
-	setChatSettingsDialogContext({
-		open: (initialSection?: SettingsSectionTitle) => {
-			chatSettingsDialogInitialSection = initialSection;
-			chatSettingsDialogOpen = true;
-		}
-	});
+	const panelNav = useSettingsNavigation();
 
 	// Global keyboard shortcuts
-	function handleKeydown(event: KeyboardEvent) {
-		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
-
-		if (isCtrlOrCmd && event.key === KeyboardKey.K_LOWER) {
-			event.preventDefault();
-			if (chatSidebar?.activateSearchMode) {
-				chatSidebar.activateSearchMode();
-				sidebarOpen = true;
-			}
-		}
-
-		if (isCtrlOrCmd && event.shiftKey && event.key === KeyboardKey.O_UPPER) {
-			event.preventDefault();
-			goto('?new_chat=true#/');
-		}
-
-		if (event.shiftKey && isCtrlOrCmd && event.key === KeyboardKey.E_UPPER) {
-			event.preventDefault();
-
-			if (chatSidebar?.editActiveConversation) {
-				chatSidebar.editActiveConversation();
-			}
-		}
-	}
+	const { handleKeydown } = useKeyboardShortcuts({
+		editActiveConversation: () => chatSidebar?.editActiveConversation?.()
+	});
 
 	function handleTitleUpdateCancel() {
 		titleUpdateDialogOpen = false;
@@ -100,27 +66,14 @@
 		}
 	}
 
+	onMount(() => {
+		mounted = true;
+	});
+
 	$effect(() => {
 		if (alwaysShowSidebarOnDesktop && isDesktop) {
 			sidebarOpen = true;
 			return;
-		}
-
-		if (isHomeRoute && !isNewChatMode) {
-			// Auto-collapse sidebar when navigating to home route (but not in new chat mode)
-			sidebarOpen = false;
-		} else if (isHomeRoute && isNewChatMode) {
-			// Keep sidebar open in new chat mode
-			sidebarOpen = true;
-		} else if (isChatRoute) {
-			// On chat routes, only auto-show sidebar if setting is enabled
-			if (autoShowSidebarOnNewChat) {
-				sidebarOpen = true;
-			}
-			// If setting is disabled, don't change sidebar state - let user control it manually
-		} else {
-			// Other routes follow default behavior
-			sidebarOpen = showSidebarByDefault;
 		}
 	});
 
@@ -185,7 +138,7 @@
 		const apiKey = config().apiKey;
 
 		if (
-			(page.route.id === '/' || page.route.id === '/chat/[id]') &&
+			(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
 			page.status !== 401 &&
 			page.status !== 403
 		) {
@@ -229,12 +182,6 @@
 
 	<Toaster richColors />
 
-	<DialogChatSettings
-		open={chatSettingsDialogOpen}
-		onOpenChange={(open) => (chatSettingsDialogOpen = open)}
-		initialSection={chatSettingsDialogInitialSection}
-	/>
-
 	<DialogConversationTitleUpdate
 		bind:open={titleUpdateDialogOpen}
 		currentTitle={titleUpdateCurrentTitle}
@@ -245,16 +192,33 @@
 
 	<Sidebar.Provider bind:open={sidebarOpen}>
 		<div class="flex h-screen w-full" style:height="{innerHeight}px">
-			<Sidebar.Root class="h-full">
+			<Sidebar.Root variant="floating" class="h-full">
 				<ChatSidebar bind:this={chatSidebar} />
 			</Sidebar.Root>
 
-			{#if !(alwaysShowSidebarOnDesktop && isDesktop)}
-				<Sidebar.Trigger
-					class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
-						? 'md:left-[var(--sidebar-width)]'
-						: 'md:left-0!'}"
-					style="translate: 1rem 1rem;"
+			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
+				{#if mounted}
+					<div in:fade={{ duration: 200 }}>
+						<Sidebar.Trigger
+							class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
+								? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
+								: 'left-0!'}"
+							style="translate: 1rem 1rem;"
+						/>
+					</div>
+				{/if}
+			{/if}
+
+			{#if isDesktop && !alwaysShowSidebarOnDesktop}
+				<DesktopIconStrip
+					{sidebarOpen}
+					onSearchClick={() => {
+						if (chatSidebar?.activateSearchMode) {
+							chatSidebar.activateSearchMode();
+						}
+
+						sidebarOpen = true;
+					}}
 				/>
 			{/if}
 

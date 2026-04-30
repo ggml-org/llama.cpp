@@ -272,6 +272,22 @@ class ModelBase:
 
         return tensors
 
+    @staticmethod
+    def _scale_is_trivial(scale: Tensor) -> bool:
+        return scale.numel() <= 1 and abs(float(scale.float().sum()) - 1.0) < 1e-6
+
+    def _write_scale_tensor(self, scale_name: str, scale: Tensor):
+        if not self._scale_is_trivial(scale):
+            scale_f32 = scale.float().numpy().flatten()
+            logger.info(f"  + {scale_name} (per-tensor scale, shape [{scale_f32.size}])")
+            self.gguf_writer.add_tensor(scale_name, scale_f32)
+
+    def _write_scales_tensor(self, scale_name: str, scales: list[float]):
+        if not np.allclose(scales, 1.0, atol=1e-6):
+            scale_vals = np.array(scales, dtype=np.float32)
+            logger.info(f"  + {scale_name} (per-expert scale, shape [{len(scales)}])")
+            self.gguf_writer.add_tensor(scale_name, scale_vals)
+
     def dequant_model(self):
         # If all quantized tensors were already handled (e.g. pure NVFP4), skip
         if self._is_nvfp4 and not any(k.endswith((".weight_scale", ".weight_scale_inv")) for k in self.model_tensors):
@@ -494,7 +510,7 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), None)
                         tensors_to_remove.append(name)
-                    if name.endswith((".k_scale", ".v_scale")):
+                    if name.endswith((".input_scale", ".k_scale", ".v_scale")):
                         tensors_to_remove.append(name)
             elif quant_method is not None:
                 raise NotImplementedError(f"Quant method is not yet supported: {quant_method!r}")
@@ -602,10 +618,6 @@ class ModelBase:
         raw = np.concatenate([d_grouped, qs_grouped], axis=-1).reshape(out_features, n_super * 36)
         return raw, [out_features, n_super * 64]
 
-    @staticmethod
-    def _nvfp4_scale2_is_trivial(scale2: Tensor) -> bool:
-        return scale2.numel() <= 1 and abs(float(scale2.float().sum()) - 1.0) < 1e-6
-
     def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
         if "language_model." in name:
             name = name.replace("language_model.", "")
@@ -616,19 +628,8 @@ class ModelBase:
         logger.info(f"Repacked {new_name} with shape {shape} and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, raw, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
 
-        # Emit per-tensor scale2 as a separate F32 tensor when non-trivial
-        if not self._nvfp4_scale2_is_trivial(scale2):
-            scale2_f32 = scale2.float().numpy().flatten()
-            scale_name = new_name.replace(".weight", ".scale")
-            logger.info(f"  + {scale_name} (per-tensor NVFP4 scale2, shape [{scale2_f32.size}])")
-            self.gguf_writer.add_tensor(scale_name, scale2_f32)
-
-        # Emit per-tensor input_scale as a separate F32 tensor when non-trivial
-        if not self._nvfp4_scale2_is_trivial(input_scale):
-            input_scale_f32 = input_scale.float().numpy().flatten()
-            input_scale_name = new_name.replace(".weight", ".input_scale")
-            logger.info(f"  + {input_scale_name} (per-tensor NVFP4 input_scale, shape [{input_scale_f32.size}])")
-            self.gguf_writer.add_tensor(input_scale_name, input_scale_f32)
+        self._write_scale_tensor(new_name.replace(".weight", ".scale"), scale2)
+        self._write_scale_tensor(new_name.replace(".weight", ".input_scale"), input_scale)
 
     def _generate_nvfp4_tensors(self):
         # Per-layer expert merging to avoid holding all experts in memory
@@ -719,23 +720,16 @@ class ModelBase:
         logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
 
-        # Emit per-expert scale2 tensor if any expert has non-trivial scale2
         scales.sort(key=lambda x: x[0])
-        scale_vals = np.array([s[1] for s in scales], dtype=np.float32)
-        if not np.allclose(scale_vals, 1.0, atol=1e-6):
-            scale_name = new_name.replace(".weight", ".scale")
-            logger.info(f"  + {scale_name} (per-expert NVFP4 scale2, shape [{len(scales)}])")
-            self.gguf_writer.add_tensor(scale_name, scale_vals)
+        self._write_scales_tensor(new_name.replace(".weight", ".scale"), [s[1] for s in scales])
 
-        # Emit per-expert input_scale tensor if any expert has non-trivial input_scale
         input_scales.sort(key=lambda x: x[0])
-        input_scale_vals = np.array([s[1] for s in input_scales], dtype=np.float32)
-        if not np.allclose(input_scale_vals, 1.0, atol=1e-6):
-            input_scale_name = new_name.replace(".weight", ".input_scale")
-            logger.info(f"  + {input_scale_name} (per-expert NVFP4 input_scale, shape [{len(input_scales)}])")
-            self.gguf_writer.add_tensor(input_scale_name, input_scale_vals)
+        self._write_scales_tensor(new_name.replace(".weight", ".input_scale"), [s[1] for s in input_scales])
 
         del experts, merged
+
+    def _needs_nvfp4_processing(self) -> bool:
+        return True
 
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
@@ -767,7 +761,7 @@ class ModelBase:
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
         # from model_tensors, leaving only non-NVFP4 (e.g. FP8) for dequant.
-        if self._is_nvfp4:
+        if self._is_nvfp4 and self._needs_nvfp4_processing():
             self._generate_nvfp4_tensors()
 
         self.dequant_model()
@@ -2198,6 +2192,10 @@ class MmprojModel(ModelBase):
                     }
                 # merge configs
                 self.preprocessor_config = {**self.preprocessor_config, **cfg}
+
+    def _needs_nvfp4_processing(self) -> bool:
+        # nvfp4 quantization applies to the text model only.
+        return False
 
     def get_vision_config(self) -> dict[str, Any] | None:
         config_name = "vision_config" if not self.is_mistral_format else "vision_encoder"
@@ -4459,6 +4457,12 @@ class NemotronNanoV2VLModel(MmprojModel):
         }
         return vision_config
 
+    def dequant_model(self):
+        if self._is_nvfp4:
+            # Skip nvfp4 quantization for vision/audio model.
+            return
+        super().dequant_model()
+
     def set_gguf_parameters(self):
         if "image_mean" not in self.preprocessor_config:
             self.preprocessor_config["image_mean"] = [0.485, 0.456, 0.406]
@@ -4480,6 +4484,10 @@ class NemotronNanoV2VLModel(MmprojModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "input_conditioner" in name:
+            return
+
+        # mtmd does not support video yet so skip tensors related to video.
+        if "radio_model.model.patch_generator.video_embedder" in name:
             return
 
         # RADIO's pos_embed doesn't have .weight suffix, but clip.cpp expects it
@@ -10829,7 +10837,11 @@ class NemotronHModel(GraniteHybridModel):
         # uses self.model_arch to build the tensor name map, and all MoE-specific
         # mappings would be missed if it were called with the default non-MoE arch.
         hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
-        if "num_experts_per_tok" in hparams:
+        has_moe_params = (
+            "num_experts_per_tok" in hparams
+            or (isinstance(hparams.get("llm_config"), dict) and "num_experts_per_tok" in hparams["llm_config"])
+        )
+        if has_moe_params:
             self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
             self.is_moe = True
 
@@ -10974,6 +10986,11 @@ class NemotronHModel(GraniteHybridModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip vision model and projector tensors for VLM models (handled by mmproj) (e.g., Nemotron Nano 12B v2 VL)
         if name.startswith(("vision_model.", "mlp1.")):
+            return
+
+        if name.startswith(("sound_encoder.")):
+            return
+        if name.startswith(("sound_projection.")):
             return
 
         # Strip language_model. prefix for VLM models (e.g., Nemotron Nano 12B v2 VL)

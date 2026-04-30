@@ -18,6 +18,8 @@
 #include <chrono>
 #include <queue>
 #include <filesystem>
+#include <random>
+#include <sstream>
 #include <cstring>
 
 #ifdef _WIN32
@@ -823,6 +825,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             proxy_path,
             req.headers,
             req.body,
+            req.files,
             req.should_stop,
             base_params.timeout_read,
             base_params.timeout_write
@@ -1126,6 +1129,77 @@ static bool should_strip_proxy_header(const std::string & header_name) {
     return false;
 }
 
+static std::string generate_multipart_boundary() {
+    thread_local std::mt19937 gen(std::random_device{}());
+    static const char chars[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    std::uniform_int_distribution<> dis(0, sizeof(chars) - 2);
+    std::string boundary = "----llama-cpp-proxy-";
+    for (int i = 0; i < 16; i++) {
+        boundary += chars[dis(gen)];
+    }
+    return boundary;
+}
+
+static std::string build_multipart_body(
+        const json & form_fields,
+        const std::map<std::string, uploaded_file> & files,
+        const std::string & boundary) {
+    static auto sanitize_field = [](const std::string & text) {
+        std::string result;
+        result.reserve(text.size());
+        for (char c : text) {
+            if (c != '\n' && c != '\r' && c != '"') {
+                result += c;
+            }
+        }
+        return result;
+    };
+
+    std::ostringstream body;
+
+    for (const auto & [key, value] : form_fields.items()) {
+        if (value.is_array()) {
+            for (const auto & item : value) {
+                body << "--" << boundary << "\r\n";
+                body << "Content-Disposition: form-data; name=\"" << sanitize_field(key) << "\"\r\n";
+                body << "\r\n";
+                if (!item.is_string()) {
+                    throw std::invalid_argument("expected string");
+                }
+                body << item.get<std::string>() << "\r\n";
+            }
+        } else {
+            body << "--" << boundary << "\r\n";
+            body << "Content-Disposition: form-data; name=\"" << sanitize_field(key) << "\"\r\n";
+            body << "\r\n";
+            if (!value.is_string()) {
+                throw std::invalid_argument("expected string");
+            }
+            body << value.get<std::string>() << "\r\n";
+        }
+    }
+
+    for (const auto & [key, file] : files) {
+        body << "--" << boundary << "\r\n";
+        body << "Content-Disposition: form-data; name=\"" << sanitize_field(key) << "\"";
+        if (!file.filename.empty()) {
+            body << "; filename=\"" << sanitize_field(file.filename) << "\"";
+        }
+        body << "\r\n";
+        if (!file.content_type.empty()) {
+            body << "Content-Type: " << sanitize_field(file.content_type) << "\r\n";
+        } else {
+            body << "Content-Type: application/octet-stream\r\n";
+        }
+        body << "\r\n";
+        body.write(reinterpret_cast<const char*>(file.data.data()), file.data.size());
+        body << "\r\n";
+    }
+
+    body << "--" << boundary << "--\r\n";
+    return body.str();
+}
+
 server_http_proxy::server_http_proxy(
         const std::string & method,
         const std::string & scheme,
@@ -1134,6 +1208,7 @@ server_http_proxy::server_http_proxy(
         const std::string & path,
         const std::map<std::string, std::string> & headers,
         const std::string & body,
+        const std::map<std::string, uploaded_file> & files,
         const std::function<bool()> should_stop,
         int32_t timeout_read,
         int32_t timeout_write
@@ -1195,28 +1270,65 @@ server_http_proxy::server_http_proxy(
         return pipe->write({{}, 0, std::string(data, data_length), ""});
     };
 
+    // when files are present, the body was converted from multipart form data to JSON
+    // we need to reconstruct the multipart body for the downstream server
+    std::string effective_body = body;
+    std::string override_content_type;
+    bool has_files = !files.empty();
+
+    if (has_files) {
+        json form_fields = json::parse(body, nullptr, false);
+        if (!form_fields.is_discarded()) {
+            auto boundary = generate_multipart_boundary();
+            effective_body = build_multipart_body(form_fields, files, boundary);
+            override_content_type = "multipart/form-data; boundary=" + boundary;
+        } else {
+            throw std::runtime_error("failed to parse multipart form fields JSON");
+        }
+    }
+
     // prepare the request to destination server
     httplib::Request req;
     {
         req.method = method;
         req.path = path;
         for (const auto & [key, value] : headers) {
-            if (key == "Accept-Encoding") {
+            const auto lowered = to_lower_copy(key);
+            if (lowered == "accept-encoding") {
                 // disable Accept-Encoding to avoid compressed responses
                 continue;
             }
-            if (key == "Transfer-Encoding") {
+            if (lowered == "transfer-encoding") {
                 // the body is already decoded
                 continue;
             }
-            if (key == "Host" || key == "host") {
+            if (lowered == "content-length") {
+                // let httplib calculate Content-Length from the actual body
+                continue;
+            }
+            if (lowered == "content-type") {
+                if (has_files) {
+                    // we set our own Content-Type with the new boundary
+                    continue;
+                }
+                // when no files but the original request was multipart,
+                // the body is now JSON, so correct the Content-Type
+                if (value.find("multipart/form-data") != std::string::npos) {
+                    override_content_type = "application/json; charset=utf-8";
+                    continue;
+                }
+            }
+            if (lowered == "host") {
                 bool is_default_port = (scheme == "https" && port == 443) || (scheme == "http" && port == 80);
                 req.set_header(key, is_default_port ? host : host + ":" + std::to_string(port));
             } else {
                 req.set_header(key, value);
             }
         }
-        req.body = body;
+        req.body = effective_body;
+        if (!override_content_type.empty()) {
+            req.set_header("Content-Type", override_content_type);
+        }
         req.response_handler = response_handler;
         req.content_receiver = content_receiver;
     }
