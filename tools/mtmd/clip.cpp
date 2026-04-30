@@ -3361,6 +3361,19 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("im_window_idx",     window_idx);
                 set_input_i32("im_inv_window_idx", inv_window_idx);
 
+                // block-diagonal attention mask: tokens in the same 4-token
+                // window attend to each other (mask = 0), all other positions
+                // are masked out (-inf). matches the window-major reorder above.
+                std::vector<float> im_window_mask_data(n_pos * n_pos, std::numeric_limits<float>::lowest());
+                for (int wi = 0; wi < n_pos / 4; wi++) {
+                    for (int i = 0; i < 4; i++) {
+                        for (int j = 0; j < 4; j++) {
+                            im_window_mask_data[(wi*4 + i) * n_pos + (wi*4 + j)] = 0.0f;
+                        }
+                    }
+                }
+                set_input_f32("im_window_mask", im_window_mask_data);
+
                 // insert merger 2x2 downsample indices
                 auto make_ds_idx = [](int off_r, int off_c, int ds_h, int ds_w, int stride_w) {
                     std::vector<int32_t> idx(ds_h * ds_w);
