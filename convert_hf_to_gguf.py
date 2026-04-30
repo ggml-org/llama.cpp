@@ -1331,6 +1331,9 @@ class TextModel(ModelBase):
         if chkhsh == "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c":
             # ref: https://huggingface.co/Qwen/Qwen3-Embedding-0.6B
             res = "qwen2"
+        if chkhsh == "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f":
+            # ref: https://huggingface.co/openbmb/MiniCPM-V-4_6
+            res = "qwen35"
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
@@ -1526,11 +1529,8 @@ class TextModel(ModelBase):
         if chkhsh == "6c81ce329e0802883b22eabab0d3fa48357337ef1ecb45443828bf1f6254833f":
             # ref: https://huggingface.co/LGAI-EXAONE/K-EXAONE-236B-A23B
             res = "exaone-moe"
-        if chkhsh == "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4":
-            # ref: https://huggingface.co/Qwen/Qwen3.5-9B-Instruct
-            res = "qwen35"
         if chkhsh == "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f":
-            # ref: MiniCPM-V 4.6 (Qwen3.5 Flash based)
+            # ref: https://huggingface.co/Qwen/Qwen3.5-9B-Instruct
             res = "qwen35"
         if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
             # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
