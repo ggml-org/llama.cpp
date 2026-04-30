@@ -53,10 +53,45 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
     SRV_DBG("response: %s\n", res.body.c_str());
 }
 
+// For Vertex AI compatibility
+struct vertexai_params {
+    bool enabled;
+    std::string path_health;
+    std::string path_predict;
+    int port;
+
+    // Ref: https://docs.cloud.google.com/vertex-ai/docs/predictions/custom-container-requirements#aip-variables
+    vertexai_params() {
+        enabled = getenv("AIP_MODE", "") == "PREDICT";
+        path_health = getenv("AIP_HEALTH_ROUTE", "", true); // default: using the route defined in server.cpp
+        path_predict = getenv("AIP_PREDICT_ROUTE", "/predict", true);
+        port = std::stoi(getenv("PORT", "8080"));
+    }
+
+    static std::string getenv(const char * name, const std::string & default_value, bool ensure_leading_slash = false) {
+        const char * value = std::getenv(name);
+        if (value == nullptr || value[0] == '\0') {
+            return default_value;
+        }
+        std::string val = value;
+        if (ensure_leading_slash && !val.empty() && val[0] != '/') {
+            val.insert(val.begin(), '/');
+        }
+        return val;
+    }
+};
+
 bool server_http_context::init(const common_params & params) {
+    const vertexai_params vai;
+
     path_prefix = params.api_prefix;
     port = params.port;
     hostname = params.hostname;
+
+    if (vai.enabled) {
+        LOG_INF("%s: Vertex AI compat: health route = %s, predict route = %s, port = %d\n", __func__, vai.path_health.c_str(), vai.path_predict.c_str(), vai.port);
+        port = vai.port;
+    }
 
     auto & srv = pimpl->srv;
 
@@ -490,18 +525,6 @@ void server_http_context::post(const std::string & path, const server_http_conte
 // https://cloud.google.com/vertex-ai/docs/predictions/custom-container-requirements
 //
 
-static std::string get_vertexai_predict_route() {
-    const char * value = std::getenv("AIP_PREDICT_ROUTE");
-    if (value == nullptr || value[0] == '\0') {
-        return "/predict";
-    }
-    std::string route = value;
-    if (route[0] != '/') {
-        route.insert(route.begin(), '/');
-    }
-    return route;
-}
-
 // Derives the camelCase @requestFormat alias for a registered path.
 // e.g. "/v1/chat/completions" -> "chatCompletions", "/apply-template" -> "applyTemplate"
 static std::string path_to_vertexai_format(const std::string & path) {
@@ -544,10 +567,10 @@ static json parse_vertexai_predict_response(const server_http_res_ptr & res) {
 }
 
 void server_http_context::register_vertexai() {
-    const std::string route = get_vertexai_predict_route();
+    const vertexai_params vai;
 
-    if (handlers.count(route)) {
-        LOG_ERR("%s: AIP_PREDICT_ROUTE=%s conflicts with an existing llama-server route\n", __func__, route.c_str());
+    if (handlers.count(vai.path_predict)) {
+        LOG_ERR("%s: AIP_PREDICT_ROUTE=%s conflicts with an existing llama-server route\n", __func__, vai.path_predict.c_str());
         exit(1);
     }
 
@@ -558,7 +581,13 @@ void server_http_context::register_vertexai() {
         alias_to_path.emplace(path_to_vertexai_format(path), path);
     }
 
-    post(route, [this, alias_to_path = std::move(alias_to_path)](const server_http_req & req) -> server_http_res_ptr {
+    if (!vai.path_health.empty()) {
+        auto health_handler = handlers.find("/health");
+        GGML_ASSERT(health_handler != handlers.end());
+        get(vai.path_health, health_handler->second);
+    }
+
+    post(vai.path_predict, [this, alias_to_path = std::move(alias_to_path)](const server_http_req & req) -> server_http_res_ptr {
         static const auto build_error = [](const std::string & message, error_type type = ERROR_TYPE_INVALID_REQUEST) -> json {
             return json {{"error", format_error_response(message, type)}};
         };
