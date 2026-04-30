@@ -12,6 +12,7 @@ Usage:
     python shrink_layers.py input.gguf -l 0 -o output.gguf     # keep layer 0 only
     python shrink_layers.py input.gguf -l 0,5,10 -o out.gguf   # keep layers 0, 5, 10
     python shrink_layers.py input.gguf -d 0,5 -o out.gguf      # delete layers 0, 5
+    python shrink_layers.py model_dir/ -l 0 -o output.gguf     # sharded model directory
 """
 from __future__ import annotations
 
@@ -34,6 +35,8 @@ import gguf
 logger = logging.getLogger("shrink-layers")
 
 BLOB_RE = re.compile(r'^blk\.(\d+)\.')
+
+SPLIT_KEYS = {"split.no", "split.count", "split.tensors.count"}
 
 
 def get_field_data(reader: gguf.GGUFReader, key: str):
@@ -63,28 +66,45 @@ def format_counts(n: int) -> str:
     return str(n)
 
 
-def analyze_model(reader: gguf.GGUFReader) -> tuple[str, int, dict[int, int], dict[int, int]]:
+def find_input_files(path: Path) -> list[Path]:
+    """Return sorted .gguf files from a file or directory path."""
+    if path.is_file():
+        return [path]
+    if path.is_dir():
+        files = sorted(path.glob("*.gguf"))
+        if not files:
+            logger.error(f"No .gguf files found in directory: {path}")
+            sys.exit(1)
+        return files
+    logger.error(f"Input not found: {path}")
+    sys.exit(1)
+
+
+def analyze_model(readers: list[gguf.GGUFReader]) -> tuple[str, int, dict[int, int], dict[int, int]]:
     """Return (arch, block_count, per_layer_params, per_layer_bytes)."""
+    reader = readers[0]
     arch = get_field_data(reader, gguf.Keys.General.ARCHITECTURE)
 
     block_count_key = gguf.Keys.LLM.BLOCK_COUNT.format(arch=arch)
     block_count = get_field_data(reader, block_count_key)
     if block_count is None:
         max_blk = -1
-        for tensor in reader.tensors:
-            m = BLOB_RE.match(tensor.name)
-            if m:
-                max_blk = max(max_blk, int(m.group(1)))
+        for r in readers:
+            for tensor in r.tensors:
+                m = BLOB_RE.match(tensor.name)
+                if m:
+                    max_blk = max(max_blk, int(m.group(1)))
         block_count = max_blk + 1
 
     per_layer_params = defaultdict(int)
     per_layer_bytes = defaultdict(int)
-    for tensor in reader.tensors:
-        m = BLOB_RE.match(tensor.name)
-        if m:
-            idx = int(m.group(1))
-            per_layer_params[idx] += tensor.n_elements
-            per_layer_bytes[idx] += tensor.n_bytes
+    for r in readers:
+        for tensor in r.tensors:
+            m = BLOB_RE.match(tensor.name)
+            if m:
+                idx = int(m.group(1))
+                per_layer_params[idx] += tensor.n_elements
+                per_layer_bytes[idx] += tensor.n_bytes
 
     return arch, block_count, dict(per_layer_params), dict(per_layer_bytes)
 
@@ -105,20 +125,25 @@ def remap_tensor_name(name: str, remap: dict[int, int]) -> str:
     return name.replace(f'blk.{old_idx}.', f'blk.{remap[old_idx]}.', 1)
 
 
-def shrink_layers(reader: gguf.GGUFReader, writer: gguf.GGUFWriter, keep_layers: set[int]) -> None:
+def shrink_layers(readers: list[gguf.GGUFReader], writer: gguf.GGUFWriter, keep_layers: set[int]) -> None:
+    reader = readers[0]
     arch = get_field_data(reader, gguf.Keys.General.ARCHITECTURE)
     block_count_key = gguf.Keys.LLM.BLOCK_COUNT.format(arch=arch)
+    original_block_count = get_field_data(reader, block_count_key)
 
     new_block_count = len(keep_layers)
     remap = build_remap(keep_layers)
-    logger.info(f"Keeping {new_block_count} layer(s): {sorted(keep_layers)}")
+    sorted_keep = sorted(keep_layers)
+    logger.info(f"Keeping {new_block_count} layer(s): {sorted_keep}")
     if remap != {k: k for k in keep_layers}:
         logger.info(f"Layer renumbering: {remap}")
 
-    # Copy metadata, adjusting block count
+    # Copy metadata from first reader, skip split keys since output is a single file
     kv_count = 0
     for field in reader.fields.values():
         if field.name == gguf.Keys.General.ARCHITECTURE or field.name.startswith('GGUF.'):
+            continue
+        if field.name in SPLIT_KEYS:
             continue
 
         val_type = field.types[0]
@@ -133,58 +158,67 @@ def shrink_layers(reader: gguf.GGUFReader, writer: gguf.GGUFWriter, keep_layers:
         if field.name == leading_dense_key:
             val = min(val, new_block_count)
 
+        # Slice per-layer arrays to match kept layers
+        if (original_block_count is not None
+                and hasattr(val, '__len__')
+                and not isinstance(val, (str, bytes))
+                and len(val) == original_block_count):
+            val = [val[i] for i in sorted_keep]
+
         writer.add_key_value(field.name, val, val_type, sub_type)
         kv_count += 1
 
-    # Filter and renumber tensors
+    # Filter and renumber tensors from all readers
     kept_tensors = 0
     removed_tensors = 0
-    for tensor in reader.tensors:
-        new_name = remap_tensor_name(tensor.name, remap)
-        m = BLOB_RE.match(tensor.name)
-        if m:
-            if int(m.group(1)) in keep_layers:
+    for r in readers:
+        for tensor in r.tensors:
+            new_name = remap_tensor_name(tensor.name, remap)
+            m = BLOB_RE.match(tensor.name)
+            if m:
+                if int(m.group(1)) in keep_layers:
+                    kept_tensors += 1
+                    writer.add_tensor_info(
+                        new_name, tensor.data.shape, tensor.data.dtype,
+                        tensor.data.nbytes, tensor.tensor_type,
+                    )
+                else:
+                    removed_tensors += 1
+            else:
                 kept_tensors += 1
                 writer.add_tensor_info(
                     new_name, tensor.data.shape, tensor.data.dtype,
                     tensor.data.nbytes, tensor.tensor_type,
                 )
-            else:
-                removed_tensors += 1
-        else:
-            kept_tensors += 1
-            writer.add_tensor_info(
-                new_name, tensor.data.shape, tensor.data.dtype,
-                tensor.data.nbytes, tensor.tensor_type,
-            )
 
     logger.info(f"Metadata keys copied: {kv_count}")
     logger.info(f"Tensors kept: {kept_tensors}, removed: {removed_tensors}")
 
-    write_output(reader, writer, keep_layers, remap)
+    write_output(readers, writer, keep_layers, remap)
 
 
-def write_output(reader: gguf.GGUFReader, writer: gguf.GGUFWriter,
+def write_output(readers: list[gguf.GGUFReader], writer: gguf.GGUFWriter,
                  keep_layers: set[int], remap: dict[int, int]) -> None:
     is_kept = lambda name: (  # noqa: E731
         (m := BLOB_RE.match(name)) is None or int(m.group(1)) in keep_layers
     )
 
-    total_bytes = sum(tensor.n_bytes for tensor in reader.tensors if is_kept(tensor.name))
+    total_bytes = 0
+    for r in readers:
+        total_bytes += sum(tensor.n_bytes for tensor in r.tensors if is_kept(tensor.name))
     bar = tqdm(desc="Writing", total=total_bytes, unit="byte", unit_scale=True)
 
     writer.write_header_to_file()
     writer.write_kv_data_to_file()
     writer.write_ti_data_to_file()
 
-    # Write tensor data in the same order as add_tensor_info was called.
-    # write_tensor_data pops from the writer's internal dict in order, so we
-    # must iterate reader.tensors in the same sequence.
-    for tensor in reader.tensors:
-        if not is_kept(tensor.name):
-            continue
-        writer.write_tensor_data(tensor.data, tensor_endianess=reader.endianess)
-        bar.update(tensor.n_bytes)
+    for r in readers:
+        for tensor in r.tensors:
+            if not is_kept(tensor.name):
+                continue
+            logger.info(f"  {tensor.name}  ({r.data.filename})")
+            writer.write_tensor_data(tensor.data, tensor_endianess=r.endianess)
+            bar.update(tensor.n_bytes)
 
     writer.close()
     bar.close()
@@ -205,7 +239,7 @@ def parse_layers_arg(s: str) -> set[int]:
     return layers
 
 
-def _parse_and_validate(arg: str, reader: gguf.GGUFReader) -> set[int]:
+def _parse_and_validate(arg: str, readers: list[gguf.GGUFReader]) -> set[int]:
     """Parse a layer arg string and validate against the model's total layers."""
     try:
         layers = parse_layers_arg(arg)
@@ -213,7 +247,7 @@ def _parse_and_validate(arg: str, reader: gguf.GGUFReader) -> set[int]:
         logger.error(f"Invalid layers format: {arg}")
         sys.exit(1)
 
-    _, total_layers, *_ = analyze_model(reader)
+    _, total_layers, *_ = analyze_model(readers)
     invalid = [i for i in layers if i < 0 or i >= total_layers]
     if invalid:
         logger.error(f"Invalid layer indices: {invalid} (valid range: 0-{total_layers - 1})")
@@ -273,8 +307,8 @@ def prompt_output(input_path: Path) -> Path:
     return out
 
 
-def run_interactive(input_path: Path, reader: gguf.GGUFReader) -> None:
-    arch, total_layers, per_layer_params, per_layer_bytes = analyze_model(reader)
+def run_interactive(input_path: Path, readers: list[gguf.GGUFReader]) -> None:
+    arch, total_layers, per_layer_params, per_layer_bytes = analyze_model(readers)
 
     total_params = sum(per_layer_params.values())
     total_bytes = sum(per_layer_bytes.values())
@@ -295,16 +329,17 @@ def run_interactive(input_path: Path, reader: gguf.GGUFReader) -> None:
             print("Aborted.")
             sys.exit(0)
 
-    _do_write(input_path, reader, output_path, keep_layers)
+    _do_write(input_path, readers, output_path, keep_layers)
 
 
-def run_batch(input_path: Path, reader: gguf.GGUFReader, output_path: Path, layers: set[int]) -> None:
+def run_batch(input_path: Path, readers: list[gguf.GGUFReader], output_path: Path, layers: set[int]) -> None:
     if output_path.exists():
         logger.warning(f"File '{output_path}' already exists, will be overwritten")
-    _do_write(input_path, reader, output_path, layers)
+    _do_write(input_path, readers, output_path, layers)
 
 
-def _do_write(input_path: Path, reader: gguf.GGUFReader, output_path: Path, keep_layers: set[int]) -> None:
+def _do_write(input_path: Path, readers: list[gguf.GGUFReader], output_path: Path, keep_layers: set[int]) -> None:
+    reader = readers[0]
     arch = get_field_data(reader, gguf.Keys.General.ARCHITECTURE)
     alignment = get_field_data(reader, gguf.Keys.General.ALIGNMENT)
 
@@ -314,7 +349,7 @@ def _do_write(input_path: Path, reader: gguf.GGUFReader, output_path: Path, keep
     if alignment is not None:
         writer.data_alignment = alignment
 
-    shrink_layers(reader, writer, keep_layers)
+    shrink_layers(readers, writer, keep_layers)
     logger.info("Done")
 
 
@@ -322,7 +357,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Shrink a GGUF model by keeping only selected transformer layers",
     )
-    parser.add_argument("input", type=Path, help="Input GGUF file")
+    parser.add_argument("input", type=Path, help="Input GGUF file or directory with sharded .gguf files")
     parser.add_argument("-o", "--output", type=Path, default=None, help="Output GGUF file")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("-l", "--layers", type=str, default=None,
@@ -335,31 +370,29 @@ def main() -> None:
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
 
-    if not args.input.is_file():
-        logger.error(f"Input file not found: {args.input}")
-        sys.exit(1)
+    input_files = find_input_files(args.input)
 
-    logger.info(f"Loading: {args.input}")
-    reader = gguf.GGUFReader(args.input, 'r')
+    logger.info(f"Loading {len(input_files)} file(s) from: {args.input}")
+    readers = [gguf.GGUFReader(str(f), 'r') for f in input_files]
 
     # Batch mode: --layers/--delete and --output provided
     if args.layers is not None and args.output is not None:
-        layers = _parse_and_validate(args.layers, reader)
-        run_batch(args.input, reader, args.output, layers)
+        layers = _parse_and_validate(args.layers, readers)
+        run_batch(args.input, readers, args.output, layers)
     elif args.delete is not None and args.output is not None:
-        delete_layers = _parse_and_validate(args.delete, reader)
-        _, total_layers, *_ = analyze_model(reader)
+        delete_layers = _parse_and_validate(args.delete, readers)
+        _, total_layers, *_ = analyze_model(readers)
         keep_layers = set(range(total_layers)) - delete_layers
         if not keep_layers:
             logger.error("Cannot delete all layers")
             sys.exit(1)
         logger.info(f"Deleting {len(delete_layers)} layer(s): {sorted(delete_layers)}")
-        run_batch(args.input, reader, args.output, keep_layers)
+        run_batch(args.input, readers, args.output, keep_layers)
     elif args.layers is not None or args.delete is not None or args.output is not None:
         parser.error("-l/-d and -o must be used together for batch mode")
     else:
         # Interactive mode
-        run_interactive(args.input, reader)
+        run_interactive(args.input, readers)
 
 
 if __name__ == '__main__':
