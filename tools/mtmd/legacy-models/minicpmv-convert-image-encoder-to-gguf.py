@@ -650,7 +650,7 @@ processor = None
 #     model.attn_pool = torch.nn.Identity()
 
 # model.blocks = model.blocks[:-1]
-model.load_state_dict(torch.load(os.path.join(dir_model, "minicpmv.clip")))
+model.load_state_dict(torch.load(os.path.join(dir_model, "minicpmv.clip"), weights_only=True))
 
 fname_middle = None
 has_text_encoder = True
@@ -800,7 +800,7 @@ def _replace_name_resampler(s, v):
     return {s: v}
 
 if has_minicpmv_projector:
-    projector = torch.load(args.minicpmv_projector)
+    projector = torch.load(args.minicpmv_projector, weights_only=True)
     new_state_dict = {}
     for k, v in projector.items():
         kvs = _replace_name_resampler(k, v)
