@@ -242,6 +242,17 @@ struct ggml_et_binary_params {
     struct ggml_tensor dst;
 };
 
+// Q8_0 mul_mat with optional residual bias.
+// If bias.data == NULL, behaves identically to the unfused MUL_MAT.
+// Otherwise, the kernel writes dst[i] = mat_mul(...) + bias[i].
+// bias must have the same shape and strides as dst when present.
+struct ggml_et_mm_q8_params {
+    struct ggml_tensor src0;
+    struct ggml_tensor src1;
+    struct ggml_tensor dst;
+    struct ggml_tensor bias;
+};
+
 // MUL_MAT_ID operation parameters (Mixture of Experts)
 struct ggml_et_mul_mat_id_params {
     struct ggml_tensor src0;  // Expert weight matrices [K, M, n_expert]

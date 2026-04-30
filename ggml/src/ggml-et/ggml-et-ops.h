@@ -40,6 +40,16 @@ struct ggml_et_binary_params {
     ggml_tensor dst;
 };
 
+// Q8_0 mul_mat with optional residual bias.
+// bias.data == NULL means "no bias" — kernel skips the add.
+// When non-NULL, bias must have the same shape and strides as dst.
+struct ggml_et_mm_q8_params {
+    ggml_tensor src0;
+    ggml_tensor src1;
+    ggml_tensor dst;
+    ggml_tensor bias;
+};
+
 struct ggml_et_im2col_params {
     ggml_tensor src0;
     ggml_tensor src1;
@@ -330,7 +340,12 @@ bool ggml_et_op_scale(ggml_backend_et_device_context* dev_ctx, const ggml_tensor
 bool ggml_et_op_mul(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_add(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_sub(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
-bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+// add_node is optional: when non-NULL and the pair (node, add_node) was
+// validated by ggml_et_can_fuse({MUL_MAT, ADD}), the Q8_0 path writes
+// dst = mm(...) + add_node's "other" operand (the bias) in one launch.
+bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx,
+                        const ggml_tensor* node,
+                        const ggml_tensor* add_node = nullptr);
 bool ggml_et_op_mul_mat_id(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rope(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_rms_norm(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);

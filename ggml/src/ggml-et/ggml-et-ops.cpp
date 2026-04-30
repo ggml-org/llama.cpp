@@ -703,7 +703,8 @@ bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* 
     return kernel_result;
 }
 
-bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node,
+                        const ggml_tensor* add_node) {
     ET_PERF_START();
 
     if (!dev_ctx || !node) {
@@ -714,6 +715,16 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
     if (!node->src[0] || !node->src[1]) {
         GGML_LOG_ERROR("ET: MUL_MAT operation missing required inputs\n");
         return false;
+    }
+
+    // Fused MM+ADD: when add_node is non-NULL the caller has already validated
+    // (Q8_0 weights, F32 acts, exact-shape ADD with stride parity to dst) via
+    // ggml_et_can_fuse({MUL_MAT, ADD}). The kernel writes dst = mm + bias and
+    // the ADD's output replaces MM's as the actual dst.
+    const ggml_tensor* fused_dst   = add_node ? add_node : node;
+    const ggml_tensor* bias_tensor = nullptr;
+    if (add_node) {
+        bias_tensor = (add_node->src[0] == node) ? add_node->src[1] : add_node->src[0];
     }
 
     const char* kernel_name;
@@ -771,19 +782,35 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
     ggml_et_binary_params params;
     params.src0 = *node->src[0];  // weight matrix
     params.src1 = *node->src[1];  // activation matrix
-    params.dst = *node;           // output matrix
+    params.dst  = *fused_dst;     // output (= add_node when fused, else node)
 
     ggml_et_cpu_compare_ctx cpu_cmp_ctx;
     bool cpu_comparison_active = false;
     if (mul_mat_cpu_compare_config.enabled) {
-        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, node, GGML_OP_MUL_MAT)) {
+        if (ggml_et_cpu_compare_init_pre(&cpu_cmp_ctx, fused_dst, GGML_OP_MUL_MAT)) {
             cpu_comparison_active = true;
         } else {
             GGML_LOG_WARN("ET: Failed to initialize CPU comparison for MUL_MAT operation\n");
         }
     }
 
-    bool kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+    bool kernel_result;
+    if (node->src[0]->type == GGML_TYPE_Q8_0) {
+        // Q8_0 kernel always takes the extended struct. bias.data is non-NULL
+        // only on the fused path; otherwise the kernel skips the add entirely.
+        ggml_et_mm_q8_params q8_params = {};
+        q8_params.src0 = params.src0;
+        q8_params.src1 = params.src1;
+        q8_params.dst  = params.dst;
+        if (bias_tensor) {
+            q8_params.bias = *bias_tensor;
+        }
+        kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &q8_params, sizeof(q8_params), 0xFFFFFFFF);
+    } else {
+        // Non-Q8 MM kernels don't yet support fused-add; the graph fuse check
+        // already rejects non-Q8 pairs, so add_node is always nullptr here.
+        kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &params, sizeof(params), 0xFFFFFFFF);
+    }
 
         // printf("Tensor error:");
     // if (params.src0.data != NULL)
@@ -803,15 +830,9 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
 
     // Phase 2: Execute CPU computation and compare with ET result (after ET kernel)
     if (cpu_comparison_active) {
-        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, node, &mul_mat_cpu_compare_config)) {
+        if (!ggml_et_cpu_compare_compute_and_check(&cpu_cmp_ctx, fused_dst, &mul_mat_cpu_compare_config)) {
             GGML_LOG_WARN("ET: CPU comparison failed for MUL_MAT operation\n");
         }
-        // if (params.src0.data != NULL)
-        // {
-        //     printf("Ptr OK\n");
-        //     printf("node->data ptr = %p\n", node->data);
-        // }
-
         ggml_et_cpu_compare_free(&cpu_cmp_ctx);
     }
 
