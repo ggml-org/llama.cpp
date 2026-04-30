@@ -90,7 +90,7 @@ void ggml_metal_pipeline_free(ggml_metal_pipeline_t pipeline) {
 }
 
 int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_with_params pipeline) {
-    return (int)pipeline.pipeline->obj.maxTotalThreadsPerThreadgroup;
+    return pipeline.pipeline->obj.maxTotalThreadsPerThreadgroup;
 }
 
 struct ggml_metal_library {

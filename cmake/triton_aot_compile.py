@@ -1,3 +1,19 @@
+
+import sys
+try:
+    import triton
+    import triton.language as tl
+    from triton.compiler.compiler import ASTSource
+except ImportError:
+    pass
+try:
+    from triton.backends.amd.compiler import HIPBackend
+except ImportError:
+    pass
+try:
+    from triton.backends.nvidia.compiler import CUDABackend
+except ImportError:
+    pass
 #!/usr/bin/env python3
 """AOT compilation of fused RotorQuant Triton kernels to .hsaco (HIP) or .cubin (CUDA).
 
@@ -17,9 +33,9 @@ import argparse
 import os
 import sys
 
-import triton  # type: ignore
-import triton.language as tl  # type: ignore
-from triton.compiler.compiler import compile as tc_compile, ASTSource  # type: ignore
+import triton
+import triton.language as tl
+from triton.compiler.compiler import compile as tc_compile, ASTSource
 
 # ---------------------------------------------------------------------------
 # Standalone Triton kernel definitions (extracted from sglang RotorQuant engine)
@@ -501,11 +517,11 @@ KERNELS = [
 def get_target(target_name: str, arch: str):
     """Build a Triton backend target object."""
     if target_name == "hip":
-        from triton.backends.amd.compiler import GPUTarget  # type: ignore
+        from triton.backends.amd.compiler import GPUTarget
         warp_size = 64
         return GPUTarget("hip", arch, warp_size)
     elif target_name == "cuda":
-        from triton.backends.nvidia.compiler import GPUTarget  # type: ignore
+        from triton.backends.nvidia.compiler import GPUTarget
         warp_size = 32
         return GPUTarget("cuda", arch, warp_size)
     else:
@@ -519,7 +535,7 @@ def compile_all(output_dir: str, target_name: str, arch: str) -> None:
     asm_key = "hsaco" if target_name == "hip" else "cubin"
 
     target = get_target(target_name, arch)
-    print(f"Target: {target}")
+    import logging; logging.warning(f"Target: {target}")
 
     errors = []
     for fn, sig, consts, suffix in KERNELS:
@@ -527,7 +543,7 @@ def compile_all(output_dir: str, target_name: str, arch: str) -> None:
         out_name = f"{name}_{suffix}.{ext}"
         out_path = os.path.join(output_dir, out_name)
 
-        print(f"  Compiling {name} ({suffix}) ...", end=" ", flush=True)
+        import logging; logging.warning(f"  Compiling {name} ({suffix}) ...", end=" ", flush=True)
         try:
             src = ASTSource(fn, signature=sig, constexprs=consts)
             compiled = tc_compile(src, target=target)
@@ -537,18 +553,18 @@ def compile_all(output_dir: str, target_name: str, arch: str) -> None:
                 binary = binary.encode()
             with open(out_path, "wb") as f:
                 f.write(binary)
-            print(f"ok → {out_name} ({len(binary)} bytes)")
+            import logging; logging.warning(f"ok → {out_name} ({len(binary)} bytes)")
         except Exception as exc:
-            print(f"FAILED: {exc}")
+            import logging; logging.warning(f"FAILED: {exc}")
             errors.append((name, exc))
 
     if errors:
-        print(f"\n{len(errors)} kernel(s) failed to compile:", file=sys.stderr)
+        import logging; logging.warning(f"\n{len(errors)} kernel(s) failed to compile:", file=sys.stderr)
         for name, exc in errors:
-            print(f"  {name}: {exc}", file=sys.stderr)
+            import logging; logging.warning(f"  {name}: {exc}", file=sys.stderr)
         sys.exit(1)
     else:
-        print(f"\nAll kernels compiled to {output_dir}/")
+        import logging; logging.warning(f"\nAll kernels compiled to {output_dir}/")
 
 
 def main():
@@ -575,11 +591,11 @@ def main():
     if args.arch is None:
         args.arch = "gfx1031" if args.target == "hip" else "sm_80"
 
-    print(f"RotorQuant Triton AOT compiler")
-    print(f"  target : {args.target}")
-    print(f"  arch   : {args.arch}")
-    print(f"  output : {args.output_dir}")
-    print()
+    import logging; logging.warning(f"RotorQuant Triton AOT compiler")
+    import logging; logging.warning(f"  target : {args.target}")
+    import logging; logging.warning(f"  arch   : {args.arch}")
+    import logging; logging.warning(f"  output : {args.output_dir}")
+    import logging; logging.warning()
 
     compile_all(args.output_dir, args.target, args.arch)
 

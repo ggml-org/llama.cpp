@@ -759,8 +759,8 @@ struct ggml_tensor * ggml_new_f32(struct ggml_context * ctx, float value) {
 }
 
 struct ggml_tensor * ggml_set_i32 (struct ggml_tensor * tensor, int32_t value) {
-    const int n     = ggml_nrows(tensor);
-    const int nc    = tensor->ne[0];
+    const int64_t n     = ggml_nrows(tensor);
+    const int64_t nc    = tensor->ne[0];
     const size_t n1 = tensor->nb[1];
 
     char * const data = tensor->data;
@@ -818,8 +818,8 @@ struct ggml_tensor * ggml_set_i32 (struct ggml_tensor * tensor, int32_t value) {
 }
 
 struct ggml_tensor * ggml_set_f32(struct ggml_tensor * tensor, float value) {
-    const int n     = ggml_nrows(tensor);
-    const int nc    = tensor->ne[0];
+    const int64_t n     = ggml_nrows(tensor);
+    const int64_t nc    = tensor->ne[0];
     const size_t n1 = tensor->nb[1];
 
     char * const data = tensor->data;
@@ -1549,8 +1549,8 @@ static void ggml_compute_forward_mul_mat_id(
     GGML_ASSERT(nb2 <= nb3);
 
     // row groups
-    const int n_ids = ids->ne[0]; // n_expert_used
-    const int n_as  = ne02;       // n_expert
+    const int64_t n_ids = ids->ne[0]; // n_expert_used
+    const int64_t n_as  = ne02;       // n_expert
 
     void * wdata_cur = params->wdata;
 
@@ -2822,7 +2822,7 @@ struct ggml_cplan ggml_graph_plan(
                         const struct ggml_tensor * src1 = node->src[1];
                         const struct ggml_tensor * ids = node->src[2];
                         const enum ggml_type vec_dot_type = type_traits_cpu[src0->type].vec_dot_type;
-                        const int n_as = src0->ne[2];
+                        const int64_t n_as = src0->ne[2];
                         // src1
                         if (src1->type != vec_dot_type) {
                             cur += ggml_row_size(vec_dot_type, ggml_nelements(src1)) + sizeof(int64_t);

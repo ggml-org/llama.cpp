@@ -753,7 +753,7 @@ inline bool ggml_can_fuse_subgraph(const struct ggml_cgraph *          cgraph,
                                    int                                 start_idx,
                                    std::initializer_list<enum ggml_op> ops,
                                    std::initializer_list<int>          outputs = {}) {
-    return ggml_can_fuse_subgraph(cgraph, start_idx, ops.size(), ops.begin(), outputs.begin(), outputs.size());
+    return ggml_can_fuse_subgraph(cgraph, start_idx, (int)ops.size(), ops.begin(), outputs.begin(), (int)outputs.size());
 }
 
 // Return true if the edges in the graph match expectations.

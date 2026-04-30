@@ -4437,7 +4437,7 @@ int ggml_metal_op_opt_step_adamw(ggml_metal_op_t ctx, int idx) {
     const int nth = std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), ne0);
     const int64_t n = (np + nth - 1) / nth;
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, (int)n, 1, 1, nth, 1, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, n, 1, 1, nth, 1, 1);
 
     return 1;
 }
@@ -4471,7 +4471,7 @@ int ggml_metal_op_opt_step_sgd(ggml_metal_op_t ctx, int idx) {
     const int nth = std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), ne0);
     const int64_t n = (np + nth - 1) / nth;
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, (int)n, 1, 1, nth, 1, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, n, 1, 1, nth, 1, 1);
 
     return 1;
 }
