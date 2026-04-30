@@ -2967,7 +2967,7 @@ struct ggml_cplan ggml_graph_plan(
 
 
 // Try to fuse the current node with subsequent nodes for better performance.
-// Returns the number of nodes consumed by fusion (>=2), or 0 if no fusion was applied.
+// Returns the number of nodes skipped by fusion (>=1), or 0 if no fusion was applied.
 static bool ggml_cpu_disable_fusion = false;  // initialized once in ggml_cpu_init(), read-only afterwards
 
 static int ggml_cpu_try_fuse_ops(
@@ -2996,7 +2996,7 @@ static int ggml_cpu_try_fuse_ops(
                 mul_w->nb[0]        == sizeof(float)) {
 
                 ggml_compute_forward_rms_norm_mul_fused(params, node, mul_node);
-                return 2;
+                return 1;
             }
         }
     }
@@ -3044,7 +3044,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         // Try fused ops, fall back to normal compute
         const int n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan);
         if (n_fused > 0) {
-            node_n += n_fused - 1;
+            node_n += n_fused;
         } else {
             ggml_compute_forward(&params, node);
         }
