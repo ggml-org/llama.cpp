@@ -228,12 +228,17 @@ static constexpr size_t GGML_CUDA_AR_MAX_BYTES = 1024 * 1024; // 1 MB
 // dev_tmp allocation size.
 static constexpr size_t GGML_CUDA_AR_COPY_MAX_BYTES = 32 * 1024 * 1024; // 32 MB
 
-// EXPERIMENT: temporarily bumped to 16 MB so the multi-block chunked-kernel
-// path handles all sub-16 MB ARs.  Revert to the per-platform tuned values
-// (Linux 128 KB, Windows 1 MB) when the experiment is done.
-static constexpr size_t GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT = 16 * 1024 * 1024; // 16 MB
-static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_DEFAULT = 2 * 1024 * 1024; // 2 MB
-// Minimum chunk size the env-var override is allowed to set; this caps the
+// AR wire size at which the copy-engine path takes over from the chunked-
+// kernel path.  Override via GGML_CUDA_AR_COPY_THRESHOLD.
+static constexpr size_t GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT = 1024 * 1024; // 1 MB
+// Per-call CE chunk-size heuristic: chunk_bytes = clamp(nbytes / 4, MIN, MAX).
+// The /4 keeps ~4 chunks in flight at any moment (good D2H/H2D overlap with
+// the peer); the clamps cover the cases where nbytes/4 is too small (per-
+// memcpy fixed cost dominates) or too large (chunk-level pipelining stalls).
+// Env var GGML_CUDA_AR_COPY_CHUNK_BYTES can override with a fixed value.
+static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MIN = 512 * 1024;       // 512 KB
+static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MAX = 2 * 1024 * 1024;  // 2 MB
+// Absolute floor that an env-var override is allowed to set; this caps the
 // per-slot copy-event array.  256 KB → up to 128 chunks per 32 MB tensor.
 static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN = 256 * 1024;
 static constexpr int GGML_CUDA_AR_COPY_MAX_CHUNKS =
@@ -324,6 +329,18 @@ static ggml_cuda_ar_slot_info ggml_cuda_ar_acquire_slot(ggml_cuda_ar_pipeline * 
     return { slot, (int) p->call_count };
 }
 
+// Per-AR copy-engine chunk size: env-var override if set, else heuristic
+// (clamp(nbytes/4, HEURISTIC_MIN, HEURISTIC_MAX)).
+static size_t ggml_cuda_ar_chunk_bytes(const ggml_cuda_ar_pipeline * p, size_t nbytes) {
+    if (p->copy_chunk_bytes > 0) {
+        return p->copy_chunk_bytes;
+    }
+    size_t cb = nbytes / 4;
+    if (cb < GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MIN) cb = GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MIN;
+    if (cb > GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MAX) cb = GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MAX;
+    return cb;
+}
+
 static void ggml_cuda_ar_wait_for_compute(
         ggml_cuda_ar_pipeline * p, ggml_backend_cuda_context * cuda_ctx, int rank, int slot) {
     ggml_cuda_ar_event_slot & ev = p->ev_pool[rank][slot];
@@ -345,8 +362,10 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     p->n_devices        = n_devices;
     p->copy_bytes       = GGML_CUDA_AR_COPY_MAX_BYTES;
     p->copy_threshold   = ggml_cuda_ar_env_u64("GGML_CUDA_AR_COPY_THRESHOLD", GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT);
-    p->copy_chunk_bytes = ggml_cuda_ar_env_u64("GGML_CUDA_AR_COPY_CHUNK_BYTES", GGML_CUDA_AR_COPY_CHUNK_BYTES_DEFAULT);
-    if (p->copy_chunk_bytes < GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN) {
+    // 0 = use the per-call heuristic (default).  Non-zero env value forces a
+    // fixed chunk size for diagnostics, with a floor at COPY_CHUNK_BYTES_MIN.
+    p->copy_chunk_bytes = ggml_cuda_ar_env_u64("GGML_CUDA_AR_COPY_CHUNK_BYTES", 0);
+    if (p->copy_chunk_bytes > 0 && p->copy_chunk_bytes < GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN) {
         GGML_LOG_WARN("%s: GGML_CUDA_AR_COPY_CHUNK_BYTES=%zu below minimum %zu; clamping\n",
                       __func__, p->copy_chunk_bytes, GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN);
         p->copy_chunk_bytes = GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN;
@@ -530,10 +549,12 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
     GGML_ASSERT(p->n_devices == 2);
     GGML_ASSERT(nbytes <= p->copy_bytes);
     GGML_ASSERT(ne <= std::numeric_limits<int>::max());
-    GGML_ASSERT(p->copy_chunk_bytes > 0);
+
+    const size_t chunk_bytes = ggml_cuda_ar_chunk_bytes(p, nbytes);
+    GGML_ASSERT(chunk_bytes > 0);
 
     const int slot = ggml_cuda_ar_acquire_slot(p).slot;
-    const size_t copy_chunks = (nbytes + p->copy_chunk_bytes - 1) / p->copy_chunk_bytes;
+    const size_t copy_chunks = (nbytes + chunk_bytes - 1) / chunk_bytes;
     GGML_ASSERT(copy_chunks <= GGML_CUDA_AR_COPY_MAX_CHUNKS);
 
     ggml_backend_cuda_context * cuda_ctx[2] = {};
@@ -559,12 +580,12 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
         }
 
         for (size_t c = 0; c < copy_chunks; ++c) {
-            const size_t offset = c * p->copy_chunk_bytes;
-            const size_t chunk_bytes = (nbytes - offset) < p->copy_chunk_bytes ?
-                (nbytes - offset) : p->copy_chunk_bytes;
+            const size_t offset = c * chunk_bytes;
+            const size_t this_bytes = (nbytes - offset) < chunk_bytes ?
+                (nbytes - offset) : chunk_bytes;
 
             CUDA_CHECK(cudaMemcpyAsync(
-                p->host_large[i] + offset, reinterpret_cast<char *>(src_buf[i]) + offset, chunk_bytes,
+                p->host_large[i] + offset, reinterpret_cast<char *>(src_buf[i]) + offset, this_bytes,
                 cudaMemcpyDeviceToHost, p->streams[i]));
             CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].cpy[c], p->streams[i]));
         }
@@ -589,13 +610,13 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
         }
 
         for (size_t c = 0; c < copy_chunks; ++c) {
-            const size_t offset = c * p->copy_chunk_bytes;
-            const size_t chunk_bytes = (nbytes - offset) < p->copy_chunk_bytes ?
-                (nbytes - offset) : p->copy_chunk_bytes;
+            const size_t offset = c * chunk_bytes;
+            const size_t this_bytes = (nbytes - offset) < chunk_bytes ?
+                (nbytes - offset) : chunk_bytes;
 
             CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->ev_pool[peer][slot].cpy[c]));
             CUDA_CHECK(cudaMemcpyAsync(
-                p->dev_tmp[i] + offset, p->host_large[peer] + offset, chunk_bytes,
+                p->dev_tmp[i] + offset, p->host_large[peer] + offset, this_bytes,
                 cudaMemcpyHostToDevice, p->streams[i]));
         }
 
