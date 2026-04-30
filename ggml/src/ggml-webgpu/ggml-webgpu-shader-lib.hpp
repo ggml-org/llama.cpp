@@ -1524,7 +1524,7 @@ class ggml_webgpu_shader_lib {
         key.type                              = context.dst->type;
         key.d_state                           = (int) context.src0->ne[0];
         key.xbc_overlap                       = ggml_webgpu_tensor_overlap(context.src1, context.src4) &&
-                          ggml_webgpu_tensor_overlap(context.src1, context.src5);
+                                                ggml_webgpu_tensor_overlap(context.src1, context.src5);
 
         auto it = ssm_scan_pipelines.find(key);
         if (it != ssm_scan_pipelines.end()) {
@@ -2021,6 +2021,10 @@ class ggml_webgpu_shader_lib {
         key.src0_type                           = context.src0->type;
         key.src1_type                           = context.src1->type;
         key.n_experts                           = context.n_experts;
+        key.vectorized = (context.src0->ne[0] % 4 == 0 && context.src0->ne[1] % 4 == 0 &&
+                          (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
+                             1 :
+                             0;
 
         auto it = mul_mat_id_pipelines.find(key);
         if (it != mul_mat_id_pipelines.end()) {
@@ -2050,14 +2054,12 @@ class ggml_webgpu_shader_lib {
         switch (context.src0->type) {
             case GGML_TYPE_F32:
                 defines.push_back("SRC0_INNER_TYPE=f32");
-                defines.push_back("FLOAT");
                 defines.push_back("INIT_SRC0_SHMEM_FLOAT");
                 defines.push_back("INIT_SRC1_SHMEM_FLOAT");
                 variant += "_f32";
                 break;
             case GGML_TYPE_F16:
                 defines.push_back("SRC0_INNER_TYPE=f16");
-                defines.push_back("FLOAT");
                 defines.push_back("INIT_SRC0_SHMEM_FLOAT");
                 defines.push_back("INIT_SRC1_SHMEM_FLOAT");
                 variant += "_f16";
@@ -2073,12 +2075,32 @@ class ggml_webgpu_shader_lib {
                     defines.push_back("U32_DEQUANT_HELPERS");
                     defines.push_back("SRC0_INNER_TYPE=u32");
 
+                    switch (context.src0->type) {
+                        case GGML_TYPE_IQ1_S:
+                        case GGML_TYPE_IQ1_M:
+                        case GGML_TYPE_IQ4_NL:
+                        case GGML_TYPE_IQ4_XS:
+                            defines.push_back(type_upper + "_GRID");
+                            break;
+                        case GGML_TYPE_IQ2_XXS:
+                        case GGML_TYPE_IQ2_XS:
+                        case GGML_TYPE_IQ2_S:
+                        case GGML_TYPE_IQ3_XXS:
+                        case GGML_TYPE_IQ3_S:
+                            defines.push_back(type_upper + "_GRID");
+                            defines.push_back(type_upper + "_TABLES");
+                            break;
+                        default:
+                            break;
+                    }
+
                     variant += std::string("_") + src0_name;
                     break;
                 }
         }
 
-        defines.push_back("SCALAR");
+        // VEC/SCALAR controls
+        defines.push_back(key.vectorized ? "VEC" : "SCALAR");
 
         // mul_mat_id is register-tile only.
         const uint32_t tile_k =
