@@ -93,6 +93,26 @@ ggml_tensor * clip_graph_parakeet::parakeet_build_graph_encoder(ggml_tensor * cu
     ggml_set_name(attn_mask, "attn_mask");
     ggml_set_input(attn_mask);
 
+    const int n_time      = cur->ne[1];
+    const int window_size = 2 * n_time - 1;
+    const int d_half      = n_state / 2;
+
+    struct ggml_tensor * pos_freqs = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, d_half);
+    ggml_set_name(pos_freqs, "pos_freqs");
+    ggml_set_input(pos_freqs);
+
+    struct ggml_tensor * rel_positions = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, window_size);
+    ggml_set_name(rel_positions, "rel_positions");
+    ggml_set_input(rel_positions);
+
+    struct ggml_tensor * freqs = ggml_repeat_4d(ctx0, pos_freqs, d_half, window_size, 1, 1);
+    struct ggml_tensor * theta = ggml_mul(ctx0, freqs, rel_positions);
+
+    struct ggml_tensor * sin = ggml_reshape_3d(ctx0, ggml_sin(ctx0, theta), 1, d_half, window_size);
+    struct ggml_tensor * cos = ggml_reshape_3d(ctx0, ggml_cos(ctx0, theta), 1, d_half, window_size);
+    struct ggml_tensor * pos_emb = ggml_reshape_2d(ctx0, ggml_cont(ctx0, ggml_concat(ctx0, sin, cos, 0)), n_state, window_size);
+    ggml_set_name(pos_emb, "pos_emb");
+
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];
         // FFN1
@@ -140,19 +160,7 @@ ggml_tensor * clip_graph_parakeet::parakeet_build_graph_encoder(ggml_tensor * cu
             K_cur = ggml_reshape_3d(ctx0, K_cur, d_head, n_head, n_time);
             V_cur = ggml_reshape_3d(ctx0, V_cur, d_head, n_head, n_time);
 
-            const int input_len = cur->ne[1];
-            const int center_pos = model.position_embeddings->ne[1] / 2 + 1;
-            const int start_pos = center_pos - input_len;
-            const int window_size = 2 * input_len - 1;
-
-            const size_t offset = start_pos * model.position_embeddings->nb[1];
-
-            // [feat, window_size]
-            struct ggml_tensor * pos_emb = ggml_view_2d(ctx0, model.position_embeddings,
-                                            n_state, window_size,
-                                            model.position_embeddings->nb[1], offset);
-            ggml_format_name(pos_emb, "enc_%d_attn_pos_emb", il);
-
+            // [n_state, window_size]
             struct ggml_tensor * pos = ggml_mul_mat(ctx0, layer.linear_pos_w, pos_emb);
             ggml_format_name(pos, "enc_%d_attn_pos", il);
 

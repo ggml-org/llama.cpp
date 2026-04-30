@@ -4491,9 +4491,6 @@ class NemotronNanoV2VLModel(MmprojModel):
         self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        if ".position_embd." in new_name or "pos_embed" in new_name:
-            return gguf.GGMLQuantizationType.F32
-
         if "sound_encoder" in name or new_name.startswith("mm.a."):
             if "bias" in new_name or "norm" in new_name:
                 return gguf.GGMLQuantizationType.F32
@@ -4501,29 +4498,6 @@ class NemotronNanoV2VLModel(MmprojModel):
                 return gguf.GGMLQuantizationType.F32
 
         return super().tensor_force_quant(name, new_name, bid, n_dims)
-
-    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        sound_config = self.global_config.get("sound_config")
-        if sound_config:
-            # Generate relative position embeddings.
-            d_model = sound_config.get("hidden_size")
-            max_len = 5000 * 2 - 1
-
-            pe = torch.zeros(max_len, d_model, dtype=torch.float32)
-            log_10000 = math.log(10000.0)
-
-            for idx in range(max_len):
-                position = float((max_len // 2) - idx)
-
-                for i in range(0, d_model, 2):
-                    div_term = math.exp(-(float(i) * log_10000 / float(d_model)))
-                    angle = position * div_term
-
-                    pe[idx, i] = math.sin(angle)
-                    if i + 1 < d_model:
-                        pe[idx, i + 1] = math.cos(angle)
-
-            yield ("a.position_embd.weight", pe)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "input_conditioner" in name:
