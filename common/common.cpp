@@ -1420,11 +1420,7 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
         goto done;
     }
 
-    // bounded-rollback architectures: classify before the seq_rm probe, since
-    // the probe (distance = 1) would silently take the rollback path and look
-    // like unbounded PART support
-    if (llama_n_rollback_max(ctx) > 0 &&
-        llama_model_supports_recurrent_partial_rollback(llama_get_model(ctx))) {
+    if (llama_n_rs_seq(ctx) > 0) {
         res = COMMON_CONTEXT_SEQ_RM_TYPE_PART_BOUNDED;
         goto done;
     }
@@ -1503,7 +1499,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
         // TODO: add for MTP
         const bool has_spec = (params.speculative.type != COMMON_SPECULATIVE_TYPE_NONE)
                               || params.speculative.has_dft();
-        cparams.n_rollback_max = has_spec ? (uint32_t) params.speculative.draft.n_max : 0u;
+        cparams.n_rs_seq = has_spec ? (uint32_t) params.speculative.draft.n_max : 0u;
     }
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;

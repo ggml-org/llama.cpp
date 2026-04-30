@@ -304,9 +304,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
     const uint32_t mem_size  = mctx_cur->get_size();
-    const bool keep_intermediates   = (cparams.n_rollback_max > 0)
+    const bool keep_intermediates   = (cparams.n_rs_seq > 0)
                             && (n_seq_tokens > 1)
-                            && ((uint32_t) n_seq_tokens <= 1 + cparams.n_rollback_max);
+                            && ((uint32_t) n_seq_tokens <= 1 + cparams.n_rs_seq);
 
     // Input projections
     auto qkvz = build_qkvz(cur, il);

@@ -807,7 +807,7 @@ private:
 
             params_base.speculative.draft.model = model_dft.get();
             params_base.speculative.draft.cparams = common_context_params_to_llama(params_dft);
-            params_base.speculative.draft.cparams.n_rollback_max = 0;
+            params_base.speculative.draft.cparams.n_rs_seq = 0;
         }
 
         std::string & mmproj_path = params_base.mmproj.path;

@@ -42,11 +42,11 @@ llama_context::llama_context(
         throw std::runtime_error("n_seq_max must be <= " + std::to_string(LLAMA_MAX_SEQ));
     }
 
-    cparams.n_rollback_max = params.n_rollback_max;
-    if (cparams.n_rollback_max > 0 && !llm_arch_supports_recurrent_partial_rollback(model.arch)) {
-        LLAMA_LOG_WARN("%s: n_rollback_max=%u requested but model arch does not support recurrent partial rollback; clamping to 0\n",
-                       __func__, cparams.n_rollback_max);
-        cparams.n_rollback_max = 0;
+    cparams.n_rs_seq = params.n_rs_seq;
+    if (cparams.n_rs_seq > 0 && !llm_arch_supports_recurrent_partial_rollback(model.arch)) {
+        LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model arch does not support recurrent partial rollback; clamping to 0\n",
+                        __func__, cparams.n_rs_seq);
+        cparams.n_rs_seq = 0;
     }
 
     cparams.n_threads        = params.n_threads;
@@ -3191,7 +3191,7 @@ llama_context_params llama_context_default_params() {
         /*.n_batch                     =*/ 2048,
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
-        /*.n_rollback_max              =*/ 0,
+        /*.n_rs_seq                    =*/ 0,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
         /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
@@ -3338,8 +3338,8 @@ uint32_t llama_n_seq_max(const llama_context * ctx) {
     return ctx->n_seq_max();
 }
 
-uint32_t llama_n_rollback_max(const llama_context * ctx) {
-    return ctx->get_cparams().n_rollback_max;
+uint32_t llama_n_rs_seq(const llama_context * ctx) {
+    return ctx->get_cparams().n_rs_seq;
 }
 
 const llama_model * llama_get_model(const llama_context * ctx) {

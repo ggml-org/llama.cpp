@@ -24,7 +24,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
                  uint32_t   rs_size,
                             /* common */
                  uint32_t   n_seq_max,
-                 uint32_t   n_rollback_max,
+                 uint32_t   n_rs_seq,
                      bool   offload,
                      bool   unified,
                             /* layer filters */
@@ -55,7 +55,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         offload,
         rs_size,
         n_seq_max,
-        n_rollback_max,
+        n_rs_seq,
         filter_recr == nullptr ?
             [&](int32_t il) { return hparams.is_recurrent(il); }
             : filter_recr

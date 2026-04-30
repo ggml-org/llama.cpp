@@ -23,7 +23,7 @@ public:
                          bool   offload,
                      uint32_t   mem_size,
                      uint32_t   n_seq_max,
-                     uint32_t   n_rollback_max,
+                     uint32_t   n_rs_seq,
         const layer_filter_cb & filter);
 
     ~llama_memory_recurrent() = default;
@@ -70,13 +70,12 @@ public:
     uint32_t size = 0; // total number of cells, shared across all sequences
     uint32_t used = 0; // used cells (i.e. at least one seq_id)
 
-    // max recurrent-state rollback distance; tensors are widened to (1 + n_rollback_max) groups
-    uint32_t n_rollback_max = 0;
+    // number of recurrent-state snapshots per seq for rollback; tensors are widened to (1 + n_rs_seq) groups
+    uint32_t n_rs_seq = 0;
     // per-seq rollback index
-    std::vector<uint32_t> recurrent_rollback_idx;
+    std::vector<uint32_t> rs_idx;
 
-    void     set_recurrent_rollback_idx(llama_seq_id seq_id, uint32_t idx);
-    uint32_t get_recurrent_rollback_idx(llama_seq_id seq_id) const;
+    void set_rs_idx(llama_seq_id seq_id, uint32_t idx);
 
     // computed before each graph build
     uint32_t n = 0;

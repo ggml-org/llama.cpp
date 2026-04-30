@@ -24,7 +24,7 @@ llama_memory_recurrent::llama_memory_recurrent(
                      bool   offload,
                  uint32_t   mem_size,
                  uint32_t   n_seq_max,
-                 uint32_t   n_rollback_max,
+                 uint32_t   n_rs_seq,
     const layer_filter_cb & filter) : hparams(model.hparams), n_seq_max(n_seq_max) {
     const int32_t n_layer = hparams.n_layer;
 
@@ -32,8 +32,8 @@ llama_memory_recurrent::llama_memory_recurrent(
     size = mem_size;
     used = 0;
 
-    this->n_rollback_max = n_rollback_max;
-    recurrent_rollback_idx.assign(n_seq_max, 0);
+    this->n_rs_seq = n_rs_seq;
+    rs_idx.assign(n_seq_max, 0);
 
     cells.clear();
     cells.resize(mem_size);
@@ -96,7 +96,7 @@ llama_memory_recurrent::llama_memory_recurrent(
             throw std::runtime_error("failed to create ggml context for rs cache");
         }
 
-        const uint32_t n_rows = mem_size * (1 + n_rollback_max);
+        const uint32_t n_rows = mem_size * (1 + n_rs_seq);
         ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
         ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
         ggml_format_name(r, "cache_r_l%d", i);
@@ -167,11 +167,11 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
         if (tail_id >= 0) {
             auto & cell = cells[tail_id];
 
-            // partial rollback via per-token snapshot index (bounded by n_rollback_max)
+            // partial rollback via per-token snapshot index (bounded by n_rs_seq)
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
                 const llama_pos rollback = cell.pos - (p0 - 1);
-                if (rollback >= 1 && rollback <= (llama_pos) n_rollback_max) {
-                    set_recurrent_rollback_idx(seq_id, (uint32_t) rollback);
+                if (rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
+                    set_rs_idx(seq_id, (uint32_t) rollback);
                     cell.pos = p0 - 1;
                     return true;
                 }
@@ -378,18 +378,11 @@ llama_pos llama_memory_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-void llama_memory_recurrent::set_recurrent_rollback_idx(llama_seq_id seq_id, uint32_t idx) {
-    if (seq_id < 0 || (size_t) seq_id >= recurrent_rollback_idx.size()) {
+void llama_memory_recurrent::set_rs_idx(llama_seq_id seq_id, uint32_t idx) {
+    if (seq_id < 0 || (size_t) seq_id >= rs_idx.size()) {
         return;
     }
-    recurrent_rollback_idx[seq_id] = (idx > n_rollback_max) ? n_rollback_max : idx;
-}
-
-uint32_t llama_memory_recurrent::get_recurrent_rollback_idx(llama_seq_id seq_id) const {
-    if (seq_id < 0 || (size_t) seq_id >= recurrent_rollback_idx.size()) {
-        return 0;
-    }
-    return recurrent_rollback_idx[seq_id];
+    rs_idx[seq_id] = (idx > n_rs_seq) ? n_rs_seq : idx;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_memory_recurrent::memory_breakdown() const {
@@ -1190,17 +1183,17 @@ int32_t llama_memory_recurrent_context::s_copy(int i) const {
     const uint32_t cell_idx = i + mem->head;
     const int32_t  src0     = mem->cells[cell_idx].src0;
 
-    if (mem->n_rollback_max == 0) {
+    if (mem->n_rs_seq == 0) {
         return src0;
     }
 
     uint32_t idx = 0;
     if (!mem->cells[cell_idx].seq_id.empty()) {
         const llama_seq_id seq = *mem->cells[cell_idx].seq_id.begin();
-        if (seq >= 0 && (size_t) seq < mem->recurrent_rollback_idx.size()) {
-            idx = mem->recurrent_rollback_idx[seq];
+        if (seq >= 0 && (size_t) seq < mem->rs_idx.size()) {
+            idx = mem->rs_idx[seq];
             // reset rollback idx
-            mem->recurrent_rollback_idx[seq] = 0;
+            mem->rs_idx[seq] = 0;
         }
     }
     return (int32_t)(idx * mem->size) + src0;
