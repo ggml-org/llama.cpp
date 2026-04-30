@@ -359,6 +359,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_CONVNEXT_BLOCK_COUNT,              hparams.convnext.n_layer);
 
     add_kv(LLM_KV_CLASSIFIER_OUTPUT_LABELS,          model->classifier_labels);
+    if (hparams.n_cls_out > 1) {
+        add_kv(LLM_KV_N_CLS_OUT,                     hparams.n_cls_out);
+    }
 
     add_kv(LLM_KV_SHORTCONV_L_CACHE,                 hparams.n_shortconv_l_cache);
 

@@ -871,6 +871,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     if (!classifier_labels.empty()) {
         hparams.n_cls_out = classifier_labels.size();
     }
+    // allow direct override of n_cls_out (e.g. for embedding-type rerankers)
+    ml.get_key(LLM_KV_N_CLS_OUT, hparams.n_cls_out, false);
 
     // arch-specific KVs
     switch (arch) {
@@ -4008,7 +4010,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
 
                     // output rerank head
-                    cls_out = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+                    cls   = create_tensor(tn(LLM_TENSOR_CLS,      "weight"), {hparams.n_cls_out, n_embd}, TENSOR_NOT_REQUIRED);
+                    cls_b = create_tensor(tn(LLM_TENSOR_CLS,      "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
+                    cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "weight"), {hparams.n_cls_out, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+                    cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];

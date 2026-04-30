@@ -283,6 +283,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_CONVNEXT_BLOCK_COUNT,      "%s.convnext.block_count"      },
 
     { LLM_KV_CLASSIFIER_OUTPUT_LABELS, "%s.classifier.output_labels" },
+    { LLM_KV_N_CLS_OUT,                "%s.n_cls_out"                },
 
     { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
     // sentence-transformers dense modules feature dims
@@ -388,7 +389,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_TOKEN_EMBD_NORM,                        "token_embd_norm" },
     { LLM_TENSOR_TOKEN_TYPES,                            "token_types" },
     { LLM_TENSOR_CLS,                                    "cls" },
-    { LLM_TENSOR_CLS_OUT,                                "cls.output" },
+    { LLM_TENSOR_CLS_OUT,                                "cls_out" },
     { LLM_TENSOR_CLS_NORM,                               "cls.norm" },
     { LLM_TENSOR_ENC_OUTPUT_NORM,                        "enc.output_norm" },
     { LLM_TENSOR_FFN_GATE_INP_SHEXP,                     "blk.%d.ffn_gate_inp_shexp" },

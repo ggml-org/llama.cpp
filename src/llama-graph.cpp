@@ -2765,12 +2765,15 @@ void llm_graph_context::build_pooling(
                 // classification head
                 // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
                 if (cls) {
-                    cur = ggml_mul_mat(ctx0, cls, cur);
+                    cur = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, cls)), cur);
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
                     if (arch == LLM_ARCH_MODERN_BERT) {
                         cur = ggml_gelu(ctx0, cur);
+                    } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_QWEN3VL) {
+                        // jina-reranker-v3 uses ReLU in the projector MLP
+                        cur = ggml_relu(ctx0, cur);
                     } else {
                         cur = ggml_tanh(ctx0, cur);
                     }
@@ -2785,14 +2788,14 @@ void llm_graph_context::build_pooling(
                 // Single layer classification head (direct projection)
                 // https://github.com/huggingface/transformers/blob/f4fc42216cd56ab6b68270bf80d811614d8d59e4/src/transformers/models/bert/modeling_bert.py#L1476
                 if (cls_out) {
-                    cur = ggml_mul_mat(ctx0, cls_out, cur);
+                    cur = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, cls_out)), cur);
                     if (cls_out_b) {
                         cur = ggml_add(ctx0, cur, cls_out_b);
                     }
                 }
 
-                // softmax for qwen3 reranker
-                if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_QWEN3VL) {
+                // softmax for qwen3 reranker (only when output is a single score, not embeddings)
+                if ((arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_QWEN3VL) && hparams.n_cls_out == 1) {
                     cur = ggml_soft_max(ctx0, cur);
                 }
             } break;
