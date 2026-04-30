@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, QRect, QSize
 from jinja2 import TemplateSyntaxError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from datetime import datetime
+from typing import Callable
 
 
 def format_template_content(template_content):
@@ -395,7 +396,7 @@ class JinjaTester(QMainWindow):
                 ensure_ascii=ensure_ascii,
             )
         )
-        env.globals["strftime_now"] = lambda format: datetime.now().strftime(format)  # ty: ignore[invalid-assignment]
+        env.globals["strftime_now"]: Callable[[str], str] = lambda format: datetime.now().strftime(format)
         env.globals["raise_exception"] = raise_exception  # ty: ignore[invalid-assignment]
         try:
             template = env.from_string(template_str)
