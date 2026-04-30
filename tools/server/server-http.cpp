@@ -563,15 +563,37 @@ void server_http_context::register_vertexai() {
             return json {{"error", format_error_response(message, type)}};
         };
 
-        json data = json::parse(req.body);
+        json data;
+        try {
+            data = json::parse(req.body);
+        } catch (const std::exception & e) {
+            auto res = std::make_unique<server_http_res>();
+            res->status = 400;
+            res->data = safe_json_to_str({{"error", format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST)}});
+            return res;
+        }
         if (!data.is_object()) {
-            throw std::invalid_argument("request body must be a JSON object");
+            auto res = std::make_unique<server_http_res>();
+            res->status = 400;
+            res->data = safe_json_to_str({{"error", format_error_response("request body must be a JSON object", ERROR_TYPE_INVALID_REQUEST)}});
+            return res;
         }
         if (!data.contains("instances") || !data.at("instances").is_array()) {
-            throw std::invalid_argument("request body must include an array field named instances");
+            auto res = std::make_unique<server_http_res>();
+            res->status = 400;
+            res->data = safe_json_to_str({{"error", format_error_response("request body must include an array field named instances", ERROR_TYPE_INVALID_REQUEST)}});
+            return res;
         }
 
         const json & instances = data.at("instances");
+        static const size_t MAX_INSTANCES = 128;
+        if (instances.size() > MAX_INSTANCES) {
+            auto res = std::make_unique<server_http_res>();
+            res->status = 400;
+            res->data = safe_json_to_str({{"error", format_error_response("instances array exceeds maximum size of " + std::to_string(MAX_INSTANCES), ERROR_TYPE_INVALID_REQUEST)}});
+            return res;
+        }
+
         std::vector<std::future<json>> futures;
         futures.reserve(instances.size());
 
