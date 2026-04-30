@@ -574,6 +574,11 @@ static json parse_gcp_predict_response(const server_http_res_ptr & res) {
 void server_http_context::register_gcp_compat() {
     const gcp_params gcp;
 
+    if (!gcp.enabled) {
+        // do nothing
+        return;
+    }
+
     if (handlers.count(gcp.path_predict)) {
         LOG_ERR("%s: AIP_PREDICT_ROUTE=%s conflicts with an existing llama-server route\n", __func__, gcp.path_predict.c_str());
         exit(1);
