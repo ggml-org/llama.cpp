@@ -1,25 +1,15 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { cn } from '$lib/components/ui/utils';
-	import {
-		modelsStore,
-		modelOptions,
-		modelsLoading,
-		modelsUpdating,
-		selectedModelId,
-		singleModelName
-	} from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import {
 		DialogModelInformation,
+		ModelId,
 		ModelsSelectorList,
 		SearchInput,
 		TruncatedText
 	} from '$lib/components/app';
-	import type { ModelOption } from '$lib/types/models';
-	import { filterModelOptions, groupModelOptions } from './utils';
 
 	interface Props {
 		class?: string;
@@ -41,201 +31,71 @@
 		useGlobalSelection = false
 	}: Props = $props();
 
-	let options = $derived(
-		modelOptions().filter((option) => {
-			const modelProps = modelsStore.getModelProps(option.model);
-			return modelProps?.webui !== false;
-		})
-	);
-	let loading = $derived(modelsLoading());
-	let updating = $derived(modelsUpdating());
-	let activeId = $derived(selectedModelId());
-	let isRouter = $derived(isRouterMode());
-	let serverModel = $derived(singleModelName());
-
-	let isLoadingModel = $state(false);
-
-	let isHighlightedCurrentModelActive = $derived(
-		!isRouter || !currentModel
-			? false
-			: (() => {
-					const currentOption = options.find((option) => option.model === currentModel);
-
-					return currentOption ? currentOption.id === activeId : false;
-				})()
-	);
-
-	let isCurrentModelInCache = $derived.by(() => {
-		if (!isRouter || !currentModel) return true;
-
-		return options.some((option) => option.model === currentModel);
-	});
-
-	let searchTerm = $state('');
-
-	let filteredOptions = $derived(filterModelOptions(options, searchTerm));
-
-	let groupedFilteredOptions = $derived(
-		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (m) =>
-			modelsStore.isModelLoaded(m)
-		)
-	);
-
 	let sheetOpen = $state(false);
-	let showModelDialog = $state(false);
-	let infoModelId = $state<string | null>(null);
 
-	function handleInfoClick(modelName: string) {
-		infoModelId = modelName;
-		showModelDialog = true;
-	}
-
-	onMount(() => {
-		modelsStore.fetch().catch((error) => {
-			console.error('Unable to load models:', error);
-		});
-	});
-
-	function handleOpenChange(open: boolean) {
-		if (loading || updating) return;
-
-		if (isRouter) {
-			if (open) {
-				sheetOpen = true;
-				searchTerm = '';
-
-				modelsStore.fetchRouterModels().then(() => {
-					modelsStore.fetchModalitiesForLoadedModels();
-				});
-			} else {
-				sheetOpen = false;
-				searchTerm = '';
-			}
-		} else {
-			showModelDialog = open;
+	const ms = useModelsSelector({
+		currentModel: () => currentModel,
+		useGlobalSelection: () => useGlobalSelection,
+		onModelChange: () => onModelChange,
+		onOpenChange: (open) => {
+			sheetOpen = open;
 		}
-	}
+	});
 
 	export function open() {
-		handleOpenChange(true);
+		ms.handleOpenChange(true);
 	}
 
 	function handleSheetOpenChange(open: boolean) {
 		if (!open) {
-			handleOpenChange(false);
+			ms.handleOpenChange(false);
 		}
-	}
-
-	async function handleSelect(modelId: string) {
-		const option = options.find((opt) => opt.id === modelId);
-		if (!option) return;
-
-		let shouldCloseMenu = true;
-
-		if (onModelChange) {
-			const result = await onModelChange(option.id, option.model);
-
-			if (result === false) {
-				shouldCloseMenu = false;
-			}
-		} else {
-			await modelsStore.selectModelById(option.id);
-		}
-
-		if (shouldCloseMenu) {
-			handleOpenChange(false);
-
-			requestAnimationFrame(() => {
-				const textarea = document.querySelector<HTMLTextAreaElement>(
-					'[data-slot="chat-form"] textarea'
-				);
-				textarea?.focus();
-			});
-		}
-
-		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
-			isLoadingModel = true;
-			modelsStore
-				.loadModel(option.model)
-				.catch((error) => console.error('Failed to load model:', error))
-				.finally(() => (isLoadingModel = false));
-		}
-	}
-
-	function getDisplayOption(): ModelOption | undefined {
-		if (!isRouter) {
-			if (serverModel) {
-				return {
-					id: 'current',
-					model: serverModel,
-					name: serverModel.split('/').pop() || serverModel,
-					capabilities: []
-				};
-			}
-
-			return undefined;
-		}
-
-		if (useGlobalSelection && activeId) {
-			const selected = options.find((option) => option.id === activeId);
-			if (selected) return selected;
-		}
-
-		if (currentModel) {
-			if (!isCurrentModelInCache) {
-				return {
-					id: 'not-in-cache',
-					model: currentModel,
-					name: currentModel.split('/').pop() || currentModel,
-					capabilities: []
-				};
-			}
-
-			return options.find((option) => option.model === currentModel);
-		}
-
-		if (activeId) {
-			return options.find((option) => option.id === activeId);
-		}
-
-		return undefined;
 	}
 </script>
 
 <div class={cn('relative inline-flex flex-col items-end gap-1', className)}>
-	{#if loading && options.length === 0 && isRouter}
+	{#if ms.loading && ms.options.length === 0 && ms.isRouter}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
 			Loading models…
 		</div>
-	{:else if options.length === 0 && isRouter}
+	{:else if ms.options.length === 0 && ms.isRouter}
 		<p class="text-xs text-muted-foreground">No models available.</p>
 	{:else}
-		{@const selectedOption = getDisplayOption()}
+		{@const selectedOption = ms.getDisplayOption()}
 
-		{#if isRouter}
+		{#if ms.isRouter}
 			<button
 				type="button"
 				class={cn(
 					`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-					!isCurrentModelInCache
+					!ms.isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
-							: isHighlightedCurrentModelActive
+							: ms.isHighlightedCurrentModelActive
 								? 'text-foreground'
 								: 'text-muted-foreground',
 					sheetOpen ? 'text-foreground' : ''
 				)}
 				style="max-width: min(calc(100cqw - 9rem), 20rem)"
-				disabled={disabled || updating}
-				onclick={() => handleOpenChange(true)}
+				disabled={disabled || ms.updating}
+				onclick={() => ms.handleOpenChange(true)}
 			>
 				<Package class="h-3.5 w-3.5" />
 
-				<TruncatedText text={selectedOption?.model || 'Select model'} class="min-w-0 font-medium" />
+				{#if !selectedOption}
+					<span class="min-w-0 font-medium">Select model</span>
+				{:else}
+					<ModelId
+						class="text-xs"
+						modelId={selectedOption?.model || ''}
+						hideQuantization
+						hideOrgName
+					/>
+				{/if}
 
-				{#if updating || isLoadingModel}
+				{#if ms.updating || ms.isLoadingModel}
 					<Loader2 class="h-3 w-3.5 animate-spin" />
 				{:else}
 					<ChevronDown class="h-3 w-3.5" />
@@ -254,11 +114,15 @@
 
 					<div class="flex flex-col gap-1 pb-4">
 						<div class="mb-3 px-4">
-							<SearchInput placeholder="Search models..." bind:value={searchTerm} />
+							<SearchInput
+								placeholder="Search models..."
+								value={ms.searchTerm}
+								onInput={(v) => ms.setSearchTerm(v)}
+							/>
 						</div>
 
 						<div class="max-h-[60vh] overflow-y-auto px-2">
-							{#if !isCurrentModelInCache && currentModel}
+							{#if !ms.isCurrentModelInCache && currentModel}
 								<button
 									type="button"
 									class="flex w-full cursor-not-allowed items-center rounded-md bg-red-400/10 px-3 py-2.5 text-left text-sm text-red-400"
@@ -272,18 +136,18 @@
 								<div class="my-1 h-px bg-border"></div>
 							{/if}
 
-							{#if filteredOptions.length === 0}
+							{#if ms.filteredOptions.length === 0}
 								<p class="px-3 py-3 text-center text-sm text-muted-foreground">No models found.</p>
 							{/if}
 
 							<ModelsSelectorList
-								groups={groupedFilteredOptions}
+								groups={ms.groupedFilteredOptions}
 								{currentModel}
-								{activeId}
+								activeId={ms.activeId}
 								sectionHeaderClass="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
 								orgHeaderClass="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none [&:not(:first-child)]:mt-2"
-								onSelect={handleSelect}
-								onInfoClick={handleInfoClick}
+								onSelect={ms.handleSelect}
+								onInfoClick={ms.handleInfoClick}
 							/>
 						</div>
 					</div>
@@ -293,23 +157,23 @@
 			<button
 				class={cn(
 					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-					!isCurrentModelInCache
+					!ms.isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
-							: isHighlightedCurrentModelActive
+							: ms.isHighlightedCurrentModelActive
 								? 'text-foreground'
 								: 'text-muted-foreground'
 				)}
 				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
-				onclick={() => handleOpenChange(true)}
-				disabled={disabled || updating}
+				onclick={() => ms.handleOpenChange(true)}
+				disabled={disabled || ms.updating}
 			>
 				<Package class="h-3.5 w-3.5" />
 
 				<TruncatedText text={selectedOption?.model || ''} class="min-w-0 font-medium" />
 
-				{#if updating}
+				{#if ms.updating}
 					<Loader2 class="h-3 w-3.5 animate-spin" />
 				{/if}
 			</button>
@@ -317,6 +181,10 @@
 	{/if}
 </div>
 
-{#if showModelDialog}
-	<DialogModelInformation bind:open={showModelDialog} modelId={infoModelId} />
+{#if ms.showModelDialog}
+	<DialogModelInformation
+		open={ms.showModelDialog}
+		onOpenChange={(v) => ms.setShowModelDialog(v)}
+		modelId={ms.infoModelId}
+	/>
 {/if}
