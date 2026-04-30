@@ -101,6 +101,10 @@ struct clip_hparams {
     int32_t audio_window_len  = -1;
     int32_t audio_hop_len     = -1;
 
+    // parakeet
+    std::vector<float> mel_filters;
+    std::vector<float> window;
+
     // legacy
     bool has_llava_projector = false;
     int minicpmv_version = 0;
@@ -492,8 +496,6 @@ struct clip_model {
 
     // Parakeet
     ggml_tensor * mm_norm_w   = nullptr;
-    ggml_tensor * mel_filters = nullptr;
-    ggml_tensor * window      = nullptr;
 
     int32_t n_sam_layers = 12; // used by deepseek-ocr sam encoder
 

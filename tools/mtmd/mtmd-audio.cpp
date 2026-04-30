@@ -811,21 +811,13 @@ static void log_mel_spectrogram_parakeet_worker_thread(
 void mtmd_audio_preprocessor_parakeet::initialize() {
     cache.fill_sin_cos_table(hparams.audio_n_fft);
 
-    // Use models mel filter bank tensor.
-    const clip_model & model = clip_get_model(ctx);
-    ggml_tensor * mel_filters = model.mel_filters;
-    GGML_ASSERT(mel_filters);
+    GGML_ASSERT(!hparams.mel_filters.empty());
+    cache.filters.n_mel = hparams.n_mel_bins;
+    cache.filters.n_fft = hparams.audio_n_fft / 2 + 1;
+    cache.filters.data  = hparams.mel_filters;
 
-    cache.filters.n_mel = mel_filters->ne[1];
-    cache.filters.n_fft = mel_filters->ne[0];
-    cache.filters.data.resize(ggml_nelements(mel_filters));
-    ggml_backend_tensor_get(mel_filters, cache.filters.data.data(), 0, ggml_nbytes(mel_filters));
-
-    // Use models hann window tensor.
-    ggml_tensor * window = model.window;
-    GGML_ASSERT(window);
-    cache.hann_window.resize(ggml_nelements(window));
-    ggml_backend_tensor_get(window, cache.hann_window.data(), 0, ggml_nbytes(window));
+    GGML_ASSERT(!hparams.window.empty());
+    cache.hann_window = hparams.window;
 }
 
 bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,

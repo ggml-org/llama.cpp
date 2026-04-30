@@ -2430,9 +2430,25 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_PARAKEET:
                 {
-                    // Preprocessing tensors
-                    model.mel_filters = get_tensor(TN_MEL_FILTERS);
-                    model.window = get_tensor(TN_WINDOW);
+                    auto get_vector = [&](const std::string & name) {
+                        std::vector<float> result;
+                        auto it = tensor_offset.find(name);
+                        if (it == tensor_offset.end()) {
+                            return result;
+                        }
+
+                        int idx = gguf_find_tensor(ctx_gguf.get(), name.c_str());
+                        GGML_ASSERT(idx >= 0);
+                        size_t n_bytes = gguf_get_tensor_size(ctx_gguf.get(), idx);
+                        size_t n_elems = n_bytes / sizeof(float);
+                        result.resize(n_elems);
+                        fin.seekg(it->second, std::ios::beg);
+                        fin.read(reinterpret_cast<char*>(result.data()), n_bytes);
+                        return result;
+                    };
+
+                    hparams.mel_filters = get_vector(TN_MEL_FILTERS);
+                    hparams.window      = get_vector(TN_WINDOW);
 
                     // Subsampling layers (conv1d)
                     for (int i : {0, 2, 3, 5, 6}) {
@@ -4058,10 +4074,6 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
 const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx) {
     return &ctx->model.hparams;
-}
-
-const struct clip_model & clip_get_model(const struct clip_ctx * ctx) {
-    return ctx->model;
 }
 
 //
