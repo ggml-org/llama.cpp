@@ -781,7 +781,9 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
             if (f_acc < 0.5) {
                 n_low++;
                 if (n_low >= 3) {
-                    LOG_WRN("%s: low acceptance streak (%d) – resetting ngram_mod\n", __func__, n_low);
+                    if (verbose) {
+                        LOG_WRN("%s: low acceptance streak (%d) – resetting ngram_mod\n", __func__, n_low);
+                    }
 
                     mod.reset();
                     n_low = 0;
