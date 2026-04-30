@@ -43,6 +43,10 @@
 #include <TargetConditionals.h>
 #endif
 
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -375,6 +379,31 @@ void * ggml_aligned_malloc(size_t size) {
         GGML_LOG_ERROR("%s: %s (attempted to allocate %6.2f MB)\n", __func__, error_desc, size/(1024.0*1024.0));
         return NULL;
     }
+#if defined(__linux__) && !defined(GGML_USE_CPU_HBM) && !defined(TARGET_OS_OSX)
+    // For large allocations, hint the kernel to back this region with transparent
+    // huge pages. This dramatically reduces TLB pressure on memory-bandwidth-bound
+    // workloads such as large MoE expert matmuls where the working set is many GiB
+    // and the per-token weight read pattern walks millions of 4 KiB pages.
+    //
+    // The hint is best-effort: it only succeeds when the system THP policy is
+    // "always" or "madvise" and the allocation is mapped (large mallocs typically
+    // are), and silently does nothing otherwise.
+    //
+    // 2 MiB threshold avoids spending syscall time on small tensor metadata;
+    // madvise itself only operates at huge-page boundaries internally.
+    if (aligned_memory != NULL && size >= (2u << 20)) {
+        const uintptr_t hp_align = (1u << 21); // 2 MiB
+        uintptr_t       addr_v   = (uintptr_t) aligned_memory;
+        uintptr_t       addr_a   = (addr_v + hp_align - 1) & ~(hp_align - 1);
+        size_t          off      = (size_t) (addr_a - addr_v);
+        if (off < size) {
+            size_t hp_size = (size - off) & ~(hp_align - 1);
+            if (hp_size > 0) {
+                (void) madvise((void *) addr_a, hp_size, MADV_HUGEPAGE);
+            }
+        }
+    }
+#endif
     return aligned_memory;
 #endif
 }
@@ -751,6 +780,13 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_f8_e4m3_b128,
         .from_float_ref           = (ggml_from_float_t) quantize_row_f8_e4m3_b128_ref,
+    },
+    [GGML_TYPE_W4A16_AUTOROUND] = {
+        .type_name                = "w4a16_autoround",
+        .blck_size                = QK_W4A16_AUTOROUND,
+        .type_size                = sizeof(block_w4a16_autoround),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_w4a16_autoround,
     },
     [GGML_TYPE_Q2_K] = {
         .type_name                = "q2_K",
@@ -1422,6 +1458,7 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_MXFP4:         wtype = GGML_TYPE_MXFP4; break;
         case GGML_FTYPE_MOSTLY_NVFP4:         wtype = GGML_TYPE_NVFP4; break;
         case GGML_FTYPE_MOSTLY_F8_E4M3_MXFP4: wtype = GGML_TYPE_F8_E4M3_B128; break;
+        case GGML_FTYPE_MOSTLY_W4A16_AUTOROUND: wtype = GGML_TYPE_W4A16_AUTOROUND; break;
         case GGML_FTYPE_MOSTLY_Q2_K:          wtype = GGML_TYPE_Q2_K;  break;
         case GGML_FTYPE_MOSTLY_Q3_K:          wtype = GGML_TYPE_Q3_K;  break;
         case GGML_FTYPE_MOSTLY_Q4_K:          wtype = GGML_TYPE_Q4_K;  break;
@@ -2974,7 +3011,7 @@ struct ggml_tensor * ggml_sinkhorn_4x4(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     GGML_ASSERT(a->type == GGML_TYPE_F32);
-    GGML_ASSERT(a->ne[0] == 4 && a->ne[1] == 4 && a->ne[2] == 1 && a->ne[3] == 1);
+    GGML_ASSERT(a->ne[0] == 4 && a->ne[1] == 4);
     return ggml_unary(ctx, a, GGML_UNARY_OP_SINKHORN_4X4);
 }
 
@@ -3295,10 +3332,10 @@ struct ggml_tensor * ggml_hc_weighted_sum(
     GGML_ASSERT(b->type == GGML_TYPE_F32);
 
     GGML_ASSERT(a->ne[1] == b->ne[0]);
-    GGML_ASSERT(a->ne[2] == 1 && a->ne[3] == 1);
-    GGML_ASSERT(b->ne[1] == 1 && b->ne[2] == 1 && b->ne[3] == 1);
+    GGML_ASSERT(a->ne[3] == 1);
+    GGML_ASSERT(b->ne[1] == a->ne[2] && b->ne[2] == 1 && b->ne[3] == 1);
 
-    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, a->ne[0]);
+    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, a->ne[0], a->ne[2]);
 
     result->op     = GGML_OP_HC_WEIGHTED_SUM;
     result->src[0] = a;
