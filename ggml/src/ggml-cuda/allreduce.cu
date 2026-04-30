@@ -62,6 +62,16 @@ static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
     return *(const volatile int *)p;
 }
 
+// Byte spacing between adjacent arrival ints.  128 bytes (two cache lines)
+// ensures each GPU/block's arrival slot lives on its own line, preventing
+// false-sharing stalls on the polling GPU.
+static constexpr size_t GGML_CUDA_AR_ARRIVAL_STRIDE = 128;
+
+// Number of blocks the chunked-kernel launches with.  Each block stripes a
+// disjoint slice of the data and synchronizes through its own arrival-token
+// slot so multiple SMs can pump PCIe stores in parallel.
+static constexpr int GGML_CUDA_AR_KERNEL_BLOCKS = 8;
+
 // ---------------------------------------------------------------------------
 // Chunked-kernel AllReduce — 2 GPUs, supports float, half, and bfloat16.
 //
@@ -84,9 +94,12 @@ static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
 //                          both GPUs truncate identically — this guarantees
 //                          bit-equivalent results across the two devices).
 //
-// The single-block configuration means __syncthreads() is sufficient for
-// intra-block coordination and we can use the cheaper non-cooperative launch.
-// 256 threads gives good occupancy while keeping register pressure low.
+// Multi-block: blocks stripe vectors across (gridDim.x * blockDim.x) global
+// threads to keep multiple SMs issuing PCIe stores in parallel.  Each block
+// has its own arrival-token slot (offset by blockIdx.x * ARRIVAL_STRIDE);
+// thread 0 of each block signals/spins on that slot independently of other
+// blocks.  Tail elements (the leftover < ELEMS_PER_VEC at the end) are
+// handled only by block 0 to avoid cross-block writes to the same slots.
 // ---------------------------------------------------------------------------
 template <typename Tdst, typename Twire>
 static __global__ void ggml_cuda_ar_kernel(
@@ -103,15 +116,19 @@ static __global__ void ggml_cuda_ar_kernel(
     // vector to host memory; each phase-3 iter reads one and produces
     // ELEMS_PER_VEC sums.
     constexpr int ELEMS_PER_VEC = 16 / sizeof(Twire);
+    constexpr int ARRIVAL_INTS  = (int)(GGML_CUDA_AR_ARRIVAL_STRIDE / sizeof(int));
 
     const int tid       = threadIdx.x;
     const int nt        = blockDim.x;
+    const int bid       = blockIdx.x;
+    const int gtid      = bid * nt + tid;
+    const int gnt       = gridDim.x * nt;
     const int count_vec = count / ELEMS_PER_VEC;
     const int tail      = count_vec * ELEMS_PER_VEC;
 
     // Phase 1: cast sendbuf (Tdst) -> host_mine (Twire) and store as 16-byte vectors.
     {
-        for (int i = tid; i < count_vec; i += nt) {
+        for (int i = gtid; i < count_vec; i += gnt) {
             const int off = i * ELEMS_PER_VEC;
             Twire wire[ELEMS_PER_VEC];
             #pragma unroll
@@ -121,35 +138,39 @@ static __global__ void ggml_cuda_ar_kernel(
             *reinterpret_cast<float4 *>(&host_mine[off]) =
                 *reinterpret_cast<const float4 *>(wire);
         }
-        if (tid < count - tail) {
+        if (bid == 0 && tid < count - tail) {
             host_mine[tail + tid] = static_cast<Twire>(sendbuf[tail + tid]);
         }
     }
 
-    // Commit all host writes before signalling.
+    // Commit this block's host writes before signalling.
     __threadfence_system();
     __syncthreads();
 
-    // Phase 2: thread 0 signals arrival, then spins for the peer.
+    // Phase 2: thread 0 of each block signals on its own arrival slot, then
+    // spins for the matching slot from peer.  Per-block tokens mean blocks
+    // proceed independently — no inter-block barrier needed.
     if (tid == 0) {
-        ggml_cuda_ar_signal_set(arrival_mine, token);
+        int       * my_slot    = arrival_mine  + bid * ARRIVAL_INTS;
+        const int * other_slot = arrival_other + bid * ARRIVAL_INTS;
 
-        __threadfence_system(); // ensure the signal itself is visible across all GPUs
+        ggml_cuda_ar_signal_set(my_slot, token);
+        __threadfence_system(); // make our signal visible system-wide
 
-        while (ggml_cuda_ar_signal_get(arrival_other) != token) {
+        while (ggml_cuda_ar_signal_get(other_slot) != token) {
             __nanosleep(100);
         }
     }
 
     __syncthreads();
 
-    // Broadcast "peer has arrived" and acquire peer's host_other writes.
+    // Acquire peer's host_other writes (this block's stripe of them).
     __threadfence_system();
 
     // Phase 3: read peer's Twire vector, cast both sides through Twire for
     // bit-equivalence, sum in Tdst precision, and write back to recvbuf.
     {
-        for (int i = tid; i < count_vec; i += nt) {
+        for (int i = gtid; i < count_vec; i += gnt) {
             const int off = i * ELEMS_PER_VEC;
             Twire wire[ELEMS_PER_VEC];
             *reinterpret_cast<float4 *>(wire) =
@@ -160,7 +181,7 @@ static __global__ void ggml_cuda_ar_kernel(
                 recvbuf[off + k] = static_cast<Tdst>(d_low) + static_cast<Tdst>(wire[k]);
             }
         }
-        if (tid < count - tail) {
+        if (bid == 0 && tid < count - tail) {
             const Twire d_low = static_cast<Twire>(sendbuf[tail + tid]);
             recvbuf[tail + tid] =
                 static_cast<Tdst>(d_low) + static_cast<Tdst>(host_other[tail + tid]);
@@ -207,15 +228,10 @@ static constexpr size_t GGML_CUDA_AR_MAX_BYTES = 1024 * 1024; // 1 MB
 // dev_tmp allocation size.
 static constexpr size_t GGML_CUDA_AR_COPY_MAX_BYTES = 32 * 1024 * 1024; // 32 MB
 
-// AR wire size at which the copy-engine path beats the chunked-kernel path.
-// Empirically determined: Linux dispatch overhead is low enough that even
-// 128 KB ARs benefit from the copy engine, while on Windows the crossover
-// sits around 1 MB.  Override either via GGML_CUDA_AR_COPY_THRESHOLD.
-#if defined(__linux__)
-static constexpr size_t GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT = 128 * 1024;       // 128 KB
-#else
-static constexpr size_t GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT = 1024 * 1024;      // 1 MB
-#endif
+// EXPERIMENT: temporarily bumped to 16 MB so the multi-block chunked-kernel
+// path handles all sub-16 MB ARs.  Revert to the per-platform tuned values
+// (Linux 128 KB, Windows 1 MB) when the experiment is done.
+static constexpr size_t GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT = 16 * 1024 * 1024; // 16 MB
 static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_DEFAULT = 2 * 1024 * 1024; // 2 MB
 // Minimum chunk size the env-var override is allowed to set; this caps the
 // per-slot copy-event array.  256 KB → up to 128 chunks per 32 MB tensor.
@@ -223,11 +239,6 @@ static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN = 256 * 1024;
 static constexpr int GGML_CUDA_AR_COPY_MAX_CHUNKS =
     static_cast<int>((GGML_CUDA_AR_COPY_MAX_BYTES + GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN - 1) /
                     GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN);
-
-// Byte spacing between adjacent arrival ints.  128 bytes (two cache lines)
-// ensures the arrival slots for the two GPUs never share a cache line,
-// preventing false-sharing stalls on the polling GPU.
-static constexpr size_t GGML_CUDA_AR_ARRIVAL_STRIDE = 128;
 
 struct ggml_cuda_ar_event_slot {
     cudaEvent_t app = nullptr;  // upstream computation complete
@@ -273,8 +284,12 @@ struct ggml_cuda_ar_pipeline {
 };
 
 // Return a pointer to the arrival int for (slot, rank).
+// Returns the base pointer for the (slot, rank) per-block token block.  The
+// kernel adds blockIdx.x * (ARRIVAL_STRIDE/sizeof(int)) internally to land on
+// its own slot.
 static int * ggml_cuda_ar_arrival_ptr(const ggml_cuda_ar_pipeline * p, int slot, int rank) {
-    const size_t offset = ((size_t)slot * p->n_devices + rank) * GGML_CUDA_AR_ARRIVAL_STRIDE;
+    const size_t offset = ((size_t)slot * p->n_devices + rank) *
+                          GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
     return reinterpret_cast<int *>(p->arrival + offset);
 }
 
@@ -389,7 +404,8 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
 
     // Arrival ring: cache-line padded so each GPU's int is on its own line.
     const size_t arrival_bytes =
-        (size_t)GGML_CUDA_AR_POOL_SIZE * n_devices * GGML_CUDA_AR_ARRIVAL_STRIDE;
+        (size_t)GGML_CUDA_AR_POOL_SIZE * n_devices *
+        GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
     if (cudaHostAlloc(reinterpret_cast<void **>(&p->arrival), arrival_bytes,
                       cudaHostAllocPortable) != cudaSuccess) {
         GGML_LOG_ERROR("%s: cudaHostAlloc for arrival ring failed (%zu bytes)\n",
@@ -817,7 +833,7 @@ bool ggml_cuda_ar_allreduce(
                 }
 
 #define LAUNCH_AR_KERNEL(Tdst, Twire) \
-                ggml_cuda_ar_kernel<Tdst, Twire><<<dim3(1), dim3(256), 0, stream>>>( \
+                ggml_cuda_ar_kernel<Tdst, Twire><<<dim3(GGML_CUDA_AR_KERNEL_BLOCKS), dim3(256), 0, stream>>>( \
                     reinterpret_cast<const Tdst *>(data), \
                     reinterpret_cast<Tdst *>(data), \
                     reinterpret_cast<Twire *>(p->host_buf[i]    + (size_t) slot * p->buf_bytes), \
