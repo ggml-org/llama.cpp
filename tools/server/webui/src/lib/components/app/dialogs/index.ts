@@ -391,7 +391,7 @@ export { default as DialogConversationSelection } from './DialogConversationSele
 export { default as DialogModelInformation } from './DialogModelInformation.svelte';
 
 /**
- * **DialogMcpResources** - MCP resources browser dialog
+ * **DialogMcpResourcesBrowser** - MCP resources browser dialog
  *
  * Dialog for browsing and attaching MCP resources to chat context.
  * Displays resources from connected MCP servers in a tree structure
@@ -399,7 +399,7 @@ export { default as DialogModelInformation } from './DialogModelInformation.svel
  *
  * **Architecture:**
  * - Uses ShadCN Dialog with two-panel layout
- * - Left panel: McpResourceBrowser with tree navigation
+ * - Left panel: McpResourcesBrowser with tree navigation
  * - Right panel: McpResourcePreview for selected resource
  * - Integrates with mcpStore for resource fetching and attachment
  *
@@ -412,13 +412,13 @@ export { default as DialogModelInformation } from './DialogModelInformation.svel
  *
  * @example
  * ```svelte
- * <DialogMcpResources
+ * <DialogMcpResourcesBrowser
  *   bind:open={showResources}
  *   onAttach={handleResourceAttach}
  * />
  * ```
  */
-export { default as DialogMcpResources } from './DialogMcpResources.svelte';
+export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowser.svelte';
 
 /**
  * **DialogMcpResourcePreview** - MCP resource content preview

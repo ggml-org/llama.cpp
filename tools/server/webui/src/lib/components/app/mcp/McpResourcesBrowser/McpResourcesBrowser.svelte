@@ -4,9 +4,9 @@
 	import type { MCPServerResources, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { parseResourcePath } from '$lib/utils';
-	import McpResourceBrowserHeader from './McpResourceBrowserHeader.svelte';
-	import McpResourceBrowserEmptyState from './McpResourceBrowserEmptyState.svelte';
-	import McpResourceBrowserServerItem from './McpResourceBrowserServerItem.svelte';
+	import McpResourcesBrowserHeader from './McpResourcesBrowserHeader.svelte';
+	import McpResourcesBrowserEmptyState from './McpResourcesBrowserEmptyState.svelte';
+	import McpResourcesBrowserServerItem from './McpResourcesBrowserServerItem.svelte';
 
 	interface Props {
 		onSelect?: (resource: MCPResourceInfo, shiftKey?: boolean) => void;
@@ -121,7 +121,7 @@
 </script>
 
 <div class={['flex flex-col gap-2', className]}>
-	<McpResourceBrowserHeader
+	<McpResourcesBrowserHeader
 		{isLoading}
 		onRefresh={handleRefresh}
 		onSearch={(q) => (searchQuery = q)}
@@ -130,10 +130,10 @@
 
 	<div class="flex flex-col gap-1">
 		{#if filteredResources.size === 0}
-			<McpResourceBrowserEmptyState {isLoading} />
+			<McpResourcesBrowserEmptyState {isLoading} />
 		{:else}
 			{#each [...filteredResources.entries()] as [serverName, serverRes] (serverName)}
-				<McpResourceBrowserServerItem
+				<McpResourcesBrowserServerItem
 					serverName={serverName as string}
 					serverRes={serverRes as MCPServerResources}
 					isExpanded={expandedServers.has(serverName as string)}

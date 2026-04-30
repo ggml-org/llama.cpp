@@ -371,6 +371,15 @@ export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPi
 export { default as ChatFormPickerMcpResources } from './ChatForm/ChatFormPickers/ChatFormPickerMcpResources.svelte';
 
 /**
+ * **ChatFormPickers** - Chat input picker container
+ *
+ * Container component that hosts both MCP prompt and MCP resource pickers.
+ * Manages shared state, keyboard navigation, and coordination between the two
+ * picker interfaces. Used within ChatForm for `@`-triggered pickers.
+ */
+export { default as ChatFormPickers } from './ChatForm/ChatFormPickers/ChatFormPickers.svelte';
+
+/**
  *
  * MESSAGES
  *

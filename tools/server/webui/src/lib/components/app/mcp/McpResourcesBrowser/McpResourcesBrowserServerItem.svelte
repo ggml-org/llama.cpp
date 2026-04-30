@@ -10,7 +10,7 @@
 		buildResourceTree,
 		countTreeResources,
 		sortTreeChildren
-	} from './mcp-resource-browser';
+	} from './mcp-resources-browser';
 	import { getDisplayName, getResourceIcon } from '$lib/utils';
 
 	interface Props {

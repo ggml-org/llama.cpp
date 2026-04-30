@@ -11,7 +11,7 @@
 		mcpResourceStore
 	} from '$lib/stores/mcp-resources.svelte';
 	import {
-		McpResourceBrowser,
+		McpResourcesBrowser,
 		McpResourcePreview,
 		McpResourceTemplateForm
 	} from '$lib/components/app';
@@ -275,7 +275,7 @@
 
 		<div class="flex h-[500px] min-w-0">
 			<div class="w-72 shrink-0 overflow-y-auto border-r border-border/30 p-4">
-				<McpResourceBrowser
+				<McpResourcesBrowser
 					onSelect={handleResourceSelect}
 					onToggle={handleResourceToggle}
 					onTemplateSelect={handleTemplateSelect}

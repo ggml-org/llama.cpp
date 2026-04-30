@@ -4,10 +4,10 @@
 		ChatFormActions,
 		ChatFormFileInputInvisible,
 		ChatFormMcpResourcesList,
-		ChatFormTextarea
+		ChatFormPickers,
+		ChatFormTextarea,
+		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
-	import ChatFormPickers from './ChatFormPickers/ChatFormPickers.svelte';
-	import { DialogMcpResources } from '$lib/components/app/dialogs';
 	import {
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		INPUT_CLASSES,
@@ -556,7 +556,7 @@
 	</div>
 </form>
 
-<DialogMcpResources
+<DialogMcpResourcesBrowser
 	bind:open={isResourceDialogOpen}
 	preSelectedUri={preSelectedResourceUri}
 	onAttach={(resource: MCPResourceInfo) => {
