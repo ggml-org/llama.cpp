@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
+	import { page } from '$app/state';
 	import { ChatFormHelperText, ChatForm } from '$lib/components/app';
 	import { onMount } from 'svelte';
+	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
 	interface Props {
 		class?: string;
@@ -32,11 +34,20 @@
 	}: Props = $props();
 
 	let chatFormRef: ChatForm | undefined = $state(undefined);
+	let chatId = $derived(page.params.id as string | undefined);
 	let message = $derived(initialMessage);
 	let previousIsLoading = $derived(isLoading);
 	let previousInitialMessage = $derived(initialMessage);
 
-	// Sync message when initialMessage prop changes (e.g., after draft restoration)
+	const { clearDraft } = useDraftMessages({
+		getChatId: () => chatId,
+		getMessage: () => message,
+		getFiles: () => uploadedFiles,
+		setMessage: (m) => (message = m),
+		setFiles: (f) => (uploadedFiles = f),
+		getInitialMessage: () => initialMessage
+	});
+
 	$effect(() => {
 		if (initialMessage !== previousInitialMessage) {
 			message = initialMessage;
@@ -51,12 +62,7 @@
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 
 	async function handleSubmit() {
-		if (
-			(!message.trim() && uploadedFiles.length === 0) ||
-			disabled ||
-			isLoading ||
-			hasLoadingAttachments
-		)
+		if ((!message.trim() && uploadedFiles.length === 0) || disabled || hasLoadingAttachments)
 			return;
 
 		if (!chatFormRef?.checkModelSelected()) return;
@@ -66,6 +72,7 @@
 
 		message = '';
 		uploadedFiles = [];
+		clearDraft();
 
 		chatFormRef?.resetTextareaHeight();
 
@@ -89,8 +96,10 @@
 		setTimeout(() => chatFormRef?.focus(), 10);
 	});
 
-	afterNavigate(() => {
-		setTimeout(() => chatFormRef?.focus(), 10);
+	afterNavigate((navigation) => {
+		if (navigation?.from != null) {
+			setTimeout(() => chatFormRef?.focus(), 10);
+		}
 	});
 
 	$effect(() => {

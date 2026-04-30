@@ -44,7 +44,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (params.speculative.mparams_dft.path.empty()) {
+    if (params.speculative.draft.mparams.path.empty()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }
@@ -78,7 +78,7 @@ int main(int argc, char ** argv) {
 
     // TODO: simplify this logic
     {
-        const auto & params_spec = params.speculative;
+        const auto & params_spec = params.speculative.draft;
 
         auto params_dft = params;
 
@@ -86,15 +86,15 @@ int main(int argc, char ** argv) {
         params_dft.n_ctx        = params_spec.n_ctx;
         params_dft.n_batch      = llama_n_ctx_seq(ctx_tgt);
         params_dft.devices      = params_spec.devices;
-        params_dft.model        = params_spec.mparams_dft;
+        params_dft.model        = params_spec.mparams;
         params_dft.n_gpu_layers = params_spec.n_gpu_layers;
 
         if (params_spec.cpuparams.n_threads > 0) {
-            params_dft.cpuparams.n_threads       = params.speculative.cpuparams.n_threads;
-            params_dft.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
+            params_dft.cpuparams.n_threads       = params.speculative.draft.cpuparams.n_threads;
+            params_dft.cpuparams_batch.n_threads = params.speculative.draft.cpuparams_batch.n_threads;
         }
 
-        params_dft.tensor_buft_overrides = params.speculative.tensor_buft_overrides;
+        params_dft.tensor_buft_overrides = params.speculative.draft.tensor_buft_overrides;
 
         auto mparams_dft = common_model_params_to_llama(params_dft);
 
@@ -104,18 +104,18 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        params.speculative.model_tgt = model_tgt;
-        params.speculative.model_dft = model_dft.get();
-        params.speculative.cparams_dft = common_context_params_to_llama(params_dft);
+        params.speculative.draft.model_tgt = model_tgt;
+        params.speculative.draft.model     = model_dft.get();
+        params.speculative.draft.cparams = common_context_params_to_llama(params_dft);
 
-        if (params.speculative.eagle3) {
+        if (params.speculative.draft.eagle3) {
             llama_set_eagle3(ctx_tgt, model_dft.get());
         }
     }
 
     // Apply chat template for EAGLE3 if available which can increase the acceptance rate
     std::string prompt = params.prompt;
-    if (params.speculative.eagle3) {
+    if (params.speculative.draft.eagle3) {
         auto chat_templates = common_chat_templates_init(model_tgt, params.chat_template);
         if (common_chat_templates_was_explicit(chat_templates.get())) {
             std::vector<common_chat_msg> chat_msgs;
@@ -177,7 +177,7 @@ int main(int argc, char ** argv) {
     int n_past;
 
     // TODO: simplify
-    if (params.speculative.eagle3) {
+    if (params.speculative.draft.eagle3) {
         // Target model decodes full prompt and sample first token and intermediate features are extracted
         llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size()));
 
@@ -234,16 +234,6 @@ int main(int argc, char ** argv) {
             // generate a new draft
             draft = common_speculative_draft(spec, params_spec, prompt_tgt, id_last);
 
-            if ((int) draft.size() > params_spec.n_max) {
-                LOG_WRN("draft size %zu exceeds max %d, truncating\n", draft.size(), params_spec.n_max);
-                draft.resize(params_spec.n_max);
-            }
-
-            if ((int) draft.size() < params_spec.n_min) {
-                LOG_DBG("ignoring small draft: %zu < %d\n", draft.size(), params_spec.n_min);
-                draft.clear();
-            }
-
             // save the original draft size
             n_draft = draft.size();
 
@@ -267,19 +257,12 @@ int main(int argc, char ** argv) {
             }
         }
 
-        GGML_ASSERT(n_draft > 0);
-
         // always have a token to evaluate from before - id_last
         common_batch_clear(batch_tgt);
         common_batch_add  (batch_tgt, id_last, n_past++, { 0 }, true);
 
         // evaluate the target model on [id_last, draft0, draft1, ..., draftN-1]
         {
-            // do not waste time on small drafts
-            if (draft.size() < (size_t) params_spec.n_min) {
-                draft.clear();
-            }
-
             for (size_t i = 0; i < draft.size(); ++i) {
                 common_batch_add(batch_tgt, draft[i], n_past + i, { 0 }, true);
             }
@@ -387,7 +370,7 @@ int main(int argc, char ** argv) {
     LOG_INF("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_predict, (t_dec_end - t_dec_start) / 1e6f, n_predict  / ((t_dec_end - t_dec_start) / 1e6f));
 
     LOG_INF("\n");
-    LOG_INF("n_draft   = %d\n", params_spec.n_max);
+    LOG_INF("n_draft   = %d\n", params_spec.draft.n_max);
     LOG_INF("n_predict = %d\n", n_predict);
     LOG_INF("n_drafted = %d\n", n_drafted);
     LOG_INF("n_accept  = %d\n", n_accept);
