@@ -6,6 +6,8 @@
 #include "llama-io.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -13,7 +15,25 @@
 
 namespace {
 
-static constexpr uint32_t DEEPSEEK4_STATE_VERSION = 1;
+// v1: every cache tensor was serialized with its full ggml_nbytes(), regardless of how
+//     many slots were populated. With n_ctx in the millions this made each checkpoint
+//     several GiB even for short conversations; the server's per-turn checkpoint restore
+//     (triggered because DeepSeek4 only supports full-removal seq_rm) became dominant.
+// v2: only the active row prefix of n_ctx-scaling tensors (attn_kv, indexer_kv) is
+//     written. On read the active prefix bytes are restored and the remaining tail is
+//     explicitly zeroed via ggml_backend_tensor_memset, preserving the
+//     "untouched-slot == zero" invariant the compute graph relies on.
+static constexpr uint32_t DEEPSEEK4_STATE_VERSION = 2;
+
+static bool deepseek4_batch_log_enabled() {
+    const char * value = std::getenv("LLAMA_DEEPSEEK4_BATCH_LOG");
+    return value != nullptr && std::strcmp(value, "0") != 0;
+}
+
+static bool deepseek4_batch_prefill_enabled() {
+    const char * value = std::getenv("LLAMA_DEEPSEEK4_BATCH_PREFILL");
+    return value != nullptr && std::strcmp(value, "0") != 0;
+}
 
 static llama_ubatch make_dummy_ubatch() {
     llama_ubatch ubatch = {};
@@ -70,7 +90,7 @@ static void deepseek4_fill_f32_tensor(ggml_tensor * tensor, float value) {
     ggml_backend_tensor_set(tensor, data.data(), 0, ggml_nbytes(tensor));
 }
 
-static void deepseek4_write_tensor(llama_io_write_i & io, const ggml_tensor * tensor) {
+static void deepseek4_write_tensor(llama_io_write_i & io, const ggml_tensor * tensor, uint64_t active_bytes_override = UINT64_MAX) {
     const uint32_t present = tensor != nullptr;
     io.write(&present, sizeof(present));
 
@@ -84,13 +104,19 @@ static void deepseek4_write_tensor(llama_io_write_i & io, const ggml_tensor * te
     for (uint32_t i = 0; i < GGML_MAX_DIMS; ++i) {
         ne[i] = tensor->ne[i];
     }
-    const uint64_t nbytes = ggml_nbytes(tensor);
+    const uint64_t total_bytes  = ggml_nbytes(tensor);
+    const uint64_t active_bytes = active_bytes_override == UINT64_MAX
+                                      ? total_bytes
+                                      : std::min<uint64_t>(active_bytes_override, total_bytes);
 
-    io.write(&type,   sizeof(type));
-    io.write(&n_dims, sizeof(n_dims));
-    io.write(ne,      sizeof(ne));
-    io.write(&nbytes, sizeof(nbytes));
-    io.write_tensor(tensor, 0, nbytes);
+    io.write(&type,         sizeof(type));
+    io.write(&n_dims,       sizeof(n_dims));
+    io.write(ne,            sizeof(ne));
+    io.write(&active_bytes, sizeof(active_bytes));
+    io.write(&total_bytes,  sizeof(total_bytes));
+    if (active_bytes > 0) {
+        io.write_tensor(tensor, 0, active_bytes);
+    }
 }
 
 static void deepseek4_read_tensor(llama_io_read_i & io, ggml_tensor * tensor) {
@@ -111,12 +137,14 @@ static void deepseek4_read_tensor(llama_io_read_i & io, ggml_tensor * tensor) {
     int32_t type_ref;
     uint32_t n_dims_ref;
     int64_t ne_ref[GGML_MAX_DIMS];
-    uint64_t nbytes_ref;
+    uint64_t active_bytes_ref;
+    uint64_t total_bytes_ref;
 
-    io.read_to(&type_ref,    sizeof(type_ref));
-    io.read_to(&n_dims_ref,  sizeof(n_dims_ref));
-    io.read_to(ne_ref,       sizeof(ne_ref));
-    io.read_to(&nbytes_ref,  sizeof(nbytes_ref));
+    io.read_to(&type_ref,         sizeof(type_ref));
+    io.read_to(&n_dims_ref,       sizeof(n_dims_ref));
+    io.read_to(ne_ref,            sizeof(ne_ref));
+    io.read_to(&active_bytes_ref, sizeof(active_bytes_ref));
+    io.read_to(&total_bytes_ref,  sizeof(total_bytes_ref));
 
     if (type_ref != static_cast<int32_t>(tensor->type)) {
         throw std::runtime_error("DeepSeek4 state tensor type mismatch");
@@ -130,13 +158,22 @@ static void deepseek4_read_tensor(llama_io_read_i & io, ggml_tensor * tensor) {
         }
     }
 
-    const uint64_t nbytes = ggml_nbytes(tensor);
-    if (nbytes_ref != nbytes) {
+    const uint64_t total_bytes = ggml_nbytes(tensor);
+    if (total_bytes_ref != total_bytes) {
         throw std::runtime_error("DeepSeek4 state tensor size mismatch");
     }
+    if (active_bytes_ref > total_bytes) {
+        throw std::runtime_error("DeepSeek4 state tensor active range exceeds tensor size");
+    }
 
-    if (nbytes > 0) {
-        ggml_backend_tensor_set(tensor, io.read(nbytes), 0, nbytes);
+    if (active_bytes_ref > 0) {
+        ggml_backend_tensor_set(tensor, io.read(active_bytes_ref), 0, active_bytes_ref);
+    }
+    if (active_bytes_ref < total_bytes) {
+        // Preserve the "untouched-slot == zero" invariant the compute graph relies on:
+        // build_attn_v4 reads compressed/indexer prefixes by current batch end, which can
+        // include rows beyond the restored prefix on the first batch after restore.
+        ggml_backend_tensor_memset(tensor, 0, active_bytes_ref, total_bytes - active_bytes_ref);
     }
 }
 
@@ -247,30 +284,43 @@ llama_memory_context_ptr llama_memory_deepseek4::init_batch(
         llama_batch_allocr & balloc,
         uint32_t n_ubatch,
         bool embd_all) {
-    GGML_UNUSED(n_ubatch);
     GGML_UNUSED(embd_all);
+
+    const bool log_batch = deepseek4_batch_log_enabled();
+    if (log_batch) {
+        std::fprintf(stderr, "%s: requested n_tokens=%u n_outputs=%u n_ubatch=%u embd_all=%d; current DeepSeek4 path splits to single-token ubatches\n",
+                __func__, balloc.get_n_tokens(), balloc.get_n_outputs(), n_ubatch, embd_all ? 1 : 0);
+    }
 
     balloc.split_reset();
 
+    const bool batch_prefill = deepseek4_batch_prefill_enabled();
     std::vector<llama_ubatch> ubatches;
     while (true) {
-        llama_ubatch ubatch = balloc.split_seq(1);
+        llama_ubatch ubatch = batch_prefill ? balloc.split_seq_deepseek4_prefill(n_ubatch, model.hparams.n_swa) : balloc.split_seq(1);
         if (ubatch.n_tokens == 0) {
             break;
         }
 
-        if (ubatch.n_tokens != 1 || ubatch.n_seqs_unq != 1) {
-            LLAMA_LOG_ERROR("%s: DeepSeek4 runtime currently supports a single token from a single sequence per ubatch\n", __func__);
+        if ((!batch_prefill && ubatch.n_tokens != 1) || ubatch.n_seqs_unq != 1) {
+            LLAMA_LOG_ERROR("%s: DeepSeek4 runtime currently supports %s from a single sequence per ubatch\n",
+                    __func__, batch_prefill ? "batched contiguous tokens" : "a single token");
             return std::make_unique<llama_memory_deepseek4_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
-        if (ubatch.pos[0] < 0 || (uint32_t) ubatch.pos[0] >= n_ctx_seq) {
-            LLAMA_LOG_ERROR("%s: DeepSeek4 runtime position %d exceeds the configured context length %u\n",
-                    __func__, ubatch.pos[0], n_ctx_seq);
-            return std::make_unique<llama_memory_deepseek4_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            if (ubatch.pos[i] < 0 || (uint32_t) ubatch.pos[i] >= n_ctx_seq) {
+                LLAMA_LOG_ERROR("%s: DeepSeek4 runtime position %d exceeds the configured context length %u\n",
+                        __func__, ubatch.pos[i], n_ctx_seq);
+                return std::make_unique<llama_memory_deepseek4_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+            }
         }
 
         ubatches.push_back(std::move(ubatch));
+    }
+
+    if (log_batch) {
+        std::fprintf(stderr, "%s: prepared %zu %subatches\n", __func__, ubatches.size(), batch_prefill ? "" : "single-token ");
     }
 
     if (balloc.get_n_used() < balloc.get_n_tokens()) {
@@ -434,11 +484,66 @@ void llama_memory_deepseek4::state_write(llama_io_write_i & io, llama_seq_id seq
         return;
     }
 
-    for (const auto & layer : layers) {
-        deepseek4_write_tensor(io, layer.attn_kv);
+    // Compute the highest populated position over the seqs we are about to serialize so
+    // that n_ctx-scaling tensors can be trimmed to their active prefix.  The model only
+    // supports n_seq_max == 1 in practice; for the broader (-1) save case we take the
+    // union of all seqs to stay correct if that ever changes.
+    llama_pos pos_max_global = -1;
+    if (seq_specific) {
+        if (seq_valid) {
+            pos_max_global = seq_pos_max_v[seq_id];
+        }
+    } else {
+        for (size_t i = 0; i < seq_pos_max_v.size(); ++i) {
+            if (seq_pos_min_v[i] >= 0) {
+                pos_max_global = std::max(pos_max_global, seq_pos_max_v[i]);
+            }
+        }
+    }
+
+    const uint32_t n_swa = model.hparams.n_swa;
+
+    for (size_t il = 0; il < layers.size(); ++il) {
+        const auto & layer       = layers[il];
+        const auto & layer_model = model.layers[il];
+
+        // attn_kv: shape [head_dim, n_swa + n_ctx_seq/ratio]; rows used are
+        // [0, n_swa) (SWA circular slots) plus [n_swa, n_swa + ceil((pos_max+1)/ratio)).
+        // For ratio == 0 there is no compressed region and the tensor is sized for n_swa.
+        uint64_t attn_active_bytes = UINT64_MAX;
+        if (layer.attn_kv != nullptr) {
+            const uint32_t ratio    = deepseek4_compress_ratio(layer_model);
+            const uint64_t row_size = layer.attn_kv->nb[1];
+            const uint64_t total_rows  = layer.attn_kv->ne[1];
+            uint64_t       active_rows = std::min<uint64_t>(n_swa, total_rows);
+            if (ratio > 0 && pos_max_global >= 0) {
+                const uint64_t comp_rows = (uint64_t(pos_max_global) + ratio) / ratio; // ceil((pos_max+1)/ratio)
+                active_rows = std::min<uint64_t>(uint64_t(n_swa) + comp_rows, total_rows);
+            }
+            attn_active_bytes = active_rows * row_size;
+        }
+
+        // indexer_kv: shape [idx_head_dim, n_ctx_seq/idx_ratio]; rows used are
+        // [0, ceil((pos_max+1)/idx_ratio)).  No n_swa offset for the indexer.
+        uint64_t indexer_active_bytes = UINT64_MAX;
+        if (layer.indexer_kv != nullptr && layer_model.indexer_compress_ape != nullptr) {
+            const uint32_t idx_ratio = static_cast<uint32_t>(layer_model.indexer_compress_ape->ne[1]);
+            const uint64_t row_size  = layer.indexer_kv->nb[1];
+            const uint64_t total_rows = layer.indexer_kv->ne[1];
+            uint64_t       active_rows = 0;
+            if (idx_ratio > 0 && pos_max_global >= 0) {
+                active_rows = std::min<uint64_t>((uint64_t(pos_max_global) + idx_ratio) / idx_ratio, total_rows);
+            }
+            indexer_active_bytes = active_rows * row_size;
+        }
+
+        deepseek4_write_tensor(io, layer.attn_kv, attn_active_bytes);
+        // attn_comp_*/indexer_comp_* are fixed-size compression state and must be
+        // restored byte-for-byte (they encode incremental sums that the next batch
+        // continues from).  Pass UINT64_MAX to keep the full-size write path.
         deepseek4_write_tensor(io, layer.attn_comp_kv_state);
         deepseek4_write_tensor(io, layer.attn_comp_score_state);
-        deepseek4_write_tensor(io, layer.indexer_kv);
+        deepseek4_write_tensor(io, layer.indexer_kv, indexer_active_bytes);
         deepseek4_write_tensor(io, layer.indexer_comp_kv_state);
         deepseek4_write_tensor(io, layer.indexer_comp_score_state);
     }
@@ -569,12 +674,18 @@ bool llama_memory_deepseek4_context::apply() {
         return false;
     }
 
-    const llama_pos pos = ubatch.pos[0];
     auto & pos_min = mem->seq_pos_min_v[seq_id];
     auto & pos_max = mem->seq_pos_max_v[seq_id];
 
-    pos_min = pos_min < 0 ? pos : std::min(pos_min, pos);
-    pos_max = std::max(pos_max, pos);
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        if (ubatch.seq_id[i][0] != seq_id) {
+            return false;
+        }
+
+        const llama_pos pos = ubatch.pos[i];
+        pos_min = pos_min < 0 ? pos : std::min(pos_min, pos);
+        pos_max = std::max(pos_max, pos);
+    }
 
     return true;
 }
