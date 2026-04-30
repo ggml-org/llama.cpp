@@ -501,8 +501,7 @@ default_image_mean = [0.5, 0.5, 0.5]
 default_image_std = [0.5, 0.5, 0.5]
 ap.add_argument('--image-mean', type=float, nargs='+', help='Mean of the images for normalization (overrides processor) ', default=None)
 ap.add_argument('--image-std', type=float, nargs='+', help='Standard deviation of the images for normalization (overrides processor)', default=None)
-ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4; MiniCPM-V 4.0 use 5; MiniCPM-o-4.0 use 6; MiniCPM-o-4.5 use 100045. NOTE: MiniCPM-V 4.6 is converted directly via convert_hf_to_gguf.py --mmproj.', default=2)
-ap.add_argument('--insert-layer-id', type=int, help='Insert layer ID for MiniCPM-o 4.5 insert merger (default: 6)', default=6)
+ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4; MiniCPM-V 4.0 use 5; MiniCPM-o-4.0 use 6; MiniCPM-o-4.5 use 100045', default=2)
 
 # with proper
 args = ap.parse_args()
@@ -627,7 +626,7 @@ else:
 
 vision_config = Idefics2VisionConfig(**default_vision_config)
 model = Idefics2VisionTransformer(vision_config)
-if minicpmv_version == 3 or (model_config and model_config.get("vision_config", {}).get("model_type", "") in ("siglip", "siglip_vision_model")):
+if minicpmv_version == 3 or (model_config and model_config.get("vision_config", {}).get("model_type") == "siglip"):
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
 elif minicpmv_version == 4:
@@ -688,18 +687,14 @@ elif args.vision_only and not has_minicpmv_projector:
 elif has_minicpmv_projector:
     fout.add_description("image encoder for MiniCPM-V")
     # add projector type
-    if minicpmv_version == 100045:
-        fout.add_string("clip.projector_type", "merger")
-        fout.add_uint32("clip.vision.insert_layer_id", args.insert_layer_id)
-    else:
-        fout.add_string("clip.projector_type", "resampler")
+    fout.add_string("clip.projector_type", "resampler")
     fout.add_int32("clip.minicpmv_version", minicpmv_version)
 else:
     fout.add_description("two-tower CLIP model")
 
 if has_vision_encoder:
     # vision_model hparams - use actual config values
-    vision_image_size = model_config.get("vision_config", {}).get("image_size", model_config.get("image_size", 448)) if model_config else 448
+    vision_image_size = model_config.get("image_size", 448) if model_config else 448
     vision_patch_size = default_vision_config.get("patch_size", 14)
     vision_hidden_size = default_vision_config.get("hidden_size", 1152)
     vision_intermediate_size = default_vision_config.get("intermediate_size", 4304)
@@ -804,52 +799,11 @@ def _replace_name_resampler(s, v):
         }
     return {s: v}
 
-
-_MERGER_TENSOR_MAP = {
-    # Insert Merger (ViTWindowAttentionMerger)
-    "vit_merger.layer_norm1.weight":        "v.insert_merger.ln1.weight",
-    "vit_merger.layer_norm1.bias":          "v.insert_merger.ln1.bias",
-    "vit_merger.self_attn.q_proj.weight":   "v.insert_merger.attn_q.weight",
-    "vit_merger.self_attn.q_proj.bias":     "v.insert_merger.attn_q.bias",
-    "vit_merger.self_attn.k_proj.weight":   "v.insert_merger.attn_k.weight",
-    "vit_merger.self_attn.k_proj.bias":     "v.insert_merger.attn_k.bias",
-    "vit_merger.self_attn.v_proj.weight":   "v.insert_merger.attn_v.weight",
-    "vit_merger.self_attn.v_proj.bias":     "v.insert_merger.attn_v.bias",
-    "vit_merger.self_attn.out_proj.weight": "v.insert_merger.attn_out.weight",
-    "vit_merger.self_attn.out_proj.bias":   "v.insert_merger.attn_out.bias",
-    "vit_merger.pre_norm.weight":           "v.insert_merger.ds_ln.weight",
-    "vit_merger.pre_norm.bias":             "v.insert_merger.ds_ln.bias",
-    "vit_merger.linear_1.weight":           "v.insert_merger.ds_ffn_up.weight",
-    "vit_merger.linear_1.bias":             "v.insert_merger.ds_ffn_up.bias",
-    "vit_merger.linear_2.weight":           "v.insert_merger.ds_ffn_down.weight",
-    "vit_merger.linear_2.bias":             "v.insert_merger.ds_ffn_down.bias",
-    # Final Merger (DownsampleMLP)
-    "resampler.mlp.0.pre_norm.weight":      "merger.pre_norm.weight",
-    "resampler.mlp.0.pre_norm.bias":        "merger.pre_norm.bias",
-    "resampler.mlp.0.mlp.0.weight":         "merger.mlp_up.weight",
-    "resampler.mlp.0.mlp.0.bias":           "merger.mlp_up.bias",
-    "resampler.mlp.0.mlp.2.weight":         "merger.mlp_down.weight",
-    "resampler.mlp.0.mlp.2.bias":           "merger.mlp_down.bias",
-}
-
-
-def _replace_name_merger(s, v):
-    """Map PyTorch tensor names to GGUF tensor names for MiniCPM-V 4.5 / 4.6 merger."""
-    if s in _MERGER_TENSOR_MAP:
-        return {_MERGER_TENSOR_MAP[s]: v}
-    return None
-
 if has_minicpmv_projector:
     projector = torch.load(args.minicpmv_projector)
     new_state_dict = {}
     for k, v in projector.items():
-        if minicpmv_version == 100045:
-            kvs = _replace_name_merger(k, v)
-            if kvs is None:
-                print(f"  Skipping unmapped projector tensor: {k}")
-                continue
-        else:
-            kvs = _replace_name_resampler(k, v)
+        kvs = _replace_name_resampler(k, v)
         for nk, nv in kvs.items():
             new_state_dict[nk] = nv
     projector = new_state_dict
