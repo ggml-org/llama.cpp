@@ -360,14 +360,14 @@ struct server_slot {
                 if (!spec_draft.empty() && ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
                     const auto n_tokens = prompt.tokens.size();
 
-                    //const int64_t t_start = ggml_time_us();
+                    const int64_t t_start = ggml_time_us();
 
                     server_prompt_checkpoint_update(spec_ckpt, ctx, this->id, n_tokens);
 
-                    //const int64_t t_total = ggml_time_us() - t_start;
-                    //printf("checkpoint total: %f ms\n", t_total / 1000.0);
+                    const int64_t t_total = ggml_time_us() - t_start;
+                    printf("checkpoint total: %f ms\n", t_total / 1000.0);
 
-                    SLT_DBG(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
+                    SLT_WRN(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
                             spec_ckpt.pos_min, spec_ckpt.pos_max, n_tokens, (float) spec_ckpt.data.size() / 1024 / 1024);
                 }
             }
