@@ -206,7 +206,16 @@ static constexpr size_t GGML_CUDA_AR_MAX_BYTES = 1024 * 1024; // 1 MB
 // Copy-engine path: largest tensor accepted on this path; sets host_large /
 // dev_tmp allocation size.
 static constexpr size_t GGML_CUDA_AR_COPY_MAX_BYTES = 32 * 1024 * 1024; // 32 MB
-static constexpr size_t GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT = 1024 * 1024; // 1 MB
+
+// AR wire size at which the copy-engine path beats the chunked-kernel path.
+// Empirically determined: Linux dispatch overhead is low enough that even
+// 128 KB ARs benefit from the copy engine, while on Windows the crossover
+// sits around 1 MB.  Override either via GGML_CUDA_AR_COPY_THRESHOLD.
+#if defined(__linux__)
+static constexpr size_t GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT = 128 * 1024;       // 128 KB
+#else
+static constexpr size_t GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT = 1024 * 1024;      // 1 MB
+#endif
 static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_DEFAULT = 2 * 1024 * 1024; // 2 MB
 // Minimum chunk size the env-var override is allowed to set; this caps the
 // per-slot copy-event array.  256 KB → up to 128 chunks per 32 MB tensor.
@@ -327,7 +336,10 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
                       __func__, p->copy_chunk_bytes, GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN);
         p->copy_chunk_bytes = GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN;
     }
-    p->bf16_threshold   = ggml_cuda_ar_env_u64("GGML_CUDA_AR_BF16_THRESHOLD", 128 * 1024); // 128 KB default
+    // Default 1: BF16 round-trip is always on for F32 inputs (any non-zero
+    // ne).  Set GGML_CUDA_AR_BF16_THRESHOLD=0 to disable, or to a larger
+    // byte threshold to opt out for small tensors.
+    p->bf16_threshold   = ggml_cuda_ar_env_u64("GGML_CUDA_AR_BF16_THRESHOLD", 1);
     for (size_t i = 0; i < n_devices; ++i) {
         p->devices[i] = devices[i];
     }
