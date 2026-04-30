@@ -1422,7 +1422,7 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
                 case GGML_TYPE_IQ3_S:
                 case GGML_TYPE_IQ4_NL:
                 case GGML_TYPE_IQ4_XS:
-                    use_fast = is_vec;
+                    use_fast = true;
                     break;
                 default:
                     break;
@@ -3108,8 +3108,8 @@ static ggml_backend_i ggml_backend_webgpu_i = {
     /* .free                    = */ ggml_backend_webgpu_free,
     /* .set_tensor_async        = */ ggml_backend_webgpu_set_tensor_async,
     /* .get_tensor_async        = */ NULL,
-    /* .get_tensor_2d_async     = */ NULL,
     /* .set_tensor_2d_async     = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL,
     /* .synchronize             = */ ggml_backend_webgpu_synchronize,
     /* .graph_plan_create       = */ NULL,

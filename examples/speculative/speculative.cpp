@@ -110,13 +110,21 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (
-        llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
-        llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
-        llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
-        llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)
-    ) {
-        LOG_ERR("%s: draft model special tokens must match target model to use speculation\n", __func__);
+    if (llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
+        (llama_vocab_get_add_bos(vocab_tgt) && llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft))) {
+        LOG_ERR("%s: draft model bos tokens must match target model to use speculation. add: %d - %d, id: %d - %d)\n",
+                __func__,
+                llama_vocab_get_add_bos(vocab_tgt), llama_vocab_get_add_bos(vocab_dft),
+                llama_vocab_bos(vocab_tgt), llama_vocab_bos(vocab_dft));
+        return 1;
+    }
+
+    if (llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
+        (llama_vocab_get_add_eos(vocab_tgt) && llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft))) {
+        LOG_ERR("%s: draft model eos tokens must match target model to use speculation. add: %d - %d, id: %d - %d)\n",
+                __func__,
+                llama_vocab_get_add_eos(vocab_tgt), llama_vocab_get_add_eos(vocab_dft),
+                llama_vocab_eos(vocab_tgt), llama_vocab_eos(vocab_dft));
         return 1;
     }
 
@@ -137,11 +145,12 @@ int main(int argc, char ** argv) {
         for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
             const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
             const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
+
             if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
                 LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
                 LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
-                        common_token_to_piece(ctx_tgt, i).c_str(),
-                        common_token_to_piece(ctx_dft, i).c_str());
+                        common_token_to_piece(vocab_tgt, i).c_str(),
+                        common_token_to_piece(vocab_dft, i).c_str());
                 return 1;
             }
         }
