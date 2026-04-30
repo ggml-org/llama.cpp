@@ -31,10 +31,10 @@ class TensorNameMap:
             "rwkv.embeddings",                           # rwkv6
             "model.embeddings",                          # rwkv7
             "model.word_embeddings",                     # bailingmoe
-            "model.embed",                               # talkie
             "encoder",                                   # neobert
             "model.transformer.wte",                     # llada
             "embed_tokens",                              # qwen3-embedding
+            "model.embed",                               # talkie
         ),
 
         # Token type embeddings
@@ -709,10 +709,6 @@ class TensorNameMap:
             "model.layers.{bid}.attention.key_layernorm",                     # apertus
         ),
 
-        MODEL_TENSOR.EMBD_SKIP_SCALE: (
-            "model.blocks.{bid}.embed_skip.a_g", # talkie
-        ),
-
         MODEL_TENSOR.ROPE_FREQS: (
             "encoder.layers.{bid}.self_attention.rotary_emb.inv_freq",  # persimmon
         ),
@@ -729,6 +725,10 @@ class TensorNameMap:
 
         MODEL_TENSOR.LAYER_OUT_SCALE: (
             "model.layers.{bid}.layer_scalar", # gemma4
+        ),
+
+        MODEL_TENSOR.EMBD_SKIP_SCALE: (
+            "model.blocks.{bid}.embed_skip.a_g", # talkie
         ),
 
         MODEL_TENSOR.PER_LAYER_TOKEN_EMBD: (

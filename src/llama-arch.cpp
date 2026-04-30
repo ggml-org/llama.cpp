@@ -16,7 +16,6 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GPT2,             "gpt2"             },
     { LLM_ARCH_GPTJ,             "gptj"             },
     { LLM_ARCH_GPTNEOX,          "gptneox"          },
-    { LLM_ARCH_TALKIE,           "talkie"           },
     { LLM_ARCH_MPT,              "mpt"              },
     { LLM_ARCH_BAICHUAN,         "baichuan"         },
     { LLM_ARCH_STARCODER,        "starcoder"        },
@@ -134,6 +133,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA_EMBED,      "llama-embed"      },
     { LLM_ARCH_MAINCODER,        "maincoder"        },
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
+    { LLM_ARCH_TALKIE,           "talkie"           },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
