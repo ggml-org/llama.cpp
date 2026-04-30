@@ -8633,6 +8633,18 @@ class OlmoeModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("FlexOlmoForCausalLM")
+class FlexOlmoModel(OlmoeModel):
+    """AllenAI FlexOlmo (BAR family — `allenai/BAR-2x7B-*`, `allenai/BAR-5x7B`).
+
+    Per `transformers.models.flex_olmo.modular_flex_olmo`, FlexOlmoDecoderLayer
+    is Olmo2's decoder layer with the dense FFN swapped for OlmoE-style top-k
+    MoE. The expert-merging logic is identical to OlmoE, so we inherit from
+    OlmoeModel and only override the architecture tag.
+    """
+    model_arch = gguf.MODEL_ARCH.FLEX_OLMO
+
+
 @ModelBase.register("JinaBertModel", "JinaBertForMaskedLM")
 class JinaBertV2Model(BertModel):
     model_arch = gguf.MODEL_ARCH.JINA_BERT_V2

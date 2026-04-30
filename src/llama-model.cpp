@@ -1879,6 +1879,16 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_FLEX_OLMO:
+            {
+                // AllenAI FlexOlmo (BAR family) — Olmo2 hybrid post-norms + OlmoE MoE FFN.
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                hparams.swa_type = LLAMA_SWA_TYPE_NONE; // FlexOlmo does not use SWA
+                switch (hparams.n_layer) {
+                    case 32: type = LLM_TYPE_7B; break; // BAR-2x7B / BAR-5x7B (32 layers, MoE)
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_OPENELM:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -5127,6 +5137,42 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff,   n_expert}, 0);
                         layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff,   n_embd, n_expert}, 0);
                         layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff,   n_expert}, 0);
+                    }
+                } break;
+            case LLM_ARCH_FLEX_OLMO:
+                {
+                    // AllenAI FlexOlmo (BAR family): Olmo2-style hybrid post-norms + OlmoE-style top-k MoE FFN.
+                    // No input_layernorm / ffn_norm — replaced by attn_post_norm / ffn_post_norm.
+                    const int64_t n_embd_head = n_embd / n_head;
+
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+                    if (n_expert == 0) {
+                        throw std::runtime_error("n_expert must be > 0 for FlexOlmo");
+                    }
+                    if (n_expert_used == 0) {
+                        throw std::runtime_error("n_expert_used must be > 0 for FlexOlmo");
+                    }
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        create_tensor_qkv(layer, i, n_embd, n_embd, n_embd_gqa, n_embd_gqa, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+                        layer.attn_q_norm    = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM,    "weight", i), {n_embd}, 0);
+                        layer.attn_k_norm    = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM,    "weight", i), {n_head_kv * n_embd_head}, 0);
+                        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
+
+                        // MoE FFN (no pre-FFN norm — FlexOlmo deletes input_layernorm and has no ffn_norm)
+                        layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
+                        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff,   n_expert}, 0);
+                        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff,   n_embd, n_expert}, 0);
+                        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff,   n_expert}, 0);
+                        layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
                     }
                 } break;
             case LLM_ARCH_OPENELM:
@@ -8817,6 +8863,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_olmoe>(*this, params);
             } break;
+        case LLM_ARCH_FLEX_OLMO:
+            {
+                llm = std::make_unique<llm_build_flex_olmo>(*this, params);
+            } break;
         case LLM_ARCH_OPENELM:
             {
                 llm = std::make_unique<llm_build_openelm>(*this, params);
@@ -9278,6 +9328,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_RND1:
         case LLM_ARCH_OLMO2:
         case LLM_ARCH_OLMOE:
+        case LLM_ARCH_FLEX_OLMO:
         case LLM_ARCH_PHI2:
         case LLM_ARCH_PHI3:
         case LLM_ARCH_PHIMOE:
