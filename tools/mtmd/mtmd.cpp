@@ -278,7 +278,6 @@ struct mtmd_context {
                     }
                 } break;
             case PROJECTOR_TYPE_MINICPMV:
-            case PROJECTOR_TYPE_MINICPMV4_6:
                 {
                     int minicpmv_version = clip_is_minicpmv(ctx_v);
                     if (minicpmv_version == 2) {
@@ -294,7 +293,7 @@ struct mtmd_context {
                         tok_row_end       = {lookup_token("\n")};
                         tok_row_end_trail = false; // no trailing end-of-row token
                         ov_img_first      = true;
-                    } else if (minicpmv_version == 3 || minicpmv_version == 4 || minicpmv_version == 5 || minicpmv_version == 6 || minicpmv_version == 100045 || minicpmv_version == 46) {
+                    } else if (minicpmv_version == 3 || minicpmv_version == 4 || minicpmv_version == 5 || minicpmv_version == 6 || minicpmv_version == 100045) {
                         // minicpmv 2.6 format:
                         // <image> (overview) </image><slice> (slice) </slice><slice> (slice) </slice>\n ...
                         slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
@@ -309,11 +308,24 @@ struct mtmd_context {
                     } else if (minicpmv_version != 0) {
                         throw std::runtime_error(string_format("unsupported minicpmv version: %d\n", minicpmv_version));
                     }
-                    if (proj == PROJECTOR_TYPE_MINICPMV4_6) {
-                        image_preproc = std::make_unique<mtmd_image_preprocessor_minicpmv4_6>(ctx_v);
-                    } else {
-                        image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
-                    }
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_MINICPMV4_6:
+                {
+                    // MiniCPM-V 4.6 reuses the same slice tokenization as the
+                    // v2.6+ family (the MTMD_SLICE_TMPL_MINICPMV_2_6 constant
+                    // denotes the slice format family, not the model version).
+                    // Configured directly here without going through
+                    // clip_is_minicpmv() / minicpmv_version dispatch.
+                    slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
+                    tok_ov_img_start  = {lookup_token("<image>")};
+                    tok_ov_img_end    = {lookup_token("</image>")};
+                    tok_sli_img_start = {lookup_token("<slice>")};
+                    tok_sli_img_end   = {lookup_token("</slice>")};
+                    tok_row_end       = {lookup_token("\n")};
+                    tok_row_end_trail = false; // no trailing end-of-row token
+                    ov_img_first      = true;
+                    image_preproc     = std::make_unique<mtmd_image_preprocessor_minicpmv4_6>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
