@@ -2,6 +2,7 @@
 #include "convert.cuh"
 #include "ggml-impl.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -28,6 +29,8 @@
 //     synchronization happens *outside the kernel*, via CUDA events
 //     between streams.  This keeps the compute engine free while large
 //     transfers are in flight, which matters for prefill-sized tensors.
+//     Reductions larger than the per-call inner cap are processed by an
+//     outer chunker that issues sequential inner calls.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -302,13 +305,6 @@ static void ggml_cuda_ar_wait_for_compute(
     ggml_cuda_ar_event_slot & ev = p->ev_pool[rank][slot];
     CUDA_CHECK(cudaEventRecord(ev.app, cuda_ctx->stream()));
     CUDA_CHECK(cudaStreamWaitEvent(p->streams[rank], ev.app));
-}
-
-static void ggml_cuda_ar_record_chunk_done(
-        ggml_cuda_ar_pipeline * p, ggml_backend_cuda_context * cuda_ctx, int rank, int slot) {
-    ggml_cuda_ar_event_slot & ev = p->ev_pool[rank][slot];
-    CUDA_CHECK(cudaEventRecord(ev.ker, p->streams[rank]));
-    CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), ev.ker));
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +603,40 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
     return true;
 }
 
+// Outer-level chunker: copy_impl handles up to copy_bytes per call (limited by
+// the host_large / dev_tmp allocation size).  When the full AR exceeds that,
+// slice the tensor into copy_bytes-sized pieces and call copy_impl repeatedly.
+// Each slice goes through its own stage 1 → stage 2 cycle and acquires its own
+// slot, so cross-AR fences and pool wraparound work the same way as for any
+// other sequence of small ARs.
+template <typename Tsrc, typename Tdst>
+static bool ggml_cuda_ar_allreduce_copy_outer(
+        ggml_cuda_ar_pipeline * p,
+        ggml_backend_t        * backends,
+        Tsrc * const            src_buf[GGML_CUDA_MAX_DEVICES],
+        Tdst * const            dst_buf[GGML_CUDA_MAX_DEVICES],
+        const bool              compute[GGML_CUDA_MAX_DEVICES],
+        int64_t                 ne) {
+    const int64_t outer_max_elems = (int64_t) (p->copy_bytes / sizeof(Tsrc));
+    GGML_ASSERT(outer_max_elems > 0);
+
+    bool ok = true;
+    for (int64_t outer_start = 0; outer_start < ne && ok; outer_start += outer_max_elems) {
+        const int64_t outer_ne     = std::min(outer_max_elems, ne - outer_start);
+        const size_t  outer_nbytes = (size_t) outer_ne * sizeof(Tsrc);
+
+        Tsrc * src[GGML_CUDA_MAX_DEVICES];
+        Tdst * dst[GGML_CUDA_MAX_DEVICES];
+        for (int i = 0; i < p->n_devices; ++i) {
+            src[i] = src_buf[i] + outer_start;
+            dst[i] = dst_buf[i] + outer_start;
+        }
+        ok = ggml_cuda_ar_allreduce_copy_impl<Tsrc, Tdst>(
+            p, backends, src, dst, compute, outer_ne, outer_nbytes);
+    }
+    return ok;
+}
+
 bool ggml_cuda_ar_allreduce(
         ggml_cuda_ar_pipeline * p,
         ggml_backend_t        * backends,
@@ -644,11 +674,11 @@ bool ggml_cuda_ar_allreduce(
     }
 
     // Decide between copy-engine and chunked-kernel paths based on the working
-    // type's actual byte count.
+    // type's actual byte count.  No upper bound: copy_outer slices reductions
+    // larger than copy_bytes into copy_bytes-sized pieces.
     const bool use_copy_engine =
         p->copy_threshold > 0 &&
-        nbytes >= p->copy_threshold &&
-        nbytes <= p->copy_bytes;
+        nbytes >= p->copy_threshold;
 
     // BF16 inactive-shard zeroing: when use_bf16 is on, the combined kernel
     // (chunked-kernel path) and the combined add kernel (copy_engine path)
@@ -710,29 +740,29 @@ bool ggml_cuda_ar_allreduce(
                 src[i] = static_cast<__nv_bfloat16 *>(copy_src_ptr[i]);
                 dst[i] = static_cast<float *>(tensors[i]->data);
             }
-            ok = ggml_cuda_ar_allreduce_copy_impl<__nv_bfloat16, float>(
-                p, backends, src, dst, inner_compute, ne, nbytes);
+            ok = ggml_cuda_ar_allreduce_copy_outer<__nv_bfloat16, float>(
+                p, backends, src, dst, inner_compute, ne);
         } else {
             switch (kernel_type) {
                 case GGML_TYPE_F32: {
                     float * buf[GGML_CUDA_MAX_DEVICES];
                     for (int i = 0; i < n; ++i) buf[i] = static_cast<float *>(tensors[i]->data);
-                    ok = ggml_cuda_ar_allreduce_copy_impl<float, float>(
-                        p, backends, buf, buf, inner_compute, ne, nbytes);
+                    ok = ggml_cuda_ar_allreduce_copy_outer<float, float>(
+                        p, backends, buf, buf, inner_compute, ne);
                     break;
                 }
                 case GGML_TYPE_BF16: {
                     __nv_bfloat16 * buf[GGML_CUDA_MAX_DEVICES];
                     for (int i = 0; i < n; ++i) buf[i] = static_cast<__nv_bfloat16 *>(tensors[i]->data);
-                    ok = ggml_cuda_ar_allreduce_copy_impl<__nv_bfloat16, __nv_bfloat16>(
-                        p, backends, buf, buf, inner_compute, ne, nbytes);
+                    ok = ggml_cuda_ar_allreduce_copy_outer<__nv_bfloat16, __nv_bfloat16>(
+                        p, backends, buf, buf, inner_compute, ne);
                     break;
                 }
                 case GGML_TYPE_F16: {
                     half * buf[GGML_CUDA_MAX_DEVICES];
                     for (int i = 0; i < n; ++i) buf[i] = static_cast<half *>(tensors[i]->data);
-                    ok = ggml_cuda_ar_allreduce_copy_impl<half, half>(
-                        p, backends, buf, buf, inner_compute, ne, nbytes);
+                    ok = ggml_cuda_ar_allreduce_copy_outer<half, half>(
+                        p, backends, buf, buf, inner_compute, ne);
                     break;
                 }
                 default:
@@ -746,11 +776,11 @@ bool ggml_cuda_ar_allreduce(
         const size_t input_type_size = ggml_type_size(input_type);
 
         // Chunked-kernel path runs entirely on the caller's compute stream:
-        // since AR is a barrier here, same-stream ordering replaces the
-        // wait_for_compute / record_chunk_done event pairs and skips the
-        // cross-stream scheduling overhead that was hurting the small-tensor
-        // (tg) latency on the AR-stream variant.  Only ev.ker is still
-        // recorded at end-of-AR for acquire_slot's pool-wraparound check.
+        // since AR is a barrier here, same-stream ordering subsumes any
+        // cross-stream event handshake that the copy-engine path needs, and
+        // skips the cross-stream scheduling overhead that was hurting the
+        // small-tensor (tg) latency on the AR-stream variant.  Only ev.ker is
+        // still recorded at end-of-AR for acquire_slot's pool-wraparound check.
         for (int64_t chunk_start = 0; chunk_start < ne; chunk_start += (int64_t) max_chunk_elems) {
             const size_t remaining_elems = (size_t) (ne - chunk_start);
             const size_t chunk_elems = remaining_elems < max_chunk_elems ? remaining_elems : max_chunk_elems;
