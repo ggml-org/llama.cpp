@@ -1,18 +1,24 @@
+#if defined(SRC_F16) || defined(DST_F16)
 enable f16;
+#endif
+
+#ifdef SRC_F16
+#define SRC_TYPE f16
+#else
+#define SRC_TYPE f32
+#endif
+
+#ifdef DST_F16
+#define DST_TYPE f16
+#else
+#define DST_TYPE f32
+#endif
 
 @group(0) @binding(0)
-#if defined(INPUT_F32)
-var<storage, read_write> input: array<f32>;
-#elif defined(INPUT_F16)
-var<storage, read_write> input: array<f16>;
-#endif
+var<storage, read_write> input: array<SRC_TYPE>;
 
 @group(0) @binding(1)
-#if defined(OUTPUT_F32)
-var<storage, read_write> output: array<f32>;
-#elif defined(OUTPUT_F16)
-var<storage, read_write> output: array<f16>;
-#endif
+var<storage, read_write> output: array<DST_TYPE>;
 
 struct Params {
     offset_i: u32,
@@ -38,29 +44,13 @@ struct Params {
 @group(0) @binding(2)
 var<uniform> params: Params;
 
-fn load_input(idx: u32) -> f32 {
-    #if defined(INPUT_F32)
-        return input[idx];
-    #elif defined(INPUT_F16)
-        return f32(input[idx]);
-    #endif
-}
-
-fn store_output(idx: u32, val: f32) {
-    #if defined(OUTPUT_F32)
-        output[idx] = val;
-    #elif defined(OUTPUT_F16)
-        output[idx] = f16(val);
-    #endif
-}
-
 const GGML_SCALE_FLAG_ALIGN_CORNERS: u32 = 1u << 8u;
 
 fn get_clamped_input(x: i32, y: i32, z: u32, n: u32) -> f32 {
     let cx = u32(clamp(x, 0, i32(params.src_w) - 1));
     let cy = u32(clamp(y, 0, i32(params.src_h) - 1));
     let i = params.offset_i + cx * params.si0 + cy * params.si1 + z * params.si2 + n * params.si3;
-    return load_input(i);
+    return f32(input[i]);
 }
 
 fn cubic_weight(t: f32, a: f32) -> f32 {
@@ -246,5 +236,5 @@ fn main(
 #endif
 
     let dst_idx = params.offset_o + x_dst * params.so0 + y_dst * params.so1 + z_dst * params.so2 + n_dst * params.so3;
-    store_output(dst_idx, result);
+    output[dst_idx] = DST_TYPE(result);
 }

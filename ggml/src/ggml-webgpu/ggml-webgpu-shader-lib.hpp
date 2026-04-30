@@ -9,7 +9,6 @@
 #include <webgpu/webgpu_cpp.h>
 
 #include <algorithm>
-#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -2740,19 +2739,19 @@ class ggml_webgpu_shader_lib {
         std::vector<std::string> defines;
         std::string              variant = "upscale";
 
-        auto push_type_defines = [&](const char * prefix, ggml_type type) {
-            std::string s_prefix = prefix;
-            if (type == GGML_TYPE_F32) {
-                defines.push_back(s_prefix + "_F32");
-            } else if (type == GGML_TYPE_F16) {
-                defines.push_back(s_prefix + "_F16");
-            } else {
-                GGML_ABORT("Unsupported type for UPSCALE shader");
-            }
-        };
+        if (key.input_type == GGML_TYPE_F16) {
+            defines.push_back("SRC_F16");
+            variant += "_src_f16";
+        } else {
+            variant += "_src_f32";
+        }
 
-        push_type_defines("INPUT", key.input_type);
-        push_type_defines("OUTPUT", key.output_type);
+        if (key.output_type == GGML_TYPE_F16) {
+            defines.push_back("DST_F16");
+            variant += "_dst_f16";
+        } else {
+            variant += "_dst_f32";
+        }
 
         switch (base_mode) {
             case GGML_SCALE_MODE_NEAREST:
