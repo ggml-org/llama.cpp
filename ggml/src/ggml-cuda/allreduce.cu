@@ -283,9 +283,14 @@ struct ggml_cuda_ar_pipeline {
     cudaEvent_t              dev_tmp_kernel_done[GGML_CUDA_MAX_DEVICES];
     bool                     dev_tmp_kernel_done_valid;
 
-    // Arrival ring: pinned, ARRIVAL_STRIDE bytes between adjacent ints.
+    // Arrival ring: ARRIVAL_STRIDE bytes between adjacent ints.  Allocated as
+    // mapped pinned host memory so the device can read/write it directly.
+    // arrival_host is the cudaFreeHost handle; arrival_dev is the device-side
+    // pointer (from cudaHostGetDevicePointer) that the kernel and cudaMemset
+    // operate on.  The CPU never touches either pointer's data.
     // Use ggml_cuda_ar_arrival_ptr() to index.
-    char * arrival;
+    char * arrival_host;
+    char * arrival_dev;
 };
 
 // Return a pointer to the arrival int for (slot, rank).
@@ -295,7 +300,7 @@ struct ggml_cuda_ar_pipeline {
 static int * ggml_cuda_ar_arrival_ptr(const ggml_cuda_ar_pipeline * p, int slot, int rank) {
     const size_t offset = ((size_t)slot * p->n_devices + rank) *
                           GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
-    return reinterpret_cast<int *>(p->arrival + offset);
+    return reinterpret_cast<int *>(p->arrival_dev + offset);
 }
 
 static uint64_t ggml_cuda_ar_env_u64(const char * name, uint64_t default_value) {
@@ -355,6 +360,8 @@ static void ggml_cuda_ar_wait_for_compute(
 ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n_devices) {
 
     if (n_devices != 2) {
+        GGML_LOG_DEBUG("%s: internal AllReduce only supports n_devices=2 (got %zu); "
+                       "falling back\n", __func__, n_devices);
         return nullptr;
     }
 
@@ -425,14 +432,28 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     const size_t arrival_bytes =
         (size_t)GGML_CUDA_AR_POOL_SIZE * n_devices *
         GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
-    if (cudaHostAlloc(reinterpret_cast<void **>(&p->arrival), arrival_bytes,
-                      cudaHostAllocPortable) != cudaSuccess) {
+    // Mapped + portable so cudaHostGetDevicePointer gives us a kernel-usable
+    // device pointer on every device — the CPU never touches the buffer.
+    if (cudaHostAlloc(reinterpret_cast<void **>(&p->arrival_host), arrival_bytes,
+                      cudaHostAllocPortable | cudaHostAllocMapped) != cudaSuccess) {
         GGML_LOG_ERROR("%s: cudaHostAlloc for arrival ring failed (%zu bytes)\n",
                        __func__, arrival_bytes);
         ggml_cuda_ar_pipeline_free(p);
         return nullptr;
     }
-    memset(p->arrival, 0, arrival_bytes);
+    if (cudaHostGetDevicePointer(reinterpret_cast<void **>(&p->arrival_dev),
+                                 p->arrival_host, 0) != cudaSuccess) {
+        GGML_LOG_ERROR("%s: cudaHostGetDevicePointer for arrival ring failed\n", __func__);
+        ggml_cuda_ar_pipeline_free(p);
+        return nullptr;
+    }
+    ggml_cuda_set_device(p->devices[0]);
+    if (cudaMemset(p->arrival_dev, 0, arrival_bytes) != cudaSuccess) {
+        GGML_LOG_ERROR("%s: cudaMemset for arrival ring failed (%zu bytes)\n",
+                       __func__, arrival_bytes);
+        ggml_cuda_ar_pipeline_free(p);
+        return nullptr;
+    }
 
     // Per-device pinned staging buffers — POOL_SIZE-deep ring so the chunked-
     // kernel can write the next slot's data while the peer is still reading
@@ -521,8 +542,8 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
             cudaStreamDestroy(p->streams[i]);
         }
     }
-    if (p->arrival) {
-        cudaFreeHost(p->arrival);
+    if (p->arrival_host) {
+        cudaFreeHost(p->arrival_host);
     }
     delete p;
 }
