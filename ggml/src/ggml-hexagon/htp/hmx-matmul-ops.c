@@ -955,7 +955,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
                                               fp16_row_bytes, weight_row_bytes, fp16_row_bytes, n_cols_next);
                         }
 
-                        interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr, n_cols, params->k, params->k,
+                        hmx_interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr, n_cols, params->k, params->k,
                                                  0, n_cols);
                         hex_swap_ptr(&buf_curr, &buf_next);
                     }
@@ -1127,7 +1127,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
                 }
 
                 // interleave row-major fp16 from scratch into tile-major in vtcm_weight
-                interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr, n_cols, k, k, 0, n_cols);
+                hmx_interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr, n_cols, k, k, 0, n_cols);
 
                 hex_swap_ptr(&buf_curr, &buf_next);
             }

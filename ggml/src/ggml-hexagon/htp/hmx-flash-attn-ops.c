@@ -284,7 +284,7 @@ static const int16_t d_tile_scatter_offsets[64] __attribute__((aligned(128))) = 
     0,        0,
 };
 
-// interleave_rows_to_tiles and interleave_cols_to_tiles are in hmx-utils.h
+// hmx_interleave_rows_to_tiles and hmx_interleave_cols_to_tiles are in hmx-utils.h
 
 // ============================================================================
 // HMX Flash Attention context (GQA-merged)
@@ -369,7 +369,7 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
         return;
     }
 
-    interleave_rows_to_tiles(factx->vtcm_k_tiles, factx->vtcm_k_fp16[args->buf_idx], total_rows, (int) factx->DK,
+    hmx_interleave_rows_to_tiles(factx->vtcm_k_tiles, factx->vtcm_k_fp16[args->buf_idx], total_rows, (int) factx->DK,
                              (int) args->src_stride, start, end);
 }
 
@@ -407,7 +407,7 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
         return;
     }
 
-    interleave_cols_to_tiles(factx->vtcm_v_tiles, factx->vtcm_v_fp16[args->buf_idx], total_rows, (int) factx->DV,
+    hmx_interleave_cols_to_tiles(factx->vtcm_v_tiles, factx->vtcm_v_fp16[args->buf_idx], total_rows, (int) factx->DV,
                              (int) args->src_stride, (int) args->n_col_tiles, start, end);
 }
 

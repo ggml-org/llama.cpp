@@ -42,7 +42,7 @@ static const int32_t hmx_transpose_scatter_offsets[32] __attribute__((aligned(VL
 // vtcm_dst: [n_col_tiles][n_k_tiles][HMX_FP16_TILE_N_ELMS] tile-major interleaved fp16
 // Processes rows [start_row, end_row) for multi-thread slicing.
 // Full range: start_row=0, end_row=n_cols.
-static inline void interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
+static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
                                             const __fp16 * restrict vtcm_src,
                                             int n_cols,
                                             int k,
@@ -150,7 +150,7 @@ static inline void interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
 // Input: [n_rows, head_dim] row-major.  Output: tile[dim_tile][row_tile].
 // Processes rows [start_row, end_row) for multi-thread slicing.
 // Full range: start_row=0, end_row=n_rows.
-static inline void interleave_cols_to_tiles(__fp16 * restrict tiles_out,
+static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
                                             const __fp16 * restrict src,
                                             int n_rows,
                                             int head_dim,
