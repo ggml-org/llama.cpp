@@ -5503,12 +5503,6 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         # (mapped to PROJECTOR_TYPE_MINICPMV4_6).
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MINICPMV4_6)
 
-        # legacy version tag, used by mtmd.cpp to pick the slice template (MINICPMV_2_6).
-        # The clip loader reads this field via gguf_get_val_i32, so it must be written as int32.
-        self.gguf_writer.add_int32("clip.minicpmv_version", 46)
-        # fixed merger output token count per slice for the default 16x downsample mode.
-        self.gguf_writer.add_uint32("clip.minicpmv_query_num", 64)
-
         # ViT layer index after which the window-attention merger is applied
         insert_layer_id = int(self.global_config.get(
             "insert_layer_id", self.hparams_vision.get("insert_layer_id", 6)))
@@ -5531,7 +5525,7 @@ class MiniCPMV4_6VisionModel(MmprojModel):
 
         # SigLIP vision body
         if name.startswith("model.vision_tower."):
-            name = "vision_tower.vision_model." + name[len("model.vision_tower."):]
+            name = name.replace("model.vision_tower.", "vision_tower.vision_model.")
             yield from super().modify_tensors(data_torch, name, bid)
             return
 

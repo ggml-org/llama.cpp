@@ -3989,9 +3989,11 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
 
 int clip_is_minicpmv(const struct clip_ctx * ctx) {
     // TODO: remove this function
-    if (ctx->proj_type() == PROJECTOR_TYPE_MINICPMV ||
-        ctx->proj_type() == PROJECTOR_TYPE_MINICPMV4_6) {
+    if (ctx->proj_type() == PROJECTOR_TYPE_MINICPMV) {
         return ctx->model.hparams.minicpmv_version;
+    }
+    if (ctx->proj_type() == PROJECTOR_TYPE_MINICPMV4_6) {
+        return 46;
     }
     return 0;
 }
