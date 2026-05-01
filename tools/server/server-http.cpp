@@ -33,30 +33,6 @@ server_http_context::server_http_context()
 
 server_http_context::~server_http_context() = default;
 
-static std::string first_ip_from_x_forwarded_for(const httplib::Request & req) {
-    std::string forwarded = req.get_header_value("X-Forwarded-For");
-
-    if (forwarded.empty()) {
-        return "";
-    }
-
-    const size_t comma = forwarded.find(',');
-    if (comma != std::string::npos) {
-        forwarded = forwarded.substr(0, comma);
-    }
-
-    // trim
-    forwarded.erase(forwarded.begin(), std::find_if(forwarded.begin(), forwarded.end(), [](unsigned char ch) {
-        return !std::isspace(ch);
-    }));
-
-    forwarded.erase(std::find_if(forwarded.rbegin(), forwarded.rend(), [](unsigned char ch) {
-        return !std::isspace(ch);
-    }).base(), forwarded.end());
-
-    return forwarded;
-}
-
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip logging requests that are regularly sent, to avoid log spam
     if (req.path == "/health"
@@ -171,6 +147,21 @@ static bool is_ip_allowed(const std::string & client_ip, const std::vector<std::
     return false;
 }
 
+static std::string first_ip_from_x_forwarded_for(const httplib::Request & req) {
+    std::string forwarded = req.get_header_value("X-Forwarded-For");
+
+    if (forwarded.empty()) {
+        return "";
+    }
+
+    const size_t comma = forwarded.find(',');
+    if (comma != std::string::npos) {
+        forwarded = forwarded.substr(0, comma);
+    }
+
+    return trim_copy(forwarded);
+}
+
 static std::string get_client_ip(
         const httplib::Request & req,
         bool use_forwarded_for,
@@ -185,7 +176,7 @@ static std::string get_client_ip(
         return remote_ip;
     }
 
-    const std::string forwarded_ip = first_forwarded_for_ip(req);
+    const std::string forwarded_ip = first_ip_from_x_forwarded_for(req);
 
     if (forwarded_ip.empty()) {
         return remote_ip;
@@ -333,6 +324,41 @@ bool server_http_context::init(const common_params & params) {
         return false;
     };
 
+	auto middleware_validate_whitelist = [
+    	whitelist_ips = params.whitelist_ips,
+	    trusted_proxy_ips = params.trusted_proxy_ips,
+	    use_forwarded_for = params.use_forwarded_for
+	](const httplib::Request & req, httplib::Response & res) {
+	    if (whitelist_ips.empty()) {
+	        return true;
+	    }
+
+	    const std::string client_ip = get_client_ip(
+	        req,
+	        use_forwarded_for,
+	        trusted_proxy_ips
+    	);
+
+	    if (is_ip_allowed(client_ip, whitelist_ips)) {
+    	    return true;
+	    }
+
+	    res.status = 403;
+	    res.set_content(
+    	    safe_json_to_str(json {
+        	    {"error", {
+            	    {"message", "Access Denied"},
+                	{"type", "permission_error"},
+	                {"code", 403}
+	            }}
+	        }),
+    	    "application/json; charset=utf-8"
+	    );
+
+    	LOG_WRN("Forbidden: IP not whitelisted: %s\n", client_ip.c_str());
+	    return false;
+	};
+	
     auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
         static const std::unordered_set<std::string> public_endpoints = {
             "/health",
