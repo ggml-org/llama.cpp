@@ -7,10 +7,10 @@ from typing import Any
 # constants
 #
 
-GGUF_MAGIC             = 0x46554747  # "GGUF"
-GGUF_VERSION           = 3
+GGUF_MAGIC = 0x46554747  # "GGUF"
+GGUF_VERSION = 3
 GGUF_DEFAULT_ALIGNMENT = 32
-GGML_QUANT_VERSION     = 2  # GGML_QNT_VERSION from ggml.h
+GGML_QUANT_VERSION = 2  # GGML_QNT_VERSION from ggml.h
 
 #
 # metadata keys
@@ -19,97 +19,101 @@ GGML_QUANT_VERSION     = 2  # GGML_QNT_VERSION from ggml.h
 
 class Keys:
     class General:
-        TYPE                       = "general.type"
-        ARCHITECTURE               = "general.architecture"
-        QUANTIZATION_VERSION       = "general.quantization_version"
-        ALIGNMENT                  = "general.alignment"
-        FILE_TYPE                  = "general.file_type"
+        TYPE = "general.type"
+        ARCHITECTURE = "general.architecture"
+        QUANTIZATION_VERSION = "general.quantization_version"
+        ALIGNMENT = "general.alignment"
+        FILE_TYPE = "general.file_type"
 
         # Recommended Sampler Parameters
-        SAMPLING_SEQUENCE           = "general.sampling.sequence"
-        SAMPLING_TOP_K              = "general.sampling.top_k"
-        SAMPLING_TOP_P              = "general.sampling.top_p"
-        SAMPLING_MIN_P              = "general.sampling.min_p"
-        SAMPLING_XTC_PROBABILITY    = "general.sampling.xtc_probability"
-        SAMPLING_XTC_THRESHOLD      = "general.sampling.xtc_threshold"
-        SAMPLING_TEMP               = "general.sampling.temp"
-        SAMPLING_PENALTY_LAST_N     = "general.sampling.penalty_last_n"
-        SAMPLING_PENALTY_REPEAT     = "general.sampling.penalty_repeat"
-        SAMPLING_MIROSTAT           = "general.sampling.mirostat"
-        SAMPLING_MIROSTAT_TAU       = "general.sampling.mirostat_tau"
-        SAMPLING_MIROSTAT_ETA       = "general.sampling.mirostat_eta"
+        SAMPLING_SEQUENCE = "general.sampling.sequence"
+        SAMPLING_TOP_K = "general.sampling.top_k"
+        SAMPLING_TOP_P = "general.sampling.top_p"
+        SAMPLING_MIN_P = "general.sampling.min_p"
+        SAMPLING_XTC_PROBABILITY = "general.sampling.xtc_probability"
+        SAMPLING_XTC_THRESHOLD = "general.sampling.xtc_threshold"
+        SAMPLING_TEMP = "general.sampling.temp"
+        SAMPLING_PENALTY_LAST_N = "general.sampling.penalty_last_n"
+        SAMPLING_PENALTY_REPEAT = "general.sampling.penalty_repeat"
+        SAMPLING_MIROSTAT = "general.sampling.mirostat"
+        SAMPLING_MIROSTAT_TAU = "general.sampling.mirostat_tau"
+        SAMPLING_MIROSTAT_ETA = "general.sampling.mirostat_eta"
 
         # Authorship Metadata
-        NAME                       = "general.name"
-        AUTHOR                     = "general.author"
-        VERSION                    = "general.version"
-        ORGANIZATION               = "general.organization"
+        NAME = "general.name"
+        AUTHOR = "general.author"
+        VERSION = "general.version"
+        ORGANIZATION = "general.organization"
 
-        FINETUNE                   = "general.finetune"
-        BASENAME                   = "general.basename"
+        FINETUNE = "general.finetune"
+        BASENAME = "general.basename"
 
-        DESCRIPTION                = "general.description"
-        QUANTIZED_BY               = "general.quantized_by"
+        DESCRIPTION = "general.description"
+        QUANTIZED_BY = "general.quantized_by"
 
-        SIZE_LABEL                 = "general.size_label"
+        SIZE_LABEL = "general.size_label"
 
         # Licensing details
-        LICENSE                    = "general.license"
-        LICENSE_NAME               = "general.license.name"
-        LICENSE_LINK               = "general.license.link"
+        LICENSE = "general.license"
+        LICENSE_NAME = "general.license.name"
+        LICENSE_LINK = "general.license.link"
 
         # Typically represents the converted GGUF repo (Unless native)
-        URL                        = "general.url" # Model Website/Paper
-        DOI                        = "general.doi"
-        UUID                       = "general.uuid"
-        REPO_URL                   = "general.repo_url" # Model Source Repository (git/svn/etc...)
+        URL = "general.url"  # Model Website/Paper
+        DOI = "general.doi"
+        UUID = "general.uuid"
+        REPO_URL = "general.repo_url"  # Model Source Repository (git/svn/etc...)
 
         # Model Source during conversion
-        SOURCE_URL                 = "general.source.url" # Model Website/Paper
-        SOURCE_DOI                 = "general.source.doi"
-        SOURCE_UUID                = "general.source.uuid"
-        SOURCE_REPO_URL            = "general.source.repo_url" # Model Source Repository (git/svn/etc...)
+        SOURCE_URL = "general.source.url"  # Model Website/Paper
+        SOURCE_DOI = "general.source.doi"
+        SOURCE_UUID = "general.source.uuid"
+        SOURCE_REPO_URL = (
+            "general.source.repo_url"  # Model Source Repository (git/svn/etc...)
+        )
 
         # Base Model Source. There can be more than one source if it's a merged
         # model like with 'Mistral-7B-Merge-14-v0.1'. This will assist in
         # tracing linage of models as it is finetuned or merged over time.
-        BASE_MODEL_COUNT           = "general.base_model.count"
-        BASE_MODEL_NAME            = "general.base_model.{id}.name"
-        BASE_MODEL_AUTHOR          = "general.base_model.{id}.author"
-        BASE_MODEL_VERSION         = "general.base_model.{id}.version"
-        BASE_MODEL_ORGANIZATION    = "general.base_model.{id}.organization"
-        BASE_MODEL_DESCRIPTION     = "general.base_model.{id}.description"
-        BASE_MODEL_URL             = "general.base_model.{id}.url" # Model Website/Paper
-        BASE_MODEL_DOI             = "general.base_model.{id}.doi"
-        BASE_MODEL_UUID            = "general.base_model.{id}.uuid"
-        BASE_MODEL_REPO_URL        = "general.base_model.{id}.repo_url" # Model Source Repository (git/svn/etc...)
+        BASE_MODEL_COUNT = "general.base_model.count"
+        BASE_MODEL_NAME = "general.base_model.{id}.name"
+        BASE_MODEL_AUTHOR = "general.base_model.{id}.author"
+        BASE_MODEL_VERSION = "general.base_model.{id}.version"
+        BASE_MODEL_ORGANIZATION = "general.base_model.{id}.organization"
+        BASE_MODEL_DESCRIPTION = "general.base_model.{id}.description"
+        BASE_MODEL_URL = "general.base_model.{id}.url"  # Model Website/Paper
+        BASE_MODEL_DOI = "general.base_model.{id}.doi"
+        BASE_MODEL_UUID = "general.base_model.{id}.uuid"
+        BASE_MODEL_REPO_URL = "general.base_model.{id}.repo_url"  # Model Source Repository (git/svn/etc...)
 
         # Dataset Source
-        DATASET_COUNT           = "general.dataset.count"
-        DATASET_NAME            = "general.dataset.{id}.name"
-        DATASET_AUTHOR          = "general.dataset.{id}.author"
-        DATASET_VERSION         = "general.dataset.{id}.version"
-        DATASET_ORGANIZATION    = "general.dataset.{id}.organization"
-        DATASET_DESCRIPTION     = "general.dataset.{id}.description"
-        DATASET_URL             = "general.dataset.{id}.url" # Model Website/Paper
-        DATASET_DOI             = "general.dataset.{id}.doi"
-        DATASET_UUID            = "general.dataset.{id}.uuid"
-        DATASET_REPO_URL        = "general.dataset.{id}.repo_url" # Model Source Repository (git/svn/etc...)
+        DATASET_COUNT = "general.dataset.count"
+        DATASET_NAME = "general.dataset.{id}.name"
+        DATASET_AUTHOR = "general.dataset.{id}.author"
+        DATASET_VERSION = "general.dataset.{id}.version"
+        DATASET_ORGANIZATION = "general.dataset.{id}.organization"
+        DATASET_DESCRIPTION = "general.dataset.{id}.description"
+        DATASET_URL = "general.dataset.{id}.url"  # Model Website/Paper
+        DATASET_DOI = "general.dataset.{id}.doi"
+        DATASET_UUID = "general.dataset.{id}.uuid"
+        DATASET_REPO_URL = (
+            "general.dataset.{id}.repo_url"  # Model Source Repository (git/svn/etc...)
+        )
 
         # Array based KV stores
-        TAGS                       = "general.tags"
-        LANGUAGES                  = "general.languages"
+        TAGS = "general.tags"
+        LANGUAGES = "general.languages"
 
     class LLM:
-        VOCAB_SIZE                        = "{arch}.vocab_size"
-        CONTEXT_LENGTH                    = "{arch}.context_length"
-        EMBEDDING_LENGTH                  = "{arch}.embedding_length"
-        EMBEDDING_LENGTH_OUT              = "{arch}.embedding_length_out"
-        FEATURES_LENGTH                   = "{arch}.features_length"
-        BLOCK_COUNT                       = "{arch}.block_count"
-        LEADING_DENSE_BLOCK_COUNT         = "{arch}.leading_dense_block_count"
-        FEED_FORWARD_LENGTH               = "{arch}.feed_forward_length"
-        EXPERT_FEED_FORWARD_LENGTH        = "{arch}.expert_feed_forward_length"
+        VOCAB_SIZE = "{arch}.vocab_size"
+        CONTEXT_LENGTH = "{arch}.context_length"
+        EMBEDDING_LENGTH = "{arch}.embedding_length"
+        EMBEDDING_LENGTH_OUT = "{arch}.embedding_length_out"
+        FEATURES_LENGTH = "{arch}.features_length"
+        BLOCK_COUNT = "{arch}.block_count"
+        LEADING_DENSE_BLOCK_COUNT = "{arch}.leading_dense_block_count"
+        FEED_FORWARD_LENGTH = "{arch}.feed_forward_length"
+        EXPERT_FEED_FORWARD_LENGTH = "{arch}.expert_feed_forward_length"
         EXPERT_SHARED_FEED_FORWARD_LENGTH = "{arch}.expert_shared_feed_forward_length"
         EXPERT_CHUNK_FEED_FORWARD_LENGTH  = "{arch}.expert_chunk_feed_forward_length"
         USE_PARALLEL_RESIDUAL             = "{arch}.use_parallel_residual"
@@ -161,21 +165,21 @@ class Keys:
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
 
     class Attention:
-        HEAD_COUNT                   = "{arch}.attention.head_count"
-        HEAD_COUNT_KV                = "{arch}.attention.head_count_kv"
-        MAX_ALIBI_BIAS               = "{arch}.attention.max_alibi_bias"
-        CLAMP_KQV                    = "{arch}.attention.clamp_kqv"
-        KEY_LENGTH                   = "{arch}.attention.key_length"
-        VALUE_LENGTH                 = "{arch}.attention.value_length"
-        LAYERNORM_EPS                = "{arch}.attention.layer_norm_epsilon"
-        LAYERNORM_RMS_EPS            = "{arch}.attention.layer_norm_rms_epsilon"
-        GROUPNORM_EPS                = "{arch}.attention.group_norm_epsilon"
-        GROUPNORM_GROUPS             = "{arch}.attention.group_norm_groups"
-        CAUSAL                       = "{arch}.attention.causal"
-        Q_LORA_RANK                  = "{arch}.attention.q_lora_rank"
-        KV_LORA_RANK                 = "{arch}.attention.kv_lora_rank"
-        DECAY_LORA_RANK              = "{arch}.attention.decay_lora_rank"
-        ICLR_LORA_RANK               = "{arch}.attention.iclr_lora_rank"
+        HEAD_COUNT = "{arch}.attention.head_count"
+        HEAD_COUNT_KV = "{arch}.attention.head_count_kv"
+        MAX_ALIBI_BIAS = "{arch}.attention.max_alibi_bias"
+        CLAMP_KQV = "{arch}.attention.clamp_kqv"
+        KEY_LENGTH = "{arch}.attention.key_length"
+        VALUE_LENGTH = "{arch}.attention.value_length"
+        LAYERNORM_EPS = "{arch}.attention.layer_norm_epsilon"
+        LAYERNORM_RMS_EPS = "{arch}.attention.layer_norm_rms_epsilon"
+        GROUPNORM_EPS = "{arch}.attention.group_norm_epsilon"
+        GROUPNORM_GROUPS = "{arch}.attention.group_norm_groups"
+        CAUSAL = "{arch}.attention.causal"
+        Q_LORA_RANK = "{arch}.attention.q_lora_rank"
+        KV_LORA_RANK = "{arch}.attention.kv_lora_rank"
+        DECAY_LORA_RANK = "{arch}.attention.decay_lora_rank"
+        ICLR_LORA_RANK = "{arch}.attention.iclr_lora_rank"
         VALUE_RESIDUAL_MIX_LORA_RANK = "{arch}.attention.value_residual_mix_lora_rank"
         GATE_LORA_RANK               = "{arch}.attention.gate_lora_rank"
         REL_BUCKETS_COUNT            = "{arch}.attention.relative_buckets_count"
@@ -199,7 +203,7 @@ class Keys:
         class Indexer:
             HEAD_COUNT = "{arch}.attention.indexer.head_count"
             KEY_LENGTH = "{arch}.attention.indexer.key_length"
-            TOP_K      = "{arch}.attention.indexer.top_k"
+            TOP_K = "{arch}.attention.indexer.top_k"
 
     class HyperConnection:
         COUNT                = "{arch}.hyper_connection.count"
@@ -207,35 +211,35 @@ class Keys:
         EPSILON              = "{arch}.hyper_connection.epsilon"
 
     class Rope:
-        DIMENSION_COUNT           = "{arch}.rope.dimension_count"
-        DIMENSION_COUNT_SWA       = "{arch}.rope.dimension_count_swa"
-        DIMENSION_SECTIONS        = "{arch}.rope.dimension_sections"
-        FREQ_BASE                 = "{arch}.rope.freq_base"
-        FREQ_BASE_SWA             = "{arch}.rope.freq_base_swa"
-        SCALING_TYPE              = "{arch}.rope.scaling.type"
-        SCALING_FACTOR            = "{arch}.rope.scaling.factor"
+        DIMENSION_COUNT = "{arch}.rope.dimension_count"
+        DIMENSION_COUNT_SWA = "{arch}.rope.dimension_count_swa"
+        DIMENSION_SECTIONS = "{arch}.rope.dimension_sections"
+        FREQ_BASE = "{arch}.rope.freq_base"
+        FREQ_BASE_SWA = "{arch}.rope.freq_base_swa"
+        SCALING_TYPE = "{arch}.rope.scaling.type"
+        SCALING_FACTOR = "{arch}.rope.scaling.factor"
         SCALING_ALPHA             = "{arch}.rope.scaling.alpha"
-        SCALING_ATTN_FACTOR       = "{arch}.rope.scaling.attn_factor"
-        SCALING_ORIG_CTX_LEN      = "{arch}.rope.scaling.original_context_length"
-        SCALING_FINETUNED         = "{arch}.rope.scaling.finetuned"
-        SCALING_YARN_LOG_MUL      = "{arch}.rope.scaling.yarn_log_multiplier"
-        SCALING_YARN_EXT_FACTOR   = "{arch}.rope.scaling.yarn_ext_factor"
-        SCALING_YARN_ATTN_FACTOR  = "{arch}.rope.scaling.yarn_attn_factor"
-        SCALING_YARN_BETA_FAST    = "{arch}.rope.scaling.yarn_beta_fast"
-        SCALING_YARN_BETA_SLOW    = "{arch}.rope.scaling.yarn_beta_slow"
+        SCALING_ATTN_FACTOR = "{arch}.rope.scaling.attn_factor"
+        SCALING_ORIG_CTX_LEN = "{arch}.rope.scaling.original_context_length"
+        SCALING_FINETUNED = "{arch}.rope.scaling.finetuned"
+        SCALING_YARN_LOG_MUL = "{arch}.rope.scaling.yarn_log_multiplier"
+        SCALING_YARN_EXT_FACTOR = "{arch}.rope.scaling.yarn_ext_factor"
+        SCALING_YARN_ATTN_FACTOR = "{arch}.rope.scaling.yarn_attn_factor"
+        SCALING_YARN_BETA_FAST = "{arch}.rope.scaling.yarn_beta_fast"
+        SCALING_YARN_BETA_SLOW = "{arch}.rope.scaling.yarn_beta_slow"
 
     class Split:
-        LLM_KV_SPLIT_NO            = "split.no"
-        LLM_KV_SPLIT_COUNT         = "split.count"
+        LLM_KV_SPLIT_NO = "split.no"
+        LLM_KV_SPLIT_COUNT = "split.count"
         LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count"
 
     class SSM:
-        CONV_KERNEL    = "{arch}.ssm.conv_kernel"
-        INNER_SIZE     = "{arch}.ssm.inner_size"
-        STATE_SIZE     = "{arch}.ssm.state_size"
+        CONV_KERNEL = "{arch}.ssm.conv_kernel"
+        INNER_SIZE = "{arch}.ssm.inner_size"
+        STATE_SIZE = "{arch}.ssm.state_size"
         TIME_STEP_RANK = "{arch}.ssm.time_step_rank"
-        GROUP_COUNT    = "{arch}.ssm.group_count"
-        DT_B_C_RMS     = "{arch}.ssm.dt_b_c_rms"
+        GROUP_COUNT = "{arch}.ssm.group_count"
+        DT_B_C_RMS = "{arch}.ssm.dt_b_c_rms"
 
     class KDA:
         HEAD_DIM = "{arch}.kda.head_dim"
@@ -245,11 +249,11 @@ class Keys:
 
     class PosNet:
         EMBEDDING_LENGTH = "{arch}.posnet.embedding_length"
-        BLOCK_COUNT      = "{arch}.posnet.block_count"
+        BLOCK_COUNT = "{arch}.posnet.block_count"
 
     class ConvNext:
         EMBEDDING_LENGTH = "{arch}.convnext.embedding_length"
-        BLOCK_COUNT      = "{arch}.convnext.block_count"
+        BLOCK_COUNT = "{arch}.convnext.block_count"
 
     class Classifier:
         OUTPUT_LABELS = "{arch}.classifier.output_labels"
@@ -258,26 +262,28 @@ class Keys:
         L_CACHE = "{arch}.shortconv.l_cache"
 
     class Tokenizer:
-        MODEL                = "tokenizer.ggml.model"
-        PRE                  = "tokenizer.ggml.pre"
-        LIST                 = "tokenizer.ggml.tokens"
-        TOKEN_TYPE           = "tokenizer.ggml.token_type"
-        TOKEN_TYPE_COUNT     = "tokenizer.ggml.token_type_count"  # for BERT-style token types
-        SCORES               = "tokenizer.ggml.scores"
-        MERGES               = "tokenizer.ggml.merges"
-        BOS_ID               = "tokenizer.ggml.bos_token_id"
-        EOS_ID               = "tokenizer.ggml.eos_token_id"
-        EOT_ID               = "tokenizer.ggml.eot_token_id"
-        EOM_ID               = "tokenizer.ggml.eom_token_id"
-        UNK_ID               = "tokenizer.ggml.unknown_token_id"
-        SEP_ID               = "tokenizer.ggml.seperator_token_id"
-        PAD_ID               = "tokenizer.ggml.padding_token_id"
-        MASK_ID              = "tokenizer.ggml.mask_token_id"
-        ADD_BOS              = "tokenizer.ggml.add_bos_token"
-        ADD_EOS              = "tokenizer.ggml.add_eos_token"
-        ADD_SEP              = "tokenizer.ggml.add_sep_token"
-        ADD_PREFIX           = "tokenizer.ggml.add_space_prefix"
-        REMOVE_EXTRA_WS      = "tokenizer.ggml.remove_extra_whitespaces"
+        MODEL = "tokenizer.ggml.model"
+        PRE = "tokenizer.ggml.pre"
+        LIST = "tokenizer.ggml.tokens"
+        TOKEN_TYPE = "tokenizer.ggml.token_type"
+        TOKEN_TYPE_COUNT = (
+            "tokenizer.ggml.token_type_count"  # for BERT-style token types
+        )
+        SCORES = "tokenizer.ggml.scores"
+        MERGES = "tokenizer.ggml.merges"
+        BOS_ID = "tokenizer.ggml.bos_token_id"
+        EOS_ID = "tokenizer.ggml.eos_token_id"
+        EOT_ID = "tokenizer.ggml.eot_token_id"
+        EOM_ID = "tokenizer.ggml.eom_token_id"
+        UNK_ID = "tokenizer.ggml.unknown_token_id"
+        SEP_ID = "tokenizer.ggml.seperator_token_id"
+        PAD_ID = "tokenizer.ggml.padding_token_id"
+        MASK_ID = "tokenizer.ggml.mask_token_id"
+        ADD_BOS = "tokenizer.ggml.add_bos_token"
+        ADD_EOS = "tokenizer.ggml.add_eos_token"
+        ADD_SEP = "tokenizer.ggml.add_sep_token"
+        ADD_PREFIX = "tokenizer.ggml.add_space_prefix"
+        REMOVE_EXTRA_WS = "tokenizer.ggml.remove_extra_whitespaces"
         PRECOMPILED_CHARSMAP = "tokenizer.ggml.precompiled_charsmap"
         SUPPRESS_TOKENS      = "tokenizer.ggml.suppress_tokens"
         HF_JSON              = "tokenizer.huggingface.json"
@@ -289,55 +295,55 @@ class Keys:
         NORMALIZER_LOWERCASE     = "tokenizer.ggml.normalizer.lowercase"
         NORMALIZER_STRIP_ACCENTS = "tokenizer.ggml.normalizer.strip_accents"
         # FIM/Infill special tokens constants
-        FIM_PRE_ID           = "tokenizer.ggml.fim_pre_token_id"
-        FIM_SUF_ID           = "tokenizer.ggml.fim_suf_token_id"
-        FIM_MID_ID           = "tokenizer.ggml.fim_mid_token_id"
-        FIM_PAD_ID           = "tokenizer.ggml.fim_pad_token_id"
-        FIM_REP_ID           = "tokenizer.ggml.fim_rep_token_id"
-        FIM_SEP_ID           = "tokenizer.ggml.fim_sep_token_id"
+        FIM_PRE_ID = "tokenizer.ggml.fim_pre_token_id"
+        FIM_SUF_ID = "tokenizer.ggml.fim_suf_token_id"
+        FIM_MID_ID = "tokenizer.ggml.fim_mid_token_id"
+        FIM_PAD_ID = "tokenizer.ggml.fim_pad_token_id"
+        FIM_REP_ID = "tokenizer.ggml.fim_rep_token_id"
+        FIM_SEP_ID = "tokenizer.ggml.fim_sep_token_id"
         # deprecated:
-        PREFIX_ID            = "tokenizer.ggml.prefix_token_id"
-        SUFFIX_ID            = "tokenizer.ggml.suffix_token_id"
-        MIDDLE_ID            = "tokenizer.ggml.middle_token_id"
+        PREFIX_ID = "tokenizer.ggml.prefix_token_id"
+        SUFFIX_ID = "tokenizer.ggml.suffix_token_id"
+        MIDDLE_ID = "tokenizer.ggml.middle_token_id"
 
     class Adapter:
-        TYPE                    = "adapter.type"
-        LORA_ALPHA              = "adapter.lora.alpha"
-        LORA_TASK_NAME          = "adapter.lora.task_name"
-        LORA_PROMPT_PREFIX      = "adapter.lora.prompt_prefix"
+        TYPE = "adapter.type"
+        LORA_ALPHA = "adapter.lora.alpha"
+        LORA_TASK_NAME = "adapter.lora.task_name"
+        LORA_PROMPT_PREFIX = "adapter.lora.prompt_prefix"
         ALORA_INVOCATION_TOKENS = "adapter.alora.invocation_tokens"
 
     class IMatrix:
         CHUNK_COUNT = "imatrix.chunk_count"
-        CHUNK_SIZE  = "imatrix.chunk_size"
-        DATASETS    = "imatrix.datasets"
+        CHUNK_SIZE = "imatrix.chunk_size"
+        DATASETS = "imatrix.datasets"
 
     class Clip:
-        PROJECTOR_TYPE        = "clip.projector_type"
-        HAS_VISION_ENCODER    = "clip.has_vision_encoder"
-        HAS_AUDIO_ENCODER     = "clip.has_audio_encoder"
-        HAS_LLAVA_PROJECTOR   = "clip.has_llava_projector"
+        PROJECTOR_TYPE = "clip.projector_type"
+        HAS_VISION_ENCODER = "clip.has_vision_encoder"
+        HAS_AUDIO_ENCODER = "clip.has_audio_encoder"
+        HAS_LLAVA_PROJECTOR = "clip.has_llava_projector"
 
     class ClipVision:
-        PROJECTOR_TYPE        = "clip.vision.projector_type" # for mixed modality models
-        IMAGE_SIZE            = "clip.vision.image_size"
-        IMAGE_MIN_PIXELS      = "clip.vision.image_min_pixels"
-        IMAGE_MAX_PIXELS      = "clip.vision.image_max_pixels"
-        PREPROC_MIN_TILES     = "clip.vision.preproc_min_tiles"
-        PREPROC_MAX_TILES     = "clip.vision.preproc_max_tiles"
-        PREPROC_IMAGE_SIZE    = "clip.vision.preproc_image_size"
-        PATCH_SIZE            = "clip.vision.patch_size"
-        EMBEDDING_LENGTH      = "clip.vision.embedding_length"
+        PROJECTOR_TYPE   = "clip.vision.projector_type"  # for mixed modality models
+        IMAGE_SIZE   = "clip.vision.image_size"
+        IMAGE_MIN_PIXELS   = "clip.vision.image_min_pixels"
+        IMAGE_MAX_PIXELS   = "clip.vision.image_max_pixels"
+        PREPROC_MIN_TILES   = "clip.vision.preproc_min_tiles"
+        PREPROC_MAX_TILES   = "clip.vision.preproc_max_tiles"
+        PREPROC_IMAGE_SIZE   = "clip.vision.preproc_image_size"
+        PATCH_SIZE   = "clip.vision.patch_size"
+        EMBEDDING_LENGTH   = "clip.vision.embedding_length"
         FEED_FORWARD_LENGTH   = "clip.vision.feed_forward_length"
-        PROJECTION_DIM        = "clip.vision.projection_dim"
-        BLOCK_COUNT           = "clip.vision.block_count"
-        IMAGE_MEAN            = "clip.vision.image_mean"
-        IMAGE_STD             = "clip.vision.image_std"
-        SPATIAL_MERGE_SIZE    = "clip.vision.spatial_merge_size"
-        USE_GELU              = "clip.use_gelu"
-        USE_SILU              = "clip.use_silu"
-        N_WA_PATTERN          = "clip.vision.n_wa_pattern"     # used by qwen2.5vl
-        WA_LAYER_INDEXES      = "clip.vision.wa_layer_indexes" # used by youtuvl
+        PROJECTION_DIM   = "clip.vision.projection_dim"
+        BLOCK_COUNT   = "clip.vision.block_count"
+        IMAGE_MEAN   = "clip.vision.image_mean"
+        IMAGE_STD   = "clip.vision.image_std"
+        SPATIAL_MERGE_SIZE   = "clip.vision.spatial_merge_size"
+        USE_GELU   = "clip.use_gelu"
+        USE_SILU   = "clip.use_silu"
+        N_WA_PATTERN   = "clip.vision.n_wa_pattern"      # used by qwen2.5vl
+        WA_LAYER_INDEXES   = "clip.vision.wa_layer_indexes"  # used by youtuvl
         WA_PATTERN_MODE       = "clip.vision.wa_pattern_mode"  # used by mimovl, per-layer -1/0/1
         IS_DEEPSTACK_LAYERS   = "clip.vision.is_deepstack_layers"
         WINDOW_SIZE           = "clip.vision.window_size"
@@ -345,9 +351,9 @@ class Keys:
         IMAGE_GRID_PINPOINTS  = "clip.vision.image_grid_pinpoints" # Granite4 Vision
 
         class Attention:
-            HEAD_COUNT      = "clip.vision.attention.head_count"
+            HEAD_COUNT = "clip.vision.attention.head_count"
             HEAD_COUNT_KV   = "clip.vision.attention.head_count_kv" # used by mimovl (GQA)
-            LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
+            LAYERNORM_EPS = "clip.vision.attention.layer_norm_epsilon"
 
         class Projector:
             SCALE_FACTOR    = "clip.vision.projector.scale_factor"
@@ -356,40 +362,40 @@ class Keys:
             SPATIAL_OFFSETS = "clip.vision.projector.spatial_offsets"
 
         class SAM:
-            BLOCK_COUNT         = "clip.vision.sam.block_count"
-            EMBEDDING_LENGTH    = "clip.vision.sam.embedding_length"
-            HEAD_COUNT          = "clip.vision.sam.head_count"
+            BLOCK_COUNT = "clip.vision.sam.block_count"
+            EMBEDDING_LENGTH = "clip.vision.sam.embedding_length"
+            HEAD_COUNT = "clip.vision.sam.head_count"
 
     class ClipAudio:
-        PROJECTOR_TYPE      = "clip.audio.projector_type" # for mixed modality models
-        NUM_MEL_BINS        = "clip.audio.num_mel_bins"
-        EMBEDDING_LENGTH    = "clip.audio.embedding_length"
+        PROJECTOR_TYPE = "clip.audio.projector_type"  # for mixed modality models
+        NUM_MEL_BINS = "clip.audio.num_mel_bins"
+        EMBEDDING_LENGTH = "clip.audio.embedding_length"
         FEED_FORWARD_LENGTH = "clip.audio.feed_forward_length"
-        PROJECTION_DIM      = "clip.audio.projection_dim"
-        BLOCK_COUNT         = "clip.audio.block_count"
+        PROJECTION_DIM = "clip.audio.projection_dim"
+        BLOCK_COUNT = "clip.audio.block_count"
         CHUNK_SIZE          = "clip.audio.chunk_size"
         CONV_KERNEL_SIZE    = "clip.audio.conv_kernel_size"
         MAX_POS_EMB         = "clip.audio.max_pos_emb"
         FEATURE_LAYERS      = "clip.audio.feature_layer" # Granite Speech Plus
 
         class Attention:
-            HEAD_COUNT      = "clip.audio.attention.head_count"
-            LAYERNORM_EPS   = "clip.audio.attention.layer_norm_epsilon"
+            HEAD_COUNT = "clip.audio.attention.head_count"
+            LAYERNORM_EPS = "clip.audio.attention.layer_norm_epsilon"
 
         class Projector:
-            STACK_FACTOR    = "clip.audio.projector.stack_factor"
+            STACK_FACTOR = "clip.audio.projector.stack_factor"
             WINDOW_SIZE     = "clip.audio.projector.window_size"
             DOWNSAMPLE_RATE = "clip.audio.projector.downsample_rate"
             HEAD_COUNT      = "clip.audio.projector.head_count"
 
     class Diffusion:
-        SHIFT_LOGITS        = "diffusion.shift_logits"
+        SHIFT_LOGITS = "diffusion.shift_logits"
 
     class xIELU:
-        ALPHA_P             = "xielu.alpha_p"
-        ALPHA_N             = "xielu.alpha_n"
-        BETA                = "xielu.beta"
-        EPS                 = "xielu.eps"
+        ALPHA_P = "xielu.alpha_p"
+        ALPHA_N = "xielu.alpha_n"
+        BETA = "xielu.beta"
+        EPS = "xielu.eps"
 
 
 #
@@ -398,10 +404,10 @@ class Keys:
 
 
 class GGUFType:
-    MODEL   = "model"
+    MODEL = "model"
     ADAPTER = "adapter"
     IMATRIX = "imatrix"
-    MMPROJ  = "mmproj" # dummy, unused for now
+    MMPROJ = "mmproj"  # dummy, unused for now
 
 
 class MODEL_ARCH(IntEnum):
@@ -542,17 +548,17 @@ class MODEL_ARCH(IntEnum):
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
-    MLP       = auto()
-    LDP       = auto()
-    LDPV2     = auto()
+    MLP = auto()
+    LDP = auto()
+    LDPV2 = auto()
     RESAMPLER = auto()
-    GLM_EDGE  = auto()
-    MERGER    = auto()
-    GEMMA3N   = auto()
-    GEMMA3    = auto()
-    QWEN3VL   = auto()
-    STEP3VL   = auto()
-    COGVLM    = auto()
+    GLM_EDGE = auto()
+    MERGER = auto()
+    GEMMA3N = auto()
+    GEMMA3 = auto()
+    QWEN3VL = auto()
+    STEP3VL = auto()
+    COGVLM = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -898,49 +904,49 @@ class MODEL_TENSOR(IntEnum):
     V_MULTI_PROJ_POST_NORM = auto()
 
     # audio (mtmd)
-    A_ENC_EMBD_POS        = auto()
-    A_ENC_EMBD_NORM       = auto()
-    A_ENC_EMBD_TO_LOGITS  = auto() # lfm2
-    A_ENC_INP_PROJ        = auto() # gemma4
-    A_ENC_CONV1D          = auto()
-    A_ENC_CONV1D_NORM     = auto() # gemma3n
-    A_ENC_CONV2D          = auto()
-    A_ENC_CONV_OUT        = auto()
-    A_PRE_NORM            = auto()
-    A_POST_NORM           = auto()
-    A_ENC_LAYER_PRE_NORM  = auto() # gemma3n
-    A_ENC_ATTN_Q          = auto()
-    A_ENC_ATTN_K          = auto()
-    A_ENC_ATTN_V          = auto()
-    A_ENC_ATTN_POST_NORM  = auto()
-    A_ENC_ATTN_PRE_NORM   = auto()
-    A_ENC_ATTN_K_REL      = auto() # gemma4
-    A_ENC_PER_DIM_SCALE   = auto() # gemma3n
-    A_ENC_INPUT_NORM      = auto()
-    A_ENC_OUTPUT          = auto() # TODO @ngxson: rename to ATTN_OUT
-    A_ENC_OUTPUT_NORM     = auto() # TODO @ngxson: rename to ATTN_OUT
-    A_ENC_FFN_UP          = auto()
-    A_ENC_FFN_NORM        = auto()
-    A_ENC_FFN_POST_NORM   = auto() # gemma3n
-    A_ENC_FFN_SCALE       = auto() # gemma3n
-    A_ENC_FFN_GATE        = auto()
-    A_ENC_FFN_DOWN        = auto()
-    A_ENC_FFN_UP_1        = auto() # lfm2, gemma3n
-    A_ENC_FFN_NORM_1      = auto() # lfm2, gemma3n (pre-norm)
-    A_ENC_FFN_POST_NORM_1 = auto() # gemma3n
-    A_ENC_FFN_SCALE_1     = auto() # gemma3n
-    A_ENC_FFN_GATE_1      = auto() # lfm2, gemma3n
-    A_ENC_FFN_DOWN_1      = auto() # lfm2, gemma3n
-    A_MMPROJ              = auto()
-    A_MMPROJ_FC           = auto()
-    A_MM_NORM_PRE         = auto()
-    A_MM_NORM_MID         = auto()
-    A_MM_EMBEDDING        = auto() # gemma3n
-    A_MM_HARD_EMB_NORM    = auto() # gemma3n
-    A_MM_SOFT_EMB_NORM    = auto() # gemma3n
-    A_MM_INP_PROJ         = auto() # gemma3n
-    A_PER_DIM_K_SCALE     = auto() # gemma4
-    A_PER_DIM_SCALE       = auto() # gemma4
+    A_ENC_EMBD_POS = auto()
+    A_ENC_EMBD_NORM = auto()
+    A_ENC_EMBD_TO_LOGITS = auto()  # lfm2
+    A_ENC_INP_PROJ = auto()  # gemma4
+    A_ENC_CONV1D = auto()
+    A_ENC_CONV1D_NORM = auto()  # gemma3n
+    A_ENC_CONV2D = auto()
+    A_ENC_CONV_OUT = auto()
+    A_PRE_NORM = auto()
+    A_POST_NORM = auto()
+    A_ENC_LAYER_PRE_NORM = auto()  # gemma3n
+    A_ENC_ATTN_Q = auto()
+    A_ENC_ATTN_K = auto()
+    A_ENC_ATTN_V = auto()
+    A_ENC_ATTN_POST_NORM = auto()
+    A_ENC_ATTN_PRE_NORM = auto()
+    A_ENC_ATTN_K_REL = auto()  # gemma4
+    A_ENC_PER_DIM_SCALE = auto()  # gemma3n
+    A_ENC_INPUT_NORM = auto()
+    A_ENC_OUTPUT = auto()  # TODO @ngxson: rename to ATTN_OUT
+    A_ENC_OUTPUT_NORM = auto()  # TODO @ngxson: rename to ATTN_OUT
+    A_ENC_FFN_UP = auto()
+    A_ENC_FFN_NORM = auto()
+    A_ENC_FFN_POST_NORM = auto()  # gemma3n
+    A_ENC_FFN_SCALE = auto()  # gemma3n
+    A_ENC_FFN_GATE = auto()
+    A_ENC_FFN_DOWN = auto()
+    A_ENC_FFN_UP_1 = auto()  # lfm2, gemma3n
+    A_ENC_FFN_NORM_1 = auto()  # lfm2, gemma3n (pre-norm)
+    A_ENC_FFN_POST_NORM_1 = auto()  # gemma3n
+    A_ENC_FFN_SCALE_1 = auto()  # gemma3n
+    A_ENC_FFN_GATE_1 = auto()  # lfm2, gemma3n
+    A_ENC_FFN_DOWN_1 = auto()  # lfm2, gemma3n
+    A_MMPROJ = auto()
+    A_MMPROJ_FC = auto()
+    A_MM_NORM_PRE = auto()
+    A_MM_NORM_MID = auto()
+    A_MM_EMBEDDING = auto()  # gemma3n
+    A_MM_HARD_EMB_NORM = auto()  # gemma3n
+    A_MM_SOFT_EMB_NORM = auto()  # gemma3n
+    A_MM_INP_PROJ = auto()  # gemma3n
+    A_PER_DIM_K_SCALE = auto()  # gemma4
+    A_PER_DIM_SCALE = auto()  # gemma4
     # nextn/mtp
     NEXTN_PROJ_PRE         = auto()
     NEXTN_PROJ_POST        = auto()
@@ -954,15 +960,15 @@ class MODEL_TENSOR(IntEnum):
     FC                     = auto()  # feature fusion layer
     D2T                    = auto()  # draft to target vocabulary mapping
     # lfm2 audio
-    A_ENC_NORM_CONV        = auto()
-    A_ENC_LINEAR_POS       = auto()
-    A_ENC_POS_BIAS_U       = auto()
-    A_ENC_POS_BIAS_V       = auto()
-    A_ENC_OUT              = auto()
-    A_ENC_CONV_DW          = auto() # SSM conv
-    A_ENC_CONV_NORM        = auto() # SSM conv
-    A_ENC_CONV_PW1         = auto()
-    A_ENC_CONV_PW2         = auto()
+    A_ENC_NORM_CONV = auto()
+    A_ENC_LINEAR_POS = auto()
+    A_ENC_POS_BIAS_U = auto()
+    A_ENC_POS_BIAS_V = auto()
+    A_ENC_OUT = auto()
+    A_ENC_CONV_DW = auto()  # SSM conv
+    A_ENC_CONV_NORM = auto()  # SSM conv
+    A_ENC_CONV_PW1 = auto()
+    A_ENC_CONV_PW2 = auto()
     A_CTC_OUT              = auto()
     A_CTC_OUT_MID          = auto()
     A_ENC_ATTN_REL_POS_EMB = auto()
@@ -1081,17 +1087,17 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GRANITE_HYBRID:   "granitehybrid",
     MODEL_ARCH.CHAMELEON:        "chameleon",
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
-    MODEL_ARCH.PLM:              "plm",
-    MODEL_ARCH.BAILINGMOE:       "bailingmoe",
-    MODEL_ARCH.BAILINGMOE2:      "bailingmoe2",
-    MODEL_ARCH.DOTS1:            "dots1",
-    MODEL_ARCH.ARCEE:            "arcee",
-    MODEL_ARCH.AFMOE:            "afmoe",
-    MODEL_ARCH.ERNIE4_5:         "ernie4_5",
-    MODEL_ARCH.ERNIE4_5_MOE:     "ernie4_5-moe",
-    MODEL_ARCH.FALCON_H1:        "falcon-h1",
-    MODEL_ARCH.HUNYUAN_MOE:      "hunyuan-moe",
-    MODEL_ARCH.HUNYUAN_DENSE:    "hunyuan-dense",
+    MODEL_ARCH.PLM: "plm",
+    MODEL_ARCH.BAILINGMOE: "bailingmoe",
+    MODEL_ARCH.BAILINGMOE2: "bailingmoe2",
+    MODEL_ARCH.DOTS1: "dots1",
+    MODEL_ARCH.ARCEE: "arcee",
+    MODEL_ARCH.AFMOE: "afmoe",
+    MODEL_ARCH.ERNIE4_5: "ernie4_5",
+    MODEL_ARCH.ERNIE4_5_MOE: "ernie4_5-moe",
+    MODEL_ARCH.FALCON_H1: "falcon-h1",
+    MODEL_ARCH.HUNYUAN_MOE: "hunyuan-moe",
+    MODEL_ARCH.HUNYUAN_DENSE: "hunyuan-dense",
     MODEL_ARCH.HUNYUAN_VL:       "hunyuan_vl",
     MODEL_ARCH.SMOLLM3:          "smollm3",
     MODEL_ARCH.GPT_OSS:          "gpt-oss",
@@ -1123,15 +1129,15 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
-    VISION_PROJECTOR_TYPE.MLP:       "mlp",
-    VISION_PROJECTOR_TYPE.LDP:       "ldp",
-    VISION_PROJECTOR_TYPE.LDPV2:     "ldpv2",
+    VISION_PROJECTOR_TYPE.MLP: "mlp",
+    VISION_PROJECTOR_TYPE.LDP: "ldp",
+    VISION_PROJECTOR_TYPE.LDPV2: "ldpv2",
     VISION_PROJECTOR_TYPE.RESAMPLER: "resampler",
-    VISION_PROJECTOR_TYPE.GLM_EDGE:  "adapter",
-    VISION_PROJECTOR_TYPE.MERGER:    "qwen2vl_merger",
-    VISION_PROJECTOR_TYPE.GEMMA3:    "gemma3",
-    VISION_PROJECTOR_TYPE.QWEN3VL:   "qwen3vl_merger",
-    VISION_PROJECTOR_TYPE.STEP3VL:   "step3vl",
+    VISION_PROJECTOR_TYPE.GLM_EDGE: "adapter",
+    VISION_PROJECTOR_TYPE.MERGER: "qwen2vl_merger",
+    VISION_PROJECTOR_TYPE.GEMMA3: "gemma3",
+    VISION_PROJECTOR_TYPE.QWEN3VL: "qwen3vl_merger",
+    VISION_PROJECTOR_TYPE.STEP3VL: "step3vl",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -1374,46 +1380,46 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_ATTN_O:              "v.blk.{bid}.attn_out",
     MODEL_TENSOR.V_ENC_ATTN_O_NORM:         "v.blk.{bid}.attn_out_norm",
     MODEL_TENSOR.V_ENC_ATTN_SINKS:          "v.blk.{bid}.attn_sinks",
-    MODEL_TENSOR.V_ENC_POST_ATTN_NORM:      "v.blk.{bid}.ln2",
-    MODEL_TENSOR.V_ENC_FFN_UP:              "v.blk.{bid}.ffn_up",
-    MODEL_TENSOR.V_ENC_FFN_GATE:            "v.blk.{bid}.ffn_gate",
-    MODEL_TENSOR.V_ENC_FFN_DOWN:            "v.blk.{bid}.ffn_down",
-    MODEL_TENSOR.V_ENC_ATTN_POST_NORM:      "v.blk.{bid}.attn_post_norm",
-    MODEL_TENSOR.V_ENC_FFN_POST_NORM:       "v.blk.{bid}.ffn_post_norm",
-    MODEL_TENSOR.V_LAYER_SCALE_1:           "v.blk.{bid}.ls1",
-    MODEL_TENSOR.V_LAYER_SCALE_2:           "v.blk.{bid}.ls2",
-    MODEL_TENSOR.V_LAYER_OUT_SCALE:         "v.blk.{bid}.out_scale",
-    MODEL_TENSOR.V_PRE_NORM:                "v.pre_ln",
-    MODEL_TENSOR.V_POST_NORM:               "v.post_ln",
-    MODEL_TENSOR.V_MM_POST_NORM:            "mm.post_norm",
-    MODEL_TENSOR.V_MM_INP_PROJ:             "mm.input_projection",
-    MODEL_TENSOR.V_MM_INP_NORM:             "mm.input_norm",
-    MODEL_TENSOR.V_MM_SOFT_EMB_NORM:        "mm.soft_emb_norm",         # gemma3n
-    MODEL_TENSOR.V_MM_EMBEDDING:            "mm.embedding",             # gemma3n
-    MODEL_TENSOR.V_MM_HARD_EMB_NORM:        "mm.hard_emb_norm",         # gemma3n
-    MODEL_TENSOR.V_ENC_CONV_STEM:           "v.conv_stem.conv",         # gemma3n
-    MODEL_TENSOR.V_ENC_CONV_STEM_NORM:      "v.conv_stem.bn",           # gemma3n
-    MODEL_TENSOR.V_ENC_MSFA_EXP:            "v.msfa.ffn.pw_exp.conv",   # gemma3n
-    MODEL_TENSOR.V_ENC_MSFA_EXP_NORM:       "v.msfa.ffn.pw_exp.bn",     # gemma3n
-    MODEL_TENSOR.V_ENC_MSFA_PROJ:           "v.msfa.ffn.pw_proj.conv",  # gemma3n
-    MODEL_TENSOR.V_ENC_MSFA_PROJ_NORM:      "v.msfa.ffn.pw_proj.bn",    # gemma3n
-    MODEL_TENSOR.V_ENC_MSFA_NORM:           "v.msfa.norm",              # gemma3n
-    MODEL_TENSOR.V_RESMPL_POS_EMBD_K:       "resampler.pos_embd_k",
-    MODEL_TENSOR.V_RESMPL_ATTN_Q:           "resampler.attn.q",
-    MODEL_TENSOR.V_RESMPL_ATTN_K:           "resampler.attn.k",
-    MODEL_TENSOR.V_RESMPL_ATTN_V:           "resampler.attn.v",
-    MODEL_TENSOR.V_RESMPL_ATTN_OUT:         "resampler.attn.out",
-    MODEL_TENSOR.V_RESMPL_KV:               "resampler.kv",
-    MODEL_TENSOR.V_RESMPL_KV_NORM:          "resampler.ln_kv",
-    MODEL_TENSOR.V_RESMPL_POST_NORM:        "resampler.ln_post",
-    MODEL_TENSOR.V_RESMPL_Q_NORM:           "resampler.ln_q",
-    MODEL_TENSOR.V_RESMPL_PROJ:             "resampler.proj",
-    MODEL_TENSOR.V_RESMPL_QUERY:            "resampler.query",
-    MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK:      "v.token_embd.img_break", # pixtral
-    MODEL_TENSOR.V_MM_PATCH_MERGER:         "mm.patch_merger", # mistral small 3.1
-    MODEL_TENSOR.V_DS_NORM:                 "v.deepstack.{bid}.norm",
-    MODEL_TENSOR.V_DS_FC1:                  "v.deepstack.{bid}.fc1",
-    MODEL_TENSOR.V_DS_FC2:                  "v.deepstack.{bid}.fc2",
+    MODEL_TENSOR.V_ENC_POST_ATTN_NORM: "v.blk.{bid}.ln2",
+    MODEL_TENSOR.V_ENC_FFN_UP: "v.blk.{bid}.ffn_up",
+    MODEL_TENSOR.V_ENC_FFN_GATE: "v.blk.{bid}.ffn_gate",
+    MODEL_TENSOR.V_ENC_FFN_DOWN: "v.blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_ENC_ATTN_POST_NORM: "v.blk.{bid}.attn_post_norm",
+    MODEL_TENSOR.V_ENC_FFN_POST_NORM: "v.blk.{bid}.ffn_post_norm",
+    MODEL_TENSOR.V_LAYER_SCALE_1: "v.blk.{bid}.ls1",
+    MODEL_TENSOR.V_LAYER_SCALE_2: "v.blk.{bid}.ls2",
+    MODEL_TENSOR.V_LAYER_OUT_SCALE: "v.blk.{bid}.out_scale",
+    MODEL_TENSOR.V_PRE_NORM: "v.pre_ln",
+    MODEL_TENSOR.V_POST_NORM: "v.post_ln",
+    MODEL_TENSOR.V_MM_POST_NORM: "mm.post_norm",
+    MODEL_TENSOR.V_MM_INP_PROJ: "mm.input_projection",
+    MODEL_TENSOR.V_MM_INP_NORM: "mm.input_norm",
+    MODEL_TENSOR.V_MM_SOFT_EMB_NORM: "mm.soft_emb_norm",  # gemma3n
+    MODEL_TENSOR.V_MM_EMBEDDING: "mm.embedding",  # gemma3n
+    MODEL_TENSOR.V_MM_HARD_EMB_NORM: "mm.hard_emb_norm",  # gemma3n
+    MODEL_TENSOR.V_ENC_CONV_STEM: "v.conv_stem.conv",  # gemma3n
+    MODEL_TENSOR.V_ENC_CONV_STEM_NORM: "v.conv_stem.bn",  # gemma3n
+    MODEL_TENSOR.V_ENC_MSFA_EXP: "v.msfa.ffn.pw_exp.conv",  # gemma3n
+    MODEL_TENSOR.V_ENC_MSFA_EXP_NORM: "v.msfa.ffn.pw_exp.bn",  # gemma3n
+    MODEL_TENSOR.V_ENC_MSFA_PROJ: "v.msfa.ffn.pw_proj.conv",  # gemma3n
+    MODEL_TENSOR.V_ENC_MSFA_PROJ_NORM: "v.msfa.ffn.pw_proj.bn",  # gemma3n
+    MODEL_TENSOR.V_ENC_MSFA_NORM: "v.msfa.norm",  # gemma3n
+    MODEL_TENSOR.V_RESMPL_POS_EMBD_K: "resampler.pos_embd_k",
+    MODEL_TENSOR.V_RESMPL_ATTN_Q: "resampler.attn.q",
+    MODEL_TENSOR.V_RESMPL_ATTN_K: "resampler.attn.k",
+    MODEL_TENSOR.V_RESMPL_ATTN_V: "resampler.attn.v",
+    MODEL_TENSOR.V_RESMPL_ATTN_OUT: "resampler.attn.out",
+    MODEL_TENSOR.V_RESMPL_KV: "resampler.kv",
+    MODEL_TENSOR.V_RESMPL_KV_NORM: "resampler.ln_kv",
+    MODEL_TENSOR.V_RESMPL_POST_NORM: "resampler.ln_post",
+    MODEL_TENSOR.V_RESMPL_Q_NORM: "resampler.ln_q",
+    MODEL_TENSOR.V_RESMPL_PROJ: "resampler.proj",
+    MODEL_TENSOR.V_RESMPL_QUERY: "resampler.query",
+    MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK: "v.token_embd.img_break",  # pixtral
+    MODEL_TENSOR.V_MM_PATCH_MERGER: "mm.patch_merger",  # mistral small 3.1
+    MODEL_TENSOR.V_DS_NORM: "v.deepstack.{bid}.norm",
+    MODEL_TENSOR.V_DS_FC1: "v.deepstack.{bid}.fc1",
+    MODEL_TENSOR.V_DS_FC2: "v.deepstack.{bid}.fc2",
     MODEL_TENSOR.V_MERGER_LN1:              "v.vit_merger.ln1",
     MODEL_TENSOR.V_MERGER_ATTN_Q:           "v.vit_merger.attn_q",
     MODEL_TENSOR.V_MERGER_ATTN_K:           "v.vit_merger.attn_k",
@@ -1422,17 +1428,17 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MERGER_DS_LN:            "v.vit_merger.ds_ln",
     MODEL_TENSOR.V_MERGER_DS_UP:            "v.vit_merger.ds_ffn_up",
     MODEL_TENSOR.V_MERGER_DS_DOWN:          "v.vit_merger.ds_ffn_down",
-    MODEL_TENSOR.V_MM_POST_FC_NORM:         "mm.post_fc_norm", # cogvlm
-    MODEL_TENSOR.V_MM_UP:                   "mm.up",
-    MODEL_TENSOR.V_MM_DOWN:                 "mm.down",
-    MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
-    MODEL_TENSOR.V_TOK_BOI:                 "v.boi",
-    MODEL_TENSOR.V_TOK_EOI:                 "v.eoi",
-    MODEL_TENSOR.V_MM_PRE_NORM:             "mm.pre_norm",
-    MODEL_TENSOR.V_TOK_IMG_BEGIN:           "mm.image_begin",
-    MODEL_TENSOR.V_TOK_IMG_END:             "mm.image_end",
-    MODEL_TENSOR.V_STD_BIAS:                "v.std_bias", # gemma4
-    MODEL_TENSOR.V_STD_SCALE:               "v.std_scale", # gemma4
+    MODEL_TENSOR.V_MM_POST_FC_NORM: "mm.post_fc_norm",  # cogvlm
+    MODEL_TENSOR.V_MM_UP: "mm.up",
+    MODEL_TENSOR.V_MM_DOWN: "mm.down",
+    MODEL_TENSOR.V_MM_GATE: "mm.gate",
+    MODEL_TENSOR.V_TOK_BOI: "v.boi",
+    MODEL_TENSOR.V_TOK_EOI: "v.eoi",
+    MODEL_TENSOR.V_MM_PRE_NORM: "mm.pre_norm",
+    MODEL_TENSOR.V_TOK_IMG_BEGIN: "mm.image_begin",
+    MODEL_TENSOR.V_TOK_IMG_END: "mm.image_end",
+    MODEL_TENSOR.V_STD_BIAS: "v.std_bias",  # gemma4
+    MODEL_TENSOR.V_STD_SCALE: "v.std_scale",  # gemma4
     # DeepSeek-OCR SAM
     MODEL_TENSOR.V_SAM_POS_EMBD:            "v.sam.pos_embd",
     MODEL_TENSOR.V_SAM_PATCH_EMBD:          "v.sam.patch_embd",
@@ -1474,61 +1480,62 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MULTI_PROJ_LINEAR:    "v.proj_blk.{bid}.linear",
     MODEL_TENSOR.V_MULTI_PROJ_POST_NORM: "v.proj_blk.{bid}.post_norm",
 
+
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
-    MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
-    MODEL_TENSOR.A_ENC_EMBD_NORM:           "a.position_embd_norm",
-    MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS:      "a.embd_to_logits",
-    MODEL_TENSOR.A_ENC_INP_PROJ:            "a.input_projection",
-    MODEL_TENSOR.A_ENC_CONV1D:              "a.conv1d.{bid}",
-    MODEL_TENSOR.A_ENC_CONV2D:              "a.conv2d.{bid}",
-    MODEL_TENSOR.A_ENC_CONV_OUT:            "a.conv_out",
-    MODEL_TENSOR.A_ENC_CONV1D_NORM:         "a.conv1d.{bid}.norm",
-    MODEL_TENSOR.A_PRE_NORM:                "a.pre_ln",
-    MODEL_TENSOR.A_POST_NORM:               "a.post_ln",
-    MODEL_TENSOR.A_ENC_LAYER_PRE_NORM:      "a.blk.{bid}.layer_pre_norm",
-    MODEL_TENSOR.A_ENC_ATTN_Q:              "a.blk.{bid}.attn_q",
-    MODEL_TENSOR.A_ENC_ATTN_K:              "a.blk.{bid}.attn_k",
-    MODEL_TENSOR.A_ENC_ATTN_V:              "a.blk.{bid}.attn_v",
-    MODEL_TENSOR.A_ENC_ATTN_POST_NORM:      "a.blk.{bid}.attn_post_norm",
-    MODEL_TENSOR.A_ENC_ATTN_PRE_NORM:       "a.blk.{bid}.attn_pre_norm",
-    MODEL_TENSOR.A_ENC_ATTN_K_REL:          "a.blk.{bid}.attn_k_rel",
-    MODEL_TENSOR.A_ENC_PER_DIM_SCALE:       "a.blk.{bid}.per_dim_scale",
-    MODEL_TENSOR.A_ENC_INPUT_NORM:          "a.blk.{bid}.ln1",
-    MODEL_TENSOR.A_ENC_OUTPUT:              "a.blk.{bid}.attn_out",
-    MODEL_TENSOR.A_ENC_OUTPUT_NORM:         "a.blk.{bid}.ln2",
-    MODEL_TENSOR.A_ENC_FFN_NORM:            "a.blk.{bid}.ffn_norm",
-    MODEL_TENSOR.A_ENC_FFN_POST_NORM:       "a.blk.{bid}.ffn_post_norm",
-    MODEL_TENSOR.A_ENC_FFN_SCALE:           "a.blk.{bid}.ffn_scale",
-    MODEL_TENSOR.A_ENC_FFN_UP:              "a.blk.{bid}.ffn_up",
-    MODEL_TENSOR.A_ENC_FFN_GATE:            "a.blk.{bid}.ffn_gate",
-    MODEL_TENSOR.A_ENC_FFN_DOWN:            "a.blk.{bid}.ffn_down",
-    MODEL_TENSOR.A_ENC_FFN_NORM_1:          "a.blk.{bid}.ffn_norm_1",
-    MODEL_TENSOR.A_ENC_FFN_POST_NORM_1:     "a.blk.{bid}.ffn_post_norm_1",
-    MODEL_TENSOR.A_ENC_FFN_SCALE_1:         "a.blk.{bid}.ffn_scale_1",
-    MODEL_TENSOR.A_ENC_FFN_UP_1:            "a.blk.{bid}.ffn_up_1",
-    MODEL_TENSOR.A_ENC_FFN_GATE_1:          "a.blk.{bid}.ffn_gate_1",
-    MODEL_TENSOR.A_ENC_FFN_DOWN_1:          "a.blk.{bid}.ffn_down_1",
-    MODEL_TENSOR.A_MMPROJ:                  "mm.a.mlp.{bid}",
-    MODEL_TENSOR.A_MMPROJ_FC:               "mm.a.fc",
-    MODEL_TENSOR.A_MM_NORM_PRE:             "mm.a.norm_pre",
-    MODEL_TENSOR.A_MM_NORM_MID:             "mm.a.norm_mid",
-    MODEL_TENSOR.A_MM_INP_PROJ:             "mm.a.input_projection",      # gemma3n
-    MODEL_TENSOR.A_MM_SOFT_EMB_NORM:        "mm.a.soft_emb_norm",         # gemma3n
-    MODEL_TENSOR.A_MM_EMBEDDING:            "mm.a.embedding",             # gemma3n
-    MODEL_TENSOR.A_MM_HARD_EMB_NORM:        "mm.a.hard_emb_norm",         # gemma3n
-    MODEL_TENSOR.A_PER_DIM_K_SCALE:         "a.blk.{bid}.per_dim_k_scale", # gemma4
-    MODEL_TENSOR.A_PER_DIM_SCALE:           "a.blk.{bid}.per_dim_scale",   # gemma4
+    MODEL_TENSOR.A_ENC_EMBD_POS: "a.position_embd",
+    MODEL_TENSOR.A_ENC_EMBD_NORM: "a.position_embd_norm",
+    MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS: "a.embd_to_logits",
+    MODEL_TENSOR.A_ENC_INP_PROJ: "a.input_projection",
+    MODEL_TENSOR.A_ENC_CONV1D: "a.conv1d.{bid}",
+    MODEL_TENSOR.A_ENC_CONV2D: "a.conv2d.{bid}",
+    MODEL_TENSOR.A_ENC_CONV_OUT: "a.conv_out",
+    MODEL_TENSOR.A_ENC_CONV1D_NORM: "a.conv1d.{bid}.norm",
+    MODEL_TENSOR.A_PRE_NORM: "a.pre_ln",
+    MODEL_TENSOR.A_POST_NORM: "a.post_ln",
+    MODEL_TENSOR.A_ENC_LAYER_PRE_NORM: "a.blk.{bid}.layer_pre_norm",
+    MODEL_TENSOR.A_ENC_ATTN_Q: "a.blk.{bid}.attn_q",
+    MODEL_TENSOR.A_ENC_ATTN_K: "a.blk.{bid}.attn_k",
+    MODEL_TENSOR.A_ENC_ATTN_V: "a.blk.{bid}.attn_v",
+    MODEL_TENSOR.A_ENC_ATTN_POST_NORM: "a.blk.{bid}.attn_post_norm",
+    MODEL_TENSOR.A_ENC_ATTN_PRE_NORM: "a.blk.{bid}.attn_pre_norm",
+    MODEL_TENSOR.A_ENC_ATTN_K_REL: "a.blk.{bid}.attn_k_rel",
+    MODEL_TENSOR.A_ENC_PER_DIM_SCALE: "a.blk.{bid}.per_dim_scale",
+    MODEL_TENSOR.A_ENC_INPUT_NORM: "a.blk.{bid}.ln1",
+    MODEL_TENSOR.A_ENC_OUTPUT: "a.blk.{bid}.attn_out",
+    MODEL_TENSOR.A_ENC_OUTPUT_NORM: "a.blk.{bid}.ln2",
+    MODEL_TENSOR.A_ENC_FFN_NORM: "a.blk.{bid}.ffn_norm",
+    MODEL_TENSOR.A_ENC_FFN_POST_NORM: "a.blk.{bid}.ffn_post_norm",
+    MODEL_TENSOR.A_ENC_FFN_SCALE: "a.blk.{bid}.ffn_scale",
+    MODEL_TENSOR.A_ENC_FFN_UP: "a.blk.{bid}.ffn_up",
+    MODEL_TENSOR.A_ENC_FFN_GATE: "a.blk.{bid}.ffn_gate",
+    MODEL_TENSOR.A_ENC_FFN_DOWN: "a.blk.{bid}.ffn_down",
+    MODEL_TENSOR.A_ENC_FFN_NORM_1: "a.blk.{bid}.ffn_norm_1",
+    MODEL_TENSOR.A_ENC_FFN_POST_NORM_1: "a.blk.{bid}.ffn_post_norm_1",
+    MODEL_TENSOR.A_ENC_FFN_SCALE_1: "a.blk.{bid}.ffn_scale_1",
+    MODEL_TENSOR.A_ENC_FFN_UP_1: "a.blk.{bid}.ffn_up_1",
+    MODEL_TENSOR.A_ENC_FFN_GATE_1: "a.blk.{bid}.ffn_gate_1",
+    MODEL_TENSOR.A_ENC_FFN_DOWN_1: "a.blk.{bid}.ffn_down_1",
+    MODEL_TENSOR.A_MMPROJ: "mm.a.mlp.{bid}",
+    MODEL_TENSOR.A_MMPROJ_FC: "mm.a.fc",
+    MODEL_TENSOR.A_MM_NORM_PRE: "mm.a.norm_pre",
+    MODEL_TENSOR.A_MM_NORM_MID: "mm.a.norm_mid",
+    MODEL_TENSOR.A_MM_INP_PROJ: "mm.a.input_projection",  # gemma3n
+    MODEL_TENSOR.A_MM_SOFT_EMB_NORM: "mm.a.soft_emb_norm",  # gemma3n
+    MODEL_TENSOR.A_MM_EMBEDDING: "mm.a.embedding",  # gemma3n
+    MODEL_TENSOR.A_MM_HARD_EMB_NORM: "mm.a.hard_emb_norm",  # gemma3n
+    MODEL_TENSOR.A_PER_DIM_K_SCALE: "a.blk.{bid}.per_dim_k_scale",  # gemma4
+    MODEL_TENSOR.A_PER_DIM_SCALE: "a.blk.{bid}.per_dim_scale",  # gemma4
     # lfm2 audio
-    MODEL_TENSOR.A_ENC_NORM_CONV:           "a.blk.{bid}.norm_conv",
-    MODEL_TENSOR.A_ENC_LINEAR_POS:          "a.blk.{bid}.linear_pos",
-    MODEL_TENSOR.A_ENC_POS_BIAS_U:          "a.blk.{bid}.pos_bias_u",
-    MODEL_TENSOR.A_ENC_POS_BIAS_V:          "a.blk.{bid}.pos_bias_v",
-    MODEL_TENSOR.A_ENC_OUT:                 "a.pre_encode.out",
-    MODEL_TENSOR.A_ENC_CONV_DW:             "a.blk.{bid}.conv_dw",
-    MODEL_TENSOR.A_ENC_CONV_NORM:           "a.blk.{bid}.conv_norm",
-    MODEL_TENSOR.A_ENC_CONV_PW1:            "a.blk.{bid}.conv_pw1",
-    MODEL_TENSOR.A_ENC_CONV_PW2:            "a.blk.{bid}.conv_pw2",
+    MODEL_TENSOR.A_ENC_NORM_CONV: "a.blk.{bid}.norm_conv",
+    MODEL_TENSOR.A_ENC_LINEAR_POS: "a.blk.{bid}.linear_pos",
+    MODEL_TENSOR.A_ENC_POS_BIAS_U: "a.blk.{bid}.pos_bias_u",
+    MODEL_TENSOR.A_ENC_POS_BIAS_V: "a.blk.{bid}.pos_bias_v",
+    MODEL_TENSOR.A_ENC_OUT: "a.pre_encode.out",
+    MODEL_TENSOR.A_ENC_CONV_DW: "a.blk.{bid}.conv_dw",
+    MODEL_TENSOR.A_ENC_CONV_NORM: "a.blk.{bid}.conv_norm",
+    MODEL_TENSOR.A_ENC_CONV_PW1: "a.blk.{bid}.conv_pw1",
+    MODEL_TENSOR.A_ENC_CONV_PW2: "a.blk.{bid}.conv_pw2",
     MODEL_TENSOR.A_CTC_OUT:                 "a.enc_ctc_out",
     MODEL_TENSOR.A_CTC_OUT_MID:             "a.enc_ctc_out_mid",
     MODEL_TENSOR.A_ENC_ATTN_REL_POS_EMB:    "a.blk.{bid}.attn_rel_pos_emb",
@@ -2234,7 +2241,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_NORM,
         MODEL_TENSOR.SSM_IN,
         MODEL_TENSOR.SSM_BETA_ALPHA,
-        MODEL_TENSOR.SSM_OUT
+        MODEL_TENSOR.SSM_OUT,
     ],
     MODEL_ARCH.QWEN3VL: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -3273,7 +3280,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FFN_DOWN,
     ],
-    MODEL_ARCH.CHATGLM : [
+    MODEL_ARCH.CHATGLM: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -3288,7 +3295,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
-    MODEL_ARCH.GLM4 : [
+    MODEL_ARCH.GLM4: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -3852,36 +3859,30 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.FALCON_H1: [
         # Token embedding
         MODEL_TENSOR.TOKEN_EMBD,
-
         # Input layernorm
         MODEL_TENSOR.ATTN_NORM,
-
         # Attention components
-        MODEL_TENSOR.ATTN_Q,         # Query projection
-        MODEL_TENSOR.ATTN_K,         # Key projection
-        MODEL_TENSOR.ATTN_V,         # Value projection
-        MODEL_TENSOR.ATTN_OUT,       # Output projection
-
+        MODEL_TENSOR.ATTN_Q,  # Query projection
+        MODEL_TENSOR.ATTN_K,  # Key projection
+        MODEL_TENSOR.ATTN_V,  # Value projection
+        MODEL_TENSOR.ATTN_OUT,  # Output projection
         # SSM components (Mamba2 specific)
-        MODEL_TENSOR.SSM_IN,         # Input projection for SSM
-        MODEL_TENSOR.SSM_CONV1D,     # Convolution layer
-        MODEL_TENSOR.SSM_DT,         # Delta time projection
-        MODEL_TENSOR.SSM_A,          # A parameter (log form)
-        MODEL_TENSOR.SSM_D,          # D parameter
-        MODEL_TENSOR.SSM_NORM,       # Normalization in SSM
-        MODEL_TENSOR.SSM_OUT,        # Output projection
-
+        MODEL_TENSOR.SSM_IN,  # Input projection for SSM
+        MODEL_TENSOR.SSM_CONV1D,  # Convolution layer
+        MODEL_TENSOR.SSM_DT,  # Delta time projection
+        MODEL_TENSOR.SSM_A,  # A parameter (log form)
+        MODEL_TENSOR.SSM_D,  # D parameter
+        MODEL_TENSOR.SSM_NORM,  # Normalization in SSM
+        MODEL_TENSOR.SSM_OUT,  # Output projection
         # Pre-feedforward layernorm
         MODEL_TENSOR.FFN_PRE_NORM,
-
         # Feed-forward network components
-        MODEL_TENSOR.FFN_GATE,       # Gate projection (SwiGLU)
-        MODEL_TENSOR.FFN_DOWN,       # Down projection
-        MODEL_TENSOR.FFN_UP,         # Up projection
-
+        MODEL_TENSOR.FFN_GATE,  # Gate projection (SwiGLU)
+        MODEL_TENSOR.FFN_DOWN,  # Down projection
+        MODEL_TENSOR.FFN_UP,  # Up projection
         # Post-feedforward layernorm
-        MODEL_TENSOR.OUTPUT_NORM,    # Final layer norm
-        MODEL_TENSOR.OUTPUT,         # Output projection (lm_head)
+        MODEL_TENSOR.OUTPUT_NORM,  # Final layer norm
+        MODEL_TENSOR.OUTPUT,  # Output projection (lm_head)
     ],
     MODEL_ARCH.HUNYUAN_MOE: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -3978,7 +3979,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FFN_NORM,
-        MODEL_TENSOR.ATTN_NORM, # operator_norm
+        MODEL_TENSOR.ATTN_NORM,  # operator_norm
         MODEL_TENSOR.ATTN_Q_NORM,
         MODEL_TENSOR.ATTN_K_NORM,
         MODEL_TENSOR.ATTN_Q,
@@ -3986,7 +3987,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.OUTPUT,
-        MODEL_TENSOR.DENSE_2_OUT, # LFM2-ColBert-350M
+        MODEL_TENSOR.DENSE_2_OUT,  # LFM2-ColBert-350M
     ],
     MODEL_ARCH.LFM2MOE: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -3998,7 +3999,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FFN_NORM,
-        MODEL_TENSOR.ATTN_NORM, # operator_norm
+        MODEL_TENSOR.ATTN_NORM,  # operator_norm
         MODEL_TENSOR.ATTN_Q_NORM,
         MODEL_TENSOR.ATTN_K_NORM,
         MODEL_TENSOR.ATTN_Q,
@@ -4475,64 +4476,72 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
 
 
 class TokenType(IntEnum):
-    NORMAL       = 1
-    UNKNOWN      = 2
-    CONTROL      = 3
+    NORMAL = 1
+    UNKNOWN = 2
+    CONTROL = 3
     USER_DEFINED = 4
-    UNUSED       = 5
-    BYTE         = 6
+    UNUSED = 5
+    BYTE = 6
 
 
 class RopeScalingType(Enum):
-    NONE     = 'none'
-    LINEAR   = 'linear'
-    YARN     = 'yarn'
-    LONGROPE = 'longrope'
+    NONE = "none"
+    LINEAR = "linear"
+    YARN = "yarn"
+    LONGROPE = "longrope"
 
 
 class PoolingType(IntEnum):
     NONE = 0
     MEAN = 1
-    CLS  = 2
+    CLS = 2
     LAST = 3
     RANK = 4
 
 
 class GGMLQuantizationType(IntEnum):
-    F32     = 0
-    F16     = 1
-    Q4_0    = 2
-    Q4_1    = 3
-    Q5_0    = 6
-    Q5_1    = 7
-    Q8_0    = 8
-    Q8_1    = 9
-    Q2_K    = 10
-    Q3_K    = 11
-    Q4_K    = 12
-    Q5_K    = 13
-    Q6_K    = 14
-    Q8_K    = 15
+    F32 = 0
+    F16 = 1
+    Q4_0 = 2
+    Q4_1 = 3
+    Q5_0 = 6
+    Q5_1 = 7
+    Q8_0 = 8
+    Q8_1 = 9
+    Q2_K = 10
+    Q3_K = 11
+    Q4_K = 12
+    Q5_K = 13
+    Q6_K = 14
+    Q8_K = 15
     IQ2_XXS = 16
-    IQ2_XS  = 17
+    IQ2_XS = 17
     IQ3_XXS = 18
-    IQ1_S   = 19
-    IQ4_NL  = 20
-    IQ3_S   = 21
-    IQ2_S   = 22
-    IQ4_XS  = 23
-    I8      = 24
-    I16     = 25
-    I32     = 26
-    I64     = 27
-    F64     = 28
-    IQ1_M   = 29
-    BF16    = 30
-    TQ1_0   = 34
-    TQ2_0   = 35
-    MXFP4   = 39
-    NVFP4   = 40
-    Q1_0    = 41
+    IQ1_S = 19
+    IQ4_NL = 20
+    IQ3_S = 21
+    IQ2_S = 22
+    IQ4_XS = 23
+    I8 = 24
+    I16 = 25
+    I32 = 26
+    I64 = 27
+    F64 = 28
+    IQ1_M = 29
+    BF16 = 30
+    TQ1_0 = 34
+    TQ2_0 = 35
+    MXFP4 = 39
+    NVFP4 = 40
+    Q1_0 = 41
+    Q3_PT = 42
+    Q3_KPT = 43
+    Q4_DPT = 44
+    Q2_DPT = 45
+    Q2_KPT = 46
+    IQ2_TQ = 47
+    IQ3_TQ = 48
+    IQ1_BN = 49
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -4547,49 +4556,56 @@ class ExpertGatingFuncType(IntEnum):
 # from llama_ftype in llama.h
 # ALL VALUES SHOULD BE THE SAME HERE AS THEY ARE OVER THERE.
 class LlamaFileType(IntEnum):
-    ALL_F32              = 0
-    MOSTLY_F16           = 1   # except 1d tensors
-    MOSTLY_Q4_0          = 2   # except 1d tensors
-    MOSTLY_Q4_1          = 3   # except 1d tensors
+    ALL_F32 = 0
+    MOSTLY_F16 = 1  # except 1d tensors
+    MOSTLY_Q4_0 = 2  # except 1d tensors
+    MOSTLY_Q4_1 = 3  # except 1d tensors
     # MOSTLY_Q4_1_SOME_F16 = 4   # tok_embeddings.weight and output.weight are F16
     # MOSTLY_Q4_2        = 5   # support has been removed
     # MOSTLY_Q4_3        = 6   # support has been removed
-    MOSTLY_Q8_0          = 7   # except 1d tensors
-    MOSTLY_Q5_0          = 8   # except 1d tensors
-    MOSTLY_Q5_1          = 9   # except 1d tensors
-    MOSTLY_Q2_K          = 10  # except 1d tensors
-    MOSTLY_Q3_K_S        = 11  # except 1d tensors
-    MOSTLY_Q3_K_M        = 12  # except 1d tensors
-    MOSTLY_Q3_K_L        = 13  # except 1d tensors
-    MOSTLY_Q4_K_S        = 14  # except 1d tensors
-    MOSTLY_Q4_K_M        = 15  # except 1d tensors
-    MOSTLY_Q5_K_S        = 16  # except 1d tensors
-    MOSTLY_Q5_K_M        = 17  # except 1d tensors
-    MOSTLY_Q6_K          = 18  # except 1d tensors
-    MOSTLY_IQ2_XXS       = 19  # except 1d tensors
-    MOSTLY_IQ2_XS        = 20  # except 1d tensors
-    MOSTLY_Q2_K_S        = 21  # except 1d tensors
-    MOSTLY_IQ3_XS        = 22  # except 1d tensors
-    MOSTLY_IQ3_XXS       = 23  # except 1d tensors
-    MOSTLY_IQ1_S         = 24  # except 1d tensors
-    MOSTLY_IQ4_NL        = 25  # except 1d tensors
-    MOSTLY_IQ3_S         = 26  # except 1d tensors
-    MOSTLY_IQ3_M         = 27  # except 1d tensors
-    MOSTLY_IQ2_S         = 28  # except 1d tensors
-    MOSTLY_IQ2_M         = 29  # except 1d tensors
-    MOSTLY_IQ4_XS        = 30  # except 1d tensors
-    MOSTLY_IQ1_M         = 31  # except 1d tensors
-    MOSTLY_BF16          = 32  # except 1d tensors
+    MOSTLY_Q8_0 = 7  # except 1d tensors
+    MOSTLY_Q5_0 = 8  # except 1d tensors
+    MOSTLY_Q5_1 = 9  # except 1d tensors
+    MOSTLY_Q2_K = 10  # except 1d tensors
+    MOSTLY_Q3_K_S = 11  # except 1d tensors
+    MOSTLY_Q3_K_M = 12  # except 1d tensors
+    MOSTLY_Q3_K_L = 13  # except 1d tensors
+    MOSTLY_Q4_K_S = 14  # except 1d tensors
+    MOSTLY_Q4_K_M = 15  # except 1d tensors
+    MOSTLY_Q5_K_S = 16  # except 1d tensors
+    MOSTLY_Q5_K_M = 17  # except 1d tensors
+    MOSTLY_Q6_K = 18  # except 1d tensors
+    MOSTLY_IQ2_XXS = 19  # except 1d tensors
+    MOSTLY_IQ2_XS = 20  # except 1d tensors
+    MOSTLY_Q2_K_S = 21  # except 1d tensors
+    MOSTLY_IQ3_XS = 22  # except 1d tensors
+    MOSTLY_IQ3_XXS = 23  # except 1d tensors
+    MOSTLY_IQ1_S = 24  # except 1d tensors
+    MOSTLY_IQ4_NL = 25  # except 1d tensors
+    MOSTLY_IQ3_S = 26  # except 1d tensors
+    MOSTLY_IQ3_M = 27  # except 1d tensors
+    MOSTLY_IQ2_S = 28  # except 1d tensors
+    MOSTLY_IQ2_M = 29  # except 1d tensors
+    MOSTLY_IQ4_XS = 30  # except 1d tensors
+    MOSTLY_IQ1_M = 31  # except 1d tensors
+    MOSTLY_BF16 = 32  # except 1d tensors
     # MOSTLY_Q4_0_4_4      = 33  # removed from gguf files, use Q4_0 and runtime repack
     # MOSTLY_Q4_0_4_8      = 34  # removed from gguf files, use Q4_0 and runtime repack
     # MOSTLY_Q4_0_8_8      = 35  # removed from gguf files, use Q4_0 and runtime repack
-    MOSTLY_TQ1_0         = 36  # except 1d tensors
-    MOSTLY_TQ2_0         = 37  # except 1d tensors
-    MOSTLY_MXFP4_MOE     = 38  # except 1d tensors
-    MOSTLY_NVFP4         = 39  # except 1d tensors
-    MOSTLY_Q1_0          = 40  # except 1d tensors
+    MOSTLY_TQ1_0 = 36  # except 1d tensors
+    MOSTLY_TQ2_0 = 37  # except 1d tensors
+    MOSTLY_MXFP4_MOE = 38  # except 1d tensors
+    MOSTLY_NVFP4 = 39  # except 1d tensors
+    MOSTLY_Q1_0 = 40  # except 1d tensors
+    MOSTLY_Q3_PT = 41  # except 1d tensors
+    MOSTLY_Q3_KPT = 42  # except 1d tensors
+    MOSTLY_Q4_DPT = 43  # except 1d tensors
+    MOSTLY_Q2_KPT = 44  # except 1d tensors
+    MOSTLY_IQ2_TQ = 45  # except 1d tensors, trellis quantized with RNG codebook
+    MOSTLY_IQ3_TQ = 46  # except 1d tensors, 3-bit with per-tensor trained grid
+    MOSTLY_IQ1_BN = 47  # except 1d tensors, 8D vector quantized with trained codebook
 
-    GUESSED              = 1024  # not specified in the model file
+    GUESSED = 1024  # not specified in the model file
 
 
 class GGUFEndian(IntEnum):
@@ -4598,18 +4614,18 @@ class GGUFEndian(IntEnum):
 
 
 class GGUFValueType(IntEnum):
-    UINT8   = 0
-    INT8    = 1
-    UINT16  = 2
-    INT16   = 3
-    UINT32  = 4
-    INT32   = 5
+    UINT8 = 0
+    INT8 = 1
+    UINT16 = 2
+    INT16 = 3
+    UINT32 = 4
+    INT32 = 5
     FLOAT32 = 6
-    BOOL    = 7
-    STRING  = 8
-    ARRAY   = 9
-    UINT64  = 10
-    INT64   = 11
+    BOOL = 7
+    STRING = 8
+    ARRAY = 9
+    UINT64 = 10
+    INT64 = 11
     FLOAT64 = 12
 
     @staticmethod
@@ -4648,10 +4664,10 @@ class VisionProjectorType:
     STEP3VL = "step3vl"
     ULTRAVOX = "ultravox"
     INTERNVL = "internvl"
-    QWEN2A = "qwen2a" # audio
-    QWEN3A = "qwen3a" # audio
-    GLMA = "glma" # audio
-    QWEN25O = "qwen2.5o" # omni
+    QWEN2A = "qwen2a"  # audio
+    QWEN3A = "qwen3a"  # audio
+    GLMA = "glma"  # audio
+    QWEN25O = "qwen2.5o"  # omni
     VOXTRAL = "voxtral"
     MERALION = "meralion"  # audio: Whisper + gated MLP adaptor
     LFM2 = "lfm2"
@@ -4669,6 +4685,7 @@ class VisionProjectorType:
     GLM4V = "glm4v"
     YOUTUVL = "youtuvl"
     NEMOTRON_V2_VL = "nemotron_v2_vl"
+    HUNYUANOCR     = "hunyuanocr"
     HUNYUANVL      = "hunyuanvl"
     MINICPMV4_6    = "minicpmv4_6"
     GRANITE_SPEECH = "granite_speech"  # audio
@@ -4679,110 +4696,118 @@ class VisionProjectorType:
 # Items here are (block size, type size)
 QK_K = 256
 GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
-    GGMLQuantizationType.F32:     (1, 4),
-    GGMLQuantizationType.F16:     (1, 2),
-    GGMLQuantizationType.Q4_0:    (32, 2 + 16),
-    GGMLQuantizationType.Q4_1:    (32, 2 + 2 + 16),
-    GGMLQuantizationType.Q5_0:    (32, 2 + 4 + 16),
-    GGMLQuantizationType.Q5_1:    (32, 2 + 2 + 4 + 16),
-    GGMLQuantizationType.Q8_0:    (32, 2 + 32),
-    GGMLQuantizationType.Q8_1:    (32, 4 + 4 + 32),
-    GGMLQuantizationType.Q2_K:    (256, 2 + 2 + QK_K // 16 + QK_K // 4),
-    GGMLQuantizationType.Q3_K:    (256, 2 + QK_K // 4 + QK_K // 8 + 12),
-    GGMLQuantizationType.Q4_K:    (256, 2 + 2 + QK_K // 2 + 12),
-    GGMLQuantizationType.Q5_K:    (256, 2 + 2 + QK_K // 2 + QK_K // 8 + 12),
-    GGMLQuantizationType.Q6_K:    (256, 2 + QK_K // 2 + QK_K // 4 + QK_K // 16),
-    GGMLQuantizationType.Q8_K:    (256, 4 + QK_K + QK_K // 8),
+    GGMLQuantizationType.F32: (1, 4),
+    GGMLQuantizationType.F16: (1, 2),
+    GGMLQuantizationType.Q4_0: (32, 2 + 16),
+    GGMLQuantizationType.Q4_1: (32, 2 + 2 + 16),
+    GGMLQuantizationType.Q5_0: (32, 2 + 4 + 16),
+    GGMLQuantizationType.Q5_1: (32, 2 + 2 + 4 + 16),
+    GGMLQuantizationType.Q8_0: (32, 2 + 32),
+    GGMLQuantizationType.Q8_1: (32, 4 + 4 + 32),
+    GGMLQuantizationType.Q2_K: (256, 2 + 2 + QK_K // 16 + QK_K // 4),
+    GGMLQuantizationType.Q3_K: (256, 2 + QK_K // 4 + QK_K // 8 + 12),
+    GGMLQuantizationType.Q4_K: (256, 2 + 2 + QK_K // 2 + 12),
+    GGMLQuantizationType.Q5_K: (256, 2 + 2 + QK_K // 2 + QK_K // 8 + 12),
+    GGMLQuantizationType.Q6_K: (256, 2 + QK_K // 2 + QK_K // 4 + QK_K // 16),
+    GGMLQuantizationType.Q8_K: (256, 4 + QK_K + QK_K // 8),
     GGMLQuantizationType.IQ2_XXS: (256, 2 + QK_K // 4),
-    GGMLQuantizationType.IQ2_XS:  (256, 2 + QK_K // 4 + QK_K // 32),
+    GGMLQuantizationType.IQ2_XS: (256, 2 + QK_K // 4 + QK_K // 32),
     GGMLQuantizationType.IQ3_XXS: (256, 2 + QK_K // 4 + QK_K // 8),
-    GGMLQuantizationType.IQ1_S:   (256, 2 + QK_K // 8 + QK_K // 16),
-    GGMLQuantizationType.IQ4_NL:  (32, 2 + 16),
-    GGMLQuantizationType.IQ3_S:   (256, 2 + QK_K // 4 + QK_K // 8 + QK_K // 32 + 4),
-    GGMLQuantizationType.IQ2_S:   (256, 2 + QK_K // 4 + QK_K // 16),
-    GGMLQuantizationType.IQ4_XS:  (256, 2 + 2 + QK_K // 2 + QK_K // 64),
-    GGMLQuantizationType.I8:      (1, 1),
-    GGMLQuantizationType.I16:     (1, 2),
-    GGMLQuantizationType.I32:     (1, 4),
-    GGMLQuantizationType.I64:     (1, 8),
-    GGMLQuantizationType.F64:     (1, 8),
-    GGMLQuantizationType.IQ1_M:   (256, QK_K // 8 + QK_K // 16  + QK_K // 32),
-    GGMLQuantizationType.BF16:    (1, 2),
-    GGMLQuantizationType.TQ1_0:   (256, 2 + 4 * 13),
-    GGMLQuantizationType.TQ2_0:   (256, 2 + 64),
-    GGMLQuantizationType.MXFP4:   (32, 1 + 16),
-    GGMLQuantizationType.NVFP4:   (64, 4 + 32),
-    GGMLQuantizationType.Q1_0:    (128, 2 + 16),
+    GGMLQuantizationType.IQ1_S: (256, 2 + QK_K // 8 + QK_K // 16),
+    GGMLQuantizationType.IQ4_NL: (32, 2 + 16),
+    GGMLQuantizationType.IQ3_S: (256, 2 + QK_K // 4 + QK_K // 8 + QK_K // 32 + 4),
+    GGMLQuantizationType.IQ2_S: (256, 2 + QK_K // 4 + QK_K // 16),
+    GGMLQuantizationType.IQ4_XS: (256, 2 + 2 + QK_K // 2 + QK_K // 64),
+    GGMLQuantizationType.I8: (1, 1),
+    GGMLQuantizationType.I16: (1, 2),
+    GGMLQuantizationType.I32: (1, 4),
+    GGMLQuantizationType.I64: (1, 8),
+    GGMLQuantizationType.F64: (1, 8),
+    GGMLQuantizationType.IQ1_M: (256, QK_K // 8 + QK_K // 16 + QK_K // 32),
+    GGMLQuantizationType.BF16: (1, 2),
+    GGMLQuantizationType.TQ1_0: (256, 2 + 4 * 13),
+    GGMLQuantizationType.TQ2_0: (256, 2 + 64),
+    GGMLQuantizationType.MXFP4: (32, 1 + 16),
+    GGMLQuantizationType.NVFP4: (64, 4 + 32),
+    GGMLQuantizationType.Q1_0: (128, 2 + 16),
+    GGMLQuantizationType.Q3_PT: (256, 124),
+    GGMLQuantizationType.Q3_KPT: (256, 110),
+    GGMLQuantizationType.Q4_DPT: (32, 18),
+    GGMLQuantizationType.Q2_DPT: (32, 10),
+    GGMLQuantizationType.Q2_KPT: (256, 84),
+    GGMLQuantizationType.IQ2_TQ: (256, 82),
+    GGMLQuantizationType.IQ3_TQ: (256, 114),
+    GGMLQuantizationType.IQ1_BN: (256, 50),
 }
 
 
 # Aliases for backward compatibility.
 
 # general
-KEY_GENERAL_ARCHITECTURE         = Keys.General.ARCHITECTURE
+KEY_GENERAL_ARCHITECTURE = Keys.General.ARCHITECTURE
 KEY_GENERAL_QUANTIZATION_VERSION = Keys.General.QUANTIZATION_VERSION
-KEY_GENERAL_ALIGNMENT            = Keys.General.ALIGNMENT
-KEY_GENERAL_NAME                 = Keys.General.NAME
-KEY_GENERAL_AUTHOR               = Keys.General.AUTHOR
-KEY_GENERAL_URL                  = Keys.General.URL
-KEY_GENERAL_DESCRIPTION          = Keys.General.DESCRIPTION
-KEY_GENERAL_LICENSE              = Keys.General.LICENSE
-KEY_GENERAL_SOURCE_URL           = Keys.General.SOURCE_URL
-KEY_GENERAL_FILE_TYPE            = Keys.General.FILE_TYPE
+KEY_GENERAL_ALIGNMENT = Keys.General.ALIGNMENT
+KEY_GENERAL_NAME = Keys.General.NAME
+KEY_GENERAL_AUTHOR = Keys.General.AUTHOR
+KEY_GENERAL_URL = Keys.General.URL
+KEY_GENERAL_DESCRIPTION = Keys.General.DESCRIPTION
+KEY_GENERAL_LICENSE = Keys.General.LICENSE
+KEY_GENERAL_SOURCE_URL = Keys.General.SOURCE_URL
+KEY_GENERAL_FILE_TYPE = Keys.General.FILE_TYPE
 
 # LLM
-KEY_VOCAB_SIZE            = Keys.LLM.VOCAB_SIZE
-KEY_CONTEXT_LENGTH        = Keys.LLM.CONTEXT_LENGTH
-KEY_EMBEDDING_LENGTH      = Keys.LLM.EMBEDDING_LENGTH
-KEY_BLOCK_COUNT           = Keys.LLM.BLOCK_COUNT
-KEY_FEED_FORWARD_LENGTH   = Keys.LLM.FEED_FORWARD_LENGTH
+KEY_VOCAB_SIZE = Keys.LLM.VOCAB_SIZE
+KEY_CONTEXT_LENGTH = Keys.LLM.CONTEXT_LENGTH
+KEY_EMBEDDING_LENGTH = Keys.LLM.EMBEDDING_LENGTH
+KEY_BLOCK_COUNT = Keys.LLM.BLOCK_COUNT
+KEY_FEED_FORWARD_LENGTH = Keys.LLM.FEED_FORWARD_LENGTH
 KEY_USE_PARALLEL_RESIDUAL = Keys.LLM.USE_PARALLEL_RESIDUAL
-KEY_TENSOR_DATA_LAYOUT    = Keys.LLM.TENSOR_DATA_LAYOUT
+KEY_TENSOR_DATA_LAYOUT = Keys.LLM.TENSOR_DATA_LAYOUT
 
 # attention
-KEY_ATTENTION_HEAD_COUNT        = Keys.Attention.HEAD_COUNT
-KEY_ATTENTION_HEAD_COUNT_KV     = Keys.Attention.HEAD_COUNT_KV
-KEY_ATTENTION_MAX_ALIBI_BIAS    = Keys.Attention.MAX_ALIBI_BIAS
-KEY_ATTENTION_CLAMP_KQV         = Keys.Attention.CLAMP_KQV
-KEY_ATTENTION_LAYERNORM_EPS     = Keys.Attention.LAYERNORM_EPS
+KEY_ATTENTION_HEAD_COUNT = Keys.Attention.HEAD_COUNT
+KEY_ATTENTION_HEAD_COUNT_KV = Keys.Attention.HEAD_COUNT_KV
+KEY_ATTENTION_MAX_ALIBI_BIAS = Keys.Attention.MAX_ALIBI_BIAS
+KEY_ATTENTION_CLAMP_KQV = Keys.Attention.CLAMP_KQV
+KEY_ATTENTION_LAYERNORM_EPS = Keys.Attention.LAYERNORM_EPS
 KEY_ATTENTION_LAYERNORM_RMS_EPS = Keys.Attention.LAYERNORM_RMS_EPS
 
 # RoPE
-KEY_ROPE_DIMENSION_COUNT           = Keys.Rope.DIMENSION_COUNT
-KEY_ROPE_FREQ_BASE                 = Keys.Rope.FREQ_BASE
-KEY_ROPE_SCALING_TYPE              = Keys.Rope.SCALING_TYPE
-KEY_ROPE_SCALING_FACTOR            = Keys.Rope.SCALING_FACTOR
-KEY_ROPE_SCALING_ORIG_CTX_LEN      = Keys.Rope.SCALING_ORIG_CTX_LEN
-KEY_ROPE_SCALING_FINETUNED         = Keys.Rope.SCALING_FINETUNED
+KEY_ROPE_DIMENSION_COUNT = Keys.Rope.DIMENSION_COUNT
+KEY_ROPE_FREQ_BASE = Keys.Rope.FREQ_BASE
+KEY_ROPE_SCALING_TYPE = Keys.Rope.SCALING_TYPE
+KEY_ROPE_SCALING_FACTOR = Keys.Rope.SCALING_FACTOR
+KEY_ROPE_SCALING_ORIG_CTX_LEN = Keys.Rope.SCALING_ORIG_CTX_LEN
+KEY_ROPE_SCALING_FINETUNED = Keys.Rope.SCALING_FINETUNED
 
 # SSM
-KEY_SSM_CONV_KERNEL    = Keys.SSM.CONV_KERNEL
-KEY_SSM_INNER_SIZE     = Keys.SSM.INNER_SIZE
-KEY_SSM_STATE_SIZE     = Keys.SSM.STATE_SIZE
+KEY_SSM_CONV_KERNEL = Keys.SSM.CONV_KERNEL
+KEY_SSM_INNER_SIZE = Keys.SSM.INNER_SIZE
+KEY_SSM_STATE_SIZE = Keys.SSM.STATE_SIZE
 KEY_SSM_TIME_STEP_RANK = Keys.SSM.TIME_STEP_RANK
-KEY_SSM_GROUP_COUNT    = Keys.SSM.GROUP_COUNT
-KEY_SSM_DT_B_C_RMS     = Keys.SSM.DT_B_C_RMS
+KEY_SSM_GROUP_COUNT = Keys.SSM.GROUP_COUNT
+KEY_SSM_DT_B_C_RMS = Keys.SSM.DT_B_C_RMS
 
 # KDA
-KEY_KDA_HEAD_DIM       = Keys.KDA.HEAD_DIM
+KEY_KDA_HEAD_DIM = Keys.KDA.HEAD_DIM
 
 # tokenization
-KEY_TOKENIZER_MODEL      = Keys.Tokenizer.MODEL
-KEY_TOKENIZER_PRE        = Keys.Tokenizer.PRE
-KEY_TOKENIZER_LIST       = Keys.Tokenizer.LIST
+KEY_TOKENIZER_MODEL = Keys.Tokenizer.MODEL
+KEY_TOKENIZER_PRE = Keys.Tokenizer.PRE
+KEY_TOKENIZER_LIST = Keys.Tokenizer.LIST
 KEY_TOKENIZER_TOKEN_TYPE = Keys.Tokenizer.TOKEN_TYPE
-KEY_TOKENIZER_SCORES     = Keys.Tokenizer.SCORES
-KEY_TOKENIZER_MERGES     = Keys.Tokenizer.MERGES
-KEY_TOKENIZER_BOS_ID     = Keys.Tokenizer.BOS_ID
-KEY_TOKENIZER_EOS_ID     = Keys.Tokenizer.EOS_ID
-KEY_TOKENIZER_EOT_ID     = Keys.Tokenizer.EOT_ID
-KEY_TOKENIZER_EOM_ID     = Keys.Tokenizer.EOM_ID
-KEY_TOKENIZER_UNK_ID     = Keys.Tokenizer.UNK_ID
-KEY_TOKENIZER_SEP_ID     = Keys.Tokenizer.SEP_ID
-KEY_TOKENIZER_PAD_ID     = Keys.Tokenizer.PAD_ID
-KEY_TOKENIZER_MASK_ID    = Keys.Tokenizer.MASK_ID
-KEY_TOKENIZER_HF_JSON    = Keys.Tokenizer.HF_JSON
-KEY_TOKENIZER_RWKV       = Keys.Tokenizer.RWKV
+KEY_TOKENIZER_SCORES = Keys.Tokenizer.SCORES
+KEY_TOKENIZER_MERGES = Keys.Tokenizer.MERGES
+KEY_TOKENIZER_BOS_ID = Keys.Tokenizer.BOS_ID
+KEY_TOKENIZER_EOS_ID = Keys.Tokenizer.EOS_ID
+KEY_TOKENIZER_EOT_ID = Keys.Tokenizer.EOT_ID
+KEY_TOKENIZER_EOM_ID = Keys.Tokenizer.EOM_ID
+KEY_TOKENIZER_UNK_ID = Keys.Tokenizer.UNK_ID
+KEY_TOKENIZER_SEP_ID = Keys.Tokenizer.SEP_ID
+KEY_TOKENIZER_PAD_ID = Keys.Tokenizer.PAD_ID
+KEY_TOKENIZER_MASK_ID = Keys.Tokenizer.MASK_ID
+KEY_TOKENIZER_HF_JSON = Keys.Tokenizer.HF_JSON
+KEY_TOKENIZER_RWKV = Keys.Tokenizer.RWKV
 
 KEY_TOKENIZER_FIM_PRE_ID = Keys.Tokenizer.FIM_PRE_ID
 KEY_TOKENIZER_FIM_SUF_ID = Keys.Tokenizer.FIM_SUF_ID
@@ -4792,6 +4817,6 @@ KEY_TOKENIZER_FIM_REP_ID = Keys.Tokenizer.FIM_REP_ID
 KEY_TOKENIZER_FIM_SEP_ID = Keys.Tokenizer.FIM_SEP_ID
 
 # deprecated
-KEY_TOKENIZER_PREFIX_ID  = Keys.Tokenizer.PREFIX_ID
-KEY_TOKENIZER_SUFFIX_ID  = Keys.Tokenizer.SUFFIX_ID
-KEY_TOKENIZER_MIDDLE_ID  = Keys.Tokenizer.MIDDLE_ID
+KEY_TOKENIZER_PREFIX_ID = Keys.Tokenizer.PREFIX_ID
+KEY_TOKENIZER_SUFFIX_ID = Keys.Tokenizer.SUFFIX_ID
+KEY_TOKENIZER_MIDDLE_ID = Keys.Tokenizer.MIDDLE_ID

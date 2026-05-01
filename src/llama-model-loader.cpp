@@ -2,6 +2,7 @@
 
 #include "ggml-alloc.h"
 #include "ggml.h"
+#include "llama.h"
 #include "gguf.h"
 #include "llama-hparams.h"
 
@@ -61,6 +62,13 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ2_S:    return "IQ2_S - 2.5 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_M:    return "IQ2_M - 2.7 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_XS:   return "IQ3_XS - 3.3 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q3_PT:   return "Q3_PT - 3.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q3_KPT:   return "Q3_KPT - Q3_K with learned levels";
+        case LLAMA_FTYPE_MOSTLY_Q4_DPT:   return "Q4_DPT - IQ4_NL with learned levels";
+        case LLAMA_FTYPE_MOSTLY_Q2_KPT:   return "Q2_KPT - Q2_K with learned levels";
+        case LLAMA_FTYPE_MOSTLY_IQ2_TQ:   return "IQ2_TQ - 2.0625 bpw trellis quantized";
+        case LLAMA_FTYPE_MOSTLY_IQ3_TQ:   return "IQ3_TQ - 3.5625 bpw per-tensor trained grid";
+        case LLAMA_FTYPE_MOSTLY_IQ1_BN:   return "IQ1_BN - 1.5625 bpw 8D vector quantized";
         case LLAMA_FTYPE_MOSTLY_IQ3_XXS:  return "IQ3_XXS - 3.0625 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ1_S:    return "IQ1_S - 1.5625 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ1_M:    return "IQ1_M - 1.75 bpw";
@@ -763,6 +771,13 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_IQ4_NL:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_NL;  break;
             case GGML_TYPE_IQ4_XS:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_XS;  break;
             case GGML_TYPE_IQ3_S:   ftype = LLAMA_FTYPE_MOSTLY_IQ3_S;   break;
+            case GGML_TYPE_Q3_PT:   ftype = LLAMA_FTYPE_MOSTLY_Q3_PT;   break;
+            case GGML_TYPE_Q3_KPT:  ftype = LLAMA_FTYPE_MOSTLY_Q3_KPT;  break;
+            case GGML_TYPE_Q4_DPT:  ftype = LLAMA_FTYPE_MOSTLY_Q4_DPT;  break;
+            case GGML_TYPE_Q2_KPT:  ftype = LLAMA_FTYPE_MOSTLY_Q2_KPT;  break;
+            case GGML_TYPE_IQ2_TQ:  ftype = LLAMA_FTYPE_MOSTLY_IQ2_TQ;  break;
+            case GGML_TYPE_IQ3_TQ:  ftype = LLAMA_FTYPE_MOSTLY_IQ3_TQ;  break;
+            case GGML_TYPE_IQ1_BN:  ftype = LLAMA_FTYPE_MOSTLY_IQ1_BN;  break;
             case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
             case GGML_TYPE_Q1_0:    ftype = LLAMA_FTYPE_MOSTLY_Q1_0;    break;
             default:

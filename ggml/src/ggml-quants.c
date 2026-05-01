@@ -378,7 +378,8 @@ void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RE
     }
 }
 
-void dequantize_row_q1_0(const block_q1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q1_0(const block_q1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    GGML_UNUSED(levels);
     static const int qk = QK1_0;
 
     assert(k % qk == 0);
@@ -398,7 +399,7 @@ void dequantize_row_q1_0(const block_q1_0 * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
-void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     static const int qk = QK4_0;
 
     assert(k % qk == 0);
@@ -418,7 +419,7 @@ void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
-void dequantize_row_q4_1(const block_q4_1 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q4_1(const block_q4_1 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     static const int qk = QK4_1;
 
     assert(k % qk == 0);
@@ -439,7 +440,7 @@ void dequantize_row_q4_1(const block_q4_1 * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
-void dequantize_row_q5_0(const block_q5_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q5_0(const block_q5_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     static const int qk = QK5_0;
 
     assert(k % qk == 0);
@@ -465,7 +466,7 @@ void dequantize_row_q5_0(const block_q5_0 * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
-void dequantize_row_q5_1(const block_q5_1 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q5_1(const block_q5_1 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     static const int qk = QK5_1;
 
     assert(k % qk == 0);
@@ -492,7 +493,7 @@ void dequantize_row_q5_1(const block_q5_1 * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
-void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     static const int qk = QK8_0;
 
     assert(k % qk == 0);
@@ -508,7 +509,7 @@ void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
-void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     static const int qk = QK_MXFP4;
 
     assert(k % qk == 0);
@@ -528,7 +529,8 @@ void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
-void dequantize_row_nvfp4(const block_nvfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_nvfp4(const block_nvfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    GGML_UNUSED(levels);
     static const int qk = QK_NVFP4;
     static const int qk_sub = QK_NVFP4_SUB;
     static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
@@ -828,6 +830,15 @@ static inline void get_scale_min_k4(int j, const uint8_t * GGML_RESTRICT q, uint
     }
 }
 
+// Extract only the scale (not min) from Q4_K-style packed scales
+static inline void get_scale_k4_only(int j, const uint8_t * GGML_RESTRICT q, uint8_t * GGML_RESTRICT d) {
+    if (j < 4) {
+        *d = q[j] & 63;
+    } else {
+        *d = (q[j+4] & 0xF) | ((q[j-4] >> 6) << 4);
+    }
+}
+
 //========================- 2-bit (de)-quantization
 
 void quantize_row_q2_K_ref(const float * GGML_RESTRICT x, block_q2_K * GGML_RESTRICT y, int64_t k) {
@@ -900,7 +911,7 @@ void quantize_row_q2_K_ref(const float * GGML_RESTRICT x, block_q2_K * GGML_REST
     }
 }
 
-void dequantize_row_q2_K(const block_q2_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q2_K(const block_q2_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
 
@@ -1244,7 +1255,7 @@ void quantize_row_q3_K_ref(const float * GGML_RESTRICT x, block_q3_K * GGML_REST
     }
 }
 
-void dequantize_row_q3_K(const block_q3_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q3_K(const block_q3_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
 
@@ -1468,7 +1479,7 @@ void quantize_row_q4_K_ref(const float * GGML_RESTRICT x, block_q4_K * GGML_REST
     }
 }
 
-void dequantize_row_q4_K(const block_q4_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q4_K(const block_q4_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
 
@@ -1670,7 +1681,7 @@ void quantize_row_q5_K_ref(const float * GGML_RESTRICT x, block_q5_K * GGML_REST
     }
 }
 
-void dequantize_row_q5_K(const block_q5_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q5_K(const block_q5_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -1878,7 +1889,7 @@ void quantize_row_q6_K_ref(const float * GGML_RESTRICT x, block_q6_K * GGML_REST
     }
 }
 
-void dequantize_row_q6_K(const block_q6_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q6_K(const block_q6_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2353,7 +2364,7 @@ size_t quantize_tq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     return nrow * row_size;
 }
 
-void dequantize_row_tq1_0(const block_tq1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_tq1_0(const block_tq1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2392,7 +2403,7 @@ void dequantize_row_tq1_0(const block_tq1_0 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
-void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2413,7 +2424,7 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
 
 // ====================== "True" 2-bit (de)-quantization
 
-void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2441,7 +2452,7 @@ void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_
 
 // ====================== 2.3125 bpw (de)-quantization
 
-void dequantize_row_iq2_xs(const block_iq2_xs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq2_xs(const block_iq2_xs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2468,7 +2479,7 @@ void dequantize_row_iq2_xs(const block_iq2_xs * GGML_RESTRICT x, float * GGML_RE
 
 // ====================== 2.5625 bpw (de)-quantization
 
-void dequantize_row_iq2_s(const block_iq2_s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq2_s(const block_iq2_s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2500,7 +2511,7 @@ void dequantize_row_iq2_s(const block_iq2_s * GGML_RESTRICT x, float * GGML_REST
 
 // ====================== 3.0625 bpw (de)-quantization
 
-void dequantize_row_iq3_xxs(const block_iq3_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq3_xxs(const block_iq3_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2532,7 +2543,7 @@ void dequantize_row_iq3_xxs(const block_iq3_xxs * GGML_RESTRICT x, float * GGML_
 
 // ====================== 3.3125 bpw (de)-quantization
 
-void dequantize_row_iq3_s(const block_iq3_s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq3_s(const block_iq3_s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2575,7 +2586,7 @@ void dequantize_row_iq3_s(const block_iq3_s * GGML_RESTRICT x, float * GGML_REST
 
 // ====================== 1.5625 bpw (de)-quantization
 
-void dequantize_row_iq1_s(const block_iq1_s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq1_s(const block_iq1_s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2600,7 +2611,7 @@ void dequantize_row_iq1_s(const block_iq1_s * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
-void dequantize_row_iq1_m(const block_iq1_m * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq1_m(const block_iq1_m * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2650,7 +2661,7 @@ void dequantize_row_iq1_m(const block_iq1_m * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
-void dequantize_row_iq4_nl(const block_iq4_nl * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq4_nl(const block_iq4_nl * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK4_NL == 0);
     const int64_t nb = k / QK4_NL;
 
@@ -2668,7 +2679,7 @@ void dequantize_row_iq4_nl(const block_iq4_nl * GGML_RESTRICT x, float * GGML_RE
     }
 }
 
-void dequantize_row_iq4_xs(const block_iq4_xs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq4_xs(const block_iq4_xs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2732,7 +2743,7 @@ void quantize_row_q8_K_ref(const float * GGML_RESTRICT x, block_q8_K * GGML_REST
     }
 }
 
-void dequantize_row_q8_K(const block_q8_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_q8_K(const block_q8_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -4305,6 +4316,4045 @@ void quantize_row_iq3_s_ref(const float * GGML_RESTRICT x, block_iq3_s * GGML_RE
     quantize_iq3_s(x, y, 1, k, NULL);
 }
 
+// ====================== Q3_KPT: Q3_K with learned per-tensor levels ======================
+//
+// Block format: Identical to block_q3_K (110 bytes per QK_K=256 elements)
+//   hmask[QK_K/8] : high bit for 3-bit indices
+//   qs[QK_K/4]    : low 2 bits for 3-bit indices
+//   scales[12]    : 6-bit quantized scales
+//   d             : super-block scale
+//
+// The difference from Q3_K: instead of q ∈ {-4,-3,-2,-1,0,1,2,3},
+// we use learned levels L[0..7] and compute: x = d * sc * (L[k] - 4)
+// where k is the 3-bit index.
+//
+// Per-tensor: 8 float32 "levels" in [0,1] from Lloyd-Max training.
+// Stored in GGUF as "q3_kpt.levels" (float32 array).
+
+static float q3kpt_levels[Q3KPT_N_LEVELS];
+static bool  q3kpt_levels_set = false;
+
+GGML_API void q3kpt_set_levels(const float * levels) {
+    memcpy(q3kpt_levels, levels, Q3KPT_N_LEVELS * sizeof(float));
+    q3kpt_levels_set = true;
+}
+
+GGML_API const float * q3kpt_get_levels(void) {
+    return q3kpt_levels_set ? q3kpt_levels : NULL;
+}
+
+GGML_API void q3kpt_free_levels(void) {
+    q3kpt_levels_set = false;
+}
+
+
+// Train levels in the symmetric quantization space
+GGML_API void q3kpt_train_levels(const float * data,
+                                 int64_t       nrow,
+                                 int64_t       n_per_row,
+                                 const float * imatrix,
+                                 float         levels_out[Q3KPT_N_LEVELS]) {
+    // Binning parameters
+    const int   N_BINS     = 8192;
+    const float bin_width  = 1.0f / N_BINS;
+    float *     bin_sum_w  = (float *) calloc(N_BINS, sizeof(float));
+    float *     bin_sum_wt = (float *) calloc(N_BINS, sizeof(float));
+    GGML_ASSERT(bin_sum_w && bin_sum_wt);
+
+    const int nb = (int) (n_per_row / QK_K);
+
+    // Single pass: use simple max_abs/4 scale estimation per sub-block, then bin
+    for (int64_t row = 0; row < nrow; ++row) {
+        const float * xrow = data + row * n_per_row;
+
+        for (int i = 0; i < nb; i++) {
+            const float * x = xrow + i * QK_K;
+
+            for (int j = 0; j < QK_K / 16; ++j) {
+                // Simple symmetric scale: max_abs / 4
+                float amax = 0;
+                for (int l = 0; l < 16; ++l) {
+                    float ax = fabsf(x[16 * j + l]);
+                    if (ax > amax) {
+                        amax = ax;
+                    }
+                }
+                if (amax < 1e-10f) {
+                    continue;
+                }
+
+                float d     = amax / 4.0f;
+                float inv_d = 1.0f / d;
+
+                for (int l = 0; l < 16; ++l) {
+                    float val = x[16 * j + l] * inv_d;
+                    // Map from [-4, 3] symmetric space to [0, 1]
+                    float t = (val + 4.0f) / 7.0f;
+
+                    if (t < 0.0f) {
+                        t = 0.0f;
+                    }
+                    if (t > 1.0f) {
+                        t = 1.0f;
+                    }
+
+                    int bin_idx = (int) (t * N_BINS);
+                    if (bin_idx >= N_BINS) {
+                        bin_idx = N_BINS - 1;
+                    }
+
+                    int   elem = i * QK_K + 16 * j + l;
+                    float w    = imatrix ? imatrix[elem] : 1.0f;
+                    if (w < 1e-10f) {
+                        w = 1e-10f;
+                    }
+                    w *= d * d;
+
+                    bin_sum_w[bin_idx] += w;
+                    bin_sum_wt[bin_idx] += w * t;
+                }
+            }
+        }
+    }
+
+    // Initialize 8 levels uniformly in [0, 1]
+    float levels[Q3KPT_N_LEVELS];
+    for (int k = 0; k < Q3KPT_N_LEVELS; ++k) {
+        levels[k] = (float) k / (Q3KPT_N_LEVELS - 1);
+    }
+
+    // Lloyd-Max iterations on bins
+    for (int iter = 0; iter < 100; ++iter) {
+        float sum_w[Q3KPT_N_LEVELS]  = { 0 };
+        float sum_wt[Q3KPT_N_LEVELS] = { 0 };
+
+        for (int b = 0; b < N_BINS; ++b) {
+            if (bin_sum_w[b] < 1e-12f) {
+                continue;
+            }
+            const float t       = (b + 0.5f) * bin_width;
+            int         best    = 0;
+            float       best_d2 = (t - levels[0]) * (t - levels[0]);
+            for (int k = 1; k < Q3KPT_N_LEVELS; ++k) {
+                float d2 = (t - levels[k]) * (t - levels[k]);
+                if (d2 < best_d2) {
+                    best_d2 = d2;
+                    best    = k;
+                }
+            }
+            sum_w[best] += bin_sum_w[b];
+            sum_wt[best] += bin_sum_wt[b];
+        }
+
+        float max_delta = 0.0f;
+        for (int k = 0; k < Q3KPT_N_LEVELS; ++k) {
+            if (sum_w[k] > 1e-12f) {
+                float new_level = sum_wt[k] / sum_w[k];
+                max_delta       = fmaxf(max_delta, fabsf(new_level - levels[k]));
+                levels[k]       = new_level;
+            }
+        }
+        if (max_delta < 1e-10f) {
+            break;
+        }
+
+        for (int k = 1; k < Q3KPT_N_LEVELS; ++k) {
+            float v = levels[k];
+            int   m = k - 1;
+            while (m >= 0 && levels[m] > v) {
+                levels[m + 1] = levels[m];
+                m--;
+            }
+            levels[m + 1] = v;
+        }
+    }
+
+    memcpy(levels_out, levels, Q3KPT_N_LEVELS * sizeof(float));
+    q3kpt_set_levels(levels);
+    free(bin_sum_w);
+    free(bin_sum_wt);
+}
+
+void dequantize_row_q3_kpt(const block_q3_kpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    assert(k % QK_K == 0);
+    const int64_t nb     = k / QK_K;
+    const float * lv = (const float *)levels;
+    GGML_ASSERT(lv != NULL && "Q3_KPT levels not set for tensor");
+
+    // levels are in [0,1], map to approximate [-4, 3] range for Q3_K compatibility
+    // The dequant formula: y = d * sc * (L[k] * 8 - 4) = d * sc * (L[k] - 0.5) * 8
+    // But simpler: store shifted levels and use: y = d * sc * L_shifted[k]
+    // where L_shifted[k] = (L[k] - 0.5) * 8 or just use (L[k] - 4) if L is in [0,7]
+
+    // Actually, let's use: reconstructed = d * sc * (L[k] - 4)
+    // where L[k] is in [0, 7] (shifted from [0,1])
+
+    const uint32_t kmask1 = 0x03030303;
+    const uint32_t kmask2 = 0x0f0f0f0f;
+
+    for (int i = 0; i < nb; i++) {
+        const float     d_all = GGML_FP16_TO_FP32(x[i].d);
+        const uint8_t * q     = x[i].qs;
+        const uint8_t * hm    = x[i].hmask;
+        uint8_t         m     = 1;
+
+        uint32_t aux32[4];
+        memcpy(aux32, x[i].scales, 12);
+        uint32_t tmp        = aux32[2];
+        aux32[2]            = ((aux32[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+        aux32[3]            = ((aux32[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+        aux32[0]            = (aux32[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+        aux32[1]            = (aux32[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+        const uint8_t * aux = (const uint8_t *) aux32;
+
+        int is = 0;
+        for (int n = 0; n < QK_K; n += 128) {
+            int shift = 0;
+            for (int j = 0; j < 4; ++j) {
+                int sc1 = (int) aux[is] - 32;
+                int sc2 = (int) aux[is + 1] - 32;
+                is += 2;
+                float dl1 = d_all * sc1;
+                float dl2 = d_all * sc2;
+
+                for (int l = 0; l < 16; ++l) {
+                    int k_idx = ((q[l + 0] >> shift) & 3) + ((hm[l + 0] & m) ? 4 : 0);
+                    y[l + 0]  = dl1 * (lv[k_idx] * 7.0f - 4.0f);
+                }
+                for (int l = 0; l < 16; ++l) {
+                    int k_idx = ((q[l + 16] >> shift) & 3) + ((hm[l + 16] & m) ? 4 : 0);
+                    y[l + 16] = dl2 * (lv[k_idx] * 7.0f - 4.0f);
+                }
+                y += 32;
+                shift += 2;
+                m <<= 1;
+            }
+            q += 32;
+        }
+    }
+}
+
+// Helper: find optimal symmetric scale for non-uniform mapped levels.
+// Closely mirrors make_qx_quants but uses nearest-mapped-level assignment
+// instead of rounding to nearest integer.
+// mapped_levels[k] = levels[k]*7 - 4, k=0..7.
+// Returns the per-sub-block scale d such that x[i] ≈ d * ml[L[i]].
+// L[i] gets the best level index [0..7].
+static float make_q3kpt_quants(int                         n,
+                               const float * GGML_RESTRICT x,
+                               int8_t * GGML_RESTRICT      L,
+                               const float * GGML_RESTRICT weight,
+                               const float *               mapped_levels) {
+    // Find the most negative and most positive mapped levels
+    float ml_neg = mapped_levels[0], ml_pos = mapped_levels[Q3KPT_N_LEVELS - 1];
+
+    // Precompute boundaries for branchless nearest-level search
+    float bounds[Q3KPT_N_LEVELS - 1];
+    for (int k = 0; k < Q3KPT_N_LEVELS - 1; ++k) {
+        bounds[k] = 0.5f * (mapped_levels[k] + mapped_levels[k + 1]);
+    }
+
+    // Find max absolute value in data (and its sign)
+    float max = 0, amax = 0;
+    for (int i = 0; i < n; ++i) {
+        float ax = fabsf(x[i]);
+        if (ax > amax) {
+            amax = ax;
+            max  = x[i];
+        }
+    }
+    if (amax < GROUP_MAX_EPS) {
+        // Find level closest to 0
+        int   zero_k = 0;
+        float zero_d = fabsf(mapped_levels[0]);
+        for (int k = 1; k < Q3KPT_N_LEVELS; ++k) {
+            if (fabsf(mapped_levels[k]) < zero_d) {
+                zero_d = fabsf(mapped_levels[k]);
+                zero_k = k;
+            }
+        }
+        for (int i = 0; i < n; ++i) {
+            L[i] = zero_k;
+        }
+        return 0.f;
+    }
+
+    float best_scale = 0;
+    float best_obj   = 0;
+    bool  first      = true;
+
+    for (int is = -15; is <= 15; ++is) {
+        float iscales[2] = {
+            -(fabsf(ml_neg) + 0.1f * is) / max,  // map max to ml_neg (Q3_K style)
+            (fabsf(ml_pos) + 0.1f * is) / max    // map max to ml_pos
+        };
+
+        for (int opt = 0; opt < 2; ++opt) {
+            float iscale = iscales[opt];
+
+            float sumlx = 0, suml2 = 0;
+            for (int i = 0; i < n; ++i) {
+                float scaled  = x[i] * iscale;
+                // Branchless nearest level assignment
+                int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]) +
+                             (scaled > bounds[3]) + (scaled > bounds[4]) + (scaled > bounds[5]) + (scaled > bounds[6]);
+                float w = weight ? weight[i] : x[i] * x[i];
+                sumlx += w * x[i] * mapped_levels[best_k];
+                suml2 += w * mapped_levels[best_k] * mapped_levels[best_k];
+            }
+
+            if (suml2 > 0 && (first || sumlx * sumlx > best_obj * suml2)) {
+                float scale = sumlx / suml2;
+                best_obj    = scale * sumlx;
+                best_scale  = scale;
+                first       = false;
+                // Re-assign L with this iscale
+                for (int i = 0; i < n; ++i) {
+                    float scaled  = x[i] * iscale;
+                    int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]) +
+                                 (scaled > bounds[3]) + (scaled > bounds[4]) + (scaled > bounds[5]) + (scaled > bounds[6]);
+                    L[i] = best_k;
+                }
+            }
+        }
+    }
+    return best_scale;
+}
+
+static void quantize_row_q3_kpt_impl(const float * GGML_RESTRICT  x,
+                                     block_q3_kpt * GGML_RESTRICT y,
+                                     int64_t                      n_per_row,
+                                     const float * GGML_RESTRICT  quant_weights) {
+    assert(n_per_row % QK_K == 0);
+    const int     nb     = n_per_row / QK_K;
+    const float * levels = q3kpt_get_levels();
+    GGML_ASSERT(levels != NULL && "Q3_KPT levels not set - call q3kpt_set_levels() first");
+
+    // Precompute mapped levels: ml[k] = levels[k] * 7 - 4
+    float mapped_levels[Q3KPT_N_LEVELS];
+    for (int k = 0; k < Q3KPT_N_LEVELS; ++k) {
+        mapped_levels[k] = levels[k] * 7.0f - 4.0f;
+    }
+
+    // Precompute boundaries for branchless nearest-level search
+    float bounds[Q3KPT_N_LEVELS - 1];
+    for (int k = 0; k < Q3KPT_N_LEVELS - 1; ++k) {
+        bounds[k] = 0.5f * (mapped_levels[k] + mapped_levels[k + 1]);
+    }
+
+    int8_t L[QK_K];
+    float  scales[QK_K / 16];
+    float  weight[16];
+    float  sw[QK_K / 16];
+    int8_t Ls[QK_K / 16];
+
+    for (int i = 0; i < nb; i++) {
+        float sumx2 = 0;
+        for (int j = 0; j < QK_K; ++j) {
+            sumx2 += x[j] * x[j];
+        }
+        float sigma2 = 2 * sumx2 / QK_K;
+
+        // First pass: find per-sub-block scales optimized for mapped levels
+        for (int j = 0; j < QK_K / 16; ++j) {
+            if (quant_weights) {
+                const float * qw = quant_weights + QK_K * i + 16 * j;
+                for (int l = 0; l < 16; ++l) {
+                    weight[l] = qw[l] * sqrtf(sigma2 + x[16 * j + l] * x[16 * j + l]);
+                }
+            } else {
+                for (int l = 0; l < 16; ++l) {
+                    weight[l] = x[16 * j + l] * x[16 * j + l];
+                }
+            }
+            float sumw = 0;
+            for (int l = 0; l < 16; ++l) {
+                sumw += weight[l];
+            }
+            sw[j] = sumw;
+
+            scales[j] = make_q3kpt_quants(16, x + 16 * j, L + 16 * j, weight, mapped_levels);
+        }
+
+        // Two-tier scale quantization (identical to Q3_K)
+        memset(y[i].scales, 0, 12);
+        float d_block = make_qx_quants(QK_K / 16, 32, scales, Ls, 1, sw);
+        for (int j = 0; j < QK_K / 16; ++j) {
+            int l = Ls[j];
+            if (j < 8) {
+                y[i].scales[j] = l & 0xF;
+            } else {
+                y[i].scales[j - 8] |= ((l & 0xF) << 4);
+            }
+            l >>= 4;
+            y[i].scales[j % 4 + 8] |= (l << (2 * (j / 4)));
+        }
+        y[i].d = GGML_FP32_TO_FP16(d_block);
+
+        // Second pass: level assignment using the quantized scales but
+        // assigning nearest LEARNED LEVEL instead of nearest integer
+        int8_t sc;
+        for (int j = 0; j < QK_K / 16; ++j) {
+            sc      = j < 8 ? y[i].scales[j] & 0xF : y[i].scales[j - 8] >> 4;
+            sc      = (sc | (((y[i].scales[8 + j % 4] >> (2 * (j / 4))) & 3) << 4)) - 32;
+            float d = GGML_FP16_TO_FP32(y[i].d) * sc;
+            if (!d) {
+                // Find level closest to 0 for zero-scale sub-blocks
+                int   zero_k    = 0;
+                float zero_dist = fabsf(mapped_levels[0]);
+                for (int k = 1; k < Q3KPT_N_LEVELS; ++k) {
+                    if (fabsf(mapped_levels[k]) < zero_dist) {
+                        zero_dist = fabsf(mapped_levels[k]);
+                        zero_k    = k;
+                    }
+                }
+                for (int ii = 0; ii < 16; ++ii) {
+                    L[16 * j + ii] = zero_k;
+                }
+                continue;
+            }
+            for (int ii = 0; ii < 16; ++ii) {
+                float scaled  = x[16 * j + ii] / d;
+                // Branchless nearest level assignment
+                int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]) +
+                             (scaled > bounds[3]) + (scaled > bounds[4]) + (scaled > bounds[5]) + (scaled > bounds[6]);
+                L[16 * j + ii] = best_k;
+            }
+        }
+
+        // Pack level indices (same bit layout as Q3_K)
+        memset(y[i].hmask, 0, QK_K / 8);
+        int     m  = 0;
+        uint8_t hm = 1;
+        for (int j = 0; j < QK_K; ++j) {
+            if (L[j] > 3) {
+                y[i].hmask[m] |= hm;
+                L[j] -= 4;
+            }
+            if (++m == QK_K / 8) {
+                m = 0;
+                hm <<= 1;
+            }
+        }
+        for (int j = 0; j < QK_K; j += 128) {
+            for (int l = 0; l < 32; ++l) {
+                y[i].qs[j / 4 + l] = L[j + l] | (L[j + l + 32] << 2) | (L[j + l + 64] << 4) | (L[j + l + 96] << 6);
+            }
+        }
+        x += QK_K;
+    }
+}
+
+size_t quantize_q3_kpt(const float * GGML_RESTRICT src,
+                       void * GGML_RESTRICT        dst,
+                       int64_t                     nrow,
+                       int64_t                     n_per_row,
+                       const float *               imatrix) {
+    size_t row_size = ggml_row_size(GGML_TYPE_Q3_KPT, n_per_row);
+    char * qrow     = (char *) dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q3_kpt_impl(src, (block_q3_kpt *) qrow, n_per_row, imatrix);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
+void quantize_row_q3_kpt_ref(const float * GGML_RESTRICT x, block_q3_kpt * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    quantize_q3_kpt(x, y, 1, k, NULL);
+}
+
+// Forward declaration needed since quantize_row_iq4_nl_impl is defined later in this file.
+static void quantize_row_iq4_nl_impl(const int super_block_size, const int block_size,
+        const float * GGML_RESTRICT x,
+        ggml_fp16_t * dh, uint8_t * q4, uint16_t * scales_h, uint8_t * scales_l,
+        float * scales, float * weight, uint8_t * L,
+        const int8_t * values,
+        const float * quant_weights,
+        const int ntry);
+
+// ====================== Q4_DPT: IQ4_NL with learned per-tensor int8 levels ======================
+//
+// Block format: identical to block_iq4_nl (18 bytes per QK4_NL=32 elements)
+//   d   : ggml_half — per-block scale
+//   qs  : QK4_NL/2 bytes — 4-bit indices into the 16-entry level table
+//
+// The difference from IQ4_NL: instead of the fixed kvalues_iq4nl int8 table,
+// we use 16 int8 levels learned per-tensor via weighted Lloyd-Max k-means.
+// Normalization: symmetric (x/amax), bin domain [-1, 1].
+// Levels stored in GGUF as "q4_dpt.levels" (int8 array, 16 values per tensor).
+
+static int8_t q4dpt_levels[Q4DPT_N_LEVELS];
+static bool   q4dpt_levels_set = false;
+
+void q4dpt_set_levels(const int8_t * levels) {
+    memcpy(q4dpt_levels, levels, Q4DPT_N_LEVELS * sizeof(int8_t));
+    q4dpt_levels_set = true;
+}
+
+const int8_t * q4dpt_get_levels(void) {
+    return q4dpt_levels_set ? q4dpt_levels : NULL;
+}
+
+void q4dpt_free_levels(void) {
+    q4dpt_levels_set = false;
+}
+
+
+// Run Lloyd-Max iterations on a pre-built histogram.
+// levels[] (n_levels entries) is updated in-place (and kept sorted).
+static void q4dpt_run_lloyd_max(const float * bin_sum_w, const float * bin_sum_wt,
+                                  float * levels, int n_levels, int n_bins, float bin_width, int max_iter) {
+    // sw/swt sized for the max possible n_levels (Q4DPT_N_LEVELS)
+    float sw[Q4DPT_N_LEVELS]  = { 0 };
+    float swt[Q4DPT_N_LEVELS] = { 0 };
+    for (int iter = 0; iter < max_iter; ++iter) {
+        for (int k = 0; k < n_levels; ++k) { sw[k] = 0; swt[k] = 0; }
+        for (int b = 0; b < n_bins; ++b) {
+            if (bin_sum_w[b] < 1e-12f) { continue; }
+            float t = -1.0f + (b + 0.5f) * bin_width;
+            int best = 0;
+            float bd = (t - levels[0]) * (t - levels[0]);
+            for (int k = 1; k < n_levels; ++k) {
+                float d = (t - levels[k]) * (t - levels[k]);
+                if (d < bd) { bd = d; best = k; }
+            }
+            sw[best]  += bin_sum_w[b];
+            swt[best] += bin_sum_wt[b];
+        }
+        float max_delta = 0.0f;
+        for (int k = 0; k < n_levels; ++k) {
+            if (sw[k] > 1e-12f) {
+                float nl = swt[k] / sw[k];
+                max_delta = fmaxf(max_delta, fabsf(nl - levels[k]));
+                levels[k] = nl;
+            }
+        }
+        if (max_delta < 1e-10f) { break; }
+        for (int k = 1; k < n_levels; ++k) {
+            float v = levels[k];
+            int m = k - 1;
+            while (m >= 0 && levels[m] > v) { levels[m+1] = levels[m]; m--; }
+            levels[m+1] = v;
+        }
+    }
+}
+
+// Train 16 Lloyd-Max int8 levels.
+// Bins x/amax values from 32-element IQ4_NL-style blocks into [-1,1],
+// runs weighted k-means (seeded from IQ4_NL values), then rounds float
+// centroids to sorted int8[16] with post-rounding local search.
+void q4dpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                         const float * imatrix, int8_t levels_out[Q4DPT_N_LEVELS]) {
+    const int   N_BINS    = 8192;
+    const float bin_width = 2.0f / N_BINS;
+    float * bin_sum_w  = (float *) calloc(N_BINS, sizeof(float));
+    float * bin_sum_wt = (float *) calloc(N_BINS, sizeof(float));
+    GGML_ASSERT(bin_sum_w && bin_sum_wt);
+
+    const int64_t n_blocks = n_per_row / QK4_NL;
+
+    // Build weighted histogram: normalize each block by amax, bin into [-1, 1]
+    for (int64_t row = 0; row < nrow; ++row) {
+        const float * xrow = data + row * n_per_row;
+        for (int64_t ib = 0; ib < n_blocks; ++ib) {
+            const float * xb = xrow + ib * QK4_NL;
+            float amax = 0.0f;
+            for (int j = 0; j < QK4_NL; ++j) {
+                float ax = fabsf(xb[j]);
+                if (ax > amax) { amax = ax; }
+            }
+            if (amax < 1e-10f) { continue; }
+            const float inv_amax = 1.0f / amax;
+            for (int j = 0; j < QK4_NL; ++j) {
+                float w = 1.0f;
+                if (imatrix) {
+                    w = imatrix[ib * QK4_NL + j];
+                    if (w < 1e-10f) { w = 1e-10f; }
+                }
+                w *= amax * amax;
+                float t = xb[j] * inv_amax;
+                int bin_idx = (int)((t + 1.0f) * 0.5f * N_BINS);
+                if (bin_idx < 0) { bin_idx = 0; }
+                if (bin_idx >= N_BINS) { bin_idx = N_BINS - 1; }
+                bin_sum_w[bin_idx]  += w;
+                bin_sum_wt[bin_idx] += w * t;
+            }
+        }
+    }
+
+    // Initialize from IQ4_NL values normalized to [-1, 1], then run Lloyd-Max
+    float best_levels[Q4DPT_N_LEVELS];
+    for (int k = 0; k < Q4DPT_N_LEVELS; ++k) {
+        best_levels[k] = (float)kvalues_iq4nl[k] / 127.0f;
+    }
+    q4dpt_run_lloyd_max(bin_sum_w, bin_sum_wt, best_levels, Q4DPT_N_LEVELS, N_BINS, bin_width, 500);
+
+    // Round float centroids to int8, preserve sort order
+    int8_t levels_i8[Q4DPT_N_LEVELS];
+    for (int k = 0; k < Q4DPT_N_LEVELS; ++k) {
+        int v = (int)roundf(best_levels[k] * 127.0f);
+        if (v < -128) { v = -128; }
+        if (v >  127) { v =  127; }
+        levels_i8[k] = (int8_t)v;
+    }
+
+    // Post-rounding local search: try ±1 adjustments to each level greedily.
+    // The int8 rounding can introduce sub-optimal level placement; this
+    // hill-climbing on discrete int8 values often recovers a better solution.
+    for (int pass = 0; pass < 10; ++pass) {
+        int improved = 0;
+        for (int k = 0; k < Q4DPT_N_LEVELS; ++k) {
+            // Evaluate current histogram MSE with int8 levels
+            float cur_levels[Q4DPT_N_LEVELS];
+            for (int i = 0; i < Q4DPT_N_LEVELS; ++i) {
+                cur_levels[i] = (float)levels_i8[i] / 127.0f;
+            }
+            float cur_mse = 0.0f;
+            for (int b = 0; b < N_BINS; ++b) {
+                if (bin_sum_w[b] < 1e-12f) { continue; }
+                float t = -1.0f + (b + 0.5f) * bin_width;
+                float bd = (t - cur_levels[0]) * (t - cur_levels[0]);
+                for (int i = 1; i < Q4DPT_N_LEVELS; ++i) {
+                    float d = (t - cur_levels[i]) * (t - cur_levels[i]);
+                    if (d < bd) { bd = d; }
+                }
+                cur_mse += bin_sum_w[b] * bd;
+            }
+
+            int8_t best_val = levels_i8[k];
+            int8_t lo = (k > 0)                    ? (int8_t)(levels_i8[k-1] + 1) : -128;
+            int8_t hi = (k < Q4DPT_N_LEVELS - 1)   ? (int8_t)(levels_i8[k+1] - 1) :  127;
+            for (int delta = -1; delta <= 1; delta += 2) {
+                int8_t nv = (int8_t)(levels_i8[k] + delta);
+                if (nv < lo || nv > hi) { continue; }
+                cur_levels[k] = (float)nv / 127.0f;
+                float test_mse = 0.0f;
+                for (int b = 0; b < N_BINS; ++b) {
+                    if (bin_sum_w[b] < 1e-12f) { continue; }
+                    float t = -1.0f + (b + 0.5f) * bin_width;
+                    float bd = (t - cur_levels[0]) * (t - cur_levels[0]);
+                    for (int i = 1; i < Q4DPT_N_LEVELS; ++i) {
+                        float d = (t - cur_levels[i]) * (t - cur_levels[i]);
+                        if (d < bd) { bd = d; }
+                    }
+                    test_mse += bin_sum_w[b] * bd;
+                }
+                if (test_mse < cur_mse) {
+                    best_val = nv;
+                    cur_mse = test_mse;
+                    improved = 1;
+                }
+                cur_levels[k] = (float)levels_i8[k] / 127.0f;  // restore
+            }
+            levels_i8[k] = best_val;
+        }
+        if (!improved) { break; }
+    }
+
+    memcpy(levels_out, levels_i8, Q4DPT_N_LEVELS * sizeof(int8_t));
+
+    q4dpt_set_levels(levels_out);
+
+    free(bin_sum_w);
+    free(bin_sum_wt);
+}
+
+void dequantize_row_q4_dpt(const block_q4_dpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    assert(k % QK4_NL == 0);
+    const int64_t nb      = k / QK4_NL;
+    const int8_t * values  = (const int8_t *)levels;
+    GGML_ASSERT(values != NULL && "Q4_DPT levels not set for tensor");
+
+    for (int i = 0; i < nb; i++) {
+        const uint8_t * qs = x[i].qs;
+        const float     d  = GGML_FP16_TO_FP32(x[i].d);
+        for (int j = 0; j < QK4_NL/2; ++j) {
+            y[j]            = d * (float)values[qs[j] & 0xf];
+            y[j + QK4_NL/2] = d * (float)values[qs[j] >>  4];
+        }
+        y += QK4_NL;
+    }
+}
+
+// Quantize one 32-element block using int8 levels and optimal per-block scale.
+// IQ4_NL-style scale perturbation with negative-scale support and final re-assignment.
+static void quantize_block_q4_dpt(const float * GGML_RESTRICT xb, block_q4_dpt * GGML_RESTRICT out,
+                                    const int8_t * values, const float * qw, int ntry) {
+    float amax = 0.0f, max_val = 0.0f;
+    for (int j = 0; j < QK4_NL; ++j) {
+        float ax = fabsf(xb[j]);
+        if (ax > amax) { amax = ax; max_val = xb[j]; }
+    }
+    if (amax < 1e-10f) {
+        out->d = 0;
+        memset(out->qs, 0, QK4_NL/2);
+        return;
+    }
+
+    // Initial scale: d = -max/values[0] (allows negative d for asymmetric levels)
+    float d = ntry > 0 ? -max_val / (float)values[0] : max_val / (float)values[0];
+    float id = (fabsf(d) > 1e-20f) ? 1.0f / d : 0.0f;
+
+    // Initial assignment + optimal scale via least-squares
+    uint8_t L[QK4_NL];
+    float sumqx = 0.0f, sumq2 = 0.0f;
+    for (int j = 0; j < QK4_NL; ++j) {
+        float al = id * xb[j];
+        int bk = 0;
+        float bd = fabsf(al - (float)values[0]);
+        for (int k = 1; k < Q4DPT_N_LEVELS; ++k) {
+            float dist = fabsf(al - (float)values[k]);
+            if (dist < bd) { bd = dist; bk = k; }
+        }
+        L[j] = (uint8_t)bk;
+        float q = (float)values[bk];
+        float w = qw ? qw[j] : 1.0f;
+        sumqx += w * q * xb[j];
+        sumq2 += w * q * q;
+    }
+    d = (sumq2 > 1e-20f) ? sumqx / sumq2 : d;
+    float best = d * sumqx;
+    uint8_t best_L[QK4_NL];
+    memcpy(best_L, L, QK4_NL);
+    float best_d = d;
+
+    // Scale perturbation: id = (itry + values[0]) / max_val (IQ4_NL-style)
+    for (int itry = -ntry; itry <= ntry; ++itry) {
+        id = ((float)itry + (float)values[0]) / max_val;
+        sumqx = sumq2 = 0.0f;
+        for (int j = 0; j < QK4_NL; ++j) {
+            float al = id * xb[j];
+            int bk = 0;
+            float bd = fabsf(al - (float)values[0]);
+            for (int k = 1; k < Q4DPT_N_LEVELS; ++k) {
+                float dist = fabsf(al - (float)values[k]);
+                if (dist < bd) { bd = dist; bk = k; }
+            }
+            L[j] = (uint8_t)bk;
+            float q = (float)values[bk];
+            float w = qw ? qw[j] : 1.0f;
+            sumqx += w * q * xb[j];
+            sumq2 += w * q * q;
+        }
+        if (sumq2 > 0.0f && sumqx * sumqx > best * sumq2) {
+            d = sumqx / sumq2;
+            best = d * sumqx;
+            best_d = d;
+            memcpy(best_L, L, QK4_NL);
+        }
+    }
+
+    // Final re-assignment using the best scale
+    id = (fabsf(best_d) > 1e-20f) ? 1.0f / best_d : 0.0f;
+    for (int j = 0; j < QK4_NL; ++j) {
+        float al = id * xb[j];
+        int bk = 0;
+        float bd = fabsf(al - (float)values[0]);
+        for (int k = 1; k < Q4DPT_N_LEVELS; ++k) {
+            float dist = fabsf(al - (float)values[k]);
+            if (dist < bd) { bd = dist; bk = k; }
+        }
+        best_L[j] = (uint8_t)bk;
+    }
+
+    out->d = GGML_FP32_TO_FP16(best_d);
+    for (int j = 0; j < QK4_NL/2; ++j) {
+        out->qs[j] = best_L[j] | (best_L[j + QK4_NL/2] << 4);
+    }
+}
+
+size_t quantize_q4_dpt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                        int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_ASSERT(n_per_row % QK4_NL == 0);
+    const int8_t * values = q4dpt_get_levels();
+    GGML_ASSERT(values != NULL && "Q4_DPT levels not set - call q4dpt_set_levels() first");
+
+    const int64_t nblock = n_per_row / QK4_NL;
+    char * qrow = (char *) dst;
+
+    for (int64_t row = 0; row < nrow; ++row) {
+        block_q4_dpt * q4 = (block_q4_dpt *) qrow;
+        for (int64_t ibl = 0; ibl < nblock; ++ibl) {
+            const float * qw = quant_weights ? quant_weights + QK4_NL * ibl : NULL;
+            quantize_block_q4_dpt(src + QK4_NL * ibl, &q4[ibl], values, qw, 15);
+        }
+        src  += n_per_row;
+        qrow += nblock * sizeof(block_q4_dpt);
+    }
+    return (size_t) nrow * nblock * sizeof(block_q4_dpt);
+}
+
+void quantize_row_q4_dpt_ref(const float * GGML_RESTRICT x, block_q4_dpt * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK4_NL == 0);
+    quantize_q4_dpt(x, y, 1, k, NULL);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Q2_DPT - 2-bit per-tensor Lloyd-Max quantization (2.5 bpw)
+////////////////////////////////////////////////////////////////////////////////
+
+// Global levels (used during quantization for the current tensor)
+static int8_t q2dpt_levels[Q2DPT_N_LEVELS];
+static bool   q2dpt_levels_set = false;
+
+void q2dpt_set_levels(const int8_t * levels) {
+    memcpy(q2dpt_levels, levels, Q2DPT_N_LEVELS * sizeof(int8_t));
+    q2dpt_levels_set = true;
+}
+
+const int8_t * q2dpt_get_levels(void) {
+    return q2dpt_levels_set ? q2dpt_levels : NULL;
+}
+
+void q2dpt_free_levels(void) {
+    q2dpt_levels_set = false;
+}
+
+// Lloyd-Max k-means for Q2_DPT: train 4 int8 levels from weight data.
+// Bins normalized values (x/amax) in [-1,1], runs weighted k-means, rounds to sorted int8[4].
+// Also sets the global levels via q2dpt_set_levels().
+void q2dpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                         const float * imatrix, int8_t levels_out[Q2DPT_N_LEVELS]) {
+    GGML_ASSERT(nrow * n_per_row > 0);
+    GGML_ASSERT(n_per_row % QK2_DPT == 0);
+
+    const int N_BINS = 8192;
+    const float bin_width = 2.0f / N_BINS;
+
+    // Allocate and clear histogram buffers
+    float * bin_sum_w  = (float *) calloc(N_BINS, sizeof(float));
+    float * bin_sum_wt = (float *) calloc(N_BINS, sizeof(float));
+    GGML_ASSERT(bin_sum_w && bin_sum_wt);
+
+    // Build histogram: bin normalized values (x/amax), weight by amax^2
+    for (int64_t row = 0; row < nrow; ++row) {
+        const float * row_data = data + row * n_per_row;
+        const float * row_w    = imatrix ? imatrix + row * n_per_row : NULL;
+
+        for (int64_t ibl = 0; ibl < n_per_row / QK2_DPT; ++ibl) {
+            const float * block = row_data + ibl * QK2_DPT;
+            const float * w     = row_w ? row_w + ibl * QK2_DPT : NULL;
+
+            // Find max abs in block
+            float amax = 0.0f;
+            for (int j = 0; j < QK2_DPT; ++j) {
+                float ax = fabsf(block[j]);
+                if (ax > amax) amax = ax;
+            }
+            if (amax < 1e-10f) continue;
+
+            // Bin normalized values
+            for (int j = 0; j < QK2_DPT; ++j) {
+                float x = block[j] / amax;
+                float wt = amax * amax * (w ? w[j] : 1.0f);
+                int bin = (int)((x + 1.0f) / bin_width);
+                bin = (bin < 0) ? 0 : (bin >= N_BINS) ? N_BINS - 1 : bin;
+                bin_sum_w[bin]  += wt;
+                bin_sum_wt[bin] += x * wt;
+            }
+        }
+    }
+
+    // Initialize from Q4_DPT levels (subsample to 4 levels)
+    const int8_t * q4dpt_init = q4dpt_get_levels();
+    float best_levels[Q2DPT_N_LEVELS];
+    if (q4dpt_init) {
+        // Subsample Q4_DPT's 16 levels to 4 levels
+        best_levels[0] = (float)q4dpt_init[0] / 127.0f;
+        best_levels[1] = (float)q4dpt_init[5] / 127.0f;
+        best_levels[2] = (float)q4dpt_init[10] / 127.0f;
+        best_levels[3] = (float)q4dpt_init[15] / 127.0f;
+    } else {
+        // Fallback: uniform asymmetric initialization
+        best_levels[0] = -1.0f;
+        best_levels[1] = -0.33f;
+        best_levels[2] = 0.33f;
+        best_levels[3] = 1.0f;
+    }
+
+    // Run Lloyd-Max iterations
+    q4dpt_run_lloyd_max(bin_sum_w, bin_sum_wt, best_levels, Q2DPT_N_LEVELS, N_BINS, bin_width, 500);
+
+    // Round to int8 and enforce sorted order
+    int8_t levels_i8[Q2DPT_N_LEVELS];
+    for (int k = 0; k < Q2DPT_N_LEVELS; ++k) {
+        int v = (int)roundf(best_levels[k] * 127.0f);
+        if (v < -128) v = -128;
+        if (v >  127) v =  127;
+        levels_i8[k] = (int8_t)v;
+    }
+
+    // Greedy local search: try +/-1 adjustments
+    float base_score = 0.0f;
+    for (int bin = 0; bin < N_BINS; ++bin) {
+        if (bin_sum_w[bin] > 0) {
+            float x = bin_sum_wt[bin] / bin_sum_w[bin];
+            float best_dist = fabsf(x - best_levels[0]);
+            for (int k = 1; k < Q2DPT_N_LEVELS; ++k) {
+                float dist = fabsf(x - best_levels[k]);
+                if (dist < best_dist) best_dist = dist;
+            }
+            base_score += best_dist * bin_sum_w[bin];
+        }
+    }
+
+    for (int pass = 0; pass < 10; ++pass) {
+        bool improved = false;
+        for (int k = 0; k < Q2DPT_N_LEVELS; ++k) {
+            int8_t orig = levels_i8[k];
+            for (int delta = -1; delta <= 1; delta += 2) {
+                int8_t trial = (int8_t)(orig + delta);
+                if (k > 0     && trial <= levels_i8[k-1]) continue;
+                if (k < Q2DPT_N_LEVELS - 1 && trial >= levels_i8[k+1]) continue;
+
+                levels_i8[k] = trial;
+                float cur_levels[Q2DPT_N_LEVELS];
+                for (int i = 0; i < Q2DPT_N_LEVELS; ++i)
+                    cur_levels[i] = (float)levels_i8[i] / 127.0f;
+
+                float cur_score = 0.0f;
+                for (int bin = 0; bin < N_BINS; ++bin) {
+                    if (bin_sum_w[bin] > 0) {
+                        float x = bin_sum_wt[bin] / bin_sum_w[bin];
+                        float best_dist = fabsf(x - cur_levels[0]);
+                        for (int i = 1; i < Q2DPT_N_LEVELS; ++i) {
+                            float dist = fabsf(x - cur_levels[i]);
+                            if (dist < best_dist) best_dist = dist;
+                        }
+                        cur_score += best_dist * bin_sum_w[bin];
+                    }
+                }
+
+                if (cur_score < base_score) {
+                    base_score = cur_score;
+                    improved = true;
+                } else {
+                    levels_i8[k] = orig;
+                }
+            }
+        }
+        if (!improved) break;
+    }
+
+    memcpy(levels_out, levels_i8, Q2DPT_N_LEVELS * sizeof(int8_t));
+    q2dpt_set_levels(levels_i8);
+
+    free(bin_sum_w);
+    free(bin_sum_wt);
+}
+
+void dequantize_row_q2_dpt(const block_q2_dpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    assert(k % QK2_DPT == 0);
+    const int64_t nb = k / QK2_DPT;
+    const int8_t * values = (const int8_t *)levels;
+    GGML_ASSERT(values != NULL && "Q2_DPT levels not set for tensor");
+
+    for (int i = 0; i < nb; i++) {
+        const uint8_t * qs = x[i].qs;
+        const float     d  = GGML_FP16_TO_FP32(x[i].d);
+        for (int j = 0; j < QK2_DPT/4; ++j) {
+            uint8_t q = qs[j];
+            y[j*4 + 0] = d * (float)values[(q >> 0) & 3];
+            y[j*4 + 1] = d * (float)values[(q >> 2) & 3];
+            y[j*4 + 2] = d * (float)values[(q >> 4) & 3];
+            y[j*4 + 3] = d * (float)values[(q >> 6) & 3];
+        }
+        y += QK2_DPT;
+    }
+}
+
+// Strategy bitmask for quantize_block_q2_dpt (for A/B testing).
+// Bit 0: level-anchor CD   (approach A)
+// Bit 1: boundary sweep+CD (approach B)
+// Bit 2: dual-extreme CD   (approach C: max_val AND min_val anchors)
+// Bit 3: element-anchor CD  (approach D: every xb[j]/values[k] as anchor)
+// Bit 4: brute-force monotone partition (approach E: exhaustive search, O(n^3) per block)
+static int q2dpt_quant_strategy = 0x3;   // default: A+B
+
+void q2dpt_set_quant_strategy(int s) { q2dpt_quant_strategy = s; }
+
+// Refine d via iterated CD until convergence.  Returns best d.
+static float q2dpt_cd_refine(const float * GGML_RESTRICT xb, const float * qw,
+                              const int8_t * values, float d) {
+    for (int iter = 0; iter < 8; ++iter) {
+        float id = (fabsf(d) > 1e-20f) ? 1.0f / d : 0.0f;
+        float sumqx = 0.0f, sumq2 = 0.0f;
+        for (int j = 0; j < QK2_DPT; ++j) {
+            float al = id * xb[j];
+            int bk = 0;
+            float bd = fabsf(al - (float)values[0]);
+            for (int m = 1; m < Q2DPT_N_LEVELS; ++m) {
+                float dist = fabsf(al - (float)values[m]);
+                if (dist < bd) { bd = dist; bk = m; }
+            }
+            float q = (float)values[bk];
+            float w = qw ? qw[j] : 1.0f;
+            sumqx += w * q * xb[j];
+            sumq2 += w * q * q;
+        }
+        if (sumq2 < 1e-20f) break;
+        float d_new = sumqx / sumq2;
+        if (fabsf(d_new - d) < 1e-8f * fabsf(d)) break;
+        d = d_new;
+    }
+    return d;
+}
+
+// Evaluate a candidate d: returns objective, fills L[].
+static float q2dpt_eval(const float * GGML_RESTRICT xb, const float * qw,
+                         const int8_t * values, float d, uint8_t * L) {
+    float id = (fabsf(d) > 1e-20f) ? 1.0f / d : 0.0f;
+    float sumqx = 0.0f, sumq2 = 0.0f;
+    for (int j = 0; j < QK2_DPT; ++j) {
+        float al = id * xb[j];
+        int bk = 0;
+        float bd = fabsf(al - (float)values[0]);
+        for (int m = 1; m < Q2DPT_N_LEVELS; ++m) {
+            float dist = fabsf(al - (float)values[m]);
+            if (dist < bd) { bd = dist; bk = m; }
+        }
+        L[j] = (uint8_t)bk;
+        float q = (float)values[bk];
+        float w = qw ? qw[j] : 1.0f;
+        sumqx += w * q * xb[j];
+        sumq2 += w * q * q;
+    }
+    if (sumq2 < 1e-20f) return -1e30f;
+    return (sumqx / sumq2) * sumqx;
+}
+
+// Helper: try a single starting d, refine via CD, update best if improved.
+static inline void q2dpt_try_d(const float * GGML_RESTRICT xb, const float * qw,
+                                const int8_t * values, float d_init,
+                                float * best, float * best_d, uint8_t * best_L) {
+    uint8_t L[QK2_DPT];
+    float d = q2dpt_cd_refine(xb, qw, values, d_init);
+    float score = q2dpt_eval(xb, qw, values, d, L);
+    if (score > *best) {
+        *best = score; *best_d = d;
+        memcpy(best_L, L, QK2_DPT);
+    }
+}
+
+// Quantize one 32-element block using 4 int8 levels and optimal per-block scale.
+// The q2dpt_quant_strategy bitmask selects which search approaches are used:
+//   Bit 0 (A): level anchors + CD (d = max_val / values[k] for each k)
+//   Bit 1 (B): boundary sweep + CD (d = xb[j] / boundary for each j and boundary)
+//   Bit 2 (C): dual-extreme anchors + CD (A using both max_val AND min_val)
+//   Bit 3 (D): element-anchor scan + CD (d = xb[j] / values[k] for each j, k)
+//   Bit 4 (E): brute-force monotone partition (exhaustive over all C(35,3) partitions)
+static void quantize_block_q2_dpt(const float * GGML_RESTRICT xb, block_q2_dpt * GGML_RESTRICT out,
+                                   const int8_t * values, const float * qw, int ntry) {
+    (void)ntry;
+    const int strat = q2dpt_quant_strategy;
+
+    float amax = 0.0f, max_val = 0.0f, min_val = 0.0f;
+    for (int j = 0; j < QK2_DPT; ++j) {
+        float ax = fabsf(xb[j]);
+        if (ax > amax) { amax = ax; max_val = xb[j]; }
+        if (xb[j] < min_val) min_val = xb[j];
+        if (xb[j] > max_val) max_val = xb[j];
+    }
+    if (amax < 1e-10f) {
+        out->d = 0;
+        memset(out->qs, 0, QK2_DPT/4);
+        return;
+    }
+
+    uint8_t best_L[QK2_DPT];
+    float best = -1e30f;
+    float best_d = 0.0f;
+
+    // --- A: level-anchor CD (4 starting points) ---
+    if (strat & 0x1) {
+        for (int k = 0; k < Q2DPT_N_LEVELS; ++k) {
+            if (values[k] == 0) continue;
+            q2dpt_try_d(xb, qw, values, max_val / (float)values[k],
+                        &best, &best_d, best_L);
+        }
+    }
+
+    // --- B: boundary-crossing sweep + CD ---
+    if (strat & 0x2) {
+        for (int b = 0; b < Q2DPT_N_LEVELS - 1; ++b) {
+            float bnd = ((float)values[b] + (float)values[b + 1]) * 0.5f;
+            if (fabsf(bnd) < 0.5f) continue;
+            for (int j = 0; j < QK2_DPT; ++j) {
+                if (fabsf(xb[j]) < 1e-12f) continue;
+                q2dpt_try_d(xb, qw, values, xb[j] / bnd,
+                            &best, &best_d, best_L);
+            }
+        }
+    }
+
+    // --- C: dual-extreme anchors + CD (8 starting points) ---
+    if (strat & 0x4) {
+        float extremes[2] = { max_val, min_val };
+        for (int e = 0; e < 2; ++e) {
+            for (int k = 0; k < Q2DPT_N_LEVELS; ++k) {
+                if (values[k] == 0) continue;
+                q2dpt_try_d(xb, qw, values, extremes[e] / (float)values[k],
+                            &best, &best_d, best_L);
+            }
+        }
+    }
+
+    // --- D: element-anchor scan + CD (32 x 4 starting points) ---
+    if (strat & 0x8) {
+        for (int j = 0; j < QK2_DPT; ++j) {
+            if (fabsf(xb[j]) < 1e-12f) continue;
+            for (int k = 0; k < Q2DPT_N_LEVELS; ++k) {
+                if (values[k] == 0) continue;
+                q2dpt_try_d(xb, qw, values, xb[j] / (float)values[k],
+                            &best, &best_d, best_L);
+            }
+        }
+    }
+
+    // --- E: brute-force monotone partition enumeration ---
+    // For a single scale d, the optimal assignment must be monotone on sorted x:
+    // if x_i < x_j then L[i] <= L[j] (for d>0) or L[i] >= L[j] (for d<0).
+    // We enumerate all C(32+3, 3) = C(35,3) = 6545 ways to partition 32 sorted
+    // elements into 4 groups, score each in O(1) using prefix sums, then pick best.
+    if (strat & 0x10) {
+        // Sort elements by value, keeping original indices
+        int idx[QK2_DPT];
+        for (int j = 0; j < QK2_DPT; ++j) idx[j] = j;
+        // Simple insertion sort (only 32 elements)
+        for (int i = 1; i < QK2_DPT; ++i) {
+            int t = idx[i];
+            float tv = xb[t];
+            int j = i - 1;
+            while (j >= 0 && xb[idx[j]] > tv) {
+                idx[j + 1] = idx[j];
+                --j;
+            }
+            idx[j + 1] = t;
+        }
+
+        // Build weighted prefix sums: swx[i] = sum_{j<i} w[j]*x[j], sw[i] = sum_{j<i} w[j]
+        float swx[QK2_DPT + 1], sw[QK2_DPT + 1];
+        swx[0] = 0.0f; sw[0] = 0.0f;
+        for (int i = 0; i < QK2_DPT; ++i) {
+            float w = qw ? qw[idx[i]] : 1.0f;
+            swx[i + 1] = swx[i] + w * xb[idx[i]];
+            sw[i + 1]  = sw[i]  + w;
+        }
+
+        // Try both orderings: d>0 maps sorted ascending to values ascending,
+        // d<0 maps sorted ascending to values descending.
+        for (int flip = 0; flip < 2; ++flip) {
+            float v[Q2DPT_N_LEVELS];
+            if (flip == 0) {
+                for (int k = 0; k < Q2DPT_N_LEVELS; ++k) v[k] = (float)values[k];
+            } else {
+                for (int k = 0; k < Q2DPT_N_LEVELS; ++k) v[k] = (float)values[Q2DPT_N_LEVELS - 1 - k];
+            }
+
+            // Precompute per-level pair products for scoring
+            float vv[Q2DPT_N_LEVELS];
+            for (int k = 0; k < Q2DPT_N_LEVELS; ++k) vv[k] = v[k] * v[k];
+
+            float bf_best = -1e30f;
+            int bf_b1 = 0, bf_b2 = 0, bf_b3 = 0;
+
+            // Enumerate partition boundaries b1 <= b2 <= b3 where group k = [b_k, b_{k+1})
+            // b0=0, b4=32.  0 <= b1 <= b2 <= b3 <= 32.
+            for (int b1 = 0; b1 <= QK2_DPT; ++b1) {
+                // Segment 0: indices [0, b1) assigned to v[0]
+                float s0_wx = swx[b1] - swx[0];
+                float s0_w  = sw[b1]  - sw[0];
+                for (int b2 = b1; b2 <= QK2_DPT; ++b2) {
+                    // Segment 1: indices [b1, b2) assigned to v[1]
+                    float s01_wx = s0_wx + (swx[b2] - swx[b1]);
+                    float s01_w  = s0_w  + (sw[b2]  - sw[b1]);
+                    // sumqx and sumq2 for segments 0+1 can be expressed but we need all 4.
+                    // For efficiency, compute incrementally for b3.
+                    float partial_sumqx = v[0] * s0_wx + v[1] * (swx[b2] - swx[b1]);
+                    float partial_sumq2 = vv[0] * s0_w + vv[1] * (sw[b2] - sw[b1]);
+                    (void)s01_wx; (void)s01_w;
+                    for (int b3 = b2; b3 <= QK2_DPT; ++b3) {
+                        // Segment 2: [b2, b3) -> v[2], Segment 3: [b3, 32) -> v[3]
+                        float seg2_wx = swx[b3] - swx[b2];
+                        float seg2_w  = sw[b3]  - sw[b2];
+                        float seg3_wx = swx[QK2_DPT] - swx[b3];
+                        float seg3_w  = sw[QK2_DPT]  - sw[b3];
+
+                        float sumqx = partial_sumqx + v[2] * seg2_wx + v[3] * seg3_wx;
+                        float sumq2 = partial_sumq2 + vv[2] * seg2_w + vv[3] * seg3_w;
+
+                        if (sumq2 < 1e-20f) continue;
+                        // score = d * sumqx = sumqx^2 / sumq2 (only valid when sumqx > 0)
+                        float score = sumqx * sumqx / sumq2;
+                        // d = sumqx / sumq2; for validity we need d > 0 when flip==0, d < 0 when flip==1
+                        // i.e. sumqx > 0 for flip==0, sumqx < 0 for flip==1
+                        if (flip == 0 && sumqx <= 0.0f) continue;
+                        if (flip == 1 && sumqx >= 0.0f) continue;
+                        if (score > bf_best) {
+                            bf_best = score;
+                            bf_b1 = b1; bf_b2 = b2; bf_b3 = b3;
+                        }
+                    }
+                }
+            }
+
+            if (bf_best > -1e29f) {
+                // Reconstruct the assignment for the best partition
+                uint8_t L_bf[QK2_DPT];
+                for (int j = 0;      j < bf_b1;   ++j) {
+                    int orig = idx[j];
+                    L_bf[orig] = flip == 0 ? 0 : (Q2DPT_N_LEVELS - 1);
+                }
+                for (int j = bf_b1;  j < bf_b2;   ++j) {
+                    int orig = idx[j];
+                    L_bf[orig] = flip == 0 ? 1 : (Q2DPT_N_LEVELS - 2);
+                }
+                for (int j = bf_b2;  j < bf_b3;   ++j) {
+                    int orig = idx[j];
+                    L_bf[orig] = flip == 0 ? 2 : (Q2DPT_N_LEVELS - 1 - 2);
+                }
+                for (int j = bf_b3;  j < QK2_DPT; ++j) {
+                    int orig = idx[j];
+                    L_bf[orig] = flip == 0 ? 3 : 0;
+                }
+                // Compute d from this assignment
+                float sumqx = 0.0f, sumq2 = 0.0f;
+                for (int j = 0; j < QK2_DPT; ++j) {
+                    float q = (float)values[L_bf[j]];
+                    float w = qw ? qw[j] : 1.0f;
+                    sumqx += w * q * xb[j];
+                    sumq2 += w * q * q;
+                }
+                if (sumq2 > 1e-20f) {
+                    float d_bf = sumqx / sumq2;
+                    float score = (sumqx / sumq2) * sumqx;
+                    if (score > best) {
+                        best = score;
+                        best_d = d_bf;
+                        memcpy(best_L, L_bf, QK2_DPT);
+                    }
+                }
+            }
+        }
+    }
+
+    // Final re-assignment with best scale
+    float id = (fabsf(best_d) > 1e-20f) ? 1.0f / best_d : 0.0f;
+    for (int j = 0; j < QK2_DPT; ++j) {
+        float al = id * xb[j];
+        int bk = 0;
+        float bd = fabsf(al - (float)values[0]);
+        for (int k = 1; k < Q2DPT_N_LEVELS; ++k) {
+            float dist = fabsf(al - (float)values[k]);
+            if (dist < bd) { bd = dist; bk = k; }
+        }
+        best_L[j] = (uint8_t)bk;
+    }
+
+    // Pack 2-bit indices: 4 values per byte
+    out->d = GGML_FP32_TO_FP16(best_d);
+    for (int j = 0; j < QK2_DPT/4; ++j) {
+        out->qs[j] = best_L[j*4] | (best_L[j*4+1] << 2) | (best_L[j*4+2] << 4) | (best_L[j*4+3] << 6);
+    }
+}
+
+size_t quantize_q2_dpt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                        int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_ASSERT(n_per_row % QK2_DPT == 0);
+    const int8_t * values = q2dpt_get_levels();
+    GGML_ASSERT(values != NULL && "Q2_DPT levels not set - call q2dpt_set_levels() first");
+
+    const int64_t nblock = n_per_row / QK2_DPT;
+    char * qrow = (char *) dst;
+
+    for (int64_t row = 0; row < nrow; ++row) {
+        block_q2_dpt * q2 = (block_q2_dpt *) qrow;
+        for (int64_t ibl = 0; ibl < nblock; ++ibl) {
+            const float * qw = quant_weights ? quant_weights + QK2_DPT * ibl : NULL;
+            quantize_block_q2_dpt(src + QK2_DPT * ibl, &q2[ibl], values, qw, 7);
+        }
+        src  += n_per_row;
+        qrow += nblock * sizeof(block_q2_dpt);
+    }
+    return (size_t) nrow * nblock * sizeof(block_q2_dpt);
+}
+
+void quantize_row_q2_dpt_ref(const float * GGML_RESTRICT x, block_q2_dpt * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK2_DPT == 0);
+    quantize_q2_dpt(x, y, 1, k, NULL);
+}
+
+// ====================== Q2_KPT: Q2_K with learned per-tensor float levels ======================
+
+static float q2kpt_levels[Q2KPT_N_LEVELS];
+static bool  q2kpt_levels_set = false;
+
+// Global level storage for Q2_KPT (per-block levels for last quantized tensor)
+static float *q2kpt_block_levels = NULL;
+static size_t q2kpt_max_levels   = 0;
+static size_t q2kpt_cur_levels   = 0;
+
+// Prepare the levels buffer for a tensor with given dimensions.
+// This should be called before parallel quantization to pre-allocate storage.
+void q2kpt_prepare_levels(int64_t nrows, int64_t n_per_row) {
+    const int nb = (int)(n_per_row / QK_K);
+    const size_t total_levels = (size_t)nrows * nb * Q2KPT_N_LEVELS;
+    if (total_levels > q2kpt_max_levels) {
+        q2kpt_block_levels = (float *) realloc(q2kpt_block_levels, total_levels * sizeof(float));
+        q2kpt_max_levels = total_levels;
+    }
+    q2kpt_cur_levels = total_levels;
+}
+
+void q2kpt_set_levels(const float * levels) {
+    memcpy(q2kpt_levels, levels, Q2KPT_N_LEVELS * sizeof(float));
+    q2kpt_levels_set = true;
+}
+
+const float * q2kpt_get_levels(void) {
+    // Return per-block levels if available, otherwise global levels
+    if (q2kpt_block_levels && q2kpt_cur_levels > 0) {
+        return q2kpt_block_levels;
+    }
+    return q2kpt_levels_set ? q2kpt_levels : NULL;
+}
+
+void q2kpt_free_levels(void) {
+    q2kpt_levels_set = false;
+    if (q2kpt_block_levels) {
+        free(q2kpt_block_levels);
+        q2kpt_block_levels = NULL;
+        q2kpt_max_levels = 0;
+        q2kpt_cur_levels = 0;
+    }
+}
+
+// Train 4 Lloyd-Max float levels for a single 256-element block.
+// Normalizes sub-block values to [0,1] using Q2_K-style scale+min estimation, then runs k-means.
+// Forward declaration (defined later in this file)
+static float make_q2kpt_quants(int n, const float * GGML_RESTRICT x,
+                                uint8_t * GGML_RESTRICT L, float * GGML_RESTRICT the_min,
+                                const float * mapped_levels, const float * weight);
+
+// ---- q2kpt_quantize_block_given_levels ----------------------------------------
+// Quantize one QK_K-element block using caller-specified levels (no training).
+// block_x:      QK_K floats of original data
+// y:            output block_q2_kpt (filled in place)
+// quant_weights: QK_K importance weights (or NULL → use x[i]²)
+// sigma2:       mean(x²) for the block (for weight formula)
+// levels:       Q2KPT_N_LEVELS values in [0,1], must be sorted ascending
+// -------------------------------------------------------------------------------
+static void q2kpt_quantize_block_given_levels(
+        const float *  GGML_RESTRICT block_x,
+        block_q2_kpt * GGML_RESTRICT y,
+        const float *  GGML_RESTRICT quant_weights,
+        float          sigma2,
+        const float    levels[Q2KPT_N_LEVELS]) {
+
+    float mapped_levels[Q2KPT_N_LEVELS];
+    float bounds[Q2KPT_N_LEVELS - 1];
+    for (int k = 0; k < Q2KPT_N_LEVELS; ++k) mapped_levels[k] = levels[k] * 3.0f;
+    for (int k = 0; k < Q2KPT_N_LEVELS - 1; ++k)
+        bounds[k] = 0.5f * (mapped_levels[k] + mapped_levels[k + 1]);
+
+    uint8_t  L[QK_K];
+    float    mins[QK_K / 16], scales[QK_K / 16], sw[QK_K / 16];
+    float    weight[16];
+    uint8_t  Ls[QK_K / 16], Lm[QK_K / 16];
+
+    memset(sw, 0, sizeof(sw));
+    float sumx2 = sigma2 * QK_K;  // reconstitute (or recompute below)
+
+    for (int j = 0; j < QK_K / 16; ++j) {
+        const float * bx = block_x + 16 * j;
+        if (quant_weights) {
+            const float * qw = quant_weights + 16 * j;
+            for (int l = 0; l < 16; ++l)
+                weight[l] = qw[l] * sqrtf(sigma2 + bx[l] * bx[l]);
+        } else {
+            for (int l = 0; l < 16; ++l)
+                weight[l] = bx[l] * bx[l];
+        }
+        for (int l = 0; l < 16; ++l) sw[j] += weight[l];
+        scales[j] = make_q2kpt_quants(16, bx, L + 16 * j, &mins[j], mapped_levels, weight);
+    }
+
+    float dm = make_qp_quants(QK_K / 16, 15, scales, Ls, sw);
+    float mm = make_qp_quants(QK_K / 16, 15, mins,   Lm, sw);
+
+    y->d    = GGML_FP32_TO_FP16(dm);
+    y->dmin = GGML_FP32_TO_FP16(mm);
+    dm = GGML_FP16_TO_FP32(y->d);
+    mm = GGML_FP16_TO_FP32(y->dmin);
+
+    for (int j = 0; j < QK_K / 16; ++j) y->scales[j] = Ls[j] | (Lm[j] << 4);
+
+    // Second pass: reassign with quantized scales
+    for (int j = 0; j < QK_K / 16; ++j) {
+        const float d = dm * (y->scales[j] & 0xF);
+        if (!d) {
+            int zero_k = 0;
+            float zero_d = fabsf(mapped_levels[0]);
+            for (int k = 1; k < Q2KPT_N_LEVELS; ++k) {
+                if (fabsf(mapped_levels[k]) < zero_d) { zero_d = fabsf(mapped_levels[k]); zero_k = k; }
+            }
+            for (int ii = 0; ii < 16; ++ii) L[16 * j + ii] = zero_k;
+            continue;
+        }
+        const float m = mm * (y->scales[j] >> 4);
+        for (int ii = 0; ii < 16; ++ii) {
+            float scaled  = (block_x[16 * j + ii] + m) / d;
+            L[16 * j + ii] = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
+        }
+    }
+
+    // Pack 2-bit indices (Q2_K layout)
+    for (int j = 0; j < QK_K; j += 128) {
+        for (int l = 0; l < 32; ++l) {
+            y->qs[j / 4 + l] = L[j + l] | (L[j + l + 32] << 2)
+                              | (L[j + l + 64] << 4) | (L[j + l + 96] << 6);
+        }
+    }
+
+    (void)sumx2;
+}
+
+// ---- Histogram Lloyd-Max helper ----------------------------------------------
+// Runs weighted Lloyd-Max iterations on a pre-built histogram.
+// bin_centers[b]: representative value for bin b (weighted centroid)
+// bin_w[b]:       total weight of data in bin b
+// levels[]:       centroids, in/out (must be sorted ascending on entry)
+// -------------------------------------------------------------------------------
+static void q2kpt_histogram_lloyd_max(
+        int n_bins, const float * bin_centers, const float * bin_w,
+        float * levels, int n_levels, int n_iter) {
+
+    for (int iter = 0; iter < n_iter; ++iter) {
+        float sum_w[Q2KPT_N_LEVELS]  = { 0.0f };
+        float sum_wt[Q2KPT_N_LEVELS] = { 0.0f };
+
+        for (int b = 0; b < n_bins; ++b) {
+            float w = bin_w[b];
+            if (w < 1e-30f) continue;
+            float t = bin_centers[b];
+            int best = 0;
+            float bd2 = (t - levels[0]) * (t - levels[0]);
+            for (int k = 1; k < n_levels; ++k) {
+                float d2 = (t - levels[k]) * (t - levels[k]);
+                if (d2 < bd2) { bd2 = d2; best = k; }
+            }
+            sum_w[best]  += w;
+            sum_wt[best] += w * t;
+        }
+
+        float new_levels[Q2KPT_N_LEVELS];
+        float max_delta = 0.0f;
+        for (int k = 0; k < n_levels; ++k) {
+            new_levels[k] = (sum_w[k] > 1e-30f) ? sum_wt[k] / sum_w[k] : levels[k];
+        }
+        // Sort ascending (insertion sort, n_levels=4)
+        for (int k = 1; k < n_levels; ++k) {
+            float v = new_levels[k]; int m = k - 1;
+            while (m >= 0 && new_levels[m] > v) { new_levels[m + 1] = new_levels[m]; --m; }
+            new_levels[m + 1] = v;
+        }
+        for (int k = 0; k < n_levels; ++k)
+            max_delta = fmaxf(max_delta, fabsf(new_levels[k] - levels[k]));
+        memcpy(levels, new_levels, n_levels * sizeof(float));
+        if (max_delta < 1e-7f) break;
+    }
+}
+
+// ---- q2kpt_optimize_block_levels ----------------------------------------------
+// Full closed-loop EM training for one QK_K block using histogram binning:
+//   1. Init: histogram Lloyd-Max on normalized [0,1] sub-block values
+//   2. EM cycles: full E-step → build effective-T histogram → cheap Lloyd-Max
+//   3. Final quantize with best levels seen
+//
+// block_x:       QK_K floats of original data
+// block_y:       workspace / output (holds the best quantization on return)
+// quant_weights: QK_K per-element importance weights (or NULL → use x[i]²)
+// sigma2:        mean(x²) for the block
+// levels_out:    Q2KPT_N_LEVELS trained levels in [0,1], ascending
+// -------------------------------------------------------------------------------
+#define Q2KPT_N_BINS          128   // histogram bins
+#define Q2KPT_INIT_LLOYD      10    // Lloyd-Max iters on init histogram
+#define Q2KPT_N_EM_CYCLES     4     // number of full E-step calls
+#define Q2KPT_LLOYD_PER_CYCLE 10    // cheap histogram Lloyd-Max iters per cycle
+
+static void q2kpt_optimize_block_levels(
+        const float *  GGML_RESTRICT block_x,
+        block_q2_kpt * GGML_RESTRICT block_y,
+        const float *  GGML_RESTRICT quant_weights,
+        float          sigma2,
+        float          levels_out[Q2KPT_N_LEVELS]) {
+
+    const float inv_bins = 1.0f / Q2KPT_N_BINS;
+
+    // ---- Build per-element weights and sub-block-normalised values -----------
+    float weights[QK_K];
+    float norm_vals[QK_K];
+
+    for (int sb = 0; sb < QK_K / 16; ++sb) {
+        const float * xsb = block_x + sb * 16;
+        float xmin = xsb[0], xmax = xsb[0];
+        for (int l = 1; l < 16; ++l) {
+            if (xsb[l] < xmin) xmin = xsb[l];
+            if (xsb[l] > xmax) xmax = xsb[l];
+        }
+        if (xmin > 0.0f) xmin = 0.0f;
+        float range     = xmax - xmin;
+        float inv_range = (range > 1e-10f) ? 1.0f / range : 0.0f;
+
+        for (int l = 0; l < 16; ++l) {
+            int   el = sb * 16 + l;
+            float t  = (range > 1e-10f) ?
+                       fmaxf(0.0f, fminf(1.0f, (xsb[l] - xmin) * inv_range)) : 0.0f;
+            norm_vals[el] = t;
+
+            float w;
+            if (quant_weights) {
+                w = quant_weights[el] * sqrtf(sigma2 + xsb[l] * xsb[l]);
+            } else {
+                w = xsb[l] * xsb[l];
+            }
+            // Scale by range² so normalised-space errors match actual-space
+            weights[el] = fmaxf(w * range * range, 1e-30f);
+        }
+    }
+
+    // ---- Phase 1: Init levels via histogram Lloyd-Max on norm_vals ----------
+    float bin_w[Q2KPT_N_BINS];
+    float bin_wt[Q2KPT_N_BINS];
+    float bin_centers[Q2KPT_N_BINS];
+
+    memset(bin_w,  0, sizeof(bin_w));
+    memset(bin_wt, 0, sizeof(bin_wt));
+
+    for (int i = 0; i < QK_K; ++i) {
+        float t = norm_vals[i];
+        int b = (int)(t * Q2KPT_N_BINS);
+        if (b >= Q2KPT_N_BINS) b = Q2KPT_N_BINS - 1;
+        bin_w[b]  += weights[i];
+        bin_wt[b] += weights[i] * t;
+    }
+    for (int b = 0; b < Q2KPT_N_BINS; ++b)
+        bin_centers[b] = (bin_w[b] > 1e-30f) ? bin_wt[b] / bin_w[b] : (b + 0.5f) * inv_bins;
+
+    float levels[Q2KPT_N_LEVELS];
+    for (int k = 0; k < Q2KPT_N_LEVELS; ++k)
+        levels[k] = (float)k / (Q2KPT_N_LEVELS - 1);
+
+    q2kpt_histogram_lloyd_max(Q2KPT_N_BINS, bin_centers, bin_w,
+                               levels, Q2KPT_N_LEVELS, Q2KPT_INIT_LLOYD);
+
+    // ---- Phase 2: EM cycles -------------------------------------------------
+    // Each cycle: full E-step → build effective-T histogram → cheap Lloyd-Max.
+    // Effective-T: T_i = (x_i + B_i) / A_i,  W_i = w_i * A_i²
+    // The M-step optimal level for class k is the W-weighted mean of T_i in k.
+    float best_levels[Q2KPT_N_LEVELS];
+    memcpy(best_levels, levels, sizeof(levels));
+    float best_err = 1e38f;
+
+    float eff_bin_w[Q2KPT_N_BINS];
+    float eff_bin_wt[Q2KPT_N_BINS];
+    float eff_bin_centers[Q2KPT_N_BINS];
+
+    for (int cycle = 0; cycle < Q2KPT_N_EM_CYCLES; ++cycle) {
+
+        // Full E-step
+        q2kpt_quantize_block_given_levels(block_x, block_y, quant_weights, sigma2, levels);
+
+        float d_all_q = GGML_FP16_TO_FP32(block_y->d);
+        float dmin_q  = GGML_FP16_TO_FP32(block_y->dmin);
+
+        memset(eff_bin_w,  0, sizeof(eff_bin_w));
+        memset(eff_bin_wt, 0, sizeof(eff_bin_wt));
+        float err = 0.0f;
+
+        for (int el = 0; el < QK_K; ++el) {
+            int sb  = el / 16;
+            int k_j = block_y->scales[sb] & 0xF;
+            int m_j = block_y->scales[sb] >> 4;
+
+            float A  = d_all_q * (float)k_j * 3.0f;
+            float mn = dmin_q  * (float)m_j;
+
+            int qs_byte = (el / 128) * 32 + el % 32;
+            int shift   = ((el % 128) / 32) * 2;
+            int idx     = (block_y->qs[qs_byte] >> shift) & 3;
+
+            float w = quant_weights ?
+                      quant_weights[el] * sqrtf(sigma2 + block_x[el] * block_x[el]) :
+                      block_x[el] * block_x[el];
+            w = fmaxf(w, 1e-30f);
+
+            float y_approx = A * levels[idx] - mn;
+            float diff     = y_approx - block_x[el];
+            err += w * diff * diff;
+
+            // Build effective-T histogram for histogram Lloyd-Max M-step
+            if (A > 1e-10f) {
+                float T = fmaxf(0.0f, fminf(1.0f, (block_x[el] + mn) / A));
+                float W = w * A * A;
+                int b = (int)(T * Q2KPT_N_BINS);
+                if (b >= Q2KPT_N_BINS) b = Q2KPT_N_BINS - 1;
+                eff_bin_w[b]  += W;
+                eff_bin_wt[b] += W * T;
+            }
+        }
+
+        if (err < best_err) {
+            best_err = err;
+            memcpy(best_levels, levels, sizeof(levels));
+        }
+
+        for (int b = 0; b < Q2KPT_N_BINS; ++b)
+            eff_bin_centers[b] = (eff_bin_w[b] > 1e-30f)
+                                 ? eff_bin_wt[b] / eff_bin_w[b]
+                                 : (b + 0.5f) * inv_bins;
+
+        q2kpt_histogram_lloyd_max(Q2KPT_N_BINS, eff_bin_centers, eff_bin_w,
+                                   levels, Q2KPT_N_LEVELS, Q2KPT_LLOYD_PER_CYCLE);
+    }
+
+    // Final quantize with the best levels found across all cycles
+    memcpy(levels_out, best_levels, sizeof(best_levels));
+    q2kpt_quantize_block_given_levels(block_x, block_y, quant_weights, sigma2, best_levels);
+}
+
+// Train 4 Lloyd-Max float levels from tensor data for Q2_KPT.
+// Uses Q2_K-style scale+min estimation to normalize sub-block values to [0,1].
+GGML_API void q2kpt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                                  const float * imatrix, float levels_out[Q2KPT_N_LEVELS]) {
+    const int   N_BINS     = 8192;
+    const float bin_width  = 1.0f / N_BINS;
+    float *     bin_sum_w  = (float *) calloc(N_BINS, sizeof(float));
+    float *     bin_sum_wt = (float *) calloc(N_BINS, sizeof(float));
+    GGML_ASSERT(bin_sum_w && bin_sum_wt);
+
+    const int nb = (int)(n_per_row / QK_K);
+
+    // Single pass: for each 16-element sub-block, estimate scale+min, normalize to [0,1], bin
+    for (int64_t row = 0; row < nrow; ++row) {
+        const float * xrow = data + row * n_per_row;
+
+        for (int i = 0; i < nb; i++) {
+            const float * x = xrow + i * QK_K;
+
+            for (int j = 0; j < QK_K / 16; ++j) {
+                // Find min and max of sub-block
+                float xmin = x[16 * j], xmax = x[16 * j];
+                for (int l = 1; l < 16; ++l) {
+                    if (x[16 * j + l] < xmin) xmin = x[16 * j + l];
+                    if (x[16 * j + l] > xmax) xmax = x[16 * j + l];
+                }
+                // Q2_K clamps min to <= 0
+                if (xmin > 0) xmin = 0;
+                float range = xmax - xmin;
+                if (range < 1e-10f) continue;
+
+                float inv_range = 1.0f / range;
+
+                for (int l = 0; l < 16; ++l) {
+                    // Normalize to [0, 1]: t = (x - min) / range
+                    float t = (x[16 * j + l] - xmin) * inv_range;
+                    if (t < 0.0f) t = 0.0f;
+                    if (t > 1.0f) t = 1.0f;
+
+                    int bin_idx = (int)(t * N_BINS);
+                    if (bin_idx >= N_BINS) bin_idx = N_BINS - 1;
+
+                    int   elem = i * QK_K + 16 * j + l;
+                    float w    = imatrix ? imatrix[elem] : 1.0f;
+                    if (w < 1e-10f) w = 1e-10f;
+                    // Weight by range² (like Q3_KPT weights by d²)
+                    w *= range * range;
+
+                    bin_sum_w[bin_idx]  += w;
+                    bin_sum_wt[bin_idx] += w * t;
+                }
+            }
+        }
+    }
+
+    // Initialize 4 levels uniformly in [0, 1]
+    float levels[Q2KPT_N_LEVELS];
+    for (int k = 0; k < Q2KPT_N_LEVELS; ++k) {
+        levels[k] = (float)k / (Q2KPT_N_LEVELS - 1);
+    }
+
+    // Lloyd-Max iterations on bins
+    for (int iter = 0; iter < 100; ++iter) {
+        float sum_w[Q2KPT_N_LEVELS]  = { 0 };
+        float sum_wt[Q2KPT_N_LEVELS] = { 0 };
+
+        for (int b = 0; b < N_BINS; ++b) {
+            if (bin_sum_w[b] < 1e-12f) continue;
+            const float t    = (b + 0.5f) * bin_width;
+            int         best = 0;
+            float       bd2  = (t - levels[0]) * (t - levels[0]);
+            for (int k = 1; k < Q2KPT_N_LEVELS; ++k) {
+                float d2 = (t - levels[k]) * (t - levels[k]);
+                if (d2 < bd2) { bd2 = d2; best = k; }
+            }
+            sum_w[best]  += bin_sum_w[b];
+            sum_wt[best] += bin_sum_wt[b];
+        }
+
+        float max_delta = 0.0f;
+        for (int k = 0; k < Q2KPT_N_LEVELS; ++k) {
+            if (sum_w[k] > 1e-12f) {
+                float new_level = sum_wt[k] / sum_w[k];
+                max_delta       = fmaxf(max_delta, fabsf(new_level - levels[k]));
+                levels[k]       = new_level;
+            }
+        }
+        if (max_delta < 1e-10f) break;
+
+        // Sort levels
+        for (int k = 1; k < Q2KPT_N_LEVELS; ++k) {
+            float v = levels[k];
+            int   m = k - 1;
+            while (m >= 0 && levels[m] > v) {
+                levels[m + 1] = levels[m];
+                m--;
+            }
+            levels[m + 1] = v;
+        }
+    }
+
+    memcpy(levels_out, levels, Q2KPT_N_LEVELS * sizeof(float));
+    q2kpt_set_levels(levels);
+    free(bin_sum_w);
+    free(bin_sum_wt);
+}
+
+void dequantize_row_q2_kpt(const block_q2_kpt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+    const float * lv = (const float *)levels;
+    GGML_ASSERT(lv != NULL && "Q2_KPT levels not set for tensor");
+
+    for (int i = 0; i < nb; i++) {
+        // Per-block levels: block i uses lv[i*4 + 0..3]
+        const float * block_lv = lv + i * Q2KPT_N_LEVELS;
+
+        // Precompute mapped levels: ml[k] = levels[k] * 3.0
+        float ml[Q2KPT_N_LEVELS];
+        for (int j = 0; j < Q2KPT_N_LEVELS; ++j) {
+            ml[j] = block_lv[j] * 3.0f;
+        }
+
+        const float     d_all = GGML_FP16_TO_FP32(x[i].d);
+        const float     m_all = GGML_FP16_TO_FP32(x[i].dmin);
+        const uint8_t * q     = x[i].qs;
+
+        int is = 0;
+        for (int n = 0; n < QK_K; n += 128) {
+            int shift = 0;
+            for (int j = 0; j < 4; ++j) {
+                uint8_t sc = x[i].scales[is++];
+                float dl = d_all * (sc & 0xF);
+                float mn = m_all * (sc >> 4);
+                for (int l = 0; l < 16; ++l) {
+                    int idx = (q[l] >> shift) & 3;
+                    *y++ = dl * ml[idx] - mn;
+                }
+
+                sc = x[i].scales[is++];
+                dl = d_all * (sc & 0xF);
+                mn = m_all * (sc >> 4);
+                for (int l = 0; l < 16; ++l) {
+                    int idx = (q[l + 16] >> shift) & 3;
+                    *y++ = dl * ml[idx] - mn;
+                }
+
+                shift += 2;
+            }
+            q += 32;
+        }
+    }
+}
+
+// Helper: find optimal (scale, min) for non-uniform mapped levels with offset.
+// mapped_levels[k] = levels[k]*3, k=0..3.
+// Model: x[i] ≈ scale * ml[L[i]] - min_offset, with min_offset >= 0.
+// Returns the per-sub-block scale; *the_min receives the min offset.
+// L[i] gets the best level index [0..3].
+static float make_q2kpt_quants(int                         n,
+                                const float * GGML_RESTRICT x,
+                                uint8_t * GGML_RESTRICT     L,
+                                float * GGML_RESTRICT       the_min,
+                                const float *               mapped_levels,
+                                const float *               weight) {
+    // Precompute boundaries for nearest-level assignment
+    float bounds[Q2KPT_N_LEVELS - 1];
+    for (int k = 0; k < Q2KPT_N_LEVELS - 1; ++k) {
+        bounds[k] = 0.5f * (mapped_levels[k] + mapped_levels[k + 1]);
+    }
+
+    float xmin = x[0], xmax = x[0];
+    for (int i = 1; i < n; ++i) {
+        if (x[i] < xmin) xmin = x[i];
+        if (x[i] > xmax) xmax = x[i];
+    }
+    if (xmin > 0) xmin = 0;
+    if (xmax <= xmin) {
+        for (int i = 0; i < n; ++i) L[i] = 0;
+        *the_min = -xmin;
+        return 0.f;
+    }
+
+    float ml_max = mapped_levels[Q2KPT_N_LEVELS - 1];
+
+    float best_scale = 0, best_min = 0;
+    float best_obj   = 0;
+    bool  first      = true;
+
+    // Grid search: try multiple trial scales
+    for (int is = -9; is <= 36; ++is) {
+        float iscale = (ml_max + 0.1f * is) / (xmax - xmin);
+        float trial_min = -xmin;
+
+        float sum_l  = 0, sum_l2 = 0, sum_lx = 0;
+        float sum_x  = 0, sum_w  = 0;
+        for (int i = 0; i < n; ++i) {
+            float scaled = iscale * (x[i] + trial_min);
+            int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
+            float ml_val = mapped_levels[best_k];
+            float w = weight ? weight[i] : x[i] * x[i];
+            sum_l  += w * ml_val;
+            sum_l2 += w * ml_val * ml_val;
+            sum_lx += w * ml_val * x[i];
+            sum_x  += w * x[i];
+            sum_w  += w;
+        }
+
+        float D = sum_w * sum_l2 - sum_l * sum_l;
+        if (D > 0) {
+            float this_scale = (sum_w * sum_lx - sum_x * sum_l) / D;
+            float this_min   = (sum_l2 * sum_x - sum_l * sum_lx) / D;
+
+            if (this_min > 0) {
+                this_min = 0;
+                this_scale = sum_lx / sum_l2;
+            }
+
+            float cur_error = 0;
+            for (int i = 0; i < n; ++i) {
+                float scaled = (x[i] - this_min) / (this_scale > 1e-15f ? this_scale : 1e-15f);
+                int best_k = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
+                float diff = this_scale * mapped_levels[best_k] + this_min - x[i];
+                float w = weight ? weight[i] : x[i] * x[i];
+                cur_error += w * diff * diff;
+            }
+
+            if (first || cur_error < best_obj) {
+                best_obj   = cur_error;
+                best_scale = this_scale;
+                best_min   = this_min;
+                first      = false;
+            }
+        }
+    }
+
+    // Inner EM refinement from best found by grid search: iterate
+    // assign→refit→assign until convergence (fixes Problem 3)
+    for (int refine = 0; refine < 8; ++refine) {
+        float sum_l  = 0, sum_l2 = 0, sum_lx = 0, sum_x = 0, sum_w = 0;
+        for (int i = 0; i < n; ++i) {
+            float scaled = (x[i] - best_min) / (best_scale > 1e-15f ? best_scale : 1e-15f);
+            int best_k   = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
+            float ml_val = mapped_levels[best_k];
+            float w = weight ? weight[i] : x[i] * x[i];
+            sum_l  += w * ml_val;
+            sum_l2 += w * ml_val * ml_val;
+            sum_lx += w * ml_val * x[i];
+            sum_x  += w * x[i];
+            sum_w  += w;
+        }
+        float D = sum_w * sum_l2 - sum_l * sum_l;
+        if (D <= 0) break;
+        float new_scale = (sum_w * sum_lx - sum_x * sum_l) / D;
+        float new_min   = (sum_l2 * sum_x - sum_l * sum_lx) / D;
+        if (new_min > 0) {
+            new_min   = 0;
+            new_scale = sum_l2 > 1e-30f ? sum_lx / sum_l2 : 0.f;
+        }
+        float cur_error = 0;
+        for (int i = 0; i < n; ++i) {
+            float scaled = (x[i] - new_min) / (new_scale > 1e-15f ? new_scale : 1e-15f);
+            int best_k   = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
+            float diff   = new_scale * mapped_levels[best_k] + new_min - x[i];
+            float w = weight ? weight[i] : x[i] * x[i];
+            cur_error += w * diff * diff;
+        }
+        if (cur_error >= best_obj - 1e-12f * best_obj) { break; }
+        best_obj   = cur_error;
+        best_scale = new_scale;
+        best_min   = new_min;
+    }
+
+    // Final assignment with best (scale, min)
+    for (int i = 0; i < n; ++i) {
+        float scaled = (x[i] - best_min) / (best_scale > 1e-15f ? best_scale : 1e-15f);
+        L[i] = (scaled > bounds[0]) + (scaled > bounds[1]) + (scaled > bounds[2]);
+    }
+
+    *the_min = -best_min;
+    return best_scale;
+}
+
+static void quantize_row_q2_kpt_impl(const float * GGML_RESTRICT  x,
+                                      block_q2_kpt * GGML_RESTRICT y,
+                                      int64_t                      n_per_row,
+                                      const float * GGML_RESTRICT  quant_weights,
+                                      const float * GGML_RESTRICT  imatrix,
+                                      float * GGML_RESTRICT        block_levels) {
+    assert(n_per_row % QK_K == 0);
+    const int nb = n_per_row / QK_K;
+    GGML_ASSERT(block_levels != NULL && "block_levels buffer must be provided");
+
+    for (int i = 0; i < nb; ++i) {
+        const float * block_x = x + i * QK_K;
+
+        // Per-block quant_weights and imatrix slices (fixes the imatrix offset bug:
+        // previously the full-row imatrix was passed and indexed from 0 for every block)
+        const float * block_qw = quant_weights ? quant_weights + i * QK_K : NULL;
+        const float * block_im = imatrix       ? imatrix       + i * QK_K : NULL;
+
+        float sumx2 = 0.0f;
+        for (int j = 0; j < QK_K; ++j) sumx2 += block_x[j] * block_x[j];
+        float sigma2 = sumx2 / QK_K;
+
+        float block_lv[Q2KPT_N_LEVELS];
+        // Runs k-means init + EM loop; fills block_lv AND writes the best
+        // quantized block into y[i] as a side-effect.
+        q2kpt_optimize_block_levels(block_x, &y[i], block_qw, sigma2, block_lv);
+
+        memcpy(block_levels + i * Q2KPT_N_LEVELS, block_lv, Q2KPT_N_LEVELS * sizeof(float));
+
+        (void)block_im;  // imatrix is folded into block_qw; retained for future use
+    }
+}
+
+size_t quantize_q2_kpt(const float * GGML_RESTRICT src,
+                        void * GGML_RESTRICT        dst,
+                        int64_t                     start_row,
+                        int64_t                     nrow,
+                        int64_t                     n_per_row,
+                        const float *               imatrix) {
+    size_t row_size = ggml_row_size(GGML_TYPE_Q2_KPT, n_per_row);
+    char * qrow = (char *) dst;
+    const int nb = (int)(n_per_row / QK_K);
+    const size_t total_levels = (size_t)nrow * nb * Q2KPT_N_LEVELS;
+    const size_t levels_needed = (size_t)(start_row + nrow) * nb * Q2KPT_N_LEVELS;
+
+    // Ensure buffer is large enough (should have been pre-allocated via q2kpt_prepare_levels)
+    if (levels_needed > q2kpt_max_levels) {
+        q2kpt_block_levels = (float *) realloc(q2kpt_block_levels, levels_needed * sizeof(float));
+        q2kpt_max_levels = levels_needed;
+    }
+    q2kpt_cur_levels = levels_needed;
+
+    // Temporary buffer for one row's block levels
+    float * row_block_levels = (float *) malloc(nb * Q2KPT_N_LEVELS * sizeof(float));
+
+    for (int64_t row = 0; row < nrow; ++row) {
+        // Quantize row with per-block trained levels
+        quantize_row_q2_kpt_impl(src, (block_q2_kpt *) qrow, n_per_row, imatrix, imatrix, row_block_levels);
+        // Copy this row's block levels to the global buffer at the correct offset
+        memcpy(q2kpt_block_levels + (start_row + row) * nb * Q2KPT_N_LEVELS, row_block_levels,
+               nb * Q2KPT_N_LEVELS * sizeof(float));
+        src  += n_per_row;
+        qrow += row_size;
+    }
+    free(row_block_levels);
+    return nrow * row_size;
+}
+
+// Train per-row levels for all rows of a tensor and write to out_levels.
+// out_levels must be pre-allocated to nrow * Q2KPT_N_LEVELS floats.
+void q2kpt_train_all_row_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                                 const float * imatrix, float * out_levels) {
+    for (int64_t r = 0; r < nrow; ++r) {
+        q2kpt_train_levels(data + r * n_per_row, 1, n_per_row, imatrix,
+                           out_levels + r * Q2KPT_N_LEVELS);
+    }
+}
+
+void quantize_row_q2_kpt_ref(const float * GGML_RESTRICT x, block_q2_kpt * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    quantize_q2_kpt(x, y, 0, 1, k, NULL);
+}
+
+
+// ============================================================================
+// ============================================================================
+// IQ2_TQ: E8 Lattice Vector Quantization (2.1875 bpw)
+// ============================================================================
+//
+// --- Per-tensor grid state ---
+static int8_t iq2tq_active_grid[16][4];
+static bool   iq2tq_grid_set = false;
+
+void iq2tq_set_grid(const int8_t grid[64]) {
+    memcpy(iq2tq_active_grid, grid, 64);
+    iq2tq_grid_set = true;
+}
+
+const int8_t * iq2tq_get_grid(void) {
+    return iq2tq_grid_set ? (const int8_t *)iq2tq_active_grid : NULL;
+}
+
+// --- Default grid: trained via K-means on optimal per-group level-sets ---
+// recon[j] = d * IQ2TQ_GRID_SCALE * grid[si][qi]
+// Only used when no per-tensor grid is available (fallback)
+static const int8_t iq2tq_grid_default[16][4] = {
+   {-20,  -8,  -2,   6},  //  0: {-2.50, -1.00, -0.25, 0.75}
+   {-14,  -8,  -2,   4},  //  1: {-1.75, -1.00, -0.25, 0.50}
+   {-16, -10,   0,  12},  //  2: {-2.00, -1.25, 0.00, 1.50}
+   {-14,  -4,   2,   8},  //  3: {-1.75, -0.50, 0.25, 1.00}
+   {-20,  -4,   4,  12},  //  4: {-2.50, -0.50, 0.50, 1.50}
+    {-8,  -4,   0,   4},  //  5: {-1.00, -0.50, 0.00, 0.50}
+    {-8,  -4,   0,   8},  //  6: {-1.00, -0.50, 0.00, 1.00}
+   {-12,  -6,   2,  12},  //  7: {-1.50, -0.75, 0.25, 1.50}
+    {-4,  -2,   2,   4},  //  8: {-0.50, -0.25, 0.25, 0.50}
+   {-10,  -2,   4,   8},  //  9: {-1.25, -0.25, 0.50, 1.00}
+   {-16,  -6,   4,  20},  // 10: {-2.00, -0.75, 0.50, 2.50}
+   {-12,  -2,   6,  14},  // 11: {-1.50, -0.25, 0.75, 1.75}
+    {-8,  -2,   4,  14},  // 12: {-1.00, -0.25, 0.50, 1.75}
+    {-4,   0,   4,   8},  // 13: {-0.50, 0.00, 0.50, 1.00}
+    {-8,  -2,   6,  22},  // 14: {-1.00, -0.25, 0.75, 2.75}
+    {-4,   2,   8,  14},  // 15: {-0.50, 0.25, 1.00, 1.75}
+};
+
+// Get current grid: per-tensor if set, else default
+static inline const int8_t (*iq2tq_cur_grid(void))[4] {
+    return iq2tq_grid_set ? (const int8_t (*)[4])iq2tq_active_grid
+                          : (const int8_t (*)[4])iq2tq_grid_default;
+}
+
+// Unpack 2-bit index from qs array: element j is in bits (j%4)*2..(j%4)*2+1 of byte j/4
+static inline int iq2tq_get_qi(const uint8_t * qs, int j) {
+    return (qs[j / 4] >> ((j % 4) * 2)) & 3;
+}
+
+// Pack 2-bit index into qs array
+static inline void iq2tq_set_qi(uint8_t * qs, int j, int val) {
+    int byte_idx = j / 4;
+    int bit_off = (j % 4) * 2;
+    qs[byte_idx] = (qs[byte_idx] & ~(3 << bit_off)) | ((val & 3) << bit_off);
+}
+
+// Find nearest qi in sorted grid entry via midpoint boundaries
+static inline int iq2tq_nearest_qi(float xn, const int8_t * g) {
+    if (xn <= 0.5f * (g[0] + g[1])) return 0;
+    if (xn <= 0.5f * (g[1] + g[2])) return 1;
+    if (xn <= 0.5f * (g[2] + g[3])) return 2;
+    return 3;
+}
+
+// Dequantization — 2-bit with asymmetric grid per group
+void dequantize_row_iq2_tq(const block_iq2_tq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    const int8_t (*grid)[4] = levels ? (const int8_t (*)[4])levels
+                                     : (const int8_t (*)[4])iq2tq_grid_default;
+    const int nb = k / QK_K;
+
+    for (int i = 0; i < nb; ++i) {
+        const block_iq2_tq * b = x + i;
+        const float dq = GGML_FP16_TO_FP32(b->d) * IQ2TQ_GRID_SCALE;
+
+        for (int g = 0; g < IQ2TQ_N_GROUPS; ++g) {
+            int si = (b->scales[g / 2] >> (4 * (g % 2))) & 0xF;
+            const int8_t * ge = grid[si];
+
+            for (int k2 = 0; k2 < 8; ++k2) {
+                int j = g * 8 + k2;
+                int qi = iq2tq_get_qi(b->qs, j);
+                y[i * QK_K + j] = dq * (float)ge[qi];
+            }
+        }
+    }
+}
+
+// Reference quantization
+void quantize_row_iq2_tq_ref(const float * GGML_RESTRICT x, block_iq2_tq * GGML_RESTRICT y, int64_t k) {
+    quantize_iq2_tq(x, y, 1, k, NULL);
+}
+
+// Quantize one row — 2-bit with asymmetric grid + OLS d
+static void quantize_row_iq2_tq_impl(
+        const float * GGML_RESTRICT x,
+        block_iq2_tq * GGML_RESTRICT y,
+        int64_t n_per_row,
+        const float * GGML_RESTRICT quant_weights
+) {
+    assert(n_per_row % QK_K == 0);
+    const int8_t (*grid)[4] = iq2tq_cur_grid();
+    const int nb = n_per_row / QK_K;
+
+    for (int bi = 0; bi < nb; ++bi) {
+        const float * xb = x + bi * QK_K;
+        block_iq2_tq * yb = y + bi;
+        memset(yb, 0, sizeof(block_iq2_tq));
+
+        // Compute sigma2 for importance weighting (higher = more uniform, lower = more magnitude-biased)
+        float sigma2 = 0;
+        for (int j = 0; j < QK_K; ++j) sigma2 += xb[j] * xb[j];
+        sigma2 = 8.0f * sigma2 / QK_K;
+
+        float amax = 0;
+        for (int j = 0; j < QK_K; ++j) {
+            float av = fabsf(xb[j]);
+            if (av > amax) amax = av;
+        }
+        if (amax < 1e-15f) continue;
+
+        // Initial d: max grid value ~24 in int8, recon = d * 0.125 * 24 = 3d → d = amax/3
+        float d = amax / 3.0f;
+
+        uint8_t qs[64] = {0};
+        uint8_t scales_out[16] = {0};
+        int grid_idx[IQ2TQ_N_GROUPS];  // chosen grid entry per group
+
+        // Phase 1: For each group, try all 16 grid entries, pick best
+        float dq = d * IQ2TQ_GRID_SCALE;
+        float inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
+        for (int g = 0; g < IQ2TQ_N_GROUPS; ++g) {
+            float best_err = 1e30f;
+            int best_si = 3;  // default: centered medium
+
+            for (int si = 0; si < 16; ++si) {
+                const int8_t * ge = grid[si];
+                float g_err = 0;
+                for (int k = 0; k < 8; ++k) {
+                    int j = g * 8 + k;
+                    float xn = xb[j] * inv_dq;
+                    int qi = iq2tq_nearest_qi(xn, ge);
+                    float recon = dq * (float)ge[qi];
+                    float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                    float err = xb[j] - recon;
+                    g_err += wk * err * err;
+                }
+                if (g_err < best_err) { best_err = g_err; best_si = si; }
+            }
+            grid_idx[g] = best_si;
+
+            // Quantize elements with chosen grid
+            const int8_t * ge = grid[best_si];
+            for (int k = 0; k < 8; ++k) {
+                int j = g * 8 + k;
+                iq2tq_set_qi(qs, j, iq2tq_nearest_qi(xb[j] * inv_dq, ge));
+            }
+        }
+
+        // Iterative refinement
+        for (int iter = 0; iter < 12; ++iter) {
+            // Re-fit d via weighted OLS: d = sum(w*x*g) / (GRID_SCALE * sum(w*g*g))
+            double sumxg = 0, sumgg = 0;
+            for (int j = 0; j < QK_K; ++j) {
+                int g = j / 8;
+                float gval = (float)grid[grid_idx[g]][iq2tq_get_qi(qs, j)];
+                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                sumxg += wk * xb[j] * gval;
+                sumgg += wk * gval * gval;
+            }
+            d = (sumgg > 0) ? (float)(sumxg / (IQ2TQ_GRID_SCALE * sumgg)) : d;
+
+            // Re-optimize grids and re-quantize
+            dq = d * IQ2TQ_GRID_SCALE;
+            inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
+            memset(scales_out, 0, 16);
+            for (int g = 0; g < IQ2TQ_N_GROUPS; ++g) {
+                float best_err = 1e30f;
+                int best_si = 3;
+
+                for (int si = 0; si < 16; ++si) {
+                    const int8_t * ge = grid[si];
+                    float g_err = 0;
+                    for (int k = 0; k < 8; ++k) {
+                        int j = g * 8 + k;
+                        float xn = xb[j] * inv_dq;
+                        int qi = iq2tq_nearest_qi(xn, ge);
+                        float recon = dq * (float)ge[qi];
+                        float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                        float err = xb[j] - recon;
+                        g_err += wk * err * err;
+                    }
+                    if (g_err < best_err) { best_err = g_err; best_si = si; }
+                }
+                scales_out[g / 2] |= (best_si << (4 * (g % 2)));
+                grid_idx[g] = best_si;
+
+                const int8_t * ge = grid[best_si];
+                for (int k = 0; k < 8; ++k) {
+                    int j = g * 8 + k;
+                    iq2tq_set_qi(qs, j, iq2tq_nearest_qi(xb[j] * inv_dq, ge));
+                }
+            }
+        }
+
+        // Final OLS d
+        {
+            double sumxg = 0, sumgg = 0;
+            for (int j = 0; j < QK_K; ++j) {
+                int g = j / 8;
+                float gval = (float)grid[grid_idx[g]][iq2tq_get_qi(qs, j)];
+                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                sumxg += wk * xb[j] * gval;
+                sumgg += wk * gval * gval;
+            }
+            d = (sumgg > 0) ? (float)(sumxg / (IQ2TQ_GRID_SCALE * sumgg)) : d;
+        }
+
+        // Multi-d search: try nearby d values and re-optimize grids
+        {
+            float best_d = d;
+            float best_total_err = 1e30f;
+            uint8_t best_scales[16], best_qs[64];
+            int best_grid_idx[IQ2TQ_N_GROUPS];
+            static const float d_factors[] = {0.8f, 0.85f, 0.9f, 0.925f, 0.95f, 0.975f, 1.0f, 1.025f, 1.05f, 1.075f, 1.1f, 1.15f, 1.2f};
+            static const int n_d_factors = sizeof(d_factors) / sizeof(d_factors[0]);
+
+            for (int df = 0; df < n_d_factors; ++df) {
+                float td = d * d_factors[df];
+                float tdq = td * IQ2TQ_GRID_SCALE;
+                float tinv = (fabsf(tdq) > 1e-15f) ? 1.0f / tdq : 0.0f;
+                uint8_t tscales[16] = {0};
+                uint8_t tqs[64] = {0};
+                int tgrid[IQ2TQ_N_GROUPS];
+                float total_err = 0;
+
+                for (int g = 0; g < IQ2TQ_N_GROUPS; ++g) {
+                    float best_err = 1e30f;
+                    int best_si = 3;
+                    for (int si = 0; si < 16; ++si) {
+                        const int8_t * ge = grid[si];
+                        float g_err = 0;
+                        for (int k = 0; k < 8; ++k) {
+                            int j = g * 8 + k;
+                            float xn = xb[j] * tinv;
+                            int qi = iq2tq_nearest_qi(xn, ge);
+                            float recon = tdq * (float)ge[qi];
+                            float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                            float err = xb[j] - recon;
+                            g_err += wk * err * err;
+                        }
+                        if (g_err < best_err) { best_err = g_err; best_si = si; }
+                    }
+                    tscales[g / 2] |= (best_si << (4 * (g % 2)));
+                    tgrid[g] = best_si;
+                    const int8_t * ge = grid[best_si];
+                    for (int k = 0; k < 8; ++k) {
+                        int j = g * 8 + k;
+                        iq2tq_set_qi(tqs, j, iq2tq_nearest_qi(xb[j] * tinv, ge));
+                    }
+                    total_err += best_err;
+                }
+
+                if (total_err < best_total_err) {
+                    best_total_err = total_err;
+                    best_d = td;
+                    memcpy(best_scales, tscales, 16);
+                    memcpy(best_qs, tqs, 64);
+                    memcpy(best_grid_idx, tgrid, sizeof(tgrid));
+                }
+            }
+            d = best_d;
+            memcpy(scales_out, best_scales, 16);
+            memcpy(qs, best_qs, 64);
+            memcpy(grid_idx, best_grid_idx, sizeof(grid_idx));
+        }
+
+        // Post multi-d refinement: 2 more OLS+grid iterations from the best d
+        for (int iter = 0; iter < 2; ++iter) {
+            double sumxg = 0, sumgg = 0;
+            for (int j = 0; j < QK_K; ++j) {
+                int g = j / 8;
+                float gval = (float)grid[grid_idx[g]][iq2tq_get_qi(qs, j)];
+                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                sumxg += wk * xb[j] * gval;
+                sumgg += wk * gval * gval;
+            }
+            d = (sumgg > 0) ? (float)(sumxg / (IQ2TQ_GRID_SCALE * sumgg)) : d;
+
+            dq = d * IQ2TQ_GRID_SCALE;
+            inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
+            memset(scales_out, 0, 16);
+            for (int g = 0; g < IQ2TQ_N_GROUPS; ++g) {
+                float best_err = 1e30f;
+                int best_si = 3;
+                for (int si = 0; si < 16; ++si) {
+                    const int8_t * ge = grid[si];
+                    float g_err = 0;
+                    for (int k = 0; k < 8; ++k) {
+                        int j = g * 8 + k;
+                        float xn = xb[j] * inv_dq;
+                        int qi = iq2tq_nearest_qi(xn, ge);
+                        float recon = dq * (float)ge[qi];
+                        float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                        float err = xb[j] - recon;
+                        g_err += wk * err * err;
+                    }
+                    if (g_err < best_err) { best_err = g_err; best_si = si; }
+                }
+                scales_out[g / 2] |= (best_si << (4 * (g % 2)));
+                grid_idx[g] = best_si;
+                const int8_t * ge = grid[best_si];
+                for (int k = 0; k < 8; ++k) {
+                    int j = g * 8 + k;
+                    iq2tq_set_qi(qs, j, iq2tq_nearest_qi(xb[j] * inv_dq, ge));
+                }
+            }
+        }
+
+        // Write result
+        yb->d = GGML_FP32_TO_FP16(d);
+        memcpy(yb->scales, scales_out, 16);
+        memcpy(yb->qs, qs, 64);
+    }
+}
+
+// Public quantize function
+size_t quantize_iq2_tq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                       int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    size_t row_size = ggml_row_size(GGML_TYPE_IQ2_TQ, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_iq2_tq_impl(src, (block_iq2_tq *)qrow, n_per_row, imatrix);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrows * row_size;
+}
+
+// Train per-tensor grid via K-means on optimal per-group level-sets
+void iq2tq_train_grid(const float * data, int64_t nrow, int64_t n_per_row,
+                      const float * imatrix, int8_t grid_out[64]) {
+    assert(n_per_row % QK_K == 0);
+    const int nb_per_row = n_per_row / QK_K;
+    const int max_groups = 200000;
+
+    // Collect optimal per-group level-sets with importance weights
+    float (*sets)[4] = (float (*)[4])malloc(max_groups * 4 * sizeof(float));
+    float * set_weights = (float *)malloc(max_groups * sizeof(float));
+    int n_sets = 0;
+
+    for (int64_t row = 0; row < nrow && n_sets < max_groups - IQ2TQ_N_GROUPS; row++) {
+        const float * xrow = data + row * n_per_row;
+        for (int bi = 0; bi < nb_per_row && n_sets < max_groups; bi++) {
+            const float * xb = xrow + bi * QK_K;
+
+            // Compute d = amax / 3
+            float amax = 0;
+            for (int j = 0; j < QK_K; j++) {
+                float av = fabsf(xb[j]);
+                if (av > amax) amax = av;
+            }
+            if (amax < 1e-15f) continue;
+            float inv_dq = 1.0f / (amax / 3.0f * IQ2TQ_GRID_SCALE);
+
+            for (int g = 0; g < IQ2TQ_N_GROUPS && n_sets < max_groups; g++) {
+                // Compute importance weight for this group
+                float gw = 1.0f;
+                if (imatrix) {
+                    gw = 0;
+                    for (int k = 0; k < 8; k++) gw += imatrix[g * 8 + k];
+                    gw /= 8.0f;
+                    if (gw < 1e-10f) gw = 1e-10f;
+                }
+
+                // Normalize group values by d*GRID_SCALE
+                float xn[8];
+                for (int k = 0; k < 8; k++) {
+                    xn[k] = xb[g * 8 + k] * inv_dq;
+                }
+
+                // Sort
+                for (int i = 0; i < 7; i++)
+                    for (int j2 = i + 1; j2 < 8; j2++)
+                        if (xn[j2] < xn[i]) { float t = xn[i]; xn[i] = xn[j2]; xn[j2] = t; }
+
+                // Optimal 4-level: split sorted 8 values into 4 pairs, compute centroids
+                // Use Lloyd-Max: iterate assignment + centroid recomputation
+                float L[4] = { xn[0], xn[2], xn[5], xn[7] };
+                for (int iter = 0; iter < 15; iter++) {
+                    float b01 = 0.5f * (L[0] + L[1]);
+                    float b12 = 0.5f * (L[1] + L[2]);
+                    float b23 = 0.5f * (L[2] + L[3]);
+                    float sum[4] = {0}; int cnt[4] = {0};
+                    for (int k = 0; k < 8; k++) {
+                        int qi = (xn[k] <= b01) ? 0 : (xn[k] <= b12) ? 1 : (xn[k] <= b23) ? 2 : 3;
+                        sum[qi] += xn[k]; cnt[qi]++;
+                    }
+                    int converged = 1;
+                    for (int q = 0; q < 4; q++) {
+                        float newL = (cnt[q] > 0) ? sum[q] / cnt[q] : L[q];
+                        if (fabsf(newL - L[q]) > 0.01f) converged = 0;
+                        L[q] = newL;
+                    }
+                    if (converged) break;
+                }
+
+                memcpy(sets[n_sets], L, 4 * sizeof(float));
+                set_weights[n_sets] = gw;
+                n_sets++;
+            }
+        }
+    }
+
+    // K-means clustering of level-sets into 16 clusters
+    float centroids[16][4];
+    // Initialize: spread evenly
+    for (int i = 0; i < 16; i++) {
+        int idx = (int)((int64_t)i * n_sets / 16);
+        memcpy(centroids[i], sets[idx], 4 * sizeof(float));
+    }
+
+    int * assign = (int *)calloc(n_sets, sizeof(int));
+    for (int iter = 0; iter < 100; iter++) {
+        int changed = 0;
+        for (int i = 0; i < n_sets; i++) {
+            float best_dist = 1e30f;
+            int best_c = 0;
+            for (int c = 0; c < 16; c++) {
+                float dist = 0;
+                for (int d = 0; d < 4; d++) {
+                    float diff = sets[i][d] - centroids[c][d];
+                    dist += diff * diff;
+                }
+                if (dist < best_dist) { best_dist = dist; best_c = c; }
+            }
+            if (assign[i] != best_c) { assign[i] = best_c; changed++; }
+        }
+
+        double sum[16][4] = {{0}};
+        double wcnt[16] = {0};
+        for (int i = 0; i < n_sets; i++) {
+            int c = assign[i];
+            float w = set_weights[i];
+            for (int d = 0; d < 4; d++) sum[c][d] += w * sets[i][d];
+            wcnt[c] += w;
+        }
+        for (int c = 0; c < 16; c++) {
+            if (wcnt[c] > 0) {
+                for (int d = 0; d < 4; d++) centroids[c][d] = (float)(sum[c][d] / wcnt[c]);
+            }
+        }
+        if (changed == 0) break;
+    }
+
+    // Sort centroids by sum of levels for consistent ordering
+    for (int i = 0; i < 15; i++) {
+        for (int j2 = i + 1; j2 < 16; j2++) {
+            float si2 = centroids[i][0] + centroids[i][1] + centroids[i][2] + centroids[i][3];
+            float sj = centroids[j2][0] + centroids[j2][1] + centroids[j2][2] + centroids[j2][3];
+            if (sj < si2) {
+                float tmp[4];
+                memcpy(tmp, centroids[i], 16);
+                memcpy(centroids[i], centroids[j2], 16);
+                memcpy(centroids[j2], tmp, 16);
+            }
+        }
+    }
+
+    // Round to int8 and output
+    for (int i = 0; i < 16; i++) {
+        for (int d = 0; d < 4; d++) {
+            float v = centroids[i][d];
+            int8_t iv = (int8_t)(v > 0 ? v + 0.5f : v - 0.5f);
+            grid_out[i * 4 + d] = iv;
+        }
+    }
+
+    free(sets);
+    free(set_weights);
+    free(assign);
+}
+
+// ============================================================================
+// IQ3_TQ: 3-bit scalar quantization with per-tensor trained grid table
+// ============================================================================
+
+// --- Per-tensor grid state (16 entries × 8 levels = 128 bytes) ---
+static int8_t iq3tq_active_grid[16][IQ3TQ_N_LEVELS];
+static bool   iq3tq_grid_set = false;
+
+void iq3tq_set_grid(const int8_t grid[IQ3TQ_GRID_SIZE]) {
+    memcpy(iq3tq_active_grid, grid, IQ3TQ_GRID_SIZE);
+    iq3tq_grid_set = true;
+}
+
+const int8_t * iq3tq_get_grid(void) {
+    return iq3tq_grid_set ? (const int8_t *)iq3tq_active_grid : NULL;
+}
+
+// Default grid: 16 entries × 8 int8 levels (fallback only, per-tensor training is used in practice)
+static const int8_t iq3tq_grid_default[16][IQ3TQ_N_LEVELS] = {
+    {-24,-18,-12, -6,  0,  6, 12, 18},
+    {-20,-15,-10, -5,  0,  5, 10, 15},
+    {-16,-12, -8, -4,  0,  4,  8, 12},
+    {-12, -8, -4, -2,  0,  2,  4,  8},
+    {-24,-16, -8, -2,  2,  6, 10, 14},
+    {-14,-10, -6, -2,  2,  8, 16, 24},
+    {-20,-14, -8, -4,  0,  4, 10, 18},
+    {-18,-10, -4,  0,  4,  8, 14, 20},
+    { -8, -6, -4, -2,  0,  2,  4,  6},
+    {-10, -6, -4, -2,  2,  4,  6, 10},
+    {-22,-14, -6, -2,  2,  6, 14, 22},
+    {-16, -8, -4, -2,  0,  4,  8, 16},
+    {-24,-20,-16,-12, -8, -4,  0,  4},
+    { -4,  0,  4,  8, 12, 16, 20, 24},
+    {-20,-16,-10, -4,  4, 10, 16, 20},
+    {-12, -8, -6, -2,  2,  6,  8, 12},
+};
+
+static inline const int8_t (*iq3tq_cur_grid(void))[IQ3TQ_N_LEVELS] {
+    return iq3tq_grid_set ? (const int8_t (*)[IQ3TQ_N_LEVELS])iq3tq_active_grid
+                          : (const int8_t (*)[IQ3TQ_N_LEVELS])iq3tq_grid_default;
+}
+
+// 3-bit pack/unpack
+static inline int iq3tq_get_qi(const uint8_t * qs, int j) {
+    int bit_pos = j * 3;
+    int byte_idx = bit_pos >> 3;
+    int bit_off = bit_pos & 7;
+    uint16_t val = qs[byte_idx];
+    if (bit_off > 5) val |= ((uint16_t)qs[byte_idx + 1] << 8);
+    return (val >> bit_off) & 7;
+}
+
+static inline void iq3tq_set_qi(uint8_t * qs, int j, int val) {
+    int bit_pos = j * 3;
+    int byte_idx = bit_pos >> 3;
+    int bit_off = bit_pos & 7;
+    qs[byte_idx] &= ~((7 << bit_off) & 0xFF);
+    qs[byte_idx] |= ((val & 7) << bit_off) & 0xFF;
+    if (bit_off > 5) {
+        qs[byte_idx + 1] &= ~((7 >> (8 - bit_off)) & 0xFF);
+        qs[byte_idx + 1] |= ((val & 7) >> (8 - bit_off)) & 0xFF;
+    }
+}
+
+// Find nearest qi in sorted 8-level grid entry
+static inline int iq3tq_nearest_qi(float xn, const int8_t * g) {
+    for (int i = 0; i < 7; ++i) {
+        if (xn <= 0.5f * (g[i] + g[i+1])) return i;
+    }
+    return 7;
+}
+
+// Dequantization
+void dequantize_row_iq3_tq(const block_iq3_tq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    const int8_t (*grid)[IQ3TQ_N_LEVELS] = levels ? (const int8_t (*)[IQ3TQ_N_LEVELS])levels
+                                                   : (const int8_t (*)[IQ3TQ_N_LEVELS])iq3tq_grid_default;
+    const int nb = k / QK_K;
+
+    for (int i = 0; i < nb; ++i) {
+        const block_iq3_tq * b = x + i;
+        const float dq = GGML_FP16_TO_FP32(b->d) * IQ3TQ_GRID_SCALE;
+
+        for (int g = 0; g < IQ3TQ_N_GROUPS; ++g) {
+            int si = (b->scales[g / 2] >> (4 * (g % 2))) & 0xF;
+            const int8_t * ge = grid[si];
+
+            for (int k2 = 0; k2 < 8; ++k2) {
+                int j = g * 8 + k2;
+                int qi = iq3tq_get_qi(b->qs, j);
+                y[i * QK_K + j] = dq * (float)ge[qi];
+            }
+        }
+    }
+}
+
+void quantize_row_iq3_tq_ref(const float * GGML_RESTRICT x, block_iq3_tq * GGML_RESTRICT y, int64_t k) {
+    quantize_iq3_tq(x, y, 1, k, NULL);
+}
+
+// Quantize one row — 3-bit with asymmetric grid + OLS d
+static void quantize_row_iq3_tq_impl(
+        const float * GGML_RESTRICT x,
+        block_iq3_tq * GGML_RESTRICT y,
+        int64_t n_per_row,
+        const float * GGML_RESTRICT quant_weights
+) {
+    assert(n_per_row % QK_K == 0);
+    const int8_t (*grid)[IQ3TQ_N_LEVELS] = iq3tq_cur_grid();
+    const int nb = n_per_row / QK_K;
+
+    for (int bi = 0; bi < nb; ++bi) {
+        const float * xb = x + bi * QK_K;
+        block_iq3_tq * yb = y + bi;
+        memset(yb, 0, sizeof(block_iq3_tq));
+
+        float sigma2 = 0;
+        for (int j = 0; j < QK_K; ++j) sigma2 += xb[j] * xb[j];
+        sigma2 = 8.0f * sigma2 / QK_K;
+
+        float amax = 0;
+        for (int j = 0; j < QK_K; ++j) {
+            float av = fabsf(xb[j]);
+            if (av > amax) amax = av;
+        }
+        if (amax < 1e-15f) continue;
+
+        float d = amax / 3.0f;
+
+        uint8_t qs[96] = {0};
+        uint8_t scales_out[16] = {0};
+        int grid_idx[IQ3TQ_N_GROUPS];
+
+        // Phase 1: For each group, try all 16 grid entries, pick best
+        float dq = d * IQ3TQ_GRID_SCALE;
+        float inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
+        for (int g = 0; g < IQ3TQ_N_GROUPS; ++g) {
+            float best_err = 1e30f;
+            int best_si = 0;
+
+            for (int si = 0; si < 16; ++si) {
+                const int8_t * ge = grid[si];
+                float g_err = 0;
+                for (int k = 0; k < 8; ++k) {
+                    int j = g * 8 + k;
+                    float xn = xb[j] * inv_dq;
+                    int qi = iq3tq_nearest_qi(xn, ge);
+                    float recon = dq * (float)ge[qi];
+                    float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                    float err = xb[j] - recon;
+                    g_err += wk * err * err;
+                }
+                if (g_err < best_err) { best_err = g_err; best_si = si; }
+            }
+            grid_idx[g] = best_si;
+            const int8_t * ge = grid[best_si];
+            for (int k = 0; k < 8; ++k) {
+                int j = g * 8 + k;
+                iq3tq_set_qi(qs, j, iq3tq_nearest_qi(xb[j] * inv_dq, ge));
+            }
+        }
+
+        // Iterative refinement
+        for (int iter = 0; iter < 12; ++iter) {
+            double sumxg = 0, sumgg = 0;
+            for (int j = 0; j < QK_K; ++j) {
+                int g = j / 8;
+                float gval = (float)grid[grid_idx[g]][iq3tq_get_qi(qs, j)];
+                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                sumxg += wk * xb[j] * gval;
+                sumgg += wk * gval * gval;
+            }
+            d = (sumgg > 0) ? (float)(sumxg / (IQ3TQ_GRID_SCALE * sumgg)) : d;
+
+            dq = d * IQ3TQ_GRID_SCALE;
+            inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
+            memset(scales_out, 0, 16);
+            for (int g = 0; g < IQ3TQ_N_GROUPS; ++g) {
+                float best_err = 1e30f;
+                int best_si = 0;
+                for (int si = 0; si < 16; ++si) {
+                    const int8_t * ge = grid[si];
+                    float g_err = 0;
+                    for (int k = 0; k < 8; ++k) {
+                        int j = g * 8 + k;
+                        float xn = xb[j] * inv_dq;
+                        int qi = iq3tq_nearest_qi(xn, ge);
+                        float recon = dq * (float)ge[qi];
+                        float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                        float err = xb[j] - recon;
+                        g_err += wk * err * err;
+                    }
+                    if (g_err < best_err) { best_err = g_err; best_si = si; }
+                }
+                scales_out[g / 2] |= (best_si << (4 * (g % 2)));
+                grid_idx[g] = best_si;
+                const int8_t * ge = grid[best_si];
+                for (int k = 0; k < 8; ++k) {
+                    int j = g * 8 + k;
+                    iq3tq_set_qi(qs, j, iq3tq_nearest_qi(xb[j] * inv_dq, ge));
+                }
+            }
+        }
+
+        // Final OLS d
+        {
+            double sumxg = 0, sumgg = 0;
+            for (int j = 0; j < QK_K; ++j) {
+                int g = j / 8;
+                float gval = (float)grid[grid_idx[g]][iq3tq_get_qi(qs, j)];
+                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                sumxg += wk * xb[j] * gval;
+                sumgg += wk * gval * gval;
+            }
+            d = (sumgg > 0) ? (float)(sumxg / (IQ3TQ_GRID_SCALE * sumgg)) : d;
+        }
+
+        // Multi-d search
+        {
+            float best_d = d;
+            float best_total_err = 1e30f;
+            uint8_t best_scales[16], best_qs[96];
+            int best_grid_idx[IQ3TQ_N_GROUPS];
+            static const float d_factors[] = {0.8f, 0.85f, 0.9f, 0.925f, 0.95f, 0.975f, 1.0f, 1.025f, 1.05f, 1.075f, 1.1f, 1.15f, 1.2f};
+            static const int n_d_factors = sizeof(d_factors) / sizeof(d_factors[0]);
+
+            for (int df = 0; df < n_d_factors; ++df) {
+                float td = d * d_factors[df];
+                float tdq = td * IQ3TQ_GRID_SCALE;
+                float tinv = (fabsf(tdq) > 1e-15f) ? 1.0f / tdq : 0.0f;
+                uint8_t tscales[16] = {0};
+                uint8_t tqs[96] = {0};
+                int tgrid[IQ3TQ_N_GROUPS];
+                float total_err = 0;
+
+                for (int g = 0; g < IQ3TQ_N_GROUPS; ++g) {
+                    float best_err = 1e30f;
+                    int best_si = 0;
+                    for (int si = 0; si < 16; ++si) {
+                        const int8_t * ge = grid[si];
+                        float g_err = 0;
+                        for (int k = 0; k < 8; ++k) {
+                            int j = g * 8 + k;
+                            float xn = xb[j] * tinv;
+                            int qi = iq3tq_nearest_qi(xn, ge);
+                            float recon = tdq * (float)ge[qi];
+                            float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                            float err = xb[j] - recon;
+                            g_err += wk * err * err;
+                        }
+                        if (g_err < best_err) { best_err = g_err; best_si = si; }
+                    }
+                    tscales[g / 2] |= (best_si << (4 * (g % 2)));
+                    tgrid[g] = best_si;
+                    const int8_t * ge = grid[best_si];
+                    for (int k = 0; k < 8; ++k) {
+                        int j = g * 8 + k;
+                        iq3tq_set_qi(tqs, j, iq3tq_nearest_qi(xb[j] * tinv, ge));
+                    }
+                    total_err += best_err;
+                }
+
+                if (total_err < best_total_err) {
+                    best_total_err = total_err;
+                    best_d = td;
+                    memcpy(best_scales, tscales, 16);
+                    memcpy(best_qs, tqs, 96);
+                    memcpy(best_grid_idx, tgrid, sizeof(tgrid));
+                }
+            }
+            d = best_d;
+            memcpy(scales_out, best_scales, 16);
+            memcpy(qs, best_qs, 96);
+            memcpy(grid_idx, best_grid_idx, sizeof(grid_idx));
+        }
+
+        // Post multi-d refinement
+        for (int iter = 0; iter < 2; ++iter) {
+            double sumxg = 0, sumgg = 0;
+            for (int j = 0; j < QK_K; ++j) {
+                int g = j / 8;
+                float gval = (float)grid[grid_idx[g]][iq3tq_get_qi(qs, j)];
+                float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                sumxg += wk * xb[j] * gval;
+                sumgg += wk * gval * gval;
+            }
+            d = (sumgg > 0) ? (float)(sumxg / (IQ3TQ_GRID_SCALE * sumgg)) : d;
+
+            dq = d * IQ3TQ_GRID_SCALE;
+            inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
+            memset(scales_out, 0, 16);
+            for (int g = 0; g < IQ3TQ_N_GROUPS; ++g) {
+                float best_err = 1e30f;
+                int best_si = 0;
+                for (int si = 0; si < 16; ++si) {
+                    const int8_t * ge = grid[si];
+                    float g_err = 0;
+                    for (int k = 0; k < 8; ++k) {
+                        int j = g * 8 + k;
+                        float xn = xb[j] * inv_dq;
+                        int qi = iq3tq_nearest_qi(xn, ge);
+                        float recon = dq * (float)ge[qi];
+                        float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
+                        float err = xb[j] - recon;
+                        g_err += wk * err * err;
+                    }
+                    if (g_err < best_err) { best_err = g_err; best_si = si; }
+                }
+                scales_out[g / 2] |= (best_si << (4 * (g % 2)));
+                grid_idx[g] = best_si;
+                const int8_t * ge = grid[best_si];
+                for (int k = 0; k < 8; ++k) {
+                    int j = g * 8 + k;
+                    iq3tq_set_qi(qs, j, iq3tq_nearest_qi(xb[j] * inv_dq, ge));
+                }
+            }
+        }
+
+        yb->d = GGML_FP32_TO_FP16(d);
+        memcpy(yb->scales, scales_out, 16);
+        memcpy(yb->qs, qs, 96);
+    }
+}
+
+size_t quantize_iq3_tq(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                       int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    size_t row_size = ggml_row_size(GGML_TYPE_IQ3_TQ, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_iq3_tq_impl(src, (block_iq3_tq *)qrow, n_per_row, imatrix);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrows * row_size;
+}
+
+// Train per-tensor grid: 16 entries × 8 levels via K-means on optimal per-group level-sets
+void iq3tq_train_grid(const float * data, int64_t nrow, int64_t n_per_row,
+                      const float * imatrix, int8_t grid_out[IQ3TQ_GRID_SIZE]) {
+    assert(n_per_row % QK_K == 0);
+    const int nb_per_row = n_per_row / QK_K;
+    const int max_groups = 200000;
+    const int NL = IQ3TQ_N_LEVELS;  // 8
+
+    float (*sets)[IQ3TQ_N_LEVELS] = (float (*)[IQ3TQ_N_LEVELS])malloc(max_groups * NL * sizeof(float));
+    float * set_weights = (float *)malloc(max_groups * sizeof(float));
+    int n_sets = 0;
+
+    for (int64_t row = 0; row < nrow && n_sets < max_groups - IQ3TQ_N_GROUPS; row++) {
+        const float * xrow = data + row * n_per_row;
+        for (int bi = 0; bi < nb_per_row && n_sets < max_groups; bi++) {
+            const float * xb = xrow + bi * QK_K;
+
+            float amax = 0;
+            for (int j = 0; j < QK_K; j++) {
+                float av = fabsf(xb[j]);
+                if (av > amax) amax = av;
+            }
+            if (amax < 1e-15f) continue;
+            float inv_dq = 1.0f / (amax / 3.0f * IQ3TQ_GRID_SCALE);
+
+            for (int g = 0; g < IQ3TQ_N_GROUPS && n_sets < max_groups; g++) {
+                float gw = 1.0f;
+                if (imatrix) {
+                    gw = 0;
+                    for (int k = 0; k < 8; k++) gw += imatrix[g * 8 + k];
+                    gw /= 8.0f;
+                    if (gw < 1e-10f) gw = 1e-10f;
+                }
+
+                // Normalize and sort group values
+                float xn[8];
+                for (int k = 0; k < 8; k++) xn[k] = xb[g * 8 + k] * inv_dq;
+                for (int a = 0; a < 7; a++)
+                    for (int b2 = a + 1; b2 < 8; b2++)
+                        if (xn[b2] < xn[a]) { float t = xn[a]; xn[a] = xn[b2]; xn[b2] = t; }
+
+                // With 8 elements and 8 levels, optimal assignment is 1:1
+                // But we still run Lloyd-Max to handle cases with duplicates
+                float L[IQ3TQ_N_LEVELS];
+                for (int q = 0; q < NL; q++) L[q] = xn[q];
+                for (int iter = 0; iter < 10; iter++) {
+                    float bounds[7];
+                    for (int q = 0; q < NL - 1; q++) bounds[q] = 0.5f * (L[q] + L[q+1]);
+                    float sum[IQ3TQ_N_LEVELS] = {0}; int cnt[IQ3TQ_N_LEVELS] = {0};
+                    for (int k = 0; k < 8; k++) {
+                        int qi = NL - 1;
+                        for (int q = 0; q < NL - 1; q++) {
+                            if (xn[k] <= bounds[q]) { qi = q; break; }
+                        }
+                        sum[qi] += xn[k]; cnt[qi]++;
+                    }
+                    int converged = 1;
+                    for (int q = 0; q < NL; q++) {
+                        float newL = (cnt[q] > 0) ? sum[q] / cnt[q] : L[q];
+                        if (fabsf(newL - L[q]) > 0.01f) converged = 0;
+                        L[q] = newL;
+                    }
+                    if (converged) break;
+                }
+
+                memcpy(sets[n_sets], L, NL * sizeof(float));
+                set_weights[n_sets] = gw;
+                n_sets++;
+            }
+        }
+    }
+
+    // K-means clustering into 16 clusters
+    float centroids[16][IQ3TQ_N_LEVELS];
+    for (int i = 0; i < 16; i++) {
+        int idx = (int)((int64_t)i * n_sets / 16);
+        memcpy(centroids[i], sets[idx], NL * sizeof(float));
+    }
+
+    int * assign = (int *)calloc(n_sets, sizeof(int));
+    for (int iter = 0; iter < 100; iter++) {
+        int changed = 0;
+        for (int i = 0; i < n_sets; i++) {
+            float best_dist = 1e30f;
+            int best_c = 0;
+            for (int c = 0; c < 16; c++) {
+                float dist = 0;
+                for (int dd = 0; dd < NL; dd++) {
+                    float diff = sets[i][dd] - centroids[c][dd];
+                    dist += diff * diff;
+                }
+                if (dist < best_dist) { best_dist = dist; best_c = c; }
+            }
+            if (assign[i] != best_c) { assign[i] = best_c; changed++; }
+        }
+
+        double sum[16][IQ3TQ_N_LEVELS];
+        double wcnt[16];
+        memset(sum, 0, sizeof(sum));
+        memset(wcnt, 0, sizeof(wcnt));
+        for (int i = 0; i < n_sets; i++) {
+            int c = assign[i];
+            float w = set_weights[i];
+            for (int dd = 0; dd < NL; dd++) sum[c][dd] += w * sets[i][dd];
+            wcnt[c] += w;
+        }
+        for (int c = 0; c < 16; c++) {
+            if (wcnt[c] > 0) {
+                for (int dd = 0; dd < NL; dd++) centroids[c][dd] = (float)(sum[c][dd] / wcnt[c]);
+            }
+        }
+        if (changed == 0) break;
+    }
+
+    // Sort centroids by sum of levels
+    for (int i = 0; i < 15; i++) {
+        for (int j2 = i + 1; j2 < 16; j2++) {
+            float si2 = 0, sj = 0;
+            for (int dd = 0; dd < NL; dd++) { si2 += centroids[i][dd]; sj += centroids[j2][dd]; }
+            if (sj < si2) {
+                float tmp[IQ3TQ_N_LEVELS];
+                memcpy(tmp, centroids[i], NL * sizeof(float));
+                memcpy(centroids[i], centroids[j2], NL * sizeof(float));
+                memcpy(centroids[j2], tmp, NL * sizeof(float));
+            }
+        }
+    }
+
+    // Round to int8
+    for (int i = 0; i < 16; i++) {
+        for (int dd = 0; dd < NL; dd++) {
+            float v = centroids[i][dd];
+            grid_out[i * NL + dd] = (int8_t)(v > 0 ? v + 0.5f : v - 0.5f);
+        }
+    }
+
+    free(sets);
+    free(set_weights);
+    free(assign);
+}
+
+// =====================================================================================
+// IQ1_BN: 8D Vector Quantized with per-tensor trained 4096-entry codebook (1.5625 bpw)
+// =====================================================================================
+
+// Global state for current tensor's codebook (32768 bytes)
+static int8_t iq1bn_active_aux[IQ1BN_AUX_SIZE];
+static bool   iq1bn_aux_set = false;
+
+static const int8_t iq1bn_default_aux[IQ1BN_AUX_SIZE] = {0};
+
+void iq1bn_set_aux(const int8_t aux[IQ1BN_AUX_SIZE]) {
+    memcpy(iq1bn_active_aux, aux, IQ1BN_AUX_SIZE);
+    iq1bn_aux_set = true;
+}
+
+const int8_t * iq1bn_get_aux(void) {
+    return iq1bn_aux_set ? iq1bn_active_aux : iq1bn_default_aux;
+}
+
+static inline const int8_t * iq1bn_cur_codebook(void) {
+    return iq1bn_aux_set ? iq1bn_active_aux : iq1bn_default_aux;
+}
+
+// 12-bit index extraction helpers
+static inline int iq1bn_get_idx(const uint8_t * qs, int g) {
+    int pair = g / 2;
+    if (g & 1) {
+        return (qs[3*pair+1] >> 4) | ((int)qs[3*pair+2] << 4);
+    } else {
+        return qs[3*pair] | (((int)qs[3*pair+1] & 0x0F) << 8);
+    }
+}
+
+static inline void iq1bn_set_idx(uint8_t * qs, int pair, int idx0, int idx1) {
+    qs[3*pair]   = idx0 & 0xFF;
+    qs[3*pair+1] = ((idx0 >> 8) & 0x0F) | ((idx1 & 0x0F) << 4);
+    qs[3*pair+2] = (idx1 >> 4) & 0xFF;
+}
+
+// Dequantization
+void dequantize_row_iq1_bn(const block_iq1_bn * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    const int8_t * codebook = levels ? (const int8_t *)levels : iq1bn_cur_codebook();
+    const int nb = k / QK_K;
+
+    for (int i = 0; i < nb; ++i) {
+        const block_iq1_bn * b = x + i;
+        const float dq = GGML_FP16_TO_FP32(b->d) * IQ1BN_GRID_SCALE;
+
+        for (int g = 0; g < IQ1BN_N_GROUPS; ++g) {
+            int ci = iq1bn_get_idx(b->qs, g);
+            const int8_t * cb = codebook + ci * IQ1BN_CODEBOOK_DIM;
+
+            for (int j = 0; j < IQ1BN_CODEBOOK_DIM; ++j) {
+                y[i * QK_K + g * IQ1BN_GROUP_SIZE + j] = dq * (float)cb[j];
+            }
+        }
+    }
+}
+
+// Reference quantization
+void quantize_row_iq1_bn_ref(const float * GGML_RESTRICT x, block_iq1_bn * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    const int8_t * codebook = iq1bn_cur_codebook();
+
+    for (int i = 0; i < nb; ++i) {
+        float amax = 0;
+        for (int j = 0; j < QK_K; ++j) {
+            float ax = fabsf(x[i * QK_K + j]);
+            if (ax > amax) amax = ax;
+        }
+        if (amax < 1e-15f) {
+            memset(y + i, 0, sizeof(block_iq1_bn));
+            continue;
+        }
+        float d = amax / 3.0f;
+        float inv_dq = 1.0f / (d * IQ1BN_GRID_SCALE);
+
+        uint16_t ci_out[IQ1BN_N_GROUPS];
+        for (int g = 0; g < IQ1BN_N_GROUPS; ++g) {
+            float xn[IQ1BN_CODEBOOK_DIM];
+            for (int j = 0; j < IQ1BN_CODEBOOK_DIM; ++j) {
+                xn[j] = x[i * QK_K + g * IQ1BN_GROUP_SIZE + j] * inv_dq;
+            }
+
+            float best_err = 1e30f;
+            int best_ci = 0;
+            for (int c = 0; c < IQ1BN_CODEBOOK_K; ++c) {
+                const int8_t * cb = codebook + c * IQ1BN_CODEBOOK_DIM;
+                float err = 0;
+                for (int j = 0; j < IQ1BN_CODEBOOK_DIM; ++j) {
+                    float diff = xn[j] - (float)cb[j];
+                    err += diff * diff;
+                }
+                if (err < best_err) { best_err = err; best_ci = c; }
+            }
+            ci_out[g] = (uint16_t)best_ci;
+        }
+
+        y[i].d = GGML_FP32_TO_FP16(d);
+        for (int g = 0; g < IQ1BN_N_GROUPS; g += 2) {
+            iq1bn_set_idx(y[i].qs, g/2, ci_out[g], ci_out[g+1]);
+        }
+    }
+}
+
+// L2 distance helper for 8D float vectors
+#if defined(__AVX2__)
+static inline float iq1bn_l2_dist_8d(__m256 va, __m256 vb) {
+    __m256 vdiff = _mm256_sub_ps(va, vb);
+    __m256 vd2 = _mm256_mul_ps(vdiff, vdiff);
+    __m128 hi = _mm256_extractf128_ps(vd2, 1);
+    __m128 lo = _mm256_castps256_ps128(vd2);
+    __m128 sum4 = _mm_add_ps(lo, hi);
+    __m128 sum2 = _mm_add_ps(sum4, _mm_movehl_ps(sum4, sum4));
+    __m128 sum1 = _mm_add_ss(sum2, _mm_movehdup_ps(sum2));
+    return _mm_cvtss_f32(sum1);
+}
+#endif
+
+// Find best codebook entry for a normalized group (weighted) — float codebook version
+static inline int iq1bn_find_best(const float * xn, const float * wg,
+                                   const float * cb_float, const float * cb_norm2,
+                                   int K, float * out_err) {
+    float best_err = 1e30f;
+    int best_c = 0;
+#if defined(__AVX2__)
+    __m256 vxn = _mm256_loadu_ps(xn);
+    __m256 vwg = _mm256_loadu_ps(wg);
+    for (int c = 0; c < K; ++c) {
+        if (cb_norm2[c] < 1e-10f) continue;
+        __m256 vcb = _mm256_loadu_ps(cb_float + c * 8);
+        __m256 vdiff = _mm256_sub_ps(vxn, vcb);
+        __m256 vd2 = _mm256_mul_ps(vdiff, vdiff);
+        __m256 vwd2 = _mm256_mul_ps(vwg, vd2);
+        // Horizontal sum
+        __m128 hi = _mm256_extractf128_ps(vwd2, 1);
+        __m128 lo = _mm256_castps256_ps128(vwd2);
+        __m128 sum4 = _mm_add_ps(lo, hi);
+        __m128 sum2 = _mm_add_ps(sum4, _mm_movehl_ps(sum4, sum4));
+        __m128 sum1 = _mm_add_ss(sum2, _mm_movehdup_ps(sum2));
+        float err = _mm_cvtss_f32(sum1);
+        if (err < best_err) { best_err = err; best_c = c; }
+    }
+#else
+    for (int c = 0; c < K; ++c) {
+        if (cb_norm2[c] < 1e-10f) continue;
+        const float * cb = cb_float + c * IQ1BN_CODEBOOK_DIM;
+        float err = 0;
+        for (int j = 0; j < IQ1BN_CODEBOOK_DIM; ++j) {
+            float diff = xn[j] - cb[j];
+            err += wg[j] * diff * diff;
+        }
+        if (err < best_err) { best_err = err; best_c = c; }
+    }
+#endif
+    if (out_err) *out_err = best_err;
+    return best_c;
+}
+
+// Full quantizer with OLS refinement + multi-d search
+static size_t quantize_row_iq1_bn_impl(const float * GGML_RESTRICT x, block_iq1_bn * GGML_RESTRICT y,
+                                        int64_t n_per_row, const float * quant_weights) {
+    const int nb = n_per_row / QK_K;
+    const int8_t * codebook = iq1bn_cur_codebook();
+
+    // Precompute float codebook and norms (avoids repeated int8→float conversion)
+    float * cb_float = (float *)malloc(IQ1BN_CODEBOOK_K * IQ1BN_CODEBOOK_DIM * sizeof(float));
+    float * cb_norm2 = (float *)malloc(IQ1BN_CODEBOOK_K * sizeof(float));
+    for (int c = 0; c < IQ1BN_CODEBOOK_K; ++c) {
+        float nn = 0;
+        const int8_t * cb = codebook + c * IQ1BN_CODEBOOK_DIM;
+        for (int j = 0; j < IQ1BN_CODEBOOK_DIM; ++j) {
+            float v = (float)cb[j];
+            cb_float[c * IQ1BN_CODEBOOK_DIM + j] = v;
+            nn += v * v;
+        }
+        cb_norm2[c] = nn;
+    }
+
+    for (int i = 0; i < nb; ++i) {
+        const float * xb = x + i * QK_K;
+        const float * wt = quant_weights ? quant_weights + i * QK_K : NULL;
+
+        float amax = 0;
+        for (int j = 0; j < QK_K; ++j) {
+            float ax = fabsf(xb[j]);
+            if (ax > amax) amax = ax;
+        }
+        if (amax < 1e-15f) {
+            memset(y + i, 0, sizeof(block_iq1_bn));
+            continue;
+        }
+
+        float d = amax / 3.0f;
+        uint16_t ci_out[IQ1BN_N_GROUPS];
+
+        // OLS iterations
+        for (int iter = 0; iter < 5; ++iter) {
+            float inv_dq = 1.0f / (d * IQ1BN_GRID_SCALE);
+
+            for (int g = 0; g < IQ1BN_N_GROUPS; ++g) {
+                float xn[IQ1BN_CODEBOOK_DIM];
+                float wg[IQ1BN_CODEBOOK_DIM];
+                for (int j = 0; j < IQ1BN_CODEBOOK_DIM; ++j) {
+                    xn[j] = xb[g * IQ1BN_GROUP_SIZE + j] * inv_dq;
+                    wg[j] = wt ? wt[g * IQ1BN_GROUP_SIZE + j] : 1.0f;
+                }
+                ci_out[g] = (uint16_t)iq1bn_find_best(xn, wg, cb_float, cb_norm2, IQ1BN_CODEBOOK_K, NULL);
+            }
+
+            // OLS: recompute d from current assignments
+            float sumxg = 0, sumgg = 0;
+            for (int g = 0; g < IQ1BN_N_GROUPS; ++g) {
+                const int8_t * cb = codebook + ci_out[g] * IQ1BN_CODEBOOK_DIM;
+                for (int j = 0; j < IQ1BN_CODEBOOK_DIM; ++j) {
+                    float gval = (float)cb[j];
+                    float w = wt ? wt[g * IQ1BN_GROUP_SIZE + j] : 1.0f;
+                    sumxg += w * xb[g * IQ1BN_GROUP_SIZE + j] * gval;
+                    sumgg += w * gval * gval;
+                }
+            }
+            if (sumgg > 0) {
+                d = sumxg / (IQ1BN_GRID_SCALE * sumgg);
+            }
+        }
+
+        // Multi-d search
+        static const float d_factors[] = {0.8f, 0.85f, 0.9f, 0.95f, 1.0f, 1.05f, 1.1f, 1.15f, 1.2f};
+        float best_d = d;
+        float best_total_err = 1e30f;
+        uint16_t best_ci_all[IQ1BN_N_GROUPS];
+
+        for (int df = 0; df < 9; ++df) {
+            float td = d * d_factors[df];
+            float inv_dq = 1.0f / (td * IQ1BN_GRID_SCALE);
+
+            uint16_t tci[IQ1BN_N_GROUPS];
+            float total_err = 0;
+
+            for (int g = 0; g < IQ1BN_N_GROUPS; ++g) {
+                float xn[IQ1BN_CODEBOOK_DIM];
+                float wg[IQ1BN_CODEBOOK_DIM];
+                for (int j = 0; j < IQ1BN_CODEBOOK_DIM; ++j) {
+                    xn[j] = xb[g * IQ1BN_GROUP_SIZE + j] * inv_dq;
+                    wg[j] = wt ? wt[g * IQ1BN_GROUP_SIZE + j] : 1.0f;
+                }
+                float gerr;
+                tci[g] = (uint16_t)iq1bn_find_best(xn, wg, cb_float, cb_norm2, IQ1BN_CODEBOOK_K, &gerr);
+                total_err += gerr;
+            }
+
+            if (total_err < best_total_err) {
+                best_total_err = total_err;
+                best_d = td;
+                memcpy(best_ci_all, tci, IQ1BN_N_GROUPS * sizeof(uint16_t));
+            }
+        }
+
+        // Post multi-d OLS refinement (2 iterations)
+        d = best_d;
+        memcpy(ci_out, best_ci_all, IQ1BN_N_GROUPS * sizeof(uint16_t));
+
+        for (int post = 0; post < 2; ++post) {
+            float sumxg = 0, sumgg = 0;
+            for (int g = 0; g < IQ1BN_N_GROUPS; ++g) {
+                const int8_t * cb = codebook + ci_out[g] * IQ1BN_CODEBOOK_DIM;
+                for (int j = 0; j < IQ1BN_CODEBOOK_DIM; ++j) {
+                    float gval = (float)cb[j];
+                    float w = wt ? wt[g * IQ1BN_GROUP_SIZE + j] : 1.0f;
+                    sumxg += w * xb[g * IQ1BN_GROUP_SIZE + j] * gval;
+                    sumgg += w * gval * gval;
+                }
+            }
+            if (sumgg > 0) {
+                d = sumxg / (IQ1BN_GRID_SCALE * sumgg);
+            }
+
+            float inv_dq = 1.0f / (d * IQ1BN_GRID_SCALE);
+            for (int g = 0; g < IQ1BN_N_GROUPS; ++g) {
+                float xn[IQ1BN_CODEBOOK_DIM];
+                float wg[IQ1BN_CODEBOOK_DIM];
+                for (int j = 0; j < IQ1BN_CODEBOOK_DIM; ++j) {
+                    xn[j] = xb[g * IQ1BN_GROUP_SIZE + j] * inv_dq;
+                    wg[j] = wt ? wt[g * IQ1BN_GROUP_SIZE + j] : 1.0f;
+                }
+                ci_out[g] = (uint16_t)iq1bn_find_best(xn, wg, cb_float, cb_norm2, IQ1BN_CODEBOOK_K, NULL);
+            }
+        }
+
+        // Write block — pack 12-bit indices
+        y[i].d = GGML_FP32_TO_FP16(d);
+        for (int g = 0; g < IQ1BN_N_GROUPS; g += 2) {
+            iq1bn_set_idx(y[i].qs, g/2, ci_out[g], ci_out[g+1]);
+        }
+    }
+
+    free(cb_float);
+    free(cb_norm2);
+    return nb * sizeof(block_iq1_bn);
+}
+
+// Public quantization entry point
+size_t quantize_iq1_bn(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                        int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_ASSERT(n_per_row % QK_K == 0);
+    float * quant_weights = (float *)malloc(n_per_row * sizeof(float));
+    size_t total = 0;
+
+    for (int64_t row = 0; row < nrows; ++row) {
+        const float * row_data = src + row * n_per_row;
+
+        if (imatrix) {
+            const float * im_row = imatrix;
+            float sumw = 0;
+            for (int64_t j = 0; j < n_per_row; ++j) {
+                quant_weights[j] = im_row[j];
+                sumw += im_row[j];
+            }
+            float scale = sumw > 0 ? n_per_row / sumw : 1.0f;
+            for (int64_t j = 0; j < n_per_row; ++j) {
+                quant_weights[j] *= scale;
+            }
+        } else {
+            float sigma2 = 0;
+            for (int64_t j = 0; j < n_per_row; ++j) {
+                sigma2 += row_data[j] * row_data[j];
+            }
+            sigma2 = 8.0f * sigma2 / n_per_row;
+            if (sigma2 < 1e-15f) sigma2 = 1.0f;
+            for (int64_t j = 0; j < n_per_row; ++j) {
+                float w = row_data[j] * row_data[j] + sigma2;
+                quant_weights[j] = w;
+            }
+        }
+
+        total += quantize_row_iq1_bn_impl(row_data, (block_iq1_bn *)((char *)dst + total),
+                                           n_per_row, quant_weights);
+    }
+
+    free(quant_weights);
+    return total;
+}
+
+// Thread work structs for parallel K-means
+#include <pthread.h>
+
+// Worker for K-means++ min_dist update (parallel over samples)
+typedef struct {
+    const float * samples;
+    float * min_dist;
+    const float * centroid;  // single centroid to compute distance to
+    int i_start;
+    int i_end;
+    int dim;
+} iq1bn_kmpp_work_t;
+
+static void * iq1bn_kmpp_worker(void * arg) {
+    iq1bn_kmpp_work_t * w = (iq1bn_kmpp_work_t *)arg;
+    const float * cc = w->centroid;
+    const int dim = w->dim;
+    // Use scalar distance to match original K-means++ pick sequence
+    // (SIMD horizontal sum rounding differences cascade in the pick chain)
+    for (int i = w->i_start; i < w->i_end; ++i) {
+        const float * s = w->samples + i * dim;
+        float dist = 0;
+        for (int j = 0; j < dim; ++j) {
+            float diff = s[j] - cc[j];
+            dist += diff * diff;
+        }
+        if (dist < w->min_dist[i]) w->min_dist[i] = dist;
+    }
+    return NULL;
+}
+
+// Worker for K-means iteration (parallel over samples)
+typedef struct {
+    const float * samples;
+    const float * weights;
+    const float * centroids;
+    int * assign;
+    float * csum;     // per-thread accumulator [K * dim]
+    float * cwt;      // per-thread accumulator [K]
+    int i_start;
+    int i_end;
+    int K;
+    int dim;
+    int changed;
+} iq1bn_kmeans_work_t;
+
+static void * iq1bn_kmeans_worker(void * arg) {
+    iq1bn_kmeans_work_t * w = (iq1bn_kmeans_work_t *)arg;
+    const int K = w->K;
+    const int dim = w->dim;
+    int changed = 0;
+
+    memset(w->csum, 0, K * dim * sizeof(float));
+    memset(w->cwt,  0, K * sizeof(float));
+
+    for (int i = w->i_start; i < w->i_end; ++i) {
+        const float * s = w->samples + i * dim;
+        float best_dist = 1e30f;
+        int best_c = 0;
+#if defined(__AVX2__)
+        __m256 vs = _mm256_loadu_ps(s);
+        for (int c = 0; c < K; ++c) {
+            float dist = iq1bn_l2_dist_8d(vs, _mm256_loadu_ps(w->centroids + c * dim));
+            if (dist < best_dist) { best_dist = dist; best_c = c; }
+        }
+#else
+        for (int c = 0; c < K; ++c) {
+            const float * cc = w->centroids + c * dim;
+            float dist = 0;
+            for (int j = 0; j < dim; ++j) {
+                float diff = s[j] - cc[j];
+                dist += diff * diff;
+            }
+            if (dist < best_dist) { best_dist = dist; best_c = c; }
+        }
+#endif
+        if (w->assign[i] != best_c) { changed++; w->assign[i] = best_c; }
+        float wt = w->weights[i];
+        for (int j = 0; j < dim; ++j) {
+            w->csum[best_c * dim + j] += wt * s[j];
+        }
+        w->cwt[best_c] += wt;
+    }
+    w->changed = changed;
+    return NULL;
+}
+
+// K-means codebook training (K=4096, random init)
+void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
+                           const float * imatrix, int8_t aux_out[IQ1BN_AUX_SIZE], int nthread) {
+    const int max_samples = 200000;
+    const int dim = IQ1BN_CODEBOOK_DIM;
+    const int K = IQ1BN_CODEBOOK_K;   // 4096
+
+    float * samples = (float *)malloc(max_samples * dim * sizeof(float));
+    float * weights = (float *)malloc(max_samples * sizeof(float));
+    int n_samples = 0;
+
+    // Phase 1: Collect normalized 8D sub-vectors
+    for (int64_t row = 0; row < nrow && n_samples < max_samples; ++row) {
+        const float * row_data = data + row * n_per_row;
+        const int n_blocks = n_per_row / QK_K;
+
+        for (int bi = 0; bi < n_blocks && n_samples < max_samples; ++bi) {
+            const float * block = row_data + bi * QK_K;
+
+            float amax = 0;
+            for (int j = 0; j < QK_K; ++j) {
+                float ax = fabsf(block[j]);
+                if (ax > amax) amax = ax;
+            }
+            if (amax < 1e-15f) continue;
+            float dd = amax / 3.0f;
+            float inv_dq = 1.0f / (dd * IQ1BN_GRID_SCALE);
+
+            for (int g = 0; g < IQ1BN_N_GROUPS && n_samples < max_samples; ++g) {
+                float gw = 1.0f;
+                if (imatrix) {
+                    gw = 0;
+                    for (int j = 0; j < dim; ++j) {
+                        int idx = bi * QK_K + g * dim + j;
+                        if (idx < n_per_row) gw += imatrix[idx];
+                    }
+                    gw /= dim;
+                    if (gw < 1e-10f) gw = 1e-10f;
+                }
+
+                float * s = samples + n_samples * dim;
+                for (int j = 0; j < dim; ++j) {
+                    s[j] = block[g * dim + j] * inv_dq;
+                }
+                weights[n_samples] = gw;
+                n_samples++;
+            }
+        }
+    }
+
+    if (n_samples == 0) {
+        memset(aux_out, 0, IQ1BN_AUX_SIZE);
+        free(samples); free(weights);
+        return;
+    }
+
+    fprintf(stderr, "IQ1BN: training K=%d codebook from %d samples\n", K, n_samples);
+
+    // Phase 2: K-means++ initialization
+    float * centroids = (float *)calloc(K * dim, sizeof(float));
+    int * assign = (int *)calloc(n_samples, sizeof(int));
+    float * min_dist = (float *)malloc(n_samples * sizeof(float));
+
+    // Pick first centroid: weighted random
+    {
+        float total_w = 0;
+        for (int i = 0; i < n_samples; ++i) total_w += weights[i];
+        float r = ((float)rand() / RAND_MAX) * total_w;
+        float cumw = 0;
+        int pick = 0;
+        for (int i = 0; i < n_samples; ++i) {
+            cumw += weights[i];
+            if (cumw >= r) { pick = i; break; }
+        }
+        memcpy(centroids, samples + pick * dim, dim * sizeof(float));
+        for (int i = 0; i < n_samples; ++i) min_dist[i] = 1e30f;
+    }
+
+    // Full K-means++ initialization with parallel min_dist update
+    if (nthread < 1) nthread = 1;
+    if (nthread > n_samples) nthread = n_samples;
+
+    // Set up thread pool for K-means++ min_dist update
+    pthread_t * threads = (pthread_t *)calloc(nthread, sizeof(pthread_t));
+    iq1bn_kmpp_work_t * kmpp_workers = (iq1bn_kmpp_work_t *)calloc(nthread, sizeof(iq1bn_kmpp_work_t));
+    for (int t = 0; t < nthread; ++t) {
+        kmpp_workers[t].samples  = samples;
+        kmpp_workers[t].min_dist = min_dist;
+        kmpp_workers[t].dim      = dim;
+        int chunk = n_samples / nthread;
+        kmpp_workers[t].i_start = t * chunk;
+        kmpp_workers[t].i_end   = (t == nthread - 1) ? n_samples : (t + 1) * chunk;
+    }
+
+    const int n_kmpp = 256;  // full K-means++ for first n_kmpp, stale-dist random for rest
+    for (int c = 0; c < K; ++c) {
+        if (c < n_kmpp) {
+            // Update min distances using SCALAR code (parallel over samples)
+            // Scalar avoids SIMD rounding differences that cascade in K-means++ pick chain
+            const float * cc = centroids + c * dim;
+            for (int t = 0; t < nthread; ++t) {
+                kmpp_workers[t].centroid = cc;
+            }
+            if (nthread > 1) {
+                for (int t = 0; t < nthread; ++t) {
+                    pthread_create(&threads[t], NULL, iq1bn_kmpp_worker, &kmpp_workers[t]);
+                }
+                for (int t = 0; t < nthread; ++t) {
+                    pthread_join(threads[t], NULL);
+                }
+            } else {
+                iq1bn_kmpp_worker(&kmpp_workers[0]);
+            }
+        }
+
+        if (c + 1 < K) {
+            // Pick next proportional to weighted distance
+            float total = 0;
+            for (int i = 0; i < n_samples; ++i) total += weights[i] * min_dist[i];
+            float r = ((float)rand() / RAND_MAX) * total;
+            float cumw = 0;
+            int pick = 0;
+            for (int i = 0; i < n_samples; ++i) {
+                cumw += weights[i] * min_dist[i];
+                if (cumw >= r) { pick = i; break; }
+            }
+            memcpy(centroids + (c + 1) * dim, samples + pick * dim, dim * sizeof(float));
+        }
+    }
+    free(min_dist);
+    free(kmpp_workers);
+
+    // Phase 3: Full-batch K-means with SIMD and pthread parallelism
+
+    // Allocate per-thread accumulators (reuse threads array from K-means++ init)
+    iq1bn_kmeans_work_t * workers = (iq1bn_kmeans_work_t *)calloc(nthread, sizeof(iq1bn_kmeans_work_t));
+    for (int t = 0; t < nthread; ++t) {
+        workers[t].samples   = samples;
+        workers[t].weights   = weights;
+        workers[t].centroids = centroids;
+        workers[t].assign    = assign;
+        workers[t].csum      = (float *)malloc(K * dim * sizeof(float));
+        workers[t].cwt       = (float *)malloc(K * sizeof(float));
+        workers[t].K         = K;
+        workers[t].dim       = dim;
+        int chunk = n_samples / nthread;
+        workers[t].i_start = t * chunk;
+        workers[t].i_end   = (t == nthread - 1) ? n_samples : (t + 1) * chunk;
+    }
+
+    const int n_iters = 30;
+    for (int iter = 0; iter < n_iters; ++iter) {
+        // Launch threads for sample assignment
+        for (int t = 0; t < nthread; ++t) {
+            if (nthread > 1) {
+                pthread_create(&threads[t], NULL, iq1bn_kmeans_worker, &workers[t]);
+            } else {
+                iq1bn_kmeans_worker(&workers[0]);
+            }
+        }
+        if (nthread > 1) {
+            for (int t = 0; t < nthread; ++t) {
+                pthread_join(threads[t], NULL);
+            }
+        }
+
+        // Merge per-thread accumulators
+        int changed = 0;
+        for (int t = 0; t < nthread; ++t) {
+            changed += workers[t].changed;
+        }
+
+        // Sum csum and cwt across threads
+        // Use workers[0]'s arrays as the merge target
+        for (int t = 1; t < nthread; ++t) {
+            for (int c = 0; c < K; ++c) {
+                for (int j = 0; j < dim; ++j) {
+                    workers[0].csum[c * dim + j] += workers[t].csum[c * dim + j];
+                }
+                workers[0].cwt[c] += workers[t].cwt[c];
+            }
+        }
+
+        // Update centroids and find most populous cluster
+        int empty = 0;
+        int max_pop_c = 0;
+        float max_pop_w = 0;
+        for (int c = 0; c < K; ++c) {
+            if (workers[0].cwt[c] > 0) {
+                for (int j = 0; j < dim; ++j) {
+                    centroids[c * dim + j] = workers[0].csum[c * dim + j] / workers[0].cwt[c];
+                }
+                if (workers[0].cwt[c] > max_pop_w) {
+                    max_pop_w = workers[0].cwt[c];
+                    max_pop_c = c;
+                }
+            } else {
+                empty++;
+            }
+        }
+
+        // Split most populous cluster to fill empty clusters
+        if (empty > 0 && max_pop_w > 0) {
+            for (int c = 0; c < K; ++c) {
+                if (workers[0].cwt[c] <= 0) {
+                    for (int j = 0; j < dim; ++j) {
+                        float perturb = 0.01f * ((float)(rand() % 201 - 100) / 100.0f);
+                        centroids[c * dim + j] = centroids[max_pop_c * dim + j] + perturb;
+                    }
+                }
+            }
+        }
+
+        if (iter % 5 == 0 || iter == n_iters - 1) {
+            fprintf(stderr, "  iter %2d: changed=%d/%d empty=%d\n", iter, changed, n_samples, empty);
+        }
+        if (iter > 5 && changed < n_samples / 1000) break;
+    }
+
+    // Free per-thread accumulators
+    for (int t = 0; t < nthread; ++t) {
+        free(workers[t].csum);
+        free(workers[t].cwt);
+    }
+    free(workers);
+    free(threads);
+
+    // Round centroids to int8 codebook
+    int8_t * codebook_out = aux_out;
+    for (int c = 0; c < K; ++c) {
+        for (int j = 0; j < dim; ++j) {
+            float v = centroids[c * dim + j];
+            int iv = (int)roundf(v);
+            if (iv < -127) iv = -127;
+            if (iv > 127) iv = 127;
+            codebook_out[c * dim + j] = (int8_t)iv;
+        }
+    }
+
+    free(samples); free(weights);
+    free(centroids); free(assign);
+}
+
+// Also add to validate_row_data switch (done via ops.cpp)
+
+// Global levels (used during quantization for the current tensor)
+static float q3pt_levels[Q3PT_N_LEVELS];
+static bool  q3pt_levels_set = false;
+
+void q3pt_set_levels(const float * levels) {
+    memcpy(q3pt_levels, levels, Q3PT_N_LEVELS * sizeof(float));
+    q3pt_levels_set = true;
+}
+
+const float * q3pt_get_levels(void) {
+    return q3pt_levels_set ? q3pt_levels : NULL;
+}
+
+void q3pt_free_levels(void) {
+    q3pt_levels_set = false;
+}
+
+
+void q3pt_train_levels(const float * data, int64_t nrow, int64_t n_per_row,
+                        const float * imatrix, float levels_out[Q3PT_N_LEVELS]) {
+
+    const int64_t n_sub   = n_per_row / 16;       // 16-element sub-blocks per row
+
+    // Binning parameters
+    const int N_BINS = 8192;
+    const float bin_width = 1.0f / N_BINS;
+    float * bin_sum_w  = (float *)calloc(N_BINS, sizeof(float));
+    float * bin_sum_wt = (float *)calloc(N_BINS, sizeof(float));
+    GGML_ASSERT(bin_sum_w && bin_sum_wt);
+
+    // First pass: bin the affine-normalized values with their weights
+    for (int64_t row = 0; row < nrow; ++row) {
+        const float * xrow = data + row * n_per_row;
+        for (int64_t ib = 0; ib < n_sub; ++ib) {
+            const float * xb = xrow + ib * 16;
+            const int col_base = (int)(ib * 16);
+            float sb_min = xb[0], sb_max = xb[0];
+            for (int j = 1; j < 16; ++j) {
+                if (xb[j] < sb_min) sb_min = xb[j];
+                if (xb[j] > sb_max) sb_max = xb[j];
+            }
+            const float sb_range = sb_max - sb_min;
+            for (int j = 0; j < 16; ++j) {
+                float w = 1.0f;
+                if (imatrix) {
+                    w = imatrix[col_base + j];
+                    if (w < 1e-10f) w = 1e-10f;
+                }
+                if (sb_range > 1e-6f) {
+                    w *= sb_range;
+                    float t = (xb[j] - sb_min) / sb_range;
+                    int bin_idx = (int)(t * N_BINS);
+                    if (bin_idx >= N_BINS) bin_idx = N_BINS - 1;
+                    bin_sum_w[bin_idx] += w;
+                    bin_sum_wt[bin_idx] += w * t;
+                }
+            }
+        }
+    }
+
+    // Initialize 8 levels uniformly in [0, 1]
+    float levels[Q3PT_N_LEVELS];
+    for (int k = 0; k < Q3PT_N_LEVELS; ++k) {
+        levels[k] = (float)k / (Q3PT_N_LEVELS - 1);
+    }
+
+    // Lloyd-Max (weighted k-means) iterations with early convergence
+    for (int iter = 0; iter < 300; ++iter) {
+        float sum_w [Q3PT_N_LEVELS] = {0};
+        float sum_wt[Q3PT_N_LEVELS] = {0};
+
+        // Process bins instead of individual values
+        for (int b = 0; b < N_BINS; ++b) {
+            if (bin_sum_w[b] < 1e-12f) continue;
+            const float t = (b + 0.5f) * bin_width;  // representative value at bin center
+            int best = 0;
+            float best_d2 = (t - levels[0]) * (t - levels[0]);
+            for (int k = 1; k < Q3PT_N_LEVELS; ++k) {
+                float d2 = (t - levels[k]) * (t - levels[k]);
+                if (d2 < best_d2) { best_d2 = d2; best = k; }
+            }
+            sum_w [best] += bin_sum_w[b];
+            sum_wt[best] += bin_sum_wt[b];
+        }
+
+        // Check for early convergence
+        float max_delta = 0.0f;
+        for (int k = 0; k < Q3PT_N_LEVELS; ++k) {
+            if (sum_w[k] > 1e-12f) {
+                float new_level = sum_wt[k] / sum_w[k];
+                max_delta = fmaxf(max_delta, fabsf(new_level - levels[k]));
+                levels[k] = new_level;
+            }
+        }
+        if (max_delta < 1e-10f) break;
+
+        // Keep levels sorted (insertion sort — 8 elements)
+        for (int k = 1; k < Q3PT_N_LEVELS; ++k) {
+            float v = levels[k]; int m = k - 1;
+            while (m >= 0 && levels[m] > v) { levels[m+1] = levels[m]; m--; }
+            levels[m+1] = v;
+        }
+    }
+
+    memcpy(levels_out, levels, Q3PT_N_LEVELS * sizeof(float));
+    q3pt_set_levels(levels);
+    free(bin_sum_w);
+    free(bin_sum_wt);
+}
+
+// --- Q3_PT bit-packing helpers ---
+
+// 6-bit sequential packing: 32 values in 24 bytes (4 values per 3 bytes).
+// Indices 0..15 = sub-block ranges, 16..31 = sub-block neg_mins.
+static inline uint8_t q3pt_sc_get(const uint8_t * GGML_RESTRICT sc, int i) {
+    const int bit  = i * 6;
+    const int byte = bit / 8;
+    const int off  = bit % 8;
+    uint8_t val = (sc[byte] >> off) & 0x3F;
+    if (off > 2) { val |= (uint8_t)((sc[byte+1] << (8 - off)) & 0x3F); }
+    return val;
+}
+
+static inline void q3pt_sc_set(uint8_t * GGML_RESTRICT sc, int i, uint8_t v) {
+    const int bit  = i * 6;
+    const int byte = bit / 8;
+    const int off  = bit % 8;
+    sc[byte] |= (uint8_t)((v & 0x3F) << off);
+    if (off > 2) { sc[byte+1] |= (uint8_t)(v >> (8 - off)); }
+}
+
+// 3-bit sequential packing: 256 values in 96 bytes (8 values per 3 bytes).
+static inline int q3pt_unpack3(const uint8_t * GGML_RESTRICT qs, int k) {
+    const int bit  = k * 3;
+    const int byte = bit / 8;
+    const int off  = bit % 8;
+    int val = (qs[byte] >> off) & 0x7;
+    if (off > 5) { val |= (int)((qs[byte+1] << (8 - off)) & 0x7); }
+    return val;
+}
+
+static inline void q3pt_pack3(uint8_t * GGML_RESTRICT qs, int k, int v) {
+    const int bit  = k * 3;
+    const int byte = bit / 8;
+    const int off  = bit % 8;
+    qs[byte] |= (uint8_t)((v & 0x7) << off);
+    if (off > 5) { qs[byte+1] |= (uint8_t)((v & 0x7) >> (8 - off)); }
+}
+
+void dequantize_row_q3_pt(const block_q3_pt * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    const float * L = (const float *)levels;
+    GGML_ASSERT(L != NULL && "Q3_PT levels not set for tensor");
+
+    for (int i = 0; i < nb; i++) {
+        const float d    = GGML_FP16_TO_FP32(x[i].d);
+        const float dmin = GGML_FP16_TO_FP32(x[i].dmin);
+        const uint8_t * sc = x[i].scales;
+        const uint8_t * qs = x[i].qs;
+
+        for (int ib = 0; ib < QK_K/16; ++ib) {
+            const float range   = d    * (float)q3pt_sc_get(sc, ib);
+            const float sub_min = -dmin * (float)q3pt_sc_get(sc, ib + QK_K/16);
+            for (int j = 0; j < 16; ++j) {
+                const int q = q3pt_unpack3(qs, ib*16 + j);
+                y[ib*16 + j] = L[q] * range + sub_min;
+            }
+        }
+        y += QK_K;
+    }
+}
+
+#define Q3PT_REFINE_ITERS 5
+
+// Find the optimal global d-scale for 6-bit (nmax=63) sub-block range quantization,
+// minimizing Σ_i weights[i] * (vals[i] - d * clamp(round(vals[i]/d), 0, nmax))^2.
+// Tries d = vals[i] / nmax as "anchor" for each sub-block i (O(n^2), n=QK_K/16=16).
+// Without imatrix all weights are equal and the winner is always max/nmax, so this is a no-op.
+// With imatrix it can redirect scale resolution to important sub-blocks at the cost of
+// less important ones that would otherwise dominate via raw max().
+static float q3pt_find_optimal_d(const float * GGML_RESTRICT vals,
+                                   const float * GGML_RESTRICT weights,
+                                   int n, int nmax) {
+    float max_val = 0.f;
+    for (int i = 0; i < n; ++i) { if (vals[i] > max_val) max_val = vals[i]; }
+    if (max_val < 1e-6f) return 0.f;
+    float best_d = max_val / (float)nmax, best_err = FLT_MAX;
+    for (int i = 0; i < n; ++i) {
+        if (vals[i] < 1e-6f) continue;
+        const float d_cand = vals[i] / (float)nmax;
+        float err = 0.f;
+        for (int j = 0; j < n; ++j) {
+            int q = (int)(vals[j] / d_cand + 0.5f);
+            if (q > nmax) q = nmax;
+            const float delta = vals[j] - d_cand * (float)q;
+            err += weights[j] * delta * delta;
+        }
+        if (err < best_err) { best_err = err; best_d = d_cand; }
+    }
+    return best_d;
+}
+
+static void quantize_row_q3_pt_impl(const float * GGML_RESTRICT x,
+                                     void * GGML_RESTRICT        vy,
+                                     int64_t                     n,
+                                     const float * GGML_RESTRICT quant_weights) {
+    GGML_ASSERT(q3pt_levels_set && "Q3_PT levels not set - call q3pt_set_levels() first");
+    GGML_ASSERT(n % QK_K == 0);
+
+    const int64_t  nbl = n / QK_K;
+    block_q3_pt * y   = (block_q3_pt *) vy;
+    const float *  L   = q3pt_levels;
+
+    for (int ibl = 0; ibl < nbl; ++ibl) {
+        const float *  xbl = x + QK_K * ibl;
+        block_q3_pt * blk = &y[ibl];
+
+        float sigma2 = 0;
+        if (quant_weights) {
+            for (int i = 0; i < QK_K; ++i) {
+                sigma2 += xbl[i] * xbl[i];
+            }
+            sigma2 = 2.f * sigma2 / QK_K;
+        }
+
+        // Per-sub-block importance weights: sum of AWQ weights over 16 elements.
+        // Used by q3pt_find_optimal_d() to direct scale resolution toward important sub-blocks.
+        float w_ib[QK_K / 16];
+        for (int ib = 0; ib < QK_K / 16; ++ib) {
+            float wsum = 0.f;
+            if (quant_weights) {
+                for (int j = 0; j < 16; ++j) {
+                    const int elem = ib * 16 + j;
+                    wsum += quant_weights[QK_K * ibl + elem] * sqrtf(sigma2 + xbl[elem] * xbl[elem]);
+                }
+            } else {
+                wsum = 16.f;  // uniform — find_optimal_d is a no-op (max/63 always wins)
+            }
+            w_ib[ib] = wsum;
+        }
+
+        // Compute per-sub-block ranges and neg_mins from raw min/max
+        float sub_ranges[QK_K / 16];
+        float neg_mins[QK_K / 16];
+        for (int ib = 0; ib < QK_K / 16; ++ib) {
+            const float * xb     = xbl + ib * 16;
+            float         sb_min = xb[0], sb_max = xb[0];
+            for (int j = 1; j < 16; ++j) {
+                if (xb[j] < sb_min) {
+                    sb_min = xb[j];
+                }
+                if (xb[j] > sb_max) {
+                    sb_max = xb[j];
+                }
+            }
+            sub_ranges[ib] = sb_max - sb_min;
+            neg_mins[ib]   = MAX(-sb_min, 0.f);
+        }
+
+        // Pre-refinement: one weighted-LS pass with continuous (float) ranges before 6-bit
+        // quantization.  Finds better initial (range, neg_min) from the raw min/max assignments,
+        // avoiding scale quantization noise in the very first set of level assignments.
+        for (int ib = 0; ib < QK_K / 16; ++ib) {
+            const float * xb = xbl + ib * 16;
+            if (sub_ranges[ib] < 1e-6f) {
+                continue;
+            }
+            const float inv_range0 = 1.f / sub_ranges[ib];
+            const float sub_min0   = -neg_mins[ib];
+            double      sA = 0, sB = 0, sC = 0, sD = 0, sE = 0;
+            for (int j = 0; j < 16; ++j) {
+                const int   elem    = ib * 16 + j;
+                const float xj      = xb[j];
+                const float w       = quant_weights ? quant_weights[QK_K * ibl + elem] * sqrtf(sigma2 + xj * xj) : 1.0f;
+                const float t       = (xj - sub_min0) * inv_range0;
+                int         best    = 0;
+                float       best_d2 = (t - L[0]) * (t - L[0]);
+                for (int k = 1; k < Q3PT_N_LEVELS; ++k) {
+                    const float d2 = (t - L[k]) * (t - L[k]);
+                    if (d2 < best_d2) {
+                        best_d2 = d2;
+                        best    = k;
+                    }
+                }
+                const float lq = L[best];
+                sA += (double) w * (double) lq * (double) lq;
+                sB += (double) w * (double) lq;
+                sC += (double) w;
+                sD += (double) w * (double) xj * (double) lq;
+                sE += (double) w * (double) xj;
+            }
+            const double det = sA * sC - sB * sB;
+            if (det > 1e-20) {
+                const float nr = (float) ((sD * sC - sE * sB) / det);
+                const float nm = (float) (-(sE * sA - sD * sB) / det);
+                if (nr > 0.f) {
+                    sub_ranges[ib] = nr;
+                }
+                if (nm > 0.f) {
+                    neg_mins[ib] = nm;
+                }
+            }
+        }
+
+        // Importance-weighted d/dmin search (replaces plain max/63)
+        float d_val    = q3pt_find_optimal_d(sub_ranges, w_ib, QK_K / 16, 63);
+        float dmin_val = q3pt_find_optimal_d(neg_mins, w_ib, QK_K / 16, 63);
+
+        // Quantize ranges and neg_mins to 6-bit
+        memset(blk->scales, 0, sizeof(blk->scales));
+        memset(blk->qs, 0, sizeof(blk->qs));
+        const float inv_d    = d_val > 0 ? 1.f / d_val : 0.f;
+        const float inv_dmin = dmin_val > 0 ? 1.f / dmin_val : 0.f;
+        for (int ib = 0; ib < QK_K / 16; ++ib) {
+            uint8_t sc = MIN(63, nearest_int(inv_d * sub_ranges[ib]));
+            uint8_t sm = MIN(63, nearest_int(inv_dmin * neg_mins[ib]));
+            q3pt_sc_set(blk->scales, ib, sc);
+            q3pt_sc_set(blk->scales, ib + QK_K / 16, sm);
+        }
+        blk->d    = GGML_FP32_TO_FP16(d_val);
+        blk->dmin = GGML_FP32_TO_FP16(dmin_val);
+
+        // Initial level assignment
+        for (int ib = 0; ib < QK_K / 16; ++ib) {
+            const float range     = d_val * (float) q3pt_sc_get(blk->scales, ib);
+            const float sub_min   = -dmin_val * (float) q3pt_sc_get(blk->scales, ib + QK_K / 16);
+            const float inv_range = range > 1e-6f ? 1.f / range : 0.f;
+            for (int j = 0; j < 16; ++j) {
+                const int   elem    = ib * 16 + j;
+                const float t       = (xbl[elem] - sub_min) * inv_range;
+                int         best    = 0;
+                float       best_d2 = (t - L[0]) * (t - L[0]);
+                for (int k = 1; k < Q3PT_N_LEVELS; ++k) {
+                    const float d2 = (t - L[k]) * (t - L[k]);
+                    if (d2 < best_d2) {
+                        best_d2 = d2;
+                        best    = k;
+                    }
+                }
+                q3pt_pack3(blk->qs, elem, best);
+            }
+        }
+
+        // Iterative refinement: weighted LS for (range, neg_min) + importance-weighted d/dmin.
+        for (int iter = 0; iter < Q3PT_REFINE_ITERS; ++iter) {
+            for (int ib = 0; ib < QK_K / 16; ++ib) {
+                double sA = 0, sB = 0, sC = 0, sD = 0, sE = 0;
+                for (int j = 0; j < 16; ++j) {
+                    const int   elem = ib * 16 + j;
+                    const float xj   = xbl[elem];
+                    const float w  = quant_weights ? quant_weights[QK_K * ibl + elem] * sqrtf(sigma2 + xj * xj) : 1.0f;
+                    const float lq = L[q3pt_unpack3(blk->qs, elem)];
+                    sA += (double) w * (double) lq * (double) lq;
+                    sB += (double) w * (double) lq;
+                    sC += (double) w;
+                    sD += (double) w * (double) xj * (double) lq;
+                    sE += (double) w * (double) xj;
+                }
+                const double det = sA * sC - sB * sB;
+                if (det < 1e-20) {
+                    continue;
+                }
+                const float new_range  = (float) ((sD * sC - sE * sB) / det);
+                const float new_negmin = (float) (-(sE * sA - sD * sB) / det);
+                sub_ranges[ib]         = new_range > 0.f ? new_range : 0.f;
+                neg_mins[ib]           = new_negmin > 0.f ? new_negmin : 0.f;
+            }
+
+            // Importance-weighted d/dmin search on updated sub_ranges/neg_mins
+            d_val    = q3pt_find_optimal_d(sub_ranges, w_ib, QK_K / 16, 63);
+            dmin_val = q3pt_find_optimal_d(neg_mins, w_ib, QK_K / 16, 63);
+
+            // Re-pack scales
+            memset(blk->scales, 0, sizeof(blk->scales));
+            const float inv_d2    = d_val > 0 ? 1.f / d_val : 0.f;
+            const float inv_dmin2 = dmin_val > 0 ? 1.f / dmin_val : 0.f;
+            for (int ib = 0; ib < QK_K / 16; ++ib) {
+                uint8_t sc = MIN(63, nearest_int(inv_d2 * sub_ranges[ib]));
+                uint8_t sm = MIN(63, nearest_int(inv_dmin2 * neg_mins[ib]));
+                q3pt_sc_set(blk->scales, ib, sc);
+                q3pt_sc_set(blk->scales, ib + QK_K / 16, sm);
+            }
+            blk->d    = GGML_FP32_TO_FP16(d_val);
+            blk->dmin = GGML_FP32_TO_FP16(dmin_val);
+
+            // Re-assign levels
+            memset(blk->qs, 0, sizeof(blk->qs));
+            for (int ib = 0; ib < QK_K / 16; ++ib) {
+                const float range     = d_val * (float) q3pt_sc_get(blk->scales, ib);
+                const float sub_min   = -dmin_val * (float) q3pt_sc_get(blk->scales, ib + QK_K / 16);
+                const float inv_range = range > 1e-6f ? 1.f / range : 0.f;
+                for (int j = 0; j < 16; ++j) {
+                    const int   elem    = ib * 16 + j;
+                    const float t       = (xbl[elem] - sub_min) * inv_range;
+                    int         best    = 0;
+                    float       best_d2 = (t - L[0]) * (t - L[0]);
+                    for (int k = 1; k < Q3PT_N_LEVELS; ++k) {
+                        const float d2 = (t - L[k]) * (t - L[k]);
+                        if (d2 < best_d2) {
+                            best_d2 = d2;
+                            best    = k;
+                        }
+                    }
+                    q3pt_pack3(blk->qs, elem, best);
+                }
+            }
+        }
+    }
+}
+
+size_t quantize_q3_pt(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_ASSERT(n_per_row % QK_K == 0);
+    int64_t nblock = n_per_row / QK_K;
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q3_pt_impl(src, qrow, n_per_row, quant_weights);
+        src  += n_per_row;
+        qrow += nblock * sizeof(block_q3_pt);
+    }
+    return nrow * nblock * sizeof(block_q3_pt);
+}
+
+void quantize_row_q3_pt_ref(const float * GGML_RESTRICT x, block_q3_pt * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    quantize_q3_pt(x, y, 1, k, NULL);
+}
 
 // =================================== 1.5 bpw ===================================================
 
@@ -5573,6 +9623,39 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_iq4_nl, data, nb);
             } break;
+        case GGML_TYPE_Q3_PT:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_q3_pt, data, nb);
+            } break;
+        case GGML_TYPE_Q3_KPT:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_q3_kpt, data, nb);
+            } break;
+        case GGML_TYPE_Q4_DPT:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_q4_dpt, data, nb);
+            } break;
+        case GGML_TYPE_Q2_DPT:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_q2_dpt, data, nb);
+            } break;
+        case GGML_TYPE_Q2_KPT:
+            {
+                VALIDATE_ROW_DATA_DM_F16_IMPL(block_q2_kpt, data, nb, d, dmin);
+            } break;
+        case GGML_TYPE_IQ2_TQ:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_iq2_tq, data, nb);
+            } break;
+
+        case GGML_TYPE_IQ3_TQ:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_iq3_tq, data, nb);
+            } break;
+        case GGML_TYPE_IQ1_BN:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_iq1_bn, data, nb);
+            } break;
 
         case GGML_TYPE_I8:
         case GGML_TYPE_I16:
@@ -5589,3 +9672,5 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
 
     return true;
 }
+
+

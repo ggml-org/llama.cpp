@@ -645,6 +645,7 @@ public:
     std::map<llama_seq_id, llama_sampler *> samplers;
 };
 
+
 //
 // llm_graph_result
 //

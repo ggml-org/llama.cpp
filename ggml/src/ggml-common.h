@@ -298,6 +298,7 @@ typedef struct {
 } block_q2_K;
 static_assert(sizeof(block_q2_K) == 2*sizeof(ggml_half) + QK_K/16 + QK_K/4, "wrong q2_K block size/padding");
 
+
 // 3-bit quantization
 // weight is represented as x = a * q
 // 16 blocks of 16 elements each
@@ -326,6 +327,12 @@ typedef struct {
     uint8_t qs[QK_K/2];           // 4--bit quants
 } block_q4_K;
 static_assert(sizeof(block_q4_K) == 2*sizeof(ggml_half) + K_SCALE_SIZE + QK_K/2, "wrong q4_K block size/padding");
+
+// Q3_KPT: Q3_K with learned per-tensor levels
+// Reuses block_q3_K structure but maps 3-bit indices through learned level table
+typedef block_q3_K block_q3_kpt;
+#define Q3KPT_N_LEVELS 8
+
 
 // 5-bit quantization
 // 8 blocks of 32 elements each
@@ -448,6 +455,115 @@ typedef struct {
     uint8_t  qs[QK_K/2];
 } block_iq4_xs;
 static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/64 + QK_K/2, "wrong iq4_xs block size/padding");
+
+// 3.875 bpw - per-tensor Lloyd-Max scalar quantization
+// 256 elements = 16 sub-blocks of 16, 8-entry level table trained per tensor
+// Layout: 2 (d) + 2 (dmin) + 24 (scales: 32x6-bit) + 96 (qs: 256x3-bit) = 124 bytes
+typedef struct {
+    ggml_half d;                  //  2 bytes: global scale for 16-elem sub-block ranges
+    ggml_half dmin;               //  2 bytes: global scale for sub-block neg_mins
+    uint8_t scales[3*QK_K/32];   // 24 bytes: 32 x 6-bit (indices 0..15 = ranges, 16..31 = neg_mins)
+    uint8_t qs[3*QK_K/8];        // 96 bytes: 256 x 3-bit Lloyd-Max level index, sequential
+} block_q3_pt;
+static_assert(sizeof(block_q3_pt) == 124, "wrong q3_pt block size");
+
+#define Q3PT_N_LEVELS 8
+
+// Q4_DPT: IQ4_NL with learned per-tensor int8 levels (4.125 bpw)
+// Block format: identical to block_iq4_nl (2 + 16 = 18 bytes per 32 elements)
+typedef block_iq4_nl block_q4_dpt;
+#define Q4DPT_N_LEVELS 16
+
+// Q2_DPT: 2-bit per-tensor Lloyd-Max scalar quantization (2.5 bpw)
+// Block format: 2 bytes (FP16 scale) + 8 bytes (2-bit indices for 32 elements) = 10 bytes per block
+// 4 learned int8 levels per tensor, optimized via Lloyd-Max k-means
+typedef struct {
+    ggml_half d;               // 2 bytes: FP16 scale (delta)
+    uint8_t qs[8];             // 8 bytes: 2-bit indices (4 values per byte, 32 elements total)
+} block_q2_dpt;
+static_assert(sizeof(block_q2_dpt) == sizeof(ggml_half) + 8, "wrong q2_dpt block size/padding");
+
+#define QK2_DPT 32
+#define Q2DPT_N_LEVELS 4
+
+// Q2_KPT: Q2_K with learned per-tensor float levels (2.625 bpw)
+// Reuses block_q2_K structure but maps 2-bit indices through learned level table
+typedef block_q2_K block_q2_kpt;
+#define Q2KPT_N_LEVELS 4
+
+// IQ2_TQ: Trellis Quantized with RNG codebook (2.0625 bpw)
+//
+// Reconstruction: y[i] = d * hash(seed, block_idx, position, trellis_state, qs_idx)
+//   where hash is a deterministic function mapping to [-1, 1]
+//   and trellis_state evolves as: next = (state + idx + 1) & 7
+//
+// Block layout (66 bytes per 256 elements):
+// IQ2_TQ: 2-bit scalar quantization with per-tensor trained asymmetric grid table
+// 32 groups of 8 elements per 256-element super-block
+//   - ggml_half d (2 bytes): super-block scale
+//   - uint8_t scales[16] (16 bytes): 32 × 4-bit grid entry index per group
+//   - uint8_t qs[64] (64 bytes): 256 × 2-bit element index within grid entry
+// recon[j] = d * IQ2TQ_GRID_SCALE * grid[group_idx][elem_idx]
+typedef struct {
+    ggml_half d;                    // Super-block scale (2 bytes)
+    uint8_t scales[QK_K/16];       // 32 × 4-bit grid entry index per group (16 bytes)
+    uint8_t qs[QK_K/4];            // 256 × 2-bit element index (64 bytes)
+} block_iq2_tq;
+static_assert(sizeof(block_iq2_tq) == 82, "wrong iq2_tq block size");
+// 2 + 16 + 64 = 82 bytes per 256 weights = 2.5625 bpw
+
+#define IQ2TQ_GROUP_SIZE 8         // Elements per group
+#define IQ2TQ_N_GROUPS   (QK_K / IQ2TQ_GROUP_SIZE)  // 32 groups per super-block
+#define IQ2TQ_GRID_SCALE 0.125f    // Grid value multiplier: recon = d * GRID_SCALE * grid_int8
+
+// IQ3_TQ: 3-bit scalar quantization with per-tensor trained asymmetric grid table (3.5625 bpw)
+// 32 groups of 8 elements per 256-element super-block
+// Each grid entry has 8 int8 levels (3 bits → 8 values per element)
+// Grid table: 16 entries × 8 int8 = 128 bytes per tensor
+// Block layout:
+//   - ggml_half d (2 bytes): super-block scale
+//   - uint8_t scales[16] (16 bytes): 32 × 4-bit grid entry index per group
+//   - uint8_t qs[96] (96 bytes): 256 × 3-bit element index within grid entry
+// recon[j] = d * IQ3TQ_GRID_SCALE * grid[group_idx][elem_idx]
+typedef struct {
+    ggml_half d;                    // Super-block scale (2 bytes)
+    uint8_t scales[QK_K/16];       // 32 × 4-bit grid entry index per group (16 bytes)
+    uint8_t qs[3*QK_K/8];          // 256 × 3-bit element index (96 bytes)
+} block_iq3_tq;
+static_assert(sizeof(block_iq3_tq) == 114, "wrong iq3_tq block size");
+// 2 + 16 + 96 = 114 bytes per 256 weights = 3.5625 bpw
+
+#define IQ3TQ_GROUP_SIZE 8         // Elements per group
+#define IQ3TQ_N_GROUPS   (QK_K / IQ3TQ_GROUP_SIZE)  // 32 groups per super-block
+#define IQ3TQ_N_LEVELS   8         // 3-bit → 8 levels per grid entry
+#define IQ3TQ_GRID_SCALE 0.125f    // Grid value multiplier
+#define IQ3TQ_GRID_SIZE  128       // 16 entries × 8 int8 = 128 bytes per tensor
+
+// IQ1_BN: 8D vector quantized with per-tensor trained 4096-entry codebook (1.5625 bpw)
+// 32 groups of 8 elements per 256-element super-block
+// Each group selects one of 4096 trained 8D vectors via 12-bit codebook index
+// Codebook: 4096 entries × 8 int8 = 32768 bytes per tensor
+// Block layout:
+//   - ggml_half d (2 bytes): super-block scale
+//   - uint8_t qs[48] (48 bytes): 32 × 12-bit codebook indices packed in pairs
+// 12-bit pair packing (groups 2k, 2k+1 → 3 bytes at qs[3k]):
+//   idx_even = qs[3k] | ((qs[3k+1] & 0x0F) << 8)
+//   idx_odd  = (qs[3k+1] >> 4) | (qs[3k+2] << 4)
+// recon[g*8+k] = d * IQ1BN_GRID_SCALE * codebook[ci][k]
+typedef struct {
+    ggml_half d;                    // Super-block scale (2 bytes)
+    uint8_t qs[3*QK_K/16];         // 32 × 12-bit codebook indices packed in pairs (48 bytes)
+} block_iq1_bn;
+static_assert(sizeof(block_iq1_bn) == 50, "wrong iq1_bn block size");
+// 2 + 48 = 50 bytes per 256 weights = 1.5625 bpw
+
+#define IQ1BN_GROUP_SIZE    8
+#define IQ1BN_N_GROUPS      (QK_K / IQ1BN_GROUP_SIZE)  // 32
+#define IQ1BN_CODEBOOK_K    4096    // number of codebook entries
+#define IQ1BN_CODEBOOK_DIM  8       // vector dimension (= group size)
+#define IQ1BN_GRID_SCALE    0.125f  // Grid value multiplier
+#define IQ1BN_CODEBOOK_SIZE (IQ1BN_CODEBOOK_K * IQ1BN_CODEBOOK_DIM)  // 32768 bytes
+#define IQ1BN_AUX_SIZE      IQ1BN_CODEBOOK_SIZE                      // 32768 bytes
 
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL

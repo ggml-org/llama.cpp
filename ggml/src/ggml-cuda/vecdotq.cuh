@@ -1288,6 +1288,194 @@ static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(
     return d * sumi;
 }
 
+#define VDR_Q4_DPT_Q8_1_MMVQ 2
+#define VDR_Q4_DPT_Q8_1_MMQ  4
+
+static __device__ __forceinline__ float vec_dot_q4_dpt_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q4_dpt * bq4 = (const block_q4_dpt *) vbq + kbx;
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < VDR_Q4_DPT_Q8_1_MMVQ; ++l) {
+        const int aux_q4 = get_int_b2(bq4->qs, iqs + l);
+        const int2 v = get_int_from_table_16(aux_q4, q4dpt_levels_cuda);
+
+        sumi = ggml_cuda_dp4a(v.x, q8[l + 0], sumi);
+        sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
+    }
+
+    const float d = __half2float(bq4->d) * __low2float(bq8_1->ds);
+    return d * sumi;
+}
+
+// Q2_DPT: 2-bit quantization with 4 learned levels
+// Helper: lookup 4 int8 levels using 2-bit indices packed in a 32-bit int
+static __device__ __forceinline__ int4 get_int_from_table_4(const int & q2, const int8_t * table) {
+    int4 result;
+    result.x = table[(q2 >>  0) & 3];
+    result.y = table[(q2 >>  8) & 3];
+    result.z = table[(q2 >> 16) & 3];
+    result.w = table[(q2 >> 24) & 3];
+    return result;
+}
+
+#define VDR_Q2_DPT_Q8_1_MMVQ 4
+#define VDR_Q2_DPT_Q8_1_MMQ  8
+
+static __device__ __forceinline__ float vec_dot_q2_dpt_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q2_dpt * bq2 = (const block_q2_dpt *) vbq + kbx;
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < VDR_Q2_DPT_Q8_1_MMVQ; ++l) {
+        const int aux_q2 = get_int_b4(bq2->qs, l);
+        const int4 v = get_int_from_table_4(aux_q2, q2dpt_levels_cuda);
+
+        sumi = ggml_cuda_dp4a(v.x, q8[l + 0], sumi);
+        sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
+        sumi = ggml_cuda_dp4a(v.z, q8[l + 8], sumi);
+        sumi = ggml_cuda_dp4a(v.w, q8[l + 12], sumi);
+    }
+
+    const float d = __half2float(bq2->d) * __low2float(bq8_1->ds);
+    return d * sumi;
+}
+
+// IQ2_TQ: 2-bit with per-tensor trained 16×4 grid table
+// Grid lookup helper: 4 × 2-bit indices packed in a byte → 4 grid values packed as int32
+static __device__ __forceinline__ int iq2tq_grid_lookup4(uint8_t qbyte, const int8_t * grid_entry) {
+    uint32_t r  = (uint32_t)(uint8_t)grid_entry[(qbyte >> 0) & 3];
+    r |= (uint32_t)(uint8_t)grid_entry[(qbyte >> 2) & 3] << 8;
+    r |= (uint32_t)(uint8_t)grid_entry[(qbyte >> 4) & 3] << 16;
+    r |= (uint32_t)(uint8_t)grid_entry[(qbyte >> 6) & 3] << 24;
+    return (int)r;
+}
+
+#define VDR_IQ2_TQ_Q8_1_MMVQ 1
+#define VDR_IQ2_TQ_Q8_1_MMQ  1
+
+static __device__ __forceinline__ float vec_dot_iq2_tq_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq2_tq * bq = (const block_iq2_tq *) vbq + kbx;
+
+    // iqs selects which 16-element portion (0..15): 2 groups of 8 elements
+    const int q8b   = iqs / 2;         // Q8_1 block index (0..7)
+    const int q8off = (iqs & 1) * 4;   // int32 offset within Q8_1 block (0 or 4)
+
+    // Grid indices for groups iqs*2 and iqs*2+1
+    const uint8_t sc = bq->scales[iqs];
+    const int8_t * ge0 = iq2tq_grid_cuda + (sc & 0xF) * 4;
+    const int8_t * ge1 = iq2tq_grid_cuda + (sc >> 4)   * 4;
+
+    const uint8_t * qs = bq->qs + iqs * 4;
+    const int * q8 = (const int *)bq8_1[q8b].qs + q8off;
+
+    int sumi = 0;
+
+    // Group 0: 8 elements = 2 bytes qs, 2 int32 Q8_1
+    sumi = ggml_cuda_dp4a(iq2tq_grid_lookup4(qs[0], ge0), q8[0], sumi);
+    sumi = ggml_cuda_dp4a(iq2tq_grid_lookup4(qs[1], ge0), q8[1], sumi);
+
+    // Group 1: next 8 elements
+    sumi = ggml_cuda_dp4a(iq2tq_grid_lookup4(qs[2], ge1), q8[2], sumi);
+    sumi = ggml_cuda_dp4a(iq2tq_grid_lookup4(qs[3], ge1), q8[3], sumi);
+
+    return __half2float(bq->d) * IQ2TQ_GRID_SCALE * __low2float(bq8_1[q8b].ds) * sumi;
+}
+
+// IQ3_TQ: 3-bit with per-tensor trained 16×8 grid table
+#define VDR_IQ3_TQ_Q8_1_MMVQ 1
+#define VDR_IQ3_TQ_Q8_1_MMQ  1
+
+static __device__ __forceinline__ float vec_dot_iq3_tq_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq3_tq * bq = (const block_iq3_tq *) vbq + kbx;
+
+    const int q8b   = iqs / 2;
+    const int q8off = (iqs & 1) * 4;
+
+    const uint8_t sc = bq->scales[iqs];
+    const int8_t * ge0 = iq3tq_grid_cuda + (sc & 0xF) * 8;
+    const int8_t * ge1 = iq3tq_grid_cuda + (sc >> 4)   * 8;
+
+    const int * q8 = (const int *)bq8_1[q8b].qs + q8off;
+
+    int sumi = 0;
+
+    // Group 0: 8 elements, 3 bytes of qs
+    {
+        const uint8_t * qs = bq->qs + (iqs * 2) * 3;
+        const uint32_t bits = qs[0] | ((uint32_t)qs[1] << 8) | ((uint32_t)qs[2] << 16);
+
+        int v0 = (uint8_t)ge0[(bits >>  0) & 7]        | ((uint32_t)(uint8_t)ge0[(bits >>  3) & 7] << 8)
+               | ((uint32_t)(uint8_t)ge0[(bits >>  6) & 7] << 16) | ((uint32_t)(uint8_t)ge0[(bits >>  9) & 7] << 24);
+        sumi = ggml_cuda_dp4a(v0, q8[0], sumi);
+
+        int v1 = (uint8_t)ge0[(bits >> 12) & 7]        | ((uint32_t)(uint8_t)ge0[(bits >> 15) & 7] << 8)
+               | ((uint32_t)(uint8_t)ge0[(bits >> 18) & 7] << 16) | ((uint32_t)(uint8_t)ge0[(bits >> 21) & 7] << 24);
+        sumi = ggml_cuda_dp4a(v1, q8[1], sumi);
+    }
+
+    // Group 1: next 8 elements, next 3 bytes of qs
+    {
+        const uint8_t * qs = bq->qs + (iqs * 2 + 1) * 3;
+        const uint32_t bits = qs[0] | ((uint32_t)qs[1] << 8) | ((uint32_t)qs[2] << 16);
+
+        int v0 = (uint8_t)ge1[(bits >>  0) & 7]        | ((uint32_t)(uint8_t)ge1[(bits >>  3) & 7] << 8)
+               | ((uint32_t)(uint8_t)ge1[(bits >>  6) & 7] << 16) | ((uint32_t)(uint8_t)ge1[(bits >>  9) & 7] << 24);
+        sumi = ggml_cuda_dp4a(v0, q8[2], sumi);
+
+        int v1 = (uint8_t)ge1[(bits >> 12) & 7]        | ((uint32_t)(uint8_t)ge1[(bits >> 15) & 7] << 8)
+               | ((uint32_t)(uint8_t)ge1[(bits >> 18) & 7] << 16) | ((uint32_t)(uint8_t)ge1[(bits >> 21) & 7] << 24);
+        sumi = ggml_cuda_dp4a(v1, q8[3], sumi);
+    }
+
+    return __half2float(bq->d) * IQ3TQ_GRID_SCALE * __low2float(bq8_1[q8b].ds) * sumi;
+}
+
+
+// IQ1_BN: 8D vector quantized with per-tensor trained 4096-entry codebook
+#define VDR_IQ1_BN_Q8_1_MMVQ 1
+#define VDR_IQ1_BN_Q8_1_MMQ  1
+
+static __device__ __forceinline__ float vec_dot_iq1_bn_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq1_bn * bq = (const block_iq1_bn *) vbq + kbx;
+
+    // iqs = 0..15, each thread handles 2 groups (16 elements)
+    const int q8b   = iqs / 2;
+    const int q8off = (iqs & 1) * 4;
+
+    // Extract two 12-bit codebook indices from qs[3*iqs .. 3*iqs+2]
+    const uint8_t * qs = bq->qs + 3 * iqs;
+    const int ci0 = qs[0] | (((int)qs[1] & 0x0F) << 8);
+    const int ci1 = (qs[1] >> 4) | ((int)qs[2] << 4);
+
+    const int * cb0 = (const int *)(iq1bn_codebook_cuda + ci0 * IQ1BN_CODEBOOK_DIM);
+    const int * cb1 = (const int *)(iq1bn_codebook_cuda + ci1 * IQ1BN_CODEBOOK_DIM);
+
+    const int * q8 = (const int *)bq8_1[q8b].qs + q8off;
+
+    int sumi = 0;
+    sumi = ggml_cuda_dp4a(cb0[0], q8[0], sumi);
+    sumi = ggml_cuda_dp4a(cb0[1], q8[1], sumi);
+    sumi = ggml_cuda_dp4a(cb1[0], q8[2], sumi);
+    sumi = ggml_cuda_dp4a(cb1[1], q8[3], sumi);
+
+    return __half2float(bq->d) * IQ1BN_GRID_SCALE * __low2float(bq8_1[q8b].ds) * (float)sumi;
+}
+
 #define VDR_IQ4_XS_Q8_1_MMVQ 4
 #define VDR_IQ4_XS_Q8_1_MMQ  4
 

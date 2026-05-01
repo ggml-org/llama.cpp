@@ -429,7 +429,15 @@ extern "C" {
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
-        GGML_TYPE_COUNT   = 42,
+        GGML_TYPE_Q3_PT   = 42, // 3.875 bpw per-tensor Lloyd-Max, 16-elem affine sub-blocks
+        GGML_TYPE_Q3_KPT  = 43, // Q3_K with learned per-tensor levels (3.4375 bpw)
+        GGML_TYPE_Q4_DPT  = 44, // IQ4_NL with learned per-tensor int8 levels (4.125 bpw)
+        GGML_TYPE_Q2_DPT  = 45, // 2-bit with learned per-tensor int8 levels (2.5 bpw)
+        GGML_TYPE_Q2_KPT  = 46, // Q2_K with learned per-tensor float levels (2.625 bpw)
+        GGML_TYPE_IQ2_TQ  = 47, // Trellis quantized with RNG codebook (2.0625 bpw)
+        GGML_TYPE_IQ3_TQ  = 48, // 3-bit with per-tensor trained grid table (3.5625 bpw)
+        GGML_TYPE_IQ1_BN  = 49, // 8D vector quantized with per-tensor trained codebook (1.5625 bpw)
+        GGML_TYPE_COUNT   = 50,
     };
 
     // precision
@@ -463,6 +471,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ2_XXS = 15, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ2_XS  = 16, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ3_XXS = 17, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q3_PT  = 26, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_S   = 18, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_NL  = 19, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ3_S   = 20, // except 1d tensors
@@ -471,8 +480,11 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ1_M   = 23, // except 1d tensors
         GGML_FTYPE_MOSTLY_BF16    = 24, // except 1d tensors
         GGML_FTYPE_MOSTLY_MXFP4   = 25, // except 1d tensors
-        GGML_FTYPE_MOSTLY_NVFP4   = 26, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q1_0    = 27, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q3_KPT  = 27, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q4_DPT  = 28, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q2_KPT  = 29, // except 1d tensors
+        GGML_FTYPE_MOSTLY_NVFP4   = 30, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q1_0    = 31, // except 1d tensors
     };
 
     // available tensor operations:
@@ -693,9 +705,8 @@ extern "C" {
 
         char name[GGML_MAX_NAME];
 
-        void * extra; // extra things e.g. for ggml-cuda.cu
-
-        char padding[8];
+        void * extra;        // extra things e.g. for ggml-cuda.cu
+        void * quant_levels; // per-tensor quantization levels (replaces char padding[8]; same size on 64-bit)
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
@@ -2811,7 +2822,7 @@ extern "C" {
 #        define GGML_RESTRICT restrict
 #    endif
 #endif
-    typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+    typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels);
     typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
 
     struct ggml_type_traits {
@@ -2822,6 +2833,7 @@ extern "C" {
         bool                     is_quantized;
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
+        size_t                   levels_row_stride;  // bytes to advance quant_levels per row (0 = per-tensor)
     };
 
     GGML_API const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type);

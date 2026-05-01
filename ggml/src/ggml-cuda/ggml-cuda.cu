@@ -4,6 +4,7 @@
 
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
+#include "ggml-quants.h"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/add-id.cuh"
 #include "ggml-cuda/arange.cuh"
@@ -1659,6 +1660,24 @@ static void ggml_cuda_op_mul_mat_cublas(
         ggml_is_contiguous(src0) &&
         row_diff == src0->ne[1] &&
         dst->op_params[0] == GGML_PREC_DEFAULT;
+
+    // Upload per-tensor grids/levels before any dequantize path (fp16, fp32, or bf16)
+    if (src0->type == GGML_TYPE_Q4_DPT) {
+        GGML_ASSERT(src0->quant_levels && "Q4_DPT MUL_MAT requires levels (set tensor->quant_levels)");
+        ggml_cuda_set_q4dpt_levels((const int8_t *)src0->quant_levels, stream);
+    }
+    if (src0->type == GGML_TYPE_IQ2_TQ) {
+        GGML_ASSERT(src0->quant_levels && "IQ2_TQ MUL_MAT requires grid (set tensor->quant_levels)");
+        ggml_cuda_set_iq2tq_grid(src0->quant_levels, stream);
+    }
+    if (src0->type == GGML_TYPE_IQ3_TQ) {
+        GGML_ASSERT(src0->quant_levels && "IQ3_TQ MUL_MAT requires grid (set tensor->quant_levels)");
+        ggml_cuda_set_iq3tq_grid(src0->quant_levels, stream);
+    }
+    if (src0->type == GGML_TYPE_IQ1_BN) {
+        GGML_ASSERT(src0->quant_levels && "IQ1_BN MUL_MAT requires codebook (set tensor->quant_levels)");
+        ggml_cuda_set_iq1bn_aux(src0->quant_levels, stream);
+    }
 
     if (supports_bf16 && src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0) && row_diff == src0->ne[1]) {
         ggml_cuda_pool_alloc<nv_bfloat16> src1_as_bf16(ctx.pool(id));
@@ -5194,6 +5213,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ3_S:
                     case GGML_TYPE_IQ3_XXS:
                     case GGML_TYPE_IQ4_NL:
+                    case GGML_TYPE_Q4_DPT:
+                    case GGML_TYPE_IQ2_TQ:
+                    case GGML_TYPE_IQ3_TQ:
+                    case GGML_TYPE_IQ1_BN:
                     case GGML_TYPE_IQ4_XS:
                     case GGML_TYPE_BF16:
                         return true;
@@ -5229,7 +5252,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             {
                 return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 ||
                        op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q5_0 ||
-                       op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL) &&
+                       op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL ||
+                       op->type == GGML_TYPE_Q4_DPT) &&
                        op->src[0]->type == GGML_TYPE_F32 &&
                        (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32);
             } break;
@@ -5280,6 +5304,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     return true;
                 }
                 if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_IQ4_NL) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_Q4_DPT) {
                     return true;
                 }
                 if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_I32) {

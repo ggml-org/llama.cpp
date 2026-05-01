@@ -120,7 +120,8 @@ void quantize_row_q8_K_generic(const float * GGML_RESTRICT x, void * GGML_RESTRI
 
 //===================================== Dot products =================================
 
-void ggml_vec_dot_q1_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q1_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     const int qk = QK1_0;
     const int nb = n / qk;
 
@@ -171,7 +172,8 @@ void ggml_vec_dot_q1_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 }
 
 
-void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -208,7 +210,8 @@ void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 }
 
 // TODO: add WASM SIMD
-void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     const int qk = QK8_1;
     const int nb = n / qk;
 
@@ -244,7 +247,8 @@ void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -276,7 +280,8 @@ void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 }
 
 // NVFP4: super-block of 64 elements = 4 sub-blocks of 16 = 2 q8_0 blocks
-void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -311,7 +316,8 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
-void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -354,7 +360,8 @@ void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-void ggml_vec_dot_q5_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q5_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     const int qk = QK8_1;
     const int nb = n / qk;
 
@@ -397,7 +404,8 @@ void ggml_vec_dot_q5_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-void ggml_vec_dot_q8_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q8_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -427,7 +435,8 @@ void ggml_vec_dot_q8_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -479,7 +488,8 @@ void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
-void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -511,7 +521,8 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
-void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -563,7 +574,8 @@ void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-void ggml_vec_dot_q3_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q3_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -642,7 +654,8 @@ void ggml_vec_dot_q3_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-void ggml_vec_dot_q4_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q4_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -716,8 +729,7 @@ void ggml_vec_dot_q4_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     for (int l = 0; l < 8; ++l) sumf += sums[l];
     *s = sumf;
 }
-
-void ggml_vec_dot_q5_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy,  size_t by, int nrc) {
+void ggml_vec_dot_q5_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy,  size_t by, int nrc, const void * levels) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -747,6 +759,7 @@ void ggml_vec_dot_q5_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 
     float sumf = 0;
     for (int i = 0; i < nb; ++i) {
+    GGML_UNUSED(levels);
         const uint8_t * GGML_RESTRICT q4 = x[i].qs;
         const uint8_t * GGML_RESTRICT hm = x[i].qh;
         const  int8_t * GGML_RESTRICT q8 = y[i].qs;
@@ -797,7 +810,8 @@ void ggml_vec_dot_q5_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-void ggml_vec_dot_q6_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q6_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -852,7 +866,8 @@ void ggml_vec_dot_q6_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-void ggml_vec_dot_iq2_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_iq2_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -894,7 +909,8 @@ void ggml_vec_dot_iq2_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs
     *s = 0.125f * sumf;
 }
 
-void ggml_vec_dot_iq2_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_iq2_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -944,7 +960,8 @@ void ggml_vec_dot_iq2_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
     *s = 0.125f * sumf;
 }
 
-void ggml_vec_dot_iq2_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_iq2_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -996,7 +1013,8 @@ void ggml_vec_dot_iq2_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = 0.125f * sumf;
 }
 
-void ggml_vec_dot_iq3_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_iq3_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1040,7 +1058,8 @@ void ggml_vec_dot_iq3_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs
     *s = 0.25f * sumf;
 }
 
-void ggml_vec_dot_iq3_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_iq3_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1096,7 +1115,65 @@ void ggml_vec_dot_iq3_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
-void ggml_vec_dot_iq1_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_q3_pt_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q3_pt * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    const float * lv = (const float *)levels;
+    GGML_ASSERT(lv != NULL && "Q3_PT levels not set for tensor");
+
+    float sumf = 0.f;
+    for (int i = 0; i < nb; ++i) {
+        const float xd    = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float xdmin = GGML_CPU_FP16_TO_FP32(x[i].dmin);
+        const float yd    = y[i].d;
+        const uint8_t * sc = x[i].scales;
+        const uint8_t * qs = x[i].qs;
+        const int8_t  * q8 = y[i].qs;
+
+        float block_sum = 0.f;
+        for (int ib = 0; ib < QK_K/16; ++ib) {
+            // Inline 6-bit unpack for range scale (index ib) and neg_min scale (index ib + QK_K/16)
+            const int sbit0  = ib * 6,              sbyte0 = sbit0 / 8,  soff0 = sbit0 % 8;
+            const int sbit1  = (ib + QK_K/16) * 6,  sbyte1 = sbit1 / 8,  soff1 = sbit1 % 8;
+            uint8_t qrange = (sc[sbyte0] >> soff0) & 0x3F;
+            if (soff0 > 2) { qrange |= (uint8_t)((sc[sbyte0+1] << (8 - soff0)) & 0x3F); }
+            uint8_t qnmin  = (sc[sbyte1] >> soff1) & 0x3F;
+            if (soff1 > 2) { qnmin  |= (uint8_t)((sc[sbyte1+1] << (8 - soff1)) & 0x3F); }
+            const float range   = xd    * (float)qrange;
+            const float sub_min = -xdmin * (float)qnmin;
+
+            float sum_lq = 0.f;
+            for (int j = 0; j < 16; ++j) {
+                // Inline 3-bit unpack
+                const int qk    = ib * 16 + j;
+                const int qbit  = qk * 3;
+                const int qbyte = qbit / 8;
+                const int qoff  = qbit % 8;
+                int q = (qs[qbyte] >> qoff) & 0x7;
+                if (qoff > 5) { q |= (int)((qs[qbyte+1] << (8 - qoff)) & 0x7); }
+                sum_lq += lv[q] * (float)q8[qk];
+            }
+            // min contribution uses precomputed 16-element sum from block_q8_K.bsums
+            block_sum += sum_lq * range + sub_min * (float)y[i].bsums[ib];
+        }
+        sumf += block_sum * yd;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_iq1_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1139,7 +1216,375 @@ void ggml_vec_dot_iq1_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
-void ggml_vec_dot_iq1_m_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+// Q3_KPT vec_dot - similar to Q3_K but with learned levels
+void ggml_vec_dot_q3_kpt_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q3_kpt * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    const float * lv = (const float *)levels;
+    GGML_ASSERT(lv != NULL && "Q3_KPT levels not set for tensor");
+
+    const uint32_t kmask1 = 0x03030303;
+    const uint32_t kmask2 = 0x0f0f0f0f;
+
+    float sumf = 0.f;
+    for (int i = 0; i < nb; ++i) {
+        const float d_all = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float yd = y[i].d;
+        const uint8_t * q = x[i].qs;
+        const uint8_t * hm = x[i].hmask;
+        const int8_t  * q8 = y[i].qs;
+        uint8_t m = 1;
+
+        uint32_t aux32[4];
+        memcpy(aux32, x[i].scales, 12);
+        uint32_t tmp = aux32[2];
+        aux32[2] = ((aux32[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+        aux32[3] = ((aux32[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+        aux32[0] = (aux32[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+        aux32[1] = (aux32[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+        const uint8_t * aux = (const uint8_t *)aux32;
+
+        int is = 0;
+        float block_sum = 0.f;
+        for (int blk = 0; blk < QK_K; blk += 128) {
+            int shift = 0;
+            for (int j = 0; j < 4; ++j) {
+                int sc1 = (int)aux[is] - 32;
+                int sc2 = (int)aux[is+1] - 32;
+                is += 2;
+                float dl1 = d_all * sc1;
+                float dl2 = d_all * sc2;
+
+                float sum1 = 0.f, sum2 = 0.f;
+                for (int l = 0; l < 16; ++l) {
+                    int k_idx = ((q[l+0] >> shift) & 3) + ((hm[l+0] & m) ? 4 : 0);
+                    sum1 += (lv[k_idx] * 7.0f - 4.0f) * (float)q8[l+0];
+                }
+                for (int l = 0; l < 16; ++l) {
+                    int k_idx = ((q[l+16] >> shift) & 3) + ((hm[l+16] & m) ? 4 : 0);
+                    sum2 += (lv[k_idx] * 7.0f - 4.0f) * (float)q8[l+16];
+                }
+                block_sum += dl1 * sum1 + dl2 * sum2;
+
+                shift += 2;
+                m <<= 1;
+                q8 += 32;
+            }
+            q += 32;
+        }
+        sumf += block_sum * yd;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_q3_kpt_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    ggml_vec_dot_q3_kpt_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc, levels);
+}
+
+// Q2_KPT vec_dot - similar to Q2_K but with learned levels
+void ggml_vec_dot_q2_kpt_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_kpt * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    const float * lv = (const float *)levels;
+    GGML_ASSERT(lv != NULL && "Q2_KPT levels not set for tensor");
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+        // Per-block levels: block i uses lv[i*4 + 0..3]
+        const float * block_lv = lv + i * Q2KPT_N_LEVELS;
+
+        // Precompute mapped levels for this block: ml[k] = levels[k] * 3.0
+        float ml[Q2KPT_N_LEVELS];
+        for (int k = 0; k < Q2KPT_N_LEVELS; ++k) {
+            ml[k] = block_lv[k] * 3.0f;
+        }
+
+        const uint8_t * q2 = x[i].qs;
+        const int8_t  * q8 = y[i].qs;
+        const uint8_t * sc = x[i].scales;
+
+        // Min term: accumulate integer bsums * min_scale (same as Q2_K)
+        int summs = 0;
+        for (int j = 0; j < 16; ++j) {
+            summs += y[i].bsums[j] * (sc[j] >> 4);
+        }
+
+        const float dall = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float dmin = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].dmin);
+
+        // Scale term: need floating-point because levels are non-uniform
+        int is = 0;
+        float fsum = 0;
+        for (int k = 0; k < QK_K/128; ++k) {
+            int shift = 0;
+            for (int j = 0; j < 4; ++j) {
+                int d_sc = sc[is++] & 0xF;
+                float suml = 0;
+                for (int l = 0; l < 16; ++l) {
+                    int idx = (q2[l] >> shift) & 3;
+                    suml += ml[idx] * (float)q8[l];
+                }
+                fsum += d_sc * suml;
+
+                d_sc = sc[is++] & 0xF;
+                suml = 0;
+                for (int l = 16; l < 32; ++l) {
+                    int idx = (q2[l] >> shift) & 3;
+                    suml += ml[idx] * (float)q8[l];
+                }
+                fsum += d_sc * suml;
+
+                shift += 2;
+                q8 += 32;
+            }
+            q2 += 32;
+        }
+        sumf += dall * fsum - dmin * summs;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_q2_kpt_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    ggml_vec_dot_q2_kpt_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc, levels);
+}
+
+// IQ2_TQ: 2-bit with asymmetric 4-tuple grid per group
+// Default grid table — only used when no per-tensor grid is available
+static const int8_t iq2tq_grid_cpu[16][4] = {
+   {-20, -8, -2,  6}, {-14, -8, -2,  4}, {-16,-10,  0, 12}, {-14, -4,  2,  8},
+   {-20, -4,  4, 12},  {-8, -4,  0,  4},  {-8, -4,  0,  8}, {-12, -6,  2, 12},
+    {-4, -2,  2,  4}, {-10, -2,  4,  8}, {-16, -6,  4, 20}, {-12, -2,  6, 14},
+    {-8, -2,  4, 14},  {-4,  0,  4,  8},  {-8, -2,  6, 22},  {-4,  2,  8, 14},
+};
+
+void ggml_vec_dot_iq2_tq_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
+
+    const int8_t (*grid)[4] = levels ? (const int8_t (*)[4])levels : (const int8_t (*)[4])iq2tq_grid_cpu;
+    const block_iq2_tq * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+    const int nb = n / QK_K;
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * IQ2TQ_GRID_SCALE;
+        const float yd = y[i].d;
+        const int8_t * q8 = y[i].qs;
+
+        int32_t fsum = 0;
+
+        for (int g = 0; g < IQ2TQ_N_GROUPS; ++g) {
+            int si = (x[i].scales[g / 2] >> (4 * (g % 2))) & 0xF;
+            const int8_t * ge = grid[si];
+            const int8_t * q8g = q8 + g * 8;
+
+            for (int k = 0; k < 8; ++k) {
+                int j = g * 8 + k;
+                int qi = (x[i].qs[j / 4] >> ((j % 4) * 2)) & 3;
+                fsum += (int32_t)ge[qi] * (int32_t)q8g[k];
+            }
+        }
+
+        sumf += d * yd * (float)fsum;
+    }
+
+    *s = sumf;
+}
+
+// IQ3_TQ default grid (must match ggml-quants.c)
+static const int8_t iq3tq_grid_cpu[16][8] = {
+    {-24,-18,-12, -6,  0,  6, 12, 18},
+    {-20,-15,-10, -5,  0,  5, 10, 15},
+    {-16,-12, -8, -4,  0,  4,  8, 12},
+    {-12, -8, -4, -2,  0,  2,  4,  8},
+    {-24,-16, -8, -2,  2,  6, 10, 14},
+    {-14,-10, -6, -2,  2,  8, 16, 24},
+    {-20,-14, -8, -4,  0,  4, 10, 18},
+    {-18,-10, -4,  0,  4,  8, 14, 20},
+    { -8, -6, -4, -2,  0,  2,  4,  6},
+    {-10, -6, -4, -2,  2,  4,  6, 10},
+    {-22,-14, -6, -2,  2,  6, 14, 22},
+    {-16, -8, -4, -2,  0,  4,  8, 16},
+    {-24,-20,-16,-12, -8, -4,  0,  4},
+    { -4,  0,  4,  8, 12, 16, 20, 24},
+    {-20,-16,-10, -4,  4, 10, 16, 20},
+    {-12, -8, -6, -2,  2,  6,  8, 12},
+};
+
+void ggml_vec_dot_iq3_tq_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
+
+    const int8_t (*grid)[8] = levels ? (const int8_t (*)[8])levels : (const int8_t (*)[8])iq3tq_grid_cpu;
+    const block_iq3_tq * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+    const int nb = n / QK_K;
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * IQ3TQ_GRID_SCALE;
+        const float yd = y[i].d;
+        const int8_t * q8 = y[i].qs;
+
+        int32_t fsum = 0;
+
+        for (int g = 0; g < IQ3TQ_N_GROUPS; ++g) {
+            int si = (x[i].scales[g / 2] >> (4 * (g % 2))) & 0xF;
+            const int8_t * ge = grid[si];
+            const int8_t * q8g = q8 + g * 8;
+
+            for (int k = 0; k < 8; ++k) {
+                int j = g * 8 + k;
+                // 3-bit unpack
+                int bit_pos = j * 3;
+                int byte_idx = bit_pos >> 3;
+                int bit_off = bit_pos & 7;
+                uint16_t val = x[i].qs[byte_idx];
+                if (bit_off > 5) val |= ((uint16_t)x[i].qs[byte_idx + 1] << 8);
+                int qi = (val >> bit_off) & 7;
+                fsum += (int32_t)ge[qi] * (int32_t)q8g[k];
+            }
+        }
+
+        sumf += d * yd * (float)fsum;
+    }
+
+    *s = sumf;
+}
+
+// IQ1_BN: 8D vector quantized — codebook[256][8] + scale_table[16]
+void ggml_vec_dot_iq1_bn_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
+
+    GGML_ASSERT(levels && "IQ1_BN requires per-tensor codebook in quant_levels");
+    const int8_t * codebook = (const int8_t *)levels;
+    const block_iq1_bn * GGML_RESTRICT x = vx;
+    const block_q8_K    * GGML_RESTRICT y = vy;
+    const int nb = n / QK_K;
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * IQ1BN_GRID_SCALE;
+        const float yd = y[i].d;
+        const int8_t * q8 = y[i].qs;
+
+        int32_t block_sum = 0;
+
+        for (int g = 0; g < IQ1BN_N_GROUPS; ++g) {
+            int ci = (g & 1)
+                ? ((x[i].qs[3*(g/2)+1] >> 4) | ((int)x[i].qs[3*(g/2)+2] << 4))
+                : (x[i].qs[3*(g/2)] | (((int)x[i].qs[3*(g/2)+1] & 0x0F) << 8));
+            const int8_t * cb = codebook + ci * IQ1BN_CODEBOOK_DIM;
+            const int8_t * q8g = q8 + g * IQ1BN_GROUP_SIZE;
+
+            for (int k = 0; k < IQ1BN_CODEBOOK_DIM; ++k) {
+                block_sum += (int32_t)cb[k] * (int32_t)q8g[k];
+            }
+        }
+
+        sumf += d * yd * (float)block_sum;
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_q4_dpt_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK4_NL == 0);
+    static_assert(QK4_NL == QK8_0, "QK4_NL and QK8_0 must be the same");
+
+    const block_q4_dpt * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK4_NL;
+
+    const int8_t * values = (const int8_t *)levels;
+    GGML_ASSERT(values != NULL && "Q4_DPT levels not set for tensor");
+
+    float sumf = 0;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d) * GGML_CPU_FP16_TO_FP32(x[ib].d);
+        int32_t blk = 0;
+        for (int j = 0; j < QK4_NL/2; ++j) {
+            blk += (int32_t)y[ib].qs[j+       0] * (int32_t)values[x[ib].qs[j] & 0xf];
+            blk += (int32_t)y[ib].qs[j+QK4_NL/2] * (int32_t)values[x[ib].qs[j] >>  4];
+        }
+        sumf += d * (float)blk;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_q2_dpt_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK2_DPT == 0);
+    static_assert(QK2_DPT == QK8_0, "QK2_DPT and QK8_0 must be the same");
+
+    const block_q2_dpt * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK2_DPT;
+
+    const int8_t * values = (const int8_t *)levels;
+    GGML_ASSERT(values != NULL && "Q2_DPT levels not set for tensor");
+
+    float sumf = 0;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d) * GGML_CPU_FP16_TO_FP32(x[ib].d);
+        int32_t blk = 0;
+        for (int j = 0; j < QK2_DPT/4; ++j) {
+            uint8_t q = x[ib].qs[j];
+            blk += (int32_t)y[ib].qs[j*4 + 0] * (int32_t)values[(q >> 0) & 3];
+            blk += (int32_t)y[ib].qs[j*4 + 1] * (int32_t)values[(q >> 2) & 3];
+            blk += (int32_t)y[ib].qs[j*4 + 2] * (int32_t)values[(q >> 4) & 3];
+            blk += (int32_t)y[ib].qs[j*4 + 3] * (int32_t)values[(q >> 6) & 3];
+        }
+        sumf += d * (float)blk;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_iq1_m_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1200,7 +1645,8 @@ void ggml_vec_dot_iq1_m_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
-void ggml_vec_dot_iq4_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_iq4_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -1229,7 +1675,8 @@ void ggml_vec_dot_iq4_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs,
     *s = sumf;
 }
 
-void ggml_vec_dot_iq4_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_iq4_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
