@@ -15,10 +15,8 @@
 #define HMX_FP16_TILE_N_ELMS 1024
 #define HMX_FP16_TILE_SIZE   2048
 
-#define HMX_INLINE_ALWAYS inline __attribute__((unused, always_inline))
-
 // Initialise aligned 256-byte area with scale vector + zero padding.
-static HMX_INLINE_ALWAYS void hmx_init_column_scales(void *out_scales, HVX_Vector v_scale) {
+static inline void hmx_init_column_scales(void *out_scales, HVX_Vector v_scale) {
     HVX_Vector *pv = (HVX_Vector *)out_scales;
     *pv++ = v_scale;
     *pv   = Q6_V_vzero();
