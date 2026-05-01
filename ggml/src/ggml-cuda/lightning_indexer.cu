@@ -2,8 +2,17 @@
 #include "fattn-common.cuh"
 #include "convert.cuh"
 
+#if !defined(GGML_USE_HIP)
 #include <mma.h>
-using namespace nvcuda;
+#if defined(GGML_USE_MUSA)
+namespace wmma = mtmusa::wmma;
+#else // GGML_USE_MUSA
+namespace wmma = nvcuda::wmma;
+#endif // GGML_USE_MUSA
+#elif defined(GGML_USE_HIP)
+#include <rocwmma/rocwmma.hpp>
+namespace wmma = rocwmma;
+#endif // !defined(GGML_USE_HIP)
 
 typedef union {
     int2 i2;
