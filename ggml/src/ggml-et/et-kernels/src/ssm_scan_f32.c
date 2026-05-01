@@ -23,6 +23,10 @@ static inline float softplus_f32(float x) {
     return x <= 20.0f ? et_logf(1.0f + et_expf(x)) : x;
 }
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 int entry_point(struct ggml_et_ssm_scan_params * params, void * env) {
     kernel_environment_t * kernel_env = (kernel_environment_t *) env;
 
@@ -68,6 +72,17 @@ int entry_point(struct ggml_et_ssm_scan_params * params, void * env) {
     if (!s_data || !x_data || !dt_data || !A_data || !B_data || !C_data || !ids || !dst_data) {
         return -1;
     }
+
+#ifdef BUILD_FOR_UBERKERNEL
+    evict_region_past_l2(src0->data, tensor_bytes(src0));
+    evict_region_past_l2(src1->data, tensor_bytes(src1));
+    evict_region_past_l2(src2->data, tensor_bytes(src2));
+    evict_region_past_l2(src3->data, tensor_bytes(src3));
+    evict_region_past_l2(src4->data, tensor_bytes(src4));
+    evict_region_past_l2(src5->data, tensor_bytes(src5));
+    evict_region_past_l2(src6->data, tensor_bytes(src6));
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
 
     const int64_t d_state      = src0->ne[0];
     const int64_t head_dim     = src0->ne[1];

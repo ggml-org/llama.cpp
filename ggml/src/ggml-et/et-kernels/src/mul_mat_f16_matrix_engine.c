@@ -109,6 +109,10 @@ pack_b_interleaved(et_fp16_t *out,
     );
 }
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 int entry_point(struct ggml_et_binary_params *params, void *env) {
     (void) env;
 
@@ -140,6 +144,11 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
     const char *src0_base = (const char *) params->src0.data;
     const char *src1_base = (const char *) params->src1.data;
     char       *dst_base  = (char *) params->dst.data;
+
+#ifdef BUILD_FOR_UBERKERNEL
+    evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
 
     if ((M % TILE_M) != 0) return 0;
     if ((K % TILE_K) != 0) return 0;

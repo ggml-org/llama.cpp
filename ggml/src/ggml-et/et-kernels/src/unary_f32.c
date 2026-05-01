@@ -456,6 +456,10 @@ static inline void vec_softplus(float* dst, const float* src, int32_t n) {
     }
 }
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 //******************************************************************************
 // Main entry point
 //******************************************************************************
@@ -492,6 +496,11 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
     if (!src0_data || !dst_data) {
         return -1;
     }
+
+#ifdef BUILD_FOR_UBERKERNEL
+    evict_region_past_l2(src0->data, tensor_bytes(src0));
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
 
     // Tensor layout: src and dst are F32 with at least dim-0 contiguity
     //   - nb[0] == sizeof(float) (rows are dense; SIMD loads stay legal)

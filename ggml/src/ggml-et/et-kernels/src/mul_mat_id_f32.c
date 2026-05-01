@@ -47,6 +47,10 @@
 #include "quants.h"
 #include "block_ops.h"
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 // Main entry point for MUL_MAT_ID kernel (Mixture of Experts)
 int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
@@ -99,6 +103,12 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
     if (!src0_data || !src1_data || !src2_data || !dst_data) {
         return -1;
     }
+
+#ifdef BUILD_FOR_UBERKERNEL
+    evict_region_past_l2(src1->data, tensor_bytes(src1));
+    evict_region_past_l2(src2->data, tensor_bytes(src2));
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
 
     // Determine block size based on src0 type
     int block_size;

@@ -493,6 +493,10 @@ static int get_row_f32_mc_cacheline_aligned(struct ggml_et_get_rows_params* para
     return 0;
 }
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
     if (!kernel_env) {
@@ -502,6 +506,12 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     struct ggml_tensor* src0 = &params->src0;  // Data tensor (F32, Q4_0, Q8_0, or Q4_K)
     struct ggml_tensor* src1 = &params->src1;  // Row indices tensor (I32)
     struct ggml_tensor* dst = &params->dst;    // Output tensor (F32)
+
+#ifdef BUILD_FOR_UBERKERNEL
+    evict_region_past_l2(src0->data, tensor_bytes(src0));
+    evict_region_past_l2(src1->data, tensor_bytes(src1));
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
 
     // Fast path - we know how to deal with them multi-core
     if((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K) && src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_F32
