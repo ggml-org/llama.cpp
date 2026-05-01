@@ -9315,9 +9315,9 @@ class MimoV2Model(TextModel):
         if weight.shape[0] != total_rows:
             raise ValueError(f"qkv_proj weight rows {weight.shape[0]} != q+k+v {total_rows}")
 
-        # auto-detect TP from scale_inv shape
+        # detect TP from scale_inv block count, descending order so larger matches first
         tp = None
-        for cand in (1, 2, 4, 8, 16):
+        for cand in (8, 4):
             if total_rows % cand != 0:
                 continue
             rpr = total_rows // cand
