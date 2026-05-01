@@ -209,6 +209,8 @@ inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * GG
         np = n;
     #elif defined(__riscv_v_intrinsic)
         #if defined(__riscv_zvfh)
+            #pragma GCC diagnostic push
+            #pragma GCC diagnostic ignored "-Wpedantic"
             size_t vl = __riscv_vsetvlmax_e32m4();
 
             // initialize accumulators to all zeroes
@@ -272,6 +274,7 @@ inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * GG
             sumf[0] = __riscv_vfmv_f_s_f32m1_f32(redsum0);
             sumf[1] = __riscv_vfmv_f_s_f32m1_f32(redsum1);
             np = n;
+            #pragma GCC diagnostic pop
         #else
             const int np = 0;
         #endif
@@ -796,6 +799,8 @@ inline static void ggml_vec_scale_f16(const int n, ggml_fp16_t * y, const float 
     np = n;
 #elif defined(__riscv_v_intrinsic)
     #if defined(__riscv_zvfh)
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wpedantic"
         const ggml_fp16_t s = GGML_CPU_FP32_TO_FP16(v);
         const _Float16 scale = *(const _Float16*)(&s);
 
@@ -826,6 +831,7 @@ inline static void ggml_vec_scale_f16(const int n, ggml_fp16_t * y, const float 
             __riscv_vse16_v_f16m4((_Float16*)y + i, ay0, vl);
         }
         np = n;
+        #pragma GCC diagnostic pop
     #else
         // fall to scalar path
         const int np = 0;

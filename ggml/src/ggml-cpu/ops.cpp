@@ -12039,7 +12039,7 @@ void ggml_compute_forward_lightning_indexer(
             for (int ik = ir0; ik < ir1; ++ik) {
                 char * k_row = (char *) k->data + ik*nbk2 + s*nbk3;
                 if (k_to_float) {
-                    k_to_float(k_row, k_row_f32, n_embd);
+                    k_to_float(k_row, k_row_f32, n_embd, nullptr);
                 } else {
                     k_row_f32 = (float *) k_row;
                 }
@@ -12048,7 +12048,7 @@ void ggml_compute_forward_lightning_indexer(
                     // dot product of q and k for head h
                     float qk = 0.0f;
                     const float * q_row = (float *) ((char *) q->data + h*nbq1 + t*nbq2 + s*nbq3);
-                    ggml_vec_dot_f32(n_embd, &qk, 0, q_row, 0, k_row_f32, 0, 1);
+                    ggml_vec_dot_f32(n_embd, &qk, 0, q_row, 0, k_row_f32, 0, 1, nullptr);
                     // ReLU and weights (prescaled)
                     score += MAX(qk, 0.0f) * w_row[h];
                 }

@@ -88,10 +88,9 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
     #elif defined(__riscv_v_intrinsic)
         int vl = __riscv_vsetvlmax_e32m8();
         vfloat32m1_t vs = __riscv_vfmv_v_f_f32m1(0.0f, 1);
-        vfloat32m8_t vsum;
+        vfloat32m8_t vsum = __riscv_vfmv_v_f_f32m8(0.0f, vl);
         vfloat32m8_t ax;
         vfloat32m8_t ay;
-        vsum = __riscv_vfmv_v_f_f32m8_tu(vsum, 0.0f, vl);
         for (int i = 0; i < n; i += vl) {
             vl = __riscv_vsetvl_e32m8(n - i);
             ax = __riscv_vle32_v_f32m8_tu(ax, &x[i], vl);
