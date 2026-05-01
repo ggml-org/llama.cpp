@@ -305,14 +305,4 @@ static inline HVX_Vector hvx_vec_mul_f32_f32(HVX_Vector a, HVX_Vector b) {
 
 #endif // __HVX_ARCH__ < 79
 
-static inline void hvx_fill_uh(void * p, uint16_t v, size_t bytes) {
-    assert(bytes % 128 == 0);
-    assert(((size_t) p % 128) == 0);
-    HVX_Vector   v_v    = Q6_Vh_vsplat_R(v);
-    HVX_Vector * pv_out = (HVX_Vector *) p;
-    for (size_t i = 0; i < bytes / 128; ++i) {
-        *pv_out++ = v_v;
-    }
-}
-
 #endif /* HVX_BASE_H */

@@ -1448,19 +1448,19 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 // ---- Load Q block [g_br, D] -> tiles, interleaving G heads ----
                 TIMER_START(q_load);
                 if (n_rows_g < g_br) {
-                    hvx_fill_uh(factx.vtcm_q_tiles, 0, q_tile_bytes);
+                    hvx_splat_u8_a(factx.vtcm_q_tiles, 0, q_tile_bytes);
                 }
                 fa_phase_q_load(&factx, q, q_start, kv_head, ib3, n_rows_g);
                 TIMER_STOP(q_load);
 
                 // ---- Initialize per-block state ----
-                hvx_fill_uh(factx.vtcm_m_vec, 0xfbff, col_vec_bytes);
-                hvx_fill_uh(factx.vtcm_l_vec, 0, col_vec_bytes);
-                hvx_fill_uh(factx.vtcm_d_tiles, 0, d_tile_bytes);
+                hvx_splat_u8_a(factx.vtcm_l_vec,   0,      col_vec_bytes);
+                hvx_splat_u8_a(factx.vtcm_d_tiles, 0,      d_tile_bytes);
+                hvx_splat_u16_a(factx.vtcm_m_vec,  0xfbff, col_vec_bytes/2);
 
                 __fp16 * o_tile_prev = factx.vtcm_o_tiles[0];
                 __fp16 * o_tile_curr = factx.vtcm_o_tiles[1];
-                hvx_fill_uh(o_tile_prev, 0, o_tile_bytes);
+                hvx_splat_u8_a(o_tile_prev, 0, o_tile_bytes);
 
                 // ---- KV block loop with DMA double-buffering ----
                 size_t buf_idx = 0;
