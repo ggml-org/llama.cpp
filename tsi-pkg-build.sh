@@ -556,31 +556,39 @@ parse_args() {
 }
 
 resolve_paths() {
-  local arch="$1"
+    local arch="$1"
 
-  if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
-    # REQUIRED CHANGE: remove hardcoded 0.4.0 and use SDK_VERSION
-    MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${arch}}"
-    MLIR_COMPILER_DIR_IN="${MLIR_SDK_VERSION}/compiler"
-  fi
+    if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
+        MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${arch}}"
+        MLIR_COMPILER_DIR_IN="${MLIR_SDK_VERSION}/compiler"
+    fi
 
-  if [ -z "${TOOLBOX_DIR_IN}" ]; then
-    MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-$(dirname "${MLIR_COMPILER_DIR_IN}")}"
-    TOOLBOX_DIR_IN="${MLIR_SDK_VERSION}/toolbox/build/install-fpga"
-  fi
+    if [ -z "${TOOLBOX_DIR_IN}" ]; then
+        MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-$(dirname "${MLIR_COMPILER_DIR_IN}")}"
+        TOOLBOX_DIR_IN="${MLIR_SDK_VERSION}/toolbox/build/install-fpga"
+    fi
 
-  MLIR_COMPILER_DIR="$(absdir "${MLIR_COMPILER_DIR_IN}")" || die "MLIR_COMPILER_DIR not found: ${MLIR_COMPILER_DIR_IN}"
-  TOOLBOX_DIR="$(absdir "${TOOLBOX_DIR_IN}")" || die "TOOLBOX_DIR not found: ${TOOLBOX_DIR_IN}"
+    MLIR_COMPILER_DIR="$(absdir "${MLIR_COMPILER_DIR_IN}")" \
+        || die "MLIR_COMPILER_DIR not found: ${MLIR_COMPILER_DIR_IN}"
 
-  export MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-$(dirname "${MLIR_COMPILER_DIR}")}"
-  export MLIR_COMPILER_DIR
-  export COMPILER_INSTALL_DIR="${MLIR_COMPILER_DIR}"
-  export TOOLBOX_DIR
-  export FAU_LOOKUP_TABLE_PATH="${MLIR_SDK_VERSION}/ffm/txe-ffm-cpp/third-party/FAU/include/"
+    TOOLBOX_DIR="$(absdir "${TOOLBOX_DIR_IN}")" \
+        || die "TOOLBOX_DIR not found: ${TOOLBOX_DIR_IN}"
 
-  log_info "SDK_VERSION: ${SDK_VERSION}"
-  log_info "MLIR_COMPILER_DIR: ${MLIR_COMPILER_DIR}"
-  log_info "TOOLBOX_DIR: ${TOOLBOX_DIR}"
+    # Derive TSICommon_DIR from TOOLBOX_DIR (SDK 0.4.1 compatible)
+    TSICommon_DIR="${TOOLBOX_DIR}/lib/cmake/TSICommon"
+    [ -d "${TSICommon_DIR}" ] || die "TSICommon_DIR not found: ${TSICommon_DIR}"
+    export TSICommon_DIR
+
+    export MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-$(dirname "${MLIR_COMPILER_DIR}")}"
+    export MLIR_COMPILER_DIR
+    export COMPILER_INSTALL_DIR="${MLIR_COMPILER_DIR}"
+    export TOOLBOX_DIR
+    export FAU_LOOKUP_TABLE_PATH="${MLIR_SDK_VERSION}/ffm/txe-ffm-cpp/third-party/FAU/include/"
+
+    log_info "SDK_VERSION:        ${SDK_VERSION}"
+    log_info "MLIR_COMPILER_DIR: ${MLIR_COMPILER_DIR}"
+    log_info "TOOLBOX_DIR:       ${TOOLBOX_DIR}"
+    log_info "TSICommon_DIR:     ${TSICommon_DIR}"
 }
 
 setup_toolchain() {
