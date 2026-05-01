@@ -1572,7 +1572,7 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                         if (kv_blk > 0) {
                             hmx_queue_pop(hmx_q);
-                            swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
+                            hex_swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
                         }
 
                         // ---- Phase 2: qk_dot(blk) on HMX ‖ V_int(blk) + DMA prefetch on HVX ----
@@ -1651,7 +1651,7 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         hmx_queue_pop(hmx_q);
                         TIMER_STOP(o_update);
 
-                        swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
+                        hex_swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
                     }
 
                 } else {
@@ -1780,7 +1780,7 @@ int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
                                     Q6_mxmem_AR_after_hf(o_tile_out, 0);
                                 }
                             }
-                            swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
+                            hex_swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
                         }
                         TIMER_STOP(o_update);
 

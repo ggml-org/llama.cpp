@@ -955,7 +955,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
 
                         interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr, n_cols, params->k, params->k,
                                                  0, n_cols);
-                        swap_ptr(&buf_curr, &buf_next);
+                        hex_swap_ptr(&buf_curr, &buf_next);
                     }
                     TIMER_STOP(weight_load);
 
@@ -1127,7 +1127,7 @@ int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, co
                 // interleave row-major fp16 from scratch into tile-major in vtcm_weight
                 interleave_rows_to_tiles(vtcm_weight, (const __fp16 *) buf_curr, n_cols, k, k, 0, n_cols);
 
-                swap_ptr(&buf_curr, &buf_next);
+                hex_swap_ptr(&buf_curr, &buf_next);
             }
             TIMER_STOP(weight_load);
 
@@ -1331,7 +1331,7 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
                     // HMX computes C = A x B, where A=[M,K] activation, B=[K,N] weight.
                     dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight, buf_curr, n_cols, k, row_stride, weight_type);
 
-                    swap_ptr(&buf_curr, &buf_next);
+                    hex_swap_ptr(&buf_curr, &buf_next);
                 }
                 TIMER_STOP(weight_load);
 
