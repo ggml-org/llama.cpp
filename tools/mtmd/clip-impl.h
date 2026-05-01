@@ -137,8 +137,6 @@
 #define TN_VIT_MERGER_DS_UP    "v.vit_merger.ds_ffn_up.%s"
 #define TN_VIT_MERGER_DS_DOWN  "v.vit_merger.ds_ffn_down.%s"
 
-#define KEY_INSERT_LAYER_ID "clip.vision.insert_layer_id"
-
 #define TN_GLM_ADAPER_CONV      "adapter.conv.%s"
 #define TN_GLM_ADAPTER_LINEAR   "adapter.linear.linear.%s"
 #define TN_GLM_ADAPTER_NORM_1   "adapter.linear.norm1.%s"

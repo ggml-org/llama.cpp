@@ -5506,10 +5506,10 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         # ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension; used for slice alignment
         self.gguf_writer.add_vision_projector_scale_factor(4)
 
-        # ViT layer index after which the window-attention merger is applied
+        # borrow wa_layer_indexes for vit_merger insertion point
         insert_layer_id = int(self.global_config.get(
             "insert_layer_id", self.hparams_vision.get("insert_layer_id", 6)))
-        self.gguf_writer.add_uint32("clip.vision.insert_layer_id", insert_layer_id)
+        self.gguf_writer.add_vision_wa_layer_indexes([insert_layer_id])
 
         # SigLIP vision body uses gelu_pytorch_tanh, which matches ggml_gelu (tanh approx).
         self.gguf_writer.add_vision_use_gelu(True)
