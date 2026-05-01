@@ -1281,20 +1281,14 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
     explicit ggml_sycl_pool_leg(queue_ptr qptr_, int device_) : device(device_), qptr(qptr_) {}
 
     ~ggml_sycl_pool_leg() {
-        clear_pool();
-        GGML_ASSERT(pool_size == 0);
-    }
-
-    void clear_pool() {
         for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
             ggml_sycl_buffer & b = buffer_pool[i];
             if (b.ptr != nullptr) {
                 SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(b.ptr, *qptr)));
                 pool_size -= b.size;
-                b.ptr  = nullptr;
-                b.size = 0;
             }
         }
+        GGML_ASSERT(pool_size == 0);
     }
 
     void * alloc(size_t size, size_t * actual_size) override {
@@ -1335,11 +1329,6 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             b.size = 0;
             return ptr;
         }
-        if (pool_size > 0) {
-            SYCL_CHECK(CHECK_TRY_ERROR(qptr->wait()));
-            clear_pool();
-        }
-
         void * ptr;
         size_t look_ahead_size = (size_t) (1.05 * size);
 
@@ -1364,15 +1353,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
     }
 
     void free(void * ptr, size_t size) override {
-        for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
-            ggml_sycl_buffer& b = buffer_pool[i];
-            if (b.ptr == nullptr) {
-                b.ptr = ptr;
-                b.size = size;
-                return;
-            }
-        }
-        GGML_LOG_WARN("WARNING: sycl buffer pool full, increase MAX_sycl_BUFFERS\n");
+        SYCL_CHECK(CHECK_TRY_ERROR(qptr->wait()));
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
         pool_size -= size;
     }
