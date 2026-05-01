@@ -17,8 +17,57 @@
 #extension GL_EXT_null_initializer : enable
 
 #include "types.glsl"
-#include "dequant_funcs_cm2.glsl"
 #include "flash_attn_base.glsl"
+#include "dequant_funcs_cm2.glsl"
+
+// buffer_reference stride = sizeof(struct) = FaBlockBytesK/V.
+layout(buffer_reference, std430, buffer_reference_align = 1) buffer decodeBufFA_K {
+    uint8_t raw[FaBlockBytesK];
+};
+layout(buffer_reference, std430, buffer_reference_align = 1) buffer decodeBufFA_V {
+    uint8_t raw[FaBlockBytesV];
+};
+
+uint fa_block_elems(uint ty) {
+    switch (ty) {
+        case 0u:  return 4u;  // GGML_TYPE_F32: vec4 block (matches decodeBufF32 / dequantFuncF32)
+        case 1u:  return 1u;  // GGML_TYPE_F16
+        case 2u:  return uint(QUANT_K_Q4_0);
+        case 3u:  return uint(QUANT_K_Q4_1);
+        case 6u:  return uint(QUANT_K_Q5_0);
+        case 7u:  return uint(QUANT_K_Q5_1);
+        case 8u:  return uint(QUANT_K_Q8_0);
+        case 41u: return uint(QUANT_K_Q1_0);
+        default:
+            return 1u;
+    }
+}
+
+float16_t faDecodeK(const decodeBufFA_K bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
+    switch (FaTypeK) {
+        case 0u: return dequantFuncF32(decodeBufF32(bl_in), blockCoords, coordInBlock);
+        case 2u: return dequantFuncQ4_0(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
+        case 3u: return dequantFuncQ4_1(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
+        case 6u: return dequantFuncQ5_0(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
+        case 7u: return dequantFuncQ5_1(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
+        case 8u: return dequantFuncQ8_0(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case 41u: return dequantFuncQ1_0(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
+        default: return float16_t(0);
+    }
+}
+
+float16_t faDecodeV(const decodeBufFA_V bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
+    switch (FaTypeV) {
+        case 0u: return dequantFuncF32(decodeBufF32(bl_in), blockCoords, coordInBlock);
+        case 2u: return dequantFuncQ4_0(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
+        case 3u: return dequantFuncQ4_1(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
+        case 6u: return dequantFuncQ5_0(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
+        case 7u: return dequantFuncQ5_1(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
+        case 8u: return dequantFuncQ8_0(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case 41u: return dequantFuncQ1_0(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
+        default: return float16_t(0);
+    }
+}
 
 layout (binding = 0) readonly buffer Q {uint8_t data_q[];};
 layout (binding = 1) readonly buffer K {uint8_t data_k[];};
@@ -55,12 +104,6 @@ ACC_TYPE Max(const in uint32_t row, const in uint32_t col, const in ACC_TYPE ele
     return max(elem0, elem1);
 }
 
-#if BLOCK_SIZE > 1
-#define DECODEFUNC , DEQUANTFUNC
-#else
-#define DECODEFUNC
-#endif
-
 // Store the output when doing grouped query attention.
 // Rows index by Q's dimension 2, and the first N rows are valid.
 D_TYPE perElemOpGqaStore(const in uint32_t r, const in uint32_t c, const in D_TYPE elem, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
@@ -95,10 +138,6 @@ ACC_TYPE perElemOpNonGqaSplitKStoreCol0(const in uint32_t r, const in uint32_t c
 }
 
 void main() {
-#ifdef NEEDS_INIT_IQ_SHMEM
-    init_iq_shmem(gl_WorkGroupSize);
-#endif
-
     init_indices();
 
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tensorLayoutQ = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
@@ -107,10 +146,10 @@ void main() {
 
     tensorViewNV<2, false, 1, 0> tensorViewTranspose = createTensorViewNV(2, false, 1, 0);
 
-#if BLOCK_SIZE > 1
-    tensorLayoutK = setTensorLayoutBlockSizeNV(tensorLayoutK, 1, BLOCK_SIZE);
-    tensorLayoutV = setTensorLayoutBlockSizeNV(tensorLayoutV, 1, BLOCK_SIZE);
-#endif
+    const uint bs_k = fa_block_elems(FaTypeK);
+    const uint bs_v = fa_block_elems(FaTypeV);
+    tensorLayoutK = setTensorLayoutBlockSizeNV(tensorLayoutK, 1, bs_k);
+    tensorLayoutV = setTensorLayoutBlockSizeNV(tensorLayoutV, 1, bs_v);
 
     tensorLayoutQ = setTensorLayoutDimensionNV(tensorLayoutQ, N, HSK);
     tensorLayoutK = setTensorLayoutDimensionNV(tensorLayoutK, KV, HSK);
@@ -120,10 +159,12 @@ void main() {
     if (Clamp != gl_CooperativeMatrixClampModeConstantNV)
     {
         q_stride &= ~7;
-#if BLOCK_SIZE == 1
-        k_stride &= ~7;
-        v_stride &= ~7;
-#endif
+        if (bs_k == 1u) {
+            k_stride &= ~7;
+        }
+        if (bs_v == 1u) {
+            v_stride &= ~7;
+        }
         m_stride &= ~7;
     }
     tensorLayoutQ = setTensorLayoutStrideNV(tensorLayoutQ, q_stride, 1);
@@ -230,7 +271,13 @@ void main() {
         coopmat<float16_t, gl_ScopeWorkgroup, HSK_pad, Bc, gl_MatrixUseB> K_T;
 
         uint32_t k_offset = ik2*p.nb12 + ik3*p.nb13;
-        coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose DECODEFUNC);
+        // F16: bs_k==1 (direct load). F32: bs_k==4 (vec4 / dequantFuncF32). Q4/Q8 family: bs_k==32. Q1_0: bs_k==128.
+        const bool k_use_decode = (bs_k > 1u);
+        if (k_use_decode) {
+            coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose, faDecodeK);
+        } else {
+            coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose);
+        }
         S = coopMatMulAdd(Qf16, K_T, S);
 
         if (LOGIT_SOFTCAP) {
@@ -291,7 +338,12 @@ void main() {
 
         coopmat<float16_t, gl_ScopeWorkgroup, Bc, HSV_pad, gl_MatrixUseB> V;
         uint32_t v_offset = iv2*p.nb22 + iv3*p.nb23;
-        coopMatLoadTensorNV(V,  data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad) DECODEFUNC);
+        const bool v_use_decode = (bs_v > 1u);
+        if (v_use_decode) {
+            coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad), faDecodeV);
+        } else {
+            coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad));
+        }
 
         L = eM*L + rowsum;
 
