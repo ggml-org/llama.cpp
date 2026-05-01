@@ -1335,30 +1335,17 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             b.size = 0;
             return ptr;
         }
-        void * ptr = nullptr;
-        size_t look_ahead_size = (size_t) (1.05 * size);
-
-        // The strict best-fit policy above never reuses a buffer smaller than
-        // the request, so cached buffers from earlier (smaller) allocations
-        // remain stuck in the pool until the device driver runs out. Mirror
-        // the CUDA leg pool: if malloc_device fails, drain the cached entries
-        // (which are unreachable anyway) and retry once. See
-        // ggml_cuda_pool_leg::alloc in ggml/src/ggml-cuda/ggml-cuda.cu.
-        auto try_alloc = [&]() {
-            return CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_device(look_ahead_size, *qptr));
-        };
-
-        auto err = try_alloc();
-        if (err != 0 || ptr == nullptr) {
-            const size_t cached_bytes = pool_size;
-            GGML_LOG_DEBUG("%s: alloc of %zu MiB failed, flushing %zu MiB of cached buffers and retrying\n",
-                           __func__, look_ahead_size / 1024 / 1024, cached_bytes / 1024 / 1024);
-            // pending kernels may still reference cached buffers; drain before free
+        if (pool_size > 0) {
             SYCL_CHECK(CHECK_TRY_ERROR(qptr->wait()));
             clear_pool();
-            err = try_alloc();
         }
-        SYCL_CHECK(err);
+
+        void * ptr;
+        size_t look_ahead_size = (size_t) (1.05 * size);
+
+        SYCL_CHECK(
+            CHECK_TRY_ERROR(ptr = (void *)sycl::malloc_device(
+                                look_ahead_size, *qptr)));
         if (!ptr) {
             GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device/GPU\n", __func__, look_ahead_size);
             return nullptr;
