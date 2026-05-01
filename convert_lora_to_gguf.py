@@ -25,10 +25,7 @@ import gguf
 from gguf.constants import GGUFValueType
 
 # reuse model definitions from the conversion/ package
-from conversion import LazyTorchTensor, ModelBase, load_all_models
-
-# Ensure all model classes are registered before we use them.
-load_all_models()
+from conversion import LazyTorchTensor, ModelBase, get_model_class
 
 logger = logging.getLogger("lora-to-gguf")
 
@@ -386,7 +383,7 @@ if __name__ == '__main__':
 
     with torch.inference_mode():
         try:
-            model_class = ModelBase.from_model_architecture(hparams["architectures"][0])
+            model_class = get_model_class(hparams["architectures"][0])
         except NotImplementedError:
             logger.error(f"Model {hparams['architectures'][0]} is not supported")
             sys.exit(1)

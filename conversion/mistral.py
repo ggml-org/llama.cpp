@@ -12,9 +12,9 @@ from .deepseek import DeepseekV2Model
 from .llama import LlamaModel
 
 if _mistral_common_installed:
-    from mistral_common.tokens.tokenizers.base import TokenizerVersion  # type: ignore[import-not-found, ty:unresolved-import]
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer  # type: ignore[import-not-found, ty:unresolved-import]
-    from mistral_common.tokens.tokenizers.sentencepiece import SentencePieceTokenizer  # type: ignore[import-not-found, ty:unresolved-import]
+    from mistral_common.tokens.tokenizers.base import TokenizerVersion  # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer  # type: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.sentencepiece import SentencePieceTokenizer  # type: ignore[import-not-found]
 else:
     TokenizerVersion = None  # type: ignore[assignment]
     Tekkenizer = None  # type: ignore[assignment]

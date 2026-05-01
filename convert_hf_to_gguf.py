@@ -20,7 +20,6 @@ from conversion import (
     ModelType,
     get_model_architecture,
     get_model_class,
-    load_all_models,
     logger,
     print_registered_models,
     _mistral_common_installed,
@@ -258,6 +257,4 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    # Ensure all model modules are imported so their @ModelBase.register decorators run.
-    load_all_models()
     main()
