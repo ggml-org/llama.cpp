@@ -31,9 +31,11 @@ static bool deepseek4_batch_prefill_enabled() {
 }
 
 static bool deepseek4_hot_dispatch_enabled() {
+    // Default OFF until the prompt-content-sensitive crash on certain expert
+    // ID patterns is resolved. Set DS4_HOT_DISPATCH=1 to opt in.
     static const bool enabled = []() {
         const char * value = std::getenv("DS4_HOT_DISPATCH");
-        if (value == nullptr) return true; // default: enabled when profile is loaded
+        if (value == nullptr) return false;
         return std::strcmp(value, "0") != 0;
     }();
     return enabled;

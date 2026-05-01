@@ -162,13 +162,25 @@ void init_budgets() {
 // Pick the GPU buffer type with the most remaining headroom that can fit
 // `needed_bytes`. Reserves the bytes immediately so subsequent picks see
 // the running total.
+//
+// If DS4_HOT_DEVICE is set in the environment, restrict picking to the
+// matching CUDAN device (e.g. `DS4_HOT_DEVICE=CUDA0`). This is useful for
+// debugging the dispatch path: pinning all hot tensors onto one GPU
+// eliminates a class of multi-device scheduler interactions that have
+// triggered illegal-memory-access crashes on certain prompts.
 ggml_backend_buffer_type_t pick_gpu_buft(size_t needed_bytes) {
-    // Use 256 MiB safety margin to leave room for other allocations later.
     const size_t margin = 256 * (size_t) 1024 * 1024;
+
+    static const char * const force_device = std::getenv("DS4_HOT_DEVICE");
 
     ggml_backend_buffer_type_t best = nullptr;
     size_t best_remaining = 0;
     for (auto & b : g_budgets) {
+        if (force_device && force_device[0]) {
+            if (std::strcmp(ggml_backend_buft_name(b.buft), force_device) != 0) {
+                continue;
+            }
+        }
         size_t avail = b.free_at_start - std::min(b.free_at_start, b.reserved + margin);
         if (avail < needed_bytes) continue;
         size_t remaining_after = avail - needed_bytes;
