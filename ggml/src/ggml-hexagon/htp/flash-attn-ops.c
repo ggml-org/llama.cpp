@@ -24,7 +24,7 @@
 
 // This is a bit of a hack because the compiler is strugling to properly inline
 // the default hvx_vec_f32_to_f16 with output into the local array.
-static void __attribute__((noinline)) hvx_vec_f32_to_f16_a(void *ptr, HVX_Vector v0, HVX_Vector v1)
+static __attribute__((noinline)) void hvx_vec_f32_to_f16_a(void *ptr, HVX_Vector v0, HVX_Vector v1)
 {
     *(HVX_Vector *) ptr = hvx_vec_f32_to_f16(v0, v1);
 }
