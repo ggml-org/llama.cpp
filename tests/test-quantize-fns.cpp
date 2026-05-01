@@ -54,7 +54,7 @@ static float total_quantization_error(const ggml_type_traits * qfns, const ggml_
     std::vector<float> tmp_out(test_size);
 
     qfns_cpu->from_float(test_data, tmp_q.data(), test_size);
-    qfns->to_float(tmp_q.data(), tmp_out.data(), test_size);
+    qfns->to_float(tmp_q.data(), tmp_out.data(), test_size, nullptr);
     return array_rmse(test_data, tmp_out.data(), test_size);
 }
 
@@ -66,10 +66,10 @@ static float reference_quantization_error(const ggml_type_traits * qfns, const g
 
     // FIXME: why is done twice?
     qfns_cpu->from_float(test_data, tmp_q.data(), test_size);
-    qfns->to_float(tmp_q.data(), tmp_out.data(), test_size);
+    qfns->to_float(tmp_q.data(), tmp_out.data(), test_size, nullptr);
 
     qfns->from_float_ref(test_data, tmp_q.data(), test_size);
-    qfns->to_float(tmp_q.data(), tmp_out_ref.data(), test_size);
+    qfns->to_float(tmp_q.data(), tmp_out_ref.data(), test_size, nullptr);
 
     return array_rmse(tmp_out.data(), tmp_out_ref.data(), test_size);
 }
@@ -95,7 +95,7 @@ static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_tr
     vdot->from_float(test_data2, tmp_q2.data(), test_size);
 
     float result = INFINITY;
-    qfns_cpu->vec_dot(test_size, &result, 0, tmp_q1.data(), 0, tmp_q2.data(), 0, 1);
+    qfns_cpu->vec_dot(test_size, &result, 0, tmp_q1.data(), 0, tmp_q2.data(), 0, 1, nullptr);
 
     const float dot_ref = dot_product(test_data1, test_data2, test_size);
 

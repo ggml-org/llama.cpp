@@ -8,7 +8,8 @@ ggml_fp16_t ggml_table_gelu_f16[1 << 16];
 // precomputed quick gelu table for f16 (128 KB)
 ggml_fp16_t ggml_table_gelu_quick_f16[1 << 16];
 
-void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc) {
+void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc, const void * levels) {
+   GGML_UNUSED(levels);
    assert(nrc == 1);
    GGML_UNUSED(nrc);
    GGML_UNUSED(bx);
@@ -136,7 +137,8 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
     *s = sumf;
 }
 
-void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * GGML_RESTRICT x, size_t bx, ggml_bf16_t * GGML_RESTRICT y, size_t by, int nrc) {
+void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * GGML_RESTRICT x, size_t bx, ggml_bf16_t * GGML_RESTRICT y, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(nrc == 1);
     GGML_UNUSED(nrc);
     GGML_UNUSED(bx);
@@ -261,7 +263,8 @@ void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * 
     *s = sumf;
 }
 
-void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * GGML_RESTRICT x, size_t bx, ggml_fp16_t * GGML_RESTRICT y, size_t by, int nrc) {
+void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * GGML_RESTRICT x, size_t bx, ggml_fp16_t * GGML_RESTRICT y, size_t by, int nrc, const void * levels) {
+    GGML_UNUSED(levels);
     assert(nrc == 1);
     GGML_UNUSED(nrc);
     GGML_UNUSED(bx);

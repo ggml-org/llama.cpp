@@ -1099,10 +1099,63 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ4_NL> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_Q4_DPT> {
+    static constexpr int qk = QK4_NL;
+    static constexpr int qr = QR4_NL;
+    static constexpr int qi = QI4_NL;
+};
+
+// Per-tensor lookup table for Q4_DPT (device global memory).
+// Each TU gets its own copy; initialized via cudaGetSymbolAddress + cudaMemcpyAsync before use.
+__device__ int8_t q4dpt_levels_cuda[16];
+
+// Per-tensor lookup table for Q2_DPT (4 int8 levels).
+__device__ int8_t q2dpt_levels_cuda[4];
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_Q2_DPT> {
+    static constexpr int qk = QK2_DPT;
+    static constexpr int qr = 4;  // 4 elements per "quantum" (2-bit)
+    static constexpr int qi = 1;  // 1 uint32 per block
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ4_XS> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR4_XS;
     static constexpr int qi = QI4_XS;
+};
+
+// Per-tensor grid for IQ2_TQ (16 × 4 int8 = 64 bytes).
+__device__ int8_t iq2tq_grid_cuda[64];
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ2_TQ> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = 4;
+    static constexpr int qi = QK_K / (4*4);  // 16
+};
+
+// Per-tensor grid for IQ3_TQ (16 × 8 int8 = 128 bytes).
+__device__ int8_t iq3tq_grid_cuda[128];
+
+
+// Per-tensor codebook for IQ1_BN (4096 × 8 int8 = 32768 bytes).
+__device__ int8_t iq1bn_codebook_cuda[IQ1BN_CODEBOOK_SIZE];
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ3_TQ> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = 4;
+    static constexpr int qi = QK_K / (4*4);  // 16
+};
+
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ1_BN> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = 4;
+    static constexpr int qi = QK_K / (4*4);  // 16
 };
 
 template<>

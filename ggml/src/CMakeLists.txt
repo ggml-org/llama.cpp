@@ -208,6 +208,13 @@ add_library(ggml-base
             ggml-quants.h
             gguf.cpp)
 
+# Enable native SIMD for ggml-quants.c (needed for K-means training in quantization)
+include(CheckCCompilerFlag)
+check_c_compiler_flag("-march=native" GGML_COMPILER_SUPPORTS_MARCH_NATIVE)
+if (GGML_COMPILER_SUPPORTS_MARCH_NATIVE)
+    set_source_files_properties(ggml-quants.c PROPERTIES COMPILE_FLAGS "-march=native")
+endif()
+
 set_target_properties(ggml-base PROPERTIES
     VERSION ${GGML_VERSION}
     SOVERSION ${GGML_VERSION_MAJOR}
