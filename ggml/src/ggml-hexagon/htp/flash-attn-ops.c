@@ -17,6 +17,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-ops.h"
+#include "hmx-ops.h"
 
 // Must be multiple of 32
 #define FLASH_ATTN_BLOCK_SIZE (32 * 2)
@@ -624,7 +625,7 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
 #ifdef HTP_HAS_HMX
     // HMX path: prefill (neq1 >= 32), head_dim multiple of 32, F16 KV
     if (k->type == HTP_TYPE_F16 && v->type == HTP_TYPE_F16 && k->ne[0] % 32 == 0 && q->ne[1] >= 32) {
-        int ret = op_hmx_flash_attn_ext(octx);
+        int ret = hmx_flash_attn_ext(octx);
         if (ret == HTP_STATUS_OK) {
             return ret;
         }

@@ -1226,7 +1226,7 @@ static void fa_compute_slopes(fa_softmax_args_t *           sargs,
 // Core HMX flash attention algorithm (GQA-merged)
 // ============================================================================
 
-int op_hmx_flash_attn_ext(struct htp_ops_context * octx) {
+int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const struct htp_tensor * q    = octx->src[0];
     const struct htp_tensor * k    = octx->src[1];
     const struct htp_tensor * v    = octx->src[2];

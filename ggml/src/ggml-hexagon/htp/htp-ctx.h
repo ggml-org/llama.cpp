@@ -107,8 +107,4 @@ int op_fill(struct htp_ops_context * octx);
 int op_diag(struct htp_ops_context * octx);
 int op_solve_tri(struct htp_ops_context * octx);
 
-#ifdef HTP_HAS_HMX
-int op_hmx_flash_attn_ext(struct htp_ops_context * octx);
-#endif
-
 #endif /* HTP_CTX_H */
