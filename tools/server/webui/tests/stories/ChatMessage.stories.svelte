@@ -1,6 +1,6 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatMessage from '$lib/components/app/chat/ChatMessages/ChatMessage.svelte';
+	import ChatMessage from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessage.svelte';
 
 	const { Story } = defineMeta({
 		title: 'Components/ChatScreen/ChatMessage',

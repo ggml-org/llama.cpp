@@ -1,6 +1,7 @@
 #include "llama-model.h"
 
 #include "llama-arch.h"
+#include "llama-ext.h"
 #include "llama-hparams.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
@@ -77,11 +78,23 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         const ggml_tensor * tensor_axis_0;
 
         uint32_t il;
-        size_t   rotation;
+        size_t   rotation; // when assigning tensor slices, rotate how the rounding is done for more even allocation
     };
 
     auto get_tensor_config_impl = [&](
                 const ggml_backend_meta_split_axis axis, const std::string & suffix = "", const std::string & suffix_fallback = "") -> tensor_config {
+        // the layers in a tensor can be inhomogeneous, if the pattern is cleanly divided by the number of GPUs there can be aliasing effects,
+        //     count only the same type of previous layers to avoid this
+        auto get_il_eff = [&](const size_t il){
+            size_t ret = 0;
+            const bool il_is_recurrent = hparams.is_recurrent(il);
+            const bool il_is_swa       = hparams.is_swa(il);
+            for (size_t il_prev = 0; il_prev < il; il_prev++) {
+                ret += hparams.is_recurrent(il_prev) == il_is_recurrent && hparams.is_swa(il_prev) == il_is_swa;
+            }
+            return ret;
+        };
+
         uint32_t il;
         std::string prefix;
         size_t rotation;
@@ -90,13 +103,13 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             GGML_ASSERT(length_prefix != std::string::npos);
             prefix = tensor_name.substr(0, length_prefix + 1);
             il = std::stoull(tensor_name.substr(4, length_prefix));
-            rotation = il % ud->n_devices;
+            rotation = get_il_eff(il) % ud->n_devices;
         } else if (tensor_name.substr(0, 6) == "cache_") {
             const size_t layer_index_start = tensor_name.find("_l", 6);
             GGML_ASSERT(layer_index_start != std::string::npos);
             il = std::stoull(tensor_name.substr(layer_index_start + 2));
             prefix = "blk." + std::to_string(il) + ".";
-            rotation = il % ud->n_devices;
+            rotation = get_il_eff(il) % ud->n_devices;
         } else {
             il = 0;
             rotation = hparams.n_layer % ud->n_devices;
@@ -724,6 +737,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
     ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT, hparams.n_group_used,    false);
 
+    if (arch == LLM_ARCH_HUNYUAN_VL || arch == LLM_ARCH_HUNYUAN_DENSE) {
+        if (hparams.n_expert <= 1) {
+            hparams.n_expert      = 0;
+            hparams.n_expert_used = 0;
+        }
+    }
+
     if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
         ml.get_key(LLM_KV_FEATURES_LENGTH,  hparams.n_embd);
         ml.get_key(LLM_KV_EMBEDDING_LENGTH, hparams.n_embd_out_impl);
@@ -802,6 +822,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     hparams.rope_freq_scale_train = ropescale == 0.0f ? 1.0f : 1.0f/ropescale;
 
     ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR, hparams.rope_attn_factor, false);
+    ml.get_key(LLM_KV_ROPE_SCALING_ALPHA,       hparams.rope_scaling_alpha, false);
 
     // non-transformer models do not have attention heads
     if (hparams.n_head() > 0) {
@@ -2579,9 +2600,18 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_HUNYUAN_VL:
         case LLM_ARCH_HUNYUAN_DENSE:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
+
+                // XDRoPE / NTK-aware scaling: base = rope_theta * alpha^(dim / (dim - 2))
+                if (hparams.rope_scaling_alpha > 0.0f) {
+                    const int dim = hparams.n_embd_head_k();
+                    hparams.rope_freq_base_train = hparams.rope_freq_base_train
+                        * powf(hparams.rope_scaling_alpha, (float)dim / (float)(dim - 2));
+                }
 
                 switch (hparams.n_embd) {
                     case 1024: type = LLM_TYPE_0_5B; break;
@@ -6934,6 +6964,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, 0);
                     }
                 } break;
+            case LLM_ARCH_HUNYUAN_VL:
             case LLM_ARCH_HUNYUAN_DENSE:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -8180,114 +8211,114 @@ void llama_model::print_info() const {
             LLAMA_LOG_INFO("%s: n_cls_out             = %u\n", __func__, hparams.n_cls_out);
 
             size_t i = 0;
-            for (auto label : classifier_labels) {
+            for (const auto & label : classifier_labels) {
                 LLAMA_LOG_INFO("%s: cls_label[%2zu]         = %s\n", __func__, i++, label.c_str());
             }
         }
-    }
 
-    if (arch == LLM_ARCH_MAMBA ||
-        arch == LLM_ARCH_MAMBA2 ||
-        arch == LLM_ARCH_JAMBA ||
-        arch == LLM_ARCH_FALCON_H1 ||
-        arch == LLM_ARCH_PLAMO2 ||
-        arch == LLM_ARCH_GRANITE_HYBRID ||
-        arch == LLM_ARCH_QWEN3NEXT ||
-        arch == LLM_ARCH_QWEN35 ||
-        arch == LLM_ARCH_QWEN35MOE ||
-        arch == LLM_ARCH_NEMOTRON_H ||
-        arch == LLM_ARCH_NEMOTRON_H_MOE) {
-        LLAMA_LOG_INFO("%s: ssm_d_conv            = %u\n",     __func__, hparams.ssm_d_conv);
-        LLAMA_LOG_INFO("%s: ssm_d_inner           = %u\n",     __func__, hparams.ssm_d_inner);
-        LLAMA_LOG_INFO("%s: ssm_d_state           = %u\n",     __func__, hparams.ssm_d_state);
-        LLAMA_LOG_INFO("%s: ssm_dt_rank           = %u\n",     __func__, hparams.ssm_dt_rank);
-        LLAMA_LOG_INFO("%s: ssm_n_group           = %u\n",     __func__, hparams.ssm_n_group);
-        LLAMA_LOG_INFO("%s: ssm_dt_b_c_rms        = %d\n",     __func__, hparams.ssm_dt_b_c_rms);
-    }
+        if (arch == LLM_ARCH_MAMBA ||
+                arch == LLM_ARCH_MAMBA2 ||
+                arch == LLM_ARCH_JAMBA ||
+                arch == LLM_ARCH_FALCON_H1 ||
+                arch == LLM_ARCH_PLAMO2 ||
+                arch == LLM_ARCH_GRANITE_HYBRID ||
+                arch == LLM_ARCH_QWEN3NEXT ||
+                arch == LLM_ARCH_QWEN35 ||
+                arch == LLM_ARCH_QWEN35MOE ||
+                arch == LLM_ARCH_NEMOTRON_H ||
+                arch == LLM_ARCH_NEMOTRON_H_MOE) {
+            LLAMA_LOG_INFO("%s: ssm_d_conv            = %u\n",     __func__, hparams.ssm_d_conv);
+            LLAMA_LOG_INFO("%s: ssm_d_inner           = %u\n",     __func__, hparams.ssm_d_inner);
+            LLAMA_LOG_INFO("%s: ssm_d_state           = %u\n",     __func__, hparams.ssm_d_state);
+            LLAMA_LOG_INFO("%s: ssm_dt_rank           = %u\n",     __func__, hparams.ssm_dt_rank);
+            LLAMA_LOG_INFO("%s: ssm_n_group           = %u\n",     __func__, hparams.ssm_n_group);
+            LLAMA_LOG_INFO("%s: ssm_dt_b_c_rms        = %d\n",     __func__, hparams.ssm_dt_b_c_rms);
+        }
 
-    LLAMA_LOG_INFO("%s: model type            = %s\n",     __func__, type_name().c_str());
-    if (pimpl->n_elements >= 1e12) {
-        LLAMA_LOG_INFO("%s: model params          = %.2f T\n", __func__, pimpl->n_elements*1e-12);
-    } else if (pimpl->n_elements >= 1e9) {
-        LLAMA_LOG_INFO("%s: model params          = %.2f B\n", __func__, pimpl->n_elements*1e-9);
-    } else if (pimpl->n_elements >= 1e6) {
-        LLAMA_LOG_INFO("%s: model params          = %.2f M\n", __func__, pimpl->n_elements*1e-6);
-    } else {
-        LLAMA_LOG_INFO("%s: model params          = %.2f K\n", __func__, pimpl->n_elements*1e-3);
-    }
+        LLAMA_LOG_INFO("%s: model type            = %s\n",     __func__, type_name().c_str());
+        if (pimpl->n_elements >= 1e12) {
+            LLAMA_LOG_INFO("%s: model params          = %.2f T\n", __func__, pimpl->n_elements*1e-12);
+        } else if (pimpl->n_elements >= 1e9) {
+            LLAMA_LOG_INFO("%s: model params          = %.2f B\n", __func__, pimpl->n_elements*1e-9);
+        } else if (pimpl->n_elements >= 1e6) {
+            LLAMA_LOG_INFO("%s: model params          = %.2f M\n", __func__, pimpl->n_elements*1e-6);
+        } else {
+            LLAMA_LOG_INFO("%s: model params          = %.2f K\n", __func__, pimpl->n_elements*1e-3);
+        }
 
-    // general kv
-    LLAMA_LOG_INFO("%s: general.name          = %s\n",    __func__, name.c_str());
+        // general kv
+        LLAMA_LOG_INFO("%s: general.name          = %s\n",    __func__, name.c_str());
 
-    if (arch == LLM_ARCH_DEEPSEEK) {
-        LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
-        LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
-        LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
-        LLAMA_LOG_INFO("%s: expert_weights_scale  = %.1f\n",   __func__, hparams.expert_weights_scale);
-    }
+        if (arch == LLM_ARCH_DEEPSEEK) {
+            LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
+            LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
+            LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
+            LLAMA_LOG_INFO("%s: expert_weights_scale  = %.1f\n",   __func__, hparams.expert_weights_scale);
+        }
 
-    if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_DEEPSEEK2OCR || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4) {
-        LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
-        LLAMA_LOG_INFO("%s: n_lora_q              = %d\n",     __func__, hparams.n_lora_q);
-        LLAMA_LOG_INFO("%s: n_lora_kv             = %d\n",     __func__, hparams.n_lora_kv);
-        LLAMA_LOG_INFO("%s: n_embd_head_k_mla     = %d\n",     __func__, hparams.n_embd_head_k_mla());
-        LLAMA_LOG_INFO("%s: n_embd_head_v_mla     = %d\n",     __func__, hparams.n_embd_head_v_mla());
-        LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
-        LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
-        LLAMA_LOG_INFO("%s: expert_weights_scale  = %.1f\n",   __func__, hparams.expert_weights_scale);
-        LLAMA_LOG_INFO("%s: expert_weights_norm   = %d\n",     __func__, hparams.expert_weights_norm);
-        LLAMA_LOG_INFO("%s: expert_gating_func    = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
-    }
+        if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_DEEPSEEK2OCR || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4) {
+            LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
+            LLAMA_LOG_INFO("%s: n_lora_q              = %d\n",     __func__, hparams.n_lora_q);
+            LLAMA_LOG_INFO("%s: n_lora_kv             = %d\n",     __func__, hparams.n_lora_kv);
+            LLAMA_LOG_INFO("%s: n_embd_head_k_mla     = %d\n",     __func__, hparams.n_embd_head_k_mla());
+            LLAMA_LOG_INFO("%s: n_embd_head_v_mla     = %d\n",     __func__, hparams.n_embd_head_v_mla());
+            LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
+            LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
+            LLAMA_LOG_INFO("%s: expert_weights_scale  = %.1f\n",   __func__, hparams.expert_weights_scale);
+            LLAMA_LOG_INFO("%s: expert_weights_norm   = %d\n",     __func__, hparams.expert_weights_norm);
+            LLAMA_LOG_INFO("%s: expert_gating_func    = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
+        }
 
-    if (arch == LLM_ARCH_QWEN2MOE) {
-        LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
-        LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n",     __func__, hparams.n_ff_shexp);
-    }
+        if (arch == LLM_ARCH_QWEN2MOE) {
+            LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
+            LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n",     __func__, hparams.n_ff_shexp);
+        }
 
-    if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1) {
-        LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
-    }
+        if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1) {
+            LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
+        }
 
-    if (arch == LLM_ARCH_MINICPM ||
-        arch == LLM_ARCH_GRANITE ||
-        arch == LLM_ARCH_GRANITE_MOE ||
-        arch == LLM_ARCH_GRANITE_HYBRID ||
-        arch == LLM_ARCH_NEMOTRON_H_MOE) {
-        LLAMA_LOG_INFO("%s: f_embedding_scale     = %f\n", __func__, hparams.f_embedding_scale);
-        LLAMA_LOG_INFO("%s: f_residual_scale      = %f\n", __func__, hparams.f_residual_scale);
-        LLAMA_LOG_INFO("%s: f_attention_scale     = %f\n", __func__, hparams.f_attention_scale);
-        LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n", __func__, hparams.n_ff_shexp);
-    }
+        if (arch == LLM_ARCH_MINICPM ||
+                arch == LLM_ARCH_GRANITE ||
+                arch == LLM_ARCH_GRANITE_MOE ||
+                arch == LLM_ARCH_GRANITE_HYBRID ||
+                arch == LLM_ARCH_NEMOTRON_H_MOE) {
+            LLAMA_LOG_INFO("%s: f_embedding_scale     = %f\n", __func__, hparams.f_embedding_scale);
+            LLAMA_LOG_INFO("%s: f_residual_scale      = %f\n", __func__, hparams.f_residual_scale);
+            LLAMA_LOG_INFO("%s: f_attention_scale     = %f\n", __func__, hparams.f_attention_scale);
+            LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n", __func__, hparams.n_ff_shexp);
+        }
 
-    if (arch == LLM_ARCH_BAILINGMOE) {
-        LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
-        LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
-        LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
-        LLAMA_LOG_INFO("%s: expert_weights_scale  = %.1f\n",   __func__, hparams.expert_weights_scale);
-        LLAMA_LOG_INFO("%s: expert_weights_norm   = %d\n",     __func__, hparams.expert_weights_norm);
-    }
+        if (arch == LLM_ARCH_BAILINGMOE) {
+            LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
+            LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
+            LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
+            LLAMA_LOG_INFO("%s: expert_weights_scale  = %.1f\n",   __func__, hparams.expert_weights_scale);
+            LLAMA_LOG_INFO("%s: expert_weights_norm   = %d\n",     __func__, hparams.expert_weights_norm);
+        }
 
-    if (arch == LLM_ARCH_BAILINGMOE2) {
-        LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
-        LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
-        LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n",     __func__, hparams.n_ff_shexp);
-        LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
-        LLAMA_LOG_INFO("%s: expert_weights_scale  = %.1f\n",   __func__, hparams.expert_weights_scale);
-        LLAMA_LOG_INFO("%s: expert_weights_norm   = %d\n",     __func__, hparams.expert_weights_norm);
-        LLAMA_LOG_INFO("%s: expert_gating_func    = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
-        LLAMA_LOG_INFO("%s: nextn_predict_layers  = %d\n",     __func__, hparams.nextn_predict_layers);
-    }
+        if (arch == LLM_ARCH_BAILINGMOE2) {
+            LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
+            LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
+            LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n",     __func__, hparams.n_ff_shexp);
+            LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
+            LLAMA_LOG_INFO("%s: expert_weights_scale  = %.1f\n",   __func__, hparams.expert_weights_scale);
+            LLAMA_LOG_INFO("%s: expert_weights_norm   = %d\n",     __func__, hparams.expert_weights_norm);
+            LLAMA_LOG_INFO("%s: expert_gating_func    = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
+            LLAMA_LOG_INFO("%s: nextn_predict_layers  = %d\n",     __func__, hparams.nextn_predict_layers);
+        }
 
-    if (arch == LLM_ARCH_SMALLTHINKER || arch == LLM_ARCH_LFM2MOE) {
-        LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
-        LLAMA_LOG_INFO("%s: expert_gating_func    = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
-    }
+        if (arch == LLM_ARCH_SMALLTHINKER || arch == LLM_ARCH_LFM2MOE) {
+            LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
+            LLAMA_LOG_INFO("%s: expert_gating_func    = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
+        }
 
-    if (arch == LLM_ARCH_GROVEMOE) {
-        LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
-        LLAMA_LOG_INFO("%s: n_ff_chexp            = %d\n",     __func__, hparams.n_ff_chexp);
-        LLAMA_LOG_INFO("%s: n_group_experts       = %d\n",     __func__, hparams.n_group_experts);
-        LLAMA_LOG_INFO("%s: expert_group_scale    = %.2f\n",   __func__, hparams.expert_group_scale);
+        if (arch == LLM_ARCH_GROVEMOE) {
+            LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
+            LLAMA_LOG_INFO("%s: n_ff_chexp            = %d\n",     __func__, hparams.n_ff_chexp);
+            LLAMA_LOG_INFO("%s: n_group_experts       = %d\n",     __func__, hparams.n_group_experts);
+            LLAMA_LOG_INFO("%s: expert_group_scale    = %.2f\n",   __func__, hparams.expert_group_scale);
+        }
     }
 
     vocab.print_info();
@@ -8954,6 +8985,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_hunyuan_moe>(*this, params);
             } break;
+        case LLM_ARCH_HUNYUAN_VL:
         case LLM_ARCH_HUNYUAN_DENSE:
             {
                 llm = std::make_unique<llm_build_hunyuan_dense>(*this, params);
@@ -9303,6 +9335,9 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GLM4_MOE:
             return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NEOX;
 
+        case LLM_ARCH_HUNYUAN_VL:
+            return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NEOX;
+
         // all model arches should be listed explicitly here
         case LLM_ARCH_UNKNOWN:
             GGML_ABORT("unknown architecture");
@@ -9436,4 +9471,19 @@ bool llama_model_is_diffusion(const llama_model * model) {
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
     return model->tensors_by_name;
+}
+
+int32_t llama_model_n_expert(const struct llama_model * model) {
+    return model->hparams.n_expert;
+}
+
+int32_t llama_model_n_devices(const struct llama_model * model) {
+    return (int32_t)model->devices.size();
+}
+
+ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i) {
+    if (i < 0 || i >= (int)model->devices.size()) {
+        return nullptr;
+    }
+    return model->devices[i].dev;
 }
