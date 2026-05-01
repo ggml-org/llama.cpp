@@ -1353,7 +1353,15 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
     }
 
     void free(void * ptr, size_t size) override {
-        SYCL_CHECK(CHECK_TRY_ERROR(qptr->wait()));
+        for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
+            ggml_sycl_buffer& b = buffer_pool[i];
+            if (b.ptr == nullptr) {
+                b.ptr = ptr;
+                b.size = size;
+                return;
+            }
+        }
+        GGML_LOG_WARN("WARNING: sycl buffer pool full, increase MAX_sycl_BUFFERS\n");
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
         pool_size -= size;
     }
