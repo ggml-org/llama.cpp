@@ -141,6 +141,19 @@ static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device)
         }
 #endif // defined(GGML_USE_HIP)
     } else {
+        static size_t free_caches[GGML_CUDA_MAX_DEVICES];
+        GGML_ASSERT(device >= 0 && device < GGML_CUDA_MAX_DEVICES);
+        size_t& free = free_caches[device];
+        if (free < size) {
+            size_t total;
+            CUDA_CHECK(cudaMemGetInfo(&free, &total));
+            free -= std::min(free, (size_t)1 << 28); // Margin: 256MB
+            if (free < size) {
+                return cudaErrorMemoryAllocation;
+            }
+            free = std::min(free, ((size_t)1 << 30) + size); // Grace: 1GB
+        }
+        free -= size;
         err = cudaMalloc(ptr, size);
     }
     return err;
