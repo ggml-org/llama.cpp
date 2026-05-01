@@ -100,19 +100,18 @@ static inline HVX_Vector hvx_exp2_hf(HVX_Vector x_v) {
     HVX_Vector x_qf16 = Q6_Vqf16_vsub_VhfVhf(x_v, f_v);        // fractional part in qf16
 
     // Horner: y = ((((E5*x + E4)*x + E3)*x + E2)*x + E1)*x + E0
-    HVX_Vector y = Q6_Vqf16_vmpy_Vqf16Vqf16(Q6_Vh_vsplat_R(0x5082), x_qf16);  // E5*x
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x157d));         // + E4
+    HVX_Vector y = Q6_Vqf16_vmpy_Vqf16Vqf16(Q6_Vh_vsplat_R(0x5082), x_qf16); // E5*x
+    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x157d));        // + E4
     y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x20ed));         // + E3
+    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x20ed));        // + E3
     y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x2b1b));         // + E2
+    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x2b1b));        // + E2
     y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x33b0));         // + E1
+    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x33b0));        // + E1
     y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x398c));         // + E0
-    // y = y * x + 1.0
-    y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x3c00));  // + 1.0
+    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x398c));        // + E0
+    y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);                      // y = y * x
+    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x3c00));        // + 1.0
 
     // Combine polynomial (mantissa) with integer part (exponent): result = y * 2^k
     y                          = Q6_Vhf_equals_Vqf16(y);
