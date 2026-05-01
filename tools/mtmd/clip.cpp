@@ -3814,33 +3814,34 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                         mask_data[q * n_k + k] = (is_padding) ? mask_value : 0.0f;
                     }
                 }
-                ggml_backend_tensor_set(attn_mask, mask_data.data(), 0, mask_data.size() * sizeof(float));
+                set_input_f32(attn_mask->name, mask_data);
 
                 // Generate rotation frequencies for relative positional encoding.
                 {
-                    struct ggml_tensor * pos_freqs_t = ggml_graph_get_tensor(gf, "pos_freqs");
-                    const int d_half      = pos_freqs_t->ne[0];
                     const int n_state     = hparams.n_embd;
+                    const int d_half      = n_state / 2;
                     const float log_10000 = logf(10000.0f);
                     std::vector<float> freqs(d_half);
                     for (int k = 0; k < d_half; ++k) {
                         freqs[k] = expf(-(float(k * 2) * log_10000 / float(n_state)));
                     }
-                    ggml_backend_tensor_set(pos_freqs_t, freqs.data(), 0, freqs.size() * sizeof(float));
+                    set_input_f32("pos_freqs", freqs);
                 }
 
                 // Generate relative positional distance values which scaled by
                 // the frequency to produce the angles for sin/cos.
                 {
-                    struct ggml_tensor * rel_pos_t = ggml_graph_get_tensor(gf, "rel_positions");
-                    const int window_size = rel_pos_t->ne[1];
+                    // window_size is only known after graph construction since it depends on
+                    // n_time from the conv output, so we read it back from the graph tensor.
+                    struct ggml_tensor * rel_pos = ggml_graph_get_tensor(gf, "rel_positions");
+                    const int window_size = rel_pos->ne[1];
                     const int n_time      = (window_size + 1) / 2;
                     std::vector<float> pos(window_size);
                     for (int t = 0; t < window_size; ++t) {
                         // The range of the values is high to low which the original model has.
                         pos[t] = float(n_time - 1 - t);
                     }
-                    ggml_backend_tensor_set(rel_pos_t, pos.data(), 0, pos.size() * sizeof(float));
+                    set_input_f32(rel_pos->name, pos);
                 }
             } break;
         default:
