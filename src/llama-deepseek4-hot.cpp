@@ -159,6 +159,9 @@ void init_budgets() {
     }
 }
 
+// Pick the GPU buffer type with the most remaining headroom that can fit
+// `needed_bytes`. Reserves the bytes immediately so subsequent picks see
+// the running total.
 ggml_backend_buffer_type_t pick_gpu_buft(size_t needed_bytes) {
     // Use 256 MiB safety margin to leave room for other allocations later.
     const size_t margin = 256 * (size_t) 1024 * 1024;
@@ -198,17 +201,25 @@ bool hot_manager::allocate(const llama_model & model) {
                 n_layer, m_layers.size());
     }
 
-    // Build a per-buft ggml context map so we can allocate all hot tensors of
-    // a layer that share a destination device into the same backing buffer.
+    // Pending uploads: a tensor pointer slot + the host bytes to copy into it.
+    struct pending_upload {
+        ggml_tensor ** slot;
+        std::vector<uint8_t> data;
+    };
+
+    // Per-buft (i.e., per-GPU device) ggml_context that aggregates all hot
+    // tensors + lookup tables targeted at that device. We allocate one backing
+    // buffer per buft after the loop.
     struct ctx_entry {
         ggml_context_ptr ctx;
-        std::vector<std::pair<ggml_tensor **, std::vector<uint8_t>>> pending; // tensor slot + host data to upload
+        std::vector<pending_upload> pending;
     };
     std::map<ggml_backend_buffer_type_t, ctx_entry> per_buft;
 
     auto get_ctx = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
         auto it = per_buft.find(buft);
         if (it != per_buft.end()) return it->second.ctx.get();
+        // Reserve enough space for ~16 tensors per layer (3 weight + 4 lookup + headroom).
         ggml_init_params p = {
             /*.mem_size   =*/ 16 * (size_t) ggml_tensor_overhead() * std::max<size_t>(n_layer, 1),
             /*.mem_buffer =*/ nullptr,
@@ -225,11 +236,34 @@ bool hot_manager::allocate(const llama_model & model) {
     int n_alloc_layers = 0;
     size_t total_bytes = 0;
 
-    auto extract_subset = [&](const ggml_tensor * src, const std::vector<int32_t> & hot_ids,
+    // Compute the total bytes one layer's hot tensors + lookup tables need so
+    // we can reserve all of them on the SAME device. This is essential — if
+    // gate_h, up_h, down_h end up on different GPUs the dual dispatch becomes
+    // a multi-backend mess and we lose the placement benefit.
+    auto layer_total_bytes = [&](int il, const llama_layer & lm) -> size_t {
+        size_t total = 0;
+        const layer_hot_state & st = *layers[il];
+        const int64_t k_local = (int64_t) st.hot_ids.size();
+        auto add_tensor = [&](const ggml_tensor * src) {
+            if (!src) return;
+            total += (ggml_nbytes(src) / src->ne[2]) * k_local;
+        };
+        if (lm.ffn_gate_up_exps) {
+            add_tensor(lm.ffn_gate_up_exps);
+        } else {
+            add_tensor(lm.ffn_gate_exps);
+            add_tensor(lm.ffn_up_exps);
+        }
+        add_tensor(lm.ffn_down_exps);
+        // Lookup tables live in CPU buffer so they don't count against GPU budget.
+        return total;
+    };
+
+    auto extract_subset = [&](ggml_backend_buffer_type_t buft, const ggml_tensor * src,
+                              const std::vector<int32_t> & hot_ids,
                               const std::string & dest_name, ggml_tensor ** out_tensor) -> bool {
         if (!src) return false;
-        if (!src->buffer) return false; // tensor not yet backed (e.g., during params-fit probe)
-        if (ggml_n_dims(src) < 3) return false;
+        if (!src->buffer) return false;
 
         const int64_t ne0 = src->ne[0];
         const int64_t ne1 = src->ne[1];
@@ -242,23 +276,20 @@ bool hot_manager::allocate(const llama_model & model) {
 
         const size_t per_expert_bytes = ggml_nbytes(src) / n_expert_src;
         const int64_t k_local = (int64_t) hot_ids.size();
-        const size_t needed = per_expert_bytes * k_local;
+        // Allocate K+1 experts so the kernel can prefetch past the last hot
+        // expert without going out of bounds (mirrors the MoE LRU cache layout
+        // which always reserves one trailing dummy slot). Hot expert IDs in
+        // [0, K) only address the K real experts; the dummy is never selected.
+        const int64_t k_alloc = k_local + 1;
+        const size_t needed   = per_expert_bytes * k_alloc;
 
-        // Pick GPU device with enough room.
-        ggml_backend_buffer_type_t buft = pick_gpu_buft(needed);
-        if (!buft) {
-            LLAMA_LOG_WARN("ds4-hot: no GPU has %.1f MiB free for %s; skipping\n",
-                    needed / (1024.0 * 1024.0), src->name);
-            return false;
-        }
-
-        // Pull source data from wherever it lives (CPU or GPU) into a host buffer
-        // we can slice from. Most of the time the source is CPU-resident with -ncmoe.
+        // Pull source data from CPU into a host buffer we can slice from.
         std::vector<uint8_t> host_data(ggml_nbytes(src));
         ggml_backend_tensor_get(src, host_data.data(), 0, host_data.size());
 
-        // Build the slice in a separate host buffer.
-        std::vector<uint8_t> slice(needed);
+        // Build the slice in a separate host buffer (zero-initialized so the
+        // dummy trailing expert is well-defined).
+        std::vector<uint8_t> slice(needed, 0);
         for (int64_t r = 0; r < k_local; ++r) {
             const int32_t e = hot_ids[(size_t) r];
             const size_t src_off = per_expert_bytes * (size_t) e;
@@ -266,16 +297,42 @@ bool hot_manager::allocate(const llama_model & model) {
             std::memcpy(slice.data() + dst_off, host_data.data() + src_off, per_expert_bytes);
         }
 
-        // Create the destination tensor in the per-buft ggml context.
         ggml_context * ctx = get_ctx(buft);
         if (!ctx) return false;
-        ggml_tensor * dst = ggml_new_tensor_3d(ctx, src->type, ne0, ne1, k_local);
+        ggml_tensor * dst = ggml_new_tensor_3d(ctx, src->type, ne0, ne1, k_alloc);
         ggml_format_name(dst, "%s.hot", dest_name.c_str());
 
-        // Defer the upload until after we allocate the buffer.
         per_buft[buft].pending.push_back({ out_tensor, std::move(slice) });
         *out_tensor = dst;
         total_bytes += needed;
+        return true;
+    };
+
+    auto add_lookup_i32 = [&](ggml_backend_buffer_type_t buft, const std::string & name,
+                              const std::vector<int32_t> & values, ggml_tensor ** out_tensor) -> bool {
+        ggml_context * ctx = get_ctx(buft);
+        if (!ctx) return false;
+        ggml_tensor * dst = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, (int64_t) values.size());
+        ggml_format_name(dst, "%s", name.c_str());
+        std::vector<uint8_t> bytes(values.size() * sizeof(int32_t));
+        std::memcpy(bytes.data(), values.data(), bytes.size());
+        per_buft[buft].pending.push_back({ out_tensor, std::move(bytes) });
+        *out_tensor = dst;
+        total_bytes += values.size() * sizeof(int32_t);
+        return true;
+    };
+
+    auto add_lookup_f32 = [&](ggml_backend_buffer_type_t buft, const std::string & name,
+                              const std::vector<float> & values, ggml_tensor ** out_tensor) -> bool {
+        ggml_context * ctx = get_ctx(buft);
+        if (!ctx) return false;
+        ggml_tensor * dst = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, (int64_t) values.size());
+        ggml_format_name(dst, "%s", name.c_str());
+        std::vector<uint8_t> bytes(values.size() * sizeof(float));
+        std::memcpy(bytes.data(), values.data(), bytes.size());
+        per_buft[buft].pending.push_back({ out_tensor, std::move(bytes) });
+        *out_tensor = dst;
+        total_bytes += values.size() * sizeof(float);
         return true;
     };
 
@@ -286,7 +343,6 @@ bool hot_manager::allocate(const llama_model & model) {
         auto & state = *layers[il];
         const auto & lm = m_layers[il];
 
-        // Skip layers that don't have the relevant tensors at all.
         if (!lm.ffn_gate_up_exps && !(lm.ffn_gate_exps && lm.ffn_up_exps)) {
             continue;
         }
@@ -294,20 +350,14 @@ bool hot_manager::allocate(const llama_model & model) {
             continue;
         }
 
-        // Determine which form the model uses for this layer.
         const bool has_combined = (lm.ffn_gate_up_exps != nullptr);
         const ggml_tensor * probe = has_combined ? lm.ffn_gate_up_exps
                                                  : (lm.ffn_gate_exps ? lm.ffn_gate_exps : lm.ffn_up_exps);
 
-        // Skip early init phases (e.g., the --fit memory probe) where tensors
-        // don't have buffers yet.
         if (!probe || !probe->buffer) {
             continue;
         }
 
-        // Skip layers whose tensors are already on a GPU device. The whole
-        // point of hot pinning is offloading CPU-resident expert work; if the
-        // probe tensor is already on GPU there is nothing to gain.
         bool buf_is_host = ggml_backend_buft_is_host(ggml_backend_buffer_get_type(probe->buffer));
         if (!buf_is_host) {
             ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(probe->buffer));
@@ -317,28 +367,79 @@ bool hot_manager::allocate(const llama_model & model) {
             }
         }
 
+        // Pick ONE GPU for all of this layer's hot tensors + lookup tables.
+        const size_t needed = layer_total_bytes((int) il, lm);
+        ggml_backend_buffer_type_t buft = pick_gpu_buft(needed);
+        if (!buft) {
+            LLAMA_LOG_WARN("ds4-hot: no GPU has %.1f MiB free for layer %zu hot pack; skipping\n",
+                    needed / (1024.0 * 1024.0), il);
+            layers[il].reset();
+            continue;
+        }
+
+        // Hot-side lookup tables (hot_remap, is_hot) live on the SAME GPU as the
+        // hot weights so the get_rows + mul_mat_id chain can run entirely on
+        // that GPU without any cross-backend transfer of the per-pick IDs.
+        // Cold-side tables (cold_remap, is_cold) live on CPU so the cold
+        // mul_mat_id (CPU weights) consumes a CPU IDs tensor without sched
+        // having to bounce data between backends each step.
+        ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
+
+        // Build per-layer lookup tables.
+        // Sentinel for cold path: a guaranteed-cold expert ID (use the first one in cold_ids).
+        const int32_t cold_sentinel = state.cold_ids.empty() ? 0 : state.cold_ids[0];
+        // Sentinel for hot path: hot index 0 (any valid hot index works; cold positions get masked).
+        const int32_t hot_sentinel = 0;
+
+        std::vector<int32_t> hot_remap_vals((size_t) n_expert, hot_sentinel);
+        std::vector<int32_t> cold_remap_vals((size_t) n_expert, cold_sentinel);
+        std::vector<float>   is_hot_vals((size_t) n_expert, 0.0f);
+        std::vector<float>   is_cold_vals((size_t) n_expert, 1.0f);
+        for (int32_t e : state.hot_ids) {
+            hot_remap_vals[(size_t) e]  = state.remap_hot[(size_t) e];
+            cold_remap_vals[(size_t) e] = cold_sentinel;
+            is_hot_vals[(size_t) e]     = 1.0f;
+            is_cold_vals[(size_t) e]    = 0.0f;
+        }
+        for (int32_t e : state.cold_ids) {
+            cold_remap_vals[(size_t) e] = e;
+        }
+
         bool ok_all = true;
         if (has_combined) {
-            ok_all &= extract_subset(lm.ffn_gate_up_exps, state.hot_ids,
+            ok_all &= extract_subset(buft, lm.ffn_gate_up_exps, state.hot_ids,
                                      "ds4_hot_gate_up_exps_l" + std::to_string(il),
                                      &state.hot_gate_up_exps);
         } else {
-            ok_all &= extract_subset(lm.ffn_gate_exps, state.hot_ids,
+            ok_all &= extract_subset(buft, lm.ffn_gate_exps, state.hot_ids,
                                      "ds4_hot_gate_exps_l" + std::to_string(il),
                                      &state.hot_gate_exps);
-            ok_all &= extract_subset(lm.ffn_up_exps, state.hot_ids,
+            ok_all &= extract_subset(buft, lm.ffn_up_exps, state.hot_ids,
                                      "ds4_hot_up_exps_l" + std::to_string(il),
                                      &state.hot_up_exps);
         }
-        ok_all &= extract_subset(lm.ffn_down_exps, state.hot_ids,
+        ok_all &= extract_subset(buft, lm.ffn_down_exps, state.hot_ids,
                                  "ds4_hot_down_exps_l" + std::to_string(il),
                                  &state.hot_down_exps);
+
+        ok_all &= add_lookup_i32(buft,     "ds4_hot_remap_l"  + std::to_string(il),
+                                 hot_remap_vals, &state.hot_remap_table);
+        ok_all &= add_lookup_i32(cpu_buft, "ds4_cold_remap_l" + std::to_string(il),
+                                 cold_remap_vals, &state.cold_remap_table);
+        ok_all &= add_lookup_f32(buft,     "ds4_is_hot_l"  + std::to_string(il),
+                                 is_hot_vals, &state.is_hot_mask);
+        ok_all &= add_lookup_f32(cpu_buft, "ds4_is_cold_l" + std::to_string(il),
+                                 is_cold_vals, &state.is_cold_mask);
+
         if (!ok_all) {
-            // Free anything partially allocated for this layer.
             state.hot_gate_up_exps = nullptr;
             state.hot_gate_exps    = nullptr;
             state.hot_up_exps      = nullptr;
             state.hot_down_exps    = nullptr;
+            state.hot_remap_table  = nullptr;
+            state.cold_remap_table = nullptr;
+            state.is_hot_mask      = nullptr;
+            state.is_cold_mask     = nullptr;
             layers[il].reset();
             continue;
         }
@@ -351,27 +452,28 @@ bool hot_manager::allocate(const llama_model & model) {
         if (!buf) {
             LLAMA_LOG_WARN("ds4-hot: could not allocate hot buffer for buft %s; skipping affected layers\n",
                     ggml_backend_buft_name(buft));
-            // Null out the tensor pointers since they're not actually backed.
             for (auto & p : e.pending) {
-                if (p.first) *p.first = nullptr;
+                if (p.slot) *p.slot = nullptr;
             }
             continue;
         }
+        // Mark as model weights so the scheduler keeps the consuming ops on
+        // this device (matches normal model-weight placement semantics).
+        ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         for (auto & p : e.pending) {
-            if (!*p.first) continue;
-            ggml_backend_tensor_set(*p.first, p.second.data(), 0, p.second.size());
+            if (!p.slot || !*p.slot) continue;
+            ggml_backend_tensor_set(*p.slot, p.data.data(), 0, p.data.size());
         }
         bufs->bufs.emplace_back(buf);
         bufs->ctxs.emplace_back(std::move(e.ctx));
     }
 
-    // Recount: a layer is fully usable only if all its tensor pointers are non-null after upload.
+    // Re-validate: a layer is fully usable only if EVERY required tensor and
+    // lookup table is non-null after upload.
     int n_usable = 0;
     for (auto & lp : layers) {
         if (!lp) continue;
-        const bool combined = lp->hot_gate_up_exps != nullptr;
-        const bool separate = lp->hot_gate_exps != nullptr && lp->hot_up_exps != nullptr;
-        if (lp->hot_down_exps && (combined || separate)) {
+        if (lp->ready_for_dispatch()) {
             n_usable++;
         } else {
             lp.reset();

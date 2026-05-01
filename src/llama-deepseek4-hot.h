@@ -47,6 +47,24 @@ struct layer_hot_state {
     ggml_tensor *                hot_gate_exps    = nullptr;
     ggml_tensor *                hot_up_exps      = nullptr;
     ggml_tensor *                hot_down_exps    = nullptr;
+
+    // Phase 2 graph-time lookup tables (live on the same GPU buffer as the hot tensors).
+    // Each is shape [1, n_expert] (use a 1D flatten of selected_experts when calling ggml_get_rows).
+    // hot_remap_table[0, e] = remap_hot[e] if e in hot_set else 0 (sentinel; masked out).
+    // cold_remap_table[0, e] = e if e in cold_set else cold_sentinel (a guaranteed cold expert id).
+    // is_hot_mask[0, e]  = 1.0 if e in hot_set else 0.0
+    // is_cold_mask[0, e] = 1.0 if e not in hot_set else 0.0
+    ggml_tensor *                hot_remap_table  = nullptr; // i32
+    ggml_tensor *                cold_remap_table = nullptr; // i32
+    ggml_tensor *                is_hot_mask      = nullptr; // f32
+    ggml_tensor *                is_cold_mask     = nullptr; // f32
+
+    // Returns true if all tensors required for Phase 2 dual dispatch are non-null.
+    bool ready_for_dispatch() const {
+        const bool gate_up_ok = hot_gate_up_exps || (hot_gate_exps && hot_up_exps);
+        return gate_up_ok && hot_down_exps && hot_remap_table && cold_remap_table
+               && is_hot_mask && is_cold_mask;
+    }
 };
 
 class hot_manager {
