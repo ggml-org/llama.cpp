@@ -297,10 +297,8 @@ static void tri_f32(const float * restrict src,
         const uint32_t abs_row = ir + b;
         const uint32_t i01     = abs_row % ne01;
 
-        const HVX_Vector * restrict v_src =
-            (const HVX_Vector *)((const uint8_t *)src + b * row_size);
-              HVX_Vector * restrict v_dst =
-            (      HVX_Vector *)((      uint8_t *)dst + b * row_size);
+        const HVX_Vector * restrict v_src = (const HVX_Vector *) ((const uint8_t *) src + b * row_size);
+        HVX_Vector * restrict v_dst       = (HVX_Vector *) ((uint8_t *) dst + b * row_size);
 
         uint32_t boundary;
         int      keep_left;
@@ -324,7 +322,7 @@ static void tri_f32(const float * restrict src,
                     v_dst[i] = zero;
                 } else {
                     HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - vec_start) * sizeof(float));
-                    v_dst[i] = Q6_V_vmux_QVV(mask, v_src[i], zero);
+                    v_dst[i]            = Q6_V_vmux_QVV(mask, v_src[i], zero);
                 }
             } else {
                 if (vec_end <= boundary) {
@@ -333,7 +331,7 @@ static void tri_f32(const float * restrict src,
                     v_dst[i] = v_src[i];
                 } else {
                     HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - vec_start) * sizeof(float));
-                    v_dst[i] = Q6_V_vmux_QVV(mask, zero, v_src[i]);
+                    v_dst[i]            = Q6_V_vmux_QVV(mask, zero, v_src[i]);
                 }
             }
         }
@@ -342,7 +340,7 @@ static void tri_f32(const float * restrict src,
         if (nloe > 0) {
             const uint32_t vec_start = nvec * VLEN_FP32;
             const uint32_t vec_end   = vec_start + nloe;
-            HVX_Vector tail_val;
+            HVX_Vector     tail_val;
             if (keep_left) {
                 if (vec_end <= boundary) {
                     tail_val = v_src[nvec];
@@ -350,7 +348,7 @@ static void tri_f32(const float * restrict src,
                     tail_val = zero;
                 } else {
                     HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - vec_start) * sizeof(float));
-                    tail_val = Q6_V_vmux_QVV(mask, v_src[nvec], zero);
+                    tail_val            = Q6_V_vmux_QVV(mask, v_src[nvec], zero);
                 }
             } else {
                 if (vec_end <= boundary) {
@@ -359,7 +357,7 @@ static void tri_f32(const float * restrict src,
                     tail_val = v_src[nvec];
                 } else {
                     HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - vec_start) * sizeof(float));
-                    tail_val = Q6_V_vmux_QVV(mask, zero, v_src[nvec]);
+                    tail_val            = Q6_V_vmux_QVV(mask, zero, v_src[nvec]);
                 }
             }
             hvx_vec_store_a(&v_dst[nvec], nloe * sizeof(float), tail_val);
