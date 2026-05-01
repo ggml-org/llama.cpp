@@ -527,7 +527,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     constexpr int stride_tile_V = V_is_K_view ? stride_tile_K : nbatch_V2 + 4;
 
     const int k_VKQ_0 = kb0 * nbatch_fa;
-    const int32_t * const top_k_tile = use_top_k ? top_k + k_VKQ_0 : nullptr;
+
+    const int32_t * const tile_top_k = use_top_k ? top_k + k_VKQ_0 : nullptr;
 
 #if defined(TURING_MMA_AVAILABLE)
     T_C_KQ KQ_C[nbatch_fa/(np*(cols_per_warp == 8 ? T_C_KQ::I : T_C_KQ::J))];
@@ -546,16 +547,16 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         cp_async_wait_all();
         __syncthreads();
         flash_attn_ext_f16_load_tile<stride_tile_V, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-            (V_h2 + int64_t(k_VKQ_0)*stride_V, tile_V, nbatch_V2, stride_V, k_VKQ_sup, top_k_tile);
+            (V_h2 + int64_t(k_VKQ_0)*stride_V, tile_V, nbatch_V2, stride_V, k_VKQ_sup, tile_top_k);
     } else {
         constexpr bool use_cp_async = nstages == 1;
         if (ncols2 > 1 || mask_h) {
             if constexpr (use_top_k) {
                 flash_attn_ext_f16_load_mask<ncols1, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-                    (mask_h, tile_mask, stride_mask, k_VKQ_sup, jt*ncols1, ne01, top_k_tile);
+                    (mask_h, tile_mask, stride_mask, k_VKQ_sup, jt*ncols1, ne01, tile_top_k);
             } else {
                 flash_attn_ext_f16_load_mask<ncols1, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-                    (mask_h + k_VKQ_0, tile_mask, stride_mask, k_VKQ_sup, jt*ncols1, ne01, top_k_tile);
+                    (mask_h + k_VKQ_0, tile_mask, stride_mask, k_VKQ_sup, jt*ncols1, ne01, tile_top_k);
             }
         }
     }
@@ -571,10 +572,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             constexpr bool use_cp_async = nstages == 1;
             if constexpr (use_top_k) {
                 flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-                    (K_h2 + k0_start, tile_K, k0_diff, stride_K, k_VKQ_sup, top_k_tile);
+                    (K_h2 + k0_start, tile_K, k0_diff, stride_K, k_VKQ_sup, tile_top_k);
             } else {
                 flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-                    (K_h2 + int64_t(k_VKQ_0)*stride_K + k0_start, tile_K, k0_diff, stride_K, k_VKQ_sup, top_k_tile);
+                    (K_h2 + int64_t(k_VKQ_0)*stride_K + k0_start, tile_K, k0_diff, stride_K, k_VKQ_sup, tile_top_k);
             }
 
             if (use_cp_async) {
@@ -906,10 +907,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 constexpr bool use_cp_async = nstages == 1;
                 if constexpr (use_top_k) {
                     flash_attn_ext_f16_load_tile<stride_tile_V, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-                        (V_h2 + i0_start/2, tile_V, i0_diff/2, stride_V, k_VKQ_sup, top_k_tile);
+                        (V_h2 + i0_start/2, tile_V, i0_diff/2, stride_V, k_VKQ_sup, tile_top_k);
                 } else {
                     flash_attn_ext_f16_load_tile<stride_tile_V, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-                        (V_h2 + int64_t(k_VKQ_0)*stride_V + i0_start/2, tile_V, i0_diff/2, stride_V, k_VKQ_sup, top_k_tile);
+                        (V_h2 + int64_t(k_VKQ_0)*stride_V + i0_start/2, tile_V, i0_diff/2, stride_V, k_VKQ_sup, tile_top_k);
                 }
                 if (use_cp_async) {
                     cp_async_wait_all();
@@ -1746,6 +1747,21 @@ static __global__ void flash_attn_ext_f16(
 
 extern bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
+#if !defined(GGML_USE_MUSA)
+#define FATTN_SET_SHARED_MEMORY_LIMIT(kernel, id, nbytes)                        \
+    do {                                                                         \
+        static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false}; \
+        if (!shared_memory_limit_raised[id]) {                                   \
+            CUDA_CHECK(cudaFuncSetAttribute(                                     \
+                        reinterpret_cast<fattn_kernel_ptr_t>(kernel),            \
+                        cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes));   \
+            shared_memory_limit_raised[id] = true;                               \
+        }                                                                        \
+    } while (0)
+#else
+#define FATTN_SET_SHARED_MEMORY_LIMIT(kernel, id, nbytes)
+#endif
+
 template <int DKQ, int DV, int ncols1, int ncols2>
 void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV = dst;
@@ -1790,40 +1806,29 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     using fattn_kernel_ptr_t = fattn_kernel_t;
 #endif // defined(GGML_USE_HIP)
     fattn_kernel_t fattn_kernel;
+
     if (logit_softcap == 0.0f) {
         constexpr bool use_logit_softcap = false;
         if constexpr (may_use_top_k) {
             if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ctx, dst)) {
-                constexpr bool use_top_k = false;
+                constexpr bool use_top_k = true;
                 fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_top_k>;
+                FATTN_SET_SHARED_MEMORY_LIMIT(fattn_kernel, id, nbytes_shared_total);
             } else {
                 constexpr bool use_top_k = false;
                 fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_top_k>;
+                FATTN_SET_SHARED_MEMORY_LIMIT(fattn_kernel, id, nbytes_shared_total);
             }
         } else {
             constexpr bool use_top_k = false;
             fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_top_k>;
+            FATTN_SET_SHARED_MEMORY_LIMIT(fattn_kernel, id, nbytes_shared_total);
         }
-
-#if !defined(GGML_USE_MUSA)
-        static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
-        if (!shared_memory_limit_raised[id]) {
-            CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<fattn_kernel_ptr_t>(fattn_kernel), cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
-            shared_memory_limit_raised[id] = true;
-        }
-#endif // !defined(GGML_USE_MUSA)
     } else {
         constexpr bool use_logit_softcap = true;
         constexpr bool use_top_k = false;
         fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_top_k>;
-
-#if !defined(GGML_USE_MUSA)
-        static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
-        if (!shared_memory_limit_raised[id]) {
-            CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<fattn_kernel_ptr_t>(fattn_kernel), cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
-            shared_memory_limit_raised[id] = true;
-        }
-#endif // !defined(GGML_USE_MUSA)
+        FATTN_SET_SHARED_MEMORY_LIMIT(fattn_kernel, id, nbytes_shared_total);
     }
 
     launch_fattn<DV, ncols1, ncols2>
