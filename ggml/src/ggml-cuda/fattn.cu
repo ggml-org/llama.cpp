@@ -6,10 +6,27 @@
 #include "fattn-wmma-f16.cuh"
 #include "fattn.cuh"
 
+bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    GGML_UNUSED_VARS(ctx);
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * top_k = dst->src[5];
+    // TODO better tuning of when to use top_k optimization on various hardware
+    return ((Q->ne[1] == 1 && K->ne[1] >= 4096) || K->ne[1] >= 8192) && top_k != nullptr;
+}
+
 template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const ggml_tensor * Q = dst->src[0];
+
+    // for DeepSeek V3.2 sparse top-k attention force Q tiles to always correspond to only 1 token (ncols1 = 1)
+    if constexpr (ncols2 == 16 && DKQ == 576) {
+        if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ctx, dst)) {
+            ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 1, ncols2>(ctx, dst);
+            return;
+        }
+    }
 
     if constexpr (ncols2 <= 8) {
         if (turing_mma_available(cc) && Q->ne[1] <= 8/ncols2) {

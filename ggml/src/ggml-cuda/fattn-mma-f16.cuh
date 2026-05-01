@@ -1744,6 +1744,8 @@ static __global__ void flash_attn_ext_f16(
 #endif // defined(FLASH_ATTN_AVAILABLE) && (defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || (defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)) || defined(AMD_MFMA_AVAILABLE))
 }
 
+extern bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
 template <int DKQ, int DV, int ncols1, int ncols2>
 void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV = dst;
@@ -1791,9 +1793,8 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     if (logit_softcap == 0.0f) {
         constexpr bool use_logit_softcap = false;
         if constexpr (may_use_top_k) {
-            const ggml_tensor * top_k = dst->src[5];
-            if (top_k != nullptr) {
-                constexpr bool use_top_k = true;
+            if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ctx, dst)) {
+                constexpr bool use_top_k = false;
                 fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_top_k>;
             } else {
                 constexpr bool use_top_k = false;
