@@ -1379,11 +1379,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
     // ======== Initialize HMX output scales ========
     // Identity scale (1.0) for O updates and normalization
-    hmx_init_column_scales(factx.vtcm_hmx_scales_id, Q6_V_vsplat_R(0x3c00));  // fp16: 1.0
+    hmx_init_column_scales(factx.vtcm_hmx_scales_id, Q6_V_vsplat_R(0x3c00)); // 1.0
 
     // QK scale embedded in HMX output
-    const __fp16 qk_scale_hf = (__fp16) factx.scale;
-    hmx_init_column_scales(factx.vtcm_hmx_scales_qk, Q6_V_vsplat_R(fp16_to_bits(&qk_scale_hf)));
+    hmx_init_column_scales(factx.vtcm_hmx_scales_qk, hvx_vec_splat_f16(factx.scale));
 
     // ======== Skip compute if profiling ========
     if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
