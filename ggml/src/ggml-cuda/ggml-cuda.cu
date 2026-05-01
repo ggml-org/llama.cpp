@@ -1340,19 +1340,16 @@ static bool ggml_backend_cuda_comm_try_allreduce_nccl(
 
 // Platform-tuned default order.  Each helper returns false if its provider is
 // unavailable, so the short-circuit OR naturally falls through to the next.
-#if defined(__linux__)
 static bool ggml_backend_cuda_comm_try_allreduce_os(
         ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
+#if defined(__linux__)
     return ggml_backend_cuda_comm_try_allreduce_nccl(comm_ctx, tensors)
         || ggml_backend_cuda_comm_try_allreduce_internal(comm_ctx, tensors);
-}
 #else
-static bool ggml_backend_cuda_comm_try_allreduce_os(
-        ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
     return ggml_backend_cuda_comm_try_allreduce_internal(comm_ctx, tensors)
         || ggml_backend_cuda_comm_try_allreduce_nccl(comm_ctx, tensors);
-}
 #endif
+}
 
 // "GGML_CUDA_ALLREDUCE=none": skip CUDA providers, fall back to butterfly.
 static bool ggml_backend_cuda_comm_try_allreduce_none(

@@ -323,10 +323,8 @@ struct ggml_cuda_ar_pipeline {
     ggml_cuda_ar_host_mapping arrival;
 };
 
-// Return a pointer to the arrival int for (slot, rank).
-// Returns the base pointer for the (slot, rank) per-block token block.  The
-// kernel adds blockIdx.x * (ARRIVAL_STRIDE/sizeof(int)) internally to land on
-// its own slot.
+// Base pointer for the (slot, rank) per-block token block.  The kernel adds
+// blockIdx.x * (ARRIVAL_STRIDE/sizeof(int)) internally to land on its own slot.
 static int * ggml_cuda_ar_arrival_ptr(const ggml_cuda_ar_pipeline * p, int slot, int rank) {
     const size_t offset = ((size_t)slot * p->n_devices + rank) *
                           GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
