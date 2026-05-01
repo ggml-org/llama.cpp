@@ -13,6 +13,10 @@ struct ggml_et_cumsum_params {
     struct ggml_tensor dst;
 };
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 int entry_point(struct ggml_et_cumsum_params * params, void * env) {
     kernel_environment_t * kernel_env = (kernel_environment_t *) env;
 
@@ -44,6 +48,11 @@ int entry_point(struct ggml_et_cumsum_params * params, void * env) {
     if (!src0_data || !dst_data) {
         return -1;
     }
+
+#ifdef BUILD_FOR_UBERKERNEL
+    evict_region_past_l2(src0->data, tensor_bytes(src0));
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
 
     const int64_t ne0 = src0->ne[0];
     const int64_t ne1 = src0->ne[1];

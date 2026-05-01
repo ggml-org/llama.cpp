@@ -85,6 +85,11 @@ int entry_point(struct ggml_et_mm_q8_params* params, void* env) {
                               && (rows_per_minion > 4)
                               && (rows_per_minion <= KSPLIT_MAX_ROWS);
 
+#ifdef BUILD_FOR_UBERKERNEL
+    evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
+
     if (use_ksplit) {
         /* Each hart processes half the K dimension */
         const int64_t k_start = is_hart1 ? k_half : 0;

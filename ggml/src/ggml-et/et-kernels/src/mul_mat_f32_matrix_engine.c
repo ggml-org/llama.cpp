@@ -23,6 +23,10 @@
 #define REP_RATE           0
 /* ─────────────────────────────────────────────────────────────────── */
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 int entry_point(struct ggml_et_binary_params* params, void* env) {
     uint64_t hart_id = get_hart_id();
     uint64_t shire_id = get_shire_id();
@@ -50,6 +54,11 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     const char* src0_base = (const char*)params->src0.data;
     const char* src1_base = (const char*)params->src1.data;
     char*       dst_base  = (char*)params->dst.data;
+
+#ifdef BUILD_FOR_UBERKERNEL
+    evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
 
     setup_cache_scp();
 #if CACHEOP_MAX > 0 || REP_RATE > 0

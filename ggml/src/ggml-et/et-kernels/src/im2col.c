@@ -29,6 +29,10 @@ static inline float im2col_load_src_elem(const void * src_base, enum ggml_type s
     return fp16_to_fp32(((const uint16_t *) src_base)[idx]);
 }
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 int entry_point(struct ggml_et_binary_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
 
@@ -50,6 +54,12 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     if (!src1->data || !dst->data) {
         return -1;
     }
+
+#ifdef BUILD_FOR_UBERKERNEL
+    evict_region_past_l2(src0->data, tensor_bytes(src0));
+    evict_region_past_l2(src1->data, tensor_bytes(src1));
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
 
     if (!((dst->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) ||
           (dst->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32)))) {

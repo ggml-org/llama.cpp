@@ -81,6 +81,10 @@ static inline float get_mask_val(const struct ggml_tensor * mask,
     return fp16_to_fp32(*(const uint16_t *)(base + ik1 * mask->nb[0]));
 }
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     kernel_environment_t * kernel_env = (kernel_environment_t *) env;
 
@@ -105,6 +109,16 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     const char * k_data   = (const char *) k->data;
     const char * v_data   = (const char *) v->data;
     char * dst_data       = (char *) dst->data;
+
+#ifdef BUILD_FOR_UBERKERNEL
+    evict_region_past_l2(q->data, tensor_bytes(q));
+    evict_region_past_l2(k->data, tensor_bytes(k));
+    evict_region_past_l2(v->data, tensor_bytes(v));
+    if (mask) {
+        evict_region_past_l2(mask->data, tensor_bytes(mask));
+    }
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
 
     const int k_type = k->type;
     const int v_type = v->type;
