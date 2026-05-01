@@ -5503,6 +5503,9 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         # (mapped to PROJECTOR_TYPE_MINICPMV4_6).
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MINICPMV4_6)
 
+        # ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension; used for slice alignment
+        self.gguf_writer.add_vision_projector_scale_factor(4)
+
         # ViT layer index after which the window-attention merger is applied
         insert_layer_id = int(self.global_config.get(
             "insert_layer_id", self.hparams_vision.get("insert_layer_id", 6)))

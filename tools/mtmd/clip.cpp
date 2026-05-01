@@ -1234,6 +1234,9 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_MINICPMV4_6:
                     {
                         // MiniCPM-V 4.6 unified merger projector
+                        // ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension
+                        hparams.n_merge = 4;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         get_u32(KEY_INSERT_LAYER_ID, hparams.insert_layer_id, false);
                     } break;
                 case PROJECTOR_TYPE_INTERNVL:
