@@ -4,6 +4,7 @@
 #include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
+#include "llama-deepseek4-hot.h"
 #include "llama-io.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
@@ -344,6 +345,16 @@ llama_context::llama_context(
 
         if (cparams.pipeline_parallel) {
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
+        }
+
+        // DeepSeek4 hot-expert pinning: load profile and allocate per-layer
+        // hot subset tensors before the first sched_reserve so the graph
+        // builder can see them. No-op if DS4_HOT_PROFILE_JSON is unset.
+        if (model.arch == LLM_ARCH_DEEPSEEK4) {
+            auto & ds4_hot_mgr = ds4_hot::instance();
+            if (ds4_hot_mgr.load_profile()) {
+                ds4_hot_mgr.allocate(model);
+            }
         }
 
         sched_reserve();
