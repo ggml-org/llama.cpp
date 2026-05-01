@@ -33,7 +33,6 @@
 #define CU_MEM_LOCATION_TYPE_DEVICE hipMemLocationTypeDevice
 #define CU_MEM_ACCESS_FLAGS_PROT_READWRITE hipMemAccessFlagsProtReadWrite
 #define CU_CHECK(fn) {hipError_t err = fn; if(err != hipSuccess) { GGML_ABORT("HipVMM Failure: %s\n", hipGetErrorString(err)); }}
-#define NCCL_CHECK(fn) {ncclResult_t err = fn; if(err != ncclSuccess) { GGML_ABORT("RCCL Failure RCCL returned: %i\n", err); }}
 #define __shfl_sync(mask, var, laneMask, width) __shfl(var, laneMask, width)
 #define __shfl_up_sync(mask, var, laneMask, width) __shfl_up(var, laneMask, width)
 #define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
@@ -59,6 +58,7 @@
 #define cudaDeviceProp hipDeviceProp_t
 #define cudaDeviceSynchronize hipDeviceSynchronize
 #define cudaError_t hipError_t
+#define cudaErrorMemoryAllocation hipErrorOutOfMemory
 #define cudaErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
 #define cudaErrorPeerAccessNotEnabled hipErrorPeerAccessNotEnabled
 #define cudaEventCreateWithFlags hipEventCreateWithFlags

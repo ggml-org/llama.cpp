@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Trash2, Pencil } from '@lucide/svelte';
+	import { Trash2, Pencil, X } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
 	import { ChatSidebarConversationItem, DialogConfirmation } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import Label from '$lib/components/ui/label/label.svelte';
@@ -16,6 +17,7 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { getPreviewText } from '$lib/utils';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
+	import { APP_NAME } from '$lib/constants';
 
 	const sidebar = Sidebar.useSidebar();
 
@@ -32,10 +34,14 @@
 	);
 
 	let filteredConversations = $derived.by(() => {
-		if (searchQuery.trim().length > 0) {
-			return conversations().filter((conversation: { name: string }) =>
-				conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
-			);
+		if (isSearchModeActive) {
+			if (searchQuery.trim().length > 0) {
+				return conversations().filter((conversation: { name: string }) =>
+					conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
+				);
+			}
+
+			return [];
 		}
 
 		return conversations();
@@ -107,9 +113,30 @@
 		}
 	}
 
+	let chatSidebarActions: { activateSearch?: () => void } | undefined = $state();
+	let openedForSearch = $state(false);
+
 	export function activateSearchMode() {
-		isSearchModeActive = true;
+		if (!sidebar.open) {
+			openedForSearch = true;
+		}
+		chatSidebarActions?.activateSearch?.();
 	}
+
+	function handleSearchDeactivated() {
+		if (openedForSearch) {
+			openedForSearch = false;
+			sidebar.toggle();
+		}
+	}
+
+	$effect(() => {
+		if (!sidebar.open) {
+			isSearchModeActive = false;
+			searchQuery = '';
+			openedForSearch = false;
+		}
+	});
 
 	export function editActiveConversation() {
 		if (currentChatId) {
@@ -130,6 +157,7 @@
 			searchQuery = '';
 		}
 
+		handleMobileSidebarItemClick();
 		await goto(`#/chat/${id}`);
 	}
 
@@ -138,60 +166,79 @@
 	}
 </script>
 
-<ScrollArea class="h-[100vh]">
-	<Sidebar.Header class=" top-0 z-10 gap-4 bg-sidebar/50 p-4 pb-2 backdrop-blur-lg md:sticky">
-		<a href="#/" onclick={handleMobileSidebarItemClick}>
-			<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
-		</a>
+<div class="flex h-full flex-col">
+	<ScrollArea class="h-full flex-1">
+		<Sidebar.Header class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
+			<div class="flex items-center justify-between">
+				<a href="#/" onclick={handleMobileSidebarItemClick}>
+					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">{APP_NAME}</h1>
+				</a>
 
-		<ChatSidebarActions {handleMobileSidebarItemClick} bind:isSearchModeActive bind:searchQuery />
-	</Sidebar.Header>
+				<Button
+					class="rounded-full md:hidden"
+					variant="ghost"
+					size="icon"
+					onclick={() => sidebar.toggle()}
+				>
+					<X class="h-4 w-4" />
+					<span class="sr-only">Close sidebar</span>
+				</Button>
+			</div>
 
-	<Sidebar.Group class="mt-2 space-y-2 p-0 px-4">
-		{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
-			<Sidebar.GroupLabel>
-				{isSearchModeActive ? 'Search results' : 'Conversations'}
-			</Sidebar.GroupLabel>
-		{/if}
+			<ChatSidebarActions
+				bind:this={chatSidebarActions}
+				{handleMobileSidebarItemClick}
+				bind:isSearchModeActive
+				bind:searchQuery
+				onSearchDeactivated={handleSearchDeactivated}
+			/>
+		</Sidebar.Header>
 
-		<Sidebar.GroupContent>
-			<Sidebar.Menu>
-				{#each conversationTree as { conversation, depth } (conversation.id)}
-					<Sidebar.MenuItem class="mb-1 p-0">
-						<ChatSidebarConversationItem
-							conversation={{
-								id: conversation.id,
-								name: conversation.name,
-								lastModified: conversation.lastModified,
-								currNode: conversation.currNode,
-								forkedFromConversationId: conversation.forkedFromConversationId
-							}}
-							{depth}
-							{handleMobileSidebarItemClick}
-							isActive={currentChatId === conversation.id}
-							onSelect={selectConversation}
-							onEdit={handleEditConversation}
-							onDelete={handleDeleteConversation}
-							onStop={handleStopGeneration}
-						/>
-					</Sidebar.MenuItem>
-				{/each}
+		<Sidebar.Group class="mt-2 h-[calc(100vh-21rem)] space-y-2 p-0 px-3">
+			{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
+				<Sidebar.GroupLabel>
+					{isSearchModeActive ? 'Search results' : 'Recent conversations'}
+				</Sidebar.GroupLabel>
+			{/if}
 
-				{#if conversationTree.length === 0}
-					<div class="px-2 py-4 text-center">
-						<p class="mb-4 p-4 text-sm text-muted-foreground">
-							{searchQuery.length > 0
-								? 'No results found'
-								: isSearchModeActive
-									? 'Start typing to see results'
-									: 'No conversations yet'}
-						</p>
-					</div>
-				{/if}
-			</Sidebar.Menu>
-		</Sidebar.GroupContent>
-	</Sidebar.Group>
-</ScrollArea>
+			<Sidebar.GroupContent>
+				<Sidebar.Menu>
+					{#each conversationTree as { conversation, depth } (conversation.id)}
+						<Sidebar.MenuItem class="mb-1 p-0">
+							<ChatSidebarConversationItem
+								conversation={{
+									id: conversation.id,
+									name: conversation.name,
+									lastModified: conversation.lastModified,
+									currNode: conversation.currNode,
+									forkedFromConversationId: conversation.forkedFromConversationId
+								}}
+								{depth}
+								isActive={currentChatId === conversation.id}
+								onSelect={selectConversation}
+								onEdit={handleEditConversation}
+								onDelete={handleDeleteConversation}
+								onStop={handleStopGeneration}
+							/>
+						</Sidebar.MenuItem>
+					{/each}
+
+					{#if conversationTree.length === 0}
+						<div class="px-2 py-4 text-center">
+							<p class="mb-4 p-4 text-sm text-muted-foreground">
+								{searchQuery.length > 0
+									? 'No results found'
+									: isSearchModeActive
+										? 'Start typing to see results'
+										: 'No conversations yet'}
+							</p>
+						</div>
+					{/if}
+				</Sidebar.Menu>
+			</Sidebar.GroupContent>
+		</Sidebar.Group>
+	</ScrollArea>
+</div>
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}

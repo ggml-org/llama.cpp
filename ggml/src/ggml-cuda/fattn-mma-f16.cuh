@@ -66,6 +66,9 @@ static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_co
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 32, 128, 2,  32, 128, 128, 128, 2, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 64, 128, 2,  32, 128, 128, 128, 2, true);
 
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(320, 256, 32, 128, 2,  32, 128, 128, 128, 1, false);
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(320, 256, 64, 256, 1,  32, 128, 128, 128, 1, false);
+
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(512, 512,  8,  64, 4,  32, 256, 256, 128, 1, false);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(512, 512, 16,  64, 4,  32, 256, 256, 128, 1, false);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(512, 512, 32, 128, 2,  32, 128, 128, 128, 1, false);
@@ -84,6 +87,9 @@ static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_co
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 16, 128, 2,  64, 128, 128, 128, 2, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 32, 128, 2,  64, 128, 128,  64, 2, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 64, 128, 2,  64, 128, 128,  64, 2, true);
+
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(320, 256, 32, 128, 2,  32, 128, 128, 128, 1, false);
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(320, 256, 64, 256, 1,  32, 128, 128, 128, 1, false);
 
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(512, 512,  8,  64, 4,  32,  96,  64, 128, 1, false);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(512, 512, 16,  64, 4,  32,  96,  64, 128, 1, false);
@@ -117,6 +123,9 @@ static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_co
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 16, 128, 2,  64, 128, 128, 128, 2, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 32, 128, 2,  64, 128, 128,  64, 2, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 64, 128, 2,  64, 128, 128,  64, 2, true);
+
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(320, 256, 32, 128, 2,  64, 160, 128,  64, 2, true);
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(320, 256, 64, 128, 2,  64, 160, 128,  64, 2, false);
 
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(512, 512, 16,  64, 4,  32, 128, 128, 128, 1, false);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(512, 512, 32, 128, 2,  32, 128, 128, 128, 1, false);
@@ -305,12 +314,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
         const half2 * const __restrict__ KV, half2 * const __restrict__ tile_KV, const int D2, const int stride_KV, const int i_sup) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     // K/V data is loaded with decreasing granularity for D for better memory bandwidth.
-    // The minimum granularity with cp.async is 16 bytes, with synchronous data loading it's 4 bytes.
+    // The minimum granularity is 16 bytes.
+    constexpr int h2_per_chunk = 16/sizeof(half2);
+    const int chunks_per_row = D2 / h2_per_chunk;
     if constexpr (use_cp_async) {
+        static_assert(warp_size == 32, "bad warp_size");
         static_assert(!oob_check, "OOB check not compatible with cp_async");
         constexpr int preload = 64;
-        constexpr int h2_per_chunk = 16/sizeof(half2);
-        const int chunks_per_row = D2 / h2_per_chunk;
 
         const unsigned int tile_KV_32 = ggml_cuda_cvta_generic_to_shared(tile_KV);
 
@@ -348,11 +358,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
         // 6: max  1*16= 16 bytes,   8 half
         ggml_cuda_unroll<6>{}(load);
     } else {
-        // TODO use ggml_cuda_memcpy_1
+        const half2 zero[4] = {{0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f}};
         auto load = [&] __device__ (const int n) {
-            const int stride_k = warp_size >> n;
-            const int k0_start = stride_k == warp_size ? 0 : D2 - D2 % (2*stride_k);
-            const int k0_stop  =                             D2 - D2 % (1*stride_k);
+            const int stride_k = 32 >> n;
+            const int k0_start = stride_k == 32 ? 0 : chunks_per_row - chunks_per_row % (2*stride_k);
+            const int k0_stop  =                      chunks_per_row - chunks_per_row % (1*stride_k);
             const int stride_i = warp_size / stride_k;
 
             if (k0_start == k0_stop) {
@@ -371,15 +381,18 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
                     const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
-                    tile_KV[i*stride_tile + k] = !oob_check || i < i_sup ? KV[i*stride_KV + k] : make_half2(0.0f, 0.0f);
+                    ggml_cuda_memcpy_1<16>(tile_KV + i*stride_tile + k*4,
+                        !oob_check || i < i_sup ? KV + i*stride_KV + k*h2_per_chunk : zero);
                 }
             }
         };
-        // 1: max 32* 4=128 bytes,  64 half
-        // 2: max 16* 4= 64 bytes,  32 half
-        // 3: max  8* 4= 32 bytes,  16 half
-        // 4: max  4* 4= 16 bytes,   8 half
-        ggml_cuda_unroll<4>{}(load);
+        // 1: max 32*16=512 bytes, 256 half
+        // 2: max 16*16=256 bytes, 128 half
+        // 3: max  8*16=128 bytes,  64 half
+        // 4: max  4*16= 64 bytes,  32 half
+        // 5: max  2*16= 32 bytes,  16 half
+        // 6: max  1*16= 16 bytes,   8 half
+        ggml_cuda_unroll<6>{}(load);
     }
 }
 
@@ -862,11 +875,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     }
 
 
-#if defined(AMD_WMMA_AVAILABLE) && !defined(LDMATRIX_TRANS_AVAILABLE)
-    T_A_VKQ A_identity;
-    make_identity_mat(A_identity);
-#endif // defined(AMD_WMMA_AVAILABLE) && !defined(LDMATRIX_TRANS_AVAILABLE)
-
     // Calculate VKQ tile, need to use logical rather than physical elements for i0 due to transposition of V:
 #pragma unroll
     for (int i0_start = 0; i0_start < DV; i0_start += 2*nbatch_V2) {
@@ -897,29 +905,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 const int k0 = k00 + (threadIdx.y % np)*T_A_VKQ::J;
 
                 T_A_VKQ A; // Transposed in SRAM but not in registers, gets transposed on load.
-#if defined(LDMATRIX_TRANS_AVAILABLE)
                 load_ldmatrix_trans(A, tile_V_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2, stride_tile_V);
-#elif defined(AMD_MFMA_AVAILABLE)
-                // MFMA A register layout: A_mat[i=lane%16][k=4*(lane/16)+reg].
-                // Normal load gives A_mat[seq][dv] but we need A_mat[dv][seq] = V^T.
-                // Load with transposed addressing: 4 strided half loads.
-                {
-                    const half2 * xs0 = tile_V_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2;
-                    const half * xs0_h = (const half *) xs0;
-                    const int stride_h = stride_tile_V * 2; // stride in half units
-                    half * A_h = (half *) A.x;
-#pragma unroll
-                    for (int l = 0; l < 4; ++l) {
-                        A_h[l] = xs0_h[(4*(threadIdx.x / 16) + l) * stride_h + threadIdx.x % 16];
-                    }
-                }
-#else
-                // TODO: Try to transpose tile_V when loading gmem to smem.
-                // Use mma to transpose T_A_VKQ for RDNA.
-                T_A_VKQ A_trans;
-                load_ldmatrix(A_trans, tile_V_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2, stride_tile_V);
-                mma(A, A_trans, A_identity);
-#endif // defined(LDMATRIX_TRANS_AVAILABLE)
                 if constexpr (T_B_KQ::I == 8) {
                     mma(VKQ_C[i_VKQ_0/i0_stride], A, B[k00/(np*T_A_VKQ::J)]);
                 } else {
@@ -1240,7 +1226,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         float KQ_max_scale[cols_per_thread];
 #pragma unroll
         for (int col = 0; col < cols_per_thread; ++col) {
-            const int jc = cols_per_warp == 8 ? T_C_KQ::get_j(col) : T_C_KQ::get_i(2*col);
+            const int jc = (threadIdx.y/np)*cols_per_warp + (cols_per_warp == 8 ? T_C_KQ::get_j(col) : T_C_KQ::get_i(2*col));
             const float sink = sinks_f[jc % ncols2];
 
             const float KQ_max_new = fmaxf(KQ_max[col], sink);
@@ -1847,6 +1833,10 @@ extern DECL_FATTN_MMA_F16_CASE(512, 512,  8,  8);
 extern DECL_FATTN_MMA_F16_CASE(576, 512, 1, 16);
 extern DECL_FATTN_MMA_F16_CASE(576, 512, 2, 16);
 extern DECL_FATTN_MMA_F16_CASE(576, 512, 4, 16);
+
+// Mistral Small 4 (DKQ=320, DV=256), GQA=32-only build:
+extern DECL_FATTN_MMA_F16_CASE(320, 256,  1, 32);
+extern DECL_FATTN_MMA_F16_CASE(320, 256,  2, 32);
 
 // For GLM 4.7 Flash
 extern DECL_FATTN_MMA_F16_CASE(576, 512,  4,  4);

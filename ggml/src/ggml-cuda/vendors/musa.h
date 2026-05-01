@@ -42,6 +42,7 @@
 #define cudaDeviceProp musaDeviceProp
 #define cudaDeviceSynchronize musaDeviceSynchronize
 #define cudaError_t musaError_t
+#define cudaErrorMemoryAllocation musaErrorMemoryAllocation
 #define cudaErrorPeerAccessAlreadyEnabled musaErrorPeerAccessAlreadyEnabled
 #define cudaErrorPeerAccessNotEnabled musaErrorPeerAccessNotEnabled
 #define cudaEventCreateWithFlags musaEventCreateWithFlags
