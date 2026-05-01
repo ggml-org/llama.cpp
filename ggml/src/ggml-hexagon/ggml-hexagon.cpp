@@ -2421,8 +2421,8 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
         return false;
     }
 
-    // TODO: add support for non-contigiuos tensors
-    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+    // TODO: add support for non-contiguous elements within a row
+    if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous_rows(dst)) {
         return false;
     }
 
