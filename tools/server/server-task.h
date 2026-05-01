@@ -571,21 +571,21 @@ struct server_prompt_checkpoint {
 
     int64_t n_tokens;
 
-    std::vector<uint8_t> data;
+    std::shared_ptr<const std::vector<uint8_t>> data;
 
     size_t size() const {
-        return data.size();
+        return data->size();
     }
 
     bool empty() const {
-        return data.empty();
+        return data->empty();
     }
 
     void clear() {
         pos_min = 0;
         pos_max = 0;
         n_tokens = 0;
-        data.clear();
+        data.reset();
     }
 };
 

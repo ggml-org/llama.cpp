@@ -46,19 +46,19 @@ static server_prompt_checkpoint server_get_checkpoint(llama_context * ctx, int i
 
     const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
-    auto cur = server_prompt_checkpoint {
-        /*.pos_min  = */ pos_min,
-        /*.pos_max  = */ pos_max,
-        /*.n_tokens = */ n_tokens,
-        /*.data     = */ std::vector<uint8_t>(checkpoint_size),
-    };
+    std::vector<uint8_t> data(checkpoint_size);
 
-    const size_t n = llama_state_seq_get_data_ext(ctx, cur.data.data(), checkpoint_size, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    const size_t n = llama_state_seq_get_data_ext(ctx, data.data(), checkpoint_size, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
     if (n != checkpoint_size) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
     }
 
-    return cur;
+    return server_prompt_checkpoint {
+        /*.pos_min  = */ pos_min,
+        /*.pos_max  = */ pos_max,
+        /*.n_tokens = */ n_tokens,
+        /*.data     = */ std::make_shared<const std::vector<uint8_t>>(std::move(data)),
+    };
 }
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
@@ -369,7 +369,7 @@ struct server_slot {
                     spec_ckpt = server_get_checkpoint(ctx, this->id, n_tokens);
 
                     SLT_DBG(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
-                            spec_ckpt.pos_min, spec_ckpt.pos_max, n_tokens, (float) spec_ckpt.data.size() / 1024 / 1024);
+                            spec_ckpt.pos_min, spec_ckpt.pos_max, n_tokens, (float) spec_ckpt.data->size() / 1024 / 1024);
                 }
             }
 
@@ -1823,7 +1823,7 @@ private:
             const auto & cur = slot.prompt.checkpoints.front();
 
             SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                    cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.data.size() / 1024 / 1024);
+                    cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.data->size() / 1024 / 1024);
 
             slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
         }
@@ -1833,7 +1833,7 @@ private:
         SLT_WRN(slot,
                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
-                cur.pos_max, cur.n_tokens, (float) cur.data.size() / 1024 / 1024);
+                cur.pos_max, cur.n_tokens, (float) cur.data->size() / 1024 / 1024);
     }
 
     void process_single_task(server_task && task) {
@@ -2493,8 +2493,8 @@ private:
 
                                     if (!do_reset) {
                                         // restore the context checkpoint
-                                        const size_t checkpoint_size = it->data.size();
-                                        const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        const size_t checkpoint_size = it->data->size();
+                                        const size_t n = llama_state_seq_set_data_ext(ctx, it->data->data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
                                         if (n != checkpoint_size) {
                                             SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float) checkpoint_size / 1024 / 1024);
@@ -2521,7 +2521,7 @@ private:
                                 for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
                                     const auto & cur = *it;
                                     if (cur.pos_max > pos_next) {
-                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.data.size() / 1024 / 1024);
+                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.data->size() / 1024 / 1024);
                                         it = slot.prompt.checkpoints.erase(it);
                                     } else {
                                         ++it;
@@ -2991,7 +2991,7 @@ private:
                             SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n",
                                     ckpt.pos_min, ckpt.pos_max, ckpt.size());
 
-                            const size_t n = llama_state_seq_set_data_ext(slot.ctx, ckpt.data.data(), ckpt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                            const size_t n = llama_state_seq_set_data_ext(slot.ctx, ckpt.data->data(), ckpt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                             if (n != ckpt.size()) {
                                 GGML_ABORT("%s: failed to restore context checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
                                         __func__, ckpt.pos_min, ckpt.pos_max, ckpt.size(), ckpt.size(), n);
