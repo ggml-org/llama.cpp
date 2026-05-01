@@ -1779,8 +1779,8 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_mul_mat_fast_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_mul_mat_pipeline_key key = {};
-        key.src0_type                        = context.src0->type;
-        key.src1_type                        = context.src1->type;
+        key.src0_type           = context.src0->type;
+        key.src1_type           = context.src1->type;
         key.vectorized          = (context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 &&
                                    (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
                                       1 :
