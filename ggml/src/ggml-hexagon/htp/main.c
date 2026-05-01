@@ -210,7 +210,7 @@ AEEResult htp_iface_close(remote_handle64 handle) {
     return AEE_SUCCESS;
 }
 
-AEEResult htp_iface_mmap(remote_handle64 handle, uint32 fd, uint32 size, uint32 pinned) {
+AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint32_t size) {
     struct htp_context * ctx = (struct htp_context *) handle;
     if (!ctx) {
         return AEE_EBADPARM;
@@ -220,7 +220,6 @@ AEEResult htp_iface_mmap(remote_handle64 handle, uint32 fd, uint32 size, uint32 
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (m->fd == fd) {
-            m->pinned = pinned;
             return AEE_SUCCESS;
         }
     }
@@ -229,7 +228,7 @@ AEEResult htp_iface_mmap(remote_handle64 handle, uint32 fd, uint32 size, uint32 
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
-            FARF(HIGH, "mmap : fd %u size %u pinned %u", fd, size, pinned);
+            FARF(HIGH, "mmap : fd %u size %u", fd, size);
 #if __HVX_ARCH__ > 73
             void *va = HAP_mmap2(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
 #else
@@ -248,7 +247,6 @@ AEEResult htp_iface_mmap(remote_handle64 handle, uint32 fd, uint32 size, uint32 
             m->base   = (uint64_t) va;
             m->fd     = fd;
             m->size   = size;
-            m->pinned = pinned;
 
             return AEE_SUCCESS;
         }
@@ -275,7 +273,6 @@ AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
             m->size   = 0;
             m->base   = NULL;
             m->fd     = -1;
-            m->pinned = 0;
         }
     }
 
@@ -358,7 +355,7 @@ static void vtcm_free(struct htp_context * ctx) {
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
-AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx, uint32 use_hmx) {
+AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx, uint32 use_hmx, uint64_t max_vmem) {
     struct htp_context * ctx = (struct htp_context *) handle;
 
     if (!ctx) {
@@ -376,12 +373,12 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
                               htp_error_callback,   // Error callback; no errors expected on the DSP
                               (void *) ctx,         // Callback context
                               &ctx->queue);
-
     if (err) {
         FARF(ERROR, "Queue import failed with 0x%08x", (unsigned) err);
         return err;
     }
 
+    ctx->max_vmem    = max_vmem;
     ctx->thread_id   = qurt_thread_get_id();
     ctx->thread_prio = qurt_thread_get_priority(ctx->thread_id);
 
@@ -622,8 +619,8 @@ static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct 
 }
 
 static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
-    if (m->size && !m->pinned) {
-        FARF(HIGH, "unmap : fd %u base %p size %u pinned %u", m->fd, (void*) m->base, (uint32_t) m->size, m->pinned);
+    if (m->size) {
+        FARF(HIGH, "unmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
 #if __HVX_ARCH__ > 73
         HAP_munmap2((void *) m->base, m->size);
 #else
@@ -660,9 +657,8 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
             m->base   = b->base = (uint64_t) va;
             m->fd     = b->fd;
             m->size   = b->size;
-            m->pinned = 0;
 
-            FARF(HIGH, "mmap : fd %u base %p size %u pinned %u", m->fd, (void*) m->base, (uint32_t) m->size, m->pinned);
+            FARF(HIGH, "mmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
             return;
         }
     }
@@ -672,8 +668,8 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
     uint32_t m_reuse = 0; // mmap reuse mask (index from ctx->mmap array)
     uint32_t b_reuse = 0; // buf reuse count
 
-    size_t   m_vmem  = 0; // mapped vmem
-    size_t   e_vmem  = 0; // extra  vmem
+    uint64_t m_vmem  = 0; // mapped vmem
+    uint64_t e_vmem  = 0; // extra  vmem
 
     // See what we can reuse
     for (uint32_t i=0; i < n_bufs; i++) {
@@ -687,9 +683,10 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
     // See how much vmem we have mmaped right now
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) { m_vmem += ctx->mmap[i].size; }
 
-    FARF(HIGH, "prep-bufs : pass1 mmap-vmem %zu extra-vmem %zu n-bufs %u b-reuse %u", m_vmem, e_vmem, n_bufs, b_reuse);
+    FARF(HIGH, "prep-bufs : pass1 mmap-vmem %zu extra-vmem %zu max-vmem %zu : n-bufs %u b-reuse %u",
+            (size_t) m_vmem, (size_t) e_vmem, (size_t) ctx->max_vmem, n_bufs, b_reuse);
 
-    if ((m_vmem + e_vmem) > HTP_OP_MAX_VMEM) {
+    if ((m_vmem + e_vmem) > ctx->max_vmem) {
         // Drop unused mappings
         for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
             bool used = m_reuse & (1<<i);

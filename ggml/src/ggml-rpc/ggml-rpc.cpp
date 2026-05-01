@@ -740,9 +740,9 @@ static ggml_backend_i ggml_backend_rpc_interface = {
     /* .free                    = */ ggml_backend_rpc_free,
     /* .set_tensor_async        = */ NULL,
     /* .get_tensor_async        = */ NULL,
-    /* .cpy_tensor_async        = */ NULL,
-    /* .get_tensor_2d_async     = */ NULL,
     /* .set_tensor_2d_async     = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
+    /* .cpy_tensor_async        = */ NULL,
     /* .synchronize             = */ ggml_backend_rpc_synchronize,
     /* .graph_plan_create       = */ NULL,
     /* .graph_plan_free         = */ NULL,
@@ -1101,7 +1101,7 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
         fs::path cache_file = fs::path(cache_dir) / hash_str;
         std::ofstream ofs(cache_file, std::ios::binary);
         ofs.write((const char *)data, size);
-        GGML_LOG_INFO("[%s] saved to '%s'\n", __func__, cache_file.c_str());
+        GGML_LOG_INFO("[%s] saved to '%s'\n", __func__, cache_file.string().c_str());
     }
     ggml_backend_tensor_set(tensor, data, offset, size);
     return true;

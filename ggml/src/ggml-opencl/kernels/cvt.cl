@@ -88,6 +88,17 @@ struct block_q6_K {
 };
 
 //------------------------------------------------------------------------------
+// block_iq4_nl
+//------------------------------------------------------------------------------
+#define QK4_NL 32
+
+struct block_iq4_nl
+{
+    half d;
+    uint8_t qs[QK4_NL / 2];
+};
+
+//------------------------------------------------------------------------------
 // kernel_convert_block_q4_0
 // Convert the block_q4_0 format to 2 separate arrays (AOS -> SOA).
 // This kernel does not deshuffle the bits.
@@ -893,5 +904,101 @@ kernel void kernel_restore_block_q6_K_noshuffle(
 
     for (int i = 0; i < QK_K/16; ++i) {
         b->scales[i] = s[i];
+    }
+}
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_iq4_nl
+// Convert the block_iq4_nl format to 2 separate arrays (AOS -> SOA).
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_iq4_nl(
+    global struct block_iq4_nl * src0,
+    global uchar * dst_q,
+    global half  * dst_d,
+    uchar          mask_0F,
+    uchar          mask_F0,
+    ulong          n_blk
+) {
+    if (get_global_id(0) >= n_blk) {
+        return;
+    }
+    global struct block_iq4_nl * b = (global struct block_iq4_nl *) src0 + get_global_id(0);
+    global uchar * q = (global uchar *) dst_q + QK4_NL/2*get_global_id(0);
+    global half  * d = (global half *) dst_d + get_global_id(0);
+
+    *d = b->d;
+
+    for (int i = 0; i < QK4_NL/2; ++i) {
+        q[i] = b->qs[i];
+    }
+}
+
+kernel void kernel_restore_block_iq4_nl(
+    global uchar * src_q,
+    global half  * src_d,
+    global struct block_iq4_nl * dst,
+    ulong          n_blk
+) {
+    if (get_global_id(0) >= n_blk) {
+        return;
+    }
+    global struct block_iq4_nl * b = (global struct block_iq4_nl *) dst + get_global_id(0);
+    global uchar * q = (global uchar *) src_q + QK4_NL/2*get_global_id(0);
+    global half  * d = (global half *) src_d + get_global_id(0);
+
+    b->d = *d;
+
+    for (int i = 0; i < QK4_NL/2; ++i) {
+        b->qs[i] = q[i];
+    }
+}
+
+kernel void kernel_convert_block_iq4_nl_noshuffle(
+    global struct block_iq4_nl * src0,
+    global uchar * dst_q,
+    global half  * dst_d,
+    uchar          mask_0F,
+    uchar          mask_F0,
+    ulong          n_blk
+) {
+    if (get_global_id(0) >= n_blk) {
+        return;
+    }
+    global struct block_iq4_nl * b = (global struct block_iq4_nl *) src0 + get_global_id(0);
+    global uchar * q = (global uchar *) dst_q + QK4_NL/2*get_global_id(0);
+    global half  * d = (global half *) dst_d + get_global_id(0);
+
+    *d = b->d;
+    for (int i = 0; i < QK4_NL/4; ++i) {
+        uchar x0 = b->qs[2*i + 0];
+        uchar x1 = b->qs[2*i + 1];
+
+        q[i + 0       ] = convert_uchar(x0 & mask_0F) | convert_uchar((x1 & mask_0F) << 4);
+        q[i + QK4_NL/4] = convert_uchar((x0 & mask_F0) >> 4) | convert_uchar(x1 & mask_F0);
+    }
+}
+
+kernel void kernel_restore_block_iq4_nl_noshuffle(
+    global uchar * src_q,
+    global half  * src_d,
+    global struct block_iq4_nl * dst,
+    uchar mask_0F,
+    uchar mask_F0,
+    ulong n_blk
+) {
+    if (get_global_id(0) >= n_blk) {
+        return;
+    }
+    global struct block_iq4_nl * b = (global struct block_iq4_nl *) dst + get_global_id(0);
+    global uchar * q = (global uchar *) src_q + QK4_NL/2*get_global_id(0);
+    global half  * d = (global half *) src_d + get_global_id(0);
+
+    b->d = *d;
+    for (int i = 0; i < QK4_NL/4; ++i) {
+        uchar x0 = q[i + 0       ];
+        uchar x1 = q[i + QK4_NL/4];
+
+        b->qs[2*i + 0] = convert_uchar((x0 & mask_0F) | ((x1 & mask_0F) << 4));
+        b->qs[2*i + 1] = convert_uchar(((x0 & mask_F0) >> 4) | (x1 & mask_F0));
     }
 }

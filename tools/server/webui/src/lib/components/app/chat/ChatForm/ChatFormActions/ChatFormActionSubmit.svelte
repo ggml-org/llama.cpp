@@ -7,20 +7,13 @@
 	interface Props {
 		canSend?: boolean;
 		disabled?: boolean;
-		isLoading?: boolean;
 		showErrorState?: boolean;
 		tooltipLabel?: string;
 	}
 
-	let {
-		canSend = false,
-		disabled = false,
-		isLoading = false,
-		showErrorState = false,
-		tooltipLabel
-	}: Props = $props();
+	let { canSend = false, disabled = false, showErrorState = false, tooltipLabel }: Props = $props();
 
-	let isDisabled = $derived(!canSend || disabled || isLoading);
+	let isDisabled = $derived(!canSend || disabled);
 </script>
 
 {#snippet submitButton(props = {})}

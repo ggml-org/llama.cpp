@@ -300,7 +300,7 @@
 			if (sendOnEnter || isModifier) {
 				event.preventDefault();
 
-				if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
+				if (!canSubmit || disabled || hasLoadingAttachments) return;
 
 				onSubmit?.();
 			}
@@ -527,16 +527,15 @@
 		}
 
 		if (isRecording) {
+			isRecording = false;
 			try {
 				const audioBlob = await audioRecorder.stopRecording();
 				const wavBlob = await convertToWav(audioBlob);
 				const audioFile = createAudioFile(wavBlob);
 
 				onFilesAdd?.([audioFile]);
-				isRecording = false;
 			} catch (error) {
 				console.error('Failed to stop recording:', error);
-				isRecording = false;
 			}
 		} else {
 			try {
@@ -555,7 +554,7 @@
 	class="relative {className}"
 	onsubmit={(e) => {
 		e.preventDefault();
-		if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
+		if (!canSubmit || disabled || hasLoadingAttachments) return;
 		onSubmit?.();
 	}}
 >

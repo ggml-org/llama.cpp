@@ -1464,8 +1464,9 @@ bool mmap::open(const char *path) {
   auto wpath = u8string_to_wstring(path);
   if (wpath.empty()) { return false; }
 
-  hFile_ = ::CreateFile2(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                         OPEN_EXISTING, NULL);
+  hFile_ =
+      ::CreateFile2(wpath.c_str(), GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, OPEN_EXISTING, NULL);
 
   if (hFile_ == INVALID_HANDLE_VALUE) { return false; }
 
@@ -2052,56 +2053,50 @@ int getaddrinfo_with_timeout(const char *node, const char *service,
   return 0;
 #elif defined(_GNU_SOURCE) && defined(__GLIBC__) &&                            \
     (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 2))
-  // Linux implementation using getaddrinfo_a for asynchronous DNS resolution
-  struct gaicb request;
+  // #2431: gai_cancel() is non-blocking and may return EAI_NOTCANCELED while
+  // the resolver worker still references the stack-local gaicb. The cancel
+  // path therefore waits (gai_suspend with no timeout) for the worker to
+  // actually finish before letting the stack frame go. The trade-off is that
+  // a wedged DNS server can hold this thread for the system resolver timeout
+  // (~30s by default) past the caller's connection timeout.
+  struct gaicb request {};
   struct gaicb *requests[1] = {&request};
-  struct sigevent sevp;
-  struct timespec timeout;
+  struct sigevent sevp {};
+  struct timespec timeout {
+    timeout_sec, 0
+  };
 
-  // Initialize the request structure
-  memset(&request, 0, sizeof(request));
   request.ar_name = node;
   request.ar_service = service;
   request.ar_request = hints;
-
-  // Set up timeout
-  timeout.tv_sec = timeout_sec;
-  timeout.tv_nsec = 0;
-
-  // Initialize sigevent structure (not used, but required)
-  memset(&sevp, 0, sizeof(sevp));
   sevp.sigev_notify = SIGEV_NONE;
 
-  // Start asynchronous resolution
-  int start_result = getaddrinfo_a(GAI_NOWAIT, requests, 1, &sevp);
-  if (start_result != 0) { return start_result; }
+  int rc = getaddrinfo_a(GAI_NOWAIT, requests, 1, &sevp);
+  if (rc != 0) { return rc; }
 
-  // Wait for completion with timeout
-  int wait_result =
-      gai_suspend((const struct gaicb *const *)requests, 1, &timeout);
+  auto cleanup = scope_exit([&] {
+    if (request.ar_result) { freeaddrinfo(request.ar_result); }
+  });
+
+  int wait_result = gai_suspend(requests, 1, &timeout);
 
   if (wait_result == 0 || wait_result == EAI_ALLDONE) {
-    // Completed successfully, get the result
     int gai_result = gai_error(&request);
     if (gai_result == 0) {
       *res = request.ar_result;
+      request.ar_result = nullptr;
       return 0;
-    } else {
-      // Clean up on error
-      if (request.ar_result) { freeaddrinfo(request.ar_result); }
-      return gai_result;
     }
-  } else if (wait_result == EAI_AGAIN) {
-    // Timeout occurred, cancel the request
-    gai_cancel(&request);
-    return EAI_AGAIN;
-  } else {
-    // Other error occurred
-    gai_cancel(&request);
-    return wait_result;
+    return gai_result;
   }
+
+  gai_cancel(&request);
+  while (gai_error(&request) == EAI_INPROGRESS) {
+    gai_suspend(requests, 1, nullptr);
+  }
+  return wait_result;
 #else
-  // Fallback implementation using thread-based timeout for other Unix systems
+  // Fallback implementation using thread-based timeout for other Unix systems.
 
   struct GetAddrInfoState {
     ~GetAddrInfoState() {
@@ -14142,6 +14137,9 @@ ssize_t read(session_t session, void *buf, size_t len, TlsError &err) {
   err.code = impl::map_mbedtls_error(ret, err.sys_errno);
   err.backend_code = static_cast<uint64_t>(-ret);
   impl::mbedtls_last_error() = ret;
+  // mbedTLS signals a clean close_notify via a negative error code rather
+  // than 0; surface it as a clean EOF the way OpenSSL/wolfSSL do.
+  if (err.code == ErrorCode::PeerClosed) { return 0; }
   return -1;
 }
 

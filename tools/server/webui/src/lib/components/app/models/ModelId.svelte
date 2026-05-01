@@ -5,8 +5,9 @@
 
 	interface Props {
 		modelId: string;
-		showOrgName?: boolean;
+		hideOrgName?: boolean;
 		showRaw?: boolean;
+		hideQuantization?: boolean;
 		aliases?: string[];
 		tags?: string[];
 		class?: string;
@@ -14,8 +15,9 @@
 
 	let {
 		modelId,
-		showOrgName = false,
+		hideOrgName = false,
 		showRaw = undefined,
+		hideQuantization = false,
 		aliases,
 		tags,
 		class: className = '',
@@ -41,7 +43,7 @@
 {:else}
 	<span class="flex min-w-0 flex-wrap items-center gap-1 {className}" {...rest}>
 		<span class="min-w-0 truncate font-medium">
-			{#if showOrgName && parsed.orgName && !(aliases && aliases.length > 0)}{parsed.orgName}/{/if}{displayName}
+			{#if !hideOrgName && parsed.orgName && !(aliases && aliases.length > 0)}{parsed.orgName}/{/if}{displayName}
 		</span>
 
 		{#if parsed.params}
@@ -50,7 +52,7 @@
 			</span>
 		{/if}
 
-		{#if parsed.quantization}
+		{#if parsed.quantization && !hideQuantization}
 			<span class={badgeClass}>
 				{parsed.quantization}
 			</span>

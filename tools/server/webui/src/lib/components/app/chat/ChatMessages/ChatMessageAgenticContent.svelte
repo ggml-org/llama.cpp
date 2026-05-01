@@ -1,37 +1,103 @@
 <script lang="ts">
+	import { Wrench, Loader2, Brain } from '@lucide/svelte';
 	import {
 		ChatMessageStatistics,
 		CollapsibleContentBlock,
 		MarkdownContent,
-		SyntaxHighlightedCode
+		SyntaxHighlightedCode,
+		ChatMessagePermissionRequest,
+		ChatMessageContinueRequest
 	} from '$lib/components/app';
-	import { config } from '$lib/stores/settings.svelte';
-	import { Wrench, Loader2, Brain } from '@lucide/svelte';
-	import { AgenticSectionType, FileTypeText } from '$lib/enums';
-	import { formatJsonPretty } from '$lib/utils';
+
+	import {
+		AgenticSectionType,
+		ChatMessageStatsView,
+		FileTypeText,
+		ToolPermissionDecision
+	} from '$lib/enums';
+	import type {
+		ChatMessageAgenticTimings,
+		ChatMessageAgenticTurnStats,
+		DatabaseMessage
+	} from '$lib/types';
 	import {
 		deriveAgenticSections,
+		formatJsonPretty,
 		parseToolResultWithImages,
 		type AgenticSection,
 		type ToolResultLine
 	} from '$lib/utils';
-	import type { DatabaseMessage } from '$lib/types/database';
-	import type { ChatMessageAgenticTimings, ChatMessageAgenticTurnStats } from '$lib/types/chat';
-	import { ChatMessageStatsView } from '$lib/enums';
+	import {
+		agenticPendingPermissionRequest,
+		agenticResolvePermission,
+		agenticPendingContinueRequest,
+		agenticResolveContinue
+	} from '$lib/stores/agentic.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
 		isStreaming?: boolean;
+		isLastAssistantMessage?: boolean;
 		highlightTurns?: boolean;
 	}
 
-	let { message, toolMessages = [], isStreaming = false, highlightTurns = false }: Props = $props();
+	let {
+		message,
+		toolMessages = [],
+		isStreaming = false,
+		isLastAssistantMessage = false,
+		highlightTurns = false
+	}: Props = $props();
 
 	let expandedStates: Record<number, boolean> = $state({});
 
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
+
+	let permissionDismissed = $state(false);
+
+	const pendingPermission = $derived(
+		isStreaming && isLastAssistantMessage ? agenticPendingPermissionRequest(message.convId) : null
+	);
+
+	// Reset dismissed when pendingPermission changes (new request or cleared)
+	let prevPendingRef: typeof pendingPermission = null;
+	$effect(() => {
+		if (pendingPermission !== prevPendingRef) {
+			prevPendingRef = pendingPermission;
+			if (pendingPermission) {
+				permissionDismissed = false;
+			}
+		}
+	});
+
+	function handlePermission(decision: ToolPermissionDecision) {
+		permissionDismissed = true;
+		agenticResolvePermission(message.convId, decision);
+	}
+
+	let continueDismissed = $state(false);
+
+	const pendingContinue = $derived(
+		isStreaming && isLastAssistantMessage ? agenticPendingContinueRequest(message.convId) : false
+	);
+
+	let prevContinueRef = false;
+	$effect(() => {
+		if (pendingContinue !== prevContinueRef) {
+			prevContinueRef = pendingContinue;
+			if (pendingContinue) {
+				continueDismissed = false;
+			}
+		}
+	});
+
+	function handleContinue(shouldContinue: boolean) {
+		continueDismissed = true;
+		agenticResolveContinue(message.convId, shouldContinue);
+	}
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
@@ -201,7 +267,11 @@
 						<Loader2 class="h-3 w-3 animate-spin" />
 					{/if}
 				</div>
-				{#if section.toolResult}
+				{#if isPending}
+					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
+						Waiting for result...
+					</div>
+				{:else if section.toolResult}
 					<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
 						{#each section.parsedLines as line, i (i)}
 							<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">{line.text}</div>
@@ -215,10 +285,8 @@
 							{/if}
 						{/each}
 					</div>
-				{:else if isPending}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
-						Waiting for result...
-					</div>
+				{:else}
+					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">No output</div>
 				{/if}
 			</div>
 		</CollapsibleContentBlock>
@@ -288,6 +356,18 @@
 		{#each sectionsParsed as section, index (index)}
 			{@render renderSection(section, index)}
 		{/each}
+	{/if}
+
+	{#if pendingPermission && !permissionDismissed}
+		<ChatMessagePermissionRequest
+			toolName={pendingPermission.toolName}
+			serverLabel={pendingPermission.serverLabel}
+			onDecision={handlePermission}
+		/>
+	{/if}
+
+	{#if pendingContinue && !continueDismissed}
+		<ChatMessageContinueRequest onDecision={handleContinue} />
 	{/if}
 </div>
 
