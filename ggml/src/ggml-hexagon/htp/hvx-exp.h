@@ -17,7 +17,7 @@
 #define EXP_LOGN2   (0x3F317218)  // ln(2)   = 0.6931471805
 #define EXP_LOG2E   (0x3FB8AA3B)  // log2(e) = 1/ln(2) = 1.4426950408
 #define EXP_ONE     (0x3f800000)  // 1.0
-#define EXP_RANGE_R (0x42B16666)  // 88.7
+#define EXP_RANGE_R (0x42B17218)  // ln(FLT_MAX) approx = 88.7228
 #define EXP_RANGE_L (0xC2B00000)  // -88.0 (approx log(FLT_MIN))
 
 static inline HVX_Vector hvx_vec_exp_f32(HVX_Vector in_vec) {
@@ -163,7 +163,7 @@ static inline void hvx_exp_f32(uint8_t * restrict dst, const uint8_t * restrict 
     HVX_Vector vec_out = Q6_V_vzero();
 
     static const float kInf    = INFINITY;
-    static const float kMaxExp = 88.7f;
+    static const float kMaxExp = 88.7228f;
 
     const HVX_Vector max_exp = hvx_vec_splat_f32(kMaxExp);
     const HVX_Vector inf     = hvx_vec_splat_f32(kInf);
