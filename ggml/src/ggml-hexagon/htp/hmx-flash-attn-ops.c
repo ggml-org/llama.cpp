@@ -1269,7 +1269,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const uint32_t n_kv_blocks  = (nek1 + Bc - 1) / Bc;
     const bool     use_pipeline = (n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads >= 2);
 
-    FARF(HIGH, "hmx_fa: neq1=%u nek1=%u DK=%u DV=%u G=%u Br=%zu Bc=%zu g_br=%zu n_kv_blocks=%u pipeline=%d vtcm=%zu",
+    FARF(HIGH, "hmx-fa: neq1=%u nek1=%u DK=%u DV=%u G=%u Br=%zu Bc=%zu g_br=%zu n_kv_blocks=%u pipeline=%d vtcm=%zu",
          neq1, nek1, DK, DV, G, Br, Bc, g_br, n_kv_blocks, use_pipeline, vtcm_budget);
 
     // ======== Build context ========
@@ -1830,7 +1830,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     TIMER_STOP(total);
 
 #if defined(ENABLE_PROFILE_TIMERS)
-    FARF(HIGH, "hmx_fa: %lld us, q_load=%lld kv_dma=%lld k_interleave=%lld v_interleave=%lld", TIMER_US(total),
+    FARF(HIGH, "hmx-fa: %lld us, q_load=%lld kv_dma=%lld k_interleave=%lld v_interleave=%lld", TIMER_US(total),
          TIMER_US(q_load), TIMER_US(kv_dma), TIMER_US(k_interleave), TIMER_US(v_interleave));
     FARF(HIGH, "  qk_dot=%lld softmax=%lld o_update=%lld o_norm=%lld o_store=%lld", TIMER_US(qk_dot), TIMER_US(softmax),
          TIMER_US(o_update), TIMER_US(o_norm), TIMER_US(o_store));
