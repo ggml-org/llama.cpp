@@ -427,14 +427,15 @@ bool hot_manager::allocate(const llama_model & model) {
         for (int i = 0; i < P; ++i) pick_arange_vals[(size_t) i] = (float) i;
 
         // Per-pick cold sentinel: cold_ids[k % n_cold] for k in [0, P).
-        // Each hot pick within a token gets a different cold expert as
-        // sentinel, so the cold path's CPU mul_mat_id also sees per-token
-        // unique IDs (defensive - the CPU helper might handle dedup
-        // correctly, but making both paths uniform is safer).
+        // For the COLD path on CPU we actually want a SINGLE shared sentinel
+        // so that the CPU mul_mat_id's matrix_row_counts dedup collapses all
+        // hot picks within a token to one expert load (saves bandwidth). The
+        // CUDA mm_ids_helper bug that required per-pick uniqueness only
+        // affects the GPU hot path. So we set every entry to cold_ids[0].
         std::vector<float> cold_sentinel_vals((size_t) P);
         const int n_cold = (int) state.cold_ids.size();
         for (int i = 0; i < P; ++i) {
-            cold_sentinel_vals[(size_t) i] = n_cold > 0 ? (float) state.cold_ids[(size_t) (i % n_cold)] : 0.0f;
+            cold_sentinel_vals[(size_t) i] = n_cold > 0 ? (float) state.cold_ids[0] : 0.0f;
         }
 
         bool ok_all = true;
