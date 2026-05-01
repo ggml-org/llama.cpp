@@ -2,6 +2,7 @@
 
 void llama_model_talkie::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+    ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
 
     switch (hparams.n_layer) {
         case 40: type = LLM_TYPE_13B; break;
@@ -82,6 +83,7 @@ llama_model_talkie::graph::graph(const llama_model & model, const llm_graph_para
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow);
 
+            // reference applies qknorm after rope
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_norm", il);
 
@@ -91,7 +93,7 @@ llama_model_talkie::graph::graph(const llama_model & model, const llm_graph_para
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr, nullptr,
+                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
@@ -111,7 +113,7 @@ llama_model_talkie::graph::graph(const llama_model & model, const llm_graph_para
         cur = build_ffn(cur,
                 model.layers[il].ffn_up,   nullptr, nullptr,
                 model.layers[il].ffn_gate, nullptr, nullptr,
-                model.layers[il].ffn_down, nullptr, nullptr,
+                model.layers[il].ffn_down, nullptr, model.layers[il].ffn_down_s,
                 nullptr,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
@@ -138,6 +140,7 @@ llama_model_talkie::graph::graph(const llama_model & model, const llm_graph_para
     res->t_embd = cur;
 
     cur = build_lora_mm(model.output, cur);
+    cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
