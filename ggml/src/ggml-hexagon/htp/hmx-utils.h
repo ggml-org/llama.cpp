@@ -201,12 +201,4 @@ static inline void interleave_cols_to_tiles(__fp16 * restrict tiles_out,
     }
 }
 
-// --- VTCM sequential allocator (from htp-ops-lib/include/dsp/vtcm_mgr.h) ---
-
-static inline uint8_t *vtcm_seq_alloc(uint8_t **vtcm_ptr, size_t size) {
-    uint8_t *p = *vtcm_ptr;
-    *vtcm_ptr += size;
-    return p;
-}
-
 #endif // HMX_UTILS_H

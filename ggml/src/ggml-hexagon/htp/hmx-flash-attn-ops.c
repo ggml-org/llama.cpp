@@ -25,6 +25,7 @@
 #include "hvx-dump.h"
 #include "hvx-reduce.h"
 #include "hvx-utils.h"
+#include "vtcm-utils.h"
 #include "worker-pool.h"
 
 // ============================================================================

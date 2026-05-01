@@ -28,6 +28,8 @@
 #include "hmx-queue.h"
 #include "hmx-profile.h"
 
+#include "vtcm-utils.h"
+
 static const __fp16 q4_0_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
     -8, 0, -7, 0, -6, 0, -5, 0, -4, 0, -3, 0, -2, 0, -1, 0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0,
 };
