@@ -57,7 +57,7 @@ static fs::path get_cache_directory() {
 #ifndef _WIN32
         const struct passwd * pw = getpwuid(getuid());
 
-        if (pw->pw_dir && *pw->pw_dir) {
+        if (pw && pw->pw_dir && *pw->pw_dir) {
             return fs::path(pw->pw_dir) / ".cache" / "huggingface" / "hub";
         }
 #endif

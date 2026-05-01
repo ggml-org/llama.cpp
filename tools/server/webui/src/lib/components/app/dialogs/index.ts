@@ -11,30 +11,12 @@
  */
 
 /**
+ * **DialogMcpServerAddNew** - Add new MCP server dialog
  *
- * SETTINGS DIALOGS
- *
- * Dialogs for application and server configuration.
- *
+ * Modal dialog for adding a new MCP server with URL and optional headers.
+ * Validates URL format and integrates with mcpStore and conversationsStore.
  */
-
-/**
- * **DialogChatSettings** - Settings dialog wrapper
- *
- * Modal dialog containing ChatSettings component with proper
- * open/close state management and automatic form reset on open.
- *
- * **Architecture:**
- * - Wraps ChatSettings component in ShadCN Dialog
- * - Manages open/close state via bindable `open` prop
- * - Resets form state when dialog opens to discard unsaved changes
- *
- * @example
- * ```svelte
- * <DialogChatSettings bind:open={showSettings} />
- * ```
- */
-export { default as DialogChatSettings } from './DialogChatSettings.svelte';
+export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
  *

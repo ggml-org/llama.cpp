@@ -485,6 +485,13 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             if (GGML_RV_ZIHINTPAUSE)
                 string(APPEND MARCH_STR "_zihintpause")
             endif()
+            if (GGML_CPU_RISCV64_SPACEMIT)
+                # `xsmtvdotii' is only required for GCC >= 15.
+                if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
+                    CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 15)
+                    string(APPEND MARCH_STR "_xsmtvdotii")
+                endif()
+            endif()
 
             list(APPEND ARCH_FLAGS "-march=${MARCH_STR}" -mabi=lp64d)
         else()

@@ -6,21 +6,19 @@
 		ChatFormActionAttachmentsSheet,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		McpServersSelector,
-		ModelsSelector,
+		ModelsSelectorDropdown,
 		ModelsSelectorSheet
 	} from '$lib/components/app';
-	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { getChatSettingsDialogContext } from '$lib/contexts';
 	import { FileTypeCategory } from '$lib/enums';
-	import { getFileTypeCategory } from '$lib/utils';
-	import { config } from '$lib/stores/settings.svelte';
+	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import { getFileTypeCategory } from '$lib/utils';
+	import { goto } from '$app/navigation';
 
 	interface Props {
 		canSend?: boolean;
@@ -165,15 +163,14 @@
 		return '';
 	});
 
-	let selectorModelRef: ModelsSelector | ModelsSelectorSheet | undefined = $state(undefined);
+	let selectorModelRef: ModelsSelectorDropdown | ModelsSelectorSheet | undefined =
+		$state(undefined);
 
 	let isMobile = new IsMobile();
 
 	export function openModelSelector() {
 		selectorModelRef?.open();
 	}
-
-	const chatSettingsDialog = getChatSettingsDialogContext();
 
 	let hasMcpPromptsSupport = $derived.by(() => {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
@@ -200,8 +197,8 @@
 				{onFileUpload}
 				{onSystemPromptClick}
 				{onMcpPromptClick}
+				onMcpSettingsClick={() => goto('#/settings/mcp')}
 				{onMcpResourcesClick}
-				onMcpSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
 			/>
 		{:else}
 			<ChatFormActionAttachmentsDropdown
@@ -214,17 +211,12 @@
 				{onSystemPromptClick}
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
-				onMcpSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
+				onMcpSettingsClick={() => goto('#/settings/mcp')}
 			/>
 		{/if}
-
-		<McpServersSelector
-			{disabled}
-			onSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
-		/>
 	</div>
 
-	<div class="ml-auto flex items-center gap-1.5">
+	<div class="ml-auto flex items-center gap-2">
 		{#if isMobile.current}
 			<ModelsSelectorSheet
 				disabled={disabled || isOffline}
@@ -234,7 +226,7 @@
 				useGlobalSelection
 			/>
 		{:else}
-			<ModelsSelector
+			<ModelsSelectorDropdown
 				disabled={disabled || isOffline}
 				bind:this={selectorModelRef}
 				currentModel={conversationModel}
@@ -244,7 +236,7 @@
 		{/if}
 	</div>
 
-	{#if isLoading}
+	{#if isLoading && !hasText}
 		<Button
 			type="button"
 			variant="secondary"
@@ -263,7 +255,6 @@
 		<ChatFormActionSubmit
 			canSend={canSend && hasModelSelected && isSelectedModelInCache}
 			{disabled}
-			{isLoading}
 			tooltipLabel={submitTooltip}
 			showErrorState={hasModelSelected && !isSelectedModelInCache}
 		/>
