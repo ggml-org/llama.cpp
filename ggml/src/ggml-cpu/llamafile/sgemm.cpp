@@ -43,6 +43,7 @@
 // [1] J. Tunney, ‘LLaMA Now Goes Faster on CPUs’, Mar. 2024. [Online].
 //     Available: https://justine.lol/matmul/. [Accessed: 29-Mar-2024].
 
+#include "ggml.h"
 #if defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Wpedantic"
 #pragma GCC diagnostic ignored "-Wignored-attributes"
@@ -3697,6 +3698,7 @@ class tinyBLAS_PPC {
 bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64_t n, int64_t k,
                      const void *A, int64_t lda, const void *B, int64_t ldb, void *C,
                      int64_t ldc, int Atype, int Btype, int Ctype, const void * quant_levels) {
+    GGML_UNUSED(quant_levels);
 
     assert(m >= 0);
     assert(n >= 0);

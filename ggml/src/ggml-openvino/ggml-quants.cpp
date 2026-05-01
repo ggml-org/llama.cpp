@@ -705,7 +705,7 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
 
     // First dequantize to F32
     std::vector<float> weights_f32(n_elements);
-    ggml_get_type_traits(tensor->type)->to_float(data, weights_f32.data(), n_elements);
+    ggml_get_type_traits(tensor->type)->to_float(data, weights_f32.data(), n_elements, nullptr);
 
     // Handle F16 case - just convert and create constant
     if (requant_type == ExtraQuantType::F16) {

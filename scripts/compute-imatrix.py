@@ -29,7 +29,7 @@ def load_f32_tensor(name):
 def save_imatrix(name, data):
     path = os.path.join(DATA_DIR, name)
     data.astype(np.float32).tofile(path)
-    print(
+    print(  # noqa: NP100
         f"  Wrote {path}: {len(data)} dims, "
         f"min={data.min():.6f}, max={data.max():.6f}, mean={data.mean():.6f}"
     )
@@ -60,14 +60,14 @@ mappings = [
     },
 ]
 
-print("Computing imatrix from captured activations")
-print("=" * 60)
+print("Computing imatrix from captured activations")  # noqa: NP100
+print("=" * 60)  # noqa: NP100
 
 for m in mappings:
     try:
         A = load_f32_tensor(m["act_file"])
-        print(f"\n{m['description']}:")
-        print(f"  Activation: {A.shape[0]} tokens × {A.shape[1]} dims")
+        print(f"\n{m['description']}:")  # noqa: NP100
+        print(f"  Activation: {A.shape[0]} tokens × {A.shape[1]} dims")  # noqa: NP100
 
         # imatrix = sum over tokens of activation^2
         # This is the standard definition used by llama.cpp
@@ -76,11 +76,11 @@ for m in mappings:
         # Also compute per-dim RMS for reference
         rms = np.sqrt(np.mean(A**2, axis=0))
 
-        print(
+        print(  # noqa: NP100
             f"  Imatrix stats: min={imatrix.min():.6f}, max={imatrix.max():.6f}, "
             f"mean={imatrix.mean():.6f}, std={imatrix.std():.6f}"
         )
-        print(
+        print(  # noqa: NP100
             f"  RMS stats:     min={rms.min():.6f}, max={rms.max():.6f}, "
             f"mean={rms.mean():.6f}"
         )
@@ -90,16 +90,16 @@ for m in mappings:
         sorted_im = np.sort(imatrix)[::-1]
         top1pct = max(1, int(len(imatrix) * 0.01))
         top10pct = max(1, int(len(imatrix) * 0.10))
-        print(f"  Power concentration:")
-        print(
+        print("  Power concentration:")  # noqa: NP100
+        print(  # noqa: NP100
             f"    Top 1% dims ({top1pct}): {sorted_im[:top1pct].sum() / total * 100:.1f}% of total"
         )
-        print(
+        print(  # noqa: NP100
             f"    Top 10% dims ({top10pct}): {sorted_im[:top10pct].sum() / total * 100:.1f}% of total"
         )
 
         save_imatrix(m["imatrix_name"], imatrix)
     except Exception as e:
-        print(f"  SKIP: {e}")
+        print(f"  SKIP: {e}")  # noqa: NP100
 
-print("\nDone.")
+print("\nDone.")  # noqa: NP100

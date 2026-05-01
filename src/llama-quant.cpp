@@ -772,6 +772,42 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
     return new_type;
 }
 
+// resolve the effective quantization type for a tensor, including tt_overrides
+static ggml_type resolve_tensor_type(quantize_state_impl & qs, const llama_model_quantize_params * params,
+                                      const ggml_tensor * tensor, ggml_type default_type, llama_ftype ftype,
+                                      const std::string & tname) {
+    ggml_type new_type = default_type;
+    if (!params->pure) {
+        new_type = llama_tensor_get_type_impl(qs, new_type, tensor, ftype, tensor_get_category(tname));
+    }
+    if (params->token_embedding_type < GGML_TYPE_COUNT &&
+        (tname == "token_embd.weight" || tname == "per_layer_token_embd.weight")) {
+        new_type = params->token_embedding_type;
+    }
+    if (params->output_tensor_type < GGML_TYPE_COUNT && tname == "output.weight") {
+        new_type = params->output_tensor_type;
+    }
+    if (!qs.tensor_type_patterns.empty()) {
+        for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
+            if (std::regex_search(tname, pattern)) {
+                new_type = qtype;
+                break;
+            }
+        }
+    }
+    return new_type;
+}
+
+// check if any tt_override pattern targets the given ggml_type
+static bool has_override_for_type(const quantize_state_impl & qs, ggml_type target_type) {
+    for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
+        if (qtype == target_type) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // outer wrapper: determine the ggml_type that this tensor should be quantized to
 static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm) {
     if (!tensor_allows_quantization(params, qs.model.arch, tensor)) {
@@ -1389,10 +1425,14 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // Q4_DPT two-pass approach: train all per-tensor int8 levels BEFORE opening the output
     // file, so the levels KV entry is already populated at the time of the metadata placeholder.
     static const size_t Q4DPT_N_LEVELS = 16;
-    std::vector<int8_t> q4dpt_all_levels;  // indexed by position in tensors[]
-    if (ftype == LLAMA_FTYPE_MOSTLY_Q4_DPT && !params->dry_run) {
+    struct q4dpt_meta {
+        std::string tensor_name;
+        int8_t levels[Q4DPT_N_LEVELS];
+    };
+    std::vector<q4dpt_meta> q4dpt_all_meta;
+    if ((ftype == LLAMA_FTYPE_MOSTLY_Q4_DPT || has_override_for_type(qs, GGML_TYPE_Q4_DPT)) && !params->dry_run) {
+        const int64_t t_start_p1 = ggml_time_us();
         LLAMA_LOG_INFO("%s: Q4_DPT pass 1: training per-tensor int8 levels...\n", __func__);
-        q4dpt_all_levels.assign(tensors.size() * Q4DPT_N_LEVELS, (int8_t)0);
 
         std::vector<no_init<uint8_t>> p1_read_data;
         std::vector<no_init<float>>   p1_f32_buf;
@@ -1409,17 +1449,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
             if (!quantize) { continue; }
 
-            ggml_type new_type = default_type;
-            if (!params->pure) {
-                new_type = llama_tensor_get_type_impl(qs, new_type, tensor, ftype, tensor_get_category(tname));
-            }
-            if (params->token_embedding_type < GGML_TYPE_COUNT &&
-                (tname == "token_embd.weight" || tname == "per_layer_token_embd.weight")) {
-                new_type = params->token_embedding_type;
-            }
-            if (params->output_tensor_type < GGML_TYPE_COUNT && tname == "output.weight") {
-                new_type = params->output_tensor_type;
-            }
+            ggml_type new_type = resolve_tensor_type(qs, params, tensor, default_type, ftype, tname);
             if (new_type != GGML_TYPE_Q4_DPT) { continue; }
 
             // Load tensor data
@@ -1454,18 +1484,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             const int64_t nrows     = tensor->ne[1];
 
             LLAMA_LOG_INFO("%s: Q4_DPT levels for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
-            q4dpt_train_levels(f32_data, nrows, n_per_row, imatrix,
-                               q4dpt_all_levels.data() + ti * Q4DPT_N_LEVELS);
-        }
 
-        // Store in GGUF metadata before the file is opened
-        for (auto & ctx : ctx_outs) {
-            if (ctx) {
-                gguf_set_arr_data(ctx.get(), "q4_dpt.levels", GGUF_TYPE_INT8,
-                                  q4dpt_all_levels.data(), q4dpt_all_levels.size());
-            }
+            q4dpt_meta meta;
+            meta.tensor_name = tname;
+            q4dpt_train_levels(f32_data, nrows, n_per_row, imatrix, meta.levels);
+            q4dpt_all_meta.push_back(meta);
+
+            // Save to GGUF
+            std::string levels_key = "q4dpt.levels." + tname;
+            gguf_set_arr_data(ctx_outs[0].get(), levels_key.c_str(), GGUF_TYPE_INT8, meta.levels, Q4DPT_N_LEVELS);
         }
-        LLAMA_LOG_INFO("%s: Q4_DPT pass 1 complete.\n", __func__);
+        const int64_t t_end_p1 = ggml_time_us();
+        LLAMA_LOG_INFO("%s: Q4_DPT pass 1 complete (%zu tensors trained, %.1f s).\n",
+                       __func__, q4dpt_all_meta.size(), (t_end_p1 - t_start_p1) / 1e6);
     }
 
     // Q2_KPT two-pass approach: train all per-block levels BEFORE opening the output
@@ -1593,7 +1624,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         int8_t grid[64];
     };
     std::vector<iq2tq_meta> iq2tq_all_meta;
-    if (params->ftype == LLAMA_FTYPE_MOSTLY_IQ2_TQ) {
+    if (params->ftype == LLAMA_FTYPE_MOSTLY_IQ2_TQ || has_override_for_type(qs, GGML_TYPE_IQ2_TQ)) {
         const int64_t t_start_p1 = ggml_time_us();
         LLAMA_LOG_INFO("%s: IQ2_TQ pass 1: training per-tensor grids...\n", __func__);
 
@@ -1606,24 +1637,13 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             ggml_tensor * tensor = tensors[ti]->tensor;
             const std::string tname = ggml_get_name(tensor);
 
-            // Mirror pass-2 logic: only quantize 2D+ weight tensors
             bool quantize = tname.rfind("weight") == tname.size() - 6;
             quantize &= (ggml_n_dims(tensor) >= 2);
             quantize &= tname.find("_norm.weight")        == std::string::npos;
             quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
             if (!quantize) { continue; }
 
-            ggml_type new_type = default_type;
-            if (!params->pure) {
-                new_type = llama_tensor_get_type_impl(qs, new_type, tensor, ftype, tensor_get_category(tname));
-            }
-            if (params->token_embedding_type < GGML_TYPE_COUNT &&
-                (tname == "token_embd.weight" || tname == "per_layer_token_embd.weight")) {
-                new_type = params->token_embedding_type;
-            }
-            if (params->output_tensor_type < GGML_TYPE_COUNT && tname == "output.weight") {
-                new_type = params->output_tensor_type;
-            }
+            ggml_type new_type = resolve_tensor_type(qs, params, tensor, default_type, ftype, tname);
             if (new_type != GGML_TYPE_IQ2_TQ) { continue; }
 
             // Load tensor data
@@ -1679,7 +1699,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         int8_t grid[128];
     };
     std::vector<iq3tq_meta> iq3tq_all_meta;
-    if (params->ftype == LLAMA_FTYPE_MOSTLY_IQ3_TQ) {
+    if (params->ftype == LLAMA_FTYPE_MOSTLY_IQ3_TQ || has_override_for_type(qs, GGML_TYPE_IQ3_TQ)) {
         const int64_t t_start_p1 = ggml_time_us();
         LLAMA_LOG_INFO("%s: IQ3_TQ pass 1: training per-tensor grids...\n", __func__);
 
@@ -1698,17 +1718,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
             if (!quantize) { continue; }
 
-            ggml_type new_type = default_type;
-            if (!params->pure) {
-                new_type = llama_tensor_get_type_impl(qs, new_type, tensor, ftype, tensor_get_category(tname));
-            }
-            if (params->token_embedding_type < GGML_TYPE_COUNT &&
-                (tname == "token_embd.weight" || tname == "per_layer_token_embd.weight")) {
-                new_type = params->token_embedding_type;
-            }
-            if (params->output_tensor_type < GGML_TYPE_COUNT && tname == "output.weight") {
-                new_type = params->output_tensor_type;
-            }
+            ggml_type new_type = resolve_tensor_type(qs, params, tensor, default_type, ftype, tname);
             if (new_type != GGML_TYPE_IQ3_TQ) { continue; }
 
             const size_t tsz = ggml_nbytes(tensor);
@@ -1980,9 +1990,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     q3kpt_set_levels(q3kpt_all_levels.data() + tensor_pass2_idx * Q3KPT_N_LEVELS);
                 }
 
-                // Q4_DPT: set the per-tensor levels (trained in pass 1) as global for quantization
+                // Q4_DPT: set per-tensor trained levels
                 if (new_type == GGML_TYPE_Q4_DPT) {
-                    q4dpt_set_levels(q4dpt_all_levels.data() + tensor_pass2_idx * Q4DPT_N_LEVELS);
+                    bool found = false;
+                    for (const auto & meta : q4dpt_all_meta) {
+                        if (meta.tensor_name == tm.name) {
+                            q4dpt_set_levels(meta.levels);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        LLAMA_LOG_WARN("%s: WARNING: no trained levels for Q4_DPT tensor %s\n", __func__, tm.name.c_str());
+                    }
                 }
 
                 // IQ2_TQ: set per-tensor trained grid

@@ -18,26 +18,27 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 repo_root = os.path.dirname(script_dir)
 sys.path.insert(0, os.path.join(repo_root, 'gguf-py'))
 
-from gguf import GGUFReader
+from gguf import GGUFReader  # noqa: E402
+
 
 def main():
     if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} MODEL.gguf pattern1 [pattern2 ...]")
-        print(f"  Extracts tensors whose names contain any of the given patterns.")
+        print(f"Usage: {sys.argv[0]} MODEL.gguf pattern1 [pattern2 ...]")  # noqa: NP100
+        print("  Extracts tensors whose names contain any of the given patterns.")  # noqa: NP100
         sys.exit(1)
 
     model_path = sys.argv[1]
     patterns = sys.argv[2:]
 
-    print(f"Reading {model_path}...")
+    print(f"Reading {model_path}...")  # noqa: NP100
     reader = GGUFReader(model_path)
 
     for tensor in reader.tensors:
         if not any(p in tensor.name for p in patterns):
             continue
 
-        print(f"\nExtracting: {tensor.name}")
-        print(f"  Shape: {list(tensor.shape)}, type: {tensor.tensor_type.name}")
+        print(f"\nExtracting: {tensor.name}")  # noqa: NP100
+        print(f"  Shape: {list(tensor.shape)}, type: {tensor.tensor_type.name}")  # noqa: NP100
 
         # Convert to f32
         raw = np.array(tensor.data, dtype=np.uint8)
@@ -52,7 +53,7 @@ def main():
         elif tensor.tensor_type.name == 'F32':
             f32_vals = raw.view(np.float32)
         else:
-            print(f"  SKIP: unsupported type {tensor.tensor_type.name}")
+            print(f"  SKIP: unsupported type {tensor.tensor_type.name}")  # noqa: NP100
             continue
 
         # Determine layout: GGUF stores shape as [col, row] for 2D
@@ -65,10 +66,11 @@ def main():
             f32_vals.tofile(fp)
 
         file_size = os.path.getsize(fname)
-        print(f"  Wrote {fname}: {n_rows} rows x {row_len} cols = {tensor.n_elements} elements")
-        print(f"  File size: {file_size / (1024*1024):.1f} MB")
-        print(f"  Stats: mean={f32_vals.mean():.6f}, std={f32_vals.std():.6f}, "
+        print(f"  Wrote {fname}: {n_rows} rows x {row_len} cols = {tensor.n_elements} elements")  # noqa: NP100
+        print(f"  File size: {file_size / (1024 * 1024):.1f} MB")  # noqa: NP100
+        print(f"  Stats: mean={f32_vals.mean():.6f}, std={f32_vals.std():.6f}, "  # noqa: NP100
               f"min={f32_vals.min():.6f}, max={f32_vals.max():.6f}")
+
 
 if __name__ == "__main__":
     main()

@@ -1639,7 +1639,6 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         const level_type_info level_types[] = {
             { GGML_TYPE_Q3_PT,  "q3_pt.levels",  8, sizeof(float) },
             { GGML_TYPE_Q3_KPT, "q3_kpt.levels", 8, sizeof(float) },
-            { GGML_TYPE_Q4_DPT, "q4_dpt.levels", 16, sizeof(int8_t) },
         };
 
         for (const auto & lt : level_types) {
@@ -1758,6 +1757,51 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
             if (iq3tq_loaded > 0) {
                 LLAMA_LOG_INFO("%s: loaded IQ3_TQ grid for %zu tensors\n", __func__, iq3tq_loaded);
+            }
+        }
+
+        // Q4_DPT: per-tensor trained levels (16 int8 values)
+        {
+            size_t q4dpt_loaded = 0;
+            for (auto & [tname, t] : name_to_tensor) {
+                if (t->type != GGML_TYPE_Q4_DPT) { continue; }
+
+                const std::string levels_key = "q4dpt.levels." + tname;
+                int64_t levels_idx = gguf_find_key(ml.metadata, levels_key.c_str());
+                if (levels_idx < 0) {
+                    // backward compat: try old flat-array key
+                    int64_t flat_idx = gguf_find_key(ml.metadata, "q4_dpt.levels");
+                    if (flat_idx < 0) { continue; }
+                    const int8_t * flat_data = (const int8_t *)gguf_get_arr_data(ml.metadata, flat_idx);
+                    const size_t flat_n = gguf_get_arr_n(ml.metadata, flat_idx);
+
+                    size_t gguf_slot = 0;
+                    for (size_t s = 0; s < (size_t)ml.n_tensors; ++s) {
+                        std::string sname = gguf_get_tensor_name(ml.metadata, s);
+                        if (sname == tname) { gguf_slot = s; break; }
+                    }
+                    if (gguf_slot * 16 + 16 > flat_n) { continue; }
+
+                    auto & taux = tensor_aux_data[t];
+                    taux.type = GGML_TYPE_Q4_DPT;
+                    taux.host_data.resize(16);
+                    memcpy(taux.host_data.data(), flat_data + gguf_slot * 16, 16);
+                    t->quant_levels = taux.host_data.data();
+                    q4dpt_loaded++;
+                    continue;
+                }
+
+                auto & taux = tensor_aux_data[t];
+                taux.type = GGML_TYPE_Q4_DPT;
+                taux.host_data.resize(16);
+                const int8_t * levels_data = (const int8_t *)gguf_get_arr_data(ml.metadata, levels_idx);
+                memcpy(taux.host_data.data(), levels_data, 16);
+
+                t->quant_levels = taux.host_data.data();
+                q4dpt_loaded++;
+            }
+            if (q4dpt_loaded > 0) {
+                LLAMA_LOG_INFO("%s: loaded Q4_DPT levels for %zu tensors\n", __func__, q4dpt_loaded);
             }
         }
 

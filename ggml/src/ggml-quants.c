@@ -400,6 +400,7 @@ void dequantize_row_q1_0(const block_q1_0 * GGML_RESTRICT x, float * GGML_RESTRI
 }
 
 void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     static const int qk = QK4_0;
 
     assert(k % qk == 0);
@@ -420,6 +421,7 @@ void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRI
 }
 
 void dequantize_row_q4_1(const block_q4_1 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     static const int qk = QK4_1;
 
     assert(k % qk == 0);
@@ -441,6 +443,7 @@ void dequantize_row_q4_1(const block_q4_1 * GGML_RESTRICT x, float * GGML_RESTRI
 }
 
 void dequantize_row_q5_0(const block_q5_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     static const int qk = QK5_0;
 
     assert(k % qk == 0);
@@ -467,6 +470,7 @@ void dequantize_row_q5_0(const block_q5_0 * GGML_RESTRICT x, float * GGML_RESTRI
 }
 
 void dequantize_row_q5_1(const block_q5_1 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     static const int qk = QK5_1;
 
     assert(k % qk == 0);
@@ -494,6 +498,7 @@ void dequantize_row_q5_1(const block_q5_1 * GGML_RESTRICT x, float * GGML_RESTRI
 }
 
 void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     static const int qk = QK8_0;
 
     assert(k % qk == 0);
@@ -510,6 +515,7 @@ void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRI
 }
 
 void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     static const int qk = QK_MXFP4;
 
     assert(k % qk == 0);
@@ -912,6 +918,7 @@ void quantize_row_q2_K_ref(const float * GGML_RESTRICT x, block_q2_K * GGML_REST
 }
 
 void dequantize_row_q2_K(const block_q2_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
 
@@ -1256,6 +1263,7 @@ void quantize_row_q3_K_ref(const float * GGML_RESTRICT x, block_q3_K * GGML_REST
 }
 
 void dequantize_row_q3_K(const block_q3_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
 
@@ -1480,6 +1488,7 @@ void quantize_row_q4_K_ref(const float * GGML_RESTRICT x, block_q4_K * GGML_REST
 }
 
 void dequantize_row_q4_K(const block_q4_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
 
@@ -1682,6 +1691,7 @@ void quantize_row_q5_K_ref(const float * GGML_RESTRICT x, block_q5_K * GGML_REST
 }
 
 void dequantize_row_q5_K(const block_q5_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -1890,6 +1900,7 @@ void quantize_row_q6_K_ref(const float * GGML_RESTRICT x, block_q6_K * GGML_REST
 }
 
 void dequantize_row_q6_K(const block_q6_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2365,6 +2376,7 @@ size_t quantize_tq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
 }
 
 void dequantize_row_tq1_0(const block_tq1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2404,6 +2416,7 @@ void dequantize_row_tq1_0(const block_tq1_0 * GGML_RESTRICT x, float * GGML_REST
 }
 
 void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2425,6 +2438,7 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
 // ====================== "True" 2-bit (de)-quantization
 
 void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2453,6 +2467,7 @@ void dequantize_row_iq2_xxs(const block_iq2_xxs * GGML_RESTRICT x, float * GGML_
 // ====================== 2.3125 bpw (de)-quantization
 
 void dequantize_row_iq2_xs(const block_iq2_xs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2480,6 +2495,7 @@ void dequantize_row_iq2_xs(const block_iq2_xs * GGML_RESTRICT x, float * GGML_RE
 // ====================== 2.5625 bpw (de)-quantization
 
 void dequantize_row_iq2_s(const block_iq2_s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2512,6 +2528,7 @@ void dequantize_row_iq2_s(const block_iq2_s * GGML_RESTRICT x, float * GGML_REST
 // ====================== 3.0625 bpw (de)-quantization
 
 void dequantize_row_iq3_xxs(const block_iq3_xxs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2544,6 +2561,7 @@ void dequantize_row_iq3_xxs(const block_iq3_xxs * GGML_RESTRICT x, float * GGML_
 // ====================== 3.3125 bpw (de)-quantization
 
 void dequantize_row_iq3_s(const block_iq3_s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2587,6 +2605,7 @@ void dequantize_row_iq3_s(const block_iq3_s * GGML_RESTRICT x, float * GGML_REST
 // ====================== 1.5625 bpw (de)-quantization
 
 void dequantize_row_iq1_s(const block_iq1_s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2612,6 +2631,7 @@ void dequantize_row_iq1_s(const block_iq1_s * GGML_RESTRICT x, float * GGML_REST
 }
 
 void dequantize_row_iq1_m(const block_iq1_m * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2662,6 +2682,7 @@ void dequantize_row_iq1_m(const block_iq1_m * GGML_RESTRICT x, float * GGML_REST
 }
 
 void dequantize_row_iq4_nl(const block_iq4_nl * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK4_NL == 0);
     const int64_t nb = k / QK4_NL;
 
@@ -2680,6 +2701,7 @@ void dequantize_row_iq4_nl(const block_iq4_nl * GGML_RESTRICT x, float * GGML_RE
 }
 
 void dequantize_row_iq4_xs(const block_iq4_xs * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2744,6 +2766,7 @@ void quantize_row_q8_K_ref(const float * GGML_RESTRICT x, block_q8_K * GGML_REST
 }
 
 void dequantize_row_q8_K(const block_q8_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+    UNUSED(levels);
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -6250,7 +6273,7 @@ size_t quantize_q2_kpt(const float * GGML_RESTRICT src,
     size_t row_size = ggml_row_size(GGML_TYPE_Q2_KPT, n_per_row);
     char * qrow = (char *) dst;
     const int nb = (int)(n_per_row / QK_K);
-    const size_t total_levels = (size_t)nrow * nb * Q2KPT_N_LEVELS;
+    UNUSED((size_t)nrow * nb * Q2KPT_N_LEVELS);
     const size_t levels_needed = (size_t)(start_row + nrow) * nb * Q2KPT_N_LEVELS;
 
     // Ensure buffer is large enough (should have been pre-allocated via q2kpt_prepare_levels)
@@ -6360,8 +6383,15 @@ static inline int iq2tq_nearest_qi(float xn, const int8_t * g) {
 
 // Dequantization — 2-bit with asymmetric grid per group
 void dequantize_row_iq2_tq(const block_iq2_tq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+#ifndef _MSC_VER
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
+#endif
     const int8_t (*grid)[4] = levels ? (const int8_t (*)[4])levels
                                      : (const int8_t (*)[4])iq2tq_grid_default;
+#ifndef _MSC_VER
+#pragma GCC diagnostic pop
+#endif
     const int nb = k / QK_K;
 
     for (int i = 0; i < nb; ++i) {
@@ -6460,10 +6490,10 @@ static void quantize_row_iq2_tq_impl(
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq2tq_get_qi(qs, j)];
                 float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                sumxg += wk * xb[j] * gval;
-                sumgg += wk * gval * gval;
+                sumxg += (double)(wk * xb[j] * gval);
+                sumgg += (double)(wk * gval * gval);
             }
-            d = (sumgg > 0) ? (float)(sumxg / (IQ2TQ_GRID_SCALE * sumgg)) : d;
+            d = (sumgg > 0) ? (float)(sumxg / ((double)IQ2TQ_GRID_SCALE * sumgg)) : d;
 
             // Re-optimize grids and re-quantize
             dq = d * IQ2TQ_GRID_SCALE;
@@ -6505,17 +6535,17 @@ static void quantize_row_iq2_tq_impl(
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq2tq_get_qi(qs, j)];
                 float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                sumxg += wk * xb[j] * gval;
-                sumgg += wk * gval * gval;
+                sumxg += (double)(wk * xb[j] * gval);
+                sumgg += (double)(wk * gval * gval);
             }
-            d = (sumgg > 0) ? (float)(sumxg / (IQ2TQ_GRID_SCALE * sumgg)) : d;
+            d = (sumgg > 0) ? (float)(sumxg / ((double)IQ2TQ_GRID_SCALE * sumgg)) : d;
         }
 
         // Multi-d search: try nearby d values and re-optimize grids
         {
             float best_d = d;
             float best_total_err = 1e30f;
-            uint8_t best_scales[16], best_qs[64];
+            uint8_t best_scales[16] = {0}, best_qs[64] = {0};
             int best_grid_idx[IQ2TQ_N_GROUPS];
             static const float d_factors[] = {0.8f, 0.85f, 0.9f, 0.925f, 0.95f, 0.975f, 1.0f, 1.025f, 1.05f, 1.075f, 1.1f, 1.15f, 1.2f};
             static const int n_d_factors = sizeof(d_factors) / sizeof(d_factors[0]);
@@ -6577,10 +6607,10 @@ static void quantize_row_iq2_tq_impl(
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq2tq_get_qi(qs, j)];
                 float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                sumxg += wk * xb[j] * gval;
-                sumgg += wk * gval * gval;
+                sumxg += (double)(wk * xb[j] * gval);
+                sumgg += (double)(wk * gval * gval);
             }
-            d = (sumgg > 0) ? (float)(sumxg / (IQ2TQ_GRID_SCALE * sumgg)) : d;
+            d = (sumgg > 0) ? (float)(sumxg / ((double)IQ2TQ_GRID_SCALE * sumgg)) : d;
 
             dq = d * IQ2TQ_GRID_SCALE;
             inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
@@ -6737,8 +6767,8 @@ void iq2tq_train_grid(const float * data, int64_t nrow, int64_t n_per_row,
         for (int i = 0; i < n_sets; i++) {
             int c = assign[i];
             float w = set_weights[i];
-            for (int d = 0; d < 4; d++) sum[c][d] += w * sets[i][d];
-            wcnt[c] += w;
+            for (int d = 0; d < 4; d++) sum[c][d] += (double)w * (double)sets[i][d];
+            wcnt[c] += (double)w;
         }
         for (int c = 0; c < 16; c++) {
             if (wcnt[c] > 0) {
@@ -6850,8 +6880,15 @@ static inline int iq3tq_nearest_qi(float xn, const int8_t * g) {
 
 // Dequantization
 void dequantize_row_iq3_tq(const block_iq3_tq * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k, const void * levels) {
+#ifndef _MSC_VER
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
+#endif
     const int8_t (*grid)[IQ3TQ_N_LEVELS] = levels ? (const int8_t (*)[IQ3TQ_N_LEVELS])levels
                                                    : (const int8_t (*)[IQ3TQ_N_LEVELS])iq3tq_grid_default;
+#ifndef _MSC_VER
+#pragma GCC diagnostic pop
+#endif
     const int nb = k / QK_K;
 
     for (int i = 0; i < nb; ++i) {
@@ -6944,10 +6981,10 @@ static void quantize_row_iq3_tq_impl(
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq3tq_get_qi(qs, j)];
                 float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                sumxg += wk * xb[j] * gval;
-                sumgg += wk * gval * gval;
+                sumxg += (double)(wk * xb[j] * gval);
+                sumgg += (double)(wk * gval * gval);
             }
-            d = (sumgg > 0) ? (float)(sumxg / (IQ3TQ_GRID_SCALE * sumgg)) : d;
+            d = (sumgg > 0) ? (float)(sumxg / ((double)IQ3TQ_GRID_SCALE * sumgg)) : d;
 
             dq = d * IQ3TQ_GRID_SCALE;
             inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
@@ -6986,17 +7023,17 @@ static void quantize_row_iq3_tq_impl(
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq3tq_get_qi(qs, j)];
                 float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                sumxg += wk * xb[j] * gval;
-                sumgg += wk * gval * gval;
+                sumxg += (double)(wk * xb[j] * gval);
+                sumgg += (double)(wk * gval * gval);
             }
-            d = (sumgg > 0) ? (float)(sumxg / (IQ3TQ_GRID_SCALE * sumgg)) : d;
+            d = (sumgg > 0) ? (float)(sumxg / ((double)IQ3TQ_GRID_SCALE * sumgg)) : d;
         }
 
         // Multi-d search
         {
             float best_d = d;
             float best_total_err = 1e30f;
-            uint8_t best_scales[16], best_qs[96];
+            uint8_t best_scales[16] = {0}, best_qs[96] = {0};
             int best_grid_idx[IQ3TQ_N_GROUPS];
             static const float d_factors[] = {0.8f, 0.85f, 0.9f, 0.925f, 0.95f, 0.975f, 1.0f, 1.025f, 1.05f, 1.075f, 1.1f, 1.15f, 1.2f};
             static const int n_d_factors = sizeof(d_factors) / sizeof(d_factors[0]);
@@ -7058,10 +7095,10 @@ static void quantize_row_iq3_tq_impl(
                 int g = j / 8;
                 float gval = (float)grid[grid_idx[g]][iq3tq_get_qi(qs, j)];
                 float wk = quant_weights ? quant_weights[bi * QK_K + j] * sqrtf(sigma2 + xb[j] * xb[j]) : 1.0f;
-                sumxg += wk * xb[j] * gval;
-                sumgg += wk * gval * gval;
+                sumxg += (double)(wk * xb[j] * gval);
+                sumgg += (double)(wk * gval * gval);
             }
-            d = (sumgg > 0) ? (float)(sumxg / (IQ3TQ_GRID_SCALE * sumgg)) : d;
+            d = (sumgg > 0) ? (float)(sumxg / ((double)IQ3TQ_GRID_SCALE * sumgg)) : d;
 
             dq = d * IQ3TQ_GRID_SCALE;
             inv_dq = (fabsf(dq) > 1e-15f) ? 1.0f / dq : 0.0f;
@@ -7214,8 +7251,8 @@ void iq3tq_train_grid(const float * data, int64_t nrow, int64_t n_per_row,
         for (int i = 0; i < n_sets; i++) {
             int c = assign[i];
             float w = set_weights[i];
-            for (int dd = 0; dd < NL; dd++) sum[c][dd] += w * sets[i][dd];
-            wcnt[c] += w;
+            for (int dd = 0; dd < NL; dd++) sum[c][dd] += (double)w * (double)sets[i][dd];
+            wcnt[c] += (double)w;
         }
         for (int c = 0; c < 16; c++) {
             if (wcnt[c] > 0) {
@@ -7597,7 +7634,9 @@ size_t quantize_iq1_bn(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
 }
 
 // Thread work structs for parallel K-means
+#ifndef _WIN32
 #include <pthread.h>
+#endif
 
 // Worker for K-means++ min_dist update (parallel over samples)
 typedef struct {
@@ -7764,10 +7803,24 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
     // Full K-means++ initialization with parallel min_dist update
     if (nthread < 1) nthread = 1;
     if (nthread > n_samples) nthread = n_samples;
+    assert(nthread >= 1);
+    const size_t nth = (size_t)(unsigned)nthread;
+    const size_t kmpp_sz = nth * sizeof(iq1bn_kmpp_work_t);
 
-    // Set up thread pool for K-means++ min_dist update
-    pthread_t * threads = (pthread_t *)calloc(nthread, sizeof(pthread_t));
-    iq1bn_kmpp_work_t * kmpp_workers = (iq1bn_kmpp_work_t *)calloc(nthread, sizeof(iq1bn_kmpp_work_t));
+#ifndef _WIN32
+    const size_t threads_sz = nth * sizeof(pthread_t);
+    pthread_t * threads = (pthread_t *)malloc(threads_sz);
+    assert(threads != NULL);
+#else
+    nthread = 1;
+    void * threads = NULL;
+    const size_t threads_sz = 0;
+#endif
+
+    iq1bn_kmpp_work_t * kmpp_workers = (iq1bn_kmpp_work_t *)malloc(kmpp_sz);
+    assert(kmpp_workers != NULL);
+    if (threads != NULL) memset(threads, 0, threads_sz);
+    memset(kmpp_workers, 0, kmpp_sz);
     for (int t = 0; t < nthread; ++t) {
         kmpp_workers[t].samples  = samples;
         kmpp_workers[t].min_dist = min_dist;
@@ -7787,12 +7840,18 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
                 kmpp_workers[t].centroid = cc;
             }
             if (nthread > 1) {
+#ifndef _WIN32
                 for (int t = 0; t < nthread; ++t) {
                     pthread_create(&threads[t], NULL, iq1bn_kmpp_worker, &kmpp_workers[t]);
                 }
                 for (int t = 0; t < nthread; ++t) {
                     pthread_join(threads[t], NULL);
                 }
+#else
+                for (int t = 0; t < nthread; ++t) {
+                    iq1bn_kmpp_worker(&kmpp_workers[t]);
+                }
+#endif
             } else {
                 iq1bn_kmpp_worker(&kmpp_workers[0]);
             }
@@ -7818,7 +7877,7 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
     // Phase 3: Full-batch K-means with SIMD and pthread parallelism
 
     // Allocate per-thread accumulators (reuse threads array from K-means++ init)
-    iq1bn_kmeans_work_t * workers = (iq1bn_kmeans_work_t *)calloc(nthread, sizeof(iq1bn_kmeans_work_t));
+    iq1bn_kmeans_work_t * workers = (iq1bn_kmeans_work_t *)malloc(nth * sizeof(iq1bn_kmeans_work_t));
     for (int t = 0; t < nthread; ++t) {
         workers[t].samples   = samples;
         workers[t].weights   = weights;
@@ -7836,6 +7895,7 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
     const int n_iters = 30;
     for (int iter = 0; iter < n_iters; ++iter) {
         // Launch threads for sample assignment
+#ifndef _WIN32
         for (int t = 0; t < nthread; ++t) {
             if (nthread > 1) {
                 pthread_create(&threads[t], NULL, iq1bn_kmeans_worker, &workers[t]);
@@ -7848,6 +7908,11 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
                 pthread_join(threads[t], NULL);
             }
         }
+#else
+        for (int t = 0; t < nthread; ++t) {
+            iq1bn_kmeans_worker(&workers[t]);
+        }
+#endif
 
         // Merge per-thread accumulators
         int changed = 0;

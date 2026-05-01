@@ -26,7 +26,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 repo_root = os.path.dirname(script_dir)
 sys.path.insert(0, os.path.join(repo_root, 'gguf-py'))
 
-from gguf import GGUFReader
+from gguf import GGUFReader  # noqa: E402
 
 
 def bf16_to_f32(raw_bytes):
@@ -56,7 +56,7 @@ def softmax(x, axis=-1):
 
 def main():
     if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} MODEL.gguf OUTPUT_DIR [--prompt TEXT] [--layer N]")
+        print(f"Usage: {sys.argv[0]} MODEL.gguf OUTPUT_DIR [--prompt TEXT] [--layer N]")  # noqa: NP100
         sys.exit(1)
 
     model_path = sys.argv[1]
@@ -72,7 +72,7 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"Loading {model_path}...")
+    print(f"Loading {model_path}...")  # noqa: NP100
     reader = GGUFReader(model_path)
 
     # Read model config from metadata
@@ -95,8 +95,8 @@ def main():
             elif 'layer_norm_rms_epsilon' in name:
                 config['eps'] = float(kv.parts[-1][0])
 
-    print(f"Config: {config}")
-    hidden = config['hidden']
+    print(f"Config: {config}")  # noqa: NP100
+    config.get('hidden')
 
     # Load tensors into a dict
     def load_tensor(name):
@@ -122,19 +122,19 @@ def main():
     # Create simple token IDs from the prompt (use first few tokens from vocab)
     # We just need realistic activations, not perfect tokenization
     n_tokens = min(32, len(prompt_text.split()))
-    print(f"Using {n_tokens} pseudo-tokens for activation extraction")
+    print(f"Using {n_tokens} pseudo-tokens for activation extraction")  # noqa: NP100
 
     # Load token embedding and create input
-    print("Loading token_embd...")
+    print("Loading token_embd...")  # noqa: NP100
     token_embd = load_tensor("token_embd.weight")  # [vocab, hidden]
     # Use token IDs 100-131 (arbitrary but avoids special tokens)
     token_ids = list(range(100, 100 + n_tokens))
     x = token_embd[token_ids]  # [n_tokens, hidden]
-    print(f"Input shape: {x.shape}")
+    print(f"Input shape: {x.shape}")  # noqa: NP100
 
     # Run forward pass through target layer only (we just need the activations)
     layer = target_layer
-    print(f"\nProcessing layer {layer}...")
+    print(f"\nProcessing layer {layer}...")  # noqa: NP100
 
     def save_activation(name, data):
         """Save activation tensor as f32bin."""
@@ -145,7 +145,7 @@ def main():
         with open(fname, 'wb') as fp:
             fp.write(struct.pack('<qq', n_rows, row_len))
             data.astype(np.float32).tofile(fp)
-        print(f"  Saved {fname}: {n_rows} x {row_len} ({os.path.getsize(fname) / 1024:.1f} KB)")
+        print(f"  Saved {fname}: {n_rows} x {row_len} ({os.path.getsize(fname) / 1024:.1f} KB)")  # noqa: NP100
 
     # Attention norm → input to attn_q/k/v
     attn_norm_w = load_tensor(f"blk.{layer}.attn_norm.weight")
@@ -194,7 +194,7 @@ def main():
     # FFN: gate and up projections
     W_gate = load_tensor(f"blk.{layer}.ffn_gate.weight")  # [ffn, hidden]
     W_up = load_tensor(f"blk.{layer}.ffn_up.weight")      # [ffn, hidden]
-    W_down = load_tensor(f"blk.{layer}.ffn_down.weight")  # [hidden, ffn]
+    load_tensor(f"blk.{layer}.ffn_down.weight")  # [hidden, ffn]
 
     gate = x_ffn @ W_gate.T
     up = x_ffn @ W_up.T
@@ -203,7 +203,7 @@ def main():
     # ffn_down weight input (the SwiGLU output)
     save_activation(f"act_blk{layer}_ffn_down_input", ffn_act)
 
-    print(f"\nDone! Extracted 4 activation tensors to {output_dir}/")
+    print(f"\nDone! Extracted 4 activation tensors to {output_dir}/")  # noqa: NP100
 
 
 if __name__ == "__main__":

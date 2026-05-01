@@ -1384,7 +1384,10 @@ void ggml_vec_dot_iq2_tq_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
     assert(nrc == 1);
     UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
     const int8_t (*grid)[4] = levels ? (const int8_t (*)[4])levels : (const int8_t (*)[4])iq2tq_grid_cpu;
+#pragma GCC diagnostic pop
     const block_iq2_tq * GGML_RESTRICT x = vx;
     const block_q8_K   * GGML_RESTRICT y = vy;
     const int nb = n / QK_K;
@@ -1441,7 +1444,10 @@ void ggml_vec_dot_iq3_tq_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
     assert(nrc == 1);
     UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-qual"
     const int8_t (*grid)[8] = levels ? (const int8_t (*)[8])levels : (const int8_t (*)[8])iq3tq_grid_cpu;
+#pragma GCC diagnostic pop
     const block_iq3_tq * GGML_RESTRICT x = vx;
     const block_q8_K   * GGML_RESTRICT y = vy;
     const int nb = n / QK_K;
