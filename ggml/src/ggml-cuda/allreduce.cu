@@ -252,6 +252,40 @@ struct ggml_cuda_ar_event_slot {
     cudaEvent_t ker = nullptr;  // AllReduce kernel complete
 };
 
+// Mapped pinned host allocation: cudaHostAlloc + cudaHostGetDevicePointer
+// in one place, with the host handle preserved for cudaFreeHost.  Used where
+// the CPU never touches the buffer — only the device reads/writes via the
+// mapped device pointer.  Required on systems where cudaDevAttrCanUseHost-
+// PointerForRegisteredMem is 0 and the host pointer can't be used as a
+// device pointer.
+struct ggml_cuda_ar_host_mapping {
+    void * host = nullptr;   // cudaFreeHost handle
+    char * dev  = nullptr;   // device-side pointer for kernels / cudaMemset / cudaMemcpyAsync
+
+    cudaError_t alloc(size_t bytes) {
+        cudaError_t rc = cudaHostAlloc(&host, bytes, cudaHostAllocPortable | cudaHostAllocMapped);
+        if (rc != cudaSuccess) {
+            host = nullptr;
+            return rc;
+        }
+        rc = cudaHostGetDevicePointer(reinterpret_cast<void **>(&dev), host, 0);
+        if (rc != cudaSuccess) {
+            cudaFreeHost(host);
+            host = nullptr;
+            dev  = nullptr;
+        }
+        return rc;
+    }
+
+    void free() {
+        if (host) {
+            cudaFreeHost(host);
+            host = nullptr;
+            dev  = nullptr;
+        }
+    }
+};
+
 struct ggml_cuda_ar_pipeline {
     int      n_devices;
     int      devices[GGML_CUDA_MAX_DEVICES];
@@ -263,9 +297,9 @@ struct ggml_cuda_ar_pipeline {
     uint64_t call_count;
 
     // Per-device resources.
-    char *                   host_buf[GGML_CUDA_MAX_DEVICES];  // pinned staging
-    char *                   host_large[GGML_CUDA_MAX_DEVICES]; // pinned staging for copy-engine path
-    char *                   dev_tmp[GGML_CUDA_MAX_DEVICES];    // device scratch for copy-engine path
+    ggml_cuda_ar_host_mapping host_buf[GGML_CUDA_MAX_DEVICES];   // pinned staging (chunked-kernel)
+    ggml_cuda_ar_host_mapping host_large[GGML_CUDA_MAX_DEVICES]; // pinned staging (copy-engine)
+    char *                    dev_tmp[GGML_CUDA_MAX_DEVICES];    // device scratch for copy-engine path
     cudaStream_t             streams[GGML_CUDA_MAX_DEVICES];   // non-blocking
     ggml_cuda_ar_event_slot  ev_pool[GGML_CUDA_MAX_DEVICES][GGML_CUDA_AR_POOL_SIZE];
 
@@ -283,14 +317,10 @@ struct ggml_cuda_ar_pipeline {
     cudaEvent_t              dev_tmp_kernel_done[GGML_CUDA_MAX_DEVICES];
     bool                     dev_tmp_kernel_done_valid;
 
-    // Arrival ring: ARRIVAL_STRIDE bytes between adjacent ints.  Allocated as
-    // mapped pinned host memory so the device can read/write it directly.
-    // arrival_host is the cudaFreeHost handle; arrival_dev is the device-side
-    // pointer (from cudaHostGetDevicePointer) that the kernel and cudaMemset
-    // operate on.  The CPU never touches either pointer's data.
+    // Arrival ring: ARRIVAL_STRIDE bytes between adjacent ints.  Mapped pinned
+    // memory; CPU never reads/writes — only the kernel and cudaMemset.
     // Use ggml_cuda_ar_arrival_ptr() to index.
-    void * arrival_host;
-    char * arrival_dev;
+    ggml_cuda_ar_host_mapping arrival;
 };
 
 // Return a pointer to the arrival int for (slot, rank).
@@ -300,7 +330,7 @@ struct ggml_cuda_ar_pipeline {
 static int * ggml_cuda_ar_arrival_ptr(const ggml_cuda_ar_pipeline * p, int slot, int rank) {
     const size_t offset = ((size_t)slot * p->n_devices + rank) *
                           GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
-    return reinterpret_cast<int *>(p->arrival_dev + offset);
+    return reinterpret_cast<int *>(p->arrival.dev + offset);
 }
 
 static uint64_t ggml_cuda_ar_env_u64(const char * name, uint64_t default_value) {
@@ -430,23 +460,14 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     const size_t arrival_bytes =
         (size_t)GGML_CUDA_AR_POOL_SIZE * n_devices *
         GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
-    // Mapped + portable so cudaHostGetDevicePointer gives us a kernel-usable
-    // device pointer on every device — the CPU never touches the buffer.
-    if (cudaHostAlloc(&p->arrival_host, arrival_bytes,
-                      cudaHostAllocPortable | cudaHostAllocMapped) != cudaSuccess) {
-        GGML_LOG_ERROR("%s: cudaHostAlloc for arrival ring failed (%zu bytes)\n",
+    if (p->arrival.alloc(arrival_bytes) != cudaSuccess) {
+        GGML_LOG_ERROR("%s: alloc for arrival ring failed (%zu bytes)\n",
                        __func__, arrival_bytes);
         ggml_cuda_ar_pipeline_free(p);
         return nullptr;
     }
-    if (cudaHostGetDevicePointer(reinterpret_cast<void **>(&p->arrival_dev),
-                                 p->arrival_host, 0) != cudaSuccess) {
-        GGML_LOG_ERROR("%s: cudaHostGetDevicePointer for arrival ring failed\n", __func__);
-        ggml_cuda_ar_pipeline_free(p);
-        return nullptr;
-    }
     ggml_cuda_set_device(p->devices[0]);
-    if (cudaMemset(p->arrival_dev, 0, arrival_bytes) != cudaSuccess) {
+    if (cudaMemset(p->arrival.dev, 0, arrival_bytes) != cudaSuccess) {
         GGML_LOG_ERROR("%s: cudaMemset for arrival ring failed (%zu bytes)\n",
                        __func__, arrival_bytes);
         ggml_cuda_ar_pipeline_free(p);
@@ -459,8 +480,8 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     p->buf_bytes = GGML_CUDA_AR_MAX_BYTES;
     const size_t host_buf_total = (size_t) GGML_CUDA_AR_POOL_SIZE * p->buf_bytes;
     for (int i = 0; i < n_devices; ++i) {
-        if (cudaHostAlloc(&p->host_buf[i], host_buf_total, cudaHostAllocPortable) != cudaSuccess) {
-            GGML_LOG_ERROR("%s: cudaHostAlloc for staging failed (%zu bytes)\n",
+        if (p->host_buf[i].alloc(host_buf_total) != cudaSuccess) {
+            GGML_LOG_ERROR("%s: alloc for staging failed (%zu bytes)\n",
                            __func__, host_buf_total);
             ggml_cuda_ar_pipeline_free(p);
             return nullptr;
@@ -473,8 +494,8 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     // cross-stream wait in copy_impl on the prior AR's add_kernel-done event.
     for (int i = 0; i < n_devices; ++i) {
         ggml_cuda_set_device(p->devices[i]);
-        if (cudaHostAlloc(&p->host_large[i], p->copy_bytes, cudaHostAllocPortable) != cudaSuccess) {
-            GGML_LOG_ERROR("%s: cudaHostAlloc for large staging failed (%zu bytes)\n",
+        if (p->host_large[i].alloc(p->copy_bytes) != cudaSuccess) {
+            GGML_LOG_ERROR("%s: alloc for large staging failed (%zu bytes)\n",
                            __func__, p->copy_bytes);
             ggml_cuda_ar_pipeline_free(p);
             return nullptr;
@@ -508,12 +529,8 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
     }
 
     for (int i = 0; i < p->n_devices; ++i) {
-        if (p->host_buf[i]) {
-            cudaFreeHost(p->host_buf[i]);
-        }
-        if (p->host_large[i]) {
-            cudaFreeHost(p->host_large[i]);
-        }
+        p->host_buf[i].free();
+        p->host_large[i].free();
         if (p->dev_tmp[i]) {
             ggml_cuda_set_device(p->devices[i]);
             cudaFree(p->dev_tmp[i]);
@@ -540,9 +557,7 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
             cudaStreamDestroy(p->streams[i]);
         }
     }
-    if (p->arrival_host) {
-        cudaFreeHost(p->arrival_host);
-    }
+    p->arrival.free();
     delete p;
 }
 
@@ -604,7 +619,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
                 (nbytes - offset) : chunk_bytes;
 
             CUDA_CHECK(cudaMemcpyAsync(
-                p->host_large[i] + offset, reinterpret_cast<char *>(src_buf[i]) + offset, this_bytes,
+                p->host_large[i].dev + offset, reinterpret_cast<char *>(src_buf[i]) + offset, this_bytes,
                 cudaMemcpyDeviceToHost, p->streams[i]));
             CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].cpy[c], p->streams[i]));
         }
@@ -635,7 +650,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
 
             CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->ev_pool[peer][slot].cpy[c]));
             CUDA_CHECK(cudaMemcpyAsync(
-                p->dev_tmp[i] + offset, p->host_large[peer] + offset, this_bytes,
+                p->dev_tmp[i] + offset, p->host_large[peer].dev + offset, this_bytes,
                 cudaMemcpyHostToDevice, p->streams[i]));
         }
 
@@ -876,8 +891,8 @@ bool ggml_cuda_ar_allreduce(
                 ggml_cuda_ar_kernel<Tdst, Twire><<<dim3(GGML_CUDA_AR_KERNEL_BLOCKS), dim3(256), 0, stream>>>( \
                     reinterpret_cast<const Tdst *>(data), \
                     reinterpret_cast<Tdst *>(data), \
-                    reinterpret_cast<Twire *>(p->host_buf[i]    + (size_t) slot * p->buf_bytes), \
-                    reinterpret_cast<const Twire *>(p->host_buf[peer] + (size_t) slot * p->buf_bytes), \
+                    reinterpret_cast<Twire *>(p->host_buf[i].dev    + (size_t) slot * p->buf_bytes), \
+                    reinterpret_cast<const Twire *>(p->host_buf[peer].dev + (size_t) slot * p->buf_bytes), \
                     static_cast<int>(chunk_elems), \
                     ggml_cuda_ar_arrival_ptr(p, slot, i), \
                     ggml_cuda_ar_arrival_ptr(p, slot, peer), \
