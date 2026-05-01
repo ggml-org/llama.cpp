@@ -168,8 +168,18 @@ void init_budgets() {
 // debugging the dispatch path: pinning all hot tensors onto one GPU
 // eliminates a class of multi-device scheduler interactions that have
 // triggered illegal-memory-access crashes on certain prompts.
+//
+// Margin (default 1.5 GiB per device) is left untouched so prefill compute
+// buffers can fit. DS4_HOT_MARGIN_MIB overrides this; use a larger value if
+// you observe OOM errors during prefill of long prompts.
 ggml_backend_buffer_type_t pick_gpu_buft(size_t needed_bytes) {
-    const size_t margin = 256 * (size_t) 1024 * 1024;
+    static const size_t margin = []() -> size_t {
+        const char * env = std::getenv("DS4_HOT_MARGIN_MIB");
+        if (!env || !*env) return (size_t) 1536 * 1024 * 1024; // 1.5 GiB default
+        long v = std::strtol(env, nullptr, 10);
+        if (v <= 0) return (size_t) 1536 * 1024 * 1024;
+        return (size_t) v * 1024 * 1024;
+    }();
 
     static const char * const force_device = std::getenv("DS4_HOT_DEVICE");
 
