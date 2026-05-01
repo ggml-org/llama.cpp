@@ -46,14 +46,8 @@
 // g_br = hex_align_up(gqa_factor * Br, 32) replaces Br for all Q/O/S/P/D dimensions.
 // Layout: Q + O_ping + O_pong + K_dma*2 + V_dma*2 + K_tile + V_tile + S + P + D + vectors + scales
 // Mask is DMA'd into a VTCM buffer (Br rows per KV block) to avoid DDR reads in softmax.
-static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor,
-                                        size_t DK,
-                                        size_t DV,
-                                        size_t Br,
-                                        size_t Bc,
-                                        size_t n_threads) {
-    const size_t g_br = hex_align_up(gqa_factor * Br, HMX_FP16_TILE_N_ROWS);
-
+static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads) {
+    const size_t g_br         = hex_align_up(gqa_factor * Br, HMX_FP16_TILE_N_ROWS);
     const size_t q_tile_size  = hex_align_up(g_br * DK * sizeof(__fp16), 4096);    // Q:  [g_br, DK]
     const size_t o_tile_size  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);    // O:  [g_br, DV] x2 ping-pong
     const size_t k_dma_size   = hex_align_up(Bc * DK * sizeof(__fp16), 4096);      // K DMA: [Bc, DK] x2 double-buf
@@ -66,11 +60,12 @@ static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor,
     const size_t row_vec_size = hex_align_up(Bc * sizeof(__fp16), 256);
     const size_t m_line_size  = hex_align_up(Bc * sizeof(__fp16), 128);
     const size_t m_buf_size   = hex_align_up(Br * m_line_size, 4096);
+    const size_t slopes_size  = hex_align_up(g_br * sizeof(__fp16), 128);
 
-    return q_tile_size * 1                 // Q tiles
+    return   q_tile_size * 1               // Q tiles
            + o_tile_size * 2               // O ping-pong
-           + k_dma_size * 2                // K DMA x2
-           + v_dma_size * 2                // V DMA x2
+           + k_dma_size  * 2               // K DMA x2
+           + v_dma_size  * 2               // V DMA x2
            + k_tile_size * 1               // K tiles
            + v_tile_size * 1               // V tiles
            + s_tile_size * 2               // S + P
@@ -78,6 +73,7 @@ static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor,
            + col_vec_size * 4              // m_vec, l_vec, s_rowmax, p_rowsum
            + row_vec_size * 2 * n_threads  // per-thread softmax row scratch
            + m_buf_size * 1                // mask VTCM buffer [Br rows]
+           + slopes_size                   // Slopes
            + 256 * 2;                      // HMX scales (id + qk)
 }
 
@@ -334,11 +330,11 @@ struct hmx_fa_context {
     HVX_Vector * vtcm_s_rowmax;        // Softmax intermediate [g_br]
     HVX_Vector * vtcm_p_rowsum;        // Softmax intermediate [g_br]
     HVX_Vector * vtcm_row_bufs;        // Per-thread softmax row scratch [n_threads][2][Bc/64]
-    size_t       row_buf_stride;       // HVX vectors per row buffer (Bc/64)
-    float *      slopes;               // ALiBi slopes [g_br], heap-allocated
     uint8_t *    vtcm_hmx_scales_id;   // HMX output scales (identity)
     uint8_t *    vtcm_hmx_scales_qk;   // HMX output scales (qk_scale)
     __fp16 *     vtcm_mask_buf;        // VTCM mask buffer [Br × m_line], DMA'd per KV block
+    __fp16 *     vtcm_slopes;          // ALiBi slopes [g_br]
+    size_t       row_buf_stride;       // HVX vectors per row buffer (Bc/64)
     size_t       mask_buf_row_stride;  // elements (__fp16) per row in mask buffer
     bool         mask_broadcast;       // true when mask->ne[2] == 1 (head-independent, single 2D DMA)
 };
@@ -649,8 +645,8 @@ typedef struct {
 
     // ALiBi per-head slopes (indexed by GQA-merged row: slope[r] for r in [0, n_rows_g))
     // slope[r] = 1.0 when max_bias == 0 (no ALiBi)
-    // Pointer into hmx_fa_context.slopes (heap-allocated, sized to g_br)
-    float * slopes;
+    // Pointer into hmx_fa_context.vtcm_slopes (sized to g_br)
+    __fp16 *                  slopes;
 
     // Mask info (preloaded before softmax)
     const struct htp_tensor * mask;
@@ -764,8 +760,8 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
             // ALiBi slopes — only needed when has_alibi (scheme A)
             HVX_Vector v_slope0, v_slope1;
             if (args->has_alibi) {
-                v_slope0 = hvx_vec_splat_f16((__fp16) args->slopes[r + 0]);
-                v_slope1 = (r + 1 < (int) n_rows_g) ? hvx_vec_splat_f16((__fp16) args->slopes[r + 1]) : Q6_V_vzero();
+                v_slope0 = hvx_vec_splat_f16(args->slopes[r + 0]);
+                v_slope1 = (r + 1 < (int) n_rows_g) ? hvx_vec_splat_f16(args->slopes[r + 1]) : Q6_V_vzero();
             }
 
             const HVX_Vector v_threshold = Q6_Vh_vsplat_R(0xcc00);  // fp16 -16.0 (hoisted outside for-c)
@@ -1193,7 +1189,7 @@ static void hmx_fa_o_norm_worker(void * data) {
 // Row r in the GQA-merged block maps to Q head h = kv_head * G + r % G.
 // slope(h) = m0^(h+1) when h < n_head_log2, else m1^(2*(h-n_head_log2)+1).
 // When max_bias == 0, all slopes are 1.0 (no ALiBi).
-static void fa_compute_slopes(fa_softmax_args_t *           sargs,
+static __attribute__((noinline)) void fa_compute_slopes(fa_softmax_args_t * sargs,
                               const struct hmx_fa_context * factx,
                               uint32_t                      kv_head,
                               size_t                        n_rows_g) {
@@ -1296,10 +1292,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.is_dst_fp32    = (dst->type == HTP_TYPE_F32);
     factx.use_pipeline   = use_pipeline;
     factx.mask_broadcast = (mask != NULL && mask->ne[2] == 1);
-    factx.slopes         = (float *) malloc(g_br * sizeof(float));
-    if (!factx.slopes) {
-        return HTP_STATUS_VTCM_TOO_SMALL;
-    }
 
     // Extract op parameters (mutable during softcap adjustment, then stored as const in factx)
     float scale = 1.0f, max_bias = 0.0f, logit_softcap = 0.0f;
@@ -1346,6 +1338,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const size_t row_vec_bytes = hex_align_up(Bc * sizeof(__fp16), 256);
     const size_t m_line_bytes  = hex_align_up(Bc * sizeof(__fp16), 128);
     const size_t m_buf_bytes   = hex_align_up(Br * m_line_bytes, 4096);
+    const size_t slopes_bytes  = hex_align_up(g_br * sizeof(__fp16), 128);
 
     uint8_t * vtcm_cur = ctx->vtcm_base;
 
@@ -1371,9 +1364,9 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.vtcm_hmx_scales_qk  = vtcm_seq_alloc(&vtcm_cur, 256);
     factx.vtcm_mask_buf       = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, m_buf_bytes);
     factx.mask_buf_row_stride = m_line_bytes / sizeof(__fp16);
+    factx.vtcm_slopes         = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, slopes_bytes);
 
     if ((size_t) (vtcm_cur - ctx->vtcm_base) > ctx->vtcm_size) {
-        free(factx.slopes);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
@@ -1386,7 +1379,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
     // ======== Skip compute if profiling ========
     if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        free(factx.slopes);
         return HTP_STATUS_OK;
     }
 
@@ -1605,12 +1597,11 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         sargs.q_start              = q_start;
                         sargs.ib3                  = ib3;
                         sargs.has_alibi            = (factx.max_bias != 0.0f);
-                        sargs.slopes               = factx.slopes;
-                        fa_compute_slopes(&sargs, &factx, kv_head, n_rows_g);
                         sargs.mask                 = mask;
                         sargs.mask_vtcm            = has_mask_dma ? (const __fp16 *) factx.vtcm_mask_buf : NULL;
                         sargs.mask_vtcm_row_stride = factx.mask_buf_row_stride;
-
+                        sargs.slopes               = factx.vtcm_slopes;
+                        fa_compute_slopes(&sargs, &factx, kv_head, n_rows_g);
 
                         TIMER_START(softmax);
                         fa_phase_softmax_and_build_d(&factx, &sargs, n_row_tiles, n_row_tiles_g_br);
@@ -1717,11 +1708,11 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         sargs.q_start              = q_start;
                         sargs.ib3                  = ib3;
                         sargs.has_alibi            = (factx.max_bias != 0.0f);
-                        sargs.slopes               = factx.slopes;
-                        fa_compute_slopes(&sargs, &factx, kv_head, n_rows_g);
                         sargs.mask                 = mask;
                         sargs.mask_vtcm            = has_mask_dma ? (const __fp16 *) factx.vtcm_mask_buf : NULL;
                         sargs.mask_vtcm_row_stride = factx.mask_buf_row_stride;
+                        sargs.slopes               = factx.vtcm_slopes;
+                        fa_compute_slopes(&sargs, &factx, kv_head, n_rows_g);
 
                         TIMER_START(softmax);
                         fa_phase_softmax_and_build_d(&factx, &sargs, n_row_tiles, n_row_tiles_g_br);
@@ -1845,6 +1836,5 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
          TIMER_US(o_update), TIMER_US(o_norm), TIMER_US(o_store));
 #endif
 
-    free(factx.slopes);
     return HTP_STATUS_OK;
 }
