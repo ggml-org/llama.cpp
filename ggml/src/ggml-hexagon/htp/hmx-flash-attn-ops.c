@@ -474,9 +474,9 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
         const size_t h_idx1 = (r + 1) % G;
 
         const uint8_t * q_ptr0 = (const uint8_t *) q->data + (q_start + q_idx0) * q->nb[1] +
-                                 (kv_head * G + h_idx0) * q->nb[2] + ib3 * q->nb[3];
+                                                  (kv_head * G + h_idx0) * q->nb[2] + ib3 * q->nb[3];
         const uint8_t * q_ptr1 = next_row_valid ? ((const uint8_t *) q->data + (q_start + q_idx1) * q->nb[1] +
-                                                   (kv_head * G + h_idx1) * q->nb[2] + ib3 * q->nb[3]) :
+                                                  (kv_head * G + h_idx1) * q->nb[2] + ib3 * q->nb[3]) :
                                                   NULL;
 
         size_t   r0       = r / HMX_FP16_TILE_N_ROWS;
@@ -791,8 +791,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                             if (qi1 == qi0) {
                                 v_mask1 = v_mask0;  // scheme B: reuse — same mask row
                             } else {
-                                v_mask1 =
-                                    *(const HVX_UVector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
+                                v_mask1 = *(const HVX_UVector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
                             }
                         }
                     } else {
@@ -802,12 +801,12 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                         const size_t              h_idx0 = args->kv_head * G + (r + 0) % G;
                         const uint32_t            im2_0  = h_idx0 % mask->ne[2];
                         const uint32_t            im3_0  = args->ib3 % mask->ne[3];
-                        const __fp16 * m0_ptr = (const __fp16 *) ((const uint8_t *) mask->data + q_idx0 * mask->nb[1] +
-                                                                  im2_0 * mask->nb[2] + im3_0 * mask->nb[3]) +
-                                                args->kv_start + c;
-                        v_mask0 = *(const HVX_UVector *) m0_ptr;
 
+                        const __fp16 * m0_ptr = (const __fp16 *) ((const uint8_t *) mask->data + q_idx0 * mask->nb[1] +
+                                                        im2_0 * mask->nb[2] + im3_0 * mask->nb[3]) + args->kv_start + c;
+                        v_mask0 = *(const HVX_UVector *) m0_ptr;
                         v_mask1 = v_neg_inf;
+
                         if (r + 1 < (int) n_rows_g) {
                             const size_t q_idx1 = args->q_start + ((r + 1) / G);
                             if (q_idx1 == q_idx0) {
@@ -817,10 +816,8 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                                 const size_t   h_idx1 = args->kv_head * G + (r + 1) % G;
                                 const uint32_t im2_1  = h_idx1 % mask->ne[2];
                                 const uint32_t im3_1  = args->ib3 % mask->ne[3];
-                                const __fp16 * m1_ptr =
-                                    (const __fp16 *) ((const uint8_t *) mask->data + q_idx1 * mask->nb[1] +
-                                                      im2_1 * mask->nb[2] + im3_1 * mask->nb[3]) +
-                                    args->kv_start + c;
+                                const __fp16 * m1_ptr = (const __fp16 *) ((const uint8_t *) mask->data + q_idx1 * mask->nb[1] +
+                                                                im2_1 * mask->nb[2] + im3_1 * mask->nb[3]) + args->kv_start + c;
                                 v_mask1 = *(const HVX_UVector *) m1_ptr;
                             }
                         }
@@ -834,18 +831,14 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                         // ALiBi path: S += slope * mask (full mul + add)
                         HVX_Vector v_sm0 = hvx_vec_mul_f16_f16(v_mask0, v_slope0);
                         HVX_Vector v_sm1 = hvx_vec_mul_f16_f16(v_mask1, v_slope1);
-                        my_row_buf0[ci] =
-                            Q6_V_vmux_QVV(q_keep0, hvx_vec_add_f16_f16(my_row_buf0[ci], v_sm0), v_neg_inf);
-                        my_row_buf1[ci] =
-                            Q6_V_vmux_QVV(q_keep1, hvx_vec_add_f16_f16(my_row_buf1[ci], v_sm1), v_neg_inf);
+                        my_row_buf0[ci]  = Q6_V_vmux_QVV(q_keep0, hvx_vec_add_f16_f16(my_row_buf0[ci], v_sm0), v_neg_inf);
+                        my_row_buf1[ci]  = Q6_V_vmux_QVV(q_keep1, hvx_vec_add_f16_f16(my_row_buf1[ci], v_sm1), v_neg_inf);
                     } else {
                         // No-ALiBi fast path (scheme A): slope≡1.0, skip the mul
                         // but still add mask (additive positional bias).  vmux
                         // clamps mask < -16 to -inf as a numerical safeguard.
-                        my_row_buf0[ci] =
-                            Q6_V_vmux_QVV(q_keep0, hvx_vec_add_f16_f16(my_row_buf0[ci], v_mask0), v_neg_inf);
-                        my_row_buf1[ci] =
-                            Q6_V_vmux_QVV(q_keep1, hvx_vec_add_f16_f16(my_row_buf1[ci], v_mask1), v_neg_inf);
+                        my_row_buf0[ci] = Q6_V_vmux_QVV(q_keep0, hvx_vec_add_f16_f16(my_row_buf0[ci], v_mask0), v_neg_inf);
+                        my_row_buf1[ci] = Q6_V_vmux_QVV(q_keep1, hvx_vec_add_f16_f16(my_row_buf1[ci], v_mask1), v_neg_inf);
                     }
                 } else {
                     if (ne < 64) {
@@ -896,8 +889,8 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                 HVX_Vector v_s_minus_m0 = Q6_Vqf16_vsub_VhfVhf(my_row_buf0[ci], v_dup_m0);
                 HVX_Vector v_s_minus_m1 = Q6_Vqf16_vsub_VhfVhf(my_row_buf1[ci], v_dup_m1);
 
-                HVX_Vector v_p_row0_hf = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_s_minus_m0));
-                HVX_Vector v_p_row1_hf = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_s_minus_m1));
+                HVX_Vector v_p_row0_hf  = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_s_minus_m0));
+                HVX_Vector v_p_row1_hf  = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_s_minus_m1));
 #else
             // F32 exp path: qf16 → f32 → exp → f32 → f16.  Higher precision,
             for (size_t c = 0; c < kv_rows; c += 64) {
@@ -929,16 +922,12 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                 HVX_VectorPair vp_p0 = hvx_vec_f16_to_f32_shuff(v_p_row0_hf);
                 HVX_VectorPair vp_p1 = hvx_vec_f16_to_f32_shuff(v_p_row1_hf);
 
-                v_p_rowsum0 =
-                    Q6_Vqf32_vadd_Vqf32Vqf32(v_p_rowsum0, Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(vp_p0), Q6_V_hi_W(vp_p0)));
-                v_p_rowsum1 =
-                    Q6_Vqf32_vadd_Vqf32Vqf32(v_p_rowsum1, Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(vp_p1), Q6_V_hi_W(vp_p1)));
+                v_p_rowsum0 = Q6_Vqf32_vadd_Vqf32Vqf32(v_p_rowsum0, Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(vp_p0), Q6_V_hi_W(vp_p0)));
+                v_p_rowsum1 = Q6_Vqf32_vadd_Vqf32Vqf32(v_p_rowsum1, Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(vp_p1), Q6_V_hi_W(vp_p1)));
             }
 
-            HVX_Vector rowsum0_sf = Q6_Vsf_equals_Vqf32(v_p_rowsum0);
-            HVX_Vector rowsum1_sf = Q6_Vsf_equals_Vqf32(v_p_rowsum1);
-            rowsum0_sf            = hvx_vec_reduce_sum_f32(rowsum0_sf);
-            rowsum1_sf            = hvx_vec_reduce_sum_f32(rowsum1_sf);
+            HVX_Vector rowsum0_sf = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(v_p_rowsum0));
+            HVX_Vector rowsum1_sf = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(v_p_rowsum1));
             {
                 // Both inputs are f32 splats, so the f32->f16 output is an fp16 splat.
                 HVX_Vector rv0_v = hvx_vec_f32_to_f16(rowsum0_sf, rowsum0_sf);
@@ -1023,16 +1012,16 @@ __attribute__((noinline)) static void fa_build_d_diag_inv_l(struct hmx_fa_contex
                                                             size_t                  n_row_tiles_g_br) {
     const HVX_Vector     v_offsets = *(const HVX_Vector *) d_tile_scatter_offsets;
     const HVX_VectorPred q_32_mask = Q6_Q_vsetq_R(32 * sizeof(__fp16));
+    const HVX_Vector     one       = hvx_vec_splat_f32(1.0f);
 
     HVX_Vector v_content = Q6_V_vzero();
     for (size_t i = 0; i < n_row_tiles; ++i) {
         if ((i % 2) == 0) {
-            HVX_Vector       v_l_hf = Q6_Vhf_equals_Vqf16(factx->vtcm_l_vec[i / 2]);
-            HVX_VectorPair   vp_l   = hvx_vec_f16_to_f32_shuff(v_l_hf);
-            const HVX_Vector one    = hvx_vec_splat_f32(1.0f);
-            HVX_Vector inv_lo = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_lo_W(vp_l))));
-            HVX_Vector inv_hi = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_hi_W(vp_l))));
-            v_content         = hvx_vec_f32_to_f16_shuff(inv_lo, inv_hi);
+            HVX_Vector     v_l_hf = Q6_Vhf_equals_Vqf16(factx->vtcm_l_vec[i / 2]);
+            HVX_VectorPair vp_l   = hvx_vec_f16_to_f32_shuff(v_l_hf);
+            HVX_Vector     inv_lo = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_lo_W(vp_l))));
+            HVX_Vector     inv_hi = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_hi_W(vp_l))));
+            v_content = hvx_vec_f32_to_f16_shuff(inv_lo, inv_hi);
         } else {
             v_content = Q6_V_vror_VR(v_content, 64);
         }
