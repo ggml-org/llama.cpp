@@ -567,7 +567,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.ff_proj",         # llada
             "layers.{bid}.mlp.gate_proj",                     # qwen3-embedding
             "model.layers.{bid}.mlp.language_mlp.gate_proj",  # cogvlm
-            "model.blocks.{bid}.mlp.mlp_gate",                 # talkie
+            "model.blocks.{bid}.mlp.mlp_gate",                # talkie
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
