@@ -38,7 +38,6 @@ add_library(${HTP_LIB} SHARED
     diag-ops.c
     solve-tri-ops.c
 )
-option(GGML_HEXAGON_FA_EXP2_HF "Use FP16 exp2 polynomial in FA softmax instead of F32 exp round-trip" OFF)
 
 target_compile_definitions(${HTP_LIB} PRIVATE
     $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,HTP_DEBUG=1,NDEBUG=1>
@@ -49,6 +48,7 @@ if (GGML_HEXAGON_FA_EXP2_HF)
     message(STATUS "ggml-htp: HMX_FA_USE_EXP2_HF=1 (use FP16 exp2 polynomial in FA softmax)")
     target_compile_definitions(${HTP_LIB} PRIVATE HMX_FA_USE_EXP2_HF=1)
 endif()
+
 # HMX acceleration: available on v73+ architectures
 set(HTP_HMX_VERSIONS v73 v75 v79 v81)
 list(FIND HTP_HMX_VERSIONS ${DSP_VERSION} _hmx_idx)
