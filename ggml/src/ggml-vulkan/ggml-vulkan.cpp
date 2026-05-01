@@ -15271,6 +15271,19 @@ static void ggml_vk_bench_pair(
 
     {
         auto groups = vk_instance.instance.enumeratePhysicalDeviceGroups();
+        std::cerr << "  Device groups found: " << groups.size() << std::endl;
+        for (size_t g = 0; g < groups.size(); g++) {
+            auto & group = groups[g];
+            std::cerr << "    Group " << g << ": " << group.physicalDeviceCount << " device(s)";
+            if (group.subsetAllocation) std::cerr << " [subsetAllocation]";
+            std::cerr << std::endl;
+            for (uint32_t i = 0; i < group.physicalDeviceCount; i++) {
+                auto props = group.physicalDevices[i].getProperties();
+                std::cerr << "      [" << i << "] " << props.deviceName << std::endl;
+            }
+        }
+
+        bool found_group = false;
         for (auto & group : groups) {
             uint32_t i0 = UINT32_MAX, i1 = UINT32_MAX;
             for (uint32_t i = 0; i < group.physicalDeviceCount; i++) {
@@ -15278,6 +15291,7 @@ static void ggml_vk_bench_pair(
                 if (group.physicalDevices[i] == dev1->physical_device) i1 = i;
             }
             if (i0 == UINT32_MAX || i1 == UINT32_MAX) continue;
+            found_group = true;
 
             dg_idx0 = i0;
             dg_idx1 = i1;
@@ -15341,6 +15355,9 @@ static void ggml_vk_bench_pair(
                 dg_device = vk::Device{};
             }
             break;
+        }
+        if (!found_group) {
+            std::cerr << "  devgroup: devices are not in the same device group" << std::endl;
         }
     }
 
