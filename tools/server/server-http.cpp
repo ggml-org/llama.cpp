@@ -274,56 +274,9 @@ bool server_http_context::init(const common_params & params) {
         LOG_INF("%s: whitelist: %zu entries loaded\n", __func__, params.whitelist_ips.size());
     }
 
-    if (params.api_keys.size() == 1) {
-        auto key = params.api_keys[0];
-        std::string substr = key.substr(std::max((int)(key.length() - 4), 0));
-        LOG_INF("%s: api_keys: ****%s\n", __func__, substr.c_str());
-    } 
-    if (params.whitelist_ips.size() == 1) {
-        LOG_INF("%s: whitelist: 1 IP loaded\n", __func__);
-    } else if (params.api_keys.size() > 1) {
-        LOG_INF("%s: api_keys: %zu keys loaded\n", __func__, params.api_keys.size());
-    }
-
     //
     // Middlewares
     //
-
-    auto middleware_validate_whitelist = [ whitelist_ips = params.whitelist_ips,trusted_proxy_ips = params.trusted_proxy_ips, use_forwarded_for = params.use_forwarded_for](const httplib::Request & req, httplib::Response & res) {
-        if (whitelist_ips.empty()) {
-            return true;
-        }
-
-        const std::string client_ip = get_client_ip(
-            req,
-            params.use_forwarded_for,
-            params.trusted_proxy_ips
-        );
-
-	if (use_forwarded_for && is_ip_allowed(req.remote_addr, trusted_proxies)) {
-            client_ip = first_ip_from_x_forwarded_for(req);
-        }
-
-        if (is_ip_allowed(client_ip, whitelist_ips)) {
-            return true;
-        }
-
-        res.status = 403;
-        res.set_content(
-            safe_json_to_str(json {
-                {"error", {
-                    {"message", "Access Denied."},
-                    {"type", "permission_error"},
-                    {"code", 403}
-                }}
-            }),
-            "application/json; charset=utf-8"
-        );
-
-        LOG_WRN("Forbidden: IP not whitelisted: %s\n", client_ip.c_str());
-        return false;
-    };
-
 	auto middleware_validate_whitelist = [
     	whitelist_ips = params.whitelist_ips,
 	    trusted_proxy_ips = params.trusted_proxy_ips,
