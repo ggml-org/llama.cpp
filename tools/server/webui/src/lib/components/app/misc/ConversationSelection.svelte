@@ -154,15 +154,15 @@
 						{#each filteredConversations as conv (conv.id)}
 							<tr
 								class="cursor-pointer border-b transition-colors hover:bg-muted/50"
-								onclick={(e) => toggleConversation(conv.id, e.shiftKey)}
+								onclick={(event) => toggleConversation(conv.id, event.shiftKey)}
 							>
 								<td class="p-3">
 									<Checkbox
 										checked={selectedIds.has(conv.id)}
-										onclick={(e) => {
-											e.preventDefault();
-											e.stopPropagation();
-											toggleConversation(conv.id, e.shiftKey);
+										onclick={(event) => {
+											event.preventDefault();
+											event.stopPropagation();
+											toggleConversation(conv.id, event.shiftKey);
 										}}
 									/>
 								</td>

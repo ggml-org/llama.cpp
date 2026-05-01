@@ -6,35 +6,52 @@ interface KeyboardShortcutsCallbacks {
 	editActiveConversation?: () => void;
 	onSearchActivated?: () => void;
 	deleteActiveConversation?: () => void;
+	navigateToPrevConversation?: () => void;
+	navigateToNextConversation?: () => void;
 }
 
 export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 	function handleKeydown(event: KeyboardEvent) {
-		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+		const isCmdOrCtrl = event.metaKey || event.ctrlKey;
 
-		if (isCtrlOrCmd && event.key === KeyboardKey.K_LOWER) {
+		if (isCmdOrCtrl && event.key === KeyboardKey.K_LOWER) {
 			event.preventDefault();
 			callbacks.activateSearchMode?.();
 			callbacks.onSearchActivated?.();
 		}
 
-		if (isCtrlOrCmd && event.shiftKey && event.key === KeyboardKey.O_UPPER) {
+		if (
+			isCmdOrCtrl &&
+			event.shiftKey &&
+			(event.key === KeyboardKey.O_LOWER || event.key === KeyboardKey.O_UPPER)
+		) {
 			event.preventDefault();
+
 			goto('?new_chat=true#/');
 		}
 
-		if (event.shiftKey && isCtrlOrCmd && event.key === KeyboardKey.E_UPPER) {
+		if (event.shiftKey && isCmdOrCtrl && event.key === KeyboardKey.E_UPPER) {
 			event.preventDefault();
 			callbacks.editActiveConversation?.();
 		}
 
 		if (
-			isCtrlOrCmd &&
+			isCmdOrCtrl &&
 			event.shiftKey &&
 			(event.key === KeyboardKey.D_LOWER || event.key === KeyboardKey.D_UPPER)
 		) {
 			event.preventDefault();
 			callbacks.deleteActiveConversation?.();
+		}
+
+		if (isCmdOrCtrl && event.shiftKey && event.key === KeyboardKey.ARROW_UP) {
+			event.preventDefault();
+			callbacks.navigateToPrevConversation?.();
+		}
+
+		if (isCmdOrCtrl && event.shiftKey && event.key === KeyboardKey.ARROW_DOWN) {
+			event.preventDefault();
+			callbacks.navigateToNextConversation?.();
 		}
 	}
 

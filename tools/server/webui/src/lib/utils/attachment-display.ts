@@ -2,29 +2,29 @@ import { AttachmentType, FileTypeCategory, SpecialFileType } from '$lib/enums';
 import { getFileTypeCategory, getFileTypeCategoryByExtension, isImageFile } from '$lib/utils';
 import type {
 	AttachmentDisplayItemsOptions,
-	ChatUploadedFile,
-	DatabaseMessageExtra
+	ChatAttachmentDisplayItem,
+	ChatUploadedFile
 } from '$lib/types';
 
 /**
- * Check if an uploaded file is an MCP prompt
+ * Check if a display item represents an MCP prompt
+ * (either from attachment type or uploaded file with mcpPrompt metadata)
  */
-function isMcpPromptUpload(file: ChatUploadedFile): boolean {
-	return file.type === SpecialFileType.MCP_PROMPT && !!file.mcpPrompt;
+export function isMcpPrompt(item: ChatAttachmentDisplayItem): boolean {
+	if (item.attachment?.type === AttachmentType.MCP_PROMPT) {
+		return true;
+	}
+	if (item.uploadedFile?.type === SpecialFileType.MCP_PROMPT && item.uploadedFile.mcpPrompt) {
+		return true;
+	}
+	return false;
 }
 
 /**
- * Check if an attachment is an MCP prompt
+ * Check if a display item represents an MCP resource
  */
-function isMcpPromptAttachment(attachment: DatabaseMessageExtra): boolean {
-	return attachment.type === AttachmentType.MCP_PROMPT;
-}
-
-/**
- * Check if an attachment is an MCP resource
- */
-function isMcpResourceAttachment(attachment: DatabaseMessageExtra): boolean {
-	return attachment.type === AttachmentType.MCP_RESOURCE;
+export function isMcpResource(item: ChatAttachmentDisplayItem): boolean {
+	return item.attachment?.type === AttachmentType.MCP_RESOURCE;
 }
 
 /**
@@ -58,7 +58,6 @@ export function getAttachmentDisplayItems(
 			size: file.size,
 			preview: file.preview,
 			isImage: getUploadedFileCategory(file) === FileTypeCategory.IMAGE,
-			isMcpPrompt: isMcpPromptUpload(file),
 			isLoading: file.isLoading,
 			loadError: file.loadError,
 			uploadedFile: file,
@@ -69,16 +68,13 @@ export function getAttachmentDisplayItems(
 	// Add stored attachments (ChatMessage)
 	for (const [index, attachment] of attachments.entries()) {
 		const isImage = isImageFile(attachment);
-		const isMcpPrompt = isMcpPromptAttachment(attachment);
-		const isMcpResource = isMcpResourceAttachment(attachment);
 
 		items.push({
 			id: `attachment-${index}`,
 			name: attachment.name,
+			size: 'size' in attachment ? attachment.size : undefined,
 			preview: isImage && 'base64Url' in attachment ? attachment.base64Url : undefined,
 			isImage,
-			isMcpPrompt,
-			isMcpResource,
 			attachment,
 			attachmentIndex: index,
 			textContent: 'content' in attachment ? attachment.content : undefined

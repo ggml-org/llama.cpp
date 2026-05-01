@@ -31,11 +31,13 @@
 		if (extra.mimeType?.includes(MimeTypeIncludes.TYPESCRIPT)) return MimeTypeIncludes.TYPESCRIPT;
 
 		const name = extra.name || extra.uri || '';
+
 		return getLanguageFromFilename(name) || 'plaintext';
 	}
 
 	function handleDownload() {
 		if (!extra.content) return;
+
 		downloadResourceContent(
 			extra.content,
 			extra.mimeType || MimeTypeText.PLAIN,
@@ -48,6 +50,7 @@
 	<Dialog.Content class="grid max-h-[90vh] max-w-5xl overflow-hidden sm:w-auto sm:max-w-6xl">
 		<Dialog.Header>
 			<Dialog.Title class="pr-8">{extra.name}</Dialog.Title>
+
 			<Dialog.Description>
 				<div class="flex items-center gap-2">
 					<span class="text-xs text-muted-foreground">{extra.uri}</span>

@@ -4,15 +4,18 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { ChatForm, DialogConfirmation } from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { KeyboardKey } from '$lib/enums';
+	import { KeyboardKey, MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
 
 	const editCtx = getMessageEditContext();
 
-	let inputAreaRef: ChatForm | undefined = $state(undefined);
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
+	let branchAfterEdit = $state(false);
+
+	let isUserMessage = $derived(editCtx.messageRole === MessageRole.USER);
+	let isAssistantMessage = $derived(editCtx.messageRole === MessageRole.ASSISTANT);
 
 	let hasUnsavedChanges = $derived.by(() => {
 		if (editCtx.editedContent !== editCtx.originalContent) return true;
@@ -52,13 +55,18 @@
 	function handleSubmit() {
 		if (!canSubmit) return;
 
-		if (saveWithoutRegenerate && editCtx.showSaveOnlyOption) {
+		if (isUserMessage && saveWithoutRegenerate && editCtx.showSaveOnlyOption) {
 			editCtx.saveOnly();
 		} else {
+			if (isAssistantMessage && editCtx.setShouldBranchAfterEdit) {
+				editCtx.setShouldBranchAfterEdit(branchAfterEdit);
+			}
+
 			editCtx.save();
 		}
 
 		saveWithoutRegenerate = false;
+		branchAfterEdit = false;
 	}
 
 	function handleAttachmentRemove(index: number) {
@@ -94,12 +102,13 @@
 
 <div class="relative w-full max-w-[80%]">
 	<ChatForm
-		bind:this={inputAreaRef}
 		value={editCtx.editedContent}
 		attachments={editCtx.editedExtras}
 		uploadedFiles={editCtx.editedUploadedFiles}
 		placeholder="Edit your message..."
 		showMcpPromptButton
+		showAddButton={editCtx.messageRole === MessageRole.USER}
+		showModelSelector={editCtx.messageRole === MessageRole.USER}
 		onValueChange={editCtx.setContent}
 		onAttachmentRemove={handleAttachmentRemove}
 		onUploadedFileRemove={handleUploadedFileRemove}
@@ -110,12 +119,20 @@
 </div>
 
 <div class="mt-2 flex w-full max-w-[80%] items-center justify-between">
-	{#if editCtx.showSaveOnlyOption}
+	{#if isUserMessage && editCtx.showSaveOnlyOption}
 		<div class="flex items-center gap-2">
 			<Switch id="save-only-switch" bind:checked={saveWithoutRegenerate} class="scale-75" />
 
 			<label for="save-only-switch" class="cursor-pointer text-xs text-muted-foreground">
 				Update without re-sending
+			</label>
+		</div>
+	{:else if isAssistantMessage}
+		<div class="flex items-center gap-2">
+			<Switch id="branch-after-edit" bind:checked={branchAfterEdit} class="scale-75" />
+
+			<label for="branch-after-edit" class="cursor-pointer text-xs text-muted-foreground">
+				Branch conversation after edit
 			</label>
 		</div>
 	{:else}

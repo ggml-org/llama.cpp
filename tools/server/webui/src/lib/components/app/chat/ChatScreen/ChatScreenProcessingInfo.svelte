@@ -59,7 +59,9 @@
 	});
 </script>
 
-<div class="chat-processing-info-container pointer-events-none" class:visible={showProcessingInfo}>
+<div
+	class={['chat-processing-info-container pointer-events-none', showProcessingInfo && 'visible']}
+>
 	<div class="chat-processing-info-content">
 		{#each processingDetails as detail (detail)}
 			<span class="chat-processing-info-detail pointer-events-auto backdrop-blur-sm">{detail}</span>

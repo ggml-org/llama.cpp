@@ -15,6 +15,7 @@
 
 	function handleFileSelect(event: Event) {
 		const input = event.target as HTMLInputElement;
+
 		if (input.files) {
 			onFileSelect?.(Array.from(input.files));
 		}

@@ -44,6 +44,7 @@
 				<Dialog.Title>
 					Select Conversations to {mode === 'export' ? 'Export' : 'Import'}
 				</Dialog.Title>
+
 				<Dialog.Description>
 					{#if mode === 'export'}
 						Choose which conversations you want to export. Selected conversations will be downloaded

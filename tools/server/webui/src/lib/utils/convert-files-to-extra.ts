@@ -38,6 +38,7 @@ export async function parseFilesToMessageExtras(
 			extras.push({
 				type: AttachmentType.MCP_PROMPT,
 				name: file.name,
+				size: file.size,
 				serverName: file.mcpPrompt.serverName,
 				promptName: file.mcpPrompt.promptName,
 				content: file.textContent ?? '',
@@ -68,6 +69,7 @@ export async function parseFilesToMessageExtras(
 				extras.push({
 					type: AttachmentType.IMAGE,
 					name: file.name,
+					size: file.size,
 					base64Url
 				});
 			}
@@ -79,6 +81,7 @@ export async function parseFilesToMessageExtras(
 				extras.push({
 					type: AttachmentType.AUDIO,
 					name: file.name,
+					size: file.size,
 					base64Data: base64Data,
 					mimeType: file.type
 				});
@@ -132,6 +135,7 @@ export async function parseFilesToMessageExtras(
 						extras.push({
 							type: AttachmentType.PDF,
 							name: file.name,
+							size: file.size,
 							content: `PDF file with ${images.length} pages`,
 							images: images,
 							processedAsImages: true,
@@ -149,6 +153,7 @@ export async function parseFilesToMessageExtras(
 						extras.push({
 							type: AttachmentType.PDF,
 							name: file.name,
+							size: file.size,
 							content: content,
 							processedAsImages: false,
 							base64Data: base64Data
@@ -166,6 +171,7 @@ export async function parseFilesToMessageExtras(
 					extras.push({
 						type: AttachmentType.PDF,
 						name: file.name,
+						size: file.size,
 						content: content,
 						processedAsImages: false,
 						base64Data: base64Data
@@ -186,6 +192,7 @@ export async function parseFilesToMessageExtras(
 					extras.push({
 						type: AttachmentType.TEXT,
 						name: file.name,
+						size: file.size,
 						content: content
 					});
 				} else {

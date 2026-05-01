@@ -25,6 +25,7 @@
 
 	function handleOpenChange(nextOpen: boolean) {
 		open = nextOpen;
+
 		onOpenChange?.(nextOpen);
 	}
 </script>
@@ -46,6 +47,7 @@
 				aria-label="Close preview"
 			>
 				<XIcon />
+
 				<span class="sr-only">Close preview</span>
 			</DialogPrimitive.Close>
 		</DialogPrimitive.Content>

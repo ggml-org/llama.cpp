@@ -209,7 +209,7 @@ export { PropsService } from './props.service';
  * - `SYNCABLE_PARAMETERS` — mapping of webui setting keys to server parameter keys
  *
  * @see settingsStore in stores/settings.svelte.ts — primary consumer for settings sync
- * @see ChatSettingsParameterSourceIndicator — displays parameter source badges in UI
+ * @see SettingsChatParameterSourceIndicator — displays parameter source badges in UI
  */
 export { ParameterSyncService } from './parameter-sync.service';
 

@@ -1,7 +1,7 @@
 import type { Preview } from '@storybook/sveltekit';
 import '../src/app.css';
-import ModeWatcherDecorator from './ModeWatcherDecorator.svelte';
-import TooltipProviderDecorator from './TooltipProviderDecorator.svelte';
+import ModeWatcherDecorator from './decorators/ModeWatcherDecorator.svelte';
+import TooltipProviderDecorator from './decorators/TooltipProviderDecorator.svelte';
 
 const preview: Preview = {
 	parameters: {

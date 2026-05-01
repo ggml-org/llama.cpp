@@ -1,4 +1,5 @@
 import { setMessageEditContext } from '$lib/contexts';
+import { MessageRole } from '$lib/enums';
 import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
 
 interface UseMessageEditContextOptions {
@@ -62,6 +63,15 @@ export function useMessageEditContext(options: UseMessageEditContextOptions) {
 		},
 		get showSaveOnlyOption() {
 			return options.showSaveOnlyOption ?? false;
+		},
+		get showBranchAfterEditOption() {
+			return false;
+		},
+		get shouldBranchAfterEdit() {
+			return false;
+		},
+		get messageRole() {
+			return MessageRole.USER;
 		},
 		setContent: (c: string) => {
 			editedContent = c;

@@ -64,9 +64,11 @@
 
 		{#if !isWebSocket && onUseProxyChange}
 			<label
-				class="mt-3 flex items-start gap-2"
-				class:cursor-pointer={mcpStore.isProxyAvailable}
-				class:opacity-80={!mcpStore.isProxyAvailable}
+				class={[
+					'mt-3 flex items-start gap-2',
+					mcpStore.isProxyAvailable && 'cursor-pointer',
+					!mcpStore.isProxyAvailable && 'opacity-80'
+				]}
 			>
 				<Switch
 					class="mt-1"

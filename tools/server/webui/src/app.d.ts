@@ -28,7 +28,6 @@ import type {
 	ApiRouterModelsUnloadResponse,
 	// Chat types
 	ChatAttachmentDisplayItem,
-	ChatAttachmentPreviewItem,
 	ChatMessageType,
 	ChatRole,
 	ChatUploadedFile,
@@ -92,7 +91,6 @@ declare global {
 		ApiRouterModelsUnloadResponse,
 		// Chat types
 		ChatAttachmentDisplayItem,
-		ChatAttachmentPreviewItem,
 		ChatMessagePromptProgress,
 		ChatMessageSiblingInfo,
 		ChatMessageTimings,

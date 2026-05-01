@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { cn } from '$lib/components/ui/utils';
 	import type { MCPConnectionLog } from '$lib/types';
 	import { formatTime, getMcpLogLevelIcon, getMcpLogLevelClass } from '$lib/utils';
 
@@ -54,14 +53,14 @@
 				class="max-h-64 space-y-0.5 overflow-y-auto rounded bg-muted/50 p-2 font-mono text-[10px]"
 			>
 				{#each logs as log (log.timestamp.getTime() + log.message)}
-					{@const Icon = getMcpLogLevelIcon(log.level)}
+					{@const IconComponent = getMcpLogLevelIcon(log.level)}
 
-					<div class={cn('flex items-start gap-1.5', getMcpLogLevelClass(log.level))}>
+					<div class={['flex items-start gap-1.5', getMcpLogLevelClass(log.level)]}>
 						<span class="shrink-0 text-muted-foreground">
 							{formatTime(log.timestamp)}
 						</span>
 
-						<Icon class="mt-0.5 h-3 w-3 shrink-0" />
+						<IconComponent class="mt-0.5 h-3 w-3 shrink-0" />
 
 						<span class="break-all">{log.message}</span>
 					</div>

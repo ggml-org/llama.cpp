@@ -1,3 +1,5 @@
+import { isElementInViewport } from '$lib/utils/viewport';
+
 /**
  * Svelte action that fades in an element when it enters the viewport.
  * Uses IntersectionObserver for efficient viewport detection.
@@ -12,17 +14,8 @@ export function fadeInView(
 ) {
 	const { duration = 300, y = 0, skipIfVisible = false } = options;
 
-	if (skipIfVisible) {
-		const rect = node.getBoundingClientRect();
-		const isAlreadyVisible =
-			rect.top < window.innerHeight &&
-			rect.bottom > 0 &&
-			rect.left < window.innerWidth &&
-			rect.right > 0;
-
-		if (isAlreadyVisible) {
-			return;
-		}
+	if (skipIfVisible && isElementInViewport(node)) {
+		return;
 	}
 
 	node.style.opacity = '0';

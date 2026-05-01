@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { ChatMessage } from '$lib/components/app';
-	import ChatMessageUserPending from './ChatMessageUserPending.svelte';
+	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -33,6 +32,7 @@
 	let { messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
+
 	const currentConfig = config();
 
 	setChatActionsContext({

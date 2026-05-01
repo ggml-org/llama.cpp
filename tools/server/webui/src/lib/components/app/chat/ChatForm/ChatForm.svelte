@@ -1,14 +1,13 @@
 <script lang="ts">
 	import {
 		ChatAttachmentsList,
-		ChatAttachmentMcpResources,
 		ChatFormActions,
 		ChatFormFileInputInvisible,
-		ChatFormPromptPicker,
-		ChatFormResourcePicker,
-		ChatFormTextarea
+		ChatFormMcpResourcesList,
+		ChatFormPickers,
+		ChatFormTextarea,
+		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
-	import { DialogMcpResources } from '$lib/components/app/dialogs';
 	import {
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		INPUT_CLASSES,
@@ -54,6 +53,8 @@
 		isLoading?: boolean;
 		placeholder?: string;
 		showMcpPromptButton?: boolean;
+		showAddButton?: boolean;
+		showModelSelector?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -73,6 +74,8 @@
 		isLoading = false,
 		placeholder = 'Type a message...',
 		showMcpPromptButton = false,
+		showAddButton = true,
+		showModelSelector = true,
 		uploadedFiles = $bindable([]),
 		value = $bindable(''),
 		onAttachmentRemove,
@@ -85,31 +88,21 @@
 		onValueChange
 	}: Props = $props();
 
-	/**
-	 *
-	 *
-	 * STATE
-	 *
-	 *
-	 */
-
 	// Component References
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
-	let promptPickerRef: ChatFormPromptPicker | undefined = $state(undefined);
-	let resourcePickerRef: ChatFormResourcePicker | undefined = $state(undefined);
+	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
+		$state(undefined);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
 
 	// Audio Recording State
 	let isRecording = $state(false);
 	let recordingSupported = $state(false);
 
-	// Prompt Picker State
+	// Picker State
 	let isPromptPickerOpen = $state(false);
 	let promptSearchQuery = $state('');
-
-	// Inline Resource Picker State (triggered by @)
 	let isInlineResourcePickerOpen = $state(false);
 	let resourceSearchQuery = $state('');
 
@@ -117,22 +110,12 @@
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
 
-	/**
-	 *
-	 *
-	 * DERIVED STATE
-	 *
-	 *
-	 */
-
-	// Configuration
 	let currentConfig = $derived(config());
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
 
-	// Model Selection Logic
 	let isRouter = $derived(isRouterMode());
 	let conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
@@ -158,7 +141,6 @@
 		return null;
 	});
 
-	// Form Validation State
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let hasAttachments = $derived(
@@ -166,26 +148,10 @@
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
 
-	/**
-	 *
-	 *
-	 * LIFECYCLE
-	 *
-	 *
-	 */
-
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
 	});
-
-	/**
-	 *
-	 *
-	 * PUBLIC API
-	 *
-	 *
-	 */
 
 	export function focus() {
 		textareaRef?.focus();
@@ -199,10 +165,6 @@
 		chatFormActionsRef?.openModelSelector();
 	}
 
-	/**
-	 * Check if a model is selected, open selector if not
-	 * @returns true if model is selected, false otherwise
-	 */
 	export function checkModelSelected(): boolean {
 		if (!hasModelSelected) {
 			chatFormActionsRef?.openModelSelector();
@@ -210,14 +172,6 @@
 		}
 		return true;
 	}
-
-	/**
-	 *
-	 *
-	 * EVENT HANDLERS - File Management
-	 *
-	 *
-	 */
 
 	function handleFileSelect(files: File[]) {
 		onFilesAdd?.(files);
@@ -237,14 +191,6 @@
 			onUploadedFileRemove?.(fileId);
 		}
 	}
-
-	/**
-	 *
-	 *
-	 * EVENT HANDLERS - Input & Keyboard
-	 *
-	 *
-	 */
 
 	function handleInput() {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
@@ -273,11 +219,7 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		if (isPromptPickerOpen && promptPickerRef?.handleKeydown(event)) {
-			return;
-		}
-
-		if (isInlineResourcePickerOpen && resourcePickerRef?.handleKeydown(event)) {
+		if (pickersRef?.handleKeydown(event)) {
 			return;
 		}
 
@@ -388,14 +330,6 @@
 		}
 	}
 
-	/**
-	 *
-	 *
-	 * EVENT HANDLERS - Prompt Picker
-	 *
-	 *
-	 */
-
 	function handlePromptLoadStart(
 		placeholderId: string,
 		promptInfo: MCPPromptInfo,
@@ -474,14 +408,6 @@
 		textareaRef?.focus();
 	}
 
-	/**
-	 *
-	 *
-	 * EVENT HANDLERS - Inline Resource Picker
-	 *
-	 *
-	 */
-
 	function handleInlineResourcePickerClose() {
 		isInlineResourcePickerOpen = false;
 		resourceSearchQuery = '';
@@ -489,7 +415,6 @@
 	}
 
 	function handleInlineResourceSelect() {
-		// Clear the @query from input after resource is attached
 		if (value.startsWith(RESOURCE_TRIGGER_PREFIX)) {
 			value = '';
 			onValueChange?.('');
@@ -511,14 +436,6 @@
 
 		isResourceDialogOpen = true;
 	}
-
-	/**
-	 *
-	 *
-	 * EVENT HANDLERS - Audio Recording
-	 *
-	 *
-	 */
 
 	async function handleMicClick() {
 		if (!audioRecorder || !recordingSupported) {
@@ -552,29 +469,27 @@
 
 <form
 	class="relative {className}"
-	onsubmit={(e) => {
-		e.preventDefault();
+	onsubmit={(event) => {
+		event.preventDefault();
+
 		if (!canSubmit || disabled || hasLoadingAttachments) return;
+
 		onSubmit?.();
 	}}
 >
-	<ChatFormPromptPicker
-		bind:this={promptPickerRef}
-		isOpen={isPromptPickerOpen}
-		searchQuery={promptSearchQuery}
-		onClose={handlePromptPickerClose}
+	<ChatFormPickers
+		bind:this={pickersRef}
+		{isPromptPickerOpen}
+		{promptSearchQuery}
+		{isInlineResourcePickerOpen}
+		{resourceSearchQuery}
+		onPromptPickerClose={handlePromptPickerClose}
+		onInlineResourcePickerClose={handleInlineResourcePickerClose}
+		onInlineResourceSelect={handleInlineResourceSelect}
 		onPromptLoadStart={handlePromptLoadStart}
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
-	/>
-
-	<ChatFormResourcePicker
-		bind:this={resourcePickerRef}
-		isOpen={isInlineResourcePickerOpen}
-		searchQuery={resourceSearchQuery}
-		onClose={handleInlineResourcePickerClose}
-		onResourceSelect={handleInlineResourceSelect}
-		onBrowse={handleBrowseResources}
+		onInlineResourceBrowse={handleBrowseResources}
 	/>
 
 	<div
@@ -611,7 +526,7 @@
 			/>
 
 			{#if mcpHasResourceAttachments()}
-				<ChatAttachmentMcpResources
+				<ChatFormMcpResourcesList
 					class="mb-3"
 					onResourceClick={(uri) => {
 						preSelectedResourceUri = uri;
@@ -624,10 +539,11 @@
 				class="px-3"
 				bind:this={chatFormActionsRef}
 				canSend={canSubmit}
-				hasText={value.trim().length > 0}
 				{disabled}
 				{isLoading}
 				{isRecording}
+				{showAddButton}
+				{showModelSelector}
 				{uploadedFiles}
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}
@@ -640,7 +556,7 @@
 	</div>
 </form>
 
-<DialogMcpResources
+<DialogMcpResourcesBrowser
 	bind:open={isResourceDialogOpen}
 	preSelectedUri={preSelectedResourceUri}
 	onAttach={(resource: MCPResourceInfo) => {
