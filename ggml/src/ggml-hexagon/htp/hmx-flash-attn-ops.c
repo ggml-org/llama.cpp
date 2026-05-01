@@ -951,7 +951,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
 // matmul gets for free via worker_pool function-pointer dispatch.  Without this, the compiler
 // can reorder the scatter past the subsequent hmx_queue_push and the HMX-queue worker thread
 // reads stale VTCM (PPL → ~vocab-size).
-static void __attribute__((noinline)) fa_ml_update_and_build_d(struct hmx_fa_context * factx,
+static __attribute__((noinline)) void fa_ml_update_and_build_d(struct hmx_fa_context * factx,
                                                                size_t                  n_rows_g,
                                                                size_t                  n_row_tiles,
                                                                size_t                  n_row_tiles_g_br) {
@@ -1003,7 +1003,7 @@ static void __attribute__((noinline)) fa_ml_update_and_build_d(struct hmx_fa_con
 //
 // noinline: same rationale as fa_ml_update_and_build_d — keeps Q6_vscatter from
 // being hoisted past the subsequent hmx_queue_push at the o_norm call site.
-static void __attribute__((noinline)) fa_build_d_diag_inv_l(struct hmx_fa_context * factx,
+static __attribute__((noinline)) void fa_build_d_diag_inv_l(struct hmx_fa_context * factx,
                                                             size_t                  n_row_tiles,
                                                             size_t                  n_row_tiles_g_br) {
     const HVX_Vector     v_offsets = *(const HVX_Vector *) d_tile_scatter_offsets;
@@ -1189,7 +1189,7 @@ static void hmx_fa_o_norm_worker(void * data) {
 // Row r in the GQA-merged block maps to Q head h = kv_head * G + r % G.
 // slope(h) = m0^(h+1) when h < n_head_log2, else m1^(2*(h-n_head_log2)+1).
 // When max_bias == 0, all slopes are 1.0 (no ALiBi).
-static void __attribute__((noinline)) fa_compute_slopes(fa_softmax_args_t * sargs,
+static __attribute__((noinline)) void fa_compute_slopes(fa_softmax_args_t * sargs,
                               const struct hmx_fa_context * factx,
                               uint32_t                      kv_head,
                               size_t                        n_rows_g) {

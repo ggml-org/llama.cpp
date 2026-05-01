@@ -849,7 +849,7 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
     }
 }
 
-static int __attribute__((noinline)) mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx,
+static __attribute__((noinline)) int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx,
                                        float *restrict out, const float *restrict x, const uint8_t *restrict w,
                                        int m, int k, int n, int weight_type) {
     // assume k % 32 == 0 && n % 32 == 0
