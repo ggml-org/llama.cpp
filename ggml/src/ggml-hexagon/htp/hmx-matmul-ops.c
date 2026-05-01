@@ -50,19 +50,6 @@ static const __fp16 iq4_nl_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
 #define HMX_X4X2_DBLK_SIZE       16  // 8 * 2 bytes (fp16 scales for Q4_0/Q8_0/IQ4_NL)
 #define HMX_X4X2_MXFP4_EBLK_SIZE 8   // 8 * 1 byte  (E8M0 scales for MXFP4)
 
-typedef struct {
-    uint8_t       *dst;
-    const uint8_t *src;
-    dma_queue     *dma;
-    size_t         n_rows;
-    size_t         src_stride;   // DDR row stride (full row_stride)
-    size_t         dst_stride;   // VTCM sub-block row stride
-    size_t         quant_off;    // quant byte offset in each DDR row
-    size_t         quant_width;  // quant bytes to copy per row
-    size_t         scale_off;    // scale byte offset in each DDR row
-    size_t         scale_width;  // scale bytes to copy per row
-} qweight_fetch_task_state_t;
-
 // Compute the byte stride of one row in x4x2 format.
 // Numerically equals ggml_row_size(type, k) when k is 256-aligned, because
 // x4x2 packing has the same density as block_q4_0 / block_q8_0.
@@ -884,11 +871,12 @@ static __attribute__((noinline)) int mat_mul_qk_0_d16a32_out_stationary(struct h
 
     // Dynamic M,N search via hmx_compute_chunks
     const size_t sub_row_stride_alloc = get_x4x2_row_stride(weight_type, K_BLOCK_SIZE);
-    const size_t per_m                = K_BLOCK_SIZE * sizeof(float)  // scratch1: M×K×4 (act DMA staging F32)
-                         + K_BLOCK_SIZE * sizeof(__fp16);             // activation: M×K×2 (F16 tiles)
-    const size_t per_n = sub_row_stride_alloc                         // scratch0: N×sub_row(K) (packed quant)
-                         + K_BLOCK_SIZE * sizeof(__fp16);             // weight: N×K×2 (F16 tiles)
-    const size_t per_mn       = sizeof(__fp16);                       // output: M×N×2 (out-stationary)
+    const size_t per_m  = K_BLOCK_SIZE * sizeof(float)   // scratch1: M×K×4 (act DMA staging F32)
+                        + K_BLOCK_SIZE * sizeof(__fp16); // activation: M×K×2 (F16 tiles)
+    const size_t per_n  = sub_row_stride_alloc           // scratch0: N×sub_row(K) (packed quant)
+                        + K_BLOCK_SIZE * sizeof(__fp16); // weight: N×K×2 (F16 tiles)
+    const size_t per_mn = sizeof(__fp16);                // output: M×N×2 (out-stationary)
+
     // Alignment margin: hex_align_up can add up to 2047 bytes per buffer;
     // scratch1 (mc×6144) is naturally 2048-aligned, remaining 4 buffers need margin
     const size_t align_margin = 4 * HMX_FP16_TILE_SIZE;
@@ -917,7 +905,7 @@ static __attribute__((noinline)) int mat_mul_qk_0_d16a32_out_stationary(struct h
     const size_t total_vtcm = weight_size + act_size + out_size + scratch0_sz + scratch1_sz + HMX_FP16_TILE_SIZE + 256;
     if (total_vtcm > vtcm_budget) {
         FARF(HIGH, "%s: VTCM overflow after search: need %zu have %zu (M=%zu N=%zu K=%zu)", __func__, total_vtcm,
-             vtcm_budget, M_BLOCK_SIZE, N_BLOCK_SIZE, K_BLOCK_SIZE);
+                    vtcm_budget, M_BLOCK_SIZE, N_BLOCK_SIZE, K_BLOCK_SIZE);
         return -1;
     }
 
@@ -982,32 +970,24 @@ static __attribute__((noinline)) int mat_mul_qk_0_d16a32_out_stationary(struct h
                 // fetch weight block into VTCM (x4x2 sub-block: quants + scales)
                 const size_t sub_row_stride = get_x4x2_row_stride(weight_type, k_blk_sz);
                 {
-                    qweight_fetch_task_state_t s;
-
-                    const int blk_start = kk / QK_Q4_0x4x2;
-                    const int nb_sub = (k_blk_sz + QK_Q4_0x4x2 - 1) / QK_Q4_0x4x2;
-                    const int    full_qrow      = (weight_type == HTP_TYPE_Q8_0) ? k : (k / 2);
-                    const int    scale_blk_size =
-                        (weight_type == HTP_TYPE_MXFP4) ? HMX_X4X2_MXFP4_EBLK_SIZE : HMX_X4X2_DBLK_SIZE;
-
-                    s.dst         = vtcm_scratch0;
-                    s.src         = w + nc * row_stride;
-                    s.n_rows      = n_blk_sz;
-                    s.src_stride  = row_stride;
-                    s.dst_stride  = sub_row_stride;
-                    s.quant_off =
-                        (weight_type == HTP_TYPE_Q8_0) ? (blk_start * QK_Q8_0x4x2) : (blk_start * (QK_Q4_0x4x2 / 2));
-                    s.quant_width =
-                        (weight_type == HTP_TYPE_Q8_0) ? (nb_sub * QK_Q8_0x4x2) : (nb_sub * (QK_Q4_0x4x2 / 2));
-                    s.scale_off   = full_qrow + blk_start * scale_blk_size;
-                    s.scale_width = nb_sub * scale_blk_size;
+                    const int blk_start       = kk / QK_Q4_0x4x2;
+                    const int nb_sub          = (k_blk_sz + QK_Q4_0x4x2 - 1) / QK_Q4_0x4x2;
+                    const int  full_qrow      = (weight_type == HTP_TYPE_Q8_0) ? k : (k / 2);
+                    const int  scale_blk_size = (weight_type == HTP_TYPE_MXFP4) ? HMX_X4X2_MXFP4_EBLK_SIZE : HMX_X4X2_DBLK_SIZE;
+                    uint8_t       *dst        = vtcm_scratch0;
+                    const uint8_t *src        = w + nc * row_stride;
+                    const size_t  n_rows      = n_blk_sz;
+                    const size_t  src_stride  = row_stride;
+                    const size_t  dst_stride  = sub_row_stride;
+                    const size_t  quant_off   = (weight_type == HTP_TYPE_Q8_0) ? (blk_start * QK_Q8_0x4x2) : (blk_start * (QK_Q4_0x4x2 / 2));
+                    const size_t  quant_width = (weight_type == HTP_TYPE_Q8_0) ? (nb_sub    * QK_Q8_0x4x2) : (nb_sub    * (QK_Q4_0x4x2 / 2));
+                    const size_t  scale_off   = full_qrow + blk_start * scale_blk_size;
+                    const size_t  scale_width = nb_sub * scale_blk_size;
 
                     // 2D DMA: quants sub-range
-                    dma_queue_push(ctx->dma[0], dma_make_ptr(s.dst, s.src + s.quant_off),
-                                      s.dst_stride, s.src_stride, s.quant_width, s.n_rows);
+                    dma_queue_push(ctx->dma[0], dma_make_ptr(dst, src + quant_off), dst_stride, src_stride, quant_width, n_rows);
                     // 2D DMA: scales sub-range
-                    dma_queue_push(ctx->dma[0], dma_make_ptr(s.dst + s.quant_width, s.src + s.scale_off),
-                                      s.dst_stride, s.src_stride, s.scale_width, s.n_rows);
+                    dma_queue_push(ctx->dma[0], dma_make_ptr(dst + quant_width, src + scale_off), dst_stride, src_stride, scale_width, n_rows);
                 }
                 TIMER_STOP(fetch);
 
