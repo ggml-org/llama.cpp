@@ -2824,6 +2824,49 @@ static bool ggml_webgpu_can_fuse_rms_norm_mul(const struct ggml_cgraph * cgraph,
     return true;
 }
 
+static webgpu_encoded_op ggml_webgpu_upscale(webgpu_context ctx, ggml_tensor * src, ggml_tensor * dst) {
+    const uint32_t        mode_flags = (uint32_t) ggml_get_op_params_i32(dst, 0);
+    std::vector<uint32_t> params = { (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
+                                     (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
+
+                                     (uint32_t) (src->nb[0] / ggml_type_size(src->type)),
+                                     (uint32_t) (src->nb[1] / ggml_type_size(src->type)),
+                                     (uint32_t) (src->nb[2] / ggml_type_size(src->type)),
+                                     (uint32_t) (src->nb[3] / ggml_type_size(src->type)),
+
+                                     (uint32_t) (dst->nb[0] / ggml_type_size(dst->type)),
+                                     (uint32_t) (dst->nb[1] / ggml_type_size(dst->type)),
+                                     (uint32_t) (dst->nb[2] / ggml_type_size(dst->type)),
+                                     (uint32_t) (dst->nb[3] / ggml_type_size(dst->type)),
+
+                                     (uint32_t) src->ne[0],
+                                     (uint32_t) src->ne[1],
+                                     (uint32_t) src->ne[2],
+                                     (uint32_t) src->ne[3],
+
+                                     (uint32_t) dst->ne[0],
+                                     (uint32_t) dst->ne[1],
+                                     (uint32_t) dst->ne[2],
+                                     (uint32_t) dst->ne[3],
+
+                                     mode_flags };
+
+    std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
+                                                  ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst) };
+
+    ggml_webgpu_shader_lib_context shader_lib_ctx = {};
+    shader_lib_ctx.src0                           = src;
+    shader_lib_ctx.dst                            = dst;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+
+    webgpu_pipeline pipeline  = ctx->shader_lib->get_upscale_pipeline(shader_lib_ctx);
+    auto *          decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
+    uint32_t        total_wg  = CEIL_DIV((uint32_t) ggml_nelements(dst), decisions->wg_size);
+    uint32_t        wg_x = std::min(ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, total_wg);
+    uint32_t        wg_y = CEIL_DIV(total_wg, wg_x);
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
+}
+
 // Returns the encoded command, or std::nullopt if the operation is a no-op
 static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
                                                            ggml_cgraph *  cgraph,
@@ -2931,6 +2974,8 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             return ggml_webgpu_conv_2d(ctx, src0, src1, node);
         case GGML_OP_IM2COL:
             return ggml_webgpu_im2col(ctx, src0, src1, node);
+        case GGML_OP_UPSCALE:
+            return ggml_webgpu_upscale(ctx, src0, node);
         default:
             return std::nullopt;
     }
@@ -4162,6 +4207,10 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == op->type && ggml_is_contiguous_rows(src0);
+            break;
+        case GGML_OP_UPSCALE:
+            supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                          (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
             break;
         default:
             break;
