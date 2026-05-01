@@ -33,6 +33,30 @@ server_http_context::server_http_context()
 
 server_http_context::~server_http_context() = default;
 
+static std::string first_ip_from_x_forwarded_for(const httplib::Request & req) {
+    std::string forwarded = req.get_header_value("X-Forwarded-For");
+
+    if (forwarded.empty()) {
+        return "";
+    }
+
+    const size_t comma = forwarded.find(',');
+    if (comma != std::string::npos) {
+        forwarded = forwarded.substr(0, comma);
+    }
+
+    // trim
+    forwarded.erase(forwarded.begin(), std::find_if(forwarded.begin(), forwarded.end(), [](unsigned char ch) {
+        return !std::isspace(ch);
+    }));
+
+    forwarded.erase(std::find_if(forwarded.rbegin(), forwarded.rend(), [](unsigned char ch) {
+        return !std::isspace(ch);
+    }).base(), forwarded.end());
+
+    return forwarded;
+}
+
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip logging requests that are regularly sent, to avoid log spam
     if (req.path == "/health"
@@ -53,42 +77,14 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
     SRV_DBG("response: %s\n", res.body.c_str());
 }
 
-static std::string first_forwarded_for_ip(const httplib::Request & req) {
-    std::string forwarded = req.get_header_value("X-Forwarded-For");
-
-    if (forwarded.empty()) {
-        return "";
+static bool ipv4_to_u32(const std::string & ip, uint32_t & out) {
+    struct in_addr addr;
+    if (inet_pton(AF_INET, ip.c_str(), &addr) != 1) {
+        return false;
     }
 
-    const size_t comma = forwarded.find(',');
-    if (comma != std::string::npos) {
-        forwarded = forwarded.substr(0, comma);
-    }
-
-    return trim_copy(forwarded);
-}
-
-static std::string get_client_ip(
-        const httplib::Request & req,
-        bool use_forwarded_for,
-        const std::vector<std::string> & trusted_proxy_ips) {
-    const std::string remote_ip = trim_copy(req.remote_addr);
-
-    if (!use_forwarded_for) {
-        return remote_ip;
-    }
-
-    if (!is_ip_allowed(remote_ip, trusted_proxy_ips)) {
-        return remote_ip;
-    }
-
-    const std::string forwarded_ip = first_forwarded_for_ip(req);
-
-    if (forwarded_ip.empty()) {
-        return remote_ip;
-    }
-
-    return forwarded_ip;
+    out = ntohl(addr.s_addr);
+    return true;
 }
 
 static std::string trim_copy(std::string value) {
@@ -101,16 +97,6 @@ static std::string trim_copy(std::string value) {
     }).base(), value.end());
 
     return value;
-}
-
-static bool ipv4_to_u32(const std::string & ip, uint32_t & out) {
-    struct in_addr addr;
-    if (inet_pton(AF_INET, ip.c_str(), &addr) != 1) {
-        return false;
-    }
-
-    out = ntohl(addr.s_addr);
-    return true;
 }
 
 static bool ip_in_cidr(const std::string & ip, const std::string & cidr) {
@@ -148,6 +134,21 @@ static bool ip_in_cidr(const std::string & ip, const std::string & cidr) {
     return (ip_val & mask) == (base_val & mask);
 }
 
+static std::string first_forwarded_for_ip(const httplib::Request & req) {
+    std::string forwarded = req.get_header_value("X-Forwarded-For");
+
+    if (forwarded.empty()) {
+        return "";
+    }
+
+    const size_t comma = forwarded.find(',');
+    if (comma != std::string::npos) {
+        forwarded = forwarded.substr(0, comma);
+    }
+
+    return trim_copy(forwarded);
+}
+
 static bool is_ip_allowed(const std::string & client_ip, const std::vector<std::string> & whitelist_ips) {
     for (const auto & entry_raw : whitelist_ips) {
         const std::string entry = trim_copy(entry_raw);
@@ -169,6 +170,30 @@ static bool is_ip_allowed(const std::string & client_ip, const std::vector<std::
 
     return false;
 }
+
+static std::string get_client_ip(
+        const httplib::Request & req,
+        bool use_forwarded_for,
+        const std::vector<std::string> & trusted_proxy_ips) {
+    const std::string remote_ip = trim_copy(req.remote_addr);
+
+    if (!use_forwarded_for) {
+        return remote_ip;
+    }
+
+    if (!is_ip_allowed(remote_ip, trusted_proxy_ips)) {
+        return remote_ip;
+    }
+
+    const std::string forwarded_ip = first_forwarded_for_ip(req);
+
+    if (forwarded_ip.empty()) {
+        return remote_ip;
+    }
+
+    return forwarded_ip;
+}
+
 
 bool server_http_context::init(const common_params & params) {
     path_prefix = params.api_prefix;
