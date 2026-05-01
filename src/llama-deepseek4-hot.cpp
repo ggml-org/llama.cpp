@@ -298,11 +298,14 @@ bool hot_manager::allocate(const llama_model & model) {
 
         const size_t per_expert_bytes = ggml_nbytes(src) / n_expert_src;
         const int64_t k_local = (int64_t) hot_ids.size();
-        // Allocate K+1 experts so the kernel can prefetch past the last hot
-        // expert without going out of bounds (mirrors the MoE LRU cache layout
-        // which always reserves one trailing dummy slot). Hot expert IDs in
-        // [0, K) only address the K real experts; the dummy is never selected.
-        const int64_t k_alloc = k_local + 1;
+        // Allocate K + P + 1 experts:
+        //   [0, K)        - real hot experts
+        //   [K, K+P)      - per-pick dummy experts (zero-weighted; never collide
+        //                   with real expert IDs across picks of a single token,
+        //                   which fixes the CUDA mm_ids_helper dedup crash)
+        //   [K+P]         - trailing prefetch padding slot (kernel reads ahead)
+        const int64_t P = n_picks_;
+        const int64_t k_alloc = k_local + P + 1;
         const size_t needed   = per_expert_bytes * k_alloc;
 
         // Pull source data from CPU into a host buffer we can slice from.
@@ -310,7 +313,7 @@ bool hot_manager::allocate(const llama_model & model) {
         ggml_backend_tensor_get(src, host_data.data(), 0, host_data.size());
 
         // Build the slice in a separate host buffer (zero-initialized so the
-        // dummy trailing expert is well-defined).
+        // dummy experts and trailing prefetch slot all hold zeros).
         std::vector<uint8_t> slice(needed, 0);
         for (int64_t r = 0; r < k_local; ++r) {
             const int32_t e = hot_ids[(size_t) r];
@@ -330,25 +333,12 @@ bool hot_manager::allocate(const llama_model & model) {
         return true;
     };
 
-    auto add_lookup_i32 = [&](ggml_backend_buffer_type_t buft, const std::string & name,
-                              const std::vector<int32_t> & values, ggml_tensor ** out_tensor) -> bool {
-        ggml_context * ctx = get_ctx(buft);
-        if (!ctx) return false;
-        ggml_tensor * dst = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, (int64_t) values.size());
-        ggml_format_name(dst, "%s", name.c_str());
-        std::vector<uint8_t> bytes(values.size() * sizeof(int32_t));
-        std::memcpy(bytes.data(), values.data(), bytes.size());
-        per_buft[buft].pending.push_back({ out_tensor, std::move(bytes) });
-        *out_tensor = dst;
-        total_bytes += values.size() * sizeof(int32_t);
-        return true;
-    };
-
     auto add_lookup_f32 = [&](ggml_backend_buffer_type_t buft, const std::string & name,
-                              const std::vector<float> & values, ggml_tensor ** out_tensor) -> bool {
+                              const std::vector<float> & values, int64_t ne0, int64_t ne1,
+                              ggml_tensor ** out_tensor) -> bool {
         ggml_context * ctx = get_ctx(buft);
         if (!ctx) return false;
-        ggml_tensor * dst = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, (int64_t) values.size());
+        ggml_tensor * dst = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne0, ne1);
         ggml_format_name(dst, "%s", name.c_str());
         std::vector<uint8_t> bytes(values.size() * sizeof(float));
         std::memcpy(bytes.data(), values.data(), bytes.size());
@@ -408,23 +398,43 @@ bool hot_manager::allocate(const llama_model & model) {
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
 
         // Build per-layer lookup tables.
-        // Sentinel for cold path: a guaranteed-cold expert ID (use the first one in cold_ids).
-        const int32_t cold_sentinel = state.cold_ids.empty() ? 0 : state.cold_ids[0];
-        // Sentinel for hot path: hot index 0 (any valid hot index works; cold positions get masked).
-        const int32_t hot_sentinel = 0;
+        // For the hot path we use float arithmetic in the graph to construct
+        // per-pick unique IDs:
+        //   hot_id[k,t] = hot_remap_table[selected[k,t]] + is_cold[k,t] * hot_pick_arange[k]
+        // For hot picks the arange contribution is 0 -> hot_id in [0, K).
+        // For cold picks the base is K (sentinel) and the arange adds k -> id in [K, K+P).
+        // This guarantees all P picks within a token map to distinct expert IDs,
+        // which is required by the CUDA mm_ids_helper kernel (it dedups
+        // (token, expert) pairs and the downstream quantize kernel reads
+        // exactly P*T compact rows).
+        const int P = n_picks_;
 
-        std::vector<int32_t> hot_remap_vals((size_t) n_expert, hot_sentinel);
-        std::vector<int32_t> cold_remap_vals((size_t) n_expert, cold_sentinel);
-        std::vector<float>   is_hot_vals((size_t) n_expert, 0.0f);
-        std::vector<float>   is_cold_vals((size_t) n_expert, 1.0f);
+        std::vector<float> hot_remap_vals((size_t) n_expert, (float) state.k); // base sentinel = K
+        std::vector<float> cold_remap_vals((size_t) n_expert, 0.0f);
+        std::vector<float> is_hot_vals((size_t) n_expert, 0.0f);
+        std::vector<float> is_cold_vals((size_t) n_expert, 1.0f);
         for (int32_t e : state.hot_ids) {
-            hot_remap_vals[(size_t) e]  = state.remap_hot[(size_t) e];
-            cold_remap_vals[(size_t) e] = cold_sentinel;
+            hot_remap_vals[(size_t) e]  = (float) state.remap_hot[(size_t) e];
             is_hot_vals[(size_t) e]     = 1.0f;
             is_cold_vals[(size_t) e]    = 0.0f;
         }
         for (int32_t e : state.cold_ids) {
-            cold_remap_vals[(size_t) e] = e;
+            cold_remap_vals[(size_t) e] = (float) e;
+        }
+
+        // Per-pick arange [0, 1, ..., P-1]
+        std::vector<float> pick_arange_vals((size_t) P);
+        for (int i = 0; i < P; ++i) pick_arange_vals[(size_t) i] = (float) i;
+
+        // Per-pick cold sentinel: cold_ids[k % n_cold] for k in [0, P).
+        // Each hot pick within a token gets a different cold expert as
+        // sentinel, so the cold path's CPU mul_mat_id also sees per-token
+        // unique IDs (defensive - the CPU helper might handle dedup
+        // correctly, but making both paths uniform is safer).
+        std::vector<float> cold_sentinel_vals((size_t) P);
+        const int n_cold = (int) state.cold_ids.size();
+        for (int i = 0; i < P; ++i) {
+            cold_sentinel_vals[(size_t) i] = n_cold > 0 ? (float) state.cold_ids[(size_t) (i % n_cold)] : 0.0f;
         }
 
         bool ok_all = true;
@@ -444,24 +454,35 @@ bool hot_manager::allocate(const llama_model & model) {
                                  "ds4_hot_down_exps_l" + std::to_string(il),
                                  &state.hot_down_exps);
 
-        ok_all &= add_lookup_i32(buft,     "ds4_hot_remap_l"  + std::to_string(il),
-                                 hot_remap_vals, &state.hot_remap_table);
-        ok_all &= add_lookup_i32(cpu_buft, "ds4_cold_remap_l" + std::to_string(il),
-                                 cold_remap_vals, &state.cold_remap_table);
+        // Track per-layer pick count for downstream graph builder access.
+        state.n_picks = P;
+
+        ok_all &= add_lookup_f32(buft,     "ds4_hot_remap_l"  + std::to_string(il),
+                                 hot_remap_vals, 1, n_expert, &state.hot_remap_table);
+        ok_all &= add_lookup_f32(cpu_buft, "ds4_cold_remap_l" + std::to_string(il),
+                                 cold_remap_vals, 1, n_expert, &state.cold_remap_table);
         ok_all &= add_lookup_f32(buft,     "ds4_is_hot_l"  + std::to_string(il),
-                                 is_hot_vals, &state.is_hot_mask);
+                                 is_hot_vals, 1, n_expert, &state.is_hot_mask);
         ok_all &= add_lookup_f32(cpu_buft, "ds4_is_cold_l" + std::to_string(il),
-                                 is_cold_vals, &state.is_cold_mask);
+                                 is_cold_vals, 1, n_expert, &state.is_cold_mask);
+        // Per-pick constants live as [P, 1] tensors so they broadcast against
+        // [P, T] when multiplied. Hot side on GPU, cold side on CPU.
+        ok_all &= add_lookup_f32(buft,     "ds4_hot_pick_arange_l"   + std::to_string(il),
+                                 pick_arange_vals, P, 1, &state.hot_pick_arange);
+        ok_all &= add_lookup_f32(cpu_buft, "ds4_cold_pick_sentinel_l" + std::to_string(il),
+                                 cold_sentinel_vals, P, 1, &state.cold_pick_sentinel);
 
         if (!ok_all) {
-            state.hot_gate_up_exps = nullptr;
-            state.hot_gate_exps    = nullptr;
-            state.hot_up_exps      = nullptr;
-            state.hot_down_exps    = nullptr;
-            state.hot_remap_table  = nullptr;
-            state.cold_remap_table = nullptr;
-            state.is_hot_mask      = nullptr;
-            state.is_cold_mask     = nullptr;
+            state.hot_gate_up_exps   = nullptr;
+            state.hot_gate_exps      = nullptr;
+            state.hot_up_exps        = nullptr;
+            state.hot_down_exps      = nullptr;
+            state.hot_remap_table    = nullptr;
+            state.cold_remap_table   = nullptr;
+            state.is_hot_mask        = nullptr;
+            state.is_cold_mask       = nullptr;
+            state.hot_pick_arange    = nullptr;
+            state.cold_pick_sentinel = nullptr;
             layers[il].reset();
             continue;
         }

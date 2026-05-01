@@ -32,6 +32,7 @@ namespace ds4_hot {
 struct layer_hot_state {
     int                          il        = -1;
     int                          k         = 0;
+    int                          n_picks   = 0;       // n_expert_used (P), e.g. 6 for DS4
     std::vector<int32_t>         hot_ids;            // size K, sorted by frequency desc
     std::unordered_set<int32_t>  hot_set;            // for O(1) membership
     std::vector<int32_t>         cold_ids;           // size n_expert - K
@@ -39,8 +40,16 @@ struct layer_hot_state {
     std::vector<int32_t>         remap_hot;          // size n_expert: original -> 0..K-1 or -1
     std::vector<int32_t>         remap_cold;         // size n_expert: original -> 0..(n_expert-K)-1 or -1
 
-    // Pinned hot tensor data: contiguous K rows from the original tensor.
-    // These live on a GPU device buffer once allocated.
+    // Pinned hot tensor data: extracted K hot expert rows + P zero-weighted
+    // dummy expert rows (one per pick index) + 1 trailing prefetch padding row.
+    // Total ne[2] = K + P + 1. The dummy experts at positions [K, K+P) let
+    // each pick within a token get a unique remapped ID even when most picks
+    // are cold, which is required by the CUDA mm_ids_helper kernel: it
+    // dedups (token, expert) pairs and produces fewer compacted rows when
+    // multiple picks share the same id, leaving the tail of ids_src1
+    // uninitialized -> illegal memory access in quantize_mmq_mxfp4_cuda.
+    // Per-pick unique dummy experts (id = K + pick_idx) keep the helper
+    // emitting exactly P*T rows.
     // For models with combined gate+up (DS-V3 style): hot_gate_up_exps is set, hot_gate_exps and hot_up_exps are null.
     // For models with separate gate/up (DS4-Flash style): hot_gate_exps and hot_up_exps are set, hot_gate_up_exps is null.
     ggml_tensor *                hot_gate_up_exps = nullptr;
@@ -48,22 +57,34 @@ struct layer_hot_state {
     ggml_tensor *                hot_up_exps      = nullptr;
     ggml_tensor *                hot_down_exps    = nullptr;
 
-    // Phase 2 graph-time lookup tables (live on the same GPU buffer as the hot tensors).
-    // Each is shape [1, n_expert] (use a 1D flatten of selected_experts when calling ggml_get_rows).
-    // hot_remap_table[0, e] = remap_hot[e] if e in hot_set else 0 (sentinel; masked out).
-    // cold_remap_table[0, e] = e if e in cold_set else cold_sentinel (a guaranteed cold expert id).
-    // is_hot_mask[0, e]  = 1.0 if e in hot_set else 0.0
-    // is_cold_mask[0, e] = 1.0 if e not in hot_set else 0.0
-    ggml_tensor *                hot_remap_table  = nullptr; // i32
-    ggml_tensor *                cold_remap_table = nullptr; // i32
-    ggml_tensor *                is_hot_mask      = nullptr; // f32
-    ggml_tensor *                is_cold_mask     = nullptr; // f32
+    // Phase 2 graph-time lookup tables.
+    //
+    // hot_remap_table_f32[0, e] = remap_hot[e] (in [0, K)) if hot, K (base
+    //   sentinel) if cold. Combined with a per-pick offset arange [0..P-1]
+    //   in the graph: hot_ids = hot_remap + is_cold * arange so each cold
+    //   pick gets a unique dummy id in [K, K+P).
+    // cold_remap_table_f32[0, e] = e if cold, 0 if hot. Combined with a
+    //   per-pick cold sentinel arange [cold_ids[0]..cold_ids[P-1]] so each
+    //   hot pick gets a different cold sentinel within the token (avoids
+    //   the same dedup bug on the CPU mul_mat_id, defensively).
+    // is_hot_mask[0, e] / is_cold_mask[0, e] = 1.0 / 0.0. Used for the
+    //   cold-path output mask (hot path no longer needs an output mask
+    //   because the dummy experts produce zero output by construction).
+    // hot_pick_arange = [0, 1, ..., P-1] f32, length P.
+    // cold_pick_sentinel = [cold_ids[0], ..., cold_ids[P-1]] f32, length P.
+    ggml_tensor *                hot_remap_table   = nullptr; // f32
+    ggml_tensor *                cold_remap_table  = nullptr; // f32
+    ggml_tensor *                is_hot_mask       = nullptr; // f32
+    ggml_tensor *                is_cold_mask      = nullptr; // f32
+    ggml_tensor *                hot_pick_arange   = nullptr; // f32 [P]
+    ggml_tensor *                cold_pick_sentinel = nullptr; // f32 [P]
 
     // Returns true if all tensors required for Phase 2 dual dispatch are non-null.
     bool ready_for_dispatch() const {
         const bool gate_up_ok = hot_gate_up_exps || (hot_gate_exps && hot_up_exps);
         return gate_up_ok && hot_down_exps && hot_remap_table && cold_remap_table
-               && is_hot_mask && is_cold_mask;
+               && is_hot_mask && is_cold_mask
+               && hot_pick_arange && cold_pick_sentinel;
     }
 };
 
@@ -88,6 +109,9 @@ public:
     int    k_per_layer() const { return k; }
     size_t profile_n_layer() const { return n_layer; }
     int    profile_n_expert() const { return n_expert; }
+    int    n_picks() const { return n_picks_; }
+
+    void   set_n_picks(int p) { n_picks_ = p; }
 
     // Per-layer accessors. il is the layer index. Returns nullptr if no hot
     // state was allocated for that layer (e.g., layer is fully on GPU already
@@ -101,6 +125,7 @@ private:
     bool                                  active   = false;
     std::string                           category = {};
     int                                   k        = 0;
+    int                                   n_picks_ = 6; // n_expert_used (P); set from model hparams via set_n_picks
     size_t                                n_layer  = 0;
     int                                   n_expert = 0;
     std::vector<std::unique_ptr<layer_hot_state>> layers;

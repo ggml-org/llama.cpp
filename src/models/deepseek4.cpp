@@ -473,7 +473,13 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
         // tensor (with a sentinel cold expert in place of any hot picks).
         const ds4_hot::layer_hot_state * hot =
             ds4_hot::instance().is_active() ? ds4_hot::instance().get(il) : nullptr;
-        const bool dispatch_dual = hot && hot->ready_for_dispatch() && deepseek4_hot_dispatch_enabled();
+        // Warmup/reserve graphs sometimes pass a selected_experts with
+        // ne[0] = n_expert instead of n_picks. In that case our per-pick
+        // arithmetic would assert in ggml_mul, so fall back to the single
+        // path code below.
+        const bool dispatch_dual = hot && hot->ready_for_dispatch()
+                                   && deepseek4_hot_dispatch_enabled()
+                                   && selected_experts->ne[0] == hot->n_picks;
 
         if (dispatch_dual) {
             const int64_t n_picks_local  = selected_experts->ne[0];
@@ -483,18 +489,35 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
             ggml_tensor * sel_cont = ggml_cont(ctx0, selected_experts);
             ggml_tensor * sel_flat = ggml_reshape_1d(ctx0, sel_cont, n_picks_local * n_tokens_local);
 
-            ggml_tensor * hot_ids_flat  = ggml_get_rows(ctx0, hot->hot_remap_table,  sel_flat);
-            ggml_tensor * cold_ids_flat = ggml_get_rows(ctx0, hot->cold_remap_table, sel_flat);
-            ggml_tensor * is_hot_flat   = ggml_get_rows(ctx0, hot->is_hot_mask,      sel_flat);
-            ggml_tensor * is_cold_flat  = ggml_get_rows(ctx0, hot->is_cold_mask,     sel_flat);
+            // Lookup tables produce float values per pick (in [P*T] flat).
+            // Reshape each to [P, T] for the per-pick arithmetic and final
+            // mul_mat_id IDs cast.
+            ggml_tensor * hot_remap_flat   = ggml_get_rows(ctx0, hot->hot_remap_table,   sel_flat);
+            ggml_tensor * cold_remap_flat  = ggml_get_rows(ctx0, hot->cold_remap_table,  sel_flat);
+            ggml_tensor * is_hot_flat      = ggml_get_rows(ctx0, hot->is_hot_mask,       sel_flat);
+            ggml_tensor * is_cold_flat     = ggml_get_rows(ctx0, hot->is_cold_mask,      sel_flat);
 
-            // Reshape IDs to [n_picks, n_tokens] for mul_mat_id; reshape masks
-            // to [1, n_picks, n_tokens] so they broadcast against the
-            // [n_embd, n_picks, n_tokens] expert outputs.
-            ggml_tensor * hot_ids  = ggml_reshape_2d(ctx0, hot_ids_flat,  n_picks_local, n_tokens_local);
-            ggml_tensor * cold_ids = ggml_reshape_2d(ctx0, cold_ids_flat, n_picks_local, n_tokens_local);
-            ggml_tensor * is_hot   = ggml_reshape_3d(ctx0, is_hot_flat,  1, n_picks_local, n_tokens_local);
-            ggml_tensor * is_cold  = ggml_reshape_3d(ctx0, is_cold_flat, 1, n_picks_local, n_tokens_local);
+            ggml_tensor * hot_remap  = ggml_reshape_2d(ctx0, hot_remap_flat,  n_picks_local, n_tokens_local);
+            ggml_tensor * cold_remap = ggml_reshape_2d(ctx0, cold_remap_flat, n_picks_local, n_tokens_local);
+            ggml_tensor * is_hot     = ggml_reshape_2d(ctx0, is_hot_flat,     n_picks_local, n_tokens_local);
+            ggml_tensor * is_cold    = ggml_reshape_2d(ctx0, is_cold_flat,    n_picks_local, n_tokens_local);
+
+            // Construct per-pick unique IDs:
+            //   hot_ids  = hot_remap  + is_cold * hot_pick_arange    (broadcasts [P,1] -> [P,T])
+            //   cold_ids = cold_remap + is_hot  * cold_pick_sentinel
+            // hot_pick_arange    = [0, 1, ..., P-1] so cold picks land in [K, K+P) (the dummy zero-weighted experts).
+            // cold_pick_sentinel = [cold_ids[0], ..., cold_ids[P-1]] so hot picks each get a different cold sentinel.
+            ggml_tensor * hot_offset  = ggml_mul(ctx0, is_cold, hot->hot_pick_arange);    // [P, T] f32
+            ggml_tensor * cold_offset = ggml_mul(ctx0, is_hot,  hot->cold_pick_sentinel); // [P, T] f32
+
+            ggml_tensor * hot_ids_f  = ggml_add(ctx0, hot_remap,  hot_offset);
+            ggml_tensor * cold_ids_f = ggml_add(ctx0, cold_remap, cold_offset);
+            ggml_tensor * hot_ids    = ggml_cast(ctx0, hot_ids_f,  GGML_TYPE_I32);
+            ggml_tensor * cold_ids   = ggml_cast(ctx0, cold_ids_f, GGML_TYPE_I32);
+
+            // For the cold-path output mask, we still need [1, P, T] f32 to
+            // broadcast against the [n_embd, P, T] expert outputs.
+            ggml_tensor * is_cold_3d = ggml_reshape_3d(ctx0, is_cold, 1, n_picks_local, n_tokens_local);
 
             const float swiglu_limit = hparams.swiglu_clamp_exp[il];
 
@@ -509,7 +532,11 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
             ggml_tensor * out_h = nullptr;
             ggml_tensor * out_c = nullptr;
 
-            // === HOT path on GPU (K hot experts only) ===
+            // === HOT path on GPU (K real hot experts + P dummy zero-weighted experts) ===
+            // No output mask needed: cold-pick positions hit dummy experts
+            // (positions K..K+P-1) which are zero-initialized, so their
+            // contribution is naturally 0. For hot picks, hot_ids points at
+            // the right real expert in [0, K).
             if (!cold_only) {
                 ggml_tensor * gate_h = nullptr;
                 ggml_tensor * up_h   = nullptr;
@@ -543,11 +570,14 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                 ggml_tensor * act_h    = ggml_swiglu_split(ctx0, gate_h, up_h);
                 ggml_tensor * down_h   = build_lora_mm_id(w_down, act_h, hot_ids);
                 out_h                  = ggml_mul(ctx0, down_h, weights);
-                out_h                  = ggml_mul(ctx0, out_h, is_hot);
                 cb(out_h, "ffn_moe_hot_out", il);
             }
 
-            // === COLD path on CPU (full original tensor with hot picks redirected to a cold sentinel) ===
+            // === COLD path on CPU (full original tensor with hot picks redirected to per-pick cold sentinels) ===
+            // Per-pick cold sentinels avoid the same-expert-multiple-times
+            // problem on CPU mul_mat_id. The output mask zeros out hot-pick
+            // positions (we still need it because the cold sentinels are
+            // real cold experts producing real outputs).
             if (!hot_only) {
                 ggml_tensor * gate_c = nullptr;
                 ggml_tensor * up_c   = nullptr;
@@ -573,7 +603,7 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                 ggml_tensor * act_c  = ggml_swiglu_split(ctx0, gate_c, up_c);
                 ggml_tensor * down_c = build_lora_mm_id(layer.ffn_down_exps, act_c, cold_ids);
                 out_c                = ggml_mul(ctx0, down_c, weights);
-                out_c                = ggml_mul(ctx0, out_c, is_cold);
+                out_c                = ggml_mul(ctx0, out_c, is_cold_3d);
                 cb(out_c, "ffn_moe_cold_out", il);
             }
 

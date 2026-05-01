@@ -353,6 +353,9 @@ llama_context::llama_context(
         if (model.arch == LLM_ARCH_DEEPSEEK4) {
             auto & ds4_hot_mgr = ds4_hot::instance();
             if (ds4_hot_mgr.load_profile()) {
+                // Pass n_expert_used (P) so the manager can allocate the
+                // K + P + 1 dummy/padding slots needed by the dispatch graph.
+                ds4_hot_mgr.set_n_picks((int) model.hparams.n_expert_used);
                 ds4_hot_mgr.allocate(model);
             }
         }
