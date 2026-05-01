@@ -18,6 +18,22 @@ import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 
+function getAudioInputFormat(mimeType: string): 'wav' | 'mp3' {
+	const normalizedMimeType = mimeType.toLowerCase();
+
+	if (
+		normalizedMimeType === 'audio/wav' ||
+		normalizedMimeType === 'audio/wave' ||
+		normalizedMimeType === 'audio/x-wav' ||
+		normalizedMimeType === 'audio/x-wave' ||
+		normalizedMimeType === 'audio/x-pn-wav'
+	) {
+		return 'wav';
+	}
+
+	return 'mp3';
+}
+
 export class ChatService {
 	/**
 	 *
@@ -821,7 +837,7 @@ export class ChatService {
 				type: ContentPartType.INPUT_AUDIO,
 				input_audio: {
 					data: audio.base64Data,
-					format: audio.mimeType.includes('wav') ? 'wav' : 'mp3'
+					format: getAudioInputFormat(audio.mimeType)
 				}
 			});
 		}
