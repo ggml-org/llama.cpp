@@ -62,10 +62,10 @@ static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
     return *(const volatile int *)p;
 }
 
-// Byte spacing between adjacent arrival ints.  128 bytes (two cache lines)
+// Byte spacing between adjacent arrival ints.  64 bytes (one cache line)
 // ensures each GPU/block's arrival slot lives on its own line, preventing
 // false-sharing stalls on the polling GPU.
-static constexpr size_t GGML_CUDA_AR_ARRIVAL_STRIDE = 128;
+static constexpr size_t GGML_CUDA_AR_ARRIVAL_STRIDE = 64;
 
 // Number of blocks the chunked-kernel launches with.  Each block stripes a
 // disjoint slice of the data and synchronizes through its own arrival-token
@@ -289,7 +289,7 @@ struct ggml_cuda_ar_pipeline {
     // pointer (from cudaHostGetDevicePointer) that the kernel and cudaMemset
     // operate on.  The CPU never touches either pointer's data.
     // Use ggml_cuda_ar_arrival_ptr() to index.
-    char * arrival_host;
+    void * arrival_host;
     char * arrival_dev;
 };
 
@@ -340,10 +340,8 @@ static size_t ggml_cuda_ar_chunk_bytes(const ggml_cuda_ar_pipeline * p, size_t n
     if (p->copy_chunk_bytes > 0) {
         return p->copy_chunk_bytes;
     }
-    size_t cb = nbytes / 4;
-    if (cb < GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MIN) cb = GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MIN;
-    if (cb > GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MAX) cb = GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MAX;
-    return cb;
+    return std::min(GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MAX,
+                    std::max(GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MIN, nbytes / 4));
 }
 
 static void ggml_cuda_ar_wait_for_compute(
@@ -434,7 +432,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
         GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
     // Mapped + portable so cudaHostGetDevicePointer gives us a kernel-usable
     // device pointer on every device — the CPU never touches the buffer.
-    if (cudaHostAlloc(reinterpret_cast<void **>(&p->arrival_host), arrival_bytes,
+    if (cudaHostAlloc(&p->arrival_host, arrival_bytes,
                       cudaHostAllocPortable | cudaHostAllocMapped) != cudaSuccess) {
         GGML_LOG_ERROR("%s: cudaHostAlloc for arrival ring failed (%zu bytes)\n",
                        __func__, arrival_bytes);
