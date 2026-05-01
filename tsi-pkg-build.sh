@@ -617,8 +617,29 @@ setup_python() {
 
   log_info "installing mlir and python dependencies"
   run pip install --upgrade pip || return 1
+
+  # Keep torch install as before (this is what your logs show)
   run pip install torch==2.7.0 || return 1
-  run pip install -r "${MLIR_COMPILER_DIR}/python/requirements-common.txt" || return 1
+
+  # ---- FIX for SDK 0.4.1: requirements-common.txt may include "-r /python/...."
+  local REQ_DIR="${MLIR_COMPILER_DIR}/python"
+  local REQ_MAIN="${REQ_DIR}/requirements-common.txt"
+
+  if [ ! -f "${REQ_MAIN}" ]; then
+    die "requirements-common.txt not found: ${REQ_MAIN}"
+  fi
+
+  if grep -qE '^[[:space:]]*-r[[:space:]]+/python/' "${REQ_MAIN}"; then
+    log_info "requirements-common.txt contains absolute /python includes; rewriting to ${REQ_DIR}"
+    local REQ_TMP
+    REQ_TMP="$(mktemp -t tsi-req-XXXXXX.txt)"
+    sed -E "s|(^[[:space:]]*-r[[:space:]]+)/python/|\\1${REQ_DIR}/|g" "${REQ_MAIN}" > "${REQ_TMP}"
+    run pip install -r "${REQ_TMP}" || { rm -f "${REQ_TMP}" >/dev/null 2>&1 || true; return 1; }
+    rm -f "${REQ_TMP}" >/dev/null 2>&1 || true
+  else
+    run pip install -r "${REQ_MAIN}" || return 1
+  fi
+  # ---- END FIX
 
   local MLIR_WHL
   MLIR_WHL="$(ls "${MLIR_COMPILER_DIR}/python"/mlir_external_packages-*.whl 2>/dev/null | head -1 || true)"

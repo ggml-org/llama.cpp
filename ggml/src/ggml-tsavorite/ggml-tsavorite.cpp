@@ -396,6 +396,7 @@ typedef struct _txe_compute_pipeline_state_t *txe_compute_pipeline_state_s;
 FILE *tsi_op_log_file;
 bool runtime_initialized = false;
 uint64_t num_of_op;
+#define TSI_RUN_TIME_INSTANCE 1
 
 // ============================================================
 // (makes blob names unique per device to avoid collisions)
@@ -459,7 +460,7 @@ static inline void tsi_blob_free_tables() {
 static inline void tsi_blob_unload_only() {
     // unload blobs if present, keep tables allocated
     if (blobDescriptor_add) {
-        for (uint32_t i = 0; i < num_of_txes; ++i) {
+        for (uint32_t i = 0; i < TSI_RUN_TIME_INSTANCE; ++i) {
             if (blobDescriptor_add[i]) {
                 tsi_unload_blob(blobDescriptor_add[i]);
                 blobDescriptor_add[i] = nullptr;
@@ -467,7 +468,7 @@ static inline void tsi_blob_unload_only() {
         }
     }
     if (blobDescriptor_mult) {
-        for (uint32_t i = 0; i < num_of_txes; ++i) {
+        for (uint32_t i = 0; i < TSI_RUN_TIME_INSTANCE; ++i) {
             if (blobDescriptor_mult[i]) {
                 tsi_unload_blob(blobDescriptor_mult[i]);
                 blobDescriptor_mult[i] = nullptr;
@@ -475,7 +476,7 @@ static inline void tsi_blob_unload_only() {
         }
     }
     if (blobDescriptor_rms_norm) {
-        for (uint32_t i = 0; i < num_of_txes; ++i) {
+        for (uint32_t i = 0; i < TSI_RUN_TIME_INSTANCE; ++i) {
             if (blobDescriptor_rms_norm[i]) {
                 tsi_unload_blob(blobDescriptor_rms_norm[i]);
                 blobDescriptor_rms_norm[i] = nullptr;
@@ -484,9 +485,9 @@ static inline void tsi_blob_unload_only() {
     }
 
     // best-effort: clear loadResult_* entries too
-    if (loadResult_add)      memset(loadResult_add,      0, num_of_txes * sizeof(void *));
-    if (loadResult_mult)     memset(loadResult_mult,     0, num_of_txes * sizeof(void *));
-    if (loadResult_rms_norm) memset(loadResult_rms_norm, 0, num_of_txes * sizeof(void *));
+    if (loadResult_add)      memset(loadResult_add,      0, TSI_RUN_TIME_INSTANCE * sizeof(void *));
+    if (loadResult_mult)     memset(loadResult_mult,     0, TSI_RUN_TIME_INSTANCE * sizeof(void *));
+    if (loadResult_rms_norm) memset(loadResult_rms_norm, 0, TSI_RUN_TIME_INSTANCE * sizeof(void *));
 
     g_rt.blob_state = TsavoriteRuntimeState::BLOB_TABLES_ALLOCATED;
 }
@@ -502,13 +503,13 @@ static inline void tsi_blob_ensure_tables_allocated() {
         }
     }
 
-    loadResult_add      = (void **)calloc(num_of_txes, sizeof(void *));
-    loadResult_mult     = (void **)calloc(num_of_txes, sizeof(void *));
-    loadResult_rms_norm = (void **)calloc(num_of_txes, sizeof(void *));
+    loadResult_add      = (void **)calloc(TSI_RUN_TIME_INSTANCE, sizeof(void *));
+    loadResult_mult     = (void **)calloc(TSI_RUN_TIME_INSTANCE, sizeof(void *));
+    loadResult_rms_norm = (void **)calloc(TSI_RUN_TIME_INSTANCE, sizeof(void *));
 
-    blobDescriptor_add      = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
-    blobDescriptor_mult     = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
-    blobDescriptor_rms_norm = (BlobDescriptor **)calloc(num_of_txes, sizeof(BlobDescriptor *));
+    blobDescriptor_add      = (BlobDescriptor **)calloc(TSI_RUN_TIME_INSTANCE, sizeof(BlobDescriptor *));
+    blobDescriptor_mult     = (BlobDescriptor **)calloc(TSI_RUN_TIME_INSTANCE, sizeof(BlobDescriptor *));
+    blobDescriptor_rms_norm = (BlobDescriptor **)calloc(TSI_RUN_TIME_INSTANCE, sizeof(BlobDescriptor *));
 
     if (!loadResult_add || !loadResult_mult || !loadResult_rms_norm ||
         !blobDescriptor_add || !blobDescriptor_mult || !blobDescriptor_rms_norm) {
@@ -537,7 +538,7 @@ static void tsi_load_all_blobs() {
     // size matches runtime txe_count
     //packed_args.resize(num_of_txes, nullptr);
 
-    for (uint32_t i = 0; i < num_of_txes; ++i) {
+    for (uint32_t i = 0; i < TSI_RUN_TIME_INSTANCE; ++i) {
         char name_add[64];
         char name_mult[64];
         char name_rms[64];
@@ -1205,11 +1206,11 @@ static void *_mlir_ciface_txe_add_host_internal(void *a, void *b, void *res, TSI
     }
 
     const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed_args[deviceId]);
-    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add[deviceId], packedHandle);
+    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_add[0], packedHandle, kPackedArgsBytes);
 
     if (!blobExecuteCmd) {
         fprintf(stderr, "tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
-                                     (unsigned long)deviceId, (char *)blobDescriptor_add[deviceId]);
+                                     (unsigned long)deviceId, (char *)blobDescriptor_add[0]);
         tsi_cleanup();
         abort();
     }
@@ -1312,10 +1313,10 @@ static void *_mlir_ciface_txe_mult_host_internal(void *a, void *b, void *res, TS
     }
 
     const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed_args[deviceId]);
-    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult[deviceId], packedHandle);
+    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_mult[0], packedHandle, kPackedArgsBytes);
     if (!blobExecuteCmd) {
         fprintf(stderr, "tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
-                                     (unsigned long)deviceId, (char *)blobDescriptor_mult[deviceId]);
+                                     (unsigned long)deviceId, (char *)blobDescriptor_mult[0]);
         tsi_cleanup();
         abort();
     }
@@ -1413,10 +1414,10 @@ static void *_mlir_ciface_txe_rms_norm_host_internal(void *a, void *b, void *buf
     }
 
     const int64_t packedHandle = tsi_shmem_handle_from_ptr(packed_args[deviceId]);
-    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm[deviceId], packedHandle);
+    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor_rms_norm[0], packedHandle, kPackedArgsBytes);
     if (!blobExecuteCmd) {
         fprintf(stderr, "tsi_launch_blob failed for device %lu and blobDescriptor %s\n",
-                                     (unsigned long)deviceId, (char *)blobDescriptor_rms_norm[deviceId]);
+                                     (unsigned long)deviceId, (char *)blobDescriptor_rms_norm[0]);
         tsi_cleanup();
         abort();
     }
