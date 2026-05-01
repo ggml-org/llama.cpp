@@ -519,7 +519,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     constexpr int  nbatch_K2       = ggml_cuda_fattn_mma_get_nbatch_K2(DKQ, DV, ncols);
     constexpr int  nbatch_V2       = ggml_cuda_fattn_mma_get_nbatch_V2(DKQ, DV, ncols);
     constexpr bool Q_in_reg        = ggml_cuda_fattn_mma_get_Q_in_reg (DKQ, DV, ncols);
-    constexpr int  nstages         = ggml_cuda_fattn_mma_get_nstages(DKQ, DV, ncols1, ncols2, use_top_k);
+    constexpr int  nstages         = ggml_cuda_fattn_mma_get_nstages  (DKQ, DV, ncols1, ncols2, use_top_k);
 
     constexpr int stride_tile_Q = DKQ/2     + 4;
     constexpr int stride_tile_K = nbatch_K2 + 4;
@@ -1623,7 +1623,6 @@ static __global__ void flash_attn_ext_f16(
     constexpr int nthreads  = ggml_cuda_fattn_mma_get_nthreads(DKQ, DV, ncols);
     constexpr int nwarps    = nthreads / warp_size;
 
-    // use top_k optimizations only for token generation with KV cache longer than 16k
     const int  n_kv_iter = use_top_k ? perf_hints.n_top_k : ne11;
 
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
