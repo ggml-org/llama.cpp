@@ -201,6 +201,45 @@ int main(int argc, char ** argv) {
                 il, e50, e80, e90, e95, e99);
     }
 
+    // Emit JSON profile to file (for runtime hot-expert pinning).
+    // Set DS4_PROFILE_JSON_OUT=path.json to enable.
+    if (const char * out_path = std::getenv("DS4_PROFILE_JSON_OUT")) {
+        FILE * fp = std::fopen(out_path, "w");
+        if (fp) {
+            std::fprintf(fp, "{\n");
+            std::fprintf(fp, "  \"n_layer\": %d,\n", prof.n_layer);
+            std::fprintf(fp, "  \"n_expert\": %d,\n", prof.n_expert);
+            std::fprintf(fp, "  \"total_picks\": %" PRIu64 ",\n", prof.total_token_picks);
+            std::fprintf(fp, "  \"layers\": {\n");
+            bool first_layer = true;
+            for (auto & [il, hist] : prof.per_layer) {
+                if (hist.empty()) continue;
+                if (!first_layer) std::fprintf(fp, ",\n");
+                first_layer = false;
+                // Sort experts by frequency descending; emit pairs.
+                std::vector<std::pair<int, uint64_t>> sorted;
+                sorted.reserve(hist.size());
+                for (size_t e = 0; e < hist.size(); ++e) {
+                    if (hist[e] > 0) sorted.emplace_back((int)e, hist[e]);
+                }
+                std::sort(sorted.begin(), sorted.end(), [](auto & a, auto & b) {
+                    return a.second > b.second;
+                });
+                std::fprintf(fp, "    \"%d\": [", il);
+                for (size_t i = 0; i < sorted.size(); ++i) {
+                    if (i) std::fprintf(fp, ",");
+                    std::fprintf(fp, "[%d,%" PRIu64 "]", sorted[i].first, sorted[i].second);
+                }
+                std::fprintf(fp, "]");
+            }
+            std::fprintf(fp, "\n  }\n}\n");
+            std::fclose(fp);
+            LOG_INF("\nds4-expert-profile: wrote JSON to %s\n", out_path);
+        } else {
+            LOG_ERR("ds4-expert-profile: could not open %s\n", out_path);
+        }
+    }
+
     llama_backend_free();
     return 0;
 }
