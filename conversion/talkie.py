@@ -38,10 +38,8 @@ class TalkieModel(TextModel):
             by_head = data_torch.view(-1, head_dim, data_torch.shape[1])
             by_head[:, head_dim // 2:] *= -1
         elif suffix == "attn.head_gain.head_g":
-            # scalar per head gain becomes q norm scale vector
-            head_dim = self.hparams["head_dim"]
-            # (n_head) -> (n_head, head_dim)
-            data_torch = data_torch.unsqueeze(-1).repeat(1, head_dim)
+            # allow head gain to broadcast
+            data_torch = data_torch.unsqueeze(-1)
 
         if not name.endswith(".weight"):
             name += ".weight"
