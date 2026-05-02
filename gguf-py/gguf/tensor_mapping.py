@@ -2141,42 +2141,55 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_ATTN_REL_POS_EMB: (
             "encoder.layers.{bid}.attn.rel_pos_emb.weight",
         ),
+
         MODEL_TENSOR.A_QF_SELF_ATTN_Q: (
             "projector.qformer.encoder.layer.{bid}.attention.attention.query",
         ),
+
         MODEL_TENSOR.A_QF_SELF_ATTN_K: (
             "projector.qformer.encoder.layer.{bid}.attention.attention.key",
         ),
+
         MODEL_TENSOR.A_QF_SELF_ATTN_V: (
             "projector.qformer.encoder.layer.{bid}.attention.attention.value",
         ),
+
         MODEL_TENSOR.A_QF_SELF_ATTN_O: (
             "projector.qformer.encoder.layer.{bid}.attention.output.dense",
         ),
+
         MODEL_TENSOR.A_QF_SELF_ATTN_NORM: (
             "projector.qformer.encoder.layer.{bid}.attention.output.LayerNorm",
         ),
+
         MODEL_TENSOR.A_QF_CROSS_ATTN_Q: (
             "projector.qformer.encoder.layer.{bid}.crossattention.attention.query",
         ),
+
         MODEL_TENSOR.A_QF_CROSS_ATTN_K: (
             "projector.qformer.encoder.layer.{bid}.crossattention.attention.key",
         ),
+
         MODEL_TENSOR.A_QF_CROSS_ATTN_V: (
             "projector.qformer.encoder.layer.{bid}.crossattention.attention.value",
         ),
+
         MODEL_TENSOR.A_QF_CROSS_ATTN_O: (
             "projector.qformer.encoder.layer.{bid}.crossattention.output.dense",
         ),
+
         MODEL_TENSOR.A_QF_CROSS_ATTN_NORM: (
             "projector.qformer.encoder.layer.{bid}.crossattention.output.LayerNorm",
         ),
+
         MODEL_TENSOR.A_QF_FFN_UP: (
             "projector.qformer.encoder.layer.{bid}.intermediate_query.dense",
         ),
+
         MODEL_TENSOR.A_QF_FFN_DOWN: (
             "projector.qformer.encoder.layer.{bid}.output_query.dense",
         ),
+
         MODEL_TENSOR.A_QF_FFN_NORM: (
             "projector.qformer.encoder.layer.{bid}.output_query.LayerNorm",
         ),
