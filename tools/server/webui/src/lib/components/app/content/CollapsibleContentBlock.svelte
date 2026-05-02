@@ -22,7 +22,7 @@
 	let {
 		open = $bindable(false),
 		class: className = '',
-		icon: Icon,
+		icon: IconComponent,
 		iconClass = 'h-4 w-4',
 		title,
 		subtitle,
@@ -32,6 +32,7 @@
 	}: Props = $props();
 
 	let contentContainer: HTMLDivElement | undefined = $state();
+
 	const autoScroll = createAutoScrollController();
 
 	$effect(() => {
@@ -59,8 +60,8 @@
 	<Card class="gap-0 border-muted bg-muted/30 py-0">
 		<Collapsible.Trigger class="flex w-full cursor-pointer items-center justify-between p-3">
 			<div class="flex items-center gap-2 text-muted-foreground">
-				{#if Icon}
-					<Icon class={iconClass} />
+				{#if IconComponent}
+					<IconComponent class={iconClass} />
 				{/if}
 
 				<span class="font-mono text-sm font-medium">{title}</span>

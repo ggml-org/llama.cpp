@@ -683,9 +683,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
                         LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
                                        __func__, tensor_name.c_str(), ggml_type_name(new_type), ggml_type_name(qtype));
                         new_type = qtype;
-                        manual = true;
-                        break;
                     }
+                    manual = true;
+                    break;
                 }
             }
         }

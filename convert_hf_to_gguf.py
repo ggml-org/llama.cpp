@@ -6797,7 +6797,7 @@ class BertModel(TextModel):
 
         tokens: list[bytes] = [f"[PAD{i}]".encode("utf-8") for i in range(vocab_size)]
         scores: list[float] = [-10000.0] * vocab_size
-        toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size  # ty: ignore[invalid-assignment]
+        toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size
 
         if isinstance(tokenizer, SentencePieceProcessor):
             for token_id in range(tokenizer.vocab_size()):
@@ -13372,17 +13372,18 @@ class LazyTorchTensor(gguf.LazyBase):
     }
 
     # only used when byteswapping data. Only correct size is needed
+    # TODO: uncomment uint64, uint32, and uint16, ref: https://github.com/pytorch/pytorch/issues/58734
     _dtype_byteswap_map: dict[torch.dtype, type] = {
         torch.float64: np.float64,
         torch.float32: np.float32,
         torch.bfloat16: np.float16,
         torch.float16: np.float16,
         torch.int64: np.int64,
-        torch.uint64: np.uint64,
+        # torch.uint64: np.uint64,
         torch.int32: np.int32,
-        torch.uint32: np.uint32,
+        # torch.uint32: np.uint32,
         torch.int16: np.int16,
-        torch.uint16: np.uint16,
+        # torch.uint16: np.uint16,
         torch.int8: np.int8,
         torch.uint8: np.uint8,
         torch.bool: np.uint8,
