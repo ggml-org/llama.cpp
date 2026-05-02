@@ -404,9 +404,13 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES];
     std::unordered_map<sycl::queue *, std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>>> scratchpad_map;
 
+    std::unique_ptr<ggml_sycl_pool> fattn_pools[GGML_SYCL_MAX_DEVICES];
+
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
+
+    static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device, int max_buffers, float look_ahead, const char * label = nullptr);
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_host(queue_ptr qptr, int device);
 
@@ -419,6 +423,17 @@ struct ggml_backend_sycl_context {
 
     ggml_sycl_pool & pool() {
         return pool(device);
+    }
+
+    ggml_sycl_pool & fattn_pool(int device) {
+        if (fattn_pools[device] == nullptr) {
+            fattn_pools[device] = new_pool_for_device(stream(device, 0), device, 8, 1.25f, "fattn");
+        }
+        return *fattn_pools[device];
+    }
+
+    ggml_sycl_pool & fattn_pool() {
+        return fattn_pool(device);
     }
 
 #ifdef GGML_SYCL_GRAPH

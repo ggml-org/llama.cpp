@@ -1265,23 +1265,30 @@ ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type() {
 }
 
 // buffer pool for sycl (legacy)
+// #define DEBUG_SYCL_POOL
 struct ggml_sycl_pool_leg : public ggml_sycl_pool {
-    static const int MAX_SYCL_BUFFERS = 256;
-
     int device;
     queue_ptr qptr;
+    int max_buffers;
+    float look_ahead;
+    const char * label;
+
     struct ggml_sycl_buffer {
         void * ptr = nullptr;
         size_t size = 0;
     };
 
-    ggml_sycl_buffer buffer_pool[MAX_SYCL_BUFFERS] = {};
+    std::vector<ggml_sycl_buffer> buffer_pool;
     size_t pool_size = 0;
 
-    explicit ggml_sycl_pool_leg(queue_ptr qptr_, int device_) : device(device_), qptr(qptr_) {}
+    explicit ggml_sycl_pool_leg(queue_ptr qptr_, int device_, int max_buffers_ = 256, float look_ahead_ = 1.05f, const char * label_ = nullptr) :
+        device(device_), qptr(qptr_), max_buffers(max_buffers_), look_ahead(look_ahead_), label(label_), buffer_pool(max_buffers_) {}
 
     ~ggml_sycl_pool_leg() {
-        for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
+        if (pool_size > 0) {
+            SYCL_CHECK(CHECK_TRY_ERROR(qptr->wait()));
+        }
+        for (int i = 0; i < max_buffers; ++i) {
             ggml_sycl_buffer & b = buffer_pool[i];
             if (b.ptr != nullptr) {
                 SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(b.ptr, *qptr)));
@@ -1291,6 +1298,22 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         GGML_ASSERT(pool_size == 0);
     }
 
+    size_t cached_size() const {
+        size_t size = 0;
+        for (int i = 0; i < max_buffers; ++i) {
+            size += buffer_pool[i].size;
+        }
+        return size;
+    }
+
+    int cached_buffers() const {
+        int n = 0;
+        for (int i = 0; i < max_buffers; ++i) {
+            n += buffer_pool[i].ptr != nullptr;
+        }
+        return n;
+    }
+
     void * alloc(size_t size, size_t * actual_size) override {
 #ifdef DEBUG_sycl_MALLOC
         int nnz = 0;
@@ -1298,7 +1321,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
 #endif
         size_t best_diff = 1ull << 36;
         int ibest = -1;
-        for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
+        for (int i = 0; i < max_buffers; ++i) {
             ggml_sycl_buffer& b = buffer_pool[i];
             if (b.ptr != nullptr) {
 #ifdef DEBUG_sycl_MALLOC
@@ -1315,6 +1338,12 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
                             *actual_size = b.size;
                             b.ptr = nullptr;
                             b.size = 0;
+#ifdef DEBUG_SYCL_POOL
+                            if (label) {
+                                GGML_LOG_INFO("%s pool[%d]: reuse exact cached buffer %.2f MiB for request %.2f MiB\n",
+                                              label, device, *actual_size / 1024.0 / 1024.0, size / 1024.0 / 1024.0);
+                            }
+#endif
                             return ptr;
                         }
                     }
@@ -1327,10 +1356,22 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             *actual_size = b.size;
             b.ptr = nullptr;
             b.size = 0;
+#ifdef DEBUG_SYCL_POOL
+            if (label) {
+                GGML_LOG_INFO("%s pool[%d]: reuse cached buffer %.2f MiB for request %.2f MiB\n",
+                              label, device, *actual_size / 1024.0 / 1024.0, size / 1024.0 / 1024.0);
+            }
+#endif
             return ptr;
         }
+        const size_t cached = cached_size();
+        if (label && cached > 0) {
+            GGML_LOG_INFO("%s pool[%d]: no cached buffer fits request %.2f MiB, cached %.2f MiB in %d/%d slots\n",
+                          label, device, size / 1024.0 / 1024.0, cached / 1024.0 / 1024.0,
+                          cached_buffers(), max_buffers);
+        }
         void * ptr;
-        size_t look_ahead_size = (size_t) (1.05 * size);
+        size_t look_ahead_size = (size_t) (look_ahead * size);
 
         SYCL_CHECK(
             CHECK_TRY_ERROR(ptr = (void *)sycl::malloc_device(
@@ -1353,15 +1394,40 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
     }
 
     void free(void * ptr, size_t size) override {
-        for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
+        for (int i = 0; i < max_buffers; ++i) {
             ggml_sycl_buffer& b = buffer_pool[i];
             if (b.ptr == nullptr) {
                 b.ptr = ptr;
                 b.size = size;
+#ifdef DEBUG_SYCL_POOL
+                if (label) {
+                    GGML_LOG_INFO("%s pool[%d]: cache returned buffer %.2f MiB in slot %d/%d\n",
+                                  label, device, size / 1024.0 / 1024.0, i + 1, max_buffers);
+                }
+#endif
                 return;
             }
         }
-        GGML_LOG_WARN("WARNING: sycl buffer pool full, increase MAX_sycl_BUFFERS\n");
+        int ismall = 0;
+        for (int i = 1; i < max_buffers; ++i) {
+            if (buffer_pool[i].size < buffer_pool[ismall].size) {
+                ismall = i;
+            }
+        }
+        if (size > buffer_pool[ismall].size) {
+            ggml_sycl_buffer & b = buffer_pool[ismall];
+            GGML_LOG_INFO("%s pool[%d]: evict cached buffer %.2f MiB for returned buffer %.2f MiB\n",
+                          label ? label : "sycl", device, b.size / 1024.0 / 1024.0, size / 1024.0 / 1024.0);
+            SYCL_CHECK(CHECK_TRY_ERROR(qptr->wait()));
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(b.ptr, *qptr)));
+            pool_size -= b.size;
+            b.ptr = ptr;
+            b.size = size;
+            return;
+        }
+        GGML_LOG_WARN("WARNING: %s%s pool[%d]: full, freeing %.2f MiB returned buffer; increase max_buffers\n",
+                      label ? label : "", label ? " sycl buffer" : "sycl buffer", device, size / 1024.0 / 1024.0);
+        SYCL_CHECK(CHECK_TRY_ERROR(qptr->wait()));
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
         pool_size -= size;
     }
@@ -1447,11 +1513,15 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_host(que
 }
 
 std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device) {
+    return new_pool_for_device(qptr, device, 256, 1.05f);
+}
+
+std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device, int max_buffers, float look_ahead, const char * label) {
     // TBD: NO VMM support
     // if (ggml_sycl_info().devices[device].vmm) {
     //     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_vmm(device));
     // }
-   return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_leg(qptr, device));
+   return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_leg(qptr, device, max_buffers, look_ahead, label));
 }
 
 // TBD pool with virtual memory management

@@ -830,32 +830,6 @@ static void flash_attn_combine_results(const float * __restrict__ VKQ_parts,
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
-template<typename T>
-struct ggml_sycl_fattn_temp_alloc {
-    queue_ptr qptr;
-    T * ptr = nullptr;
-
-    explicit ggml_sycl_fattn_temp_alloc(queue_ptr qptr) : qptr(qptr) {}
-
-    ~ggml_sycl_fattn_temp_alloc() {
-        if (ptr != nullptr) {
-            SYCL_CHECK(CHECK_TRY_ERROR(qptr->wait()));
-            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
-        }
-    }
-
-    void alloc(size_t size) {
-        GGML_ASSERT(ptr == nullptr);
-        SYCL_CHECK(CHECK_TRY_ERROR(ptr = (T *) sycl::malloc_device(size * sizeof(T), *qptr)));
-        if (!ptr) {
-            GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device/GPU\n", __func__, size * sizeof(T));
-        }
-    }
-
-    ggml_sycl_fattn_temp_alloc(const ggml_sycl_fattn_temp_alloc &) = delete;
-    ggml_sycl_fattn_temp_alloc & operator=(const ggml_sycl_fattn_temp_alloc &) = delete;
-};
-
 template <fattn_kernel_t fattn_kernel, int warp_size>
 static void lauch_kernel(
     dpct::dim3 group_range,
@@ -947,11 +921,13 @@ void launch_fattn(
     const int id  = ggml_sycl_get_device();
     const int nsm = ggml_sycl_info().devices[id].nsm;
 
-    ggml_sycl_fattn_temp_alloc<sycl::half>   K_f16(main_stream);
-    ggml_sycl_fattn_temp_alloc<sycl::half>   V_f16(main_stream);
-    ggml_sycl_fattn_temp_alloc<int>          KV_max(main_stream);
-    ggml_sycl_fattn_temp_alloc<float>        dst_tmp(main_stream);
-    ggml_sycl_fattn_temp_alloc<sycl::float2> dst_tmp_meta(main_stream);
+    ggml_sycl_pool & pool = ctx.fattn_pool();
+
+    ggml_sycl_pool_alloc<sycl::half>   K_f16(pool);
+    ggml_sycl_pool_alloc<sycl::half>   V_f16(pool);
+    ggml_sycl_pool_alloc<int>          KV_max(pool);
+    ggml_sycl_pool_alloc<float>        dst_tmp(pool);
+    ggml_sycl_pool_alloc<sycl::float2> dst_tmp_meta(pool);
 
     const char * K_data = (const char *) K->data;
     size_t nb11 = K->nb[1];
