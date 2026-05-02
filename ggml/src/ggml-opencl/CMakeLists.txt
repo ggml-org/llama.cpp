@@ -107,6 +107,10 @@ set(GGML_OPENCL_KERNELS
     mul_mv_id_mxfp4_f32_flat
     gemm_moe_mxfp4_f32
     gemv_moe_mxfp4_f32
+    gemm_moe_mxfp4_f32_ns
+    gemv_moe_mxfp4_f32_ns
+    moe_reorder_b
+    moe_sort_by_expert
     mul_mm_f32_f32_l4_lm
     mul_mm_f16_f32_l4_lm
     mul_mm_q4_0_f32_l4_lm
