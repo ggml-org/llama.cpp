@@ -519,6 +519,36 @@ static common_chat_tool todo_list{
     })",
 };
 
+static common_chat_tool manage_todo_list_tool{
+    /* .name = */ "manage_todo_list",
+    /* .description = */ "Create or update the todo list",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "todos": {
+                "type": "array",
+                "description": "List of TODO list items"
+            }
+        },
+        "required": ["todos"]
+    })",
+};
+
+static common_chat_tool run_in_terminal_tool{
+    /* .name = */ "run_in_terminal",
+    /* .description = */ "Run a shell command.",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "Shell command to run"
+            }
+        },
+        "required": ["command"]
+    })",
+};
+
 static common_chat_tool edit_tool{
     /* .name = */ "edit",
     /* .description = */ "Edit file",
@@ -1333,6 +1363,11 @@ class peg_test_builder {
         return *this;
     }
 
+    peg_test_builder & messages(std::vector<common_chat_msg> messages) {
+        tc_.params.messages = std::move(messages);
+        return *this;
+    }
+
     peg_test_builder & enable_thinking(bool val) {
         tc_.params.enable_thinking = val;
         return *this;
@@ -1678,6 +1713,45 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_thoughts)
             .run();
 
+        {
+            common_chat_msg user_start;
+            user_start.role    = "user";
+            user_start.content = "Create a todo list, then inspect the repository.";
+
+            common_chat_msg assistant_todos = simple_assist_msg(
+                "", "", "manage_todo_list",
+                R"({"todos":[{"item":"Inspect repository","selected":false}]})", "call_todos");
+
+            common_chat_msg tool_result;
+            tool_result.role         = "tool";
+            tool_result.content      = "Successfully wrote todo list";
+            tool_result.tool_call_id = "call_todos";
+
+            common_chat_msg user_continue;
+            user_continue.role    = "user";
+            user_continue.content = "Proceed.";
+
+            tst.test(
+                   "I need to run a terminal command.\n"
+                   "</think>\n\n"
+                   "<tool_call>\n"
+                   "<function=run_in_terminal>\n"
+                   "<parameter=command>\n"
+                   "pwd\n"
+                   "</parameter>\n"
+                   "</function>\n"
+                   "</tool_call>")
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .enable_thinking(true)
+                .tools({ manage_todo_list_tool, run_in_terminal_tool })
+                .messages({ user_start, assistant_todos, tool_result, user_continue })
+                .expect_reasoning("I need to run a terminal command.")
+                .expect_tool_calls({
+                    { "run_in_terminal", R"({"command": "pwd"})", {} },
+                })
+                .run();
+        }
+
         tst.test(
                "<tool_call>\n"
                "<function=special_function>\n"
@@ -1721,6 +1795,31 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({
                 { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
             })
+            .run();
+
+        tst.test(
+               "I might call:\n"
+               "<tool_call>\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "pwd\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "</think>\n\n"
+               "Final answer text.")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ run_in_terminal_tool })
+            .expect_reasoning("I might call:\n"
+               "<tool_call>\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "pwd\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .expect_content("Final answer text.")
             .run();
 
         tst.test(
