@@ -46,6 +46,32 @@ TOKENIZER_LINKED_KEYS = [
     gguf.Keys.Tokenizer.SCORES
 ]
 
+# Convert value based on type
+def parse_value(value_str: str, value_type: GGUFValueType) -> Any:
+    if value_type == GGUFValueType.UINT8:
+        return np.uint8(int(value_str))
+    elif value_type == GGUFValueType.INT8:
+        return np.int8(int(value_str))
+    elif value_type == GGUFValueType.UINT16:
+        return np.uint16(int(value_str))
+    elif value_type == GGUFValueType.INT16:
+        return np.int16(int(value_str))
+    elif value_type == GGUFValueType.UINT32:
+        return np.uint32(int(value_str))
+    elif value_type == GGUFValueType.INT32:
+        return np.int32(int(value_str))
+    elif value_type == GGUFValueType.FLOAT32:
+        return np.float32(float(value_str))
+    elif value_type == GGUFValueType.BOOL:
+        return value_str.lower() in ('true', 'yes', '1')
+    elif value_type == GGUFValueType.STRING:
+        return value_str
+    elif value_type == GGUFValueType.ARRAY:
+        logger.error("Array type is not yet supported")
+        sys.exit(1)
+    else:
+        return value_str
+
 
 class TokenizerEditorDialog(QDialog):
     def __init__(self, tokens, token_types, scores, parent=None):
@@ -785,28 +811,7 @@ class AddMetadataDialog(QDialog):
         key = self.key_edit.text()
         value_type = self.type_combo.currentData()
         value_text = self.value_edit.toPlainText()
-
-        # Convert value based on type
-        if value_type == GGUFValueType.UINT8:
-            value = np.uint8(int(value_text))
-        elif value_type == GGUFValueType.INT8:
-            value = np.int8(int(value_text))
-        elif value_type == GGUFValueType.UINT16:
-            value = np.uint16(int(value_text))
-        elif value_type == GGUFValueType.INT16:
-            value = np.int16(int(value_text))
-        elif value_type == GGUFValueType.UINT32:
-            value = np.uint32(int(value_text))
-        elif value_type == GGUFValueType.INT32:
-            value = np.int32(int(value_text))
-        elif value_type == GGUFValueType.FLOAT32:
-            value = np.float32(float(value_text))
-        elif value_type == GGUFValueType.BOOL:
-            value = value_text.lower() in ('true', 'yes', '1')
-        elif value_type == GGUFValueType.STRING:
-            value = value_text
-        else:
-            value = value_text
+        value = parse_value(value_text, value_type)
 
         return key, value_type, value
 
@@ -1192,28 +1197,13 @@ class GGUFEditorWindow(QMainWindow):
                 return
 
         try:
-            # Convert the string value to the appropriate type
-            if value_type == GGUFValueType.UINT8:
-                converted_value = np.uint8(int(new_value))
-            elif value_type == GGUFValueType.INT8:
-                converted_value = np.int8(int(new_value))
-            elif value_type == GGUFValueType.UINT16:
-                converted_value = np.uint16(int(new_value))
-            elif value_type == GGUFValueType.INT16:
-                converted_value = np.int16(int(new_value))
-            elif value_type == GGUFValueType.UINT32:
-                converted_value = np.uint32(int(new_value))
-            elif value_type == GGUFValueType.INT32:
-                converted_value = np.int32(int(new_value))
-            elif value_type == GGUFValueType.FLOAT32:
-                converted_value = np.float32(float(new_value))
-            elif value_type == GGUFValueType.BOOL:
-                converted_value = new_value.lower() in ('true', 'yes', '1')
-            elif value_type == GGUFValueType.STRING:
-                converted_value = new_value
-            else:
-                # Unsupported type for editing
+            # Check if type is unsupported for editing first
+            if value_type not in (GGUFValueType.UINT8, GGUFValueType.INT8, GGUFValueType.UINT16, GGUFValueType.INT16,
+                                  GGUFValueType.UINT32, GGUFValueType.INT32, GGUFValueType.FLOAT32, GGUFValueType.BOOL,
+                                  GGUFValueType.STRING):
                 return
+
+            converted_value = parse_value(new_value, value_type)
 
             # Store the change
             self.metadata_changes[key] = (value_type, converted_value)
@@ -1590,14 +1580,124 @@ class GGUFEditorWindow(QMainWindow):
             self.statusBar().showMessage("Error saving file")
 
 
+def cli_mode(args: argparse.Namespace) -> None:
+    logger.info(f"Loading {args.model_path}...")
+    reader = GGUFReader(args.model_path, 'r')
+
+    # Validate changes
+    metadata_to_remove = set(args.delete) if args.delete else set()
+    metadata_changes = {}
+
+    if args.set:
+        for key, type_str, val_str in args.set:
+            try:
+                val_type = GGUFValueType[type_str.upper()]
+                converted_val = parse_value(val_str, val_type)
+                metadata_changes[key] = (val_type, converted_val)
+            except KeyError:
+                logger.error(f"Invalid GGUF type: {type_str}")
+                sys.exit(1)
+            except ValueError as e:
+                logger.error(f"Failed to parse value '{val_str}' for type {type_str}: {e}")
+                sys.exit(1)
+
+    if args.set_file:
+        for key, file_path in args.set_file:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    file_content = f.read()
+                # Explicitly default to string
+                metadata_changes[key] = (GGUFValueType.STRING, file_content)
+            except IOError as e:
+                logger.error(f"Failed to read from file '{file_path}': {e}")
+                sys.exit(1)
+
+    logger.info(f"Saving changes to {args.output}...")
+
+    arch = 'unknown'
+    arch_field = reader.get_field(gguf.Keys.General.ARCHITECTURE)
+    if arch_field:
+        arch = arch_field.contents()
+
+    writer = GGUFWriter(args.output, arch=arch, endianess=reader.endianess)
+
+    alignment_field = reader.get_field(gguf.Keys.General.ALIGNMENT)
+    if alignment_field and alignment_field.contents() is not None:
+        writer.data_alignment = alignment_field.contents()
+
+    # Modify/Delete existing metadata
+    for field in reader.fields.values():
+        if field.name == gguf.Keys.General.ARCHITECTURE or field.name.startswith('GGUF.'):
+            continue
+        if field.name in metadata_to_remove:
+            continue
+
+        if field.name in metadata_changes:
+            val_type, value = metadata_changes[field.name]
+            writer.add_key_value(field.name, value, val_type)
+        else:
+            value = field.contents()
+            if value is not None:
+                sub_type = field.types[-1] if field.types[0] == GGUFValueType.ARRAY else None
+                writer.add_key_value(field.name, value, field.types[0], sub_type=sub_type)
+
+    # Add new metadata
+    for key, (val_type, value) in metadata_changes.items():
+        if reader.get_field(key) is None:
+            writer.add_key_value(key, value, val_type)
+
+    # Build new tensors list
+    for tensor in reader.tensors:
+        writer.add_tensor(
+            tensor.name,
+            tensor.data,
+            raw_shape=tensor.data.shape,
+            raw_dtype=tensor.tensor_type,
+            tensor_endianess=reader.endianess
+        )
+
+    # Save the file
+    writer.open_output_file(Path(args.output))
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_tensors_to_file(progress=True)
+    writer.close()
+
+    logger.info("Done.")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="GUI GGUF Editor")
-    parser.add_argument("model_path", nargs="?", help="path to GGUF model file to load at startup")
-    parser.add_argument("--verbose", action="store_true", help="increase output verbosity")
+    parser = argparse.ArgumentParser(description="GUI/CLI GGUF Editor")
+    parser.add_argument("model_path", nargs="?", help="path to GGUF model file to load")
+    parser.add_argument("-v", "--verbose", action="store_true", help="increase output verbosity")
+
+    # CLI Mode Arguments
+    parser.add_argument("-s", "--set", nargs=3, action="append", metavar=("KEY", "TYPE", "VALUE"),
+                        help="Set key to value. TYPE must be a valid GGUFValueType (e.g. STRING, FLOAT32)")
+    parser.add_argument("-f", "--set-file", nargs=2, action="append", metavar=("KEY", "FILE"),
+                        help="Set key to string contents of file")
+    parser.add_argument("-d", "--delete", action="append", metavar="KEY",
+                        help="Delete key")
+    parser.add_argument("-o", "--output", metavar="FILE",
+                        help="Output file to save the modified GGUF (required if --set or --delete are used)")
 
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+
+    # Check if CLI mode
+    if args.set or args.set_file or args.delete:
+        if not args.model_path or not args.output:
+            logger.error("CLI mode requires both an input 'model_path' and an '--output' file")
+            sys.exit(1)
+        if args.model_path == args.output:
+            logger.error("Input and output cannot be the same file")
+            sys.exit(1)
+        if not os.path.isfile(args.model_path):
+            logger.error(f"Invalid model path: {args.model_path}")
+            sys.exit(1)
+        cli_mode(args)
+        sys.exit(0)
 
     app = QApplication(sys.argv)
     window = GGUFEditorWindow()
