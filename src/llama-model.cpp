@@ -1345,6 +1345,14 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_MSA:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                switch (hparams.n_layer) {
+                    case 36: type = hparams.n_embd == 2560 ? LLM_TYPE_4B : LLM_TYPE_8B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_QWEN3:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -3994,6 +4002,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {    n_embd, n_ff_shexp}, 0);
                     }
                 } break;
+            case LLM_ARCH_MSA:       // identical tensor layout to QWEN3
             case LLM_ARCH_QWEN3:
             case LLM_ARCH_QWEN3VL:
                 {
@@ -9059,6 +9068,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_mimo2_iswa>(*this, params);
             } break;
+        case LLM_ARCH_MSA:
+            {
+                llm = std::make_unique<llm_build_msa>(*this, params);
+            } break;
         case LLM_ARCH_KIMI_LINEAR:
             {
                 llm = std::make_unique<llm_build_kimi_linear>(*this, params);
@@ -9272,6 +9285,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN2:
         case LLM_ARCH_DREAM:
         case LLM_ARCH_QWEN2MOE:
+        case LLM_ARCH_MSA:
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN3MOE:
         case LLM_ARCH_LLADA_MOE:
