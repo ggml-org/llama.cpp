@@ -589,10 +589,12 @@ void server_models::load(const std::string & name) {
     // exceeding models_max. Without this, the window between unload_lru()
     // releasing its lock and this lock_guard acquiring allows multiple
     // threads to each observe capacity and all proceed to load.
+    // Note: sleeping models don't count as "active" since they're idle and
+    // don't serve requests — they can be evicted without counting against the limit.
     if (base_params.models_max > 0) {
         size_t count_active = 0;
         for (const auto & m : mapping) {
-            if (m.second.meta.is_running()) {
+            if (m.second.meta.status == SERVER_MODEL_STATUS_LOADED || m.second.meta.status == SERVER_MODEL_STATUS_LOADING) {
                 count_active++;
             }
         }
