@@ -114,16 +114,16 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
     choice = body["choices"][0]
     tool_calls = choice["message"].get("tool_calls")
     assert tool_calls and len(tool_calls) == 1, f'Expected 1 tool call in {choice["message"]}'
+    assert choice["finish_reason"] == "tool_calls", f'Expected finish_reason tool_calls, got {choice["finish_reason"]}'
     tool_call = tool_calls[0]
     assert choice["message"].get("content") in (None, ""), f'Expected no content in {choice["message"]}'
     # assert len(tool_call.get("id", "")) > 0, f'Expected non empty tool call id in {tool_call}'
     expected_function_name = "python" if tool["type"] == "code_interpreter" else tool["function"]["name"]
     assert expected_function_name == tool_call["function"]["name"], f'Expected tool name to be {tool_call["function"]["name"]} in {choice["message"]}'
     actual_arguments = tool_call["function"]["arguments"]
-    assert isinstance(actual_arguments, dict) or isinstance(actual_arguments, str), f'Expected arguments to be a dict or str, got: {actual_arguments}'
+    assert isinstance(actual_arguments, str), f'Expected arguments to be a JSON string, got: {actual_arguments}'
     if argument_key is not None:
-        if (isinstance(actual_arguments, str)):
-            actual_arguments = json.loads(actual_arguments)
+        actual_arguments = json.loads(actual_arguments)
         assert argument_key in actual_arguments, f"tool arguments: {actual_arguments}, expected: {argument_key}"
 
 
@@ -277,6 +277,7 @@ def test_completion_with_required_tool_real_model(tool: dict, argument_key: str 
     choice = body["choices"][0]
     tool_calls = choice["message"].get("tool_calls")
     assert tool_calls and len(tool_calls) == 1, f'Expected 1 tool call in {choice["message"]}'
+    assert choice["finish_reason"] == "tool_calls", f'Expected finish_reason tool_calls, got {choice["finish_reason"]}'
     tool_call = tool_calls[0]
     # assert choice["message"].get("content") in (None, ""), f'Expected no content in {choice["message"]}'
     expected_function_name = "python" if tool["type"] == "code_interpreter" else tool["function"]["name"]
@@ -412,11 +413,14 @@ def do_test_weather(server: ServerProcess, **kwargs):
     choice = body["choices"][0]
     tool_calls = choice["message"].get("tool_calls")
     assert tool_calls and len(tool_calls) == 1, f'Expected 1 tool call in {choice["message"]}'
+    assert choice["finish_reason"] == "tool_calls", f'Expected finish_reason tool_calls, got {choice["finish_reason"]}'
     tool_call = tool_calls[0]
     # assert choice["message"].get("content") in (None, ""), f'Expected no content in {choice["message"]}'
     assert tool_call["function"]["name"] == WEATHER_TOOL["function"]["name"], f'Expected weather tool call, got {tool_call["function"]["name"]}'
     # assert len(tool_call.get("id", "")) > 0, f'Expected non empty tool call id in {tool_call}'
-    actual_arguments = json.loads(tool_call["function"]["arguments"])
+    actual_arguments_text = tool_call["function"]["arguments"]
+    assert isinstance(actual_arguments_text, str), f'Expected arguments to be a JSON string, got: {actual_arguments_text}'
+    actual_arguments = json.loads(actual_arguments_text)
     assert 'location' in actual_arguments, f"location not found in {json.dumps(actual_arguments)}"
     location = actual_arguments["location"]
     assert isinstance(location, str), f"Expected location to be a string, got {type(location)}: {json.dumps(location)}"
@@ -633,11 +637,14 @@ def do_test_hello_world(server: ServerProcess, **kwargs):
     choice = body["choices"][0]
     tool_calls = choice["message"].get("tool_calls")
     assert tool_calls and len(tool_calls) == 1, f'Expected 1 tool call in {choice["message"]}'
+    assert choice["finish_reason"] == "tool_calls", f'Expected finish_reason tool_calls, got {choice["finish_reason"]}'
     tool_call = tool_calls[0]
     # assert choice["message"].get("content") in (None, ""), f'Expected no content in {choice["message"]}'
     assert tool_call["function"]["name"] == PYTHON_TOOL["function"]["name"]
     # assert len(tool_call.get("id", "")) > 0, f'Expected non empty tool call id in {tool_call}'
-    actual_arguments = json.loads(tool_call["function"]["arguments"])
+    actual_arguments_text = tool_call["function"]["arguments"]
+    assert isinstance(actual_arguments_text, str), f'Expected arguments to be a JSON string, got: {actual_arguments_text}'
+    actual_arguments = json.loads(actual_arguments_text)
     assert 'code' in actual_arguments, f"code not found in {json.dumps(actual_arguments)}"
     code = actual_arguments["code"]
     assert isinstance(code, str), f"Expected code to be a string, got {type(code)}: {json.dumps(code)}"

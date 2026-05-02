@@ -20,6 +20,7 @@ from typing import (
     Iterator,
     List,
     Literal,
+    Optional,
     Tuple,
     Set,
 )
@@ -398,13 +399,16 @@ class ServerProcess:
                         assert len(choice['delta']['reasoning_content']) > 0, f'Expected non empty reasoning_content delta!'
                         reasoning_content.append(choice['delta']['reasoning_content'])
                         reasoning_content_parts += 1
-                    if choice['delta'].get('finish_reason') is not None:
-                        finish_reason = choice['delta']['finish_reason']
+                    if choice.get('finish_reason') is not None:
+                        finish_reason = choice['finish_reason']
                     for tc in choice['delta'].get('tool_calls', []):
                         if 'function' not in tc:
                             raise ValueError(f"Expected function type, got {tc['type']}")
                         if tc['index'] >= len(tool_calls):
+                            assert tc['index'] == len(tool_calls), f"Expected next tool call index {len(tool_calls)}, got {tc['index']}"
                             assert 'id' in tc
+                            assert len(tc['id']) > 0, f"Expected non empty tool call id in {tc}"
+                            assert tc['id'] not in {tool_call.get('id') for tool_call in tool_calls}, f"Duplicate tool call id: {tc['id']}"
                             assert tc.get('type') == 'function'
                             assert 'function' in tc and 'name' in tc['function'] and len(tc['function']['name']) > 0, \
                                 f"Expected function call with name, got {tc.get('function')}"
