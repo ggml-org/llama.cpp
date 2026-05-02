@@ -110,8 +110,12 @@ private:
 
     void update_meta(const std::string & name, const server_model_meta & meta);
 
+    // return the priority of a model instance (thread-safe)
+    int get_model_priority(const std::string & name);
+
     // unload least recently used models if the limit is reached
-    void unload_lru();
+    // requesting_priority: if > 0, only evict running models with priority < requesting_priority
+    void unload_lru(int requesting_priority = 0);
 
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);

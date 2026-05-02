@@ -423,6 +423,20 @@ std::optional<server_model_meta> server_models::get_meta(const std::string & nam
     return std::nullopt;
 }
 
+int server_models::get_model_priority(const std::string & name) {
+    std::lock_guard<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        return it->second.meta.priority;
+    }
+    for (const auto & [key, inst] : mapping) {
+        if (inst.meta.aliases.count(name)) {
+            return inst.meta.priority;
+        }
+    }
+    return 0;
+}
+
 static int get_free_port() {
 #ifdef _WIN32
     WSADATA wsaData;
@@ -505,12 +519,13 @@ std::vector<server_model_meta> server_models::get_all_meta() {
     return result;
 }
 
-void server_models::unload_lru() {
+void server_models::unload_lru(int requesting_priority) {
     if (base_params.models_max <= 0) {
         return; // no limit
     }
     // find the best candidate for eviction using priority-aware LRU
-    // sort by: priority ascending (evict low priority first), then by last_used ascending (LRU tiebreaker)
+    // if requesting_priority > 0: only evict running models with priority < requesting_priority
+    // if requesting_priority <= 0: evict lowest priority running model (existing behavior)
     std::string candidate_name;
     int candidate_priority = INT_MAX;
     int64_t candidate_last_used = ggml_time_ms();
@@ -522,10 +537,22 @@ void server_models::unload_lru() {
                 count_active++;
                 int pri = m.second.meta.priority;
                 int64_t last_used = m.second.meta.last_used;
-                if (pri < candidate_priority || (pri == candidate_priority && last_used < candidate_last_used)) {
-                    candidate_name = m.first;
-                    candidate_priority = pri;
-                    candidate_last_used = last_used;
+                // when requesting_priority > 0: only evict if candidate priority < requesting priority
+                // when requesting_priority <= 0: evict lowest priority (existing behavior)
+                if (requesting_priority > 0) {
+                    if (pri < requesting_priority) {
+                        if (pri < candidate_priority || (pri == candidate_priority && last_used < candidate_last_used)) {
+                            candidate_name = m.first;
+                            candidate_priority = pri;
+                            candidate_last_used = last_used;
+                        }
+                    }
+                } else {
+                    if (pri < candidate_priority || (pri == candidate_priority && last_used < candidate_last_used)) {
+                        candidate_name = m.first;
+                        candidate_priority = pri;
+                        candidate_last_used = last_used;
+                    }
                 }
             }
         }
@@ -547,7 +574,8 @@ void server_models::load(const std::string & name) {
     if (!has_model(name)) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
-    unload_lru();
+    int request_priority = get_model_priority(name);
+    unload_lru(request_priority);
 
     std::lock_guard<std::mutex> lk(mutex);
 

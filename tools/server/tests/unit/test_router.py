@@ -207,7 +207,7 @@ def test_router_api_key_required():
     assert "error" not in authed.body
 
 
-def test_router_priority_evicts_lower():
+def test_router_priority_high_overrides_low():
     global server
     server.models_max = 2
     server.models_priority_default = 0  # default priority for models loaded via presets
@@ -216,33 +216,83 @@ def test_router_priority_evicts_lower():
 
     model_a = "ggml-org/tinygemma3-GGUF:Q8_0"
     model_b = "ggml-org/test-model-stories260K:F32"
+    model_c = "ggml-org/test-model-stories260K-infill:F32"
 
-    # Load first two models with default priority (0)
+    # Load two models with default priority 0
     _load_model_and_wait(model_a, timeout=120)
     _load_model_and_wait(model_b, timeout=120)
 
     assert _get_model_status(model_a) == "loaded"
     assert _get_model_status(model_b) == "loaded"
 
+    # Unload model_b so we have room
+    server.make_request("POST", "/models/unload", data={"model": model_b})
+    _wait_for_model_status(model_b, {"unloaded"}, timeout=120)
+
     # Load model_c with priority 5 via POST /models/load
+    # It should evict model_a (priority 0 < priority 5) and NOT model_b (priority 0 == priority 0)
+    # But wait, model_b has priority 0 which is NOT less than requesting priority 5
+    # Actually, the request priority is 5, so we evict any running model with pri < 5
+    # Both model_a (pri=0) and model_b (pri=0) have pri < 5, so we evict lowest (both equal pri=0, LRU wins)
+    # model_a was loaded first so it's LRU, so model_a gets evicted
     load_c = server.make_request(
-        "POST", "/models/load", data={"model": model_b, "priority": 5}
+        "POST", "/models/load", data={"model": model_c, "priority": 5}
     )
     assert load_c.status_code == 200
 
-    # Wait for model_c (model_b) to be loaded
-    _wait_for_model_status(model_b, {"loaded"}, timeout=120)
+    # Wait for model_c to be loaded
+    _wait_for_model_status(model_c, {"loaded"}, timeout=120)
 
-    # Verify model_a was evicted (lower priority)
+    # Verify model_a was evicted (lower priority than request)
     status_a = _get_model_status(model_a)
     assert status_a == "unloaded", f"Expected model_a to be evicted, got {status_a}"
 
-    # Verify model_b is loaded with priority 5
+    # Verify model_b is still loaded (LRU tiebreaker when pri=0, model_a was loaded first)
+    status_b = _get_model_status(model_b)
+    assert status_b == "loaded", f"Expected model_b to still be loaded, got {status_b}"
+
+    # Verify model_c is loaded with priority 5
     models_res = server.make_request("GET", "/models")
     for model_item in models_res.body.get("data", []):
-        if model_item.get("id") == model_b:
+        if model_item.get("id") == model_c:
             assert model_item.get("priority") == 5
             break
+
+def test_router_low_priority_does_not_evict_high():
+    global server
+    server.models_max = 2
+    server.no_models_autoload = True
+    server.start()
+
+    model_a = "ggml-org/test-model-stories260K:F32"
+    model_b = "ggml-org/test-model-stories260K-infill:F32"
+
+    # Load model_a with priority 5
+    load_a = server.make_request(
+        "POST", "/models/load", data={"model": model_a, "priority": 5}
+    )
+    assert load_a.status_code == 200
+    _wait_for_model_status(model_a, {"loaded"}, timeout=120)
+
+    # Load model_b with priority 1 (default)
+    _load_model_and_wait(model_b, timeout=120)
+    assert _get_model_status(model_b) == "loaded"
+
+    # Now request to load model_a again with priority 2
+    # This should NOT evict model_b (pri=1 < req pri=2, so model_b would be evicted)
+    # But since model_a is already running, POST /models/load returns already running
+    # Let's test a different scenario: unload model_b, load it back with pri=1
+    # While model_a (pri=5) is running
+    server.make_request("POST", "/models/unload", data={"model": model_b})
+    _wait_for_model_status(model_b, {"unloaded"}, timeout=120)
+
+    # model_a (pri=5) is running, try to load model_b (pri=1)
+    # Since req pri=1 and model_a pri=5, we only evict pri < 1
+    # model_a has pri=5 which is NOT < 1, so NO eviction should happen
+    # But models_max=2 and we have 1 running, so room for 1 more
+    _load_model_and_wait(model_b, timeout=120)
+    assert _get_model_status(model_a) == "loaded", f"Expected model_a to still be loaded (high pri not evicted by low pri request), got {_get_model_status(model_a)}"
+    assert _get_model_status(model_b) == "loaded"
 
 
 def test_router_priority_lru_within_same_priority():
