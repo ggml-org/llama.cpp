@@ -12,6 +12,7 @@
 #include "ggml-cuda/clamp.cuh"
 #include "ggml-cuda/concat.cuh"
 #include "ggml-cuda/conv-transpose-1d.cuh"
+#include "ggml-cuda/snake.cuh"
 #include "ggml-cuda/conv2d.cuh"
 #include "ggml-cuda/conv2d-dw.cuh"
 #include "ggml-cuda/conv2d-transpose.cuh"
@@ -2877,6 +2878,10 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_IM2COL_3D:
             ggml_cuda_op_im2col_3d(ctx, dst);
             break;
+            break;
+        case GGML_OP_SNAKE:
+            ggml_cuda_op_snake(ctx, dst);
+            break;
         case GGML_OP_CONV_2D:
             ggml_cuda_op_conv2d(ctx, dst);
             break;
@@ -5159,6 +5164,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_ROPE_BACK: {
             return op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && ggml_is_contiguous_2(op->src[0]);
         }
+        case GGML_OP_SNAKE:
+            return op->src[0]->type == GGML_TYPE_F32 ||
+                   op->src[0]->type == GGML_TYPE_F16 ||
+                   op->src[0]->type == GGML_TYPE_BF16;
         case GGML_OP_IM2COL:
         case GGML_OP_IM2COL_3D:
         case GGML_OP_CONV_2D:

@@ -1026,6 +1026,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "IM2COL",
     "IM2COL_BACK",
     "IM2COL_3D",
+    "SNAKE",
     "CONV_2D",
     "CONV_3D",
     "CONV_2D_DW",
@@ -1075,7 +1076,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1136,6 +1137,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "im2col(x)",
     "im2col_back(x)",
     "im2col_3d(x)",
+    "snake(x)",
     "conv_2d(x)",
     "conv_3d(x)",
     "conv_2d_dw(x)",
@@ -1185,7 +1187,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4459,6 +4461,26 @@ struct ggml_tensor * ggml_im2col_back(
     result->op     = GGML_OP_IM2COL_BACK;
     result->src[0] = a;
     result->src[1] = b;
+
+    return result;
+}
+
+// ggml_snake
+
+struct ggml_tensor * ggml_snake(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * inv_b) {
+    // x: [T, C], a: [1,C] or [C], inv_b: [1,C] or [C]
+    // output: [T, C] same shape and type as x (F32, F16, or BF16)
+    GGML_ASSERT(x->type == GGML_TYPE_F32 || x->type == GGML_TYPE_F16 || x->type == GGML_TYPE_BF16);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, x->type, GGML_MAX_DIMS, x->ne);
+
+    result->op     = GGML_OP_SNAKE;
+    result->src[0] = x;
+    result->src[1] = a;
+    result->src[2] = inv_b;
 
     return result;
 }

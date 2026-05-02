@@ -1,0 +1,44 @@
+#version 450
+
+#include "types.glsl"
+
+layout (binding = 0) readonly buffer X    {A_TYPE data_x[];};
+layout (binding = 1) readonly buffer A    {float data_a[];};
+layout (binding = 2) readonly buffer INVB {float data_inv_b[];};
+layout (binding = 3) writeonly buffer D   {D_TYPE data_d[];};
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint32_t T;
+    uint32_t C;
+} p;
+
+// Load A_TYPE to float
+float load_val(uint32_t idx) {
+#if defined(DATA_A_BF16)
+    return bf16_to_fp32(uint32_t(data_x[idx]));
+#else
+    return float(data_x[idx]);
+#endif
+}
+
+// Store float as D_TYPE
+void store_val(uint32_t idx, float v) {
+#if defined(DATA_A_BF16)
+    data_d[idx] = D_TYPE(fp32_to_bf16(v));
+#else
+    data_d[idx] = D_TYPE(v);
+#endif
+}
+
+void main() {
+    const uint32_t t = gl_GlobalInvocationID.x;
+    const uint32_t c = gl_GlobalInvocationID.y;
+    if (t >= p.T || c >= p.C) return;
+
+    const uint32_t idx = t + c * p.T;
+    const float xi = load_val(idx);
+    const float s  = sin(data_a[c] * xi);
+    store_val(idx, xi + s * s * data_inv_b[c]);
+}

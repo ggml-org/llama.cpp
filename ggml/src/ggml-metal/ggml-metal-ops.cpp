@@ -390,6 +390,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_conv_transpose_1d(ctx, idx);
             } break;
+        case GGML_OP_SNAKE:
+            {
+                n_fuse = ggml_metal_op_snake(ctx, idx);
+            } break;
         case GGML_OP_CONV_TRANSPOSE_2D:
             {
                 n_fuse = ggml_metal_op_conv_transpose_2d(ctx, idx);
@@ -3830,6 +3834,38 @@ int ggml_metal_op_conv_transpose_1d(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, OL, OC, 1, 1, 1, 1);
+
+    return 1;
+}
+
+int ggml_metal_op_snake(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * dst = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * src2 = dst->src[2];
+
+    const int T = (int)src0->ne[0];
+    const int C = (int)src0->ne[1];
+    const int total = T * C;
+
+    auto pipeline = ggml_metal_library_get_pipeline_snake(lib, dst);
+
+    ggml_metal_kargs_snake args = { T, C };
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(src0), 1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(src1), 2);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(src2), 3);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(dst),  4);
+
+    const int nth = 256;
+    const int ntg = (total + nth - 1) / nth;
+    ggml_metal_encoder_dispatch_threadgroups(enc, ntg, 1, 1, nth, 1, 1);
 
     return 1;
 }

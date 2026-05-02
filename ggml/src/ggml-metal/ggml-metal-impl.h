@@ -604,6 +604,11 @@ typedef struct {
 } ggml_metal_kargs_conv_transpose_1d;
 
 typedef struct {
+    int32_t T;
+    int32_t C;
+} ggml_metal_kargs_snake;
+
+typedef struct {
     int32_t  IC;
     int32_t  IH;
     int32_t  IW;

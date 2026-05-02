@@ -529,6 +529,7 @@ extern "C" {
         GGML_OP_IM2COL,
         GGML_OP_IM2COL_BACK,
         GGML_OP_IM2COL_3D,
+        GGML_OP_SNAKE,
         GGML_OP_CONV_2D,
         GGML_OP_CONV_3D,
         GGML_OP_CONV_2D_DW,
@@ -1995,6 +1996,14 @@ extern "C" {
         int                   d0, // dilation dimension 0
         int                   d1, // dilation dimension 1
         bool                  is_2D);
+
+    // Fused Snake activation: y = x + sin^2(a * x) * inv_b
+    // x: [T, C], a: [1, C] or [C], inv_b: [1, C] or [C]
+    GGML_API struct ggml_tensor * ggml_snake(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * inv_b);
 
     GGML_API struct ggml_tensor * ggml_conv_1d(
             struct ggml_context * ctx,
