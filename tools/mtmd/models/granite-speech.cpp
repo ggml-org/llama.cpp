@@ -14,7 +14,6 @@ ggml_cgraph * clip_graph_granite_speech::build() {
     ggml_tensor * attn_dists = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, context_size * context_size);
     ggml_set_name(attn_dists, "attn_dists");
     ggml_set_input(attn_dists);
-    ggml_build_forward_expand(gf, attn_dists);
 
     ggml_tensor * attn_mask = nullptr;
     if (remainder > 0) {
@@ -22,7 +21,6 @@ ggml_cgraph * clip_graph_granite_speech::build() {
             context_size, context_size, 1, num_blocks);
         ggml_set_name(attn_mask, "attn_mask");
         ggml_set_input(attn_mask);
-        ggml_build_forward_expand(gf, attn_mask);
     }
 
     ggml_tensor * inp = build_inp_raw(1);
