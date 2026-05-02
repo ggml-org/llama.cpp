@@ -1493,6 +1493,12 @@ static void test_msgs_oaicompat_json_conversion() {
                               "]"),
                   common_chat_msgs_to_json_oaicompat({ message_assist_call_python }).dump(2));
 
+    const auto msg_json    = message_assist_call_python.to_json_oaicompat();
+    const auto & args_json = msg_json.at("tool_calls").at(0).at("function").at("arguments");
+    assert_equals(true, args_json.is_string());
+    assert_equals(false, args_json.is_object());
+    assert_equals(std::string("{\"code\":\"print('hey')\"}"), args_json.get<std::string>());
+
     auto res = common_chat_msgs_parse_oaicompat(json::parse("[{\"role\": \"assistant\", \"tool_calls\": []}]"));
     assert_equals<size_t>(1, res.size());
     assert_equals<std::string>(res[0].role, "assistant");
@@ -1713,6 +1719,23 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_thoughts)
             .run();
 
+        tst.test(
+               "</think>\n\n"
+               "<tool_call>\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "pwd\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tools({ run_in_terminal_tool })
+            .expect_tool_calls({
+                { "run_in_terminal", R"({"command": "pwd"})", {} },
+            })
+            .run();
+
         {
             common_chat_msg user_start;
             user_start.role    = "user";
@@ -1746,6 +1769,24 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 .tools({ manage_todo_list_tool, run_in_terminal_tool })
                 .messages({ user_start, assistant_todos, tool_result, user_continue })
                 .expect_reasoning("I need to run a terminal command.")
+                .expect_tool_calls({
+                    { "run_in_terminal", R"({"command": "pwd"})", {} },
+                })
+                .run();
+
+            tst.test(
+                   "</think>\n\n"
+                   "<tool_call>\n"
+                   "<function=run_in_terminal>\n"
+                   "<parameter=command>\n"
+                   "pwd\n"
+                   "</parameter>\n"
+                   "</function>\n"
+                   "</tool_call>")
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .enable_thinking(true)
+                .tools({ manage_todo_list_tool, run_in_terminal_tool })
+                .messages({ user_start, assistant_todos, tool_result, user_continue })
                 .expect_tool_calls({
                     { "run_in_terminal", R"({"command": "pwd"})", {} },
                 })
@@ -4530,6 +4571,19 @@ static void test_msg_diffs_compute() {
         diff2.tool_call_delta.arguments = "{\"arg2\": 2}";
 
         assert_equals({ diff1, diff2 }, common_chat_msg_diff::compute_diffs(msg0, msg2));
+
+        const auto delta1       = server_chat_msg_diff_to_json_oaicompat(diff1);
+        const auto delta2       = server_chat_msg_diff_to_json_oaicompat(diff2);
+        const auto & tool_call1 = delta1.at("tool_calls").at(0);
+        const auto & tool_call2 = delta2.at("tool_calls").at(0);
+        assert_equals((size_t) 0, tool_call1.at("index").get<size_t>());
+        assert_equals((size_t) 1, tool_call2.at("index").get<size_t>());
+        assert_equals(std::string("123"), tool_call1.at("id").get<std::string>());
+        assert_equals(std::string("222"), tool_call2.at("id").get<std::string>());
+        assert_equals(true, tool_call1.at("function").at("arguments").is_string());
+        assert_equals(true, tool_call2.at("function").at("arguments").is_string());
+        assert_equals(std::string("{\"arg1\": 1}"), tool_call1.at("function").at("arguments").get<std::string>());
+        assert_equals(std::string("{\"arg2\": 2}"), tool_call2.at("function").at("arguments").get<std::string>());
     }
 }
 
