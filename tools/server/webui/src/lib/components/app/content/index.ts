@@ -29,7 +29,7 @@
  * <MarkdownContent content={message.content} attachments={message.extra} />
  * ```
  */
-export { default as MarkdownContent } from './MarkdownContent.svelte';
+export { default as MarkdownContent } from './MarkdownContent/MarkdownContent.svelte';
 
 /**
  * **SyntaxHighlightedCode** - Code syntax highlighting

@@ -2,14 +2,15 @@
 	import '../app.css';
 	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import {
-		ChatSidebar,
 		DesktopIconStrip,
-		DialogConversationTitleUpdate
+		DialogConversationTitleUpdate,
+		SidebarNavigation
 	} from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
@@ -24,6 +25,7 @@
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
+	import { conversations } from '$lib/stores/conversations.svelte';
 
 	let { children } = $props();
 
@@ -37,7 +39,6 @@
 		| { activateSearchMode?: () => void; editActiveConversation?: () => void }
 		| undefined = $state();
 
-	// Conversation title update dialog state
 	let titleUpdateDialogOpen = $state(false);
 	let titleUpdateCurrentTitle = $state('');
 	let titleUpdateNewTitle = $state('');
@@ -45,13 +46,70 @@
 
 	const panelNav = useSettingsNavigation();
 
+	function navigateToConversation(direction: -1 | 1) {
+		const allConvs = conversations();
+		if (allConvs.length === 0) return;
+
+		const currentId = page.params.id;
+
+		if (!currentId) {
+			goto(`#/chat/${allConvs[direction === 1 ? 0 : allConvs.length - 1].id}`);
+
+			return;
+		}
+
+		const idx = allConvs.findIndex((c) => c.id === currentId);
+		if (idx === -1) return;
+
+		const targetIdx = idx + direction;
+
+		if (targetIdx >= 0 && targetIdx < allConvs.length) {
+			goto(`#/chat/${allConvs[targetIdx].id}`);
+		} else {
+			goto('?new_chat=true#/');
+		}
+	}
+
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
-		editActiveConversation: () => chatSidebar?.editActiveConversation?.()
+		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
+
+		navigateToPrevConversation: () => navigateToConversation(-1),
+
+		navigateToNextConversation: () => navigateToConversation(1)
 	});
+
+	function checkApiKey() {
+		const apiKey = config().apiKey;
+
+		if (
+			(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
+			page.status !== 401 &&
+			page.status !== 403
+		) {
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json'
+			};
+
+			if (apiKey && apiKey.trim() !== '') {
+				headers.Authorization = `Bearer ${apiKey.trim()}`;
+			}
+
+			fetch(`${base}/props`, { headers })
+				.then((response) => {
+					if (response.status === 401 || response.status === 403) {
+						window.location.reload();
+					}
+				})
+				.catch((e) => {
+					console.error('Error checking API key:', e);
+				});
+		}
+	}
 
 	function handleTitleUpdateCancel() {
 		titleUpdateDialogOpen = false;
+
 		if (titleUpdateResolve) {
 			titleUpdateResolve(false);
 			titleUpdateResolve = null;
@@ -60,6 +118,7 @@
 
 	function handleTitleUpdateConfirm() {
 		titleUpdateDialogOpen = false;
+
 		if (titleUpdateResolve) {
 			titleUpdateResolve(true);
 			titleUpdateResolve = null;
@@ -135,31 +194,7 @@
 
 	// Monitor API key changes and redirect to error page if removed or changed when required
 	$effect(() => {
-		const apiKey = config().apiKey;
-
-		if (
-			(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
-			page.status !== 401 &&
-			page.status !== 403
-		) {
-			const headers: Record<string, string> = {
-				'Content-Type': 'application/json'
-			};
-
-			if (apiKey && apiKey.trim() !== '') {
-				headers.Authorization = `Bearer ${apiKey.trim()}`;
-			}
-
-			fetch(`${base}/props`, { headers })
-				.then((response) => {
-					if (response.status === 401 || response.status === 403) {
-						window.location.reload();
-					}
-				})
-				.catch((e) => {
-					console.error('Error checking API key:', e);
-				});
-		}
+		checkApiKey();
 	});
 
 	// Set up title update confirmation callback
@@ -193,7 +228,7 @@
 	<Sidebar.Provider bind:open={sidebarOpen}>
 		<div class="flex h-screen w-full" style:height="{innerHeight}px">
 			<Sidebar.Root variant="floating" class="h-full">
-				<ChatSidebar bind:this={chatSidebar} />
+				<SidebarNavigation bind:this={chatSidebar} />
 			</Sidebar.Root>
 
 			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
