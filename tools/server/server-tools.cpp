@@ -1,6 +1,8 @@
 #include "server-tools.h"
 
 #include <sheredom/subprocess.h>
+#include <cpp-httplib/httplib.h>
+#include <cstdlib>
 
 #include <filesystem>
 #include <fstream>
@@ -694,6 +696,185 @@ struct server_tool_apply_diff : server_tool {
 };
 
 //
+// web_search: query a SearXNG instance for live web results
+//
+// Enable with:  --tool web_search
+// Configure:    SEARXNG_URL=http://localhost:8888  (env var, default shown)
+//
+
+struct server_tool_web_search : server_tool {
+    std::string srv_host;
+    int         srv_port    = 80;
+    std::string srv_path_pfx;   // e.g. "/searxng" when behind a reverse proxy
+    bool        srv_use_ssl = false;
+
+    server_tool_web_search() {
+        name             = "web_search";
+        display_name     = "Web search";
+        permission_write = false;
+
+        const char * env = std::getenv("SEARXNG_URL");
+        parse_url(env ? env : "http://localhost:8888");
+    }
+
+    void parse_url(const std::string & raw) {
+        std::string s = raw;
+
+        if (s.compare(0, 8, "https://") == 0) {
+            srv_use_ssl = true;
+            srv_port    = 443;
+            s           = s.substr(8);
+        } else if (s.compare(0, 7, "http://") == 0) {
+            s = s.substr(7);
+        }
+
+        // Split off any path prefix (e.g. /searxng in http://host/searxng)
+        auto slash = s.find('/');
+        if (slash != std::string::npos) {
+            srv_path_pfx = s.substr(slash);
+            s            = s.substr(0, slash);
+        }
+
+        // Split host:port
+        auto colon = s.find(':');
+        if (colon != std::string::npos) {
+            srv_host = s.substr(0, colon);
+            try { srv_port = std::stoi(s.substr(colon + 1)); } catch (...) {}
+        } else {
+            srv_host = s;
+        }
+    }
+
+    json get_definition() override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description",
+                    "Search the web for up-to-date information. "
+                    "Use this when you need current facts, news, prices, or anything "
+                    "that may not be in your training data. "
+                    "Returns titles, URLs, and short snippets from the top results."},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"query", {
+                            {"type",        "string"},
+                            {"description", "The search query"},
+                        }},
+                        {"num_results", {
+                            {"type",        "integer"},
+                            {"description", "Number of results to return (1-10, default 5)"},
+                            {"default",     5},
+                            {"minimum",     1},
+                            {"maximum",     10},
+                        }},
+                        {"language", {
+                            {"type",        "string"},
+                            {"description", "BCP-47 language code, e.g. 'en', 'de' (default 'en')"},
+                            {"default",     "en"},
+                        }},
+                    }},
+                    {"required", json::array({"query"})},
+                }},
+            }},
+        };
+    }
+
+    json invoke(json params) override {
+        std::string query = params.at("query").get<std::string>();
+        int  n_results    = std::max(1, std::min(10, json_value(params, "num_results", 5)));
+        std::string lang  = json_value(params, "language", std::string("en"));
+
+        // Percent-encode query
+        std::string q_enc;
+        for (unsigned char c : query) {
+            if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+                q_enc += static_cast<char>(c);
+            } else {
+                char buf[4];
+                snprintf(buf, sizeof(buf), "%%%02X", c);
+                q_enc += buf;
+            }
+        }
+
+        std::string path = srv_path_pfx + "/search?q=" + q_enc
+                         + "&format=json&language=" + lang;
+
+        httplib::Headers hdrs = {{"Accept", "application/json"}};
+        httplib::Result  res;
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+        if (srv_use_ssl) {
+            httplib::SSLClient cli(srv_host, srv_port);
+            cli.set_connection_timeout(10);
+            cli.set_read_timeout(15);
+            res = cli.Get(path, hdrs);
+        } else {
+            httplib::Client cli(srv_host, srv_port);
+            cli.set_connection_timeout(10);
+            cli.set_read_timeout(15);
+            res = cli.Get(path, hdrs);
+        }
+#else
+        if (srv_use_ssl) {
+            return {{"error",
+                "HTTPS SearXNG URLs require OpenSSL. "
+                "Rebuild with OpenSSL or use an http:// URL."}};
+        }
+        httplib::Client cli(srv_host, srv_port);
+        cli.set_connection_timeout(10);
+        cli.set_read_timeout(15);
+        res = cli.Get(path, hdrs);
+#endif
+
+        if (!res) {
+            return {{"error", "SearXNG request failed: " + httplib::to_string(res.error())}};
+        }
+        if (res->status != 200) {
+            return {{"error", string_format(
+                "SearXNG returned HTTP %d "
+                "(is format=json enabled in SearXNG settings?)", res->status)}};
+        }
+
+        json data;
+        try { data = json::parse(res->body); }
+        catch (const json::exception & e) {
+            return {{"error", std::string("JSON parse error: ") + e.what()}};
+        }
+
+        auto raw = data.value("results", json::array());
+        std::ostringstream out;
+        out << "Search: \"" << query << "\"\n\n";
+
+        int shown = 0;
+        for (const auto & r : raw) {
+            if (shown >= n_results) break;
+            std::string title   = r.value("title",   "");
+            std::string url_s   = r.value("url",     "");
+            std::string snippet = r.value("content", "");
+
+            if (snippet.size() > 400) {
+                snippet = snippet.substr(0, 400) + "...";
+            }
+
+            out << ++shown << ". " << title << "\n"
+                << "   " << url_s << "\n";
+            if (!snippet.empty()) {
+                out << "   " << snippet << "\n";
+            }
+            out << "\n";
+        }
+
+        if (shown == 0) {
+            out << "(no results)\n";
+        }
+
+        return {{"plain_text_response", out.str()}};
+    }
+};
+
+//
 // public API
 //
 
@@ -706,6 +887,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_write_file>());
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_apply_diff>());
+    tools.push_back(std::make_unique<server_tool_web_search>());
     return tools;
 }
 
