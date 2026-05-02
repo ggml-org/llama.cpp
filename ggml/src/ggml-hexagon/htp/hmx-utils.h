@@ -17,9 +17,9 @@
 
 // Initialise aligned 256-byte area with scale vector + zero padding.
 static inline void hmx_init_column_scales(void *out_scales, HVX_Vector v_scale) {
-    HVX_Vector *pv = (HVX_Vector *)out_scales;
-    *pv++ = v_scale;
-    *pv   = Q6_V_vzero();
+    volatile HVX_Vector *pv = (HVX_Vector *) out_scales;
+    pv[0] = v_scale;
+    pv[1] = Q6_V_vzero();
 }
 
 // --- Shared scatter offsets and interleave helper ---
