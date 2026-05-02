@@ -52,7 +52,8 @@ ggml_cgraph * clip_graph_granite_speech::build() {
             cb(residual, "ffn1_residual", il);
         }
 
-        // self-attention with Shaw RPE
+        // build_attn not used here: Shaw RPE needs pos_attn = mul_mat(pos_emb, Q)
+        // injected between KQ product and softmax, which build_attn doesn't support
         {
             auto * normed = build_norm(residual, layer.ln_1_w, layer.ln_1_b,
                                        NORM_TYPE_NORMAL, eps, il);
