@@ -667,7 +667,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(__fp16 * restrict vtcm_dst
         unsigned t = start_tile;
 
         // start_tile may be in the middle of a 4-tile group, so process the first few tiles with the single-tile code until we reach a group boundary.
-        for (const unsigned end = hex_align_up(start_tile, 4); t < end; ++t, ++kt){
+        for (const unsigned end = MIN(end_tile, hex_align_up(start_tile, 4)); t < end; ++t, ++kt){
             // --- Single-tile fallback ---
             if (is_q4) {
                 dequantize_weight_q4_to_fp16_cx2(vtcm_dst, vtcm_src, t, kt, ct, n_cols, qrow_size, row_stride, vlut_cvt,
