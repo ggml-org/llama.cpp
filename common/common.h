@@ -628,8 +628,9 @@ struct common_params {
     // router server configs
     std::string models_dir    = ""; // directory containing models for the router server
     std::string models_preset = ""; // directory containing model presets for the router server
-    int models_max = 4;             // maximum number of models to load simultaneously
-    bool models_autoload = true;    // automatically load models when requested via the router server
+    int models_max = 4;                   // maximum number of models to load simultaneously
+    bool models_autoload = true;          // automatically load models when requested via the router server
+    int models_priority_default = 0;      // default priority for model instances (higher = more important for eviction)
 
     bool log_json = false;
 

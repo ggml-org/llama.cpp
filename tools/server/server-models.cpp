@@ -234,6 +234,14 @@ void server_models::add_model(server_model_meta && meta) {
         }
     }
 
+    // extract priority from preset, defaulting to base_params
+    std::string priority_str;
+    if (meta.preset.get_option("__PRESET_PRIORITY", priority_str)) {
+        meta.priority = std::stoi(priority_str);
+    } else {
+        meta.priority = base_params.models_priority_default;
+    }
+
     meta.update_args(ctx_preset, bin_path); // render args
     std::string name = meta.name;
     mapping[name] = instance_t{
@@ -501,30 +509,35 @@ void server_models::unload_lru() {
     if (base_params.models_max <= 0) {
         return; // no limit
     }
-    // remove one of the servers if we passed the models_max (least recently used - LRU)
-    std::string lru_model_name = "";
-    int64_t lru_last_used = ggml_time_ms();
+    // find the best candidate for eviction using priority-aware LRU
+    // sort by: priority ascending (evict low priority first), then by last_used ascending (LRU tiebreaker)
+    std::string candidate_name;
+    int candidate_priority = INT_MAX;
+    int64_t candidate_last_used = ggml_time_ms();
     size_t count_active = 0;
     {
         std::unique_lock<std::mutex> lk(mutex);
         for (const auto & m : mapping) {
             if (m.second.meta.is_running()) {
                 count_active++;
-                if (m.second.meta.last_used < lru_last_used) {
-                    lru_model_name = m.first;
-                    lru_last_used = m.second.meta.last_used;
+                int pri = m.second.meta.priority;
+                int64_t last_used = m.second.meta.last_used;
+                if (pri < candidate_priority || (pri == candidate_priority && last_used < candidate_last_used)) {
+                    candidate_name = m.first;
+                    candidate_priority = pri;
+                    candidate_last_used = last_used;
                 }
             }
         }
     }
-    if (!lru_model_name.empty() && count_active >= (size_t)base_params.models_max) {
-        SRV_INF("models_max limit reached, removing LRU name=%s\n", lru_model_name.c_str());
-        unload(lru_model_name);
+    if (!candidate_name.empty() && count_active >= (size_t)base_params.models_max) {
+        SRV_INF("models_max limit reached, removing candidate name=%s priority=%d (LRU eviction with priority)\n", candidate_name.c_str(), candidate_priority);
+        unload(candidate_name);
         // wait for unload to complete
         {
             std::unique_lock<std::mutex> lk(mutex);
-            cv.wait(lk, [this, &lru_model_name]() {
-                return mapping[lru_model_name].meta.status == SERVER_MODEL_STATUS_UNLOADED;
+            cv.wait(lk, [this, &candidate_name]() {
+                return mapping[candidate_name].meta.status == SERVER_MODEL_STATUS_UNLOADED;
             });
         }
     }
@@ -760,6 +773,14 @@ void server_models::update_status(const std::string & name, server_model_status 
     cv.notify_all();
 }
 
+void server_models::update_priority(const std::string & name, int priority) {
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        it->second.meta.priority = priority;
+    }
+}
+
 void server_models::wait_until_loading_finished(const std::string & name) {
     std::unique_lock<std::mutex> lk(mutex);
     cv.wait(lk, [this, &name]() {
@@ -937,6 +958,7 @@ void server_models_routes::init_routes() {
                 {"role",          "router"},
                 {"max_instances", params.models_max},
                 {"models_autoload", params.models_autoload},
+                {"default_priority", params.models_priority_default},
                 // this is a dummy response to make sure webui doesn't break
                 {"model_alias", "llama-server"},
                 {"model_path",  "none"},
@@ -979,6 +1001,7 @@ void server_models_routes::init_routes() {
         auto res = std::make_unique<server_http_res>();
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
+        int priority = json_value(body, "priority", json_value(body, "pri", 0));
         auto meta = models.get_meta(name);
         if (!meta.has_value()) {
             res_err(res, format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
@@ -987,6 +1010,11 @@ void server_models_routes::init_routes() {
         if (meta->is_running()) {
             res_err(res, format_error_response("model is already running", ERROR_TYPE_INVALID_REQUEST));
             return res;
+        }
+        // update model priority if specified in the request
+        if (priority != 0 || meta->priority != 0) {
+            int actual_priority = priority != 0 ? priority : meta->priority;
+            models.update_priority(name, actual_priority);
         }
         models.load(meta->name);
         res_ok(res, {{"success", true}});
@@ -1020,6 +1048,7 @@ void server_models_routes::init_routes() {
                 {"id",       meta.name},
                 {"aliases",  meta.aliases},
                 {"tags",     meta.tags},
+                {"priority", meta.priority},
                 {"object",   "model"},    // for OAI-compat
                 {"owned_by", "llamacpp"}, // for OAI-compat
                 {"created",  t},          // for OAI-compat

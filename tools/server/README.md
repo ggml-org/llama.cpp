@@ -1516,6 +1516,34 @@ llama-server -ctx 8192 -n 1024 -np 2
 
 Note: model instances inherit both command line arguments and environment variables from the router server.
 
+#### Priority-based eviction
+
+When `models_max` is reached, the router uses priority-aware LRU eviction:
+- Models with **lower priority** are evicted first
+- Within the same priority level, the **least recently used** model is evicted
+
+You can set a default priority for all models with `--models-priority-default N`, or set individual model priorities in presets:
+
+```ini
+[*]
+priority = 1
+
+[high_priority_model]
+model = /path/to/model.gguf
+priority = 10
+```
+
+Alternatively, you can override priority per-load via the `POST /models/load` API:
+
+```json
+{
+  "model": "my-model",
+  "priority": 10
+}
+```
+
+The priority can also be retrieved from `GET /props` (field `default_priority`) and `GET /models` (field `priority` on each model).
+
 Alternatively, you can also add GGUF based preset (see next section)
 
 ### Model presets

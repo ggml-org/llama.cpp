@@ -205,3 +205,104 @@ def test_router_api_key_required():
     )
     assert authed.status_code == 200
     assert "error" not in authed.body
+
+
+def test_router_priority_evicts_lower():
+    global server
+    server.models_max = 2
+    server.models_priority_default = 0  # default priority for models loaded via presets
+    server.no_models_autoload = True
+    server.start()
+
+    model_a = "ggml-org/tinygemma3-GGUF:Q8_0"
+    model_b = "ggml-org/test-model-stories260K:F32"
+
+    # Load first two models with default priority (0)
+    _load_model_and_wait(model_a, timeout=120)
+    _load_model_and_wait(model_b, timeout=120)
+
+    assert _get_model_status(model_a) == "loaded"
+    assert _get_model_status(model_b) == "loaded"
+
+    # Load model_c with priority 5 via POST /models/load
+    load_c = server.make_request(
+        "POST", "/models/load", data={"model": model_b, "priority": 5}
+    )
+    assert load_c.status_code == 200
+
+    # Wait for model_c (model_b) to be loaded
+    _wait_for_model_status(model_b, {"loaded"}, timeout=120)
+
+    # Verify model_a was evicted (lower priority)
+    status_a = _get_model_status(model_a)
+    assert status_a == "unloaded", f"Expected model_a to be evicted, got {status_a}"
+
+    # Verify model_b is loaded with priority 5
+    models_res = server.make_request("GET", "/models")
+    for model_item in models_res.body.get("data", []):
+        if model_item.get("id") == model_b:
+            assert model_item.get("priority") == 5
+            break
+
+
+def test_router_priority_lru_within_same_priority():
+    global server
+    server.models_max = 2
+    server.no_models_autoload = True
+    server.start()
+
+    model_a = "ggml-org/tinygemma3-GGUF:Q8_0"
+    model_b = "ggml-org/test-model-stories260K:F32"
+    model_c = "ggml-org/test-model-stories260K-infill:F32"
+
+    # Load first two models (default priority 0)
+    _load_model_and_wait(model_a, timeout=120)
+    _load_model_and_wait(model_b, timeout=120)
+
+    assert _get_model_status(model_a) == "loaded"
+    assert _get_model_status(model_b) == "loaded"
+
+    # Load model_c with same priority (default 0) - should evict LRU (model_a)
+    _load_model_and_wait(model_c, timeout=120)
+
+    # model_a should be evicted (LRU among same priority)
+    assert _get_model_status(model_a) == "unloaded"
+    assert _get_model_status(model_b) == "loaded"
+    assert _get_model_status(model_c) == "loaded"
+
+
+def test_router_priority_default_in_props():
+    global server
+    server.models_max = 4
+    server.models_priority_default = 3
+    server.no_models_autoload = True
+    server.start()
+
+    res = server.make_request("GET", "/props")
+    assert res.status_code == 200
+    assert res.body.get("default_priority") == 3
+
+
+def test_router_models_load_with_priority_field():
+    global server
+    server.models_max = 2
+    server.no_models_autoload = True
+    server.start()
+
+    model_a = "ggml-org/tinygemma3-GGUF:Q8_0"
+    model_b = "ggml-org/test-model-stories260K:F32"
+
+    _load_model_and_wait(model_a, timeout=120)
+    _load_model_and_wait(model_b, timeout=120)
+
+    # Verify both are loaded
+    assert _get_model_status(model_a) == "loaded"
+    assert _get_model_status(model_b) == "loaded"
+
+    # Try to load model_b again with priority 10 via /models/load
+    load_res = server.make_request(
+        "POST", "/models/load", data={"model": model_b, "priority": 10}
+    )
+    # Model is already running, should get error
+    assert load_res.status_code == 200
+    assert load_res.body.get("success") is True

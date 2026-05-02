@@ -86,6 +86,7 @@ class ServerProcess:
     api_key: str | None = None
     models_dir: str | None = None
     models_max: int | None = None
+    models_priority_default: int | None = None
     no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
     enable_ctx_shift: int | None = False
@@ -156,6 +157,8 @@ class ServerProcess:
             server_args.extend(["--models-dir", self.models_dir])
         if self.models_max is not None:
             server_args.extend(["--models-max", self.models_max])
+        if self.models_priority_default is not None:
+            server_args.extend(["--models-priority-default", self.models_priority_default])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:

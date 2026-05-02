@@ -65,6 +65,7 @@ struct server_model_meta {
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
+    int priority = 0;   // model priority for preemptive eviction (higher = more important)
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -137,6 +138,9 @@ public:
 
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
+
+    // update the priority of a model instance (thread-safe)
+    void update_priority(const std::string & name, int priority);
 
     // wait until the model instance is fully loaded (thread-safe)
     // return when the model no longer in "loading" state
