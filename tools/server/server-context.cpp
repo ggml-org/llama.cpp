@@ -1317,7 +1317,7 @@ private:
                 return false;
             }
 
-            const bool need_logits = task.params.sampling.n_probs > 0;
+            const bool need_pre_sample_logits = task.params.sampling.n_probs > 0 && !task.params.post_sampling_probs;
 
             bool backend_sampling = true;
 
@@ -1326,8 +1326,8 @@ private:
             // TODO: speculative decoding requires multiple samples per batch - not supported yet
             backend_sampling &= !(slot.can_speculate() && common_speculative_n_max(slot.spec.get(), task.params.speculative) > 0);
 
-            // TODO: getting post/pre sampling logits is not yet supported with backend sampling
-            backend_sampling &= !need_logits;
+            // TODO: getting pre sampling logits is not yet supported with backend sampling
+            backend_sampling &= !need_pre_sample_logits;
 
             // TODO: tmp until backend sampling is fully implemented
             if (backend_sampling) {

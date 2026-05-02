@@ -524,6 +524,49 @@ def test_n_probs_post_sampling():
             # if the ones we did get already sum to 1.0.
             assert sum(p["prob"] for p in tok["top_probs"]) == pytest.approx(1.0)
 
+def test_n_probs_post_backend_sampling():
+    """Verify that the same probabilities are returned with and without backend sampling."""
+    global server
+    server.backend_sampling = True
+    server.start()
+
+    def make_request(backend_sampling):
+        n_predict = 20
+
+        res = server.make_request("POST", "/completion", data={
+            "prompt": "The countries of Europe, in random order, are:",
+            "n_probs": 10,
+            "n_predict": n_predict,
+            "post_sampling_probs": True,
+            "seed": 4242,
+            "backend_sampling": backend_sampling,
+        })
+        assert res.status_code == 200
+
+        total_probs = 0
+        completions = res.body["completion_probabilities"]
+        assert len(completions) == n_predict
+        for tok in completions:
+            # Handling of 0.0 probabilities differs between samplers and backend sampling. Filter them to normalize the
+            # data.
+            tok["top_probs"] = [x for x in tok["top_probs"] if x["prob"] > 0.0]
+            total_probs += len(tok["top_probs"])
+        # Verify that we got at least two top probs on average, to ensure the effectiveness of the test.
+        assert total_probs >= 2 * n_predict
+        return completions
+
+    def verify_token(a, b):
+        assert a["id"] == b["id"]
+        assert a["token"] == b["token"]
+        assert a["bytes"] == b["bytes"]
+        assert a["prob"] == pytest.approx(b["prob"], abs=0.01)
+
+    for (a, b) in zip(make_request(True), make_request(False)):
+        verify_token(a, b)
+        assert len(a["top_probs"]) == len(b["top_probs"])
+
+        for (aa, bb) in zip(a["top_probs"], b["top_probs"]):
+            verify_token(aa, bb)
 
 @pytest.mark.parametrize("tokenize,openai_style", [(False, False), (False, True), (True, False), (True, True)])
 def test_logit_bias(tokenize, openai_style):

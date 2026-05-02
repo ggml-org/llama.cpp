@@ -108,6 +108,7 @@ class ServerProcess:
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     webui_mcp_proxy: bool = False
+    backend_sampling: bool = False
     gcp_compat: bool = False
 
     # session variables
@@ -252,6 +253,8 @@ class ServerProcess:
             server_args.append("--no-cache-idle-slots")
         if self.webui_mcp_proxy:
             server_args.append("--webui-mcp-proxy")
+        if self.backend_sampling:
+            server_args.append("--backend_sampling")
         if self.gcp_compat:
             env["AIP_MODE"] = "PREDICTION"
 
