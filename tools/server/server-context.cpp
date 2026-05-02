@@ -868,10 +868,11 @@ private:
 
         const int n_ctx_train = llama_model_n_ctx_train(model);
 
-        int n_ctx_slot = llama_n_ctx_seq(ctx);
+        const int n_ctx_slot = llama_n_ctx_seq(ctx);
         if (n_ctx_slot > n_ctx_train) {
-            SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n", n_ctx_slot, n_ctx_train);
-            n_ctx_slot = n_ctx_train;
+            SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - "
+                    "generation quality may degrade beyond the training context unless RoPE scaling is configured\n",
+                    n_ctx_slot, n_ctx_train);
         }
 
         slots.clear();
