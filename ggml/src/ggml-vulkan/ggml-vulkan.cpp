@@ -9813,14 +9813,10 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_conv_transpose_1d_f32;
         }
         return nullptr;
-        switch (src0->type) {
-        }
     case GGML_OP_SNAKE:
-        switch (src0->type) {
-            case GGML_TYPE_F16:  return ctx->device->pipeline_snake_f16;
-            case GGML_TYPE_BF16: return ctx->device->pipeline_snake_bf16;
-            default:             return ctx->device->pipeline_snake_f32;
-        }
+        if (src0->type == GGML_TYPE_F16)  return ctx->device->pipeline_snake_f16;
+        if (src0->type == GGML_TYPE_BF16) return ctx->device->pipeline_snake_bf16;
+        return ctx->device->pipeline_snake_f32;
     case GGML_OP_POOL_2D:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_pool2d_f32;
