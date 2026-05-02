@@ -109,16 +109,23 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data(
         ret.back().total = total;
     }
     for (size_t i = 0; i < nd; i++) {
+        ggml_backend_dev_t dev = llama_model_get_device(model, i);
+
         size_t free;
         size_t total;
-        ggml_backend_dev_memory(llama_model_get_device(model, i), &free, &total);
+        ggml_backend_dev_memory(dev, &free, &total);
 
-        // Devices can return 0 bytes for free and total memory if they do not
-        // have any memory budget to report. Treat this as unknown for --fit
-        // instead of using the host-memory budget as a device budget.
+        // Some accelerator backends, such as BLAS, report 0/0 and rely on the
+        // host-memory fallback. For GPU-like backends, however, 0/0 means --fit
+        // has no reliable device budget.
         if (free == 0 && total == 0) {
-            throw common_params_fit_exception(std::string("device ") + ggml_backend_dev_name(llama_model_get_device(model, i))
-                + " did not report memory; cannot safely fit to an unknown device budget");
+            const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+            if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                throw common_params_fit_exception(std::string("device ") + ggml_backend_dev_name(dev)
+                    + " did not report memory; cannot safely fit to an unknown device budget");
+            }
+            free  = ret.back().free;
+            total = ret.back().total;
         }
         ret[i].free  = free;
         ret[i].total = total;
