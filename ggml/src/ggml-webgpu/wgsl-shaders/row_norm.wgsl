@@ -18,6 +18,7 @@ struct Params {
     offset_src: u32, // in elements
     offset_dst: u32, // in elements
 
+    // Strides (in elements)
     stride_src1: u32,
     stride_src2: u32,
     stride_src3: u32,
@@ -67,7 +68,6 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     let elems = (params.ne0 + WG_SIZE - 1) / WG_SIZE;
 
     var sum = 0.0f;
-    var cum_sum = 0.0f;
     var col = lid.x;
     for (var j: u32 = 0; j < elems; j++) {
         if (col >= params.ne0) {
@@ -75,28 +75,20 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         }
         let v = f32(src[i_src_row + col]);
 #ifdef NORM
-        let val = v;
+        sum += v;
 #else
-        let val = v * v;
+        sum += v * v;
 #endif
-        let y = val - cum_sum;
-        let t = sum + y;
-        cum_sum = (t - sum) - y;
-        sum = t;
         col += WG_SIZE;
     }
 
     scratch[lid.x] = sum;
-    scratch[lid.x + WG_SIZE] = cum_sum;
     workgroupBarrier();
 
     var offset: u32 = WG_SIZE / 2u;
     while (offset > 0) {
         if (lid.x < offset) {
-            let y = scratch[lid.x + offset] - (scratch[lid.x + WG_SIZE] + scratch[lid.x + WG_SIZE + offset]);
-            let t = scratch[lid.x] + y;
-            scratch[lid.x + offset] = (t - scratch[lid.x]) - y;
-            scratch[lid.x] = t;
+            scratch[lid.x] += scratch[lid.x + offset];
         }
         offset /= 2u;
         workgroupBarrier();
@@ -106,7 +98,6 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
 #ifdef NORM
     let mean = sum / f32(params.ne0);
     var sq_sum = 0.0f;
-    var cum_sq_sum = 0.0f;
     col = lid.x;
     for (var j: u32 = 0; j < elems; j++) {
         if (col >= params.ne0) {
@@ -114,24 +105,17 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         }
         let v = f32(src[i_src_row + col]);
         let d = v - mean;
-        let val = d * d;
-        let y = val - cum_sq_sum;
-        let t = sq_sum + y;
-        cum_sq_sum = (t - sq_sum) - y;
-        sq_sum = t;
+        sq_sum += d * d;
         col += WG_SIZE;
     }
 
+    workgroupBarrier();
     scratch[lid.x] = sq_sum;
-    scratch[lid.x + WG_SIZE] = cum_sq_sum;
     workgroupBarrier();
     offset = WG_SIZE / 2u;
     while (offset > 0) {
         if (lid.x < offset) {
-            let y = scratch[lid.x + offset] - (scratch[lid.x + WG_SIZE] + scratch[lid.x + WG_SIZE + offset]);
-            let t = scratch[lid.x] + y;
-            scratch[lid.x + WG_SIZE] = (t - scratch[lid.x]) - y;
-            scratch[lid.x] = t;
+            scratch[lid.x] += scratch[lid.x + offset];
         }
         offset /= 2u;
         workgroupBarrier();
