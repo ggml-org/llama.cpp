@@ -830,6 +830,11 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
             const std::string tensor_name(tensor->name);
             for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
                 if (std::regex_search(tensor_name, pattern)) {
+                    // The user explicitly specified a type for this tensor;
+                    // honor it and skip the auto-upgrade rules below, even if
+                    // the chosen type happens to equal the ftype default.
+                    // Otherwise rules like the n_gqa>=4 attn_v upgrade would
+                    // silently flip the user's choice.
                     if (qtype != new_type) {
                         LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
                                        __func__, tensor_name.c_str(), ggml_type_name(new_type), ggml_type_name(qtype));
