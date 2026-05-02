@@ -524,8 +524,8 @@ void server_models::unload_lru(int requesting_priority) {
         return; // no limit
     }
     // find the best candidate for eviction using priority-aware LRU
-    // if requesting_priority > 0: only evict running models with priority < requesting_priority
-    // if requesting_priority <= 0: evict lowest priority running model (existing behavior)
+    // sleeping models are always eligible for eviction (they don't serve requests)
+    // loaded/loading models are only evicted when below requesting_priority
     std::string candidate_name;
     int candidate_priority = INT_MAX;
     int64_t candidate_last_used = ggml_time_ms();
@@ -533,7 +533,7 @@ void server_models::unload_lru(int requesting_priority) {
     {
         std::unique_lock<std::mutex> lk(mutex);
         for (const auto & m : mapping) {
-            if (m.second.meta.is_running()) {
+            if (m.second.meta.status == SERVER_MODEL_STATUS_LOADED || m.second.meta.status == SERVER_MODEL_STATUS_LOADING) {
                 count_active++;
                 int pri = m.second.meta.priority;
                 int64_t last_used = m.second.meta.last_used;
@@ -553,6 +553,16 @@ void server_models::unload_lru(int requesting_priority) {
                         candidate_priority = pri;
                         candidate_last_used = last_used;
                     }
+                }
+            }
+            // sleeping models: always evictable, regardless of requesting_priority
+            else if (m.second.meta.status == SERVER_MODEL_STATUS_SLEEPING) {
+                int pri = m.second.meta.priority;
+                int64_t last_used = m.second.meta.last_used;
+                if (pri < candidate_priority || (pri == candidate_priority && last_used < candidate_last_used)) {
+                    candidate_name = m.first;
+                    candidate_priority = pri;
+                    candidate_last_used = last_used;
                 }
             }
         }
