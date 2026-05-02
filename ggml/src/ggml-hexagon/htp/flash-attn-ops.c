@@ -17,13 +17,14 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-ops.h"
+#include "hmx-ops.h"
 
 // Must be multiple of 32
 #define FLASH_ATTN_BLOCK_SIZE (32 * 2)
 
 // This is a bit of a hack because the compiler is strugling to properly inline
 // the default hvx_vec_f32_to_f16 with output into the local array.
-static void __attribute__((noinline)) hvx_vec_f32_to_f16_a(void *ptr, HVX_Vector v0, HVX_Vector v1)
+static __attribute__((noinline)) void hvx_vec_f32_to_f16_a(void *ptr, HVX_Vector v0, HVX_Vector v1)
 {
     *(HVX_Vector *) ptr = hvx_vec_f32_to_f16(v0, v1);
 }
@@ -620,6 +621,17 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
     if ((q->type != HTP_TYPE_F16 && q->type != HTP_TYPE_F32) || k->type != HTP_TYPE_F16 || v->type != HTP_TYPE_F16) {
         return HTP_STATUS_NO_SUPPORT;
     }
+
+#ifdef HTP_HAS_HMX
+    // HMX path: prefill (neq1 >= 32), head_dim multiple of 32, F16 KV
+    if (k->type == HTP_TYPE_F16 && v->type == HTP_TYPE_F16 && k->ne[0] % 32 == 0 && q->ne[1] >= 32) {
+        int ret = hmx_flash_attn_ext(octx);
+        if (ret == HTP_STATUS_OK) {
+            return ret;
+        }
+        // VTCM too small or other failure -> fall through to HVX path
+    }
+#endif
 
     struct htp_fa_context factx;
     factx.octx = octx;

@@ -138,15 +138,15 @@ set(CMAKE_SHARED_LIBRARY_SONAME_C_FLAG   "-Wl,-soname,")
 set(CMAKE_SHARED_LIBRARY_SONAME_CXX_FLAG "-Wl,-soname,")
 
 #Compiler Options
-set(COMMON_FLAGS "-mcpu=hexagon${V_ARCH} -m${V_ARCH} -mhvx=${V_ARCH} -fvectorize -Wall -Werror -fno-zero-initialized-in-bss -G0 -fdata-sections -fpic ${XQF_ARGS}")
+set(COMMON_FLAGS "-mcpu=hexagon${V_ARCH} -m${V_ARCH} -mhvx=${V_ARCH} -fvectorize -flto -Wall -Werror -fno-zero-initialized-in-bss -G0 -fdata-sections -fpic ${XQF_ARGS}")
 
 set(CMAKE_CXX_FLAGS_DEBUG          "${COMMON_FLAGS} -O0 -D_DEBUG -g")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${COMMON_FLAGS} -O3 -g")
-set(CMAKE_CXX_FLAGS_RELEASE        "${COMMON_FLAGS} -O3")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${COMMON_FLAGS} -O2 -g")
+set(CMAKE_CXX_FLAGS_RELEASE        "${COMMON_FLAGS} -O2")
 
 set(CMAKE_C_FLAGS_DEBUG            "${COMMON_FLAGS} -O0 -D_DEBUG -g")
-set(CMAKE_C_FLAGS_RELWITHDEBINFO   "${COMMON_FLAGS} -O3 -g")
-set(CMAKE_C_FLAGS_RELEASE          "${COMMON_FLAGS} -O3")
+set(CMAKE_C_FLAGS_RELWITHDEBINFO   "${COMMON_FLAGS} -O2 -g")
+set(CMAKE_C_FLAGS_RELEASE          "${COMMON_FLAGS} -O2")
 
 set(CMAKE_ASM_FLAGS_DEBUG          "${COMMON_FLAGS} ${CMAKE_CXX_FLAGS_DEBUG}")
 set(CMAKE_ASM_FLAGS_RELEASE        "${COMMON_FLAGS} ${CMAKE_CXX_FLAGS_RELEASE}")

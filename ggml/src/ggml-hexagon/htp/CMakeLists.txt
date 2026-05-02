@@ -44,6 +44,11 @@ target_compile_definitions(${HTP_LIB} PRIVATE
     $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>
     FP32_QUANTIZE_GROUP_SIZE=${GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE})
 
+if (GGML_HEXAGON_FA_EXP2_HF)
+    message(STATUS "ggml-htp: HMX_FA_USE_EXP2_HF=1 (use FP16 exp2 polynomial in FA softmax)")
+    target_compile_definitions(${HTP_LIB} PRIVATE HMX_FA_USE_EXP2_HF=1)
+endif()
+
 # HMX acceleration: available on v73+ architectures
 set(HTP_HMX_VERSIONS v73 v75 v79 v81)
 list(FIND HTP_HMX_VERSIONS ${DSP_VERSION} _hmx_idx)
@@ -52,11 +57,13 @@ if (_hmx_idx GREATER_EQUAL 0)
     target_sources(${HTP_LIB} PRIVATE
         hmx-queue.c
         hmx-matmul-ops.c
+        hmx-flash-attn-ops.c
     )
 
     # -mhmx enables HMX instruction set (needed by files that include hmx-utils.h)
     set_source_files_properties(
         hmx-matmul-ops.c
+        hmx-flash-attn-ops.c
         PROPERTIES COMPILE_OPTIONS "-mhmx"
     )
 
