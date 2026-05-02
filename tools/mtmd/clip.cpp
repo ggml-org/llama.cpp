@@ -1094,7 +1094,7 @@ struct clip_model_loader {
             get_u32(string_format(KEY_N_FF,           prefix), hparams.n_ff);
             get_u32(string_format(KEY_N_BLOCK,        prefix), hparams.n_layer);
             get_u32(string_format(KEY_PROJ_DIM,       prefix), hparams.projection_dim);
-            get_f32(string_format(KEY_LAYER_NORM_EPS, prefix), hparams.eps, false);
+            get_f32(string_format(KEY_LAYER_NORM_EPS, prefix), hparams.eps);
 
             if (is_vision) {
                 get_u32(KEY_IMAGE_SIZE, hparams.image_size);

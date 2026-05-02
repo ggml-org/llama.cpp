@@ -12610,6 +12610,7 @@ class GraniteSpeechMmprojModel(MmprojModel):
 
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE_SPEECH)
         self.gguf_writer.add_audio_num_mel_bins(a["input_dim"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
         self.gguf_writer.add_audio_chunk_size(a["context_size"])
         self.gguf_writer.add_audio_conv_kernel_size(a["conv_kernel_size"])
         self.gguf_writer.add_audio_max_pos_emb(a["max_pos_emb"])
