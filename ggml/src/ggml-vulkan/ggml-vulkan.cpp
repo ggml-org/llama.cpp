@@ -109,6 +109,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define GGML_VK_MAX_NODES 8192
 
 static constexpr size_t GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT = 512 * 1024;
+static constexpr size_t GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT = 256 * 1024;
 
 #define VK_CHECK(err, msg)                                          \
     do {                                                            \
@@ -6780,11 +6781,49 @@ static size_t ggml_vk_uma_non_cached_direct_read_threshold() {
     return threshold;
 }
 
+static size_t ggml_vk_uma_non_cached_direct_write_threshold() {
+    static const size_t threshold = []() {
+        const char * threshold_env = getenv("GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD");
+        if (threshold_env == nullptr || threshold_env[0] == '\0') {
+            return GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT;
+        }
+
+        char * end = nullptr;
+        errno = 0;
+        const unsigned long long parsed = strtoull(threshold_env, &end, 10);
+        if (errno != 0 || end == threshold_env || *end != '\0') {
+            GGML_LOG_WARN("ggml_vulkan: invalid GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD='%s', using default %zu\n",
+                threshold_env,
+                GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT);
+            return GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT;
+        }
+
+        if (parsed > std::numeric_limits<size_t>::max()) {
+            GGML_LOG_WARN("ggml_vulkan: GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD='%s' exceeds size_t max (%zu), using default %zu\n",
+                threshold_env,
+                std::numeric_limits<size_t>::max(),
+                GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT);
+            return GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT;
+        }
+
+        return (size_t) parsed;
+    }();
+
+    return threshold;
+}
+
 static bool ggml_vk_use_uma_direct_read(vk_buffer & src, size_t copy_size) {
     GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
     const bool host_cached = (src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) != vk::MemoryPropertyFlags{};
     return host_cached || copy_size > ggml_vk_uma_non_cached_direct_read_threshold();
+}
+
+static bool ggml_vk_use_uma_direct_write(const vk_buffer & dst, size_t copy_size) {
+    GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    const bool host_cached = (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) != vk::MemoryPropertyFlags{};
+    return host_cached || copy_size > ggml_vk_uma_non_cached_direct_write_threshold();
 }
 
 static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_context& subctx, vk_buffer& dst, size_t offset, const ggml_tensor * tensor, bool sync_staging = false) {
@@ -6889,14 +6928,16 @@ static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, siz
 
     if (dst->device->uma && (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
         GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
-        if (width == spitch) {
-            deferred_memcpy((uint8_t *) dst->ptr + offset, src, width * height, &subctx->in_memcpys);
-        } else {
-            for (size_t i = 0; i < height; i++) {
-                deferred_memcpy((uint8_t *) dst->ptr + offset + i * width, (const uint8_t *) src + i * spitch, width, &subctx->in_memcpys);
+        if (ggml_vk_use_uma_direct_write(dst, width * height)) {
+            if (width == spitch) {
+                deferred_memcpy((uint8_t *) dst->ptr + offset, src, width * height, &subctx->in_memcpys);
+            } else {
+                for (size_t i = 0; i < height; i++) {
+                    deferred_memcpy((uint8_t *) dst->ptr + offset + i * width, (const uint8_t *) src + i * spitch, width, &subctx->in_memcpys);
+                }
             }
+            return true;
         }
-        return true;
     }
 
     // Check if src is pinned memory
