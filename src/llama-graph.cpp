@@ -65,7 +65,7 @@ static ggml_tensor * ggml_mul_mat_aux(
 
     ggml_tensor * res;
 
-    res = ggml_reshape_2d(ctx, cur, n, ggml_nelements(cur)/n);
+    res = ggml_cont_2d   (ctx, cur, n, ggml_nelements(cur)/n);
     res = ggml_mul_mat   (ctx, rot, res);
     res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
 
