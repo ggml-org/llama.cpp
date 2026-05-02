@@ -132,14 +132,17 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
         return p.eps();
     }
 
+    auto end_trimmed = trim_whitespace(end);
+    auto start_trimmed = trim_whitespace(start);
+
     if (mode == reasoning_mode::TAG_BASED || mode == reasoning_mode::TOOLS_ONLY) {
-        if (!end.empty()) {
-            if (!start.empty()) {
+        if (!end_trimmed.empty()) {
+            if (!start_trimmed.empty()) {
                 // Standard tag-based: optional(<think>reasoning</think>)
-                return p.optional(start + p.reasoning(p.until(end)) + end + p.space());
+                return p.optional(start_trimmed + p.space() + p.reasoning(p.until(end_trimmed)) + end_trimmed + p.space());
             }
             // Delimiter-style (empty start)
-            return p.optional(p.reasoning(p.until(end)) + end + p.space());
+            return p.optional(p.space() + p.reasoning(p.until(end_trimmed)) + end_trimmed + p.space());
         }
     }
 
