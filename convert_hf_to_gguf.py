@@ -288,6 +288,48 @@ class ModelBase:
             logger.info(f"  + {scale_name} (per-expert scale, shape [{len(scales)}])")
             self.gguf_writer.add_tensor(scale_name, scale_vals)
 
+    @staticmethod
+    def _dequant_simple(weight: Tensor, scale: Tensor, block_size: Sequence[int] | None = None) -> Tensor:
+        scale = scale.float()
+
+        if block_size is not None:
+            block_size = tuple(block_size)
+            dim_offset = scale.ndim - len(block_size)
+
+            if dim_offset >= 0 and scale.ndim == weight.ndim and all(size > 0 for size in block_size):
+                expanded_shape = list(scale.shape)
+                for i, size in enumerate(block_size):
+                    expanded_shape[dim_offset + i] *= size
+
+                if tuple(expanded_shape) == tuple(weight.shape):
+                    # Broadcast scale over block views instead of materializing a repeated scale tensor.
+                    weight_view_shape: list[int] = []
+                    scale_view_shape: list[int] = []
+
+                    for i, scale_dim in enumerate(scale.shape):
+                        if dim_offset <= i < dim_offset + len(block_size):
+                            block_dim = block_size[i - dim_offset]
+                            weight_view_shape.extend((scale_dim, block_dim))
+                            scale_view_shape.extend((scale_dim, 1))
+                        else:
+                            weight_view_shape.append(scale_dim)
+                            scale_view_shape.append(scale_dim)
+
+                    weight_view = weight.float().reshape(weight_view_shape)
+                    scale_view = scale.reshape(scale_view_shape)
+                    return (weight_view * scale_view).reshape(weight.shape)
+
+            for i, size in enumerate(block_size):
+                scale = scale.repeat_interleave(size, dim_offset + i)
+            # unpad the scale (e.g. when the tensor size isn't a multiple of the block size)
+            scale = scale[tuple(slice(0, size) for size in weight.shape)]
+
+        # align scale dims to weight for correct broadcasting (e.g. [128] -> [128, 1, 1])
+        while scale.ndim < weight.ndim:
+            scale = scale.unsqueeze(-1)
+
+        return weight.float() * scale
+
     def dequant_model(self):
         # If all quantized tensors were already handled (e.g. pure NVFP4), skip
         if self._is_nvfp4 and not any(k.endswith((".weight_scale", ".weight_scale_inv")) for k in self.model_tensors):
@@ -310,22 +352,6 @@ class ModelBase:
 
                 # The scale is inverted
                 return data / scale.float()
-
-            def dequant_simple(weight: Tensor, scale: Tensor, block_size: Sequence[int] | None = None) -> Tensor:
-                scale = scale.float()
-
-                if block_size is not None:
-                    dim_offset = scale.ndim - len(block_size)
-                    for i, size in enumerate(block_size):
-                        scale = scale.repeat_interleave(size, dim_offset + i)
-                    # unpad the scale (e.g. when the tensor size isn't a multiple of the block size)
-                    scale = scale[tuple(slice(0, size) for size in weight.shape)]
-
-                # align scale dims to weight for correct broadcasting (e.g. [128] -> [128, 1, 1])
-                while scale.ndim < weight.ndim:
-                    scale = scale.unsqueeze(-1)
-
-                return weight.float() * scale
 
             # ref: https://github.com/ModelCloud/GPTQModel/blob/037c5c0f6c9e33c500d975b038d02e7ca437546d/gptqmodel/nn_modules/qlinear/__init__.py#L437-L476
             def dequant_gptq(g_idx: Tensor, qweight: Tensor, qzeros: Tensor, scales: Tensor) -> Tensor:
@@ -419,7 +445,9 @@ class ModelBase:
                         weight_name = name.removesuffix("_scale_inv")
                         w = self.model_tensors[weight_name]
                         s = self.model_tensors[name]
-                        self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
+                        self.model_tensors[weight_name] = (
+                            lambda w=w, s=s, bs=block_size: self._dequant_simple(w(), s(), bs)
+                        )
                         tensors_to_remove.append(name)
                     if name.endswith(".activation_scale"):  # unused
                         tensors_to_remove.append(name)
@@ -430,7 +458,9 @@ class ModelBase:
                         weight_name = name.removesuffix("qscale_weight") + "weight"
                         w = self.model_tensors[weight_name]
                         s = self.model_tensors[name]
-                        self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
+                        self.model_tensors[weight_name] = (
+                            lambda w=w, s=s, bs=block_size: self._dequant_simple(w(), s(), bs)
+                        )
                         tensors_to_remove.append(name)
                     if name.endswith(".qscale_act"):
                         tensors_to_remove.append(name)
@@ -473,7 +503,9 @@ class ModelBase:
                             weight_name = name.removesuffix("_scale")
                             w = self.model_tensors[weight_name]
                             s = self.model_tensors[name]
-                            self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), block_size)
+                            self.model_tensors[weight_name] = (
+                                lambda w=w, s=s: self._dequant_simple(w(), s(), block_size)
+                            )
                             tensors_to_remove.append(name)
                 elif quant_format == "pack-quantized":
                     assert weight_config.get("strategy") == "group"
@@ -508,7 +540,7 @@ class ModelBase:
                         weight_name = name.removesuffix("_scale")
                         w = self.model_tensors[weight_name]
                         s = self.model_tensors[name]
-                        self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), None)
+                        self.model_tensors[weight_name] = lambda w=w, s=s: self._dequant_simple(w(), s(), None)
                         tensors_to_remove.append(name)
                     if name.endswith((".input_scale", ".k_scale", ".v_scale")):
                         tensors_to_remove.append(name)
