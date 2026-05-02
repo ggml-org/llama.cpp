@@ -362,7 +362,11 @@ private:
             auto s = ls.first;
             return is_literal ? "\"" + s + "\"" : s;
         };
-        std::function<literal_or_rule()> transform = [&]() -> literal_or_rule {
+        std::function<literal_or_rule(int)> transform = [&](int depth) -> literal_or_rule {
+            if (depth > 100) {
+                _errors.push_back("Pattern too deeply nested");
+                return std::make_pair("", false);
+            }
             size_t start = i;
             std::vector<literal_or_rule> seq;
 
@@ -423,20 +427,20 @@ private:
                             // lookahead/lookbehind (?=, ?!, ?<=, ?<!) - not supported
                             _warnings.push_back("Unsupported pattern syntax");
                             // skip to matching ')' to avoid UB on empty seq
-                            int depth = 1;
-                            while (i < length && depth > 0) {
+                            int group_depth = 1;
+                            while (i < length && group_depth > 0) {
                                 if (sub_pattern[i] == '\\' && i + 1 < length) {
                                     i += 2; // skip escaped character
                                 } else {
-                                    if (sub_pattern[i] == '(') depth++;
-                                    else if (sub_pattern[i] == ')') depth--;
+                                    if (sub_pattern[i] == '(') group_depth++;
+                                    else if (sub_pattern[i] == ')') group_depth--;
                                     i++;
                                 }
                             }
                             continue;
                         }
                     }
-                    seq.emplace_back("(" + to_rule(transform()) + ")", false);
+                    seq.emplace_back("(" + to_rule(transform(depth + 1)) + ")", false);
                 } else if (c == ')') {
                     i++;
                     if (start > 0 && sub_pattern[start - 1] != '(' && (start < 2 || sub_pattern[start - 2] != '?' || sub_pattern[start - 1] != ':')) {
@@ -465,6 +469,10 @@ private:
                     seq.emplace_back("|", false);
                     i++;
                 } else if (c == '*' || c == '+' || c == '?') {
+                    if (seq.empty()) {
+                        _errors.push_back(std::string("Quantifier '") + c + "' appears without preceding token");
+                        return std::make_pair("", false);
+                    }
                     seq.back() = std::make_pair(to_rule(seq.back()) + c, false);
                     i++;
                 } else if (c == '{') {
@@ -497,6 +505,10 @@ private:
                         }
                     } catch (const std::invalid_argument & e) {
                         _errors.push_back("Invalid number in curly brackets");
+                        return std::make_pair("", false);
+                    }
+                    if (seq.empty()) {
+                        _errors.push_back("Quantifier '" + curly_brackets + "' appears without preceding token");
                         return std::make_pair("", false);
                     }
                     auto &last = seq.back();
@@ -551,7 +563,7 @@ private:
             }
             return join_seq();
         };
-        return _add_rule(name, "\"\\\"\" (" + to_rule(transform()) + ") \"\\\"\" space");
+        return _add_rule(name, "\"\\\"\" (" + to_rule(transform(0)) + ") \"\\\"\" space");
     }
 
     /*
