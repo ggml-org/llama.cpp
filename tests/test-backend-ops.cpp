@@ -4945,6 +4945,77 @@ struct test_snake : public test_case {
     }
 };
 
+// GGML_OP_SNAKE: naive vs fused equivalence
+// naive : x + sin(a * x)^2 * inv_b   (5 ops, broadcast 1 -> T)
+// fused : ggml_snake(x, a, inv_b)    (1 op)
+// out   : naive - fused, expected ~0 if the fused op matches the naive math
+struct test_snake_equiv : public test_case {
+    const std::array<int64_t, 2> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR1(ne);
+    }
+
+    test_snake_equiv(std::array<int64_t, 2> ne = {256, 192}) : ne(ne) {}
+
+    // Output is (naive - fused), expected pointwise ~0. The default nmse metric
+    // is mse(a, b) / mse(a, 0); when the reference signal is ~0, the denominator
+    // collapses and the ratio explodes on float rounding noise. Use mean absolute
+    // error between backends instead, which is well-defined near zero.
+    double err(const float * a, const float * b, size_t n) override {
+        double sum = 0.0;
+        for (size_t i = 0; i < n; i++) {
+            sum += std::fabs(a[i] - b[i]);
+        }
+        return sum / (double)n;
+    }
+
+    double max_nmse_err() override {
+        return 1e-5;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne[0], ne[1]);
+        ggml_set_name(x, "x");
+
+        ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, ne[1]);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * inv_b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, ne[1]);
+        ggml_set_name(inv_b, "inv_b");
+
+        // naive decomposition
+        ggml_tensor * ax     = ggml_mul(ctx, x, a);
+        ggml_tensor * sin_ax = ggml_sin(ctx, ax);
+        ggml_tensor * sin_sq = ggml_sqr(ctx, sin_ax);
+        ggml_tensor * scaled = ggml_mul(ctx, sin_sq, inv_b);
+        ggml_tensor * naive  = ggml_add(ctx, x, scaled);
+        ggml_set_name(naive, "naive");
+
+        // fused single op on the same inputs
+        ggml_tensor * fused = ggml_snake(ctx, x, a, inv_b);
+        ggml_set_name(fused, "fused");
+
+        // delta : pointwise ~0 if the fused op is mathematically equivalent
+        ggml_tensor * out = ggml_sub(ctx, naive, fused);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        // x in [-pi, pi] to exercise sin periodicity, params in default range
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            const std::string name = ggml_get_name(t);
+            if (name == "x") {
+                init_tensor_uniform(t, -3.14159f, 3.14159f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_CONV_TRANSPOSE_2D
 struct test_conv_transpose_2d : public test_case {
     // Dimensions
@@ -7852,6 +7923,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_snake(type, { 128, 16}));  // power-of-two fast path
     }
     test_cases.emplace_back(new test_snake(GGML_TYPE_F32, {128, 16}, /*v=*/1)); // non-contiguous
+
+    // GGML_OP_SNAKE: naive vs fused equivalence (BigVGAN-style shape)
+    test_cases.emplace_back(new test_snake_equiv({256, 192}));
 
     for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
         test_cases.emplace_back(new test_conv_transpose_2d({3, 2, 3, 1}, {2, 2, 1, 3}, 1, kernel_type));
