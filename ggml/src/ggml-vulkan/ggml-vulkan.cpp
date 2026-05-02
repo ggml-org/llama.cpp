@@ -191,6 +191,7 @@ typedef std::shared_ptr<vk_device_struct> vk_device;
 typedef std::weak_ptr<vk_device_struct> vk_device_ref;
 
 struct vk_buffer_struct;
+static void ggml_vk_calibrate_uma_thresholds(vk_device& device);
 typedef std::shared_ptr<vk_buffer_struct> vk_buffer;
 typedef std::weak_ptr<vk_buffer_struct> vk_buffer_ref;
 
@@ -620,6 +621,8 @@ struct vk_device_struct {
     uint32_t subgroup_size_log2;
     uint32_t shader_core_count;
     bool uma;
+    size_t uma_read_threshold;
+    size_t uma_write_threshold;
     bool prefer_host_memory;
     bool float_controls_rte_fp16;
     bool subgroup_basic;
@@ -6105,6 +6108,7 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     const char* output_tensor = getenv("GGML_VULKAN_OUTPUT_TENSOR");
     vk_output_tensor = (output_tensor == NULL ? 0 : atoi(output_tensor));
 #endif
+    ggml_vk_calibrate_uma_thresholds(ctx->device);
 }
 
 static vk_pipeline ggml_vk_get_to_fp16(ggml_backend_vk_context * ctx, ggml_type type) {
@@ -6750,11 +6754,16 @@ static void ggml_vk_ensure_sync_staging_buffer(ggml_backend_vk_context * ctx, si
     }
 }
 
-static size_t ggml_vk_uma_non_cached_direct_read_threshold() {
-    static const size_t threshold = []() {
+struct uma_threshold_cache {
+    size_t value;
+    bool set;
+};
+
+static size_t ggml_vk_uma_non_cached_direct_read_threshold(vk_device& device) {
+    static const uma_threshold_cache cache = []() {
         const char * threshold_env = getenv("GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD");
         if (threshold_env == nullptr || threshold_env[0] == '\0') {
-            return GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT;
+            return uma_threshold_cache{GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT, false};
         }
 
         char * end = nullptr;
@@ -6764,7 +6773,8 @@ static size_t ggml_vk_uma_non_cached_direct_read_threshold() {
             GGML_LOG_WARN("ggml_vulkan: invalid GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD='%s', using default %zu\n",
                 threshold_env,
                 GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT);
-            return GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT;
+            // Explicit override is set, so we ignore calibrated value and use default instead.
+            return uma_threshold_cache{GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT, true};
         }
 
         if (parsed > std::numeric_limits<size_t>::max()) {
@@ -6772,20 +6782,25 @@ static size_t ggml_vk_uma_non_cached_direct_read_threshold() {
                 threshold_env,
                 std::numeric_limits<size_t>::max(),
                 GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT);
-            return GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT;
+            // Explicit override is set, so we ignore calibrated value and use default instead.
+            return uma_threshold_cache{GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT, true};
         }
 
-        return (size_t) parsed;
+        return uma_threshold_cache{(size_t) parsed, true};
     }();
 
-    return threshold;
+    if (cache.set) {
+        return cache.value;
+    }
+
+    return device->uma_read_threshold;
 }
 
-static size_t ggml_vk_uma_non_cached_direct_write_threshold() {
-    static const size_t threshold = []() {
+static size_t ggml_vk_uma_non_cached_direct_write_threshold(vk_device& device) {
+    static const uma_threshold_cache cache = []() {
         const char * threshold_env = getenv("GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD");
         if (threshold_env == nullptr || threshold_env[0] == '\0') {
-            return GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT;
+            return uma_threshold_cache{GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT, false};
         }
 
         char * end = nullptr;
@@ -6795,7 +6810,8 @@ static size_t ggml_vk_uma_non_cached_direct_write_threshold() {
             GGML_LOG_WARN("ggml_vulkan: invalid GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD='%s', using default %zu\n",
                 threshold_env,
                 GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT);
-            return GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT;
+            // Explicit override is set, so we ignore calibrated value and use default instead.
+            return uma_threshold_cache{GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT, true};
         }
 
         if (parsed > std::numeric_limits<size_t>::max()) {
@@ -6803,27 +6819,141 @@ static size_t ggml_vk_uma_non_cached_direct_write_threshold() {
                 threshold_env,
                 std::numeric_limits<size_t>::max(),
                 GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT);
-            return GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT;
+            // Explicit override is set, so we ignore calibrated value and use default instead.
+            return uma_threshold_cache{GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT, true};
         }
 
-        return (size_t) parsed;
+        return uma_threshold_cache{(size_t) parsed, true};
     }();
 
-    return threshold;
+    if (cache.set) {
+        return cache.value;
+    }
+
+    return device->uma_write_threshold;
+}
+
+static void ggml_vk_calibrate_uma_thresholds(vk_device& device) {
+    if (!device->uma) {
+        device->uma_read_threshold = GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT;
+        device->uma_write_threshold = GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT;
+        return;
+    }
+
+    const std::vector<size_t> sizes = { 4 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024 };
+    size_t read_threshold = GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT;
+    size_t write_threshold = GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT;
+    bool read_found = false;
+    bool write_found = false;
+
+    // Setup test buffers
+    // Destination: HostVisible + HostCoherent (likely non-cached on UMA)
+    vk_buffer dst = ggml_vk_create_buffer(device, sizes.back(), {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
+    // Source: Pinned host buffer for GPU copies
+    vk_buffer src = ggml_vk_create_buffer(device, sizes.back(), {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
+
+    std::vector<uint8_t> host_data(sizes.back(), 0);
+
+    // Warmup to avoid driver JIT/pipeline setup overhead biasing results against the GPU
+    for (int i = 0; i < 5; ++i) {
+        vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
+        ggml_vk_ctx_begin(device, subctx);
+        vk::BufferCopy copy{ 0, 0, sizes.back() };
+        subctx->s->buffer->buf.copyBuffer(src->buffer, dst->buffer, {copy});
+        ggml_vk_ctx_end(subctx);
+        ggml_vk_submit(subctx, device->fence);
+        (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
+        device->device.resetFences({device->fence});
+    }
+
+    for (size_t size : sizes) {
+        const int iterations = 50;
+
+        // Benchmark Direct Write (memcpy)
+        auto start_w_mem = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < iterations; ++i) {
+            memcpy(dst->ptr, host_data.data(), size);
+        }
+        auto end_w_mem = std::chrono::high_resolution_clock::now();
+        double write_memcpy_time = std::chrono::duration<double, std::micro>(end_w_mem - start_w_mem).count() / iterations;
+
+        // Benchmark GPU Write (vkCmdCopyBuffer)
+        auto start_w_gpu = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < iterations; ++i) {
+            vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
+            ggml_vk_ctx_begin(device, subctx);
+            vk::BufferCopy copy{ 0, 0, size };
+            subctx->s->buffer->buf.copyBuffer(src->buffer, dst->buffer, {copy});
+            ggml_vk_ctx_end(subctx);
+            ggml_vk_submit(subctx, device->fence);
+            (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
+            device->device.resetFences({device->fence});
+        }
+        auto end_w_gpu = std::chrono::high_resolution_clock::now();
+        double write_gpu_time = std::chrono::duration<double, std::micro>(end_w_gpu - start_w_gpu).count() / iterations;
+
+        if (!write_found && write_gpu_time < write_memcpy_time) {
+            write_threshold = size;
+            write_found = true;
+        }
+
+        // Benchmark Direct Read (memcpy)
+        auto start_r_mem = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < iterations; ++i) {
+            memcpy(host_data.data(), dst->ptr, size);
+        }
+        auto end_r_mem = std::chrono::high_resolution_clock::now();
+        double read_memcpy_time = std::chrono::duration<double, std::micro>(end_r_mem - start_r_mem).count() / iterations;
+
+        // Benchmark GPU Read (vkCmdCopyBuffer)
+        auto start_r_gpu = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < iterations; ++i) {
+            vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
+            ggml_vk_ctx_begin(device, subctx);
+            vk::BufferCopy copy{ 0, 0, size };
+            subctx->s->buffer->buf.copyBuffer(dst->buffer, src->buffer, {copy});
+            ggml_vk_ctx_end(subctx);
+            ggml_vk_submit(subctx, device->fence);
+            (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
+            device->device.resetFences({device->fence});
+        }
+        auto end_r_gpu = std::chrono::high_resolution_clock::now();
+        double read_gpu_time = std::chrono::duration<double, std::micro>(end_r_gpu - start_r_gpu).count() / iterations;
+
+        if (!read_found && read_gpu_time < read_memcpy_time) {
+            read_threshold = size;
+            read_found = true;
+        }
+
+        if (read_found && write_found) {
+            break;
+        }
+    }
+
+    device->uma_read_threshold = read_threshold;
+    device->uma_write_threshold = write_threshold;
+
+    ggml_vk_destroy_buffer(src);
+    ggml_vk_destroy_buffer(dst);
+
+    // Reset the command pool to mark all benchmark buffers as reusable
+    ggml_vk_command_pool_cleanup(device, device->transfer_queue.cmd_pool);
+
+    VK_LOG_DEBUG("ggml_vulkan: calibrated UMA read threshold: " << device->uma_read_threshold << ", write threshold: " << device->uma_write_threshold);
 }
 
 static bool ggml_vk_use_uma_direct_read(vk_buffer & src, size_t copy_size) {
     GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
     const bool host_cached = (src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) != vk::MemoryPropertyFlags{};
-    return host_cached || copy_size > ggml_vk_uma_non_cached_direct_read_threshold();
+    return host_cached || copy_size > ggml_vk_uma_non_cached_direct_read_threshold(src->device);
 }
 
 static bool ggml_vk_use_uma_direct_write(const vk_buffer & dst, size_t copy_size) {
     GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
     const bool host_cached = (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) != vk::MemoryPropertyFlags{};
-    return host_cached || copy_size > ggml_vk_uma_non_cached_direct_write_threshold();
+    return host_cached || copy_size > ggml_vk_uma_non_cached_direct_write_threshold(dst->device);
 }
 
 static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_context& subctx, vk_buffer& dst, size_t offset, const ggml_tensor * tensor, bool sync_staging = false) {
