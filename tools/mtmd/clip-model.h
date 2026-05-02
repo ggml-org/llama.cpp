@@ -234,6 +234,18 @@ struct clip_layer {
     // granite_speech conformer per-layer
     ggml_tensor * attn_rel_pos_emb = nullptr;
 
+    // granite_speech qformer cross-attention
+    ggml_tensor * cross_attn_q_w    = nullptr;
+    ggml_tensor * cross_attn_q_b    = nullptr;
+    ggml_tensor * cross_attn_k_w    = nullptr;
+    ggml_tensor * cross_attn_k_b    = nullptr;
+    ggml_tensor * cross_attn_v_w    = nullptr;
+    ggml_tensor * cross_attn_v_b    = nullptr;
+    ggml_tensor * cross_attn_o_w    = nullptr;
+    ggml_tensor * cross_attn_o_b    = nullptr;
+    ggml_tensor * cross_attn_norm_w = nullptr;
+    ggml_tensor * cross_attn_norm_b = nullptr;
+
     bool has_deepstack() const {
         return deepstack_fc1_w != nullptr;
     }
@@ -299,36 +311,6 @@ struct yasa2_stage {
     std::vector<yasa2_block> blocks;
 };
 
-struct qformer_proj_layer {
-    ggml_tensor * self_attn_q_w = nullptr;
-    ggml_tensor * self_attn_q_b = nullptr;
-    ggml_tensor * self_attn_k_w = nullptr;
-    ggml_tensor * self_attn_k_b = nullptr;
-    ggml_tensor * self_attn_v_w = nullptr;
-    ggml_tensor * self_attn_v_b = nullptr;
-    ggml_tensor * self_attn_o_w = nullptr;
-    ggml_tensor * self_attn_o_b = nullptr;
-    ggml_tensor * self_attn_norm_w = nullptr;
-    ggml_tensor * self_attn_norm_b = nullptr;
-
-    ggml_tensor * cross_attn_q_w = nullptr;
-    ggml_tensor * cross_attn_q_b = nullptr;
-    ggml_tensor * cross_attn_k_w = nullptr;
-    ggml_tensor * cross_attn_k_b = nullptr;
-    ggml_tensor * cross_attn_v_w = nullptr;
-    ggml_tensor * cross_attn_v_b = nullptr;
-    ggml_tensor * cross_attn_o_w = nullptr;
-    ggml_tensor * cross_attn_o_b = nullptr;
-    ggml_tensor * cross_attn_norm_w = nullptr;
-    ggml_tensor * cross_attn_norm_b = nullptr;
-
-    ggml_tensor * ffn_up_w = nullptr;
-    ggml_tensor * ffn_up_b = nullptr;
-    ggml_tensor * ffn_down_w = nullptr;
-    ggml_tensor * ffn_down_b = nullptr;
-    ggml_tensor * ffn_norm_w = nullptr;
-    ggml_tensor * ffn_norm_b = nullptr;
-};
 
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
@@ -569,7 +551,7 @@ struct clip_model {
     ggml_tensor * qf_proj_norm_b = nullptr;
     ggml_tensor * qf_proj_linear_w = nullptr;
     ggml_tensor * qf_proj_linear_b = nullptr;
-    std::vector<qformer_proj_layer> qf_proj_layers;
+    std::vector<clip_layer> qf_proj_layers;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A

@@ -215,20 +215,20 @@ ggml_cgraph * clip_graph_granite_speech::build() {
 
             // self-attention
             {
-                ggml_tensor * Q = ggml_add(ctx0, build_mm(pl.self_attn_q_w, queries), pl.self_attn_q_b);
-                ggml_tensor * K = ggml_add(ctx0, build_mm(pl.self_attn_k_w, queries), pl.self_attn_k_b);
-                ggml_tensor * V = ggml_add(ctx0, build_mm(pl.self_attn_v_w, queries), pl.self_attn_v_b);
+                ggml_tensor * Q = ggml_add(ctx0, build_mm(pl.q_w, queries), pl.q_b);
+                ggml_tensor * K = ggml_add(ctx0, build_mm(pl.k_w, queries), pl.k_b);
+                ggml_tensor * V = ggml_add(ctx0, build_mm(pl.v_w, queries), pl.v_b);
 
                 Q = ggml_reshape_4d(ctx0, Q, proj_d_head, proj_n_head, num_queries, nblocks_proj);
                 K = ggml_reshape_4d(ctx0, K, proj_d_head, proj_n_head, num_queries, nblocks_proj);
                 V = ggml_reshape_4d(ctx0, V, proj_d_head, proj_n_head, num_queries, nblocks_proj);
 
-                ggml_tensor * sa_out = build_attn(pl.self_attn_o_w, pl.self_attn_o_b,
+                ggml_tensor * sa_out = build_attn(pl.o_w, pl.o_b,
                     Q, K, V, nullptr, proj_kq_scale, il);
                 sa_out = ggml_reshape_3d(ctx0, sa_out, n_embd, num_queries, nblocks_proj);
 
                 queries = build_norm(ggml_add(ctx0, sa_out, queries),
-                    pl.self_attn_norm_w, pl.self_attn_norm_b,
+                    pl.ln_1_w, pl.ln_1_b,
                     NORM_TYPE_NORMAL, proj_eps, il);
             }
 
@@ -254,13 +254,13 @@ ggml_cgraph * clip_graph_granite_speech::build() {
             // ffn
             {
                 ggml_tensor * ffn_out = build_ffn(queries,
-                    pl.ffn_up_w, pl.ffn_up_b,
+                    pl.ff_up_w, pl.ff_up_b,
                     nullptr, nullptr,
-                    pl.ffn_down_w, pl.ffn_down_b,
+                    pl.ff_down_w, pl.ff_down_b,
                     FFN_GELU, il);
 
                 queries = build_norm(ggml_add(ctx0, ffn_out, queries),
-                    pl.ffn_norm_w, pl.ffn_norm_b,
+                    pl.ln_2_w, pl.ln_2_b,
                     NORM_TYPE_NORMAL, proj_eps, il);
             }
         }
