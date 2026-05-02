@@ -1728,6 +1728,7 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 * restrict vtcm_dst,
                                                    int n_rows,
                                                    int k_block,
                                                    int k_stride) {
+    hex_l2fetch((const uint8_t *)src, k_block * sizeof(*src), k_stride * sizeof(*src), 2);
     for (int r = 0; r < n_rows; r += 2) {
         int r0 = r / HMX_FP16_TILE_N_ROWS;  // tile row index
         int r1 = r % HMX_FP16_TILE_N_ROWS;  // intra-tile row idx
@@ -1736,6 +1737,11 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 * restrict vtcm_dst,
 
         const HVX_Vector *pv_in0 = (const HVX_Vector *) (src + (r + 0) * k_stride);
         const HVX_Vector *pv_in1 = (const HVX_Vector *) (src + (r + 1) * k_stride);
+
+        if (r < n_rows - 2) {  // prefetch next iteration's rows
+            hex_l2fetch((const uint8_t *)(src + (r + 2) * k_stride), k_block * sizeof(*src), k_stride * sizeof(*src), MIN(n_rows - 2 - r, 2));
+        }
+
         for (int c = 0; c < k_block; c += 32) {
             HVX_Vector v0 = *pv_in0++;
             HVX_Vector v1 = next_row_valid ? *pv_in1++ : Q6_V_vzero();
