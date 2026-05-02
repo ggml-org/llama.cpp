@@ -167,7 +167,7 @@ class ModelBase:
                 logger.info("heuristics unable to detect tensor dtype, defaulting to --outtype f16")
 
         # Configure GGUF Writer
-        self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
+        self.gguf_writer = gguf.GGUFWriter(path=fname_out, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
 
         # Mistral specific
@@ -728,9 +728,6 @@ class ModelBase:
 
         del experts, merged
 
-    def _needs_nvfp4_processing(self) -> bool:
-        return True
-
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
         quant_algo = (self.hparams.get("quantization_config") or {}).get("quant_algo")
@@ -761,7 +758,7 @@ class ModelBase:
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
         # from model_tensors, leaving only non-NVFP4 (e.g. FP8) for dequant.
-        if self._is_nvfp4 and self._needs_nvfp4_processing():
+        if self._is_nvfp4:
             self._generate_nvfp4_tensors()
 
         self.dequant_model()
@@ -780,7 +777,8 @@ class ModelBase:
             old_dtype = data_torch.dtype
 
             # convert any unsupported data types to float32
-            if data_torch.dtype not in (torch.float16, torch.float32):
+            preserve_integer_tensor = name.endswith(".ffn.gate.tid2eid")
+            if data_torch.dtype not in (torch.float16, torch.float32) and not preserve_integer_tensor:
                 data_torch = data_torch.to(torch.float32)
 
             # use the first number-like part of the tensor name as the block id
@@ -791,6 +789,13 @@ class ModelBase:
                     break
 
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
+                if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_TID2EID, bid, suffix=""):
+                    data = LazyTorchTensor.to_eager(data_torch).to(torch.int32).numpy()
+                    shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"
+                    logger.info(f"{f'%-{max_name_len}s' % f'{new_name},'} {old_dtype} --> I32, shape = {shape_str}")
+                    self.gguf_writer.add_tensor(new_name, data)
+                    continue
+
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
@@ -2192,10 +2197,6 @@ class MmprojModel(ModelBase):
                     }
                 # merge configs
                 self.preprocessor_config = {**self.preprocessor_config, **cfg}
-
-    def _needs_nvfp4_processing(self) -> bool:
-        # nvfp4 quantization applies to the text model only.
-        return False
 
     def get_vision_config(self) -> dict[str, Any] | None:
         config_name = "vision_config" if not self.is_mistral_format else "vision_encoder"
@@ -4457,12 +4458,6 @@ class NemotronNanoV2VLModel(MmprojModel):
         }
         return vision_config
 
-    def dequant_model(self):
-        if self._is_nvfp4:
-            # Skip nvfp4 quantization for vision/audio model.
-            return
-        super().dequant_model()
-
     def set_gguf_parameters(self):
         if "image_mean" not in self.preprocessor_config:
             self.preprocessor_config["image_mean"] = [0.485, 0.456, 0.406]
@@ -4484,10 +4479,6 @@ class NemotronNanoV2VLModel(MmprojModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "input_conditioner" in name:
-            return
-
-        # mtmd does not support video yet so skip tensors related to video.
-        if "radio_model.model.patch_generator.video_embedder" in name:
             return
 
         # RADIO's pos_embed doesn't have .weight suffix, but clip.cpp expects it
@@ -6658,7 +6649,7 @@ class BertModel(TextModel):
 
         tokens: list[bytes] = [f"[PAD{i}]".encode("utf-8") for i in range(vocab_size)]
         scores: list[float] = [-10000.0] * vocab_size
-        toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size
+        toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size  # ty: ignore[invalid-assignment]
 
         if isinstance(tokenizer, SentencePieceProcessor):
             for token_id in range(tokenizer.vocab_size()):
@@ -9199,6 +9190,186 @@ class DeepseekV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("DeepseekV4ForCausalLM")
+class DeepseekV4Model(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK4
+    skip_mtp = True
+    merge_expert = True
+    # Chat template: basic system / user / assistant turns with proper
+    # `<｜Assistant｜>` framing, an `enable_thinking` switch (chat vs thinking
+    # mode), and `drop_thinking` semantics (only the assistant turn after the
+    # last user turn keeps its `reasoning_content`; earlier assistant turns
+    # are emitted as `</think>` only). This matches the `thinking_mode` and
+    # `drop_thinking=True` default of the official `encoding/encoding_dsv4.py`
+    # for the OpenAI-API subset of roles. Tool calling, the `developer` /
+    # `latest_reminder` roles, and quick-instruction tasks are not included.
+    # Validated byte-for-byte against `encoding/tests/test_input_2.json` ->
+    # `test_output_2.txt` (basic chat with interleaved thinking and
+    # drop_thinking applied).
+    chat_template = (
+        "{%- if not add_generation_prompt is defined -%}"
+        "{%- set add_generation_prompt = false -%}"
+        "{%- endif -%}"
+        "{%- if enable_thinking is defined -%}"
+        "{%- set thinking = enable_thinking -%}"
+        "{%- elif thinking is not defined -%}"
+        "{%- set thinking = false -%}"
+        "{%- endif -%}"
+        "{%- set ns = namespace(last_user_idx=-1) -%}"
+        "{%- for message in messages -%}"
+        "{%- if message['role'] in ['user', 'tool'] -%}"
+        "{%- set ns.last_user_idx = loop.index0 -%}"
+        "{%- endif -%}"
+        "{%- endfor -%}"
+        "{{- '<｜begin▁of▁sentence｜>' -}}"
+        "{%- for message in messages -%}"
+        "{%- if message['role'] == 'system' -%}"
+        "{{- message['content'] -}}"
+        "{%- elif message['role'] == 'user' -%}"
+        "{{- '<｜User｜>' + message['content'] -}}"
+        "{%- elif message['role'] == 'assistant' -%}"
+        "{{- '<｜Assistant｜>' -}}"
+        "{%- if thinking and loop.index0 > ns.last_user_idx and message['reasoning_content'] is defined and message['reasoning_content'] -%}"
+        "{{- '<think>' + message['reasoning_content'] + '</think>' -}}"
+        "{%- else -%}"
+        "{{- '</think>' -}}"
+        "{%- endif -%}"
+        "{{- message['content'] + '<｜end▁of▁sentence｜>' -}}"
+        "{%- endif -%}"
+        "{%- endfor -%}"
+        "{%- if add_generation_prompt -%}"
+        "{{- '<｜Assistant｜>' -}}"
+        "{%- if thinking -%}"
+        "{{- '<think>' -}}"
+        "{%- else -%}"
+        "{{- '</think>' -}}"
+        "{%- endif -%}"
+        "{%- endif -%}"
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # State for merging per-expert weights into a single 3D tensor per
+        # layer; populated lazily in modify_tensors().
+        self._expert_buffers: list[dict[str, Tensor]] | None = None
+        self._expert_seen: list[dict[str, set[int]]] | None = None
+
+    def set_gguf_parameters(self):
+        self.hparams["num_key_value_heads"] = self.find_hparam(["num_key_value_heads"], optional=True) or 1
+        self.hparams["rms_norm_eps"] = self.find_hparam(["rms_norm_eps", "norm_eps"], optional=True) or 1e-6
+
+        score_func_keys = {}
+        for key in ("scoring_func", "score_func"):
+            if key in self.hparams:
+                score_func_keys[key] = self.hparams.pop(key)
+
+        try:
+            TextModel.set_gguf_parameters(self)
+        finally:
+            self.hparams.update(score_func_keys)
+
+        self.gguf_writer.add_chat_template(self.chat_template)
+
+        self.gguf_writer.add_vocab_size(self.find_hparam(["vocab_size"]))
+
+        if (q_lora_rank := self.find_hparam(["q_lora_rank"], optional=True)) is not None:
+            self.gguf_writer.add_q_lora_rank(q_lora_rank)
+
+        if (rope_dim := self.find_hparam(["qk_rope_head_dim"], optional=True)) is not None:
+            self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+        if (sliding_window := self.find_hparam(["sliding_window"], optional=True)) is not None:
+            self.gguf_writer.add_sliding_window(sliding_window)
+
+        if (compress_rope_theta := self.find_hparam(["compress_rope_theta"], optional=True)) is not None:
+            self.gguf_writer.add_rope_freq_base_swa(compress_rope_theta)
+
+        self.gguf_writer.add_leading_dense_block_count(0)
+
+        self.gguf_writer.add_expert_feed_forward_length(self.find_hparam(["moe_intermediate_size"]))
+
+        if (n_routed_experts := self.find_hparam(["n_routed_experts"], optional=True)) is not None:
+            self.gguf_writer.add_expert_count(n_routed_experts)
+
+        if (n_shared_experts := self.find_hparam(["n_shared_experts"], optional=True)) is not None:
+            self.gguf_writer.add_expert_shared_count(n_shared_experts)
+
+        if (routed_scaling_factor := self.find_hparam(["routed_scaling_factor"], optional=True)) is not None:
+            self.gguf_writer.add_expert_weights_scale(routed_scaling_factor)
+
+        if self.find_hparam(["scoring_func"], optional=True) != "softmax":
+            self.gguf_writer.add_expert_weights_norm(True)
+
+        if (swiglu_limit := self.find_hparam(["swiglu_limit"], optional=True)) is not None:
+            self.gguf_writer.add_swiglu_clamp_exp([float(swiglu_limit)] * self.block_count)
+
+        if (index_n_heads := self.find_hparam(["index_n_heads"], optional=True)) is not None:
+            self.gguf_writer.add_indexer_head_count(index_n_heads)
+
+        if (index_head_dim := self.find_hparam(["index_head_dim"], optional=True)) is not None:
+            self.gguf_writer.add_indexer_key_length(index_head_dim)
+
+        if (index_topk := self.find_hparam(["index_topk"], optional=True)) is not None:
+            self.gguf_writer.add_indexer_top_k(index_topk)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("mtp."):
+            return
+
+        if self.hparams.get("tie_word_embeddings", False) and name == "head.weight":
+            logger.info("Skipping tied output layer 'head.weight' (will use token_embd.weight)")
+            return
+
+        if self.merge_expert and ".ffn.experts." in name:
+            n_experts = self.hparams["n_routed_experts"]
+            assert bid is not None
+
+            match = re.fullmatch(r"layers\.(\d+)\.ffn\.experts\.(\d+)\.(w[123])\.weight", name)
+            if match is None:
+                raise ValueError(f"Unexpected DeepSeek V4 expert tensor name: {name}")
+
+            xid = int(match.group(2))
+            w_name = match.group(3)
+            if xid >= n_experts:
+                raise ValueError(f"Unexpected DeepSeek V4 expert id {xid} for tensor {name}")
+
+            if self._expert_buffers is None:
+                self._expert_buffers = [{} for _ in range(self.block_count)]
+                self._expert_seen = [{} for _ in range(self.block_count)]
+            assert self._expert_seen is not None
+
+            layer_buffers = self._expert_buffers[bid]
+            layer_seen = self._expert_seen[bid]
+
+            seen = layer_seen.setdefault(w_name, set())
+            if xid in seen:
+                raise ValueError(f"Duplicate DeepSeek V4 expert tensor: {name}")
+
+            if w_name not in layer_buffers:
+                layer_buffers[w_name] = torch.empty((n_experts, *data_torch.shape), dtype=data_torch.dtype)
+            elif layer_buffers[w_name].shape[1:] != data_torch.shape:
+                raise ValueError(
+                    f"Unexpected DeepSeek V4 expert shape {tuple(data_torch.shape)} for tensor {name}; "
+                    f"expected {tuple(layer_buffers[w_name].shape[1:])}"
+                )
+
+            layer_buffers[w_name][xid].copy_(data_torch)
+            seen.add(xid)
+
+            if all(len(layer_seen.get(done_w_name, set())) >= n_experts for done_w_name in ("w2", "w1", "w3")):
+                for done_w_name in ["w2", "w1", "w3"]:
+                    merged = layer_buffers.pop(done_w_name)
+                    del layer_seen[done_w_name]
+                    merged_name = f"layers.{bid}.ffn.experts.{done_w_name}.weight"
+                    for new_name, data_torch in TextModel.modify_tensors(self, merged, merged_name, bid):
+                        yield new_name, data_torch
+                return
+            else:
+                return
+
+        yield from TextModel.modify_tensors(self, data_torch, name, bid)
+
+
 @ModelBase.register(
     "Mistral3ForConditionalGeneration",
     "Ministral3ForCausalLM",
@@ -10837,11 +11008,7 @@ class NemotronHModel(GraniteHybridModel):
         # uses self.model_arch to build the tensor name map, and all MoE-specific
         # mappings would be missed if it were called with the default non-MoE arch.
         hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
-        has_moe_params = (
-            "num_experts_per_tok" in hparams
-            or (isinstance(hparams.get("llm_config"), dict) and "num_experts_per_tok" in hparams["llm_config"])
-        )
-        if has_moe_params:
+        if "num_experts_per_tok" in hparams:
             self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
             self.is_moe = True
 
@@ -10986,11 +11153,6 @@ class NemotronHModel(GraniteHybridModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip vision model and projector tensors for VLM models (handled by mmproj) (e.g., Nemotron Nano 12B v2 VL)
         if name.startswith(("vision_model.", "mlp1.")):
-            return
-
-        if name.startswith(("sound_encoder.")):
-            return
-        if name.startswith(("sound_projection.")):
             return
 
         # Strip language_model. prefix for VLM models (e.g., Nemotron Nano 12B v2 VL)
@@ -13334,6 +13496,11 @@ class LazyTorchTensor(gguf.LazyBase):
         return cls._wrap_fn(func)(*args, **kwargs)
 
 
+if (torch_float8_e8m0fnu := getattr(torch, "float8_e8m0fnu", None)) is not None:
+    LazyTorchTensor._dtype_byteswap_map[torch_float8_e8m0fnu] = np.uint8
+    LazyTorchTensor._dtype_str_map["F8_E8M0"] = torch_float8_e8m0fnu
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert a huggingface model to a GGML compatible file")
@@ -13346,8 +13513,8 @@ def parse_args() -> argparse.Namespace:
         help="path to write to; default: based on input. {ftype} will be replaced by the outtype.",
     )
     parser.add_argument(
-        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "auto"], default="auto",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, and auto for the highest-fidelity 16-bit float type",
+        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "native", "auto"], default="auto",
+        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, native to preserve supported source quantization formats, and auto for the highest-fidelity 16-bit float type",
     )
     parser.add_argument(
         "--bigendian", action="store_true",
@@ -13373,6 +13540,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--verbose", action="store_true",
         help="increase output verbosity",
+    )
+    parser.add_argument(
+        "--torch-threads", type=int, default=None,
+        help="number of PyTorch CPU threads to use for tensor conversion operations",
     )
     parser.add_argument(
         "--split-max-tensors", type=int, default=0,
@@ -13494,6 +13665,12 @@ def main() -> None:
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
+
+    if args.torch_threads is not None:
+        if args.torch_threads <= 0:
+            raise ValueError("--torch-threads must be a positive integer")
+        torch.set_num_threads(args.torch_threads)
+        logger.info(f"PyTorch tensor conversion threads: {torch.get_num_threads()}")
 
     if args.remote:
         hf_repo_id = args.model
