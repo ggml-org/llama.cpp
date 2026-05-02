@@ -1674,8 +1674,7 @@ struct clip_model_loader {
         model.position_embeddings = get_tensor(string_format(TN_POS_EMBD, prefix), false);
 
         const bool has_standard_layers = (
-            model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
-            model.proj_type != PROJECTOR_TYPE_GRANITE_SPEECH);
+            model.proj_type != PROJECTOR_TYPE_GEMMA3NV);
 
         // layers
         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
@@ -2437,8 +2436,6 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_GRANITE_SPEECH:
                 {
-                    model.layers.resize(hparams.n_layer);
-
                     model.inp_proj_w     = get_tensor(string_format(TN_INP_PROJ,    "weight"));
                     model.inp_proj_b     = get_tensor(string_format(TN_INP_PROJ,    "bias"));
                     model.ctc_out_w      = get_tensor(string_format(TN_CTC_OUT,     "weight"));
@@ -2446,28 +2443,14 @@ struct clip_model_loader {
                     model.ctc_out_mid_w  = get_tensor(string_format(TN_CTC_OUT_MID, "weight"));
                     model.ctc_out_mid_b  = get_tensor(string_format(TN_CTC_OUT_MID, "bias"));
 
+                    // per-layer tensors not loaded by the generic loop above
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & layer = model.layers[il];
 
-                        layer.q_w = get_tensor(string_format(TN_ATTN_Q, prefix, il, "weight"));
-                        layer.k_w = get_tensor(string_format(TN_ATTN_K, prefix, il, "weight"));
-                        layer.v_w = get_tensor(string_format(TN_ATTN_V, prefix, il, "weight"));
-                        layer.o_w = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "weight"));
-                        layer.o_b = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "bias"));
                         layer.attn_rel_pos_emb = get_tensor(string_format(TN_ATTN_REL_POS_EMB, prefix, il));
 
-                        layer.ln_1_w = get_tensor(string_format(TN_LN_1, prefix, il, "weight"));
-                        layer.ln_1_b = get_tensor(string_format(TN_LN_1, prefix, il, "bias"));
-
-                        layer.ln_2_w = get_tensor(string_format(TN_LN_2, prefix, il, "weight"));
-                        layer.ln_2_b = get_tensor(string_format(TN_LN_2, prefix, il, "bias"));
-
-                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM, prefix, il, "weight"));
-                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM, prefix, il, "bias"));
-                        layer.ff_up_w     = get_tensor(string_format(TN_FFN_UP,   prefix, il, "weight"));
-                        layer.ff_up_b     = get_tensor(string_format(TN_FFN_UP,   prefix, il, "bias"));
-                        layer.ff_down_w   = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "weight"));
-                        layer.ff_down_b   = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "bias"));
+                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "weight"));
+                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "bias"));
 
                         layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "weight"));
                         layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "bias"));
