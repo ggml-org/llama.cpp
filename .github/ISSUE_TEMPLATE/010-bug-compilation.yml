@@ -12,6 +12,8 @@ body:
         after recreating the CMake build directory and with `-DGGML_CCACHE=OFF`.
         If the compilation succeeds with ccache disabled you should be able to permanently fix the issue
         by clearing `~/.cache/ccache` (on Linux).
+
+        Please fill out this template yourself, copypasting language model outputs is [strictly prohibited](https://github.com/ggml-org/llama.cpp/blob/master/CONTRIBUTING.md#ai-usage-policy).
   - type: textarea
     id: commit
     attributes:
