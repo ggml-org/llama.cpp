@@ -80,7 +80,7 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     if (!content.empty()) {
         jmsg["content"] = content;
     } else if (!content_parts.empty()) {
-        if (concat_typed_text) {
+        if (concat_typed_text || contains_media()) {
             std::string text;
             bool last_was_media_marker = false;
             // join parts with newline, do not add newline before or after media markers
@@ -357,15 +357,6 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
     return msgs;
 }
 
-static bool msg_has_media_markers(const common_chat_msg & msg) {
-    for (const auto & part : msg.content_parts) {
-        if (part.type == "media_marker") {
-            return true;
-        }
-    }
-    return false;
-}
-
 static json render_message_to_json(const std::vector<common_chat_msg> & msgs, const jinja::caps & c) {
     if (!c.supports_string_content && !c.supports_typed_content) {
         LOG_WRN("%s: Neither string content nor typed content is supported by the template. This is unexpected and may lead to issues.\n", __func__);
@@ -376,24 +367,7 @@ static json render_message_to_json(const std::vector<common_chat_msg> & msgs, co
 
     json messages = json::array();
     for (const auto & msg : msgs) {
-        bool has_media = msg_has_media_markers(msg);
-
-        if (has_media && !only_string_accepted) {
-            // Typed-content templates may output their own image placeholder
-            // (e.g. "<image>") instead of the media marker text, which breaks
-            // mtmd_tokenize. Concatenate all parts so markers survive in the
-            // rendered prompt, wrapping as a typed text array if needed.
-            json jmsg = msg.to_json_oaicompat(/* concat_typed_text= */ true);
-            if (!c.supports_string_content) {
-                jmsg["content"] = json::array({
-                    json{
-                        {"type", "text"},
-                        {"text", jmsg.at("content").get<std::string>()},
-                    }
-                });
-            }
-            messages.push_back(jmsg);
-        } else if (only_string_accepted) {
+        if (only_string_accepted) {
             json jmsg = msg.to_json_oaicompat(/* concat_typed_text= */ true);
             messages.push_back(jmsg);
         } else if (only_typed_accepted) {
