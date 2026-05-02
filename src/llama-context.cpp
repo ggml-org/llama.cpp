@@ -17,6 +17,28 @@
 #include <limits>
 #include <stdexcept>
 
+static bool llama_split_mode_tensor_supports_kv_cache_quantization(const llama_model & model, enum ggml_type type_k, enum ggml_type type_v) {
+    // Initial supported scope: CUDA tensor-parallel inference with Q8_0 K/V cache.
+    // CUDA already has the required pieces: SET_ROWS can write F32 rows into Q8_0 tensors,
+    // and FLASH_ATTN_EXT has Q8_0 K/V kernels. Other backends / type combinations remain gated.
+    if (type_k != GGML_TYPE_Q8_0 || type_v != GGML_TYPE_Q8_0) {
+        return false;
+    }
+
+    if (model.get_split_state_ud.devices.empty()) {
+        return false;
+    }
+
+    for (ggml_backend_dev_t dev : model.get_split_state_ud.devices) {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        if (std::strcmp(ggml_backend_reg_name(reg), "CUDA") != 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 //
 // llama_context
 //
@@ -3012,8 +3034,11 @@ llama_context * llama_init_from_model(
             return nullptr;
         }
         if (ggml_is_quantized(params.type_k) || ggml_is_quantized(params.type_v)) {
-            LLAMA_LOG_ERROR("%s: simultaneous use of SPLIT_MODE_TENSOR and KV cache quantization not implemented\n", __func__);
-            return nullptr;
+            if (!llama_split_mode_tensor_supports_kv_cache_quantization(*model, params.type_k, params.type_v)) {
+                LLAMA_LOG_ERROR("%s: simultaneous use of SPLIT_MODE_TENSOR and KV cache quantization is currently supported only for CUDA with Q8_0 K/V cache\n", __func__);
+                return nullptr;
+            }
+            LLAMA_LOG_INFO("%s: enabling experimental SPLIT_MODE_TENSOR with Q8_0 K/V cache on CUDA\n", __func__);
         }
     }
 
