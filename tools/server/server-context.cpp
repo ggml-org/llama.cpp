@@ -2616,7 +2616,7 @@ private:
                             SLT_ERR(slot, "failed to process image, res = %d\n", res);
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
                             slot.release();
-                            continue;
+                            break;
                         }
 
                         slot.n_prompt_tokens_processed += n_tokens_out;
@@ -2628,6 +2628,10 @@ private:
                         }
 
                         has_mtmd = true;
+                    }
+
+                    if (!slot.is_processing()) {
+                        continue;
                     }
 
                     // add prompt tokens for processing in the current batch
