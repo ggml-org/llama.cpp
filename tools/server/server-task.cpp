@@ -10,6 +10,8 @@
 #include "speculative.h"
 #include "server-common.h"
 
+#include <algorithm>
+
 using json = nlohmann::ordered_json;
 
 //
@@ -264,6 +266,13 @@ task_params server_task::params_from_json_cmpl(
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
     params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
+    if (data.contains("__responses_tool_metadata") && data.at("__responses_tool_metadata").is_object()) {
+        for (const auto & item : data.at("__responses_tool_metadata").items()) {
+            params.responses_tool_metadata[item.key()] = item.value();
+        }
+    }
+    params.responses_web_search_wrapper = json_value(data, "__responses_web_search_wrapper", std::string());
+    params.responses_file_search_wrapper = json_value(data, "__responses_file_search_wrapper", std::string());
 
     params.sampling.top_k              = json_value(data, "top_k",               defaults.sampling.top_k);
     params.sampling.top_p              = json_value(data, "top_p",               defaults.sampling.top_p);
@@ -985,6 +994,521 @@ static json build_oai_resp_metadata(const std::string & oai_resp_id,
     };
 }
 
+static json parse_tool_arguments(const std::string & arguments) {
+    if (arguments.empty()) {
+        return json::object();
+    }
+    try {
+        return json::parse(arguments);
+    } catch (const std::exception &) {
+        return json::object();
+    }
+}
+
+static std::string get_responses_tool_type(
+        const std::unordered_map<std::string, json> & responses_tool_metadata,
+        const std::string & tool_name) {
+    const auto it = responses_tool_metadata.find(tool_name);
+    if (it == responses_tool_metadata.end()) {
+        return "function";
+    }
+    return json_value(it->second, "type", std::string("function"));
+}
+
+static bool get_custom_tool_input_value_if_present(const json & parsed_args, std::string & input) {
+    if (parsed_args.contains("input")) {
+        input = parsed_args.at("input").is_string()
+            ? parsed_args.at("input").get<std::string>()
+            : parsed_args.at("input").dump();
+        return true;
+    }
+    if (parsed_args.contains("patch")) {
+        input = parsed_args.at("patch").is_string()
+            ? parsed_args.at("patch").get<std::string>()
+            : parsed_args.at("patch").dump();
+        return true;
+    }
+    return false;
+}
+
+static std::string get_custom_tool_input_value(
+        const json & parsed_args,
+        const std::string & raw_arguments) {
+    std::string input;
+    if (get_custom_tool_input_value_if_present(parsed_args, input)) {
+        return input;
+    }
+    return raw_arguments;
+}
+
+static std::string normalize_apply_patch_hunk_header(const std::string & line) {
+    if (line.rfind("@@ -", 0) != 0) {
+        return line;
+    }
+
+    const size_t new_range = line.find(" +", 4);
+    if (new_range == std::string::npos) {
+        return line;
+    }
+
+    const size_t range_end = line.find(" @@", new_range + 2);
+    if (range_end == std::string::npos) {
+        return line;
+    }
+
+    std::string context = line.substr(range_end + 3);
+    while (!context.empty() && context.front() == ' ') {
+        context.erase(context.begin());
+    }
+    return context.empty() ? "@@" : "@@ " + context;
+}
+
+static std::string normalize_apply_patch_input(const std::string & input) {
+    std::string output;
+    output.reserve(input.size());
+
+    size_t pos = 0;
+    while (pos < input.size()) {
+        const size_t line_end = input.find('\n', pos);
+        const size_t end = line_end == std::string::npos ? input.size() : line_end;
+        std::string line = input.substr(pos, end - pos);
+        bool has_cr = false;
+        if (!line.empty() && line.back() == '\r') {
+            has_cr = true;
+            line.pop_back();
+        }
+
+        output += normalize_apply_patch_hunk_header(line);
+        if (has_cr) {
+            output += '\r';
+        }
+        if (line_end != std::string::npos) {
+            output += '\n';
+        }
+        pos = line_end == std::string::npos ? input.size() : line_end + 1;
+    }
+
+    return output;
+}
+
+static std::string get_custom_tool_input_value(
+        const std::string & tool_name,
+        const json & parsed_args,
+        const std::string & raw_arguments) {
+    std::string input = get_custom_tool_input_value(parsed_args, raw_arguments);
+    if (tool_name == "apply_patch") {
+        input = normalize_apply_patch_input(input);
+    }
+    return input;
+}
+
+static std::string best_effort_custom_tool_delta(
+        const std::string & accumulated_arguments,
+        const std::string & previous_input) {
+    const json parsed_args = parse_tool_arguments(accumulated_arguments);
+    std::string current_input;
+    if (!get_custom_tool_input_value_if_present(parsed_args, current_input)) {
+        return std::string();
+    }
+    if (current_input.size() < previous_input.size()) {
+        return std::string();
+    }
+    return current_input.substr(previous_input.size());
+}
+
+static json build_local_shell_action(const json & args, const std::string & raw_arguments) {
+    if (args.contains("action") && args.at("action").is_object()) {
+        return args.at("action");
+    }
+
+    json action = {
+        {"type", "exec"},
+        {"command", json::array()},
+    };
+
+    if (args.contains("command")) {
+        const json & command = args.at("command");
+        if (command.is_array()) {
+            action["command"] = command;
+        } else if (command.is_string()) {
+            action["command"] = json::array({"bash", "-lc", command.get<std::string>()});
+        }
+    } else if (args.contains("cmd") && args.at("cmd").is_string()) {
+        action["command"] = json::array({"bash", "-lc", args.at("cmd").get<std::string>()});
+    } else if (!raw_arguments.empty()) {
+        action["command"] = json::array({"bash", "-lc", raw_arguments});
+    }
+
+    for (const char * key : {"timeout_ms", "working_directory", "env", "user"}) {
+        if (args.contains(key)) {
+            action[key] = args.at(key);
+        }
+    }
+
+    return action;
+}
+
+static std::string first_web_search_query(const json & action) {
+    for (const char * key : {"query", "input", "q", "search_query"}) {
+        if (action.contains(key) && action.at(key).is_string()) {
+            return action.at(key).get<std::string>();
+        }
+    }
+    if (action.contains("queries") && action.at("queries").is_array()) {
+        for (const auto & query : action.at("queries")) {
+            if (query.is_string() && !query.get<std::string>().empty()) {
+                return query.get<std::string>();
+            }
+            if (query.is_object() && query.contains("q") && query.at("q").is_string()) {
+                return query.at("q").get<std::string>();
+            }
+        }
+    }
+    if (action.contains("search_query") && action.at("search_query").is_array()) {
+        return first_web_search_query(json{{"queries", action.at("search_query")}});
+    }
+    if (action.contains("url") && action.at("url").is_string()) {
+        std::string query = action.at("url").get<std::string>();
+        if (action.contains("pattern") && action.at("pattern").is_string()) {
+            query += " " + action.at("pattern").get<std::string>();
+        }
+        return query;
+    }
+    return "";
+}
+
+static json build_web_search_local_shell_call_item(
+        const common_chat_tool_call & tool_call,
+        const std::string & status,
+        const json & action,
+        const std::string & wrapper) {
+    if (wrapper.empty() || wrapper.find_first_of(" \t\r\n") != std::string::npos) {
+        SRV_WRN("%s", "Ignoring X-Llama-Responses-Web-Search-Wrapper: expected a command name or path without arguments\n");
+        return nullptr;
+    }
+
+    if (status == "in_progress") {
+        return json {
+            {"type",    "local_shell_call"},
+            {"status",  status},
+            {"call_id", tool_call.id},
+            {"action",  json{{"type", "exec"}, {"command", json::array()}}},
+        };
+    }
+
+    const std::string action_type = json_value(action, "type", std::string("search"));
+    json command = json::array({wrapper});
+    if (action_type == "open_page" || action_type == "find_in_page") {
+        const std::string url = json_value(action, "url", std::string());
+        if (url.empty()) {
+            SRV_WRN("%s", "Ignoring Responses web_search shell bridge call: missing url\n");
+            return nullptr;
+        }
+        command.push_back("extract");
+        command.push_back(url);
+        if (action_type == "find_in_page" && action.contains("pattern") && action.at("pattern").is_string()) {
+            command.push_back("--query");
+            command.push_back(action.at("pattern").get<std::string>());
+        }
+    } else {
+        const std::string query = first_web_search_query(action);
+        if (query.empty()) {
+            SRV_WRN("%s", "Ignoring Responses web_search shell bridge call: missing query\n");
+            return nullptr;
+        }
+        command.push_back("search");
+        command.push_back(query);
+    }
+    command.push_back("--json");
+
+    const json shell_action = json {
+        {"type", "exec"},
+        {"command", command},
+        {"timeout_ms", 60000},
+    };
+    return json {
+        {"type",    "local_shell_call"},
+        {"status",  status},
+        {"call_id", tool_call.id},
+        {"action",  shell_action},
+    };
+}
+
+static std::string file_search_query_from_args(const json & args) {
+    for (const char * key : {"query", "pattern", "filename", "name"}) {
+        if (args.contains(key) && args.at(key).is_string()) {
+            const std::string value = args.at(key).get<std::string>();
+            if (!value.empty()) {
+                return value;
+            }
+        }
+    }
+    return "";
+}
+
+static json build_file_search_local_shell_call_item(
+        const common_chat_tool_call & tool_call,
+        const std::string & status,
+        const json & args,
+        const std::string & wrapper) {
+    if (wrapper.empty() || wrapper.find_first_of(" \t\r\n") != std::string::npos) {
+        SRV_WRN("%s", "Ignoring X-Llama-Responses-File-Search-Wrapper: expected a command name or path without arguments\n");
+        return nullptr;
+    }
+
+    if (status == "in_progress") {
+        return json {
+            {"type",    "local_shell_call"},
+            {"status",  status},
+            {"call_id", tool_call.id},
+            {"action",  json{{"type", "exec"}, {"command", json::array()}}},
+        };
+    }
+
+    const std::string query = file_search_query_from_args(args);
+    if (query.empty()) {
+        SRV_WRN("%s", "Ignoring Responses file_search shell bridge call: missing query\n");
+        return nullptr;
+    }
+
+    std::string path = json_value(args, "path", std::string("."));
+    if (path.empty() || path[0] == '/' || path.find("..") != std::string::npos) {
+        path = ".";
+    }
+
+    const std::string mode = json_value(args, "mode",
+        json_value(args, "search_type", std::string("content")));
+    const bool files_mode = mode == "files" || mode == "file" || mode == "filename" || mode == "path";
+
+    json command = json::array({wrapper});
+    command.push_back("--hidden");
+    command.push_back("--glob");
+    command.push_back("!**/.git/**");
+    command.push_back("--glob");
+    command.push_back("!**/node_modules/**");
+    command.push_back("--glob");
+    command.push_back("!**/build/**");
+    command.push_back("--glob");
+    command.push_back("!**/dist/**");
+
+    if (files_mode) {
+        command.push_back("--files");
+        command.push_back("--glob");
+        command.push_back("*" + query + "*");
+        command.push_back(path);
+    } else {
+        command.push_back("-n");
+        command.push_back("--max-columns");
+        command.push_back("240");
+        command.push_back("--max-columns-preview");
+        command.push_back("--max-filesize");
+        command.push_back("1M");
+        command.push_back("--");
+        command.push_back(query);
+        command.push_back(path);
+    }
+
+    const json shell_action = json {
+        {"type", "exec"},
+        {"command", command},
+        {"timeout_ms", 30000},
+    };
+    return json {
+        {"type",    "local_shell_call"},
+        {"status",  status},
+        {"call_id", tool_call.id},
+        {"action",  shell_action},
+    };
+}
+
+static json server_build_responses_tool_output_item(
+        const common_chat_tool_call & tool_call,
+        const std::unordered_map<std::string, json> & responses_tool_metadata,
+        const std::string & status,
+        const std::string & item_id,
+        const std::string & responses_web_search_wrapper,
+        const std::string & responses_file_search_wrapper) {
+    const auto it = responses_tool_metadata.find(tool_call.name);
+    const json parsed_args = parse_tool_arguments(tool_call.arguments);
+
+    const json & meta = it != responses_tool_metadata.end() ? it->second : json::object();
+    const std::string tool_type = get_responses_tool_type(responses_tool_metadata, tool_call.name);
+    const std::string tool_name = json_value(meta, "name", tool_call.name);
+
+    if (tool_type == "custom") {
+        return json {
+            {"type",    "custom_tool_call"},
+            {"status",  status},
+            {"call_id", tool_call.id},
+            {"name",    tool_name},
+            {"input",   get_custom_tool_input_value(tool_name, parsed_args, tool_call.arguments)},
+        };
+    }
+
+    if (tool_type == "local_shell") {
+        return json {
+            {"type",    "local_shell_call"},
+            {"status",  status},
+            {"call_id", tool_call.id},
+            {"action",  build_local_shell_action(parsed_args, tool_call.arguments)},
+        };
+    }
+
+    if (tool_type == "tool_search") {
+        json arguments = parsed_args.contains("arguments") ? parsed_args.at("arguments") : parsed_args;
+        return json {
+            {"type",      "tool_search_call"},
+            {"status",    status},
+            {"call_id",   tool_call.id},
+            {"execution", json_value(meta, "execution", json_value(parsed_args, "execution", std::string("client")))},
+            {"arguments", arguments},
+        };
+    }
+
+    if (tool_type == "web_search") {
+        json action = json::object();
+        if (parsed_args.contains("action") && parsed_args.at("action").is_object()) {
+            action = parsed_args.at("action");
+        } else if (parsed_args.contains("query") || parsed_args.contains("queries") ||
+                   parsed_args.contains("input") || parsed_args.contains("q") || parsed_args.contains("search_query")) {
+            action = json{{"type", "search"}};
+            if (parsed_args.contains("queries")) {
+                action["queries"] = parsed_args.at("queries");
+            }
+            for (const char * key : {"query", "input", "q", "search_query"}) {
+                if (parsed_args.contains(key)) {
+                    action[key] = parsed_args.at(key);
+                }
+            }
+        } else if (parsed_args.contains("url")) {
+            const std::string action_type = parsed_args.contains("pattern") ? "find_in_page" : "open_page";
+            action = json {
+                {"type", action_type},
+                {"url",  parsed_args.at("url")},
+            };
+            if (parsed_args.contains("pattern")) {
+                action["pattern"] = parsed_args.at("pattern");
+            }
+        }
+        if (!responses_web_search_wrapper.empty()) {
+            const json shell_item = build_web_search_local_shell_call_item(
+                    tool_call,
+                    status,
+                    action,
+                    responses_web_search_wrapper);
+            if (!shell_item.is_null()) {
+                return shell_item;
+            }
+        }
+        return json {
+            {"type",   "web_search_call"},
+            {"id",     item_id.empty() ? "ws_" + random_string() : item_id},
+            {"status", status},
+            {"action", action},
+        };
+    }
+
+    if (tool_type == "file_search") {
+        if (!responses_file_search_wrapper.empty()) {
+            const json shell_item = build_file_search_local_shell_call_item(
+                    tool_call,
+                    status,
+                    parsed_args,
+                    responses_file_search_wrapper);
+            if (!shell_item.is_null()) {
+                return shell_item;
+            }
+        }
+
+        const std::string query = file_search_query_from_args(parsed_args);
+        return json {
+            {"type",    "file_search_call"},
+            {"id",      item_id.empty() ? "fs_" + random_string() : item_id},
+            {"status",  status},
+            {"queries", query.empty() ? json::array() : json::array({query})},
+        };
+    }
+
+    if (tool_type == "image_generation") {
+        json output_item = {
+            {"type",   "image_generation_call"},
+            {"id",     item_id.empty() ? "ig_" + random_string() : item_id},
+            {"status", status},
+            {"result", json_value(parsed_args, "result", std::string())},
+        };
+        const std::string revised_prompt = json_value(parsed_args, "revised_prompt",
+            json_value(parsed_args, "prompt", std::string()));
+        if (!revised_prompt.empty()) {
+            output_item["revised_prompt"] = revised_prompt;
+        }
+        return output_item;
+    }
+
+    return json {
+        {"type",      "function_call"},
+        {"id",        item_id.empty() ? "fc_" + random_string() : item_id},
+        {"call_id",   tool_call.id},
+        {"name",      tool_name},
+        {"arguments", tool_name == "update_plan" ? ([&]() { json args = parsed_args;
+            if (args.contains("plan") && args.at("plan").is_array()) {
+                for (auto & item : args["plan"]) {
+                    if (item.is_object() && item.contains("status") && item.at("status").is_string()) {
+                        const std::string s = item.at("status").get<std::string>();
+                        item["status"] = s == "Pending" ? "pending" : s
+                                           == "InProgress" || s == "In Progress" ? "in_progress" : s
+                                           == "Completed" ? "completed" : item["status"];
+                    }
+                } return args.dump();
+            } return tool_call.arguments; })() : tool_call.arguments},
+        {"status",    status},
+    };
+}
+
+static json build_responses_reasoning_item(const std::string & id, const std::string & text, const std::string & status) {
+    json item = {
+        {"id",                id},
+        {"summary",           json::array()},
+        {"type",              "reasoning"},
+        {"content",           json::array()},
+        {"encrypted_content", ""},
+        {"status",            status},
+    };
+    if (!text.empty()) {
+        item["summary"].push_back({{"type", "summary_text"}, {"text", text}});
+        item["content"].push_back({{"type", "reasoning_text"}, {"text", text}});
+    }
+    return item;
+}
+
+static json build_responses_content_part(const std::string & text) {
+    return json {
+        {"type", "output_text"}, {"annotations", json::array()},
+        {"logprobs", json::array()}, {"text", text},
+    };
+}
+
+static json build_responses_message_item(const std::string & id, const common_chat_msg & msg, const bool has_tool_calls) {
+    return json {
+        {"content", json::array({build_responses_content_part(msg.content)})},
+        {"id",     id},
+        {"phase",  has_tool_calls ? "commentary" : "final_answer"},
+        {"role",   msg.role.empty() ? "assistant" : msg.role},
+        {"status", "completed"},
+        {"type",   "message"},
+    };
+}
+
+static json build_responses_sse(const char * event, int & seq_num, const json & fields) {
+    json data = {
+        {"type",            event},
+        {"sequence_number", seq_num++},
+    };
+    for (const auto & field : fields.items()) {
+        data[field.key()] = field.value();
+    }
+    return json {{"event", event}, {"data", data}};
+}
+
 json server_task_result_cmpl_final::to_json_oaicompat_resp() {
     common_chat_msg msg;
     if (!oaicompat_msg.empty()) {
@@ -997,48 +1521,33 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
     std::vector<json> output;
 
     if (msg.reasoning_content != "") {
-        output.push_back(json {
-            {"id",      "rs_" + random_string()},
-            {"summary", json::array()},
-            {"type",    "reasoning"},
-            {"content", json::array({ json {
-                {"text", msg.reasoning_content},
-                {"type", "reasoning_text"},
-            }})},
-            {"encrypted_content", ""},
-            {"status",            "completed"},
-        });
+        output.push_back(build_responses_reasoning_item("rs_" + random_string(), msg.reasoning_content, "completed"));
     }
 
     if (msg.content != "") {
-        output.push_back(json {
-            {"content", json::array({ json {
-                {"type",        "output_text"},
-                {"annotations", json::array()},
-                {"logprobs",    json::array()},
-                {"text",        msg.content},
-            }})},
-            {"id",     "msg_" + random_string()},
-            {"role",   msg.role},
-            {"status", "completed"},
-            {"type",   "message"},
-        });
+        const bool has_tool_calls = !oaicompat_msg.tool_calls.empty();
+        output.push_back(build_responses_message_item("msg_" + random_string(), msg, has_tool_calls));
     }
 
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
-        output.push_back(json {
-            {"type",      "function_call"},
-            {"id",        "fc_" + random_string()},
-            {"call_id",   tool_call.id},
-            {"name",      tool_call.name},
-            {"arguments", tool_call.arguments},
-            {"status",    "completed"},
-        });
+        output.push_back(server_build_responses_tool_output_item(
+            tool_call,
+            generation_params.responses_tool_metadata,
+            "completed",
+            "",
+            generation_params.responses_web_search_wrapper,
+            generation_params.responses_file_search_wrapper));
     }
 
     std::string output_text = build_output_text(output);
-    return build_oai_resp_metadata(oai_resp_id, oaicompat_model, output, output_text,
-                                   n_prompt_tokens, n_decoded, n_prompt_tokens_cache);
+    json res = build_oai_resp_metadata(oai_resp_id, oaicompat_model, output, output_text,
+                                       n_prompt_tokens, n_decoded, n_prompt_tokens_cache);
+    if (stop == STOP_TYPE_LIMIT && msg.content.empty() && msg.tool_calls.empty()) {
+        res["status"]             = "incomplete";
+        res["completed_at"]       = nullptr;
+        res["incomplete_details"] = json{{"reason", "max_output_tokens"}};
+    }
+    return res;
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
@@ -1048,80 +1557,40 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     int output_idx = 0;
 
     if (oaicompat_msg.reasoning_content != "") {
-        const json output_item = json {
-            {"id",      oai_resp_reasoning_id},
-            {"summary", json::array()},
-            {"type",    "reasoning"},
-            {"content", json::array({ json {
-                {"text", oaicompat_msg.reasoning_content},
-                {"type", "reasoning_text"},
-            }})},
-            {"encrypted_content", ""},
-            {"status",            "completed"},
-        };
+        const json output_item = build_responses_reasoning_item(
+            oai_resp_reasoning_id,
+            oaicompat_msg.reasoning_content,
+            "completed");
 
-        server_sent_events.push_back(json {
-            {"event", "response.output_item.done"},
-            {"data", json {
-                {"type",            "response.output_item.done"},
-                {"sequence_number", seq_num++},
-                {"output_index",    output_idx},
-                {"item",            output_item},
-            }}
-        });
+        if (!oai_resp_reasoning_done) {
+            server_sent_events.push_back(build_responses_sse("response.output_item.done", seq_num, {
+                {"output_index", output_idx}, {"item", output_item},
+            }));
+        }
         output.push_back(output_item);
         output_idx++;
     }
 
     if (oaicompat_msg.content != "") {
-        server_sent_events.push_back(json {
-            {"event", "response.output_text.done"},
-            {"data", json {
-                {"type",            "response.output_text.done"},
-                {"sequence_number", seq_num++},
-                {"output_index",    output_idx},
-                {"content_index",   0},
-                {"item_id",         oai_resp_message_id},
-                {"text",            oaicompat_msg.content},
-                {"logprobs",        json::array()},
-            }}
-        });
-
-        const json content_part = {
-            {"type",        "output_text"},
-            {"annotations", json::array()},
-            {"logprobs",    json::array()},
-            {"text",        oaicompat_msg.content}
-        };
-
-        server_sent_events.push_back(json {
-            {"event", "response.content_part.done"},
-            {"data", json {
-                {"type",            "response.content_part.done"},
-                {"sequence_number", seq_num++},
-                {"output_index",    output_idx},
-                {"content_index",   0},
-                {"item_id",         oai_resp_message_id},
-                {"part",            content_part},
-            }}
-        });
-        const json output_item = {
-            {"type",    "message"},
-            {"status",  "completed"},
-            {"id",      oai_resp_message_id},
-            {"content", json::array({content_part})},
-            {"role",    "assistant"}
-        };
-
-        server_sent_events.push_back(json {
-            {"event", "response.output_item.done"},
-            {"data", json {
-                {"type",            "response.output_item.done"},
-                {"sequence_number", seq_num++},
-                {"output_index",    output_idx},
-                {"item",            output_item},
-            }}
-        });
+        const bool has_tool_calls = !oaicompat_msg.tool_calls.empty();
+        const json content_part = build_responses_content_part(oaicompat_msg.content);
+        common_chat_msg msg = oaicompat_msg;
+        msg.role = msg.role.empty() ? "assistant" : msg.role;
+        const json output_item = build_responses_message_item(oai_resp_message_id, msg, has_tool_calls);
+        if (!oai_resp_message_done) {
+            server_sent_events.push_back(build_responses_sse("response.output_text.done", seq_num, {
+                {"output_index", output_idx}, {"content_index", 0},
+                {"item_id", oai_resp_message_id}, {"text", oaicompat_msg.content},
+                {"logprobs", json::array()},
+            }));
+            server_sent_events.push_back(build_responses_sse("response.content_part.done", seq_num, {
+                {"output_index", output_idx}, {"content_index", 0},
+                {"item_id", oai_resp_message_id}, {"part", content_part},
+            }));
+            server_sent_events.push_back(build_responses_sse("response.output_item.done", seq_num, {
+                {"output_index", output_idx}, {"item", output_item},
+            }));
+        }
         output.push_back(output_item);
         output_idx++;
     }
@@ -1131,23 +1600,28 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         const std::string fc_id = tc_idx < oai_resp_fc_item_ids.size()
             ? oai_resp_fc_item_ids[tc_idx]
             : "fc_" + random_string(); // fallback for non-streaming path
-        const json output_item = {
-            {"type",      "function_call"},
-            {"id",        fc_id},
-            {"call_id",   tool_call.id},
-            {"name",      tool_call.name},
-            {"arguments", tool_call.arguments},
-            {"status",    "completed"},
-        };
-        server_sent_events.push_back(json {
-            {"event", "response.output_item.done"},
-            {"data", json {
-                {"type",            "response.output_item.done"},
-                {"sequence_number", seq_num++},
-                {"output_index",    output_idx},
-                {"item",            output_item},
-            }}
-        });
+        const json output_item = server_build_responses_tool_output_item(
+            tool_call,
+            generation_params.responses_tool_metadata,
+            "completed",
+            fc_id,
+            generation_params.responses_web_search_wrapper,
+            generation_params.responses_file_search_wrapper);
+        const std::string tool_type = json_value(output_item, "type", std::string());
+        if (tool_type == "function_call") {
+            server_sent_events.push_back(build_responses_sse("response.function_call_arguments.done", seq_num, {
+                {"output_index", output_idx}, {"item_id", fc_id},
+                {"arguments", json_value(output_item, "arguments", tool_call.arguments)},
+            }));
+        } else if (tool_type == "custom_tool_call") {
+            server_sent_events.push_back(build_responses_sse("response.custom_tool_call_input.done", seq_num, {
+                {"output_index", output_idx}, {"item_id", fc_id},
+                {"input", json_value(output_item, "input", std::string())},
+            }));
+        }
+        server_sent_events.push_back(build_responses_sse("response.output_item.done", seq_num, {
+            {"output_index", output_idx}, {"item", output_item},
+        }));
         output.push_back(output_item);
         output_idx++;
     }
@@ -1156,14 +1630,16 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     json resp = build_oai_resp_metadata(oai_resp_id, oaicompat_model, output, output_text,
                                         n_prompt_tokens, n_decoded, n_prompt_tokens_cache);
 
-    server_sent_events.push_back(json {
-        {"event", "response.completed"},
-        {"data", json {
-            {"type",            "response.completed"},
-            {"sequence_number", seq_num++},
-            {"response",        resp},
-        }}
-    });
+    const char * event = "response.completed";
+    if (stop == STOP_TYPE_LIMIT && oaicompat_msg.content.empty() && oaicompat_msg.tool_calls.empty()) {
+        resp["status"]             = "incomplete";
+        resp["completed_at"]       = nullptr;
+        resp["incomplete_details"] = json{{"reason", "max_output_tokens"}};
+        event = "response.incomplete";
+    }
+    server_sent_events.push_back(build_responses_sse(event, seq_num, {
+        {"response", resp},
+    }));
 
     return server_sent_events;
 }
@@ -1453,8 +1929,16 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     oai_resp_message_id    = state.oai_resp_message_id;
     oai_resp_fc_id         = state.oai_resp_fc_id;
     oai_resp_fc_item_id    = state.oai_resp_fc_item_id;
+    oai_resp_fc_tool_type  = state.oai_resp_fc_tool_type;
+    oai_resp_fc_arguments  = state.oai_resp_fc_arguments;
+    oai_resp_fc_custom_input = state.oai_resp_fc_custom_input;
     oai_resp_seq_num       = state.oai_resp_seq_num;
     oai_resp_output_idx    = state.oai_resp_output_idx;
+    oai_resp_reasoning_output_idx = state.oai_resp_reasoning_output_idx;
+    oai_resp_reasoning_done = state.oai_resp_reasoning_done;
+    oai_resp_message_done = state.oai_resp_message_done;
+    oai_resp_reasoning_content = state.chat_msg.reasoning_content;
+    oai_resp_message_content = state.chat_msg.content;
 
     // track if the accumulated message has any reasoning content
     anthropic_has_reasoning = !state.chat_msg.reasoning_content.empty();
@@ -1468,13 +1952,18 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
         if (!diff.reasoning_content_delta.empty()) {
             if (!state.thinking_block_started) {
                 state.thinking_block_started = true;
-                state.oai_resp_seq_num++;    // output_item.added
+                state.oai_resp_reasoning_output_idx = state.oai_resp_output_idx;
+                state.oai_resp_seq_num += 2; // output_item.added + reasoning_summary_part.added
                 state.oai_resp_output_idx++;
             }
-            state.oai_resp_seq_num++; // reasoning_text.delta
+            state.oai_resp_seq_num += 2; // reasoning_summary_text.delta + reasoning_text.delta
         }
         if (!diff.content_delta.empty()) {
             if (!state.text_block_started) {
+                if (state.thinking_block_started && !state.oai_resp_reasoning_done) {
+                    state.oai_resp_reasoning_done = true;
+                    state.oai_resp_seq_num++; // reasoning output_item.done
+                }
                 state.text_block_started = true;
                 state.oai_resp_seq_num += 2; // output_item.added + content_part.added
                 state.oai_resp_output_idx++;
@@ -1482,14 +1971,42 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
             state.oai_resp_seq_num++; // output_text.delta
         }
         if (!diff.tool_call_delta.name.empty()) {
+            if (state.thinking_block_started && !state.oai_resp_reasoning_done) {
+                state.oai_resp_reasoning_done = true;
+                state.oai_resp_seq_num++; // reasoning output_item.done
+            }
+            if (state.text_block_started && !state.oai_resp_message_done) {
+                state.oai_resp_message_done = true;
+                state.oai_resp_seq_num += 3; // output_text.done + content_part.done + output_item.done
+            }
             state.oai_resp_fc_id = diff.tool_call_delta.id;
             state.oai_resp_fc_item_id = "fc_" + random_string();
+            oai_resp_fc_item_id = state.oai_resp_fc_item_id;
+            state.oai_resp_fc_tool_type = get_responses_tool_type(responses_tool_metadata, diff.tool_call_delta.name);
+            state.oai_resp_fc_arguments.clear();
+            state.oai_resp_fc_custom_input.clear();
             state.oai_resp_fc_item_ids.push_back(state.oai_resp_fc_item_id);
             state.oai_resp_seq_num++;    // output_item.added
             state.oai_resp_output_idx++;
         }
         if (!diff.tool_call_delta.arguments.empty()) {
-            state.oai_resp_seq_num++; // function_call_arguments.delta
+            const std::string tool_type = state.oai_resp_fc_tool_type;
+            if (tool_type == "function") {
+                state.oai_resp_seq_num++; // function_call_arguments.delta
+            }
+            const std::string next_arguments = state.oai_resp_fc_arguments + diff.tool_call_delta.arguments;
+            if (tool_type == "custom") {
+                const std::string delta = best_effort_custom_tool_delta(next_arguments, state.oai_resp_fc_custom_input);
+                const json parsed_args = parse_tool_arguments(next_arguments);
+                std::string current_input;
+                if (get_custom_tool_input_value_if_present(parsed_args, current_input)) {
+                    state.oai_resp_fc_custom_input = current_input;
+                }
+                if (!delta.empty()) {
+                    state.oai_resp_seq_num++; // custom_tool_call_input.delta
+                }
+            }
+            state.oai_resp_fc_arguments = next_arguments;
         }
     }
 }
@@ -1635,6 +2152,47 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
     std::vector<json> events;
     int & seq_num    = oai_resp_seq_num;
     int & output_idx = oai_resp_output_idx;
+    auto maybe_close_reasoning = [&]() {
+        if (!thinking_block_started || oai_resp_reasoning_done) {
+            return;
+        }
+        events.push_back(json {
+            {"event", "response.output_item.done"},
+            {"data", json {
+                {"type",            "response.output_item.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    oai_resp_reasoning_output_idx < 0 ? output_idx - 1 : oai_resp_reasoning_output_idx},
+                {"item",            build_responses_reasoning_item(
+                    oai_resp_reasoning_id,
+                    oai_resp_reasoning_content,
+                    "completed")},
+            }},
+        });
+        oai_resp_reasoning_done = true;
+    };
+    auto maybe_close_text = [&]() {
+        if (!text_block_started || oai_resp_message_done) {
+            return;
+        }
+        const json content_part = build_responses_content_part(oai_resp_message_content);
+        common_chat_msg msg;
+        msg.role = "assistant";
+        msg.content = oai_resp_message_content;
+        events.push_back(build_responses_sse("response.output_text.done", seq_num, {
+            {"output_index", output_idx - 1}, {"content_index", 0},
+            {"item_id", oai_resp_message_id}, {"text", oai_resp_message_content},
+            {"logprobs", json::array()},
+        }));
+        events.push_back(build_responses_sse("response.content_part.done", seq_num, {
+            {"output_index", output_idx - 1}, {"content_index", 0},
+            {"item_id", oai_resp_message_id}, {"part", content_part},
+        }));
+        events.push_back(build_responses_sse("response.output_item.done", seq_num, {
+            {"output_index", output_idx - 1},
+            {"item", build_responses_message_item(oai_resp_message_id, msg, true)},
+        }));
+        oai_resp_message_done = true;
+    };
 
     if (n_decoded == 1) {
         // Build initial response object with all required fields but empty output and zeroed usage
@@ -1669,18 +2227,32 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                         {"type",            "response.output_item.added"},
                         {"sequence_number", seq_num++},
                         {"output_index",    output_idx++},
-                        {"item", json {
-                            {"id",                oai_resp_reasoning_id},
-                            {"summary",           json::array()},
-                            {"type",              "reasoning"},
-                            {"content",           json::array()},
-                            {"encrypted_content", ""},
-                            {"status",            "in_progress"},
-                        }},
+                        {"item",            build_responses_reasoning_item(oai_resp_reasoning_id, "", "in_progress")},
+                    }},
+                });
+                events.push_back(json {
+                    {"event", "response.reasoning_summary_part.added"},
+                    {"data", json {
+                        {"type",            "response.reasoning_summary_part.added"},
+                        {"sequence_number", seq_num++},
+                        {"output_index",    output_idx - 1},
+                        {"summary_index",   0},
+                        {"item_id",         oai_resp_reasoning_id},
                     }},
                 });
                 thinking_block_started = true;
             }
+            events.push_back(json {
+                {"event", "response.reasoning_summary_text.delta"},
+                {"data", json {
+                    {"type",            "response.reasoning_summary_text.delta"},
+                    {"sequence_number", seq_num++},
+                    {"output_index",    output_idx - 1},
+                    {"summary_index",   0},
+                    {"delta",           diff.reasoning_content_delta},
+                    {"item_id",         oai_resp_reasoning_id},
+                }},
+            });
             events.push_back(json {
                 {"event", "response.reasoning_text.delta"},
                 {"data", json {
@@ -1696,6 +2268,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
 
         if (!diff.content_delta.empty()) {
             if (!text_block_started) {
+                maybe_close_reasoning();
                 events.push_back(json {
                     {"event", "response.output_item.added"},
                     {"data", json {
@@ -1705,6 +2278,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                         {"item", json {
                             {"content", json::array()},
                             {"id",      oai_resp_message_id},
+                            {"phase",   "commentary"},
                             {"role",    "assistant"},
                             {"status",  "in_progress"},
                             {"type",    "message"},
@@ -1741,35 +2315,71 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
         }
 
         if (!diff.tool_call_delta.name.empty()) {
+            maybe_close_reasoning();
+            maybe_close_text();
+            oai_resp_fc_tool_type = get_responses_tool_type(responses_tool_metadata, diff.tool_call_delta.name);
+            oai_resp_fc_arguments.clear();
+            oai_resp_fc_custom_input.clear();
+            const common_chat_tool_call tool_call {
+                diff.tool_call_delta.name,
+                "",
+                diff.tool_call_delta.id,
+            };
+            const json output_item = server_build_responses_tool_output_item(
+                tool_call,
+                responses_tool_metadata,
+                "in_progress",
+                oai_resp_fc_item_id,
+                responses_web_search_wrapper,
+                responses_file_search_wrapper);
+            if (json_value(output_item, "type", std::string()) == "function_call") {
+                oai_resp_fc_tool_type = "function";
+            }
             events.push_back(json {
                 {"event", "response.output_item.added"},
                 {"data", json {
                     {"type",            "response.output_item.added"},
                     {"sequence_number", seq_num++},
                     {"output_index",    output_idx++},
-                    {"item", json {
-                        {"id",        oai_resp_fc_item_id},
-                        {"arguments", ""},
-                        {"call_id",   diff.tool_call_delta.id},
-                        {"name",      diff.tool_call_delta.name},
-                        {"type",      "function_call"},
-                        {"status",    "in_progress"},
-                    }},
+                    {"item",            output_item},
                 }},
             });
         }
 
         if (!diff.tool_call_delta.arguments.empty()) {
-            events.push_back(json {
-                {"event", "response.function_call_arguments.delta"},
-                {"data", json {
-                    {"type",            "response.function_call_arguments.delta"},
-                    {"sequence_number", seq_num++},
-                    {"output_index",    output_idx - 1},
-                    {"delta",           diff.tool_call_delta.arguments},
-                    {"item_id",         oai_resp_fc_item_id},
-                }},
-            });
+            if (oai_resp_fc_tool_type == "function") {
+                events.push_back(json {
+                    {"event", "response.function_call_arguments.delta"},
+                    {"data", json {
+                        {"type",            "response.function_call_arguments.delta"},
+                        {"sequence_number", seq_num++},
+                        {"output_index",    output_idx - 1},
+                        {"delta",           diff.tool_call_delta.arguments},
+                        {"item_id",         oai_resp_fc_item_id},
+                    }},
+                });
+            } else if (oai_resp_fc_tool_type == "custom") {
+                const std::string next_arguments = oai_resp_fc_arguments + diff.tool_call_delta.arguments;
+                const std::string delta = best_effort_custom_tool_delta(next_arguments, oai_resp_fc_custom_input);
+                const json parsed_args = parse_tool_arguments(next_arguments);
+                oai_resp_fc_arguments = next_arguments;
+                std::string current_input;
+                if (get_custom_tool_input_value_if_present(parsed_args, current_input)) {
+                    oai_resp_fc_custom_input = current_input;
+                }
+                if (!delta.empty()) {
+                    events.push_back(json {
+                        {"event", "response.custom_tool_call_input.delta"},
+                        {"data", json {
+                            {"type",            "response.custom_tool_call_input.delta"},
+                            {"sequence_number", seq_num++},
+                            {"output_index",    output_idx - 1},
+                            {"delta",           delta},
+                            {"item_id",         oai_resp_fc_item_id},
+                        }},
+                    });
+                }
+            }
         }
     }
     return events;

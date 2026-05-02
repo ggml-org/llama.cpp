@@ -911,7 +911,8 @@ static void handle_media(
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files)
+    std::vector<raw_buffer> & out_files,
+    bool no_prefill_assistant)
 {
     json llama_params;
 
@@ -992,11 +993,22 @@ json oaicompat_chat_params_parse(
             std::string type      = json_value(p, "type", std::string());
             if (type == "image_url") {
                 if (!opt.allow_image) {
-                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                    p["type"] = "text";
+                    p["text"] = "[image input omitted: current model does not support image input]";
+                    p.erase("image_url");
+                    continue;
                 }
 
                 json image_url = json_value(p, "image_url", json::object());
-                handle_media(out_files, image_url, opt.media_path);
+                try {
+                    handle_media(out_files, image_url, opt.media_path);
+                } catch (const std::exception & e) {
+                    SRV_WRN("image input could not be loaded, sending text placeholder instead: %s\n", e.what());
+                    p["type"] = "text";
+                    p["text"] = "[image input omitted: " + std::string(e.what()) + "]";
+                    p.erase("image_url");
+                    continue;
+                }
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1078,7 +1090,7 @@ json oaicompat_chat_params_parse(
     // continue_final_message is the explicit opt in alias from the vLLM/transformers API,
     // equivalent to the prefill_assistant heuristic
     bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant"
-        && (continue_final_message || opt.prefill_assistant);
+        && (continue_final_message || (opt.prefill_assistant && !no_prefill_assistant));
     common_chat_msg last_message;
     if (prefill_assistant_message) {
         last_message = inputs.messages.back();

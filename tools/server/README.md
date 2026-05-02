@@ -1370,6 +1370,18 @@ curl http://localhost:8080/v1/responses \
 
 This endpoint works by converting Responses request into Chat Completions request.
 
+Responses `web_search` and `file_search` tools work with full compatibility and replay into the VScode Codex extension.
+A wrapper is used in the .codex folder or project's config.toml file to send the parameter, but it seamless to the model.
+Example:
+[model_providers.llamacpp]
+name = "Local llama.cpp"
+model = "model.gguf"
+base_url = "http://127.0.0.1:1234/v1" #Adjust for your port/IP
+supports_websockets = false #this must be false and is not supported yet in llama.cpp
+
+[model_providers.llamacpp.http_headers]
+X-Llama-Responses-Web-Search-Wrapper = "tvly" # replace with any text based web search, tvly is recommended.
+X-Llama-Responses-File-Search-Wrapper = "rg" # rg works best must be installed; set to preferred file search tool.
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 
