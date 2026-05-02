@@ -6819,6 +6819,7 @@ static size_t ggml_vk_benchmark_uma_threshold(
             return size;
         }
     }
+
     return default_threshold;
 }
 
@@ -6889,7 +6890,6 @@ static void ggml_vk_calibrate_uma_thresholds(vk_device& device) {
     }
 
     ggml_vk_run_uma_benchmarks(device);
-
     VK_LOG_DEBUG("ggml_vulkan: calibrated UMA read threshold: " << device->uma_read_threshold << ", write threshold: " << device->uma_write_threshold);
 }
 
@@ -6897,14 +6897,14 @@ static bool ggml_vk_use_uma_direct_read(vk_buffer & src, size_t copy_size) {
     GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
     const bool host_cached = (src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) != vk::MemoryPropertyFlags{};
-    return host_cached || copy_size > ggml_vk_uma_non_cached_direct_read_threshold(src->device);
+    return host_cached || copy_size <= ggml_vk_uma_non_cached_direct_read_threshold(src->device);
 }
 
 static bool ggml_vk_use_uma_direct_write(const vk_buffer & dst, size_t copy_size) {
     GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
     const bool host_cached = (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) != vk::MemoryPropertyFlags{};
-    return host_cached || copy_size > ggml_vk_uma_non_cached_direct_write_threshold(dst->device);
+    return host_cached || copy_size <= ggml_vk_uma_non_cached_direct_write_threshold(dst->device);
 }
 
 static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_context& subctx, vk_buffer& dst, size_t offset, const ggml_tensor * tensor, bool sync_staging = false) {
