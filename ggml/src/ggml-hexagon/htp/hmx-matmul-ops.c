@@ -814,7 +814,7 @@ static void transfer_activation_chunk_threaded(struct htp_context *ctx, __fp16 *
 #define FALLBACK_TO_STANDARD 1
 
 // C += AB
-static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b, 
+static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b,
                                 const __fp16 *restrict col_scales, const __fp16 *restrict eye_tile,
                                 int n_row_tiles, int n_col_tiles, int n_dot_tiles, bool zero_init) {
     __builtin_assume(n_row_tiles > 0);
