@@ -8,8 +8,12 @@ enum common_params_fit_status {
     COMMON_PARAMS_FIT_STATUS_ERROR   = 2, // a hard error occurred, e.g. because no model could be found at the specified path
 };
 
-// fits mparams and cparams to free device memory (assumes system memory is unlimited)
-//   - returns true if the parameters could be successfully modified to fit device memory
+// fits mparams and cparams to free memory budgets
+//   - budget group 0: physical/API-reported device budget per device
+//   - budget group 1: host budget
+//   - budget group 2: shared/overlapping budget for UMA/unified-memory devices
+//   - returns SUCCESS only if the fitted parameters pass verification for every enabled budget group
+//   - commits fitted params and writable output buffers only on SUCCESS; FAILURE/ERROR leaves inputs unchanged
 //   - this function is NOT thread safe because it modifies the global llama logger state
 //   - only parameters that have the same value as in llama_default_model_params are modified
 //     with the exception of the context size which is modified if and only if equal to 0
