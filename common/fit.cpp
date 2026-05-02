@@ -115,17 +115,18 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data(
         size_t total;
         ggml_backend_dev_memory(dev, &free, &total);
 
-        // Some accelerator backends, such as BLAS, report 0/0 and rely on the
-        // host-memory fallback. For GPU-like backends, however, 0/0 means --fit
-        // has no reliable device budget.
+        // Some non-GPU accelerator backends, such as BLAS, report 0/0 and rely on
+        // the host-memory fallback. For GPU-like backends, keep 0/0 so --fit does
+        // not assign anything to a device with an unknown memory budget.
         if (free == 0 && total == 0) {
             const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
             if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-                throw common_params_fit_exception(std::string("device ") + ggml_backend_dev_name(dev)
-                    + " did not report memory; cannot safely fit to an unknown device budget");
+                LOG_WRN("%s: device %s did not report memory; --fit will not use it\n",
+                        __func__, ggml_backend_dev_name(dev));
+            } else {
+                free  = ret.back().free;
+                total = ret.back().total;
             }
-            free  = ret.back().free;
-            total = ret.back().total;
         }
         ret[i].free  = free;
         ret[i].total = total;
