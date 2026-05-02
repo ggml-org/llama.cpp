@@ -1520,7 +1520,6 @@ struct clip_model_loader {
                         get_u32(KEY_A_PROJ_WINDOW_SIZE,     hparams.audio_proj_window_size);
                         get_u32(KEY_A_PROJ_DOWNSAMPLE_RATE, hparams.audio_proj_downsample_rate);
                         get_u32(KEY_A_PROJ_HEAD_COUNT,      hparams.audio_proj_head_count);
-                        get_f32(KEY_A_PROJ_LAYERNORM_EPS,   hparams.audio_proj_layernorm_eps);
                     } break;
                 case PROJECTOR_TYPE_JANUS_PRO:
                     {

@@ -98,7 +98,6 @@ struct clip_hparams {
     int32_t audio_proj_window_size     = 0;
     int32_t audio_proj_downsample_rate = 0;
     int32_t audio_proj_head_count      = 0;
-    float   audio_proj_layernorm_eps   = 0.0f;
 
     // audio-to-mel preprocessor params
     int32_t audio_chunk_len   = -1; // in seconds

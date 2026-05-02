@@ -1,6 +1,7 @@
 #include "models.h"
 
 ggml_cgraph * clip_graph_granite_speech::build() {
+    const float enc_eps    = 1e-5f;
     const int n_frames     = img.nx;
     const int context_size = hparams.audio_chunk_size;
     const int ctc_layer    = n_layer / 2;
@@ -38,7 +39,7 @@ ggml_cgraph * clip_graph_granite_speech::build() {
         // ffn1 (half-step)
         {
             auto * ffn1 = build_norm(cur, layer.ff_norm_w, layer.ff_norm_b,
-                                     NORM_TYPE_NORMAL, eps, il);
+                                     NORM_TYPE_NORMAL, enc_eps, il);
             cb(ffn1, "ffn1_norm", il);
 
             ffn1 = build_ffn(ffn1,
@@ -56,7 +57,7 @@ ggml_cgraph * clip_graph_granite_speech::build() {
         // injected between KQ product and softmax, which build_attn doesn't support
         {
             auto * normed = build_norm(residual, layer.ln_1_w, layer.ln_1_b,
-                                       NORM_TYPE_NORMAL, eps, il);
+                                       NORM_TYPE_NORMAL, enc_eps, il);
             cb(normed, "attn_norm", il);
 
             if (n_frames < padded_len) {
@@ -110,7 +111,7 @@ ggml_cgraph * clip_graph_granite_speech::build() {
         // conv module
         {
             cur = build_norm(residual, layer.norm_conv_w, layer.norm_conv_b,
-                             NORM_TYPE_NORMAL, eps, il);
+                             NORM_TYPE_NORMAL, enc_eps, il);
             cb(cur, "conv_norm", il);
 
             auto * x = build_mm(layer.conv_pw1_w, cur);
@@ -151,7 +152,7 @@ ggml_cgraph * clip_graph_granite_speech::build() {
         // ffn2 (half-step)
         {
             auto * ffn2 = build_norm(residual, layer.ff_norm_1_w, layer.ff_norm_1_b,
-                                     NORM_TYPE_NORMAL, eps, il);
+                                     NORM_TYPE_NORMAL, enc_eps, il);
             cb(ffn2, "ffn2_norm", il);
 
             ffn2 = build_ffn(ffn2,
@@ -165,7 +166,7 @@ ggml_cgraph * clip_graph_granite_speech::build() {
         }
 
         cur = build_norm(residual, layer.ln_2_w, layer.ln_2_b,
-                         NORM_TYPE_NORMAL, eps, il);
+                         NORM_TYPE_NORMAL, enc_eps, il);
         cb(cur, "layer_out", il);
 
         // CTC branch
@@ -189,7 +190,7 @@ ggml_cgraph * clip_graph_granite_speech::build() {
         const int proj_n_head     = hparams.audio_proj_head_count;
         const int proj_d_head     = n_embd / proj_n_head;
         const float proj_kq_scale = 1.0f / sqrtf((float)proj_d_head);
-        const float proj_eps      = hparams.audio_proj_layernorm_eps;
+        const float proj_eps      = 1e-12f;
         const int nblocks_proj    = (n_frames + window_size - 1) / window_size;
         const int padded_proj     = nblocks_proj * window_size;
 

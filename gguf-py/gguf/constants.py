@@ -352,7 +352,6 @@ class Keys:
             WINDOW_SIZE     = "clip.audio.projector.window_size"
             DOWNSAMPLE_RATE = "clip.audio.projector.downsample_rate"
             HEAD_COUNT      = "clip.audio.projector.head_count"
-            LAYERNORM_EPS   = "clip.audio.projector.layer_norm_epsilon"
 
     class Diffusion:
         SHIFT_LOGITS        = "diffusion.shift_logits"

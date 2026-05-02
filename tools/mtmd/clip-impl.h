@@ -69,7 +69,6 @@
 #define KEY_A_PROJ_WINDOW_SIZE     "clip.audio.projector.window_size"
 #define KEY_A_PROJ_DOWNSAMPLE_RATE "clip.audio.projector.downsample_rate"
 #define KEY_A_PROJ_HEAD_COUNT      "clip.audio.projector.head_count"
-#define KEY_A_PROJ_LAYERNORM_EPS   "clip.audio.projector.layer_norm_epsilon"
 
 
 //
