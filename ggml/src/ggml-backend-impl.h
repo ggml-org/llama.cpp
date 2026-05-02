@@ -98,6 +98,9 @@ extern "C" {
     // temporary workaround to statically allocate tensors from a context in a deduplicated way:
     GGML_API struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
 
+    // another temporary workaround
+    GGML_API void ggml_backend_meta_buft_update_max_n_tensors(ggml_backend_buffer_type_t buft, size_t n_tensors);
+
     //
     // Backend (stream)
     //

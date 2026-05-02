@@ -823,6 +823,12 @@ static void ggml_gallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
 
 static bool ggml_gallocr_reserve_n_impl(
         ggml_gallocr_t galloc, struct ggml_cgraph * graph, const int * node_buffer_ids, const int * leaf_buffer_ids, bool no_alloc) {
+    // FIXME long-term this should be replaced with better logic in ggml-alloc.c
+    for (int i = 0; i < galloc->n_buffers; i++) {
+        if (ggml_backend_buft_is_meta(galloc->bufts[i])) {
+            ggml_backend_meta_buft_update_max_n_tensors(galloc->bufts[i], graph->n_leafs + graph->n_nodes);
+        }
+    }
     size_t min_hash_size = graph->n_nodes + graph->n_leafs;
     // add 25% margin to avoid hash collisions
     min_hash_size += min_hash_size / 4;
