@@ -4881,6 +4881,70 @@ struct test_conv_transpose_1d : public test_case {
     }
 };
 
+// GGML_OP_SNAKE
+struct test_snake : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 2> ne;
+    int v; // view (1 : non-contiguous x)
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, ne, v);
+    }
+
+    test_snake(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 2> ne = {64, 32},
+            int v = 0)
+        : type(type), ne(ne), v(v) {}
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        // mul (a*x), sin, sqr, mul (s*s*inv_b), add (x + ...)
+        return 5 * (uint64_t)ne[0] * (uint64_t)ne[1];
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // x: [T, C], a and inv_b: [C]
+        ggml_tensor * x;
+        if (v & 1) {
+            auto big = ne;
+            big[0] *= 3;
+            big[1] *= 2;
+            ggml_tensor * x_full = ggml_new_tensor_2d(ctx, type, big[0], big[1]);
+            ggml_set_name(x_full, "x_full");
+            x = ggml_view_2d(ctx, x_full, ne[0], ne[1], x_full->nb[1], 0);
+            ggml_set_name(x, "view_of_x");
+        } else {
+            x = ggml_new_tensor_2d(ctx, type, ne[0], ne[1]);
+            ggml_set_name(x, "x");
+        }
+
+        ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[1]);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * inv_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[1]);
+        ggml_set_name(inv_b, "inv_b");
+
+        ggml_tensor * out = ggml_snake(ctx, x, a, inv_b);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        // Snake nonlinearity is most active when a*x spans several periods.
+        // Default uniform [-1,1] keeps sin in the near-linear regime; widen
+        // x to [-pi, pi] so that sin^2 actually exercises its periodicity.
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            const std::string name = ggml_get_name(t);
+            if (name == "x" || name == "x_full") {
+                init_tensor_uniform(t, -3.14159f, 3.14159f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_CONV_TRANSPOSE_2D
 struct test_conv_transpose_2d : public test_case {
     // Dimensions
@@ -7780,6 +7844,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_conv_transpose_1d({3,2,1,1}, {3,1,2,1}, 1, 0, 1));
     test_cases.emplace_back(new test_conv_transpose_1d({2,1,1,1}, {3,1,1,1}, 1, 0, 1));
 
+    // GGML_OP_SNAKE: y = x + sin(a*x)^2 * inv_b
+    for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
+        test_cases.emplace_back(new test_snake(type, {  5,  7}));   // primes < SIMD width
+        test_cases.emplace_back(new test_snake(type, { 33, 32}));   // boundary at 32
+        test_cases.emplace_back(new test_snake(type, {1025, 13}));  // large prime, grid-stride
+        test_cases.emplace_back(new test_snake(type, { 128, 16}));  // power-of-two fast path
+    }
+    test_cases.emplace_back(new test_snake(GGML_TYPE_F32, {128, 16}, /*v=*/1)); // non-contiguous
+
     for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
         test_cases.emplace_back(new test_conv_transpose_2d({3, 2, 3, 1}, {2, 2, 1, 3}, 1, kernel_type));
         test_cases.emplace_back(new test_conv_transpose_2d({10, 10, 9, 1}, {3, 3, 1, 9}, 2, kernel_type));
@@ -8907,6 +8980,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32, 10, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {1024, 10, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32000, 512, 1, 1}));
+
+    // BigVGAN-style vocoder shapes (24 kHz, 192 channels) for SNAKE
+    test_cases.emplace_back(new test_snake(GGML_TYPE_F32,  {7680, 192}));
+    test_cases.emplace_back(new test_snake(GGML_TYPE_F16,  {7680, 192}));
+    test_cases.emplace_back(new test_snake(GGML_TYPE_BF16, {7680, 192}));
 
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {512, 34, 2, 1}));
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 80, 1, 1}));
