@@ -1730,8 +1730,9 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 * restrict vtcm_dst,
                                                    int k_stride) {
     hex_l2fetch((const uint8_t *)src, k_block * sizeof(*src), k_stride * sizeof(*src), 2);
     for (int r = 0; r < n_rows; r += 2) {
-        int r0 = r / HMX_FP16_TILE_N_ROWS;  // tile row index
-        int r1 = r % HMX_FP16_TILE_N_ROWS;  // intra-tile row idx
+        const int r0 = r / HMX_FP16_TILE_N_ROWS;  // tile row index
+        const int r1 = (r % HMX_FP16_TILE_N_ROWS) / 2;  // intra-tile row idx
+        const int tile_idx_base = r0 * (k_block / HMX_FP16_TILE_N_COLS);
 
         const bool next_row_valid = (r + 1) < n_rows;
 
@@ -1742,7 +1743,7 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 * restrict vtcm_dst,
             hex_l2fetch((const uint8_t *)(src + (r + 2) * k_stride), k_block * sizeof(*src), k_stride * sizeof(*src), MIN(n_rows - 2 - r, 2));
         }
 
-        for (int c = 0; c < k_block; c += 32) {
+        for (int c = 0; c < k_block; c += VLEN_FP32) {
             HVX_Vector v0 = *pv_in0++;
             HVX_Vector v1 = next_row_valid ? *pv_in1++ : Q6_V_vzero();
 
@@ -1750,10 +1751,10 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 * restrict vtcm_dst,
 
             // compute output position
             int c0       = c / HMX_FP16_TILE_N_COLS;  // tile column index
-            int tile_idx = r0 * (k_block / HMX_FP16_TILE_N_COLS) + c0;
+            int tile_idx = tile_idx_base + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HMX_FP16_TILE_N_ELMS);
-            tile[r1 / 2]     = v_out;
+            tile[r1]         = v_out;
         }
     }
 }
