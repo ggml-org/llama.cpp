@@ -197,13 +197,17 @@ struct common_chat_parser_params {
     // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
     bool                    reasoning_in_content = false;
     std::string             generation_prompt;
+    std::string             thinking_start_tag;
+    std::string             thinking_end_tag;
     bool                    parse_tool_calls     = true;
     bool                    debug                = false;  // Enable debug output for PEG parser
     common_peg_arena        parser               = {};
     common_chat_parser_params() = default;
     common_chat_parser_params(const common_chat_params & chat_params) {
-        format  = chat_params.format;
-        generation_prompt = chat_params.generation_prompt;
+        format             = chat_params.format;
+        generation_prompt  = chat_params.generation_prompt;
+        thinking_start_tag = chat_params.thinking_start_tag;
+        thinking_end_tag   = chat_params.thinking_end_tag;
     }
 };
 

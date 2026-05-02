@@ -2316,9 +2316,28 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         LOG_DBG("No parser definition detected, assuming pure content parser.");
     }
 
-    const std::string effective_input = params.generation_prompt.empty()
-        ? input
-        : params.generation_prompt + input;
+    std::string effective_input;
+    if (params.generation_prompt.empty()) {
+        effective_input = input;
+    } else {
+        effective_input = params.generation_prompt;
+        const auto marker_pos = params.thinking_end_tag.find_first_not_of(" \t\r\n");
+        if (!params.thinking_start_tag.empty() && marker_pos != std::string::npos && marker_pos > 0) {
+            const auto leading_ws  = params.thinking_end_tag.substr(0, marker_pos);
+            const auto end_marker  = params.thinking_end_tag.substr(marker_pos);
+            const bool is_or_may_be_empty_thinking_close =
+                string_starts_with(input, end_marker) ||
+                string_starts_with(end_marker, input);
+            const bool closes_empty_thinking =
+                string_ends_with(params.generation_prompt, params.thinking_start_tag) &&
+                is_or_may_be_empty_thinking_close &&
+                !string_starts_with(input, params.thinking_end_tag);
+            if (closes_empty_thinking) {
+                effective_input += leading_ws;
+            }
+        }
+        effective_input += input;
+    }
 
     //LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.c_str());
 
