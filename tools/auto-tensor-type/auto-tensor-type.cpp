@@ -20,6 +20,8 @@
 #include "llama.h"
 #include "log.h"
 
+#include <sys/stat.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -27,6 +29,7 @@
 #include <fstream>
 #include <future>
 #include <chrono>
+#include <iomanip>
 #include <mutex>
 #include <numeric>
 #include <regex>
@@ -84,7 +87,7 @@ struct config {
     int n_test_samples           = 1;     // number of samples per test size
     std::vector<int> test_sizes = {32, 128, 512};
     int64_t min_elements        = 40000;
-    ggml_type output_tensor_type = GGML_TYPE_COUNT; // default: highest from list
+    ggml_type output_tensor_type = GGML_TYPE_COUNT; // default: default_output_type_for_target()
     int max_iterations           = 100;
     std::string output_path;
     int n_threads                = 1;
@@ -93,6 +96,30 @@ struct config {
     // can get different quant types (matches hand-tuned recipes in llama-quant.cpp).
     // Set to 1 to reproduce the older per-role-only behavior.
     int n_layer_buckets          = 3;
+    // Number of representative layers sampled per (class, bucket) for activation
+    // capture. Larger values reduce per-bucket cost-matrix noise at the cost of
+    // more Phase-3 quantize+eval work. The first and last layer of each class
+    // are always sampled regardless of K (boundary layers are most sensitive).
+    int n_reps_per_bucket        = 3;
+    // Imatrix-energy bias correction. Each role's KLD is multiplied by
+    //   role_weight[r] = (geomean_role_energy / role_energy[r])^alpha
+    // where role_energy[r] is the mean per-input-channel imatrix value averaged
+    // across that role's tensors. Promotes residual-write tensors (ffn_down,
+    // attn_output, ssm_out) whose inputs are post-nonlinearity / post-attention
+    // and therefore low-energy, but whose errors compound through the residual
+    // stream. alpha = 0 disables the correction (current default — relative-L2
+    // metric already mitigates the worst magnitude bias). Reintroduced on top
+    // of the relative-L2 metric to capture role-level architectural sensitivity.
+    float importance_alpha       = 0.0f;
+    // Path to a Phase-3 cost-matrix cache file. If the file exists at startup
+    // and its header matches the current run's parameters (model size+mtime,
+    // sorted quant_types, min_elements, n_layer_buckets, n_reps_per_bucket,
+    // test_data, test_sizes, n_test_samples), Phase 2 + Phase 3 are skipped and
+    // the cached cost matrix is used directly. On miss/mismatch, the file is
+    // overwritten after Phase 3 completes. Empty = no cache.
+    // Useful for sweeping --target-bpw and --output-tensor-type without redoing
+    // ~45 minutes of trained-quant training each iteration.
+    std::string cost_matrix_cache;
 };
 
 struct tensor_info {
@@ -220,6 +247,52 @@ static ggml_type highest_bpw(const std::vector<ggml_type> & types) {
     ggml_type best = types[0];
     for (auto t : types) {
         if (compute_bpw(t) > compute_bpw(best)) best = t;
+    }
+    return best;
+}
+
+// Heuristic for the default output_tensor_type when the user does not pass
+// --output-tensor-type. Picks the lowest-BPW candidate at or above
+//   max(target_bpw + 1.0, 5.0)
+// falling back to the highest if none qualifies.
+//
+// Why not just `highest_bpw`? The output projection is large (vocab × hidden,
+// often ~10-20% of model params on modern tokenizers) and force-pinned (we
+// can't measure its per-tensor KLD via MUL_MAT — the model output KLD captures
+// it end-to-end). Empirically, picking Q6_K when target is 4.25 BPW wastes
+// ~0.11 BPW that the DP can spend on architecturally-amplified tensors
+// (attn_v, attn_output, ffn residual writes) for a much larger quality win.
+// Measured 2026-05-01 on Qwen3.5-9B: switching default from Q6_K to Q5_K cut
+// Mean KLD 0.0456 → 0.0366 (-19.6%) and Max KLD 8.78 → 2.57 (-71%) at the
+// same total 4.25 BPW.
+//
+// Why the 5.0-bpw floor? Both winning experiments (4.25 and 4.5 BPW targets)
+// landed on Q5_K (5.5 bpw) for output. Hand-tuned recipes (bartowski/unsloth
+// IQ4_XS, Q4_K_S, Q3_K_M) consistently use Q5_K for output across a wide
+// range of layer-tensor BPW targets — output sensitivity does not scale
+// linearly with the rest of the budget. A naive "smallest above target"
+// rule would pick Q4_K (4.5) for target 4.25 — untested but plausibly worse
+// than Q5_K, since it removes the small-but-meaningful premium that protects
+// the head against tail-token errors. Using the floor keeps output at Q5_K
+// for low/mid targets and lets it scale up only when target itself goes high.
+//
+// Resolved choices on the standard {IQ3_TQ, Q4_DPT, IQ4_XS, Q4_K, Q5_K, Q6_K}:
+//   target 3.0  → Q5_K (5.5),   target 4.25 → Q5_K (5.5),
+//   target 4.5  → Q5_K (5.5),   target 5.0  → Q6_K (6.5),
+//   target 5.5  → Q6_K (6.5),   target 6.5  → Q6_K (fallback to highest).
+static ggml_type default_output_type_for_target(const std::vector<ggml_type> & types, float target_bpw) {
+    const double min_output_bpw = std::max((double)target_bpw + 1.0, 5.0);
+    ggml_type best = GGML_TYPE_COUNT;
+    double best_bpw = 1e30;
+    for (auto t : types) {
+        const double bpw = compute_bpw(t);
+        if (bpw >= min_output_bpw && bpw < best_bpw) {
+            best = t;
+            best_bpw = bpw;
+        }
+    }
+    if (best == GGML_TYPE_COUNT) {
+        best = highest_bpw(types);
     }
     return best;
 }
@@ -1032,6 +1105,70 @@ static void split_fused_roles(
     }
 }
 
+// Mean per-input-channel imatrix energy for each role. The imatrix records
+// per-column sum of x_i^2 / counts ≈ E[x_i^2]; averaging across columns gives
+// a per-tensor scalar, then we average across tensors of the same role.
+// Tensors not present in the imatrix are skipped (they fall back to weight=1).
+static std::map<std::string, double> compute_role_energy(
+        const std::vector<tensor_info> & quantizable,
+        const std::unordered_map<std::string, std::vector<float>> & imatrix_data,
+        int64_t min_elements) {
+    std::map<std::string, std::pair<double, int>> sums; // role -> (sum_per_tensor_mean, n_tensors)
+    for (const auto & ti : quantizable) {
+        if (!is_quantizable_weight(ti, min_elements)) continue;
+        auto it = imatrix_data.find(ti.name);
+        if (it == imatrix_data.end() || it->second.empty()) continue;
+        double s = 0;
+        for (float v : it->second) s += (double)v;
+        double mean_energy = s / (double)it->second.size();
+        if (!std::isfinite(mean_energy) || mean_energy <= 0) continue;
+        sums[ti.role].first  += mean_energy;
+        sums[ti.role].second += 1;
+    }
+    std::map<std::string, double> out;
+    for (auto & [r, p] : sums) {
+        if (p.second > 0) out[r] = p.first / (double)p.second;
+    }
+    return out;
+}
+
+// Apply role_weight = (geomean / role_energy)^alpha to every (role, bucket) cell
+// in the cost matrix. The same multiplicative factor is applied to all qtypes for
+// a given role-bucket, so it preserves the within-role qtype ordering and only
+// changes the BPW-vs-error trade-off the DP optimizer sees across roles.
+static void apply_importance_alpha(
+        std::map<std::string, std::map<ggml_type, cost_entry>> & cost_matrix,
+        const std::map<std::string, double> & role_energy,
+        float alpha) {
+    if (alpha == 0.0f || role_energy.empty()) return;
+
+    // Geometric mean over roles that have a positive energy reading.
+    double sum_log = 0;
+    int n = 0;
+    for (const auto & [r, e] : role_energy) {
+        if (e > 0) { sum_log += std::log(e); n++; }
+    }
+    if (n == 0) return;
+    const double gmean = std::exp(sum_log / (double)n);
+
+    LOG("Applying importance-alpha=%.2f role weights (geomean energy=%.6g):\n", alpha, gmean);
+    std::map<std::string, double> role_weight;
+    for (const auto & [r, e] : role_energy) {
+        if (e <= 0) { role_weight[r] = 1.0; continue; }
+        role_weight[r] = std::pow(gmean / e, (double)alpha);
+        LOG("  %-12s energy=%.6g  weight=%.4f\n", r.c_str(), e, role_weight[r]);
+    }
+
+    for (auto & [key, costs] : cost_matrix) {
+        auto wit = role_weight.find(rb_role(key));
+        if (wit == role_weight.end()) continue;
+        const double w = wit->second;
+        for (auto & [qt, ce] : costs) {
+            if (ce.kld < 1e29) ce.kld *= w; // skip the forbidden-choice sentinel
+        }
+    }
+}
+
 struct assignment {
     std::map<std::string, ggml_type> role_to_type;
     double total_kld;
@@ -1338,12 +1475,29 @@ static void print_usage(const char * prog) {
     LOG("  --test-samples N         Number of samples per test size (default: 1)\n");
     LOG("  --test-sizes S1,S2,S3    Token counts for test inputs (default: 32,128,512)\n");
     LOG("  --min-elements N         Skip tensors with fewer elements (default: 40000)\n");
-    LOG("  --output-tensor-type T   Quant type for output.weight (default: highest from list)\n");
+    LOG("  --output-tensor-type T   Quant type for output.weight (default: lowest candidate\n");
+    LOG("                           with bpw >= max(target_bpw + 1.0, 5.0), else highest.\n");
+    LOG("                           Avoids spending top-shelf bits on a force-pinned tensor\n");
+    LOG("                           whose budget the DP spends better on amplified roles.)\n");
     LOG("  --max-iterations N       Max optimization iterations (default: 100)\n");
     LOG("  --threads N              Number of threads (default: 1)\n");
     LOG("  --layer-buckets N        Per-class layer buckets for independent quant assignment\n");
     LOG("                           (default: 3 — first/middle/last third).\n");
     LOG("                           1 reproduces the older per-role-only behavior.\n");
+    LOG("  --reps-per-bucket K      Number of representative layers sampled per (class, bucket)\n");
+    LOG("                           for activation capture (default: 3). Boundary layers\n");
+    LOG("                           (first/last of each class) are always sampled in\n");
+    LOG("                           addition. Larger K reduces cost-matrix noise at\n");
+    LOG("                           the cost of more Phase-3 quantize+eval work.\n");
+    LOG("  --importance-alpha A     Imatrix-energy bias exponent (default: 0). Multiplies\n");
+    LOG("                           each role's KLD by (geomean_energy/role_energy)^A,\n");
+    LOG("                           promoting low-energy residual-write tensors\n");
+    LOG("                           (ffn_down, attn_output, ssm_out). 0 = disabled,\n");
+    LOG("                           1 = full inverse-energy. Useful range 0..1.5.\n");
+    LOG("  --cost-matrix-cache PATH Read/write the Phase-3 cost matrix to PATH. On hit,\n");
+    LOG("                           skips Phase 2+3 entirely (~50min savings) when the\n");
+    LOG("                           cache header matches model+quants+test-data+sampling.\n");
+    LOG("                           On miss, runs Phase 3 normally and overwrites PATH.\n");
 }
 
 static config parse_args(int argc, char ** argv) {
@@ -1400,6 +1554,20 @@ static config parse_args(int argc, char ** argv) {
                 LOG_ERR("--layer-buckets must be >= 1\n");
                 exit(1);
             }
+        } else if (arg == "--reps-per-bucket" && i + 1 < argc) {
+            cfg.n_reps_per_bucket = std::stoi(argv[++i]);
+            if (cfg.n_reps_per_bucket < 1) {
+                LOG_ERR("--reps-per-bucket must be >= 1\n");
+                exit(1);
+            }
+        } else if (arg == "--importance-alpha" && i + 1 < argc) {
+            cfg.importance_alpha = std::stof(argv[++i]);
+            if (cfg.importance_alpha < 0.0f) {
+                LOG_ERR("--importance-alpha must be >= 0\n");
+                exit(1);
+            }
+        } else if (arg == "--cost-matrix-cache" && i + 1 < argc) {
+            cfg.cost_matrix_cache = argv[++i];
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argv[0]);
             exit(0);
@@ -1418,10 +1586,174 @@ static config parse_args(int argc, char ** argv) {
     }
 
     if (cfg.output_tensor_type == GGML_TYPE_COUNT) {
-        cfg.output_tensor_type = highest_bpw(cfg.quant_types);
+        cfg.output_tensor_type = default_output_type_for_target(cfg.quant_types, cfg.target_bpw);
     }
 
     return cfg;
+}
+
+// ============================================================================
+// Section 9b: Cost-matrix cache (skip Phase 2+3 across reruns)
+// ============================================================================
+
+static long long file_size_or_neg(const std::string & path) {
+    if (path.empty()) return -1;
+    struct stat st;
+    return stat(path.c_str(), &st) == 0 ? (long long)st.st_size : -1;
+}
+static long long file_mtime_or_neg(const std::string & path) {
+    if (path.empty()) return -1;
+    struct stat st;
+    return stat(path.c_str(), &st) == 0 ? (long long)st.st_mtime : -1;
+}
+static std::string sorted_qtypes_str(const std::vector<ggml_type> & types) {
+    std::vector<std::string> names;
+    names.reserve(types.size());
+    for (auto t : types) names.emplace_back(ggml_type_name(t));
+    std::sort(names.begin(), names.end());
+    std::string s;
+    for (size_t i = 0; i < names.size(); i++) {
+        if (i) s += ",";
+        s += names[i];
+    }
+    return s;
+}
+static std::string ints_str(const std::vector<int> & v) {
+    std::string s;
+    for (size_t i = 0; i < v.size(); i++) {
+        if (i) s += ",";
+        s += std::to_string(v[i]);
+    }
+    return s;
+}
+
+// Trim leading whitespace (used to handle "key value" parsing where value may
+// have a leading space after the key).
+static std::string ltrim(const std::string & s) {
+    size_t i = 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) i++;
+    return s.substr(i);
+}
+
+// Write the Phase-3 cost matrix to PATH along with a header capturing every
+// parameter that affects what the cost matrix would contain. Subsequent runs
+// can short-circuit Phase 2 + Phase 3 if their headers match exactly.
+static bool save_cost_matrix_cache(
+        const std::string & path, const config & cfg,
+        const std::map<std::string, std::map<ggml_type, cost_entry>> & cost_matrix) {
+    std::ofstream out(path);
+    if (!out) {
+        LOG_ERR("Failed to open cost-matrix cache for writing: %s\n", path.c_str());
+        return false;
+    }
+    out << "# auto-tensor-type cost matrix cache v1\n";
+    out << "model_path " << cfg.model_path << "\n";
+    out << "model_size " << file_size_or_neg(cfg.model_path) << "\n";
+    out << "model_mtime " << file_mtime_or_neg(cfg.model_path) << "\n";
+    out << "quant_types " << sorted_qtypes_str(cfg.quant_types) << "\n";
+    out << "min_elements " << cfg.min_elements << "\n";
+    out << "n_layer_buckets " << cfg.n_layer_buckets << "\n";
+    out << "n_reps_per_bucket " << cfg.n_reps_per_bucket << "\n";
+    out << "test_data " << cfg.test_data_path << "\n";
+    out << "test_data_size " << file_size_or_neg(cfg.test_data_path) << "\n";
+    out << "test_sizes " << ints_str(cfg.test_sizes) << "\n";
+    out << "n_test_samples " << cfg.n_test_samples << "\n";
+    out << "[entries]\n";
+    out << std::scientific << std::setprecision(10);
+    int n = 0;
+    for (const auto & [key, row] : cost_matrix) {
+        const std::string role = rb_role(key);
+        const int bucket = rb_bucket(key);
+        for (const auto & [qt, e] : row) {
+            out << role << " " << bucket << " " << ggml_type_name(qt)
+                << " " << e.kld << " " << e.bpw << "\n";
+            n++;
+        }
+    }
+    if (!out) {
+        LOG_ERR("Failed while writing cost-matrix cache: %s\n", path.c_str());
+        return false;
+    }
+    LOG("Wrote cost-matrix cache (%d entries) to %s\n", n, path.c_str());
+    return true;
+}
+
+// Try to load a cached cost matrix from PATH. Returns true and fills cost_matrix
+// only if the file exists AND every header line matches the current cfg. On any
+// header mismatch we log the offending field and return false (caller will run
+// Phase 2 + Phase 3 normally). Missing-file is silent (not an error).
+static bool load_cost_matrix_cache(
+        const std::string & path, const config & cfg,
+        std::map<std::string, std::map<ggml_type, cost_entry>> & cost_matrix) {
+    std::ifstream in(path);
+    if (!in) return false;
+
+    std::string line;
+    if (!std::getline(in, line) || line != "# auto-tensor-type cost matrix cache v1") {
+        LOG_WRN("Cost-matrix cache %s: bad header; ignoring\n", path.c_str());
+        return false;
+    }
+
+    auto expect_kv = [&](const std::string & key, const std::string & expected) -> bool {
+        if (!std::getline(in, line)) {
+            LOG_WRN("Cost-matrix cache %s: truncated at '%s'\n", path.c_str(), key.c_str());
+            return false;
+        }
+        const size_t sp = line.find(' ');
+        const std::string k = (sp == std::string::npos) ? line : line.substr(0, sp);
+        const std::string v = (sp == std::string::npos) ? std::string() : ltrim(line.substr(sp + 1));
+        if (k != key) {
+            LOG_WRN("Cost-matrix cache %s: header key mismatch (expected '%s', got '%s')\n",
+                    path.c_str(), key.c_str(), k.c_str());
+            return false;
+        }
+        if (v != expected) {
+            LOG_WRN("Cost-matrix cache %s: header mismatch on '%s' (cached='%s', current='%s')\n",
+                    path.c_str(), key.c_str(), v.c_str(), expected.c_str());
+            return false;
+        }
+        return true;
+    };
+
+    if (!expect_kv("model_path",        cfg.model_path)) return false;
+    if (!expect_kv("model_size",        std::to_string(file_size_or_neg(cfg.model_path)))) return false;
+    if (!expect_kv("model_mtime",       std::to_string(file_mtime_or_neg(cfg.model_path)))) return false;
+    if (!expect_kv("quant_types",       sorted_qtypes_str(cfg.quant_types))) return false;
+    if (!expect_kv("min_elements",      std::to_string(cfg.min_elements))) return false;
+    if (!expect_kv("n_layer_buckets",   std::to_string(cfg.n_layer_buckets))) return false;
+    if (!expect_kv("n_reps_per_bucket", std::to_string(cfg.n_reps_per_bucket))) return false;
+    if (!expect_kv("test_data",         cfg.test_data_path)) return false;
+    if (!expect_kv("test_data_size",    std::to_string(file_size_or_neg(cfg.test_data_path)))) return false;
+    if (!expect_kv("test_sizes",        ints_str(cfg.test_sizes))) return false;
+    if (!expect_kv("n_test_samples",    std::to_string(cfg.n_test_samples))) return false;
+
+    if (!std::getline(in, line) || line != "[entries]") {
+        LOG_WRN("Cost-matrix cache %s: missing [entries] marker\n", path.c_str());
+        return false;
+    }
+
+    int n = 0;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        std::istringstream ss(line);
+        std::string role, qt_name;
+        int bucket;
+        double kld, bpw;
+        if (!(ss >> role >> bucket >> qt_name >> kld >> bpw)) {
+            LOG_WRN("Cost-matrix cache %s: parse failure on line: %s\n", path.c_str(), line.c_str());
+            return false;
+        }
+        const ggml_type qt = parse_ggml_type_str(qt_name.c_str());
+        if (qt == GGML_TYPE_COUNT) {
+            LOG_WRN("Cost-matrix cache %s: unknown qtype '%s'\n", path.c_str(), qt_name.c_str());
+            return false;
+        }
+        cost_entry e; e.kld = kld; e.bpw = bpw;
+        cost_matrix[make_rb_key(role, bucket)][qt] = e;
+        n++;
+    }
+    LOG("Loaded cost-matrix cache (%d entries) from %s\n", n, path.c_str());
+    return true;
 }
 
 // ============================================================================
@@ -1439,6 +1771,8 @@ int main(int argc, char ** argv) {
     LOG("Quant types: ");
     for (auto t : cfg.quant_types) LOG("%s ", ggml_type_name(t));
     LOG("\n");
+    LOG("Output tensor type: %s (%.4f bpw)\n",
+        ggml_type_name(cfg.output_tensor_type), compute_bpw(cfg.output_tensor_type));
     LOG("Output:      %s\n", cfg.output_path.c_str());
     LOG("\n");
 
@@ -1525,39 +1859,80 @@ int main(int argc, char ** argv) {
     // and sample representatives from each class.
     auto layer_classes = get_layer_equivalence_classes(n_layer, all_tensors, cfg.min_elements);
 
-    // Collect all target layer indices
-    std::vector<int> target_layers;
-    for (const auto & lc : layer_classes) {
-        for (int l : lc.reps) target_layers.push_back(l);
-    }
-    std::sort(target_layers.begin(), target_layers.end());
-    target_layers.erase(std::unique(target_layers.begin(), target_layers.end()), target_layers.end());
-
-    LOG("Layer equivalence classes: %zu classes, %zu total target layers\n",
-        layer_classes.size(), target_layers.size());
-    for (const auto & lc : layer_classes) {
-        std::string roles_str;
-        for (const auto & [role, ne0, ne1] : lc.signature) {
-            if (!roles_str.empty()) roles_str += ", ";
-            roles_str += role;
-        }
-        LOG("  Class %zu: %zu layers, reps=[", lc.class_index, lc.all_layers.size());
-        for (size_t i = 0; i < lc.reps.size(); i++) {
-            if (i > 0) LOG(", ");
-            LOG("%d", lc.reps[i]);
-        }
-        LOG("], roles=[%s]\n", roles_str.c_str());
-    }
-
     // Compute per-layer bucket (0..n_layer_buckets-1) based on position within
     // the layer's equivalence class. Layers outside any class (i.e. no quantizable
     // weights) get bucket 0 — they won't be sampled anyway. Globals use -1.
+    // Computed BEFORE target_layers so we can sample reps per bucket.
     std::map<int, int> layer_to_bucket;
     for (const auto & lc : layer_classes) {
         const int n = (int)lc.all_layers.size();
         for (int i = 0; i < n; i++) {
             layer_to_bucket[lc.all_layers[i]] = compute_bucket(i, n, cfg.n_layer_buckets);
         }
+    }
+
+    // Sample target layers: K reps per (class, bucket), evenly stratified across
+    // the bucket's layers. Boundary layers (first and last of each class) are
+    // always pinned regardless of K — they correspond to the most-sensitive
+    // positions in the residual stream (post-embedding read, pre-output write)
+    // and the hand-tuned recipes in llama-quant.cpp:513 (`use_more_bits`) treat
+    // them specially. Pinning them here keeps the (role, bucket-0) and
+    // (role, bucket-last) cost-matrix entries grounded in the actual boundary
+    // layers' KLD rather than only the bucket midpoint's.
+    std::vector<int> target_layers;
+    for (const auto & lc : layer_classes) {
+        if (lc.all_layers.empty()) continue;
+        target_layers.push_back(lc.all_layers.front());
+        if (lc.all_layers.size() > 1) target_layers.push_back(lc.all_layers.back());
+
+        // Group this class's layers by bucket, then evenly sample K from each.
+        std::map<int, std::vector<int>> bucket_to_layers;
+        for (int l : lc.all_layers) {
+            bucket_to_layers[layer_to_bucket.at(l)].push_back(l);
+        }
+        for (auto & [b, layers] : bucket_to_layers) {
+            const int n = (int)layers.size();
+            const int k = std::min(n, std::max(1, cfg.n_reps_per_bucket));
+            if (k == 1) {
+                target_layers.push_back(layers[n / 2]); // middle of bucket
+            } else {
+                for (int i = 0; i < k; i++) {
+                    int idx = (int)(((long long)i * (n - 1)) / (k - 1)); // 0..n-1 evenly
+                    target_layers.push_back(layers[idx]);
+                }
+            }
+        }
+    }
+    std::sort(target_layers.begin(), target_layers.end());
+    target_layers.erase(std::unique(target_layers.begin(), target_layers.end()), target_layers.end());
+
+    LOG("Layer equivalence classes: %zu classes, %zu total target layers (K=%d reps/bucket)\n",
+        layer_classes.size(), target_layers.size(), cfg.n_reps_per_bucket);
+    for (const auto & lc : layer_classes) {
+        std::string roles_str;
+        for (const auto & [role, ne0, ne1] : lc.signature) {
+            if (!roles_str.empty()) roles_str += ", ";
+            roles_str += role;
+        }
+        // Per-bucket rep listing: which sampled layers fall into each bucket.
+        std::map<int, std::vector<int>> sampled_by_bucket;
+        for (int l : lc.all_layers) {
+            if (std::binary_search(target_layers.begin(), target_layers.end(), l)) {
+                sampled_by_bucket[layer_to_bucket.at(l)].push_back(l);
+            }
+        }
+        std::string reps_str;
+        for (const auto & [b, layers] : sampled_by_bucket) {
+            if (!reps_str.empty()) reps_str += " ";
+            reps_str += "[" + std::to_string(b) + "]={";
+            for (size_t i = 0; i < layers.size(); i++) {
+                if (i) reps_str += ",";
+                reps_str += std::to_string(layers[i]);
+            }
+            reps_str += "}";
+        }
+        LOG("  Class %zu: %zu layers, sampled %s, roles=[%s]\n",
+            lc.class_index, lc.all_layers.size(), reps_str.c_str(), roles_str.c_str());
     }
     // For each (role, bucket), list the concrete layer indices that belong to it
     // (used at emission to write layer-alternation regexes).
@@ -1589,31 +1964,53 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // Build set of target weight tensor names (for the eval callback)
-    // NOTE: token_embd uses ggml_get_rows (embedding lookup), NOT ggml_mul_mat,
-    // so it cannot be measured via MUL_MAT KLD. It gets the highest-BPW type as preset.
+    // Build set of target weight tensor names (for the eval callback).
+    // Skip BOTH token_embd and output:
+    //  - token_embd uses ggml_get_rows (embedding lookup), NOT ggml_mul_mat,
+    //    so it cannot be measured via MUL_MAT KLD.
+    //  - output IS a MUL_MAT, but Phase 4 force-pins it to `output_type` and
+    //    overwrites the cost matrix entry regardless of measurement (see
+    //    "Add global tensors to the cost matrix with their fixed types"),
+    //    so measuring its KLD is wasted work — and it's typically the largest
+    //    tensor in the model (vocab × hidden), so the waste is significant.
+    // Both globals get their types preset before optimization.
     std::unordered_set<std::string> target_weight_names;
     for (const auto & ti : quantizable) {
-        if (ti.role == "token_embd") continue;  // skip — not MUL_MAT
+        if (ti.role == "token_embd" || ti.role == "output") continue;
         if (ti.layer >= 0) {
             // Include if this tensor's layer is one of our target layers
             if (std::binary_search(target_layers.begin(), target_layers.end(), ti.layer)) {
                 target_weight_names.insert(ti.name);
             }
         } else {
-            // Global tensors (output.weight, etc.) — capture those too
+            // Other global tensors (rare) — capture those too
             target_weight_names.insert(ti.name);
         }
     }
 
-    // ---- Phase 2: Capture reference activations ----
-    LOG("\n--- Phase 2: Capturing reference activations ---\n");
-
-    // Load imatrix data
+    // Load imatrix data unconditionally — needed for Phase 3 trained-quant
+    // training (cache-miss path) AND for --importance-alpha role weights in
+    // Phase 4 (cache-hit path).
     std::unordered_map<std::string, std::vector<float>> imatrix_data;
     if (!cfg.imatrix_path.empty()) {
         load_imatrix_data(cfg.imatrix_path, imatrix_data);
     }
+
+    // ---- Cache check: try to skip Phase 2 + Phase 3 ----
+    std::map<std::string, std::map<ggml_type, cost_entry>> cost_matrix;
+    capture_state cap_state;  // populated only on cache miss; declared here so
+                              // its swap-with-empty cleanup later still compiles
+    bool cache_hit = false;
+    if (!cfg.cost_matrix_cache.empty()) {
+        cache_hit = load_cost_matrix_cache(cfg.cost_matrix_cache, cfg, cost_matrix);
+    }
+
+    if (cache_hit) {
+        LOG("\n--- Skipping Phase 2 + Phase 3 (cost-matrix cache hit) ---\n");
+    } else {
+
+    // ---- Phase 2: Capture reference activations ----
+    LOG("\n--- Phase 2: Capturing reference activations ---\n");
 
     // Load model with llama API
     common_params params;
@@ -1628,7 +2025,6 @@ int main(int argc, char ** argv) {
     params.n_ubatch = min_batch;
     params.n_ctx    = std::max(1024, max_test_size + 1);
 
-    capture_state cap_state;
     for (const auto & ti : quantizable) {
         if (target_weight_names.count(ti.name)) {
             cap_state.target_weight_names.insert(ti.name);
@@ -1788,8 +2184,15 @@ int main(int argc, char ** argv) {
     // ---- Phase 3: Build cost matrix ----
     LOG("\n--- Phase 3: Building cost matrix ---\n");
 
-    auto cost_matrix = build_cost_matrix(cfg, quantizable, cap_state.captures_by_role,
-                                         cfg.model_path, gguf_ctx, imatrix_data);
+    cost_matrix = build_cost_matrix(cfg, quantizable, cap_state.captures_by_role,
+                                    cfg.model_path, gguf_ctx, imatrix_data);
+
+    // Persist for future runs (cache invalidation is by header-field match).
+    if (!cfg.cost_matrix_cache.empty()) {
+        save_cost_matrix_cache(cfg.cost_matrix_cache, cfg, cost_matrix);
+    }
+
+    } // end of cache-miss block (Phase 2 + Phase 3)
 
     // Build preliminary role_info map (per-bucket) so split_fused_roles can
     // apportion fused error by element count at the same bucket.
@@ -1808,6 +2211,15 @@ int main(int argc, char ** argv) {
 
     // Split fused-MUL_MAT captures (e.g. attn_qkv) into their component roles.
     split_fused_roles(cost_matrix, roles);
+
+    // Apply imatrix-energy bias correction (if --importance-alpha > 0). Promotes
+    // low-energy residual-write tensors that the relative-L2 metric still
+    // under-weights. Done after split_fused_roles so the bias applies to the
+    // component roles (which actually carry the elements), not the fused entry.
+    if (cfg.importance_alpha > 0.0f) {
+        auto role_energy = compute_role_energy(quantizable, imatrix_data, cfg.min_elements);
+        apply_importance_alpha(cost_matrix, role_energy, cfg.importance_alpha);
+    }
 
     // Print cost matrix
     LOG("\nCost matrix (avg relative-L2 error by role-bucket × quant type):\n");
@@ -1830,10 +2242,11 @@ int main(int argc, char ** argv) {
     // ---- Phase 4: Optimize assignment ----
     LOG("\n--- Phase 4: Optimizing assignment ---\n");
 
-    // Determine fixed types for global tensors (before building roles map)
-    ggml_type output_type = cfg.output_tensor_type != GGML_TYPE_COUNT
-                            ? cfg.output_tensor_type
-                            : highest_bpw(cfg.quant_types);
+    // Determine fixed types for global tensors (before building roles map).
+    // parse_args has already set cfg.output_tensor_type (either from the user's
+    // --output-tensor-type or via default_output_type_for_target) so this is
+    // always non-COUNT here.
+    ggml_type output_type = cfg.output_tensor_type;
 
     // Detect tied embeddings: llama-quantize (src/llama-quant.cpp:~534) silently
     // promotes token_embd to output_tensor_type when the arch lacks a distinct
