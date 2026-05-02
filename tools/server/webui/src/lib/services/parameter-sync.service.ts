@@ -361,7 +361,7 @@ export class ParameterSyncService {
 
 	/**
 	 * Get parameter information including source and values.
-	 * Used by ChatSettingsParameterSourceIndicator to display the correct badge
+	 * Used by SettingsChatParameterSourceIndicator to display the correct badge
 	 * (Custom vs Default) for each parameter in the settings UI.
 	 *
 	 * @param key - The parameter key to get info for

@@ -1,5 +1,5 @@
 name: Bug (model use)
-description: Something goes wrong when using a model (in general, not specific to a single llama.cpp module).
+description: Something goes wrong when running a model (crashes, garbled outputs, etc.).
 title: "Eval bug: "
 labels: ["bug-unconfirmed", "model evaluation"]
 body:
@@ -12,6 +12,8 @@ body:
         If you encountered the issue while using an external UI (e.g. ollama),
         please reproduce your issue using one of the examples/binaries in this repository.
         The `llama-completion` binary can be used for simple and reproducible model inference.
+
+        Please fill out this template yourself, copypasting language model outputs is [strictly prohibited](https://github.com/ggml-org/llama.cpp/blob/master/CONTRIBUTING.md#ai-usage-policy).
   - type: textarea
     id: version
     attributes:

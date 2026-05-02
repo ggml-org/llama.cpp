@@ -5,15 +5,16 @@
 	import { TooltipSide } from '$lib/enums';
 
 	interface Props {
-		icon: Component;
-		tooltip: string;
-		variant?: ButtonVariant;
-		size?: ButtonSize;
-		iconSize?: string;
+		ariaLabel?: string;
 		class?: string;
 		disabled?: boolean;
+		icon: Component;
+		iconSize?: string;
 		onclick: (e?: MouseEvent) => void;
-		'aria-label'?: string;
+		size?: ButtonSize;
+		stopPropagationOnClick?: boolean;
+		tooltip: string;
+		variant?: ButtonVariant;
 		tooltipSide?: TooltipSide;
 	}
 
@@ -26,8 +27,9 @@
 		disabled = false,
 		iconSize = 'h-3 w-3',
 		tooltipSide = TooltipSide.TOP,
+		stopPropagationOnClick = false,
 		onclick,
-		'aria-label': ariaLabel
+		ariaLabel
 	}: Props = $props();
 </script>
 
@@ -37,13 +39,18 @@
 			{variant}
 			{size}
 			{disabled}
-			{onclick}
+			onclick={(e: MouseEvent) => {
+				if (stopPropagationOnClick) e.stopPropagation();
+
+				onclick?.(e);
+			}}
 			class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
 			aria-label={ariaLabel || tooltip}
 		>
-			{@const IconComponent = icon}
-
-			<IconComponent class={iconSize} />
+			{#if icon}
+				{@const IconComponent = icon}
+				<IconComponent class={iconSize} />
+			{/if}
 		</Button>
 	</Tooltip.Trigger>
 

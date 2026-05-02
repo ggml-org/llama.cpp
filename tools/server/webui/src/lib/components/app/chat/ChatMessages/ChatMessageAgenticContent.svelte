@@ -5,8 +5,8 @@
 		CollapsibleContentBlock,
 		MarkdownContent,
 		SyntaxHighlightedCode,
-		ChatMessagePermissionRequest,
-		ChatMessageContinueRequest
+		ChatMessageActionCardPermissionRequest,
+		ChatMessageActionCardContinueRequest
 	} from '$lib/components/app';
 
 	import {
@@ -359,7 +359,7 @@
 	{/if}
 
 	{#if pendingPermission && !permissionDismissed}
-		<ChatMessagePermissionRequest
+		<ChatMessageActionCardPermissionRequest
 			toolName={pendingPermission.toolName}
 			serverLabel={pendingPermission.serverLabel}
 			onDecision={handlePermission}
@@ -367,7 +367,7 @@
 	{/if}
 
 	{#if pendingContinue && !continueDismissed}
-		<ChatMessageContinueRequest onDecision={handleContinue} />
+		<ChatMessageActionCardContinueRequest onDecision={handleContinue} />
 	{/if}
 </div>
 
