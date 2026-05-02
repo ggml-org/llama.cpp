@@ -113,12 +113,12 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data(
         size_t total;
         ggml_backend_dev_memory(llama_model_get_device(model, i), &free, &total);
 
-        // devices can return 0 bytes for free and total memory if they do not
-        // have any to report. in this case, we will use the host memory as a fallback
-        // fixes: https://github.com/ggml-org/llama.cpp/issues/18577
+        // Devices can return 0 bytes for free and total memory if they do not
+        // have any memory budget to report. Treat this as unknown for --fit
+        // instead of using the host-memory budget as a device budget.
         if (free == 0 && total == 0) {
-            free  = ret.back().free;
-            total = ret.back().total;
+            throw common_params_fit_exception(std::string("device ") + ggml_backend_dev_name(llama_model_get_device(model, i))
+                + " did not report memory; cannot safely fit to an unknown device budget");
         }
         ret[i].free  = free;
         ret[i].total = total;
