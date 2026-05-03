@@ -2116,22 +2116,38 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
     return std::nullopt;
 }
 
+static std::string common_chat_templates_generation_prompt(const common_chat_template & tmpl, const autoparser::generation_params & inputs) {
+    autoparser::generation_params params = inputs;
+    params.add_generation_prompt = false;
+    std::string no_gen_prompt    = common_chat_template_direct_apply_impl(tmpl, params);
+    params.add_generation_prompt = true;
+    std::string gen_prompt       = common_chat_template_direct_apply_impl(tmpl, params);
+
+    size_t prefix_len = 0;
+    size_t min_size = std::min(no_gen_prompt.size(), gen_prompt.size());
+    while (prefix_len < min_size && no_gen_prompt[prefix_len] == gen_prompt[prefix_len]) {
+        prefix_len++;
+    }
+    return gen_prompt.substr(prefix_len);
+}
+
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                             const struct common_chat_templates_inputs & inputs) {
     autoparser::generation_params params;
     params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
     const auto & tmpl =
         params.tools.is_array() && tmpls->template_tool_use ? *tmpls->template_tool_use : *tmpls->template_default;
-    const auto & src        = tmpl.source();
-    const auto & caps       = tmpl.original_caps();
-    params.messages         = render_message_to_json(inputs.messages, tmpl.original_caps());
-    params.tool_choice      = inputs.tool_choice;
-    params.reasoning_format = inputs.reasoning_format;
-    params.enable_thinking  = inputs.enable_thinking;
-    params.grammar          = inputs.grammar;
-    params.now              = inputs.now;
-    params.add_bos          = tmpls->add_bos;
-    params.add_eos          = tmpls->add_eos;
+    const auto & src             = tmpl.source();
+    const auto & caps            = tmpl.original_caps();
+    params.messages              = render_message_to_json(inputs.messages, tmpl.original_caps());
+    params.tool_choice           = inputs.tool_choice;
+    params.reasoning_format      = inputs.reasoning_format;
+    params.enable_thinking       = inputs.enable_thinking;
+    params.grammar               = inputs.grammar;
+    params.now                   = inputs.now;
+    params.add_generation_prompt = inputs.add_generation_prompt;
+    params.add_bos               = tmpls->add_bos;
+    params.add_eos               = tmpls->add_eos;
 
     if (src.find("<|channel|>") == std::string::npos) {
         // map developer to system for all models except for GPT-OSS
@@ -2153,14 +2169,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         workaround::func_args_not_string(params.messages);
     }
 
-    params.add_generation_prompt = false;
-    std::string no_gen_prompt    = common_chat_template_direct_apply_impl(tmpl, params);
-    params.add_generation_prompt = true;
-    std::string gen_prompt       = common_chat_template_direct_apply_impl(tmpl, params);
-    auto        diff             = calculate_diff_split(no_gen_prompt, gen_prompt);
-    params.generation_prompt     = diff.right + diff.suffix;
-
-    params.add_generation_prompt = inputs.add_generation_prompt;
+    params.generation_prompt = common_chat_templates_generation_prompt(tmpl, params);
 
     params.extra_context = common_chat_extra_context();
     for (auto el : inputs.chat_template_kwargs) {
