@@ -764,6 +764,10 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
                 ggml_et_op_im2col(dev_ctx, node);
                 break;
 
+            case GGML_OP_CONV_2D:
+                ggml_et_op_conv_2d(dev_ctx, node);
+                break;
+
             case GGML_OP_FLASH_ATTN_EXT:
                 ggml_et_op_flash_attn_ext(dev_ctx, node);
                 break;
@@ -1121,6 +1125,99 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                        op->nb[0] == ggml_type_size(op->type) &&
                        op->src[1]->nb[0] == ggml_type_size(op->src[1]->type);
             break;
+        case GGML_OP_CONV_2D: {
+            // First-cut conv_2d_f32_me kernel constraints. Anything outside
+            // this falls back to CPU (it's a strict subset on purpose).
+            if (!op->src[0] || !op->src[1])                          { supported = false; break; }
+            if (op->type != GGML_TYPE_F32 ||
+                op->src[0]->type != GGML_TYPE_F32 ||
+                op->src[1]->type != GGML_TYPE_F32)                   { supported = false; break; }
+            if (!ggml_is_contiguous(op) ||
+                !ggml_is_contiguous(op->src[0]) ||
+                !ggml_is_contiguous(op->src[1]))                     { supported = false; break; }
+
+            const ggml_tensor * flt = op->src[0];   // [Kw, Kh, Cin, Cout]
+            const ggml_tensor * in  = op->src[1];   // [W,  H,  Cin, N]
+            const int32_t s0 = ggml_get_op_params_i32(op, 0);
+            const int32_t s1 = ggml_get_op_params_i32(op, 1);
+            const int32_t p0 = ggml_get_op_params_i32(op, 2);
+            const int32_t p1 = ggml_get_op_params_i32(op, 3);
+            const int32_t d0 = ggml_get_op_params_i32(op, 4);
+            const int32_t d1 = ggml_get_op_params_i32(op, 5);
+
+            const int64_t Kw   = flt->ne[0];
+            const int64_t Kh   = flt->ne[1];
+            const int64_t Cin  = flt->ne[2];
+            const int64_t Cout = flt->ne[3];
+            const int64_t H    = in->ne[1];
+            (void)in->ne[0];
+
+            if (s0 < 1 || s1 < 1 ||
+                !(d0 == 1 && d1 == 1) ||
+                Cin  % 16 != 0 || Cout % 16 != 0 ||
+                in->ne[3] != 1) {
+                supported = false;
+                break;
+            }
+            const int64_t OW = op->ne[0];
+            const int64_t OH = op->ne[1];
+            if (OW <= 0 || OH <= 0) {
+                supported = false;
+                break;
+            }
+            (void)p0; (void)p1;
+
+            // Mirror the kernel's sizing:
+            //   if K_TILES * per_KT_bytes <= budget: 1 buffer, n_chunks=1
+            //   else: 2 buffers (double-buffer), shrink chunk_KT until
+            //         2*chunk_KT*per_KT_bytes <= budget.
+            const int64_t Hp     = H + 2 * p1;
+            const int64_t OW_pad = (OW + 15) & ~15;
+            const int64_t Wp_a   = OW_pad;
+            const bool need_stage = (OW % 16 != 0);
+            const int64_t stage_bytes = need_stage
+                ? (Cout * OH * OW_pad * 4)
+                : 0;
+            const int64_t L2SCP_BUDGET = 1500 * 1024;
+            // Per-hart partial-TenC scratch (mirrors kernel MAX_TILES_PER_HART=2):
+            // 32 minions × 2 tiles × 1024 bytes = 64 KB per shire.
+            const int64_t scratch_bytes = 32 * 2 * 16 * 16 * 4;
+            const int64_t budget = L2SCP_BUDGET - stage_bytes - scratch_bytes;
+            const int64_t per_KT_bytes = Kh * Kw * Cout * 16 * 4
+                                       + Kw * 16 * Hp * Wp_a * 4;
+            const int64_t K_TILES = Cin / 16;
+
+            int64_t chunk_KT_calc;
+            int64_t n_chunks_calc;
+            if (K_TILES * per_KT_bytes <= budget) {
+                chunk_KT_calc = K_TILES;
+                n_chunks_calc = 1;
+            } else {
+                chunk_KT_calc = K_TILES;
+                while (chunk_KT_calc > 1 &&
+                       2 * chunk_KT_calc * per_KT_bytes > budget) {
+                    chunk_KT_calc--;
+                }
+                while (chunk_KT_calc > 1 &&
+                       K_TILES % chunk_KT_calc != 0) {
+                    chunk_KT_calc--;
+                }
+                if (chunk_KT_calc < 1) { supported = false; break; }
+                n_chunks_calc = K_TILES / chunk_KT_calc;
+            }
+
+            if (n_chunks_calc > 1) {
+                const int64_t M_TILES = Cout / 16;
+                const int64_t w_tiles = (OW + 15) / 16;
+                const int64_t total_tiles = OH * w_tiles * M_TILES;
+                // MAX_TILES_PER_HART = 2 (mirrors kernel constant).
+                const int64_t max_workers = (need_stage ? 32 : 1024) * 2;
+                if (total_tiles > max_workers) { supported = false; break; }
+            }
+
+            supported = true;
+            break;
+        }
         case GGML_OP_SCALE:
             // F32 contiguous, total elements must be cache line aligned (16 floats)
             supported = op->type == GGML_TYPE_F32 &&

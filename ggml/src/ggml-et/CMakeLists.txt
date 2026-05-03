@@ -71,6 +71,7 @@ set(KERNELS
     solve_tri_f32
     ssm_conv_f32
     ssm_scan_f32
+    conv_2d_f32_me
     memops
     uberkernel
 )
