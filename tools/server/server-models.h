@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <set>
+#include <vector>
 
 /**
  * state diagram:
@@ -106,7 +107,16 @@ private:
     common_params base_params;
     std::string bin_path;
     std::vector<std::string> base_env;
-    common_preset base_preset; // base preset from llama-server CLI args
+   common_preset base_preset; // base preset from llama-server CLI args
+    // pending load queue (priority-ordered, same-priority FIFO)
+    struct pending_entry_t {
+        std::string name;
+        int priority;
+        int seq; // monotonically increasing sequence number for FIFO within same priority
+    };
+    int pending_seq = 0;
+    std::vector<pending_entry_t> pending_queue;
+    std::thread pending_processor;
 
     void update_meta(const std::string & name, const server_model_meta & meta);
 
@@ -117,6 +127,13 @@ private:
     // requesting_priority: if > 0, only evict running models with priority < requesting_priority
     void unload_lru(int requesting_priority = 0);
 
+    // enqueue a pending load request (thread-safe)
+    // called when capacity is full; returns true if queued, false if immediate load is possible
+    bool enqueue_pending_load(const std::string & name);
+
+    // process the pending queue (called from dedicated thread)
+    void process_pending_queue();
+
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
 
@@ -124,6 +141,9 @@ public:
     server_models(const common_params & params, int argc, char ** argv);
 
     void load_models();
+
+    // return true if sleeping models should be treated as unloaded
+    bool should_treat_sleep_as_unload();
 
     // check if a model instance exists (thread-safe)
     bool has_model(const std::string & name);
@@ -149,6 +169,11 @@ public:
     // wait until the model instance is fully loaded (thread-safe)
     // return when the model no longer in "loading" state
     void wait_until_loading_finished(const std::string & name);
+
+    // wait for a model to finish loading (thread-safe)
+    // blocks until model status transitions from UNLOADED to LOADING/LOADED/SLEEPING/FAILED
+    // used by route handlers when a model is queued in the pending queue
+    void wait_for_model_loaded(const std::string & name);
 
     // ensure the model is in ready state (thread-safe)
     // return false if model is ready

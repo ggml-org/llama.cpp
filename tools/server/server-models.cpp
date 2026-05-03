@@ -172,7 +172,7 @@ server_models::server_models(
               base_params(params),
               base_env(get_environment()),
               base_preset(ctx_preset.load_from_args(argc, argv)) {
-    // clean up base preset
+   // clean up base preset
     unset_reserved_args(base_preset, true);
     // set binary path
     try {
@@ -183,6 +183,9 @@ server_models::server_models(
         LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
     load_models();
+
+    // start pending queue processor thread
+    pending_processor = std::thread(&server_models::process_pending_queue, this);
 }
 
 void server_models::add_model(server_model_meta && meta) {
@@ -297,9 +300,18 @@ void server_models::load_models() {
         }
     }
 
-    // server base preset from CLI args take highest precedence
+     // server base preset from CLI args take highest precedence
     for (auto & [name, preset] : final_presets) {
         preset.merge(base_preset);
+    }
+
+    // auto-detect priority usage: if any preset has priority set, enable treat-sleep-as-unload
+    for (const auto & [name, preset] : final_presets) {
+        std::string val;
+        if (preset.get_option(COMMON_ARG_PRESET_PRIORITY, val)) {
+            base_params.models_treat_sleep_as_unload = true;
+            break;
+        }
     }
 
     // convert presets to server_model_meta and add to mapping
@@ -598,16 +610,101 @@ void server_models::unload_lru(int requesting_priority) {
             cv.wait(lk, [this, &candidate_name]() {
                 return mapping[candidate_name].meta.status == SERVER_MODEL_STATUS_UNLOADED;
             });
+  }
+    }
+}
+
+bool server_models::enqueue_pending_load(const std::string & name) {
+    std::lock_guard<std::mutex> lk(mutex);
+    // Check if already in pending queue
+    for (const auto & entry : pending_queue) {
+        if (entry.name == name) {
+            return true; // already queued
+        }
+    }
+    // Add to pending queue
+    pending_entry_t entry{
+        name,
+        get_model_priority(name),
+        pending_seq++
+    };
+    pending_queue.push_back(entry);
+    // Sort: higher priority first, then FIFO for same priority
+    std::sort(pending_queue.begin(), pending_queue.end(), [](const pending_entry_t & a, const pending_entry_t & b) {
+        if (a.priority != b.priority) {
+            return a.priority > b.priority; // higher priority first
+        }
+        return a.seq < b.seq; // FIFO for same priority
+    });
+    // Wake up the pending processor
+    cv.notify_all();
+    return true;
+}
+
+bool server_models::should_treat_sleep_as_unload() {
+    return base_params.models_treat_sleep_as_unload;
+}
+
+ void server_models::process_pending_queue() {
+    while (true) {
+        std::string name_to_load;
+        {
+            std::unique_lock<std::mutex> lk(mutex);
+
+            // Wait until there are pending entries AND capacity is available
+            while (!pending_queue.empty()) {
+                size_t count_active = 0;
+                size_t max_active = base_params.models_max > 0 ? base_params.models_max : mapping.size();
+
+                for (const auto & [n, inst] : mapping) {
+                    if (inst.meta.status == SERVER_MODEL_STATUS_LOADED || inst.meta.status == SERVER_MODEL_STATUS_LOADING) {
+                        count_active++;
+                    } else if (base_params.models_treat_sleep_as_unload && inst.meta.status == SERVER_MODEL_STATUS_SLEEPING) {
+                        // sleeping treated as unloaded: don't count against capacity
+                    }
+                }
+
+                if (count_active < max_active) {
+                    // capacity available
+                    name_to_load = pending_queue.front().name;
+                    pending_queue.erase(pending_queue.begin());
+                    SRV_ALWAYS("processing pending load name=%s (count_active=%zu models_max=%zu)\n",
+                        name_to_load.c_str(), count_active, max_active);
+                    lk.unlock();
+                    break;
+                }
+
+                // No capacity — wait for model state change signal
+                cv.wait(lk);
+            }
+        }
+
+        // Load outside the lock
+        if (!name_to_load.empty()) {
+            {
+                std::unique_lock<std::mutex> lk(mutex);
+                auto it = mapping.find(name_to_load);
+                if (it != mapping.end() && it->second.meta.status != SERVER_MODEL_STATUS_UNLOADED) {
+                    SRV_ALWAYS("skipping pending load for %s: no longer unloaded\n", name_to_load.c_str());
+                    lk.unlock();
+                    continue;
+                }
+            }
+            try {
+                load(name_to_load);
+            } catch (const std::exception & e) {
+                SRV_ERR("pending load failed for %s: %s\n", name_to_load.c_str(), e.what());
+            }
         }
     }
 }
 
-  void server_models::load(const std::string & name) {
+ void server_models::load(const std::string & name) {
     if (!has_model(name)) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
     int request_priority = get_model_priority(name);
-   SRV_ALWAYS("load name=%s request_priority=%d\n", name.c_str(), request_priority);
+    SRV_ALWAYS("load name=%s request_priority=%d\n", name.c_str(), request_priority);
     unload_lru(request_priority);
 
     std::lock_guard<std::mutex> lk(mutex);
@@ -622,21 +719,26 @@ void server_models::unload_lru(int requesting_priority) {
     // exceeding models_max. Without this, the window between unload_lru()
     // releasing its lock and this lock_guard acquiring allows multiple
     // threads to each observe capacity and all proceed to load.
-    // Note: sleeping models don't count as "active" since they're idle and
-    // don't serve requests — they can be evicted without counting against the limit.
-    if (base_params.models_max > 0) {
-        size_t count_active = 0;
-        for (const auto & m : mapping) {
-            if (m.first == name) continue; // don't count the model being loaded
-            if (m.second.meta.status == SERVER_MODEL_STATUS_LOADED || m.second.meta.status == SERVER_MODEL_STATUS_LOADING) {
-                count_active++;
-            }
-      }
-        if (count_active >= (size_t)base_params.models_max) {
-            SRV_ERR("capacity re-check failed count_active=%zu models_max=%d name=%s\n",
-                count_active, base_params.models_max, name.c_str());
-            throw std::runtime_error("model limit reached, try again later");
+    size_t count_active = 0;
+    for (const auto & m : mapping) {
+        if (m.first == name) continue;
+        if (m.second.meta.status == SERVER_MODEL_STATUS_LOADED || m.second.meta.status == SERVER_MODEL_STATUS_LOADING) {
+            count_active++;
+        } else if (base_params.models_treat_sleep_as_unload && m.second.meta.status == SERVER_MODEL_STATUS_SLEEPING) {
+            // treat sleeping as unloaded: sleeping models don't count
+        } else {
+            // sleeping models normally don't count as active
         }
+    }
+    if (base_params.models_max > 0 && count_active >= (size_t)base_params.models_max) {
+        // capacity full — enqueue pending load and wake processor
+        if (enqueue_pending_load(name)) {
+            SRV_ALWAYS("queued load for name=%s request_priority=%d count_active=%zu models_max=%d\n",
+                name.c_str(), request_priority, count_active, base_params.models_max);
+            return; // caller should wait via ensure_model_ready
+        }
+        // else: already in queue, just return
+        return;
     }
 
     // prepare new instance info
@@ -860,7 +962,19 @@ void server_models::wait_until_loading_finished(const std::string & name) {
     });
 }
 
-bool server_models::ensure_model_ready(const std::string & name) {
+void server_models::wait_for_model_loaded(const std::string & name) {
+    std::unique_lock<std::mutex> lk(mutex);
+    // Wait until model is no longer UNLOADED (transitioned to LOADING, LOADED, SLEEPING, or FAILED)
+    cv.wait(lk, [this, &name]() {
+        auto it = mapping.find(name);
+        if (it != mapping.end()) {
+            return it->second.meta.status != SERVER_MODEL_STATUS_UNLOADED;
+        }
+        return true; // model disappeared, treat as done
+    });
+}
+
+ bool server_models::ensure_model_ready(const std::string & name) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
         throw std::runtime_error("model name=" + name + " is not found");
@@ -1085,6 +1199,11 @@ void server_models_routes::init_routes() {
             models.update_priority(name, actual_priority);
         }
         models.load(meta->name);
+        // If model is still unloaded (was queued), wait for it to finish loading
+        auto current_meta = models.get_meta(meta->name);
+        if (current_meta.has_value() && current_meta->status == SERVER_MODEL_STATUS_UNLOADED) {
+            models.wait_for_model_loaded(meta->name);
+        }
         res_ok(res, {{"success", true}});
         return res;
     };
@@ -1095,8 +1214,13 @@ void server_models_routes::init_routes() {
         auto all_models = models.get_all_meta();
         std::time_t t = std::time(0);
         for (const auto & meta : all_models) {
+            server_model_status display_status = meta.status;
+         // When treat-sleep-as-unload is active, sleeping models appear as unloaded
+            if (models.should_treat_sleep_as_unload() && meta.status == SERVER_MODEL_STATUS_SLEEPING) {
+                display_status = SERVER_MODEL_STATUS_UNLOADED;
+            }
             json status {
-                {"value",  server_model_status_to_string(meta.status)},
+                {"value",  server_model_status_to_string(display_status)},
                 {"args",   meta.args},
             };
             if (!meta.preset.name.empty()) {
