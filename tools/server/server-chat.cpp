@@ -1089,7 +1089,7 @@ json server_chat_convert_responses_to_chatcmpl(
     // (e.g. Codex CLI sends store, include, prompt_cache_key, web_search)
     for (const char * key : {
         "store", "include", "prompt_cache_key", "web_search",
-        "text", "truncation", "metadata", "reasoning", "background", 
+        "text", "truncation", "metadata", "reasoning", "background",
         "service_tier", "safety_identifier", "max_tool_calls",
     }) {
         chatcmpl_body.erase(key);

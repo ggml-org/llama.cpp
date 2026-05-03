@@ -755,6 +755,39 @@ def test_responses_malformed_input_image_recovery_visible():
     assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
 
 
+def test_responses_image_with_tools():
+    """Image content plus tools require two parser passes. The second
+    pass must read the original image_url content, not the media_marker
+    mutation from the first pass."""
+    global server
+    server = ServerPreset.tinygemma3()
+    server.jinja = True
+    server.start()
+    res = server.make_request("POST", "/v1/responses", data={
+        "model": "gpt-4.1",
+        "input": [
+            {"role": "user", "content": [
+                {"type": "input_text", "text": "What is shown?"},
+                {"type": "input_image", "image_url":
+                    "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"},
+            ]},
+        ],
+        "tools": [{
+            "type": "function",
+            "name": "get_image",
+            "parameters": {
+                "type": "object",
+                "properties": {"unused": {"type": "string"}},
+                "required": ["unused"],
+            },
+        }],
+        "max_output_tokens": 4,
+        "temperature": 0.0,
+    })
+    assert res.status_code == 200
+    assert res.body["status"] == "completed"
+
+
 def test_responses_malformed_input_file_recovery_visible():
     """Malformed input_file should keep the request alive and inject visible
     recovery text into the converted prompt."""

@@ -912,7 +912,8 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files,
-    bool no_prefill_assistant)
+    bool no_prefill_assistant,
+    bool unsupported_image_as_text)
 {
     json llama_params;
 
@@ -993,6 +994,9 @@ json oaicompat_chat_params_parse(
             std::string type      = json_value(p, "type", std::string());
             if (type == "image_url") {
                 if (!opt.allow_image) {
+                    if (!unsupported_image_as_text) {
+                        throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                    }
                     p["type"] = "text";
                     p["text"] = "[image input omitted: current model does not support image input]";
                     p.erase("image_url");
@@ -1003,6 +1007,9 @@ json oaicompat_chat_params_parse(
                 try {
                     handle_media(out_files, image_url, opt.media_path);
                 } catch (const std::exception & e) {
+                    if (!unsupported_image_as_text) {
+                        throw;
+                    }
                     SRV_WRN("image input could not be loaded, sending text placeholder instead: %s\n", e.what());
                     p["type"] = "text";
                     p["text"] = "[image input omitted: " + std::string(e.what()) + "]";

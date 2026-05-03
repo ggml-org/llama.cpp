@@ -308,7 +308,8 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files,
-    bool no_prefill_assistant = false);
+    bool no_prefill_assistant = false,
+    bool unsupported_image_as_text = false);
 
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(
