@@ -22,9 +22,20 @@ void ggml_openvino_device_config::init() {
     if (initialized) {
         return;
     }
-    device_name = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "CPU";
+device_name = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "CPU";
     auto available_devices = ov_singleton_core().get_available_devices();
-    if (std::find(available_devices.begin(), available_devices.end(), device_name) == available_devices.end()) {
+    
+    // Check if string matches a physical device OR an OpenVINO virtual plugin
+    bool is_valid_device = (std::find(available_devices.begin(), available_devices.end(), device_name) != available_devices.end());
+    
+    if (!is_valid_device) {
+        if (device_name.find("MULTI") == 0 || device_name.find("AUTO") == 0 || 
+            device_name.find("HETERO") == 0 || device_name.find("BATCH") == 0) {
+            is_valid_device = true;
+        }
+    }
+
+    if (!is_valid_device) {
         GGML_LOG_WARN("GGML OpenVINO Backend: device %s is not available, fallback to CPU\n", device_name.c_str());
         device_name = "CPU";
     }
