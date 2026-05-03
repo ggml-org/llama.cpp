@@ -1057,7 +1057,9 @@ struct llm_graph_context {
     void build_dense_out(
             ggml_tensor * dense_2,
             ggml_tensor * dense_2_b,
-            ggml_tensor * dense_3) const;
+            ggml_tensor * dense_3,
+            ggml_tensor * dense_3_b,
+            llm_ffn_op_type act) const;
 };
 
 // TODO: better name

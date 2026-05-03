@@ -4010,6 +4010,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // output rerank head
                     cls_out = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
 
+                    // Dense output layers for jina-reranker-v3 projector
+                    dense_2_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.n_embd_out()}, TENSOR_NOT_REQUIRED);
+                    dense_3_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_3_OUT, "weight"), {hparams.n_embd_out(), hparams.n_embd_out()}, TENSOR_NOT_REQUIRED);
+
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
 
@@ -9081,7 +9085,12 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     // there will be two additional dense projection layers
     // dense linear projections are applied after pooling
     // TODO: move reranking logic here and generalize
-    llm->build_dense_out(dense_2_out_layers, dense_2_out_layers_b, dense_3_out_layers);
+    // Determine activation for dense output layers
+    llm_ffn_op_type dense_out_act = LLM_FFN_SILU; // default for GEMMA_EMBEDDING etc.
+    if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_QWEN3VL) {
+        dense_out_act = LLM_FFN_RELU; // jina-reranker-v3 uses ReLU between dense layers
+    }
+    llm->build_dense_out(dense_2_out_layers, dense_2_out_layers_b, dense_3_out_layers, nullptr, dense_out_act);
 
     llm->res->set_outputs();
 
