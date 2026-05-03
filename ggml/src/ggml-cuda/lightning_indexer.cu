@@ -119,7 +119,7 @@ static __global__ void lightning_indexer_kernel_wmma(
     __shared__ float qk_shared[WARPS_PER_BLOCK][HEADS_PER_INNER_LOOP][K_VECS_PER_BLOCK];
 
     // load K fragment
-    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> frag_k;
+    wmma::fragment<wmma::matrix_b, HEADS_PER_INNER_LOOP, K_VECS_PER_BLOCK, K_EMBD_PER_INNER_LOOP, half, wmma::col_major> frag_k;
     wmma::load_matrix_sync(frag_k, (half*) &k_shared_h[0][i_warp * K_EMBD_PER_INNER_LOOP / 4], n_embd_padded);
 
     float score_k = 0.0f;
@@ -128,11 +128,11 @@ static __global__ void lightning_indexer_kernel_wmma(
         const int i_head_next = i_head_0 + HEADS_PER_INNER_LOOP;
 
         // we don't use accumulator for anything, fill it with zeros
-        wmma::fragment<wmma::accumulator, 16, 16, 16, float> frag_acc;
+        wmma::fragment<wmma::accumulator, HEADS_PER_INNER_LOOP, K_VECS_PER_BLOCK, K_EMBD_PER_INNER_LOOP, float> frag_acc;
         wmma::fill_fragment(frag_acc, 0.0f);
 
         // load Q fragment
-        wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> frag_q;
+        wmma::fragment<wmma::matrix_a, HEADS_PER_INNER_LOOP, K_VECS_PER_BLOCK, K_EMBD_PER_INNER_LOOP, half, wmma::row_major> frag_q;
         wmma::load_matrix_sync(frag_q, (half*) &q_shared_h[0][i_warp * K_EMBD_PER_INNER_LOOP / 4], n_embd_padded);
 
         // preload next Q tile to registers during matrix multiplication
@@ -149,7 +149,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 
         // perform matrix multiplication
         wmma::mma_sync(frag_acc, frag_q, frag_k, frag_acc);
-        wmma::store_matrix_sync((float*) &qk_shared[i_warp][0][0], frag_acc, 16, wmma::mem_row_major);
+        wmma::store_matrix_sync((float*) &qk_shared[i_warp][0][0], frag_acc, K_VECS_PER_BLOCK, wmma::mem_row_major);
 
         // make sure all threads finished using q_shared_h so we can store next tile
         __syncthreads();
@@ -189,9 +189,13 @@ static __global__ void lightning_indexer_kernel_wmma(
         sum = sum > 0.0f ? sum : 0.0f;
         sum *= w_val;
 
+        // wait until qk_shared[0] is no longer used
+        __syncthreads();
+
         // reuse qk_shared[0] for storing partial results
         qk_shared[0][h][k] = sum;
 
+        // wait until all threads write their results
         __syncthreads();
 
         // accumulate result over heads
@@ -201,6 +205,9 @@ static __global__ void lightning_indexer_kernel_wmma(
                 score_k += qk_shared[0][i_head][tid];
             }
         }
+
+        // make sure all threads finished using qk_shared
+        __syncthreads();
     }
 
     // phase 4 - store output to VRAM
