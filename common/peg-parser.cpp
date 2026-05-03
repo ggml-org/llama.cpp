@@ -6,6 +6,7 @@
 #include "unicode.h"
 
 #include <algorithm>
+#include <cctype>
 #include <initializer_list>
 #include <map>
 #include <memory>
@@ -1455,6 +1456,32 @@ common_peg_parser common_peg_parser_builder::json_member(const std::string & key
         ws,
         p,
     });
+}
+
+common_peg_parser common_peg_parser_builder::optspace(const std::string & tag) {
+    auto parser = eps();
+    size_t end_of_prefix_space = tag.size();
+    size_t start_of_suffix_space = tag.size();
+    for (size_t i = 0; i < tag.size(); i++) {
+        if (!std::isspace(tag[i])) {
+            end_of_prefix_space = i;
+            break;
+        }
+    }
+    for (size_t i = tag.size(); i > 0; i--) {
+        if (!std::isspace(tag[i - 1])) {
+            start_of_suffix_space = i;
+            break;
+        }
+    }
+    for (size_t i = 0; i < end_of_prefix_space; i++) {
+        parser += optional(literal(std::string(1, tag[i])));
+    }
+    parser += literal(tag.substr(end_of_prefix_space, start_of_suffix_space - end_of_prefix_space));
+    for (size_t i = start_of_suffix_space; i < tag.size(); i++) {
+        parser += optional(literal(std::string(1, tag[i])));
+    }
+    return parser;
 }
 
 static std::string gbnf_escape_char_class(uint32_t c) {
