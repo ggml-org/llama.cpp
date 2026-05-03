@@ -635,7 +635,6 @@ struct server_context_impl {
 
 public:
     // only use these pointers outside of this class:
-    //  - when not in sleeping state
     //  - and, with thread-safe APIs (e.g., tokenizer calls)
     llama_model * model = nullptr;
     mtmd_context * mctx = nullptr;
@@ -644,15 +643,10 @@ public:
     server_queue    queue_tasks;
     server_response queue_results;
 
-    // note: chat_params must not be refreshed upon existing sleeping state
     server_chat_params chat_params;
 
     ~server_context_impl() {
-        if (!sleeping) {
-            // destroy() is already called when entering sleeping state
-            // we don't call it again here to avoid double free
-            destroy();
-        }
+        destroy();
     }
 
 private:
@@ -698,9 +692,7 @@ private:
     std::set<std::string> model_aliases; // additional names for the model
     std::set<std::string> model_tags;    // informational tags
 
-    bool sleeping = false;
-
-    void destroy() {
+ void destroy() {
         llama_init.reset();
 
         ctx = nullptr;
@@ -729,25 +721,10 @@ private:
         prompt_cache->update();
     }
 
-    void handle_sleeping_state(bool new_state) {
-        GGML_ASSERT(sleeping != new_state);
-        if (new_state) {
-            SRV_INF("%s", "server is entering sleeping state\n");
-            destroy();
-        } else {
-            SRV_INF("%s", "server is exiting sleeping state\n");
-            if (!load_model(params_base)) {
-                GGML_ABORT("failed to reload model after sleeping");
-            }
-        }
-        sleeping = new_state;
-    }
+    
 
     // load the model and initialize llama_context
-    // this may also be called to resume from sleeping state
     bool load_model(common_params & params) {
-        bool is_resume = sleeping;
-
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
 
         params_base = params;
@@ -806,9 +783,7 @@ private:
 
         std::string & mmproj_path = params_base.mmproj.path;
         if (!mmproj_path.empty()) {
-            if (!is_resume) {
-                mtmd_helper_log_set(common_log_default_callback, nullptr);
-            }
+            mtmd_helper_log_set(common_log_default_callback, nullptr);
 
             mtmd_context_params mparams = mtmd_context_params_default();
 
@@ -973,21 +948,16 @@ private:
         model_aliases = params_base.model_alias;
         model_tags    = params_base.model_tags;
 
-        // propagate new defaults back to caller
+               // propagate new defaults back to caller
         params = params_base;
 
-        if (!is_resume) {
-            return init();
-        }
-
-        return true;
+        return init();
     }
 
     // unlike load_model(), this is only called once during initialization
     bool init() {
         GGML_ASSERT(ctx != nullptr);
         GGML_ASSERT(model != nullptr);
-        GGML_ASSERT(!sleeping);
 
         // wiring up server queues
         queue_tasks.on_new_task([this](server_task && task) {
@@ -995,9 +965,6 @@ private:
         });
         queue_tasks.on_update_slots([this]() {
             update_slots();
-        });
-        queue_tasks.on_sleeping_state([this](bool sleeping) {
-            handle_sleeping_state(sleeping);
         });
 
         metrics.init();
@@ -3093,8 +3060,7 @@ bool server_context::load_model(common_params & params) {
 }
 
 void server_context::start_loop() {
-    auto & params = impl->params_base;
-    impl->queue_tasks.start_loop(params.sleep_idle_seconds * 1000);
+    impl->queue_tasks.start_loop();
 }
 
 void server_context::terminate() {
@@ -3154,17 +3120,10 @@ server_context_meta server_context::get_meta() const {
 
 
 // generator-like API for HTTP response generation
-// may have bypass_sleep = true if the task does not use ctx_server
 struct server_res_generator : server_http_res {
     server_response_reader rd;
-    server_res_generator(server_queue & queue_tasks, server_response & queue_results, int sleep_idle_seconds, bool bypass_sleep = false)
-            : rd(queue_tasks, queue_results, HTTP_POLLING_SECONDS) {
-        // fast path in case sleeping is disabled
-        bypass_sleep |= sleep_idle_seconds < 0;
-        if (!bypass_sleep) {
-            queue_tasks.wait_until_no_sleep();
-        }
-    }
+    server_res_generator(server_queue & queue_tasks, server_response & queue_results)
+            : rd(queue_tasks, queue_results, HTTP_POLLING_SECONDS) {}
     void ok(const json & response_data) {
         status = 200;
         data = safe_json_to_str(response_data);
@@ -3174,10 +3133,6 @@ struct server_res_generator : server_http_res {
         data = safe_json_to_str({{ "error", error_data }});
     }
 };
-
-void server_context::on_sleeping_changed(std::function<void(bool)> callback) {
-    impl->queue_tasks.on_sleeping_state(std::move(callback));
-}
 
 
 //
@@ -3405,8 +3360,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     return res;
 }
 
-std::unique_ptr<server_res_generator> server_routes::create_response(bool bypass_sleep) {
-    return std::make_unique<server_res_generator>(queue_tasks, queue_results, params.sleep_idle_seconds, bypass_sleep);
+std::unique_ptr<server_res_generator> server_routes::create_response() {
+    return std::make_unique<server_res_generator>(queue_tasks, queue_results);
 }
 
 server_routes::server_routes(const common_params & params, server_context & ctx_server)
@@ -3419,13 +3374,12 @@ server_routes::server_routes(const common_params & params, server_context & ctx_
 
 void server_routes::init_routes() {
     // IMPORTANT: all lambda functions must start with create_response()
-    // this is to ensure that the server_res_generator can handle sleeping case correctly
 
     this->get_health = [this](const server_http_req &) {
         // error and loading states are handled by middleware
-        auto res = create_response(true);
+        auto res = create_response();
 
-        // this endpoint can be accessed during sleeping
+        // this endpoint can be accessed
         // the next LOC is to avoid someone accidentally use ctx_server
         bool ctx_server; // do NOT delete this line
         GGML_UNUSED(ctx_server);
@@ -3616,9 +3570,8 @@ void server_routes::init_routes() {
     };
 
     this->get_props = [this](const server_http_req &) {
-        auto res = create_response(true);
+        auto res = create_response();
 
-        // this endpoint can be accessed during sleeping
         // the next LOC is to avoid someone accidentally use ctx_server
         bool ctx_server; // do NOT delete this line
         GGML_UNUSED(ctx_server);
@@ -3653,7 +3606,6 @@ void server_routes::init_routes() {
             { "bos_token",                   meta->bos_token_str },
             { "eos_token",                   meta->eos_token_str },
             { "build_info",                  meta->build_info },
-            { "is_sleeping",                 queue_tasks.is_sleeping() },
         };
         if (params.use_jinja) {
             if (!tmpl_tools.empty()) {
@@ -3889,9 +3841,8 @@ void server_routes::init_routes() {
     };
 
     this->get_models = [this](const server_http_req &) {
-        auto res = create_response(true);
+        auto res = create_response();
 
-        // this endpoint can be accessed during sleeping
         // the next LOC is to avoid someone accidentally use ctx_server
         bool ctx_server; // do NOT delete this line
         GGML_UNUSED(ctx_server);

@@ -271,12 +271,6 @@ int main(int argc, char ** argv) {
         // load the model
         LOG_INF("%s: loading model\n", __func__);
 
-        if (server_models::is_child_server()) {
-            ctx_server.on_sleeping_changed([&](bool sleeping) {
-                server_models::notify_router_sleeping_state(sleeping);
-            });
-        }
-
         if (!ctx_server.load_model(params)) {
             clean_up();
             if (ctx_http.thread.joinable()) {

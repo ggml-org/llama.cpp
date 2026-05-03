@@ -13,10 +13,7 @@
 struct server_queue {
 private:
     int id = 0;
-    bool running  = false;
-    bool sleeping = false;
-    bool req_stop_sleeping = false;
-    int64_t time_last_task = 0;
+    bool running = false;
 
     // queues
     std::deque<server_task> queue_tasks;
@@ -28,7 +25,6 @@ private:
     // callback functions
     std::function<void(server_task &&)> callback_new_task;
     std::function<void(void)>           callback_update_slots;
-    std::function<void(bool)>           callback_sleeping_state;
 
 public:
     // Add a new task to the end of the queue
@@ -47,33 +43,9 @@ public:
     // prioritize tasks that use the specified slot (otherwise, pop the first deferred task)
     void pop_deferred_task(int id_slot);
 
-    // if sleeping, request exiting sleep state and wait until it is done
-    // returns immediately if not sleeping
-    void wait_until_no_sleep();
+     void terminate();
 
-    bool is_sleeping() {
-        std::unique_lock<std::mutex> lock(mutex_tasks);
-        return sleeping;
-    }
-
-    // end the start_loop routine
-    void terminate();
-
-    /**
-     * Main loop consists of these steps:
-     * - Wait until a new task arrives
-     * - Process the task (i.e. maybe copy data into slot)
-     * - Check if multitask is finished
-     * - Update all slots
-     *
-     * Sleeping procedure (disabled if idle_sleep_ms < 0):
-     * - If there is no task after idle_sleep_ms, enter sleeping state
-     * - Call callback_sleeping_state(true)
-     * - Wait until req_stop_sleeping is set to true
-     * - Call callback_sleeping_state(false)
-     * - Exit sleeping state
-     */
-    void start_loop(int64_t idle_sleep_ms = -1);
+     void start_loop();
 
     // for metrics
     size_t queue_tasks_deferred_size() {
@@ -95,22 +67,7 @@ public:
         callback_update_slots = std::move(callback);
     }
 
-    // Register callback for sleeping state change; multiple callbacks are allowed
-    // note: when entering sleeping state, the callback is called AFTER sleeping is set to true
-    //       when leaving sleeping state, the callback is called BEFORE sleeping is set to false
-    void on_sleeping_state(std::function<void(bool)> callback) {
-        if (callback_sleeping_state) {
-            auto prev_callback = std::move(callback_sleeping_state);
-            callback_sleeping_state = [prev_callback, callback](bool sleeping) {
-                prev_callback(sleeping);
-                callback(sleeping);
-            };
-        } else {
-            callback_sleeping_state = std::move(callback);
-        }
-    }
-
-private:
+    private:
     void cleanup_pending_task(int id_target);
 };
 

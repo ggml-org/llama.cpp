@@ -228,7 +228,6 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--prefill-assistant, --no-prefill-assistant` | whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)<br/>when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled<br/><br/>(env: LLAMA_ARG_PREFILL_ASSISTANT) |
 | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
 | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
-| `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
 | `-td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
 | `-tbd, --threads-batch-draft N` | number of threads to use during batch and prompt processing (default: same as --threads-draft) |
 | `--draft, --draft-n, --draft-max N` | number of tokens to draft for speculative decoding (default: 16)<br/>(env: LLAMA_ARG_DRAFT_MAX) |
@@ -807,9 +806,8 @@ By default, it is read-only. To make POST request to change global properties, y
     "vision": false
   },
   "media_marker": "<__media_YoNhud46VdDqbuFmKYEO9PY7A4ARzRfg__>",
-  "build_info": "b(build number)-(build commit hash)",
-  "is_sleeping": false
-}
+  "build_info": "b(build number)-(build commit hash)"
+ }
 ```
 
 - `default_generation_settings` - the default generation settings for the `/completion` endpoint, which has the same fields as the `generation_settings` response object from the `/completion` endpoint.
@@ -818,7 +816,6 @@ By default, it is read-only. To make POST request to change global properties, y
 - `chat_template` - the model's original Jinja2 prompt template
 - `chat_template_caps` - capabilities of the chat template (see `common/jinja/caps.h` for more info)
 - `modalities` - the list of supported modalities
-- `is_sleeping` - sleeping status, see [Sleeping on idle](#sleeping-on-idle)
 
 ### POST `/props`: Change server global properties.
 
@@ -1656,9 +1653,9 @@ The `status` object can be:
 
 ```json
 "status": {
-  "value": "sleeping",
-  "args": ["llama-server", "-ctx", "4096"]
-}
+   "value": "loaded",
+   "args": ["llama-server", "-ctx", "4096"]
+ }
 ```
 
 ### POST `/models/load`: Load a model
@@ -1718,19 +1715,6 @@ Example of an error:
     }
 }
 ```
-
-## Sleeping on Idle
-
-The server supports an automatic sleep mode that activates after a specified period of inactivity (no incoming tasks). This feature, introduced in [PR #18228](https://github.com/ggml-org/llama.cpp/pull/18228), can be enabled using the `--sleep-idle-seconds` command-line argument. It works seamlessly in both single-model and multi-model configurations.
-
-When the server enters sleep mode, the model and its associated memory (including the KV cache) are unloaded from RAM to conserve resources. Any new incoming task will automatically trigger the model to reload.
-
-The sleeping status can be retrieved from the `GET /props` endpoint (or `/props?model=(model_name)` in router mode).
-
-Note that the following endpoints are exempt from being considered as incoming tasks. They do not trigger model reloading and do not reset the idle timer:
-- `GET /health`
-- `GET /props`
-- `GET /models`
 
 ## More examples
 

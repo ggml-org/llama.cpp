@@ -42,8 +42,7 @@ extern char **environ;
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
 #define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
-#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready" // also sent when waking up from sleep
-#define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
+#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready"
 
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
@@ -617,8 +616,6 @@ void server_models::load(const std::string & name) {
                     std::string str(buffer);
                     if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
                         this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
-                    } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_SLEEP)) {
-                        this->update_status(name, SERVER_MODEL_STATUS_SLEEPING, 0);
                     }
                 }
             } else {
@@ -779,9 +776,6 @@ bool server_models::ensure_model_ready(const std::string & name) {
     if (meta->is_ready()) {
         return false; // ready for taking requests
     }
-    if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
-        return false; // child is sleeping but still running; new request will wake it up
-    }
     if (meta->status == SERVER_MODEL_STATUS_UNLOADED) {
         SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
         load(name);
@@ -870,15 +864,6 @@ std::thread server_models::setup_child_server(const std::function<void(int)> & s
         }
     });
 }
-
-void server_models::notify_router_sleeping_state(bool is_sleeping) {
-    common_log_pause(common_log_main());
-    fflush(stdout);
-    fprintf(stdout, "%s\n", is_sleeping ? CMD_CHILD_TO_ROUTER_SLEEP : CMD_CHILD_TO_ROUTER_READY);
-    fflush(stdout);
-    common_log_resume(common_log_main());
-}
-
 
 //
 // server_models_routes
