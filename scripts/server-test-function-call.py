@@ -164,8 +164,8 @@ def chat_completion(url, messages, tools=None, stream=False, force_tools=False):
 
 
 def all_tools_called(tools, all_tool_calls):
-    all_tool_names = set([ tc["function"]["name"] for tc in tools ])
-    all_called_tool_names = set([ tc["function"]["name"] for tc in all_tool_calls ])
+    all_tool_names = set([tc["function"]["name"] for tc in tools])
+    all_called_tool_names = set([tc["function"]["name"] for tc in all_tool_calls])
     return all_tool_names == all_called_tool_names
 
 
