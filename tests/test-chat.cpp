@@ -1800,6 +1800,37 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ empty_args_tool_no_properties })
             .expect(message_with_tool_calls("empty_args_no_props", "{}"))
             .run();
+
+        // Edge cases when reasoning traces are not sent
+        tst.test(
+               "<think>\n\n</think>\n\n"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect_reasoning("<think>\n\n")
+            .expect_tool_calls({
+                { "special_function", "{\"arg1\": 1}" }
+            })
+            .run();
+
+        tst.test(
+               "</think>\n\n"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect_reasoning("")
+            .expect_tool_calls({
+                { "special_function", "{\"arg1\": 1}" }
+            })
+            .run();
     }
 
     {
