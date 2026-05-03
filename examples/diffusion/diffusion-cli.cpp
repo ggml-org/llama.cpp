@@ -192,10 +192,10 @@ int main(int argc, char ** argv) {
     GGML_ASSERT((params.diffusion.eps == 0) ^ (params.diffusion.block_length == 0));
 
     if (params.diffusion.eps) {
-        diff_params.schedule = TIMESTEP_BASED;
+        diff_params.schedule = DIFFUSION_TRANSFER_SCHEDULE_TIMESTEP_BASED;
         diff_params.eps      = params.diffusion.eps;
     } else if (params.diffusion.block_length) {
-        diff_params.schedule     = BLOCK_BASED;
+        diff_params.schedule     = DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED;
         diff_params.block_length = params.diffusion.block_length;
     }
 
@@ -214,8 +214,17 @@ int main(int argc, char ** argv) {
     callback_data cb_data               = { &diff_params, vocab, n_input };
     diff_params.step_callback_user_data = &cb_data;
 
-    const char * alg_names[]   = { "ORIGIN", "ENTROPY_BASED", "MARGIN_BASED", "RANDOM", "CONFIDENCE_BASED" };
-    const char * sched_names[] = { "TIMESTEP_BASED", "BLOCK_BASED" };
+    const char * alg_names[]   = {
+        "DIFFUSION_ALGORITHM_ORIGIN",
+        "DIFFUSION_ALGORITHM_ENTROPY_BASED",
+        "DIFFUSION_ALGORITHM_MARGIN_BASED",
+        "DIFFUSION_ALGORITHM_RANDOM",
+        "DIFFUSION_ALGORITHM_CONFIDENCE_BASED",
+    };
+    const char * sched_names[] = {
+        "DIFFUSION_TRANSFER_SCHEDULE_TIMESTEP_BASED",
+        "DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED",
+    };
     const char * alg_name =
         (diff_params.algorithm >= 0 && diff_params.algorithm <= 4) ? alg_names[diff_params.algorithm] : "UNKNOWN";
     const char * sched_name =
@@ -227,11 +236,11 @@ int main(int argc, char ** argv) {
     LOG_INF("diffusion_params: - %-25s enum             = %d (%s)\n", "algorithm", diff_params.algorithm, alg_name);
     LOG_INF("diffusion_params: - %-25s enum             = %d (%s)\n", "schedule", diff_params.schedule, sched_name);
     LOG_INF("diffusion_params: - %-25s f32              = %.3f\n", "temperature", diff_params.temperature);
-    if (diff_params.schedule == TIMESTEP_BASED) {
+    if (diff_params.schedule == DIFFUSION_TRANSFER_SCHEDULE_TIMESTEP_BASED) {
         LOG_INF("diffusion_params: - %-25s f32              = %.6f\n", "eps", diff_params.eps);
         LOG_INF("diffusion_params: - %-25s f32              = %.3f\n", "alg_temp", diff_params.alg_temp);
     }
-    if (diff_params.schedule == BLOCK_BASED) {
+    if (diff_params.schedule == DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED) {
         LOG_INF("diffusion_params: - %-25s u32              = %d\n", "block_length", diff_params.block_length);
         LOG_INF("diffusion_params: - %-25s f32              = %.3f\n", "cfg_scale", diff_params.cfg_scale);
     }

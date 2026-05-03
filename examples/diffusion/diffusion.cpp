@@ -14,10 +14,10 @@ static float calculate_confidence(const llama_token_data_array & cur_p,
                                   diffusion_algorithm            algorithm,
                                   std::mt19937 &                 rng) {
     switch (algorithm) {
-        case CONFIDENCE_BASED:
+        case DIFFUSION_ALGORITHM_CONFIDENCE_BASED:
             return cur_p.data[cur_p.selected].p;  // Selected token probability
 
-        case ENTROPY_BASED:
+        case DIFFUSION_ALGORITHM_ENTROPY_BASED:
             {
                 float       entropy = 0.0f;
                 const float epsilon = 1e-10f;
@@ -28,16 +28,16 @@ static float calculate_confidence(const llama_token_data_array & cur_p,
                 return -entropy;  // Higher entropy = lower confidence
             }
 
-        case MARGIN_BASED:
+        case DIFFUSION_ALGORITHM_MARGIN_BASED:
             return (cur_p.size > 1) ? cur_p.data[0].p - cur_p.data[1].p : cur_p.data[0].p;
 
-        case RANDOM:
+        case DIFFUSION_ALGORITHM_RANDOM:
             {
                 std::uniform_real_distribution<float> uniform(0.0f, 1.0f);
                 return uniform(rng);  // Random confidence
             }
 
-        case ORIGIN:
+        case DIFFUSION_ALGORITHM_ORIGIN:
             return cur_p.data[cur_p.selected].p;
 
         default:
@@ -49,11 +49,11 @@ static float calculate_confidence(const llama_token_data_array & cur_p,
 static int32_t calculate_transfer_count(int32_t                      step,
                                         int32_t                      total_steps,
                                         int32_t                      remaining_masked,
-                                        transfer_schedule            schedule,
+                                        diffusion_transfer_schedule  schedule,
                                         float                        eps,
                                         const std::vector<int32_t> & num_transfer_tokens = {}) {
     switch (schedule) {
-        case TIMESTEP_BASED:
+        case DIFFUSION_TRANSFER_SCHEDULE_TIMESTEP_BASED:
             {
                 float t          = 1.0f - (float) step / total_steps * (1.0f - eps);
                 float s          = 1.0f - (float) (step + 1) / total_steps * (1.0f - eps);
@@ -61,7 +61,7 @@ static int32_t calculate_transfer_count(int32_t                      step,
                 return (int32_t) (remaining_masked * p_transfer);
             }
 
-        case BLOCK_BASED:
+        case DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED:
             if (!num_transfer_tokens.empty() && step < (int32_t) num_transfer_tokens.size()) {
                 return num_transfer_tokens[step];
             }
@@ -161,7 +161,7 @@ void diffusion_generate(llama_context *          ctx,
     int32_t              num_blocks      = 1;
     int32_t              steps_per_block = params.steps;
 
-    if (params.schedule == BLOCK_BASED) {
+    if (params.schedule == DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED) {
         GGML_ASSERT(params.max_length % params.block_length == 0);
         num_blocks = params.max_length / params.block_length;
         GGML_ASSERT(params.steps % num_blocks == 0);
@@ -175,13 +175,13 @@ void diffusion_generate(llama_context *          ctx,
     int64_t time_start          = ggml_time_us();
 
     for (int block_num = 0; block_num < num_blocks; block_num++) {
-        int32_t block_start = (params.schedule == BLOCK_BASED) ? n_input + block_num * params.block_length : 0;
-        int32_t block_end   = (params.schedule == BLOCK_BASED) ?
+        int32_t block_start = (params.schedule == DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED) ? n_input + block_num * params.block_length : 0;
+        int32_t block_end   = (params.schedule == DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED) ?
                                   std::min(n_input + (block_num + 1) * params.block_length, params.max_length) :
                                   params.max_length;
 
         // Count masked tokens in current block for block-based processing
-        if (params.schedule == BLOCK_BASED) {
+        if (params.schedule == DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED) {
             int32_t block_mask_count = 0;
             for (int i = block_start; i < block_end; i++) {
                 if (output_tokens[i] == params.mask_token_id) {
@@ -270,7 +270,7 @@ void diffusion_generate(llama_context *          ctx,
             for (int32_t i = 0; i < params.max_length; i++) {
                 if (output_tokens[i] == params.mask_token_id) {
                     // For block-based, only consider current block
-                    if (params.schedule != BLOCK_BASED || (i >= block_start && i < block_end)) {
+                    if (params.schedule != DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED || (i >= block_start && i < block_end)) {
                         mask_positions.push_back(i);
                     }
                 }
@@ -284,7 +284,7 @@ void diffusion_generate(llama_context *          ctx,
                 add_gumbel_noise(logits, n_vocab, params.temperature, rng);
             }
 
-            if (params.algorithm == ORIGIN) {
+            if (params.algorithm == DIFFUSION_ALGORITHM_ORIGIN) {
                 int32_t transfer_count = calculate_transfer_count(
                     step, steps_per_block, mask_positions.size(), params.schedule, params.eps, num_transfer_tokens);
                 float p_transfer = (float) transfer_count / mask_positions.size();

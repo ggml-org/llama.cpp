@@ -4,12 +4,18 @@
 
 #include <cstdint>
 
-enum diffusion_algorithm { ORIGIN = 0, ENTROPY_BASED = 1, MARGIN_BASED = 2, RANDOM = 3, CONFIDENCE_BASED = 4 };
+enum diffusion_algorithm {
+    DIFFUSION_ALGORITHM_ORIGIN           = 0,
+    DIFFUSION_ALGORITHM_ENTROPY_BASED    = 1,
+    DIFFUSION_ALGORITHM_MARGIN_BASED     = 2,
+    DIFFUSION_ALGORITHM_RANDOM           = 3,
+    DIFFUSION_ALGORITHM_CONFIDENCE_BASED = 4,
+};
 
 // Unified transfer scheduling methods
-enum transfer_schedule {
-    TIMESTEP_BASED = 0,  // Dream-style: (1.0 - s/t) * remaining
-    BLOCK_BASED    = 1,  // LLaDA-style: process in blocks with get_num_transfer_tokens
+enum diffusion_transfer_schedule {
+    DIFFUSION_TRANSFER_SCHEDULE_TIMESTEP_BASED = 0,  // Dream-style: (1.0 - s/t) * remaining
+    DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED    = 1,  // LLaDA-style: process in blocks with get_num_transfer_tokens
 };
 
 typedef bool (*diffusion_step_callback_t)(int32_t             step,
@@ -31,8 +37,8 @@ struct diffusion_params {
     float   top_p = 0.;
     int32_t top_k = 0.;
 
-    diffusion_algorithm algorithm = CONFIDENCE_BASED;
-    transfer_schedule   schedule  = TIMESTEP_BASED;
+    diffusion_algorithm         algorithm = DIFFUSION_ALGORITHM_CONFIDENCE_BASED;
+    diffusion_transfer_schedule schedule  = DIFFUSION_TRANSFER_SCHEDULE_TIMESTEP_BASED;
 
     float   cfg_scale        = 0.;     // Config scale for classifier-free guidance
     float   eps              = 0.;     // Timestep scheduling
