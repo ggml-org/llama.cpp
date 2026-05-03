@@ -355,6 +355,7 @@ bool ggml_et_op_group_norm(ggml_backend_et_device_context* dev_ctx, const ggml_t
 bool ggml_et_op_glu(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_im2col(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
+bool ggml_et_op_conv_2d(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_get_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);
 bool ggml_et_op_set_rows(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node);

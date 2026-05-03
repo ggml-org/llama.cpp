@@ -1318,6 +1318,45 @@ bool ggml_et_op_im2col(ggml_backend_et_device_context* dev_ctx, const ggml_tenso
     return kernel_result;
 }
 
+bool ggml_et_op_conv_2d(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !node)                       return false;
+    if (!node->src[0] || !node->src[1])          return false;
+    if (!node->data || !node->src[0]->data || !node->src[1]->data) return false;
+
+    // Kernel constraints (mirror supports_op; recheck here as a guard).
+    const ggml_tensor * flt = node->src[0];   // [Kw, Kh, Cin, Cout]
+    const ggml_tensor * in  = node->src[1];   // [W,  H,  Cin, N]
+    if (node->type != GGML_TYPE_F32 || flt->type != GGML_TYPE_F32 || in->type != GGML_TYPE_F32) return false;
+
+    const int32_t s0 = ggml_get_op_params_i32(node, 0);
+    const int32_t s1 = ggml_get_op_params_i32(node, 1);
+    const int32_t p0 = ggml_get_op_params_i32(node, 2);
+    const int32_t p1 = ggml_get_op_params_i32(node, 3);
+    const int32_t d0 = ggml_get_op_params_i32(node, 4);
+    const int32_t d1 = ggml_get_op_params_i32(node, 5);
+
+    if (s0 < 1 || s1 < 1)               return false;
+    if (d0 != 1 || d1 != 1)             return false;
+    if (flt->ne[2] % 16 != 0 || flt->ne[3] % 16 != 0) return false;
+    if (in->ne[3] != 1)                 return false;
+    if (node->ne[0] <= 0)               return false;   // OW > 0 (any width OK; staging path handles non-16)
+    (void)p0; (void)p1;
+
+    ggml_et_binary_params params;
+    params.src0 = *node->src[0];
+    params.src1 = *node->src[1];
+    params.dst  = *node;
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "conv_2d_f32_me",
+                                               &params, sizeof(params),
+                                               0xFFFFFFFFu);
+
+    ET_PERF_END("CONV_2D", "conv_2d_f32_me", node);
+    return kernel_result;
+}
+
 bool ggml_et_op_softmax(ggml_backend_et_device_context* dev_ctx, const ggml_tensor* node) {
     ET_PERF_START();
 
