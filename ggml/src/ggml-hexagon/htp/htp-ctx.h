@@ -20,7 +20,7 @@ struct htp_mmap {
     uint64_t size;
     uint64_t base;
     uint32_t fd;
-    uint32_t pinned;
+    uint32_t reserved;
 };
 
 // Scratchpad state
@@ -76,6 +76,8 @@ struct htp_context {
     uint32_t               vtcm_rctx;
     atomic_bool            vtcm_valid;
     atomic_bool            vtcm_needs_release;
+
+    uint64_t               max_vmem;
 
     struct htp_ops_context octx;
 

@@ -1642,22 +1642,16 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         // Qwen3.5 (basically same as Nemotron, but keeping separate tests just in case)
         auto tst = peg_tester("models/templates/Qwen3.5-4B.jinja", detailed_debug);
 
-        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .enable_thinking(true)
             .expect(message_assist_thoughts)
             .run();
 
-                tst.test("I'm\nthinking\n</think>\nHello, world!\nWhat's up?")
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_NONE)
-            .expect_content("<think>\nI'm\nthinking\n</think>\nHello, world!\nWhat's up?")
-            .run();
-
-        tst.test("I'm\nthinking\n</think>\nHello, world!\nWhat's up?")
-            .enable_thinking(true)
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .expect(message_assist_thoughts)
+            .expect_content("<think>\nI'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
             .run();
 
         tst.test(
@@ -1673,7 +1667,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         tst.test(
-               "I'm\nthinking\n</think>\n"
+               "I'm\nthinking\n</think>\n\n"
                "<tool_call>\n"
                "<function=special_function>\n"
                "<parameter=arg1>\n1\n</parameter>\n"
@@ -1731,7 +1725,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test(
                "I need to output the invoice details in JSON\n"
-               "</think>\n"
+               "</think>\n\n"
                R"({"amount": 123.45, "date": "2025-12-03"})")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .enable_thinking(true)
@@ -1751,7 +1745,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "hello()\n"
                "</parameter>\n"
                "</function>\n"
-               "</tool_call></think>\n"
+               "</tool_call>\n</think>\n\n"
                "<tool_call>\n"
                "<function=python>\n"
                "<parameter=code>\n"
@@ -1994,7 +1988,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "hello()\n"
                "</parameter>\n"
                "</function>\n"
-               "</tool_call></think>\n"
+               "</tool_call>\n</think>\n"
                "<tool_call>\n"
                "<function=python>\n"
                "<parameter=code>\n"
@@ -2255,6 +2249,46 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist)
             .run();
+
+        {
+            // additional tests for https://github.com/ggml-org/llama.cpp/pull/21760
+            auto tmpls = read_templates("models/templates/google-gemma-4-31B-it.jinja");
+
+            common_chat_msg tool_call_msg = simple_assist_msg(
+                "Let me check.", "", "special_function", "{\"arg1\": 1}","c0");
+
+            common_chat_msg tool_msg;
+            tool_msg.role         = "tool";
+            tool_msg.tool_name    = "special_function";
+            tool_msg.tool_call_id = "c0";
+            tool_msg.content      = "{\"r\":\"ok\"}";
+
+            {
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_user, tool_call_msg, tool_msg };
+                inputs.tools                 = { special_function_tool };
+                inputs.add_generation_prompt = true;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (!string_ends_with(params.prompt, "<turn|>\n<|turn>model\n")) {
+                    throw std::runtime_error("Missing generation prompt for Gemma 4");
+                }
+            }
+
+            {
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_user, tool_call_msg, tool_msg };
+                inputs.tools                 = { special_function_tool };
+                inputs.add_generation_prompt = false;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (string_ends_with(params.prompt, "<|turn>model\n")) {
+                    throw std::runtime_error("Gemma 4: generation prompt was modified despite add_generation_prompt=false");
+                }
+            }
+        }
     }
 
     {
@@ -3463,7 +3497,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         // Tool call with reasoning (enable_thinking=true)
-        tst.test("I'm\nthinking</think><tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</tool_call>")
+        tst.test("I'm\nthinking\n</think>\n\n<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</tool_call>")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
@@ -3487,7 +3521,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         // Tool call with reasoning and content
-        tst.test("I need to call a function</think>"
+        tst.test("I need to call a function\n</think>\n\n"
                  "Let me check the time.<tool_call>\n{\"name\": \"get_time\", \"arguments\": {\"city\": \"XYZCITY\"}}</tool_call>")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
@@ -3514,7 +3548,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // fake tool call marker in reasoning
         tst.test(
-               "Let me think about <tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 2}}</tool_call> hmm</think>"
+               "Let me think about <tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 2}}</tool_call> hmm\n</think>\n\n"
                "<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</tool_call>")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
@@ -3542,11 +3576,11 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // Format: <minimax:tool_call><invoke name="func"><parameter name="key">value</parameter></invoke></minimax:tool_call>
     {
         auto tst = peg_tester("models/templates/MiniMax-M2.jinja", detailed_debug);
-        tst.test("</think>Hello, world!\nWhat's up?").enable_thinking(true).reasoning_format(COMMON_REASONING_FORMAT_AUTO).expect(message_assist).run();
+        tst.test("\n</think>\n\nHello, world!\nWhat's up?").enable_thinking(true).reasoning_format(COMMON_REASONING_FORMAT_AUTO).expect(message_assist).run();
 
-        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?").enable_thinking(true).reasoning_format(COMMON_REASONING_FORMAT_AUTO).expect(message_assist_thoughts).run();
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?").enable_thinking(true).reasoning_format(COMMON_REASONING_FORMAT_AUTO).expect(message_assist_thoughts).run();
 
-        tst.test("Let's call a tool:</think><minimax:tool_call>\n<invoke name=\"empty_args\">\n</invoke>\n</minimax:tool_call>").
+        tst.test("Let's call a tool:\n</think>\n\n<minimax:tool_call>\n<invoke name=\"empty_args\">\n</invoke>\n</minimax:tool_call>").
             enable_thinking(true).
             reasoning_format(COMMON_REASONING_FORMAT_AUTO).
             tools({ empty_args_tool }).
@@ -3554,7 +3588,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             run();
 
         tst.test(
-               "</think><minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter "
+               "\n</think>\n\n<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter "
                "name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>")
             .tools({ special_function_tool })
             .expect(message_assist_call)
@@ -3714,7 +3748,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .enable_thinking(false)
             .expect(message_assist)
             .run();
-        tst.test("I'm\nthinking</think>\n\nHello, world!\nWhat's up?")
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .expect(message_assist_thoughts)
@@ -3729,7 +3763,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .expect(message_assist_call_content)
             .run();
-        tst.test("I'm\nthinking</think>\n\n<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
+        tst.test("I'm\nthinking\n</think>\n\n<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .tools({ special_function_tool })
@@ -4006,7 +4040,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     {
         auto tst = peg_tester("models/templates/StepFun3.5-Flash.jinja", detailed_debug);
-        tst.test("I was thinking</think>\nNow I'm not.").
+
+        tst.test("I was thinking\n</think>\nNow I'm not.").
             enable_thinking(true).
             reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK).
             expect_reasoning("I was thinking").
