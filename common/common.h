@@ -503,6 +503,7 @@ struct common_params {
     int32_t control_vector_layer_start = -1; // layer range for control vector
     int32_t control_vector_layer_end   = -1; // layer range for control vector
     bool    offline                    = false;
+    bool    download_only              = false; // only download the model if required, don't start the server
 
     int32_t ppl_stride      = 0;     // stride for perplexity calculations. If left at 0, the pre-existing approach will be used.
     int32_t ppl_output_type = 0;     // = 0 -> ppl output is as usual, = 1 -> ppl output is num_tokens, ppl, one per line
@@ -626,10 +627,11 @@ struct common_params {
     std::vector<std::string> server_tools;
 
     // router server configs
-    std::string models_dir    = ""; // directory containing models for the router server
-    std::string models_preset = ""; // directory containing model presets for the router server
-    int models_max = 4;             // maximum number of models to load simultaneously
-    bool models_autoload = true;    // automatically load models when requested via the router server
+    std::string models_dir    = "";  // directory containing models for the router server
+    std::string models_preset = "";  // directory containing model presets for the router server
+    int models_max = 4;              // maximum number of models to load simultaneously
+    int models_memory_margin = 1024; // MiB of free memory to preserve per device (0 = disabled)
+    bool models_autoload = true;     // automatically load models when requested via the router server
 
     bool log_json = false;
 

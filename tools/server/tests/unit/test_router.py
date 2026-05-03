@@ -1,4 +1,5 @@
 import pytest
+import threading
 from utils import *
 
 server: ServerProcess
@@ -205,3 +206,126 @@ def test_router_api_key_required():
     )
     assert authed.status_code == 200
     assert "error" not in authed.body
+
+
+# --- Drain-aware eviction tests ---
+
+
+def _make_completion(model_id: str, max_tokens: int = 16) -> dict:
+    """Send a non-streaming completion request. Returns {"content": ..., "error": ...}."""
+    result = {"content": "", "error": None}
+    try:
+        res = server.make_request("POST", "/v1/chat/completions", data={
+            "model": model_id,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        if res.status_code == 200:
+            choices = res.body.get("choices", [])
+            if choices:
+                result["content"] = choices[0].get("message", {}).get("content", "")
+        else:
+            result["error"] = f"status {res.status_code}: {res.body}"
+    except Exception as e:
+        result["error"] = str(e)
+    return result
+
+
+def test_router_concurrent_no_thrashing():
+    """Concurrent requests for different models should all succeed, not thrash."""
+    global server
+    server = ServerPreset.router()
+    server.models_max = 1
+    server.start()
+
+    model_a = "ggml-org/tinygemma3-GGUF:Q8_0"
+    model_b = "ggml-org/test-model-stories260K:F32"
+    n_per_model = 3
+    results = {}
+
+    def send_request(model_id, idx):
+        results[(model_id, idx)] = _make_completion(model_id)
+
+    threads = []
+    for i in range(n_per_model):
+        threads.append(threading.Thread(target=send_request, args=(model_a, i)))
+        threads.append(threading.Thread(target=send_request, args=(model_b, i)))
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=300)
+
+    failures = [f"{m} #{i}: {r['error']}" for (m, i), r in results.items() if r["error"] is not None]
+    assert len(failures) == 0, f"{len(failures)} request(s) failed:\n" + "\n".join(failures)
+
+
+def test_router_concurrent_partial_capacity():
+    """With models_max=2 and 3 models, concurrent requests should all succeed."""
+    global server
+    server = ServerPreset.router()
+    server.models_max = 2
+    server.start()
+
+    models = [
+        "ggml-org/tinygemma3-GGUF:Q8_0",
+        "ggml-org/test-model-stories260K:F32",
+        "ggml-org/test-model-stories260K-infill:F32",
+    ]
+    results = {}
+
+    def send_request(model_id, idx):
+        results[(model_id, idx)] = _make_completion(model_id)
+
+    threads = []
+    for model in models:
+        for i in range(2):
+            threads.append(threading.Thread(target=send_request, args=(model, i)))
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=300)
+
+    failures = [f"{m} #{i}: {r['error']}" for (m, i), r in results.items() if r["error"] is not None]
+    assert len(failures) == 0, f"{len(failures)} request(s) failed:\n" + "\n".join(failures)
+
+
+def test_router_alternating_requests():
+    """Repeated alternating requests between two models should all succeed."""
+    global server
+    server = ServerPreset.router()
+    server.models_max = 1
+    server.start()
+
+    model_a = "ggml-org/tinygemma3-GGUF:Q8_0"
+    model_b = "ggml-org/test-model-stories260K:F32"
+
+    for i in range(3):
+        result = _make_completion(model_a)
+        assert result["error"] is None, f"Round {i} model A failed: {result['error']}"
+        result = _make_completion(model_b)
+        assert result["error"] is None, f"Round {i} model B failed: {result['error']}"
+
+
+def test_router_concurrent_same_model():
+    """Concurrent requests for the same model should all succeed."""
+    global server
+    server = ServerPreset.router()
+    server.models_max = 1
+    server.start()
+
+    model_id = "ggml-org/tinygemma3-GGUF:Q8_0"
+    results = {}
+
+    def send_request(idx):
+        results[idx] = _make_completion(model_id)
+
+    threads = [threading.Thread(target=send_request, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=300)
+
+    failures = [f"#{i}: {r['error']}" for i, r in results.items() if r["error"] is not None]
+    assert len(failures) == 0, f"{len(failures)} request(s) failed:\n" + "\n".join(failures)

@@ -3053,6 +3053,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_MAX"));
     add_opt(common_arg(
+        {"--models-memory-margin"}, "N",
+        string_format("for router server, MiB of memory to leave free, per device (default: %d, 0 = unlimited)", params.models_memory_margin),
+        [](common_params & params, int value) {
+            params.models_memory_margin = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_MEMORY_MARGIN"));
+    add_opt(common_arg(
         {"--models-autoload"},
         {"--no-models-autoload"},
         string_format("for router server, whether to automatically load models (default: %s)", params.models_autoload ? "enabled" : "disabled"),
@@ -3281,6 +3288,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.offline = true;
         }
     ).set_env("LLAMA_OFFLINE"));
+    add_opt(common_arg(
+        {"--download-only"},
+        "Download the model file(s) and exit",
+        [](common_params & params) {
+            params.download_only = true;
+        }
+    ));
     add_opt(common_arg(
         {"-lv", "--verbosity", "--log-verbosity"}, "N",
         string_format("Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:\n"

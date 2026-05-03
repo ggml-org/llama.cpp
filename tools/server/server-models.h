@@ -14,6 +14,9 @@
 /**
  * state diagram:
  *
+ *
+ *  ┌► DOWNLOADING ─┐
+ *  │               ▼
  * UNLOADED ──► LOADING ──► LOADED ◄──── SLEEPING
  *  ▲            │            │               ▲
  *  └───failed───┘            │               │
@@ -21,8 +24,8 @@
  *  └────────unloaded─────────┘
  */
 enum server_model_status {
-    // TODO: also add downloading state when the logic is added
     SERVER_MODEL_STATUS_UNLOADED,
+    SERVER_MODEL_STATUS_DOWNLOADING,
     SERVER_MODEL_STATUS_LOADING,
     SERVER_MODEL_STATUS_LOADED,
     SERVER_MODEL_STATUS_SLEEPING
@@ -31,6 +34,9 @@ enum server_model_status {
 static server_model_status server_model_status_from_string(const std::string & status_str) {
     if (status_str == "unloaded") {
         return SERVER_MODEL_STATUS_UNLOADED;
+    }
+    if (status_str == "downloading") {
+        return SERVER_MODEL_STATUS_DOWNLOADING;
     }
     if (status_str == "loading") {
         return SERVER_MODEL_STATUS_LOADING;
@@ -46,13 +52,16 @@ static server_model_status server_model_status_from_string(const std::string & s
 
 static std::string server_model_status_to_string(server_model_status status) {
     switch (status) {
-        case SERVER_MODEL_STATUS_UNLOADED: return "unloaded";
-        case SERVER_MODEL_STATUS_LOADING:  return "loading";
-        case SERVER_MODEL_STATUS_LOADED:   return "loaded";
-        case SERVER_MODEL_STATUS_SLEEPING: return "sleeping";
-        default:                           return "unknown";
+        case SERVER_MODEL_STATUS_UNLOADED:     return "unloaded";
+        case SERVER_MODEL_STATUS_DOWNLOADING:  return "downloading";
+        case SERVER_MODEL_STATUS_LOADING:      return "loading";
+        case SERVER_MODEL_STATUS_LOADED:       return "loaded";
+        case SERVER_MODEL_STATUS_SLEEPING:     return "sleeping";
+        default:                               return "unknown";
     }
 }
+
+using device_memory_map = std::map<ggml_backend_dev_t, size_t>;
 
 struct server_model_meta {
     common_preset preset;
@@ -62,6 +71,7 @@ struct server_model_meta {
     int port = 0;
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
     int64_t last_used = 0; // for LRU unloading
+    device_memory_map dmm_req; // bytes required per device
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
@@ -90,6 +100,7 @@ private:
         std::thread th;
         server_model_meta meta;
         FILE * stdin_file = nullptr;
+        uint64_t active_refs = 0;
     };
 
     std::mutex mutex;
@@ -107,13 +118,27 @@ private:
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
 
+    // available memory per device
+    device_memory_map dmm_available;
+
     void update_meta(const std::string & name, const server_model_meta & meta);
 
     // unload least recently used models if the limit is reached
-    void unload_lru();
+    void unload_lru(const device_memory_map & dmm_req);
 
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
+
+    // return number of devices where the memory limit would be exceeded
+    // return 0 if the new model would fit on all devices
+    // not thread-safe, caller must hold mutex
+    int can_fit(const device_memory_map & dmm_req) const;
+
+    // download model files, blocking call (caller must NOT hold mutex)
+    bool download_model(const std::string & name);
+
+    // Internal helper for model loading
+    void _load(const std::string & name, const device_memory_map & dmm_req);
 
 public:
     server_models(const common_params & params, int argc, char ** argv);
@@ -149,6 +174,12 @@ public:
 
     // proxy an HTTP request to the model instance
     server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used);
+
+    // Increase instance ref counter
+    void inc_refs(const std::string & name);
+
+    // Decrease instance ref counter
+    void dec_refs(const std::string & name);
 
     // return true if the current process is a child server instance
     static bool is_child_server();

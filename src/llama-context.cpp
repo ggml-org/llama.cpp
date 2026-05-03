@@ -3549,6 +3549,19 @@ void llama_perf_context_reset(llama_context * ctx) {
     ctx->perf_reset();
 }
 
+uint64_t llama_context_device_memory(const llama_context * ctx, ggml_backend_dev_t device) {
+    const bool is_host = ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_CPU;
+    uint64_t total = 0;
+    for (const auto & [buft, mb] : ctx->memory_breakdown()) {
+        const bool matches = is_host ? ggml_backend_buft_is_host(buft) :
+                                       ggml_backend_buft_get_device(buft) == device;
+        if (matches) {
+            total += mb.total();
+        }
+    }
+    return total;
+}
+
 //
 // training
 //

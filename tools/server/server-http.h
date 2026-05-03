@@ -28,7 +28,13 @@ struct server_http_res {
         return next != nullptr;
     }
 
-    virtual ~server_http_res() = default;
+    std::function<void()> on_destroy = nullptr;
+
+    virtual ~server_http_res() {
+        if (on_destroy) {
+            on_destroy();
+        }
+    }
 };
 
 // unique pointer, used by set_chunked_content_provider
