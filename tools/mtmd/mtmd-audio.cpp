@@ -663,8 +663,8 @@ void mtmd_audio_preprocessor_granite_speech::initialize() {
 }
 
 bool mtmd_audio_preprocessor_granite_speech::preprocess(const float *                 samples,
-                                                         size_t                        n_samples,
-                                                         std::vector<mtmd_audio_mel> & output) {
+                                                        size_t                        n_samples,
+                                                        std::vector<mtmd_audio_mel> & output) {
     if (n_samples == 0) {
         return false;
     }

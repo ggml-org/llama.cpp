@@ -7,9 +7,9 @@ ggml_cgraph * clip_graph_granite_speech::build() {
     const int conv_kernel  = hparams.audio_conv_kernel_size;
     const int conv_pad     = conv_kernel / 2;
 
-    const int num_blocks  = (n_frames + context_size - 1) / context_size;
-    const int padded_len  = num_blocks * context_size;
-    const int remainder   = n_frames % context_size;
+    const int num_blocks   = (n_frames + context_size - 1) / context_size;
+    const int padded_len   = num_blocks * context_size;
+    const int remainder    = n_frames % context_size;
 
     ggml_tensor * attn_dists = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, context_size * context_size);
     ggml_set_name(attn_dists, "attn_dists");

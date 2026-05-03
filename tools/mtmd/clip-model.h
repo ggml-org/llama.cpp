@@ -310,7 +310,6 @@ struct yasa2_stage {
     std::vector<yasa2_block> blocks;
 };
 
-
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -538,16 +537,16 @@ struct clip_model {
     ggml_tensor * audio_out_proj_b = nullptr;
 
     // granite_speech encoder
-    ggml_tensor * inp_proj_w = nullptr;
-    ggml_tensor * inp_proj_b = nullptr;
-    ggml_tensor * ctc_out_w = nullptr;
-    ggml_tensor * ctc_out_b = nullptr;
+    ggml_tensor * inp_proj_w    = nullptr;
+    ggml_tensor * inp_proj_b    = nullptr;
+    ggml_tensor * ctc_out_w     = nullptr;
+    ggml_tensor * ctc_out_b     = nullptr;
     ggml_tensor * ctc_out_mid_w = nullptr;
     ggml_tensor * ctc_out_mid_b = nullptr;
     // qformer projector
-    ggml_tensor * qf_proj_query = nullptr;
-    ggml_tensor * qf_proj_norm_w = nullptr;
-    ggml_tensor * qf_proj_norm_b = nullptr;
+    ggml_tensor * qf_proj_query    = nullptr;
+    ggml_tensor * qf_proj_norm_w   = nullptr;
+    ggml_tensor * qf_proj_norm_b   = nullptr;
     ggml_tensor * qf_proj_linear_w = nullptr;
     ggml_tensor * qf_proj_linear_b = nullptr;
     std::vector<clip_layer> qf_proj_layers;
