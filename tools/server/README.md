@@ -228,6 +228,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--prefill-assistant, --no-prefill-assistant` | whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)<br/>when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled<br/><br/>(env: LLAMA_ARG_PREFILL_ASSISTANT) |
 | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
 | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
+| `--priority N` | priority for preemptive scheduling in router mode (preset only, 0 = normal, positive = higher, negative = lower) |
 | `-td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
 | `-tbd, --threads-batch-draft N` | number of threads to use during batch and prompt processing (default: same as --threads-draft) |
 | `--draft, --draft-n, --draft-max N` | number of tokens to draft for speculative decoding (default: 16)<br/>(env: LLAMA_ARG_DRAFT_MAX) |
@@ -1715,6 +1716,70 @@ Example of an error:
     }
 }
 ```
+
+## Priority Scheduling
+
+The server supports preemptive priority scheduling for router mode. Models can be assigned a priority level in `presets.ini`, and incoming requests are routed based on priority. Higher-priority requests preempt lower-priority running models immediately, while same-priority models follow a drain window to prevent thrashing.
+
+### Configuration
+
+Set priority per model in `presets.ini` using the `priority` option:
+
+```ini
+[model-a]
+models_path = /path/to/model-a.gguf
+priority = 10
+
+[model-b]
+models_path = /path/to/model-b.gguf
+priority = 5
+
+[*]
+priority = 0
+```
+
+**Priority values:**
+- `0` = normal (default when omitted)
+- Positive = higher priority
+- Negative = lower priority
+
+### Preemption Behavior
+
+When a higher-priority request arrives:
+1. The router checks if the running model has any pending queued requests
+2. If the running model has only the current request being served (drain window satisfied), the router sends a cancel signal to the running model's child process
+3. The interrupted request is re-enqueued with its prompt cache intact for fast reprocessing
+4. The higher-priority request is forwarded to the target model immediately
+5. The client connection for the interrupted request remains open until completion or timeout
+
+### Drain Window
+
+When same-priority models receive burst traffic, switching on every request causes thrashing. The drain window prevents this:
+
+- A loaded model A (priority P) is only unloaded to service model B (priority P) when model A has no remaining queued requests beyond the one being served
+- This means sequential requests for the same-priority model drain fully before another same-priority model is considered
+- Different priority models always follow the preemption rules above
+
+### Task-Level Priority
+
+Individual requests can override the model's default priority using the `priority` field in the request body:
+
+```json
+{
+    "model": "model-a",
+    "messages": [{"role": "user", "content": "urgent query"}],
+    "priority": 100
+}
+```
+
+Task-level priority takes precedence over the model-level priority for that specific request.
+
+### Implementation Notes
+
+- Preemption happens at the router level by sending cancel tasks to child processes
+- Interrupted tasks are re-enqueued with their prompt cache intact (same as slot save/restore)
+- The router tracks pending request counts per model for drain window decisions
+- Priority sorting is implemented inline without external dependencies
 
 ## More examples
 

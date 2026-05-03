@@ -293,6 +293,7 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);
     params.sampling.backend_sampling   = json_value(data, "backend_sampling",    defaults.sampling.backend_sampling);
     params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
+    params.priority                     = json_value(data, "priority",            defaults.priority);
 
     params.speculative = defaults.speculative;
 

@@ -475,6 +475,7 @@ struct common_params {
 
     std::set<std::string> model_alias;     // model aliases                                                 // NOLINT
     std::set<std::string> model_tags;      // model tags (informational, not used for routing)              // NOLINT
+    int32_t priority                   = 0; // priority for preemptive scheduling in router mode             // NOLINT
     std::string hf_token             = ""; // HF token                                                      // NOLINT
     std::string prompt               = "";                                                                  // NOLINT
     std::string system_prompt        = "";                                                                  // NOLINT

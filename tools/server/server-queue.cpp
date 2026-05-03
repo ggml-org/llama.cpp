@@ -27,11 +27,24 @@ int server_queue::post(server_task && task, bool front) {
         cleanup_pending_task(task.id_target);
     }
     const int task_id = task.id;
-    QUE_DBG("new task, id = %d, front = %d\n", task_id, front);
+    QUE_DBG("new task, id = %d, front = %d, priority = %d\n", task_id, front, task.params.priority);
     if (front) {
         queue_tasks.push_front(std::move(task));
     } else {
-        queue_tasks.push_back(std::move(task));
+        // priority-aware insertion: find the right position based on task priority
+        // same-priority tasks keep FIFO order (appended at end of their priority group)
+        // higher-priority tasks are inserted ahead of lower-priority ones
+        bool inserted = false;
+        for (auto it = queue_tasks.begin(); it != queue_tasks.end(); ++it) {
+            if (task.params.priority > it->params.priority) {
+                queue_tasks.insert(it, std::move(task));
+                inserted = true;
+                break;
+            }
+        }
+        if (!inserted) {
+            queue_tasks.push_back(std::move(task));
+        }
     }
     condition_tasks.notify_one();
     return task_id;
@@ -47,11 +60,21 @@ int server_queue::post(std::vector<server_task> && tasks, bool front) {
         if (task.type == SERVER_TASK_TYPE_CANCEL) {
             cleanup_pending_task(task.id_target);
         }
-        QUE_DBG("new task, id = %d/%d, front = %d\n", task.id, (int) tasks.size(), front);
+        QUE_DBG("new task, id = %d/%d, front = %d, priority = %d\n", task.id, (int) tasks.size(), front, task.params.priority);
         if (front) {
             queue_tasks.push_front(std::move(task));
         } else {
-            queue_tasks.push_back(std::move(task));
+            bool inserted = false;
+            for (auto it = queue_tasks.begin(); it != queue_tasks.end(); ++it) {
+                if (task.params.priority > it->params.priority) {
+                    queue_tasks.insert(it, std::move(task));
+                    inserted = true;
+                    break;
+                }
+            }
+            if (!inserted) {
+                queue_tasks.push_back(std::move(task));
+            }
         }
     }
     condition_tasks.notify_one();
@@ -60,8 +83,19 @@ int server_queue::post(std::vector<server_task> && tasks, bool front) {
 
 void server_queue::defer(server_task && task) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
-    QUE_DBG("defer task, id = %d\n", task.id);
-    queue_tasks_deferred.push_back(std::move(task));
+    QUE_DBG("defer task, id = %d, priority = %d\n", task.id, task.params.priority);
+    // priority-aware deferred insertion
+    bool inserted = false;
+    for (auto it = queue_tasks_deferred.begin(); it != queue_tasks_deferred.end(); ++it) {
+        if (task.params.priority > it->params.priority) {
+            queue_tasks_deferred.insert(it, std::move(task));
+            inserted = true;
+            break;
+        }
+    }
+    if (!inserted) {
+        queue_tasks_deferred.push_back(std::move(task));
+    }
    condition_tasks.notify_one();
 }
 

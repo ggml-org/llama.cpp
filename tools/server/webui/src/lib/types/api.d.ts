@@ -86,9 +86,11 @@ export interface ApiModelDataEntry {
 	aliases?: string[];
 	/** Informational tags for this model */
 	tags?: string[];
-	/** Legacy meta field (may be present in older responses) */
-	meta?: Record<string, unknown> | null;
-}
+/** Legacy meta field (may be present in older responses) */
+ 	meta?: Record<string, unknown> | null;
+ 	/** Preemption priority for this model (0 = normal, positive = higher, negative = lower) */
+ 	priority?: number;
+ }
 
 export interface ApiModelDetails {
 	name: string;

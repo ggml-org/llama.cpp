@@ -141,25 +141,25 @@ int main(int argc, char ** argv) {
         // proxy handlers
         // note: routes.get_health stays the same
         routes.get_metrics                 = models_routes->proxy_get;
-        routes.post_props                  = models_routes->proxy_post;
-        routes.post_completions            = models_routes->proxy_post;
-        routes.post_completions_oai        = models_routes->proxy_post;
-        routes.post_chat_completions       = models_routes->proxy_post;
-        routes.post_responses_oai          = models_routes->proxy_post;
-        routes.post_transcriptions_oai     = models_routes->proxy_post;
-        routes.post_anthropic_messages     = models_routes->proxy_post;
-        routes.post_anthropic_count_tokens = models_routes->proxy_post;
-        routes.post_infill                 = models_routes->proxy_post;
-        routes.post_embeddings             = models_routes->proxy_post;
-        routes.post_embeddings_oai         = models_routes->proxy_post;
-        routes.post_rerank                 = models_routes->proxy_post;
-        routes.post_tokenize               = models_routes->proxy_post;
-        routes.post_detokenize             = models_routes->proxy_post;
-        routes.post_apply_template         = models_routes->proxy_post;
+        routes.post_props                  = models_routes->proxy_post_priority;
+        routes.post_completions            = models_routes->proxy_post_priority;
+        routes.post_completions_oai        = models_routes->proxy_post_priority;
+        routes.post_chat_completions       = models_routes->proxy_post_priority;
+        routes.post_responses_oai          = models_routes->proxy_post_priority;
+        routes.post_transcriptions_oai     = models_routes->proxy_post_priority;
+        routes.post_anthropic_messages     = models_routes->proxy_post_priority;
+        routes.post_anthropic_count_tokens = models_routes->proxy_post_priority;
+        routes.post_infill                 = models_routes->proxy_post_priority;
+        routes.post_embeddings             = models_routes->proxy_post_priority;
+        routes.post_embeddings_oai         = models_routes->proxy_post_priority;
+        routes.post_rerank                 = models_routes->proxy_post_priority;
+        routes.post_tokenize               = models_routes->proxy_post_priority;
+        routes.post_detokenize             = models_routes->proxy_post_priority;
+        routes.post_apply_template         = models_routes->proxy_post_priority;
         routes.get_lora_adapters           = models_routes->proxy_get;
-        routes.post_lora_adapters          = models_routes->proxy_post;
+        routes.post_lora_adapters          = models_routes->proxy_post_priority;
         routes.get_slots                   = models_routes->proxy_get;
-        routes.post_slots                  = models_routes->proxy_post;
+        routes.post_slots                  = models_routes->proxy_post_priority;
 
         // custom routes for router
         routes.get_props                   = models_routes->get_router_props;

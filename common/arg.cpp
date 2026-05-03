@@ -4080,6 +4080,14 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
         [](common_params &, int) { /* unused */ }
     ).set_env(COMMON_ARG_PRESET_STOP_TIMEOUT).set_preset_only());
 
+    args.push_back(common_arg(
+        {"priority"}, "N",
+        "priority for preemptive scheduling in router mode (0 = normal, positive = higher, negative = lower)",
+        [](common_params & params, int priority) {
+            params.priority = priority;
+        }
+    ).set_env(COMMON_ARG_PRESET_PRIORITY).set_preset_only());
+
     // args.push_back(common_arg(
     //     {"pin"},
     //     "in server router mode, do not unload this model if models_max is exceeded",
