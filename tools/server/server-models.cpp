@@ -526,6 +526,26 @@ void server_models::unload_lru(int requesting_priority) {
     // find the best candidate for eviction using priority-aware LRU
     // sleeping models are always eligible for eviction (they don't serve requests)
     // loaded/loading models are only evicted when below requesting_priority
+    // Debug logging for priority scheduling diagnostics
+    {
+        std::string active_models, sleeping_models;
+        {
+            std::unique_lock<std::mutex> lk(mutex);
+            for (const auto & m : mapping) {
+                std::string entry = string_format("%s[pri=%d,stat=%s]", m.first.c_str(), m.second.meta.priority,
+                    m.second.meta.status == SERVER_MODEL_STATUS_LOADED ? "loaded" :
+                    m.second.meta.status == SERVER_MODEL_STATUS_LOADING ? "loading" :
+                    m.second.meta.status == SERVER_MODEL_STATUS_SLEEPING ? "sleeping" : "unloaded");
+                if (m.second.meta.status == SERVER_MODEL_STATUS_LOADED || m.second.meta.status == SERVER_MODEL_STATUS_LOADING) {
+                    active_models += (active_models.empty() ? "" : ", ") + entry;
+                } else if (m.second.meta.status == SERVER_MODEL_STATUS_SLEEPING) {
+                    sleeping_models += (sleeping_models.empty() ? "" : ", ") + entry;
+                }
+            }
+        }
+        SRV_ALWAYS("unload_lru called requesting_priority=%d models_max=%d active=[%s] sleeping=[%s]\n",
+            requesting_priority, base_params.models_max, active_models.c_str(), sleeping_models.c_str());
+    }
     std::string candidate_name;
     int candidate_priority = INT_MAX;
     int64_t candidate_last_used = ggml_time_ms();
@@ -565,9 +585,11 @@ void server_models::unload_lru(int requesting_priority) {
                     candidate_last_used = last_used;
                 }
             }
-        }
+           }
     }
     if (!candidate_name.empty() && count_active >= (size_t)base_params.models_max) {
+     SRV_ALWAYS("evicting candidate name=%s priority=%d (requesting_priority=%d count_active=%zu models_max=%d)\n",
+            candidate_name.c_str(), candidate_priority, requesting_priority, count_active, base_params.models_max);
         SRV_INF("models_max limit reached, removing candidate name=%s priority=%d (LRU eviction with priority)\n", candidate_name.c_str(), candidate_priority);
         unload(candidate_name);
         // wait for unload to complete
@@ -580,11 +602,12 @@ void server_models::unload_lru(int requesting_priority) {
     }
 }
 
-void server_models::load(const std::string & name) {
+  void server_models::load(const std::string & name) {
     if (!has_model(name)) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
     int request_priority = get_model_priority(name);
+   SRV_ALWAYS("load name=%s request_priority=%d\n", name.c_str(), request_priority);
     unload_lru(request_priority);
 
     std::lock_guard<std::mutex> lk(mutex);
@@ -604,11 +627,14 @@ void server_models::load(const std::string & name) {
     if (base_params.models_max > 0) {
         size_t count_active = 0;
         for (const auto & m : mapping) {
+            if (m.first == name) continue; // don't count the model being loaded
             if (m.second.meta.status == SERVER_MODEL_STATUS_LOADED || m.second.meta.status == SERVER_MODEL_STATUS_LOADING) {
                 count_active++;
             }
-        }
+      }
         if (count_active >= (size_t)base_params.models_max) {
+            SRV_ERR("capacity re-check failed count_active=%zu models_max=%d name=%s\n",
+                count_active, base_params.models_max, name.c_str());
             throw std::runtime_error("model limit reached, try again later");
         }
     }
@@ -761,10 +787,12 @@ void server_models::load(const std::string & name) {
 }
 
 void server_models::unload(const std::string & name) {
-    std::lock_guard<std::mutex> lk(mutex);
+     std::lock_guard<std::mutex> lk(mutex);
     auto it = mapping.find(name);
     if (it != mapping.end()) {
         if (it->second.meta.is_running()) {
+        SRV_ALWAYS("unload name=%s status=%d priority=%d last_used=%lld\n",
+                name.c_str(), it->second.meta.status, it->second.meta.priority, (long long)it->second.meta.last_used);
             SRV_INF("stopping model instance name=%s\n", name.c_str());
             stopping_models.insert(name);
             if (it->second.meta.status == SERVER_MODEL_STATUS_LOADING) {
