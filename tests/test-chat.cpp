@@ -1813,7 +1813,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .expect_reasoning("<think>\n\n")
             .expect_tool_calls({
-                { "special_function", "{\"arg1\": 1}" }
+                { "special_function", "{\"arg1\": 1}", "" }
             })
             .run();
 
@@ -1828,7 +1828,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .expect_reasoning("")
             .expect_tool_calls({
-                { "special_function", "{\"arg1\": 1}" }
+                { "special_function", "{\"arg1\": 1}", "" }
             })
             .run();
     }
