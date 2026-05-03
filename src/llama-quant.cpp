@@ -738,7 +738,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     constexpr double INFINITE = std::numeric_limits<double>::infinity();
     constexpr uint64_t STATE_MAGIC = 0x4250572d5631; // "BPW-V1"
     constexpr uint64_t HASH_MAGIC = 0xeabada55cafed00d;
-    constexpr float penalty = 2.0f;
+    constexpr float boost = 4.0f;
     const char * func = __func__;
 
     // Tensor size in bytes for a given type
@@ -901,6 +901,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         uint64_t n = 0;
         ifs.read((char *)& n, sizeof(n));
         for (uint64_t i = 0; i < n; ++i) {
+            if (!ifs.good()) { break; }
             uint32_t len = 0;
             ifs.read((char *)& len, sizeof(len));
             std::string name(len, '\0');
@@ -909,6 +910,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             type_choice si;
             uint64_t sz = 0;
             ifs.read((char *)& sz, sizeof(sz));
+            if (sz > std::size(quant_types)) {
+                LLAMA_LOG_WARN("%s: state file candidate size exceeds limits, ignoring\n", func);
+                return {};
+            }
             ifs.read((char *)& si.choice, sizeof(si.choice));
             ifs.read((char *)& si.min_bpw, sizeof(si.min_bpw));
             ifs.read((char *)& si.max_bpw, sizeof(si.max_bpw));
@@ -918,6 +923,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
             si.candidates.resize(sz);
             for (auto & cd : si.candidates) {
+                if (!ifs.good()) { break; }
                 int32_t t = 0;
                 uint64_t b = 0;
                 ifs.read((char *)& t, sizeof(t));
@@ -929,6 +935,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             }
 
             out.emplace(std::move(name), std::move(si));
+        }
+
+        if (!ifs.good()) {
+            LLAMA_LOG_WARN("%s: state file truncated or read error, ignoring\n", func);
+            return {};
         }
 
         LLAMA_LOG_INFO("\t%s: using %s (data for %lu tensors loaded)\n", func, checkpoint_file.c_str(), out.size());
@@ -1078,7 +1089,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         auto trimmed_mean = [](std::vector<double> & v) -> double {
             const auto n = v.size();
             if (n == 0) { return 0.0; }
-            if (n < 50) { return std::accumulate(v.begin(), v.end(), 0.0) / (double)n; }
+            if (n < 100) { return std::accumulate(v.begin(), v.end(), 0.0) / (double)n; }
             const auto k = (size_t)((double)n * 0.01); // trim 1% from each end
             std::nth_element(v.begin(), v.begin() + k, v.end());
             std::nth_element(v.begin() + k, v.end() - k, v.end());
@@ -1357,14 +1368,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             // Fast variance estimation
             float sum = 0.0f;
             float sq_sum = 0.0f;
-            const int64_t limit = std::min<int64_t>(len, 256);
-            for (int64_t i = 0; i < limit; ++i) {
+            for (int64_t i = 0; i < len; ++i) {
                 sum += src_row[i];
                 sq_sum += src_row[i] * src_row[i];
             }
 
-            const float mean = sum / limit;
-            float variance = sq_sum / limit - mean * mean;
+            const float mean = sum / len;
+            float variance = sq_sum / len - mean * mean;
             const float std_dev = std::sqrt(std::max(0.0f, variance));
 
             // Clip at 4 standard deviations to simulate the effect of rotation spreading the outlier energy
@@ -1456,11 +1466,14 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             for (int64_t slice = 0; slice < ne2; ++slice) {
                 std::mt19937 rng(djb2_hash((const uint8_t*)name.data(), name.size()) ^ HASH_MAGIC ^ slice);
                 const int64_t limit = std::max<int64_t>(1, std::min<int64_t>(nrows_total, rows_to_sample));
-                const int64_t stride = std::max<int64_t>(1, nrows_total / limit);
-                int64_t offset = stride > 1 ? std::uniform_int_distribution<int64_t>(0, stride - 1)(rng) : 0;
+                const double stride = (double)nrows_total / limit;
+                int64_t offset = stride > 1.0 ? std::uniform_int_distribution<int64_t>(0, (int64_t)stride - 1)(rng) : 0;
 
                 int64_t count = 0;
-                for (int64_t r = offset; r < nrows_total && count < limit; r += stride) {
+                for (int64_t i = 0; i < limit; ++i) {
+                    int64_t r = offset + std::llround(i * stride);
+                    if (r >= nrows_total) { break; }
+
                     const uint8_t * src = (const uint8_t *)tensor->data + slice * (src_row_sz * nrows_total) + r * src_row_sz;
                     size_t cur_sz = f32_sample.size();
                     f32_sample.resize(cur_sz + n_per_row);
@@ -1606,8 +1619,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<uint8_t> q_buf;
         std::vector<float> dq_buf;
         if (total_rows_sampled > 0 && max_row_sz > 0) {
-            q_buf.reserve(total_rows_sampled * max_row_sz + 256); // safety padding
-            dq_buf.reserve(total_rows_sampled * n_per_row);
+            q_buf.reserve(max_row_sz + 256); // safety padding
+            dq_buf.reserve(n_per_row);
         }
 
         float scaling_factor = 1.0f;
@@ -1708,30 +1721,44 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::mutex m_load;
         std::mutex m_log;
         std::mutex m_res;
+        std::exception_ptr w_exception;
+        std::atomic<bool> w_failed{false};
         std::vector<std::thread> threads;
         int n_workers = std::max(1, std::min(nthread, (int)tensors.size()));
         threads.reserve(n_workers);
 
         for (int i = 0; i < n_workers; ++i) {
             threads.emplace_back([&](){
-                std::vector<no_init<uint8_t>> buf;
-                std::vector<float> f32_sample;
-                std::vector<float> smoothed_sample;
-                while(true) {
-                    const size_t cur = idx.fetch_add(1);
-                    if (cur >= tensors.size()) { break; }
-                    if (!can_quantize(tensors[cur]->tensor)) { continue; }
+                try {
+                    std::vector<no_init<uint8_t>> buf;
+                    std::vector<float> f32_sample;
+                    std::vector<float> smoothed_sample;
+                    while(true) {
+                        if (w_failed.load(std::memory_order_relaxed)) { break; }
+                        const size_t cur = idx.fetch_add(1);
+                        if (cur >= tensors.size()) { break; }
+                        if (!can_quantize(tensors[cur]->tensor)) { continue; }
 
-                    auto res = process_tensor(tensors[cur], buf, f32_sample, smoothed_sample, m_load, m_log);
-                    if (res) {
-                        std::lock_guard<std::mutex> lock(m_res);
-                        all_tensors.push_back(std::move(*res));
+                        auto res = process_tensor(tensors[cur], buf, f32_sample, smoothed_sample, m_load, m_log);
+                        if (res) {
+                            std::lock_guard<std::mutex> lock(m_res);
+                            all_tensors.push_back(std::move(*res));
+                        }
+                    }
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(m_res);
+                    if (!w_failed.exchange(true)) {
+                        w_exception = std::current_exception();
                     }
                 }
             });
         }
 
         for(auto& t : threads) { t.join(); }
+
+        if (w_exception) {
+            std::rethrow_exception(w_exception);
+        }
     }
 
     check_signal_handler(all_tensors);
@@ -1882,7 +1909,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     // Certain tensors have a higher impact on model quality, so we apply a lower penalty to them
     auto is_important = [&](const std::string & tensor_name) -> bool {
-        if (tensor_name == "output.weight") { return true; }
+        if (tensor_name == "output.weight" || tensor_name == "token_embd.weight") { return true; }
 
         return false;
     };
@@ -1897,7 +1924,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         cost = 0.0;
         for (size_t i = 0; i < all_tensors.size(); ++i) {
             const auto & tn = all_tensors[i];
-            const double eff_mu = tn.important ? mu / penalty : mu; // important tensors get a lower penalty
+            const double eff_mu = tn.important ? mu / boost : mu; // important tensors get a lower penalty
 
             int best = 0;
             double min = INFINITE;
@@ -2002,7 +2029,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             auto bytes = (double)(tn.candidates[next].bytes - tn.candidates[tn.choice].bytes);
             if (bytes > EPSILON) {
                 double ratio = err / bytes;
-                if (tn.important) { ratio *= penalty; } // important tensors get a higher priority
+                if (tn.important) { ratio *= boost; } // important tensors get a higher priority
                 queue.push({i, next, ratio});
             }
         }
