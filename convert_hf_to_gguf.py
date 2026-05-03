@@ -2889,6 +2889,20 @@ class LlamaModel(TextModel):
                 .swapaxes(1, 2)
                 .reshape(weights.shape))
 
+    def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
+        # Mirror the BF16 Q/K RoPE permutation site in modify_tensors; the NVFP4 path bypasses it.
+        if self.undo_permute:
+            n_head = self.find_hparam(["n_heads", "num_attention_heads"], optional=True)
+            n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"], optional=True)
+            if n_head is not None:
+                if name.endswith("q_proj.weight"):
+                    weight = LlamaModel.permute(weight, n_head, n_head)
+                    scale  = LlamaModel.permute(scale, n_head, n_head)
+                elif name.endswith("k_proj.weight"):
+                    weight = LlamaModel.permute(weight, n_head, n_kv_head)
+                    scale  = LlamaModel.permute(scale, n_head, n_kv_head)
+        super()._repack_nvfp4(name, weight, scale, scale2, input_scale)
+
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
