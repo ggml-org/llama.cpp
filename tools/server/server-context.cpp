@@ -2649,21 +2649,37 @@ private:
                         slot.n_prompt_tokens_processed++;
 
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
-                        // create checkpoints that many tokens before the end of the prompt:
+                        // create checkpoints in the tail of the prompt:
                         //  - 4 + n_ubatch
+                        //  - SWA-spaced offsets down to 4 + n_swa
                         //  - 4
+                        // The SWA-spaced checkpoints are useful for hybrid/recurrent models that cannot partially
+                        // erase the tail cache state. They avoid falling back to an ubatch-old checkpoint when only
+                        // a sliding-window tail plus the previous generation needs to be replayed.
                         // ref: https://github.com/ggml-org/llama.cpp/pull/20288
                         if (do_checkpoint) {
-                            static const int checkpoint_offsets[] = {4 + n_ubatch, 4};
-
                             bool should_break = false;
-                            for (int offset : checkpoint_offsets) {
+
+                            auto should_checkpoint_tail = [&](int offset) {
                                 const int n_last = std::min(n_batch, offset);
-                                if (slot.task->n_tokens() == slot.prompt.n_tokens() + n_last) {
-                                    should_break = true;
-                                    break;
+                                return slot.task->n_tokens() == slot.prompt.n_tokens() + n_last;
+                            };
+
+                            if (should_checkpoint_tail(4 + n_ubatch)) {
+                                should_break = true;
+                            } else if (n_swa > 0 && n_swa < n_ubatch) {
+                                for (int offset = 4 + ((n_ubatch / n_swa) * n_swa); offset > 4; offset -= n_swa) {
+                                    if (should_checkpoint_tail(offset)) {
+                                        should_break = true;
+                                        break;
+                                    }
                                 }
                             }
+
+                            if (!should_break && should_checkpoint_tail(4)) {
+                                should_break = true;
+                            }
+
                             if (should_break) {
                                 break;
                             }

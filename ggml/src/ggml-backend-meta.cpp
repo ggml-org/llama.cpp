@@ -957,6 +957,11 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(co
             case GGML_OP_GATED_DELTA_NET: {
                 split_state = handle_gated_delta_net(src_ss);
             } break;
+            case GGML_OP_DSV4_HC_SPLIT_SINKHORN:
+            case GGML_OP_DSV4_HC_WEIGHTED_SUM:
+            case GGML_OP_DSV4_HC_EXPAND:
+            case GGML_OP_DSV4_FP8_KV_QUANTIZE:
+            case GGML_OP_DSV4_ROPE_TAIL:
             case GGML_OP_UNARY: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ false);
             } break;
@@ -2089,4 +2094,3 @@ ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, siz
     const ggml_backend_meta_context * backend_ctx = (const ggml_backend_meta_context *) meta_backend->context;
     return backend_ctx->backend_configs[index].backend;
 }
-

@@ -3208,8 +3208,12 @@ static void quantize_row_iq2_xxs_impl(const float * GGML_RESTRICT x, void * GGML
         for (int ib = 0; ib < QK_K/32; ++ib) {
             const float * xb = xbl + 32*ib;
             const float * qw = quant_weights + QK_K*ibl + 32*ib;
-            for (int i = 0; i < 32; ++i) weight[i] = qw[i] * sqrtf(sigma2 + xb[i]*xb[i]);
-            for (int i = 0; i < 32; ++i) waux[i] = sqrtf(weight[i]);
+            for (int i = 0; i < 32; ++i) {
+                weight[i] = qw[i] * sqrtf(sigma2 + xb[i]*xb[i]);
+            }
+            for (int i = 0; i < 32; ++i) {
+                waux[i] = sqrtf(weight[i]);
+            }
             for (int k = 0; k < 4; ++k) {
                 int nflip = 0;
                 uint8_t s = 0;

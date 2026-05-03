@@ -68,6 +68,7 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: an output file must be specified", __func__);
         return 1;
     }
+    params.warmup = false;
     llama_backend_init();
     llama_numa_init(params.numa);
     common_init_result_ptr llama_init = common_init_from_params(params);
@@ -180,4 +181,3 @@ int main(int argc, char ** argv) {
     gguf_write_to_file(gguf_ctx.get(), params.out_file.c_str(), /*only_meta =*/ false);
     return 0;
 }
-

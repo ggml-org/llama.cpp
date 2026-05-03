@@ -1661,6 +1661,7 @@ static common_chat_params common_chat_params_init_gigachat_v3(
 static common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_template &    tmpl,
                                                                  const autoparser::generation_params & inputs) {
     common_chat_params data;
+    const auto & src = tmpl.source();
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
@@ -1681,8 +1682,9 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     const std::string DSML         = "｜DSML｜";
     const std::string THINK_START  = "<think>";
     const std::string THINK_END    = "</think>";
-    const std::string FC_START     = "<" + DSML + "function_calls>";
-    const std::string FC_END       = "</" + DSML + "function_calls>";
+    const std::string FC_NAME      = src.find("function_calls") != std::string::npos ? "function_calls" : "tool_calls";
+    const std::string FC_START     = "<" + DSML + FC_NAME + ">";
+    const std::string FC_END       = "</" + DSML + FC_NAME + ">";
     const std::string INVOKE_START = "<" + DSML + "invoke";
     const std::string INVOKE_END   = "</" + DSML + "invoke>";
     const std::string PARAM_START  = "<" + DSML + "parameter";
@@ -2093,12 +2095,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_gigachat_v3(tmpl, params);
     }
 
-    // DeepSeek V3.2 format detection: template defines dsml_token and uses it for tool calls.
+    // DeepSeek DSML format detection: template defines dsml_token and uses it for tool calls.
     // The template source contains the token as a variable assignment, not as a literal in markup.
     if (src.find("dsml_token") != std::string::npos &&
-        src.find("function_calls") != std::string::npos &&
+        (src.find("function_calls") != std::string::npos || src.find("tool_calls") != std::string::npos) &&
         src.find("DSML") != std::string::npos) {
-        LOG_DBG("Using specialized template: DeepSeek V3.2\n");
+        LOG_DBG("Using specialized template: DeepSeek DSML\n");
         return common_chat_params_init_deepseek_v3_2(tmpl, params);
     }
 

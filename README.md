@@ -1,3 +1,22 @@
+# DeepSeek v4 Flash experimental support
+
+This is a fork of llama.cpp that implements DSv4 support, with generated GGUF that aims to target MacBooks with just 128GB of RAM using 2bit quantization of routed experts.
+
+Disclaimer:
+* This code was written with heavy help from GPT 5.5 and the official DeepSeek v4 Flash as reference.
+* The model quantized in this way behaves very very well in the chat, frontier-model vibes, but it was not extensively tested.
+* The code runs both with CPU and Metal backends. With Metal is faster.
+
+Download the GGUF from: https://huggingface.co/antirez/deepseek-v4-gguf
+
+Then to test it run with (but for production you may want to tune context, disable thinking for faster replies and so forth):
+
+```
+llama-cli \
+    -m DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat.gguf \
+    -cnv
+```
+
 # llama.cpp
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)

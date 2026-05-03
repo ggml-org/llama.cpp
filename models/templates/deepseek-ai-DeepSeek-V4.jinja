@@ -1,0 +1,96 @@
+{%- if not add_generation_prompt is defined -%}
+  {%- set add_generation_prompt = false -%}
+{%- endif -%}
+{%- if not thinking is defined -%}
+  {%- if enable_thinking is defined -%}
+    {%- set thinking = enable_thinking -%}
+  {%- else -%}
+    {%- set thinking = false -%}
+  {%- endif -%}
+{%- endif -%}
+{%- set dsml_token = '｜DSML｜' -%}
+{%- set thinking_start_token = '<think>' -%}
+{%- set thinking_end_token = '</think>' -%}
+{%- set tools_header = '## Tools\n\nYou have access to a set of tools to help answer the user question. You can invoke tools by writing a "<' + dsml_token + 'tool_calls>" block like the following:\n\n<' + dsml_token + 'tool_calls>\n<' + dsml_token + 'invoke name="$TOOL_NAME">\n<' + dsml_token + 'parameter name="$PARAMETER_NAME" string="true|false">$PARAMETER_VALUE</' + dsml_token + 'parameter>\n...\n</' + dsml_token + 'invoke>\n<' + dsml_token + 'invoke name="$TOOL_NAME2">\n...\n</' + dsml_token + 'invoke>\n</' + dsml_token + 'tool_calls>\n\nString parameters should be specified as is and set `string="true"`. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string="false"`.\n\nIf thinking_mode is enabled (triggered by ' + thinking_start_token + '), you MUST output your complete reasoning inside ' + thinking_start_token + '...' + thinking_end_token + ' BEFORE any tool calls or final response.\n\nOtherwise, output directly after ' + thinking_end_token + ' with tool calls or final response.\n\n### Available Tool Schemas\n\n' -%}
+{%- set tools_footer = '\n\nYou MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.' -%}
+{%- set ns = namespace(system_prompt='', is_first_system=true, pending_assistant=false, pending_tool_result=false) -%}
+{%- for message in messages -%}
+  {%- if message['role'] == 'system' -%}
+    {%- if ns.is_first_system -%}
+      {%- set ns.system_prompt = ns.system_prompt + (message['content'] or '') -%}
+      {%- set ns.is_first_system = false -%}
+    {%- else -%}
+      {%- set ns.system_prompt = ns.system_prompt + '\n\n' + (message['content'] or '') -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if tools is defined and tools -%}
+  {%- set ts = namespace(schemas='') -%}
+  {%- for tool in tools -%}
+    {%- if tool['type'] == 'function' -%}
+      {%- set ts.schemas = ts.schemas + (tool['function'] | tojson) + '\n' -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- if ns.system_prompt -%}
+    {%- set ns.system_prompt = ns.system_prompt + '\n\n' + tools_header + ts.schemas + tools_footer -%}
+  {%- else -%}
+    {%- set ns.system_prompt = tools_header + ts.schemas + tools_footer -%}
+  {%- endif -%}
+{%- endif -%}
+{{- bos_token -}}
+{{- ns.system_prompt -}}
+{%- for message in messages -%}
+  {%- if message['role'] == 'user' -%}
+    {{- '<｜User｜>' + (message['content'] or '') -}}
+    {%- set ns.pending_assistant = true -%}
+    {%- set ns.pending_tool_result = false -%}
+  {%- elif message['role'] == 'tool' -%}
+    {%- if not ns.pending_tool_result -%}
+      {{- '<｜User｜>' -}}
+    {%- endif -%}
+    {{- '<tool_result>' + (message['content'] or '') + '</tool_result>' -}}
+    {%- set ns.pending_assistant = true -%}
+    {%- set ns.pending_tool_result = true -%}
+  {%- elif message['role'] == 'assistant' -%}
+    {%- if ns.pending_assistant -%}
+      {{- '<｜Assistant｜>' -}}
+      {%- if thinking and message['reasoning_content'] is defined and message['reasoning_content'] -%}
+        {{- thinking_start_token + message['reasoning_content'] + thinking_end_token -}}
+      {%- else -%}
+        {{- thinking_end_token -}}
+      {%- endif -%}
+    {%- endif -%}
+    {{- (message['content'] or '') -}}
+    {%- if message['tool_calls'] -%}
+      {{- '\n\n<' + dsml_token + 'tool_calls>\n' -}}
+      {%- for tool in message['tool_calls'] -%}
+        {%- set func = tool['function'] -%}
+        {{- '<' + dsml_token + 'invoke name="' + func['name'] + '">\n' -}}
+        {%- set args = func['arguments'] -%}
+        {%- if args is string -%}
+          {%- set args = args | from_json -%}
+        {%- endif -%}
+        {%- for key, val in args.items() -%}
+          {%- if val is string -%}
+            {{- '<' + dsml_token + 'parameter name="' + key + '" string="true">' + val + '</' + dsml_token + 'parameter>\n' -}}
+          {%- else -%}
+            {{- '<' + dsml_token + 'parameter name="' + key + '" string="false">' + (val | tojson) + '</' + dsml_token + 'parameter>\n' -}}
+          {%- endif -%}
+        {%- endfor -%}
+        {{- '</' + dsml_token + 'invoke>\n' -}}
+      {%- endfor -%}
+      {{- '</' + dsml_token + 'tool_calls>' -}}
+    {%- endif -%}
+    {{- '<｜end▁of▁sentence｜>' -}}
+    {%- set ns.pending_assistant = false -%}
+    {%- set ns.pending_tool_result = false -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt and ns.pending_assistant -%}
+  {{- '<｜Assistant｜>' -}}
+  {%- if thinking -%}
+    {{- thinking_start_token -}}
+  {%- else -%}
+    {{- thinking_end_token -}}
+  {%- endif -%}
+{%- endif -%}

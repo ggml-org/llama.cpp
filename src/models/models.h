@@ -194,6 +194,10 @@ struct llm_build_deepseek : public llm_graph_context {
     llm_build_deepseek(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_deepseek4 : public llm_graph_context {
+    llm_build_deepseek4(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_dots1 : public llm_graph_context {
     llm_build_dots1(const llama_model & model, const llm_graph_params & params);
 };

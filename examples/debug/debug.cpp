@@ -56,7 +56,7 @@ struct output_data {
         const llama_vocab * vocab = llama_model_get_vocab(model);
         const bool add_bos = llama_vocab_get_add_bos(vocab);
 
-        tokens = common_tokenize(ctx, params.prompt, add_bos);
+        tokens = common_tokenize(ctx, params.prompt, add_bos, params.parse_special);
         prompt = params.prompt;
 
         if (params.embedding) {
@@ -187,7 +187,7 @@ static bool run(llama_context * ctx, const common_params & params) {
 
     const bool add_bos = llama_vocab_get_add_bos(vocab);
 
-    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos);
+    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos, params.parse_special);
 
     if (tokens.empty()) {
         LOG_ERR("%s : there are not input tokens to process - (try to provide a prompt with '-p')\n", __func__);

@@ -82,11 +82,39 @@ public:
     llama_kv_cache_iswa * get_mem_attn() const;
     llama_memory_recurrent * get_mem_recr() const;
 
+    bool has_dsv4_compressed_kv() const;
+    uint32_t get_dsv4_n_comp(int32_t il) const;
+    ggml_tensor * get_dsv4_attn_k (ggml_context * ctx, int32_t il, llama_seq_id seq_id) const;
+    ggml_tensor * get_dsv4_index_k(ggml_context * ctx, int32_t il, llama_seq_id seq_id) const;
+
 private:
     const llama_hparams & hparams;
 
     const std::unique_ptr<llama_kv_cache_iswa> mem_attn;
     const std::unique_ptr<llama_memory_recurrent> mem_recr;
+
+    struct dsv4_cache_layer {
+        uint32_t n_comp = 0;
+        ggml_tensor * attn_k  = nullptr;
+        ggml_tensor * index_k = nullptr;
+    };
+
+    uint32_t dsv4_n_seq_max = 0;
+    std::vector<dsv4_cache_layer> dsv4_cache_layers;
+    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> dsv4_ctxs_bufs;
+
+    void dsv4_seq_rm  (llama_seq_id seq_id, llama_pos p0, llama_pos p1);
+    void dsv4_seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1);
+    void dsv4_seq_keep(llama_seq_id seq_id);
+
+    void dsv4_clear_seq(llama_seq_id seq_id);
+    void dsv4_clear_rows(llama_seq_id seq_id, int32_t il, llama_pos p0, llama_pos p1);
+    void dsv4_copy_rows (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, int32_t il, llama_pos p0, llama_pos p1);
+
+    uint32_t dsv4_n_state_rows(int32_t il, llama_seq_id seq_id) const;
+
+    void dsv4_state_write(llama_io_write_i & io, llama_seq_id seq_id) const;
+    void dsv4_state_read (llama_io_read_i  & io, llama_seq_id seq_id);
 };
 
 class llama_memory_hybrid_iswa_context : public llama_memory_context_i {
@@ -127,7 +155,14 @@ public:
     const llama_kv_cache_iswa_context * get_attn() const;
     const llama_memory_recurrent_context * get_recr() const;
 
+    bool has_dsv4_compressed_kv() const;
+    uint32_t get_dsv4_n_comp(int32_t il) const;
+    ggml_tensor * get_dsv4_attn_k (ggml_context * ctx, int32_t il, llama_seq_id seq_id) const;
+    ggml_tensor * get_dsv4_index_k(ggml_context * ctx, int32_t il, llama_seq_id seq_id) const;
+
 private:
+    llama_memory_hybrid_iswa * mem = nullptr;
+
     // the index of the next ubatch to process
     size_t i_next = 0;
 
