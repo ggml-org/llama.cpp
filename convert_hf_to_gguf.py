@@ -9216,6 +9216,8 @@ class DeepseekV4Model(TextModel):
 
     _qtype_aliases: dict[str, gguf.GGMLQuantizationType] = {
         "q8_0": gguf.GGMLQuantizationType.Q8_0,
+        "q4_k": gguf.GGMLQuantizationType.Q4_K,
+        "q4_k_m": gguf.GGMLQuantizationType.Q4_K,
         "q2_k": gguf.GGMLQuantizationType.Q2_K,
         "iq2_xxs": gguf.GGMLQuantizationType.IQ2_XXS,
         "iq2_xs": gguf.GGMLQuantizationType.IQ2_XS,
@@ -9312,6 +9314,8 @@ class DeepseekV4Model(TextModel):
         return {
             gguf.LlamaFileType.MOSTLY_TQ1_0: gguf.GGMLQuantizationType.TQ1_0,
             gguf.LlamaFileType.MOSTLY_TQ2_0: gguf.GGMLQuantizationType.TQ2_0,
+            gguf.LlamaFileType.MOSTLY_Q4_K_S: gguf.GGMLQuantizationType.Q4_K,
+            gguf.LlamaFileType.MOSTLY_Q4_K_M: gguf.GGMLQuantizationType.Q4_K,
             gguf.LlamaFileType.MOSTLY_Q2_K: gguf.GGMLQuantizationType.Q2_K,
             gguf.LlamaFileType.MOSTLY_IQ2_XXS: gguf.GGMLQuantizationType.IQ2_XXS,
             gguf.LlamaFileType.MOSTLY_IQ2_XS: gguf.GGMLQuantizationType.IQ2_XS,
@@ -9483,6 +9487,7 @@ class DeepseekV4Model(TextModel):
     @classmethod
     def _quantize_deepseek4_expert(cls, data: np.ndarray, qtype: gguf.GGMLQuantizationType) -> np.ndarray:
         c_quantized_types = {
+            gguf.GGMLQuantizationType.Q4_K,
             gguf.GGMLQuantizationType.Q2_K,
             gguf.GGMLQuantizationType.IQ2_XXS,
             gguf.GGMLQuantizationType.IQ2_XS,
