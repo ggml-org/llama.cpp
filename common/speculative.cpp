@@ -987,6 +987,15 @@ common_speculative * common_speculative_init(
         llama_context             * ctx_tgt) {
     llama_context * ctx_dft = nullptr;
     if (params.draft.model) {
+        // for SWA draft models, force swa_full on the draft context so prefix
+        // reuse (seq_rm + seq_add) works beyond the SWA window — otherwise the
+        // draft must re-decode from the window edge on every long-context
+        // request and acceptance length degrades significantly
+        if (llama_model_n_swa(params.draft.model) > 0 && !params.draft.cparams.swa_full) {
+            LOG_INF("%s: draft model uses SWA — enabling swa_full for the draft context\n", __func__);
+            params.draft.cparams.swa_full = true;
+        }
+
         ctx_dft = llama_init_from_model(params.draft.model, params.draft.cparams);
         if (ctx_dft == nullptr) {
             LOG_ERR("%s", "failed to create draft context\n");

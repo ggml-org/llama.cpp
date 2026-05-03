@@ -797,6 +797,13 @@ private:
                 return false;
             }
 
+            // for SWA draft models, force swa_full on the draft context so prefix
+            // reuse works beyond the SWA window during speculation
+            if (llama_model_n_swa(model_dft.get()) > 0 && !params_dft.swa_full) {
+                SRV_INF("%s", "draft model uses SWA — enabling swa_full for the draft context\n");
+                params_dft.swa_full = true;
+            }
+
             params_base.speculative.draft.model = model_dft.get();
             params_base.speculative.draft.cparams = common_context_params_to_llama(params_dft);
         }
