@@ -22,18 +22,51 @@ void ggml_openvino_device_config::init() {
     if (initialized) {
         return;
     }
-device_name = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "CPU";
+    device_name = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "CPU";
     auto available_devices = ov_singleton_core().get_available_devices();
     
-    // Check if string matches a physical device OR an OpenVINO virtual plugin
+    // Check if it's an exact match for a device
     bool is_valid_device = (std::find(available_devices.begin(), available_devices.end(), device_name) != available_devices.end());
     
     if (!is_valid_device) {
-        if (device_name.find("MULTI") == 0 || device_name.find("AUTO") == 0 || 
-            device_name.find("HETERO") == 0 || device_name.find("BATCH") == 0) {
+        // Allow standalone virtual devices
+        if (device_name == "AUTO" || device_name == "MULTI" || device_name == "HETERO") {
             is_valid_device = true;
+        } 
+        // Parse and validate sub-devices for virtual setups like MULTI:GPU.1,GPU.2
+        else if (device_name.find("MULTI:") == 0 || device_name.find("AUTO:") == 0 || 
+                   device_name.find("HETERO:") == 0 || device_name.find("BATCH:") == 0) {
+            
+            is_valid_device = true;
+            size_t start = device_name.find(':') + 1;
+            
+            while (start < device_name.length()) {
+                size_t end = device_name.find(',', start);
+                if (end == std::string::npos) end = device_name.length();
+                
+                std::string sub_dev = device_name.substr(start, end - start);
+                
+                // Strip OpenVINO device properties if present (e.g., "GPU.1(2)")
+                size_t paren_pos = sub_dev.find('(');
+                if (paren_pos != std::string::npos) {
+                    sub_dev = sub_dev.substr(0, paren_pos);
+                }
+                
+                // Validate the extracted device against available devices
+                if (std::find(available_devices.begin(), available_devices.end(), sub_dev) == available_devices.end()) {
+                    is_valid_device = false;
+                    break;
+                }
+                start = end + 1;
+            }
         }
     }
+
+    if (!is_valid_device) {
+        GGML_LOG_WARN("GGML OpenVINO Backend: device %s is not available, fallback to CPU\n", device_name.c_str());
+        device_name = "CPU";
+    }
+    is_npu = (device_name == "NPU");
 
     if (!is_valid_device) {
         GGML_LOG_WARN("GGML OpenVINO Backend: device %s is not available, fallback to CPU\n", device_name.c_str());
