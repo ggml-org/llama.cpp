@@ -389,6 +389,7 @@ struct ggml_backend_opencl_context {
     ADRENO_GPU_GEN adreno_gen;
 
     cl_int alignment;
+    size_t global_mem_size;
     size_t max_alloc_size;
     size_t max_workgroup_size;
     bool fp16_support;
@@ -3384,6 +3385,9 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     GGML_ASSERT(base_align_in_bits % 8u == 0);
     backend_ctx->alignment = base_align_in_bits / 8u;
     GGML_LOG_INFO("ggml_opencl: mem base addr align: %u\n", backend_ctx->alignment);
+
+    clGetDeviceInfo(device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(size_t), &backend_ctx->global_mem_size, NULL);
+    GGML_LOG_INFO("ggml_opencl: global mem size: %zu MB\n", backend_ctx->global_mem_size/1024/1024);
 
     clGetDeviceInfo(device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(size_t), &backend_ctx->max_alloc_size, NULL);
     GGML_LOG_INFO("ggml_opencl: max mem alloc size: %zu MB\n", backend_ctx->max_alloc_size/1024/1024);
@@ -6547,29 +6551,15 @@ static const char * ggml_backend_opencl_device_get_description(ggml_backend_dev_
 }
 
 static void ggml_backend_opencl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    const ggml_backend_opencl_device_context * dev_ctx =
-        (const ggml_backend_opencl_device_context *) dev->context;
-
-    cl_ulong global_mem_size = 0;
-    const cl_int err = clGetDeviceInfo(
-        dev_ctx->device,
-        CL_DEVICE_GLOBAL_MEM_SIZE,
-        sizeof(global_mem_size),
-        &global_mem_size,
-        nullptr);
-
-    if (err != CL_SUCCESS || global_mem_size == 0) {
-        *free  = 0;
-        *total = 0;
-        return;
-    }
+    ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) dev->context;
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) dev_ctx->backend_ctx;
 
     static const size_t opencl_extra_margin = 1024ull*1024ull*1024ull;
 
     // OpenCL does not provide reliable currently-free device memory.
     // Use total/global memory as a best-effort upper bound.
     // Improved safety: Reduce by a 1GiB extra margin for common --fit
-    *total = (size_t) global_mem_size;
+    *total = backend_ctx->global_mem_size;
     *free  = *total > opencl_extra_margin ? *total - opencl_extra_margin : 0;
 }
 
