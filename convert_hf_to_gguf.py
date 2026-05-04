@@ -2889,6 +2889,20 @@ class LlamaModel(TextModel):
                 .swapaxes(1, 2)
                 .reshape(weights.shape))
 
+    def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
+        # Mirror the BF16 Q/K RoPE permutation site in modify_tensors; the NVFP4 path bypasses it.
+        if self.undo_permute:
+            n_head = self.find_hparam(["n_heads", "num_attention_heads"], optional=True)
+            n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"], optional=True)
+            if n_head is not None:
+                if name.endswith("q_proj.weight"):
+                    weight = LlamaModel.permute(weight, n_head, n_head)
+                    scale  = LlamaModel.permute(scale, n_head, n_head)
+                elif name.endswith("k_proj.weight"):
+                    weight = LlamaModel.permute(weight, n_head, n_kv_head)
+                    scale  = LlamaModel.permute(scale, n_head, n_kv_head)
+        super()._repack_nvfp4(name, weight, scale, scale2, input_scale)
+
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -12702,11 +12716,12 @@ class MistralModel(LlamaModel):
     def set_mistral_config(gguf_writer: gguf.GGUFWriter, hparams: dict):
         if "yarn" in hparams:
             yarn_params = hparams["yarn"]
+            mscale_all_dim = 1.0 if not yarn_params["apply_scale"] else 0.0
             gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             gguf_writer.add_rope_scaling_factor(yarn_params["factor"])
             gguf_writer.add_rope_scaling_yarn_beta_fast(yarn_params["beta"])
             gguf_writer.add_rope_scaling_yarn_beta_slow(yarn_params["alpha"])
-            gguf_writer.add_rope_scaling_yarn_log_mul(1.0) # mscale_all_dim
+            gguf_writer.add_rope_scaling_yarn_log_mul(mscale_all_dim)
             gguf_writer.add_rope_scaling_orig_ctx_len(yarn_params["original_max_position_embeddings"])
 
         if "llama_4_scaling" in hparams:
@@ -13232,17 +13247,18 @@ class LazyTorchTensor(gguf.LazyBase):
     }
 
     # only used when byteswapping data. Only correct size is needed
+    # TODO: uncomment uint64, uint32, and uint16, ref: https://github.com/pytorch/pytorch/issues/58734
     _dtype_byteswap_map: dict[torch.dtype, type] = {
         torch.float64: np.float64,
         torch.float32: np.float32,
         torch.bfloat16: np.float16,
         torch.float16: np.float16,
         torch.int64: np.int64,
-        torch.uint64: np.uint64,
+        # torch.uint64: np.uint64,
         torch.int32: np.int32,
-        torch.uint32: np.uint32,
+        # torch.uint32: np.uint32,
         torch.int16: np.int16,
-        torch.uint16: np.uint16,
+        # torch.uint16: np.uint16,
         torch.int8: np.int8,
         torch.uint8: np.uint8,
         torch.bool: np.uint8,

@@ -2254,8 +2254,7 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
         return false;
     }
 
-    if (dst->ne[2] != 1 || dst->ne[3] != 1) {
-        // FA during prompt still needs work
+    if (dst->ne[3] != 1) {
         return false;
     }
 
