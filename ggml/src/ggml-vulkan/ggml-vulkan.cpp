@@ -6891,11 +6891,14 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
 
     // Warmup: exercise both the GPU copy path and the CPU memcpy path so that
     // caches and driver state are in a representative steady state before timing.
+    // warmup_ctx is reused across iterations; ggml_vk_submit clears seqs after
+    // each submission, so ggml_vk_ctx_begin always starts with an empty context.
     vk_context warmup_ctx = ggml_vk_create_temporary_context(benchmark_pool);
     for (int i = 0; i < 5; ++i) {
         // GPU copy warmup (staging -> uma_direct, as in the write staging path).
         memcpy(staging->ptr, host_data.data(), sizes.back());
         ggml_vk_ctx_begin(device, warmup_ctx);
+        GGML_ASSERT(warmup_ctx->seqs.size() == 1); // seqs must be cleared by prior submit
         vk::BufferCopy copy{ 0, 0, sizes.back() };
         warmup_ctx->s->buffer->buf.copyBuffer(staging->buffer, uma_direct->buffer, {copy});
         ggml_vk_ctx_end(warmup_ctx);
@@ -6905,7 +6908,6 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
         // CPU direct-write warmup.
         memcpy(uma_direct->ptr, host_data.data(), sizes.back());
     }
-
 
     // Write threshold: compare CPU direct write (host -> uma_direct) against the
     // real GPU staging path (host -> staging memcpy + GPU copyBuffer staging -> uma_direct).
