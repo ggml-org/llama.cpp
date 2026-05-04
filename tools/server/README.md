@@ -1646,7 +1646,11 @@ Listing all models in cache. The model metadata will also include a field to ind
 }
 ```
 
-Note: For a local GGUF (stored offline in a custom directory), the model object will have `"in_cache": false`.
+Note:
+1. For a local GGUF (stored offline in a custom directory), the model object will have `"in_cache": false`.
+2. Adding `?reload=1` to the query params will refresh the list of models. The behavior is as follow:
+    - If a model is running but updated or removed from the source, it will be unloaded
+    - If a model is not running, it will be added or updated according to the source
 
 The `status` object can be:
 
