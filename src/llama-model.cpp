@@ -10,6 +10,7 @@
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
+#include "llama-kv-cache-kapsl.h"
 #include "llama-memory-hybrid.h"
 #include "llama-memory-hybrid-iswa.h"
 #include "llama-memory-recurrent.h"
@@ -2014,7 +2015,16 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         };
                     }
 
-                    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                    if (cparams.kapsl_kv_pool != nullptr) {
+                        GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE);
+
+                        res = new llama_kv_cache_kapsl(
+                                *this,
+                                params.type_k,
+                                params.type_v,
+                                cparams.kapsl_kv_pool,
+                                cparams.kapsl_session_id);
+                    } else if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
                         GGML_ASSERT(hparams.is_swa_any());
 
                         res = new llama_kv_cache_iswa(

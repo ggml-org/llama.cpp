@@ -69,6 +69,47 @@ extern "C" {
     typedef int32_t llama_token;
     typedef int32_t llama_seq_id;
 
+    enum llama_kapsl_kv_dtype {
+        LLAMA_KAPSL_KV_DTYPE_F16 = 0,
+    };
+
+    struct llama_kapsl_kv_pool_desc {
+        void * user_data;
+
+        uint32_t device_id;
+        uint32_t block_size;
+        uint32_t num_blocks;
+        uint32_t num_kv_heads;
+        uint32_t head_dim;
+        enum llama_kapsl_kv_dtype dtype;
+
+        // Device storage layout:
+        // [num_blocks, 2, num_kv_heads, block_size, head_dim]
+        void * device_base;
+
+        // Device-side physical block table for the active llama context.
+        // Layout: [n_layers, max_blocks_per_seq], with layer stride in u32s.
+        uint32_t * block_table_device;
+        uint32_t block_table_layer_stride;
+        uint32_t n_layers;
+        uint32_t max_blocks_per_seq;
+
+        bool (*reserve)(
+                void * user_data,
+                uint64_t session_id,
+                uint32_t tokens_needed,
+                uint32_t ** block_table_device_out,
+                uint32_t * n_blocks_out);
+
+        void (*release)(
+                void * user_data,
+                uint64_t session_id);
+
+        bool (*touch)(
+                void * user_data,
+                uint64_t session_id);
+    };
+
     enum llama_vocab_type {
         LLAMA_VOCAB_TYPE_NONE   = 0, // For models without vocab
         LLAMA_VOCAB_TYPE_SPM    = 1, // LLaMA tokenizer based on byte-level BPE with byte fallback
@@ -362,6 +403,11 @@ extern "C" {
         // currently works only with CPU execution
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
+
+        // Optional external paged KV pool. When set, a Kapsl llama.cpp fork can
+        // use Kapsl-owned KV blocks instead of allocating a static context KV cache.
+        struct llama_kapsl_kv_pool_desc * kapsl_kv_pool;
+        uint64_t                          kapsl_session_id;
 
         // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
         bool embeddings;  // if true, extract embeddings (together with logits)

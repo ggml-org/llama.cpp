@@ -1019,6 +1019,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GET_ROWS",
     "GET_ROWS_BACK",
     "SET_ROWS",
+    "KAPSL_KV_WRITE",
+    "KAPSL_PAGED_ATTN",
     "DIAG",
     "DIAG_MASK_INF",
     "DIAG_MASK_ZERO",
@@ -1080,7 +1082,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1129,6 +1131,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "get_rows(x)",
     "get_rows_back(x)",
     "set_rows(x)",
+    "kapsl_kv_write(x)",
+    "kapsl_paged_attn(x)",
     "diag(x)",
     "diag_mask_inf(x)",
     "diag_mask_zero(x)",
@@ -1190,7 +1194,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3910,6 +3914,98 @@ struct ggml_tensor * ggml_set_rows(
     result->src[0] = b;
     result->src[1] = c;
     result->src[2] = a; // note: order is weird due to legacy reasons (https://github.com/ggml-org/llama.cpp/pull/16063#discussion_r2385795931)
+
+    return result;
+}
+
+// ggml_kapsl_kv_write
+
+struct ggml_tensor * ggml_kapsl_kv_write(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * pool,
+        struct ggml_tensor  * cur,
+        struct ggml_tensor  * positions,
+        struct ggml_tensor  * block_table,
+        int32_t               layer_id,
+        int32_t               block_size,
+        int32_t               block_table_layer_stride) {
+    GGML_ASSERT(pool->type == GGML_TYPE_F16);
+    GGML_ASSERT(cur->type == GGML_TYPE_F32 || cur->type == GGML_TYPE_F16);
+    GGML_ASSERT(positions->type == GGML_TYPE_I32 || positions->type == GGML_TYPE_I64);
+    GGML_ASSERT(block_table->type == GGML_TYPE_I32);
+    GGML_ASSERT(layer_id >= 0);
+    GGML_ASSERT(block_size > 0);
+    GGML_ASSERT(block_table_layer_stride > 0);
+
+    GGML_ASSERT(pool->ne[0] == cur->ne[0]);
+    GGML_ASSERT(pool->ne[1] == block_size);
+    GGML_ASSERT(pool->ne[2] == cur->ne[1]);
+    GGML_ASSERT(positions->ne[0] == cur->ne[2]);
+    GGML_ASSERT(block_table->ne[0] >= block_table_layer_stride);
+    GGML_ASSERT(block_table->ne[1] > layer_id);
+
+    int32_t params[] = {
+        layer_id,
+        block_size,
+        block_table_layer_stride,
+    };
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, pool);
+
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_KAPSL_KV_WRITE;
+    result->src[0] = cur;
+    result->src[1] = positions;
+    result->src[2] = block_table;
+    result->src[3] = pool;
+
+    return result;
+}
+
+// ggml_kapsl_paged_attn
+
+struct ggml_tensor * ggml_kapsl_paged_attn(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * kv_pool,
+        struct ggml_tensor  * positions,
+        struct ggml_tensor  * block_table,
+        int32_t               layer_id,
+        int32_t               block_size,
+        int32_t               block_table_layer_stride,
+        int32_t               n_kv_heads,
+        float                 scale) {
+    GGML_ASSERT(q->type == GGML_TYPE_F32 || q->type == GGML_TYPE_F16);
+    GGML_ASSERT(kv_pool->type == GGML_TYPE_F16);
+    GGML_ASSERT(positions->type == GGML_TYPE_I32 || positions->type == GGML_TYPE_I64);
+    GGML_ASSERT(block_table->type == GGML_TYPE_I32);
+    GGML_ASSERT(layer_id >= 0);
+    GGML_ASSERT(block_size > 0);
+    GGML_ASSERT(block_table_layer_stride > 0);
+    GGML_ASSERT(n_kv_heads > 0);
+    GGML_ASSERT(q->ne[1] % n_kv_heads == 0);
+    GGML_ASSERT(positions->ne[0] == q->ne[2]);
+    GGML_ASSERT(block_table->ne[0] >= block_table_layer_stride);
+    GGML_ASSERT(block_table->ne[1] > layer_id);
+
+    int64_t ne[3] = { q->ne[0], q->ne[1], q->ne[2] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 3, ne);
+
+    int32_t iparams[] = {
+        layer_id,
+        block_size,
+        block_table_layer_stride,
+        n_kv_heads,
+    };
+    ggml_set_op_params(result, iparams, sizeof(iparams));
+    ggml_set_op_params_f32(result, 4, scale);
+
+    result->op     = GGML_OP_KAPSL_PAGED_ATTN;
+    result->src[0] = q;
+    result->src[1] = kv_pool;
+    result->src[2] = positions;
+    result->src[3] = block_table;
 
     return result;
 }
@@ -6831,6 +6927,12 @@ static void ggml_compute_backward(
         } break;
         case GGML_OP_NONE: {
             // noop
+        } break;
+        case GGML_OP_KAPSL_KV_WRITE: {
+            // inference-only side-effect op
+        } break;
+        case GGML_OP_KAPSL_PAGED_ATTN: {
+            // inference-only op
         } break;
         case GGML_OP_COUNT:
         default: {

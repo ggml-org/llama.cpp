@@ -306,7 +306,48 @@ private:
     bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo);
 };
 
-class llama_kv_cache_context : public llama_memory_context_i {
+class llama_kv_cache_graph_context : public llama_memory_context_i {
+public:
+    ~llama_kv_cache_graph_context() override = default;
+
+    virtual uint32_t get_n_kv() const = 0;
+
+    virtual ggml_type type_k() const = 0;
+    virtual ggml_type type_v() const = 0;
+
+    virtual ggml_tensor * get_k(ggml_context * ctx, int32_t il) const = 0;
+    virtual ggml_tensor * get_v(ggml_context * ctx, int32_t il) const = 0;
+
+    virtual ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const = 0;
+    virtual ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const = 0;
+
+    virtual ggml_tensor * paged_attn(
+            ggml_context *,
+            ggml_tensor *,
+            ggml_tensor *,
+            float,
+            int32_t) const {
+        return nullptr;
+    }
+
+    virtual ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const = 0;
+    virtual ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const = 0;
+
+    virtual ggml_tensor * build_input_k_rot(ggml_context * ctx) const = 0;
+    virtual ggml_tensor * build_input_v_rot(ggml_context * ctx) const = 0;
+
+    virtual void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const = 0;
+    virtual void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const = 0;
+
+    virtual void set_input_k_shift   (ggml_tensor * dst) const = 0;
+    virtual void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const = 0;
+    virtual void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const = 0;
+
+    virtual void set_input_k_rot(ggml_tensor * dst) const = 0;
+    virtual void set_input_v_rot(ggml_tensor * dst) const = 0;
+};
+
+class llama_kv_cache_context : public llama_kv_cache_graph_context {
 public:
     // some shorthands
     using slot_info_vec_t  = llama_kv_cache::slot_info_vec_t;
@@ -348,14 +389,14 @@ public:
     // llama_kv_cache_context specific API
     //
 
-    uint32_t get_n_kv() const;
+    uint32_t get_n_kv() const override;
 
-    ggml_type type_k() const;
-    ggml_type type_v() const;
+    ggml_type type_k() const override;
+    ggml_type type_v() const override;
 
     // get views of the current state of the cache
-    ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
-    ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_k(ggml_context * ctx, int32_t il) const override;
+    ggml_tensor * get_v(ggml_context * ctx, int32_t il) const override;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be laid out contiguously in memory
@@ -363,27 +404,27 @@ public:
     //   - k_idxs [n_tokens]
     //   - v_cur  [n_embd_head_v, n_head_v, n_tokens]
     //   - v_idxs [n_tokens] or [n_tokens*n_embd_v_gqa] depending if V cache is transposed
-    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
-    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const override;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const override;
 
     // create destination indices for each head of the current batch for where it would be written in the KV cache
     // the indices address the global KV cache (not per stream) - this is not relevant for the user of this API, but
     //   helps understand the implementation logic of cpy_k and cpy_v
-    ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
-    ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+    ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const override;
+    ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const override;
 
-    ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
-    ggml_tensor * build_input_v_rot(ggml_context * ctx) const;
+    ggml_tensor * build_input_k_rot(ggml_context * ctx) const override;
+    ggml_tensor * build_input_v_rot(ggml_context * ctx) const override;
 
-    void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
-    void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const override;
+    void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const override;
 
-    void set_input_k_shift   (ggml_tensor * dst) const;
-    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
-    void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    void set_input_k_shift   (ggml_tensor * dst) const override;
+    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const override;
+    void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const override;
 
-    void set_input_k_rot(ggml_tensor * dst) const;
-    void set_input_v_rot(ggml_tensor * dst) const;
+    void set_input_k_rot(ggml_tensor * dst) const override;
+    void set_input_v_rot(ggml_tensor * dst) const override;
 
 private:
     llama_memory_status status;

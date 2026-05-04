@@ -54,6 +54,7 @@
 #include "ggml-cuda/wkv.cuh"
 #include "ggml-cuda/gla.cuh"
 #include "ggml-cuda/gated_delta_net.cuh"
+#include "ggml-cuda/kapsl-kv.cuh"
 #include "ggml-cuda/set.cuh"
 #include "ggml-cuda/set-rows.cuh"
 #include "ggml-cuda/pad_reflect_1d.cuh"
@@ -619,15 +620,18 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
+    bool owns_ptr = true;
     std::string name;
 
-    ggml_backend_cuda_buffer_context(int device, void * dev_ptr) :
-        device(device), dev_ptr(dev_ptr),
+    ggml_backend_cuda_buffer_context(int device, void * dev_ptr, bool owns_ptr = true) :
+        device(device), dev_ptr(dev_ptr), owns_ptr(owns_ptr),
         name(GGML_CUDA_NAME + std::to_string(device)) {
     }
 
     ~ggml_backend_cuda_buffer_context() {
-        CUDA_CHECK(cudaFree(dev_ptr));
+        if (owns_ptr) {
+            CUDA_CHECK(cudaFree(dev_ptr));
+        }
     }
 };
 
@@ -784,6 +788,17 @@ static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_bac
     }
 
     ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, dev_ptr);
+
+    return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
+}
+
+ggml_backend_buffer_t ggml_backend_cuda_buffer_from_device_ptr(int device, void * ptr, size_t size) {
+    if (ptr == nullptr || size == 0) {
+        return nullptr;
+    }
+
+    ggml_backend_buffer_type_t buft = ggml_backend_cuda_buffer_type(device);
+    ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(device, ptr, false);
 
     return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
 }
@@ -2647,6 +2662,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_SET_ROWS:
             ggml_cuda_op_set_rows(ctx, dst);
+            break;
+        case GGML_OP_KAPSL_KV_WRITE:
+            ggml_cuda_op_kapsl_kv_write(ctx, dst);
+            break;
+        case GGML_OP_KAPSL_PAGED_ATTN:
+            ggml_cuda_op_kapsl_paged_attn(ctx, dst);
             break;
         case GGML_OP_SET:
             ggml_cuda_op_set(ctx, dst);
@@ -5000,6 +5021,21 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                        op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL) &&
                        op->src[0]->type == GGML_TYPE_F32 &&
                        (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32);
+            } break;
+        case GGML_OP_KAPSL_KV_WRITE:
+            {
+                return op->type == GGML_TYPE_F16 &&
+                       (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                       (op->src[1]->type == GGML_TYPE_I32 || op->src[1]->type == GGML_TYPE_I64) &&
+                       op->src[2]->type == GGML_TYPE_I32;
+            } break;
+        case GGML_OP_KAPSL_PAGED_ATTN:
+            {
+                return op->type == GGML_TYPE_F32 &&
+                       (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                       op->src[1]->type == GGML_TYPE_F16 &&
+                       (op->src[2]->type == GGML_TYPE_I32 || op->src[2]->type == GGML_TYPE_I64) &&
+                       op->src[3]->type == GGML_TYPE_I32;
             } break;
         case GGML_OP_SET:
             {

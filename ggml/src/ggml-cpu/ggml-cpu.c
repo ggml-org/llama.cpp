@@ -1854,6 +1854,14 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_set_rows(params, tensor);
             } break;
+        case GGML_OP_KAPSL_KV_WRITE:
+            {
+                GGML_ABORT("Kapsl KV write is CUDA-only");
+            }
+        case GGML_OP_KAPSL_PAGED_ATTN:
+            {
+                GGML_ABORT("Kapsl paged attention is CUDA-only");
+            }
         case GGML_OP_DIAG:
             {
                 ggml_compute_forward_diag(params, tensor);

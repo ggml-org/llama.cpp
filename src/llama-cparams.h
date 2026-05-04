@@ -44,4 +44,7 @@ struct llama_cparams {
 
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
+
+    llama_kapsl_kv_pool_desc * kapsl_kv_pool;
+    uint64_t                   kapsl_session_id;
 };

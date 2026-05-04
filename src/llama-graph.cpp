@@ -22,7 +22,7 @@
 
 static ggml_tensor * build_attn_inp_kq_mask(
         ggml_context * ctx,
-        const llama_kv_cache_context * mctx,
+        const llama_kv_cache_graph_context * mctx,
         const llama_ubatch & ubatch,
         const llama_cparams & cparams) {
     const auto n_kv     = mctx->get_n_kv();
@@ -38,7 +38,7 @@ static ggml_tensor * build_attn_inp_kq_mask(
 
 static bool can_reuse_kq_mask(
         ggml_tensor * kq_mask,
-        const llama_kv_cache_context * mctx,
+        const llama_kv_cache_graph_context * mctx,
         const llama_ubatch & ubatch,
         const llama_cparams & cparams) {
     const auto n_kv     = mctx->get_n_kv();
@@ -460,7 +460,7 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
-    const auto * mctx = static_cast<const llama_kv_cache_context *>(params.mctx);
+    const auto * mctx = static_cast<const llama_kv_cache_graph_context *>(params.mctx);
 
     this->mctx = mctx;
 
@@ -481,7 +481,7 @@ void llm_graph_input_attn_k::set_input(const llama_ubatch * ubatch) {
 }
 
 bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
-    const auto * mctx = static_cast<const llama_kv_cache_context *>(params.mctx);
+    const auto * mctx = static_cast<const llama_kv_cache_graph_context *>(params.mctx);
 
     this->mctx = mctx;
 
@@ -1898,7 +1898,7 @@ ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos_bucket_dec() const {
-    const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
+    const auto * mctx_cur = static_cast<const llama_kv_cache_graph_context *>(mctx);
 
     auto inp = std::make_unique<llm_graph_input_pos_bucket_kv>(hparams, mctx_cur);
 
@@ -2143,7 +2143,7 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
      const llama_ubatch & ubatch,
     const llama_hparams & hparams,
     const llama_cparams & cparams,
-    const llama_kv_cache_context * mctx_cur) {
+    const llama_kv_cache_graph_context * mctx_cur) {
 
     auto inp = std::make_unique<llm_graph_input_attn_kv>(hparams, cparams, mctx_cur);
 
@@ -2164,7 +2164,7 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
 }
 
 llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
-    const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
+    const auto * mctx_cur = static_cast<const llama_kv_cache_graph_context *>(mctx);
 
     auto inp = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
 
@@ -2219,7 +2219,16 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = nullptr;
+    if (kq_b == nullptr && sinks == nullptr) {
+        cur = mctx_cur->paged_attn(ctx0, q, inp->get_k_idxs(), kq_scale, il);
+        if (cur) {
+            cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]);
+        }
+    }
+    if (cur == nullptr) {
+        cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    }
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot) {
@@ -2251,7 +2260,7 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
      const llama_ubatch & ubatch,
     const llama_hparams & hparams,
     const llama_cparams & cparams,
-    const llama_kv_cache_context * mctx_cur) {
+    const llama_kv_cache_graph_context * mctx_cur) {
 
     auto inp = std::make_unique<llm_graph_input_attn_k>(hparams, cparams, mctx_cur);
 
@@ -2268,7 +2277,7 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
 }
 
 llm_graph_input_attn_k * llm_graph_context::build_attn_inp_k() const {
-    const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
+    const auto * mctx_cur = static_cast<const llama_kv_cache_graph_context *>(mctx);
 
     auto inp = build_attn_inp_k_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
 

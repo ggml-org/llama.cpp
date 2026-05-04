@@ -517,6 +517,8 @@ extern "C" {
         GGML_OP_GET_ROWS,
         GGML_OP_GET_ROWS_BACK,
         GGML_OP_SET_ROWS,
+        GGML_OP_KAPSL_KV_WRITE,
+        GGML_OP_KAPSL_PAGED_ATTN,
         GGML_OP_DIAG,
         GGML_OP_DIAG_MASK_INF,
         GGML_OP_DIAG_MASK_ZERO,
@@ -1673,6 +1675,39 @@ extern "C" {
             struct ggml_tensor  * a,  // destination
             struct ggml_tensor  * b,  // source
             struct ggml_tensor  * c); // row indices
+
+    // Writes the current layer K or V tensor into an externally-owned Kapsl paged KV pool.
+    // `pool` layout is [head_dim, block_size, n_kv_heads, n_blocks].
+    // `cur` layout is [head_dim, n_kv_heads, n_tokens].
+    // `positions` layout is [n_tokens] and stores logical token positions.
+    // `block_table` layout is [block_table_layer_stride, n_layers].
+    GGML_API struct ggml_tensor * ggml_kapsl_kv_write(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * pool,
+            struct ggml_tensor  * cur,
+            struct ggml_tensor  * positions,
+            struct ggml_tensor  * block_table,
+            int32_t               layer_id,
+            int32_t               block_size,
+            int32_t               block_table_layer_stride);
+
+    // Naive correctness-first paged attention over a Kapsl-owned KV pool.
+    // `q` layout is [head_dim, n_q_heads, n_tokens].
+    // `kv_pool` layout is the raw Kapsl pool storage.
+    // `positions` layout is [n_tokens] and stores logical token positions.
+    // `block_table` layout is [block_table_layer_stride, n_layers].
+    // Result layout is [head_dim, n_q_heads, n_tokens].
+    GGML_API struct ggml_tensor * ggml_kapsl_paged_attn(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * kv_pool,
+            struct ggml_tensor  * positions,
+            struct ggml_tensor  * block_table,
+            int32_t               layer_id,
+            int32_t               block_size,
+            int32_t               block_table_layer_stride,
+            int32_t               n_kv_heads,
+            float                 scale);
 
     GGML_API struct ggml_tensor * ggml_diag(
         struct ggml_context     * ctx,

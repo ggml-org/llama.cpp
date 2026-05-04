@@ -21,7 +21,7 @@ struct llama_layer;
 
 struct llama_memory_context_i;
 
-class llama_kv_cache_context;
+class llama_kv_cache_graph_context;
 class llama_kv_cache_iswa_context;
 class llama_memory_recurrent_context;
 class llama_memory_hybrid_context;
@@ -166,7 +166,7 @@ class llm_graph_input_pos_bucket_kv : public llm_graph_input_i {
 public:
     llm_graph_input_pos_bucket_kv(
             const llama_hparams & hparams,
-            const llama_kv_cache_context * mctx) : hparams(hparams), mctx(mctx) {}
+            const llama_kv_cache_graph_context * mctx) : hparams(hparams), mctx(mctx) {}
     virtual ~llm_graph_input_pos_bucket_kv() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -175,7 +175,7 @@ public:
 
     const llama_hparams hparams;
 
-    const llama_kv_cache_context * mctx;
+    const llama_kv_cache_graph_context * mctx;
 };
 
 class llm_graph_input_out_ids : public llm_graph_input_i {
@@ -287,7 +287,7 @@ public:
     llm_graph_input_attn_kv(
             const llama_hparams & hparams,
             const llama_cparams & cparams,
-            const llama_kv_cache_context * mctx) :
+            const llama_kv_cache_graph_context * mctx) :
         hparams(hparams),
         cparams(cparams),
         mctx(mctx) {
@@ -319,7 +319,7 @@ public:
     const llama_hparams hparams;
     const llama_cparams cparams;
 
-    const llama_kv_cache_context * mctx;
+    const llama_kv_cache_graph_context * mctx;
 };
 
 // V-less input for the KV cache
@@ -329,7 +329,7 @@ public:
     llm_graph_input_attn_k(
             const llama_hparams & hparams,
             const llama_cparams & cparams,
-            const llama_kv_cache_context * mctx) :
+            const llama_kv_cache_graph_context * mctx) :
         hparams(hparams),
         cparams(cparams),
         mctx(mctx) {
@@ -352,7 +352,7 @@ public:
     const llama_hparams hparams;
     const llama_cparams cparams;
 
-    const llama_kv_cache_context * mctx;
+    const llama_kv_cache_graph_context * mctx;
 };
 
 class llm_graph_input_attn_kv_iswa : public llm_graph_input_i {
