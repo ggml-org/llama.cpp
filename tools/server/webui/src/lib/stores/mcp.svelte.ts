@@ -29,7 +29,6 @@ import {
 	getProxiedUrlString,
 	parseMcpServerSettings,
 	detectMcpTransportFromUrl,
-	getFaviconUrl,
 	uuid
 } from '$lib/utils';
 import {
@@ -477,9 +476,9 @@ class MCPStore {
 
 	/**
 	 * Get icon URL for an MCP server by its ID.
-	 * Prefers the server's own icons (from MCP spec) and falls back
-	 * to Google's favicon service.
-	 * Returns null if server is not found.
+	 * Returns the best icon from the MCP server's `icons` array
+	 * (see MCP spec: spec.modelcontextprotocol.io).
+	 * Returns null if no icon is available.
 	 */
 	getServerFavicon(serverId: string): string | null {
 		const server = this.getServerById(serverId);
@@ -497,7 +496,7 @@ class MCPStore {
 			}
 		}
 
-		return getFaviconUrl(server.url, this._proxyAvailable);
+		return null;
 	}
 
 	isAnyServerLoading(): boolean {

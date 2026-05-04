@@ -146,9 +146,6 @@ export { createBase64DataUrl } from './data-url';
 // Header utilities
 export { parseHeadersToArray, serializeHeaders } from './headers';
 
-// Favicon utilities
-export { getFaviconUrl } from './favicon';
-
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,

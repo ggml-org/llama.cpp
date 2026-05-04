@@ -13,7 +13,6 @@ export * from './code-blocks';
 export * from './code';
 export * from './context-keys';
 export * from './css-classes';
-export * from './favicon';
 export * from './floating-ui-constraints';
 export * from './formatters';
 export * from './key-value-pairs';
