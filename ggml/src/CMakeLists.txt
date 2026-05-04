@@ -265,6 +265,7 @@ function(ggml_add_backend_library backend)
 
     target_link_libraries(${backend} PRIVATE ggml-base)
     target_include_directories(${backend} PRIVATE ..)
+    target_compile_features(${backend} INTERFACE c_std_90)
 
     if (${BUILD_SHARED_LIBS})
         target_compile_definitions(${backend} PRIVATE GGML_BACKEND_BUILD)
