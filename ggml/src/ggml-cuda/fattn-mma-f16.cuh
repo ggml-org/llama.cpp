@@ -556,7 +556,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         cp_async_wait_all();
         __syncthreads();
         flash_attn_ext_f16_load_tile<stride_tile_V, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-            (V_h2 + int64_t(k_VKQ_0)*stride_V, tile_V, nbatch_V2, stride_V, k_VKQ_sup, tile_top_k);
+            (V_h2 + int64_t(k_VKQ_0)*stride_V, tile_V, nbatch_V2, stride_V, k_VKQ_sup, nullptr);
     } else {
         constexpr bool use_cp_async = nstages == 1;
         if (ncols2 > 1 || mask_h) {
@@ -565,7 +565,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                     (mask_h, tile_mask, stride_mask, k_VKQ_sup, jt*ncols1, ne01, tile_top_k);
             } else {
                 flash_attn_ext_f16_load_mask<ncols1, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-                    (mask_h + k_VKQ_0, tile_mask, stride_mask, k_VKQ_sup, jt*ncols1, ne01, tile_top_k);
+                    (mask_h + k_VKQ_0, tile_mask, stride_mask, k_VKQ_sup, jt*ncols1, ne01, nullptr);
             }
         }
     }
@@ -584,7 +584,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                     (K_h2 + k0_start, tile_K, k0_diff, stride_K, k_VKQ_sup, tile_top_k);
             } else {
                 flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-                    (K_h2 + int64_t(k_VKQ_0)*stride_K + k0_start, tile_K, k0_diff, stride_K, k_VKQ_sup, tile_top_k);
+                    (K_h2 + int64_t(k_VKQ_0)*stride_K + k0_start, tile_K, k0_diff, stride_K, k_VKQ_sup, nullptr);
             }
 
             if (use_cp_async) {
@@ -919,7 +919,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                         (V_h2 + i0_start/2, tile_V, i0_diff/2, stride_V, k_VKQ_sup, tile_top_k);
                 } else {
                     flash_attn_ext_f16_load_tile<stride_tile_V, nwarps, nbatch_fa, use_cp_async, oob_check, use_top_k>
-                        (V_h2 + int64_t(k_VKQ_0)*stride_V + i0_start/2, tile_V, i0_diff/2, stride_V, k_VKQ_sup, tile_top_k);
+                        (V_h2 + int64_t(k_VKQ_0)*stride_V + i0_start/2, tile_V, i0_diff/2, stride_V, k_VKQ_sup, nullptr);
                 }
                 if (use_cp_async) {
                     cp_async_wait_all();
