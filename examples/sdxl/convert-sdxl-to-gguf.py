@@ -30,11 +30,13 @@ temporary f16 file is removed automatically.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -81,7 +83,8 @@ _K_QUANTS: frozenset[str] = frozenset(
 _ALL_Q_TYPES = ["f32", "f16", "q8_0"] + sorted(_K_QUANTS)
 
 
-def run_llama_quantize(f16_path: str, out_path: str, q_type: str, binary: str) -> None:
+def run_llama_quantize(f16_path: str, out_path: str, q_type: str, binary: str) -> str:
+    """Run llama-quantize and return out_path (convenient for futures)."""
     if not os.path.isfile(binary):
         raise FileNotFoundError(
             f"llama-quantize binary not found at {binary!r}. "
@@ -89,8 +92,9 @@ def run_llama_quantize(f16_path: str, out_path: str, q_type: str, binary: str) -
             "or pass --llama-quantize /path/to/llama-quantize"
         )
     cmd = [binary, f16_path, out_path, q_type]
-    print(f"\nRunning: {' '.join(cmd)}")
+    print(f"  [kquant] {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
+    return out_path
 
 
 # ---------------------------------------------------------------------------
@@ -98,22 +102,38 @@ def run_llama_quantize(f16_path: str, out_path: str, q_type: str, binary: str) -
 # ---------------------------------------------------------------------------
 
 def load_tensors(component_dir: str) -> dict[str, torch.Tensor]:
+    """Load tensors from a directory.  Handles single-file and sharded safetensors."""
     d = component_dir
-    candidates = [
-        os.path.join(d, "model.safetensors"),
-        os.path.join(d, "diffusion_pytorch_model.safetensors"),
-        os.path.join(d, "diffusion_pytorch_model.fp16.safetensors"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            if not HAS_SAFETENSORS:
+
+    if HAS_SAFETENSORS:
+        # Sharded safetensors (e.g. model-00001-of-00003.safetensors)
+        for pat in ("model-*-of-*.safetensors", "diffusion_pytorch_model-*-of-*.safetensors"):
+            shards = sorted(glob.glob(os.path.join(d, pat)))
+            if shards:
+                print(f"  Loading {len(shards)} shards from {os.path.basename(d)}/")
+                result: dict[str, torch.Tensor] = {}
+                for shard in shards:
+                    result.update(safetensors_load(shard))
+                return result
+
+        # Single safetensors file
+        for fname in ("model.safetensors",
+                      "diffusion_pytorch_model.safetensors",
+                      "diffusion_pytorch_model.fp16.safetensors"):
+            path = os.path.join(d, fname)
+            if os.path.exists(path):
+                print(f"  Loading {path}")
+                return safetensors_load(path)
+    else:
+        # Safetensors present but library missing — warn early
+        for fname in ("model.safetensors", "diffusion_pytorch_model.safetensors"):
+            if os.path.exists(os.path.join(d, fname)):
                 raise RuntimeError(
-                    f"Found {path} but 'safetensors' package is not installed. "
+                    f"Found {fname} but 'safetensors' is not installed. "
                     "Run: pip install safetensors"
                 )
-            print(f"  Loading {path}")
-            return safetensors_load(path)
 
+    # PyTorch fallback
     for fname in ("pytorch_model.bin", "diffusion_pytorch_model.bin"):
         path = os.path.join(d, fname)
         if os.path.exists(path):
@@ -121,8 +141,7 @@ def load_tensors(component_dir: str) -> dict[str, torch.Tensor]:
             return torch.load(path, map_location="cpu")
 
     raise FileNotFoundError(
-        f"No model weights found in {component_dir!r}. "
-        "Expected model.safetensors, diffusion_pytorch_model.safetensors, or pytorch_model.bin"
+        f"No model weights found in {component_dir!r}."
     )
 
 
@@ -136,20 +155,19 @@ def load_config(component_dir: str) -> dict[str, Any]:
 # Dtype / quantization logic
 # ---------------------------------------------------------------------------
 
-def convert_tensor(
-    data: torch.Tensor, name: str, q_type: str, verbose: bool = True
+def _quantize_f32_array(
+    arr: np.ndarray, name: str, q_type: str, verbose: bool = True
 ) -> tuple[np.ndarray, GGMLQuantizationType | None]:
-    """Return (array, raw_dtype) applying smart per-tensor dtype rules.
+    """Apply dtype policy to an already-float32 numpy array.
 
     1D (bias, norm, scalar) → f32, None
     4D (conv kernel)        → f16, None  (GGML conv has no f32 kernel support)
     2D (weight matrix)      → q_type; q8_0 falls back to f16 on incompatible shape
     """
-    arr = data.squeeze().float().numpy()
     n_dims = arr.ndim
 
     if n_dims == 1:
-        out = arr.astype(np.float32)
+        out = arr  # already f32
         if verbose:
             print(f"  {name} | f32 | {out.shape}")
         return out, None
@@ -161,10 +179,9 @@ def convert_tensor(
         return out, None
 
     if q_type == "f32":
-        out = arr.astype(np.float32)
         if verbose:
-            print(f"  {name} | f32 | {out.shape}")
-        return out, None
+            print(f"  {name} | f32 | {arr.shape}")
+        return arr, None
 
     if q_type == "f16":
         out = arr.astype(np.float16)
@@ -178,22 +195,29 @@ def convert_tensor(
             if verbose:
                 print(f"  {name} | q8_0 | {arr.shape}")
             return out, GGMLQuantizationType.Q8_0
-        else:
-            out = arr.astype(np.float16)
-            if verbose:
-                print(f"  {name} | f16 (q8_0 fallback, row={arr.shape[-1]}) | {arr.shape}")
-            return out, None
+        out = arr.astype(np.float16)
+        if verbose:
+            print(f"  {name} | f16 (q8_0 fallback row={arr.shape[-1]}) | {arr.shape}")
+        return out, None
 
     raise ValueError(f"Unsupported q_type: {q_type!r}")
+
+
+def convert_tensor(
+    data: torch.Tensor, name: str, q_type: str, verbose: bool = True
+) -> tuple[np.ndarray, GGMLQuantizationType | None]:
+    """Torch tensor → (numpy array, raw_dtype)."""
+    return _quantize_f32_array(data.squeeze().float().numpy(), name, q_type, verbose)
 
 
 def add_tensor_to_all(
     writers: dict[str, GGUFWriter], name: str, data: torch.Tensor
 ) -> None:
-    """Convert and write a tensor to every open GGUF writer in one pass."""
+    """Convert to float32 once, then cast/quantize per writer — no redundant tensor copies."""
+    arr_f32 = data.squeeze().float().numpy()
     first = True
     for q_type, fout in writers.items():
-        arr, raw_dtype = convert_tensor(data, name, q_type, verbose=first)
+        arr, raw_dtype = _quantize_f32_array(arr_f32, name, q_type, verbose=first)
         fout.add_tensor(name, arr, raw_dtype=raw_dtype)
         first = False
 
@@ -366,6 +390,17 @@ def write_unet_metadata(fout: GGUFWriter, cfg: dict) -> None:
 # Component converters — write to all open writers simultaneously
 # ---------------------------------------------------------------------------
 
+def _iter_tensors(
+    tensors: dict[str, torch.Tensor], label: str
+):
+    """Yield (hf_name, data) while printing a running counter."""
+    total = len(tensors)
+    for i, (hf_name, data) in enumerate(tensors.items(), 1):
+        print(f"  [{i}/{total}]", end=" ")
+        yield hf_name, data
+    print(f"  {label}: {total} tensors done")
+
+
 def add_text_encoder(writers: dict[str, GGUFWriter], model_dir: str, prefix: str) -> None:
     component = "text_encoder" if prefix == "te1" else "text_encoder_2"
     comp_dir = os.path.join(model_dir, component)
@@ -375,10 +410,10 @@ def add_text_encoder(writers: dict[str, GGUFWriter], model_dir: str, prefix: str
     for fout in writers.values():
         write_te_metadata(fout, cfg, prefix)
 
-    for hf_name, data in tensors.items():
+    for hf_name, data in _iter_tensors(tensors, prefix):
         gguf_name = get_te_tensor_name(hf_name, prefix)
         if gguf_name is None:
-            print(f"  skipping {hf_name}")
+            print(f"skipping {hf_name}")
             continue
         add_tensor_to_all(writers, gguf_name, data)
 
@@ -391,7 +426,7 @@ def add_vae(writers: dict[str, GGUFWriter], model_dir: str) -> None:
     for fout in writers.values():
         write_vae_metadata(fout, cfg)
 
-    for hf_name, data in tensors.items():
+    for hf_name, data in _iter_tensors(tensors, "vae"):
         add_tensor_to_all(writers, get_vae_tensor_name(hf_name), data)
 
 
@@ -403,7 +438,7 @@ def add_unet(writers: dict[str, GGUFWriter], model_dir: str) -> None:
     for fout in writers.values():
         write_unet_metadata(fout, cfg)
 
-    for hf_name, data in tensors.items():
+    for hf_name, data in _iter_tensors(tensors, "unet"):
         add_tensor_to_all(writers, get_unet_tensor_name(hf_name), data)
 
 
@@ -555,14 +590,24 @@ def main() -> None:
 
     output_files = [paths[qt] for qt in python_types if not (qt == "f16" and f16_is_temp)]
 
-    # K-quant pass: call llama-quantize once per type using the f16 GGUF
+    # K-quant pass: all types run in parallel via ThreadPoolExecutor
     if k_quant_types:
         f16_path = paths["f16"]
+        n_workers = min(len(k_quant_types), os.cpu_count() or 1)
+        print(f"\nK-quant pass: {len(k_quant_types)} type(s) × {n_workers} worker(s)")
         try:
-            for kq in k_quant_types:
-                kq_path = out_path(kq)
-                run_llama_quantize(f16_path, kq_path, kq, args.llama_quantize)
-                output_files.append(kq_path)
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                future_to_kq = {
+                    pool.submit(
+                        run_llama_quantize,
+                        f16_path, out_path(kq), kq, args.llama_quantize
+                    ): kq
+                    for kq in k_quant_types
+                }
+                for future in as_completed(future_to_kq):
+                    kq = future_to_kq[future]
+                    kq_path = future.result()   # re-raises on failure
+                    output_files.append(kq_path)
         finally:
             if f16_is_temp and os.path.exists(f16_path):
                 os.unlink(f16_path)
