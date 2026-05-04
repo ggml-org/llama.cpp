@@ -183,7 +183,7 @@
 | `--spec-draft-cpu-range, -Crd, --cpu-range-draft lo-hi` | Ranges of CPUs for affinity. Complements --cpu-mask-draft |
 | `--spec-draft-cpu-strict, --cpu-strict-draft <0\|1>` | Use strict CPU placement for draft model (default: same as --cpu-strict) |
 | `--spec-draft-prio, --prio-draft N` | set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0) |
-| `--spec-draft-poll, --poll-draft <0\|1>` | Use polling to wait for draft model work (default: same as --poll]) |
+| `--spec-draft-poll, --poll-draft <0\|1>` | Use polling to wait for draft model work (default: same as --poll) |
 | `--spec-draft-cpu-mask-batch, -Cbd, --cpu-mask-batch-draft M` | Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask) |
 | `--spec-draft-cpu-strict-batch, --cpu-strict-batch-draft <0\|1>` | Use strict CPU placement for draft model (default: --cpu-strict-draft) |
 | `--spec-draft-prio-batch, --prio-batch-draft N` | set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0) |
