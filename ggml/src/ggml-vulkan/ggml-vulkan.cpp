@@ -6648,12 +6648,57 @@ static void ggml_vk_end_submission(vk_submission& s, std::vector<vk_semaphore> w
     s.signal_semaphores = std::move(signal_semaphores);
 }
 
+static void ggml_vk_record_host_write_barrier(vk_context& ctx) {
+    if (ctx->s == nullptr) {
+        return;
+    }
+
+    const bool transfer_queue = ctx->p->q->transfer_only;
+
+    if (!ctx->in_memcpys.empty() || !ctx->memsets.empty()) {
+        ctx->s->buffer->buf.pipelineBarrier(
+            vk::PipelineStageFlagBits::eHost,
+            ctx->p->q->stage_flags,
+            {},
+            { {
+              { vk::AccessFlagBits::eHostWrite },
+              { transfer_queue ? vk::AccessFlagBits::eTransferRead : (vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eTransferRead) }
+            } },
+            {},
+            {}
+        );
+    }
+}
+
+static void ggml_vk_record_host_read_barrier(vk_context& ctx) {
+    if (ctx->s == nullptr) {
+        return;
+    }
+
+    const bool transfer_queue = ctx->p->q->transfer_only;
+
+    if (!ctx->out_memcpys.empty()) {
+        ctx->s->buffer->buf.pipelineBarrier(
+            ctx->p->q->stage_flags,
+            vk::PipelineStageFlagBits::eHost,
+            {},
+            { {
+              { transfer_queue ? vk::AccessFlagBits::eTransferWrite : (vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferWrite) },
+              { vk::AccessFlagBits::eHostRead }
+            } },
+            {},
+            {}
+        );
+    }
+}
+
 static void ggml_vk_ctx_end(vk_context& ctx) {
     VK_LOG_DEBUG("ggml_vk_ctx_end(" << ctx << ", " << ctx->seqs.size() << ")");
     if (ctx->s == nullptr) {
         return;
     }
 
+    ggml_vk_record_host_read_barrier(ctx);
     ctx->s->buffer->buf.end();
     ctx->s = nullptr;
 }
@@ -6701,6 +6746,7 @@ static bool ggml_vk_submit_transfer_ctx(ggml_backend_vk_context * ctx) {
     for (auto& cpy : cpy_ctx->in_memcpys) {
         memcpy(cpy.dst, cpy.src, cpy.n);
     }
+    ggml_vk_record_host_write_barrier(cpy_ctx);
     cpy_ctx->in_memcpys.clear();
     cpy_ctx->memsets.clear();
     cpy_ctx->out_memcpys.clear();
@@ -6738,9 +6784,13 @@ static void ggml_vk_ensure_sync_staging_buffer(vk_device& device, size_t size) {
     if (device->sync_staging == nullptr || device->sync_staging->size < size) {
         VK_LOG_MEMORY("ggml_vk_ensure_sync_staging_buffer(" << size << ")");
         ggml_vk_destroy_buffer(device->sync_staging);
-        device->sync_staging = ggml_vk_create_buffer_check(device, size,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        if (device->uma) {
+            device->sync_staging = ggml_vk_create_buffer_device(device, size);
+        } else {
+            device->sync_staging = ggml_vk_create_buffer_check(device, size,
+                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        }
     }
 }
 
@@ -6748,9 +6798,13 @@ static void ggml_vk_ensure_sync_staging_buffer(ggml_backend_vk_context * ctx, si
     if (ctx->sync_staging == nullptr || ctx->sync_staging->size < size) {
         VK_LOG_MEMORY("ggml_vk_ensure_sync_staging_buffer(" << size << ")");
         ggml_vk_destroy_buffer(ctx->sync_staging);
-        ctx->sync_staging = ggml_vk_create_buffer_check(ctx->device, size,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        if (ctx->device->uma) {
+            ctx->sync_staging = ggml_vk_create_buffer_device(ctx->device, size);
+        } else {
+            ctx->sync_staging = ggml_vk_create_buffer_check(ctx->device, size,
+                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        }
     }
 }
 
@@ -7145,6 +7199,8 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
         for (auto& mset : subctx->memsets) {
             memset(mset.dst, mset.val, mset.n);
         }
+
+        ggml_vk_record_host_write_barrier(subctx);
 
         ggml_vk_submit(subctx, dst->device->fence);
         VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_buffer_write_2d waitForFences");
@@ -13647,6 +13703,8 @@ static void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
             memset(mset.dst, mset.val, mset.n);
         }
 
+        ggml_vk_record_host_write_barrier(subctx);
+
         if (almost_ready && !ctx->almost_ready_fence_pending) {
             ggml_vk_submit(subctx, ctx->almost_ready_fence);
             ctx->almost_ready_fence_pending = true;
@@ -14208,6 +14266,8 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
         for (auto& cpy : compute_ctx->in_memcpys) {
             memcpy(cpy.dst, cpy.src, cpy.n);
         }
+
+        ggml_vk_record_host_write_barrier(compute_ctx);
 
         ggml_vk_submit(compute_ctx, {});
         ctx->submit_pending = true;
