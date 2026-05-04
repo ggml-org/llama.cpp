@@ -39,6 +39,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <deque>
 #include <sstream>
 #include <utility>
+#include <optional>
 #include <memory>
 #include <limits>
 #include <map>
@@ -6780,11 +6781,11 @@ static void deferred_memset(void * dst, uint32_t val, size_t size, std::vector<v
     }
 }
 
-static void ggml_vk_ensure_sync_staging_buffer_internal(vk_device& device, vk_buffer** staging_ptr, size_t size) {
+static void ggml_vk_ensure_sync_staging_buffer_internal(vk_device& device, vk_buffer* staging_ptr, size_t size) {
     if (*staging_ptr == nullptr || (*staging_ptr)->size < size) {
         VK_LOG_MEMORY("ggml_vk_ensure_sync_staging_buffer(" << size << ")");
         ggml_vk_destroy_buffer(*staging_ptr);
-        if (device.uma) {
+        if (device->uma) {
             *staging_ptr = ggml_vk_create_buffer_device(device, size);
         } else {
             *staging_ptr = ggml_vk_create_buffer_check(device, size,
@@ -6799,13 +6800,13 @@ static void ggml_vk_ensure_sync_staging_buffer(vk_device& device, size_t size) {
 }
 
 static void ggml_vk_ensure_sync_staging_buffer(ggml_backend_vk_context * ctx, size_t size) {
-    ggml_vk_ensure_sync_staging_buffer_internal(*ctx->device, &ctx->sync_staging, size);
+    ggml_vk_ensure_sync_staging_buffer_internal(ctx->device, &ctx->sync_staging, size);
 }
 
-static size_t ggml_vk_parse_uma_threshold(const char* env_var_name) {
+static std::optional<size_t> ggml_vk_parse_uma_threshold(const char* env_var_name) {
     const char * threshold_env = getenv(env_var_name);
     if (threshold_env == nullptr || threshold_env[0] == '\0') {
-        return (size_t)-1;
+        return std::nullopt;
     }
 
     char * end = nullptr;
@@ -6814,26 +6815,26 @@ static size_t ggml_vk_parse_uma_threshold(const char* env_var_name) {
     if (errno != 0 || end == threshold_env || *end != '\0') {
         GGML_LOG_WARN("ggml_vulkan: invalid %s='%s', falling back to benchmarked threshold\n",
             env_var_name, threshold_env);
-        return (size_t)-1;
+        return std::nullopt;
     }
 
     if (parsed > std::numeric_limits<size_t>::max()) {
         GGML_LOG_WARN("ggml_vulkan: %s='%s' exceeds size_t max (%zu), falling back to benchmarked threshold\n",
             env_var_name, threshold_env, std::numeric_limits<size_t>::max());
-        return (size_t)-1;
+        return std::nullopt;
     }
 
     return (size_t) parsed;
 }
 
 static size_t ggml_vk_uma_non_cached_direct_read_threshold(vk_device& device) {
-    static const size_t cache = ggml_vk_parse_uma_threshold("GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD");
-    return cache == (size_t)-1 ? device->uma_read_threshold : cache;
+    static const std::optional<size_t> cache = ggml_vk_parse_uma_threshold("GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD");
+    return cache.value_or(device->uma_read_threshold);
 }
 
 static size_t ggml_vk_uma_non_cached_direct_write_threshold(vk_device& device) {
-    static const size_t cache = ggml_vk_parse_uma_threshold("GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD");
-    return cache == (size_t)-1 ? device->uma_write_threshold : cache;
+    static const std::optional<size_t> cache = ggml_vk_parse_uma_threshold("GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD");
+    return cache.value_or(device->uma_write_threshold);
 }
 
 template<typename CPUOp, typename GPUOp>
@@ -6867,6 +6868,10 @@ static size_t ggml_vk_benchmark_uma_threshold(
 static void ggml_vk_run_uma_benchmarks(vk_device& device) {
     const std::vector<size_t> sizes = { 4 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024 };
 
+    // Use a dedicated command pool for benchmarks to avoid interfering with the global transfer pool
+    vk_command_pool benchmark_pool;
+    benchmark_pool.init(device, &device->transfer_queue);
+
     // uma_direct: host-visible device-local buffer (the UMA direct-mapped path).
     vk_buffer uma_direct = ggml_vk_create_buffer(device, sizes.back(), {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
     GGML_ASSERT(uma_direct->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
@@ -6884,7 +6889,7 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
 
     // Warmup: exercise both the GPU copy path and the CPU memcpy path so that
     // caches and driver state are in a representative steady state before timing.
-    vk_context warmup_ctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
+    vk_context warmup_ctx = ggml_vk_create_temporary_context(benchmark_pool);
     for (int i = 0; i < 5; ++i) {
         // GPU copy warmup (staging -> uma_direct, as in the write staging path).
         memcpy(staging->ptr, host_data.data(), sizes.back());
@@ -6912,12 +6917,11 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
         [&](size_t size) {
             // GPU staging path: memcpy into staging, then GPU copies staging -> uma_direct.
             memcpy(staging->ptr, host_data.data(), size);
-            vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
-            ggml_vk_ctx_begin(device, subctx);
+            ggml_vk_ctx_begin(device, warmup_ctx);
             vk::BufferCopy copy{ 0, 0, size };
-            subctx->s->buffer->buf.copyBuffer(staging->buffer, uma_direct->buffer, {copy});
-            ggml_vk_ctx_end(subctx);
-            ggml_vk_submit(subctx, device->fence);
+            warmup_ctx->s->buffer->buf.copyBuffer(staging->buffer, uma_direct->buffer, {copy});
+            ggml_vk_ctx_end(warmup_ctx);
+            ggml_vk_submit(warmup_ctx, device->fence);
             (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
             device->device.resetFences({device->fence});
         }
@@ -6934,12 +6938,11 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
         },
         [&](size_t size) {
             // GPU staging path: GPU copies uma_direct -> staging, then memcpy out.
-            vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
-            ggml_vk_ctx_begin(device, subctx);
+            ggml_vk_ctx_begin(device, warmup_ctx);
             vk::BufferCopy copy{ 0, 0, size };
-            subctx->s->buffer->buf.copyBuffer(uma_direct->buffer, staging->buffer, {copy});
-            ggml_vk_ctx_end(subctx);
-            ggml_vk_submit(subctx, device->fence);
+            warmup_ctx->s->buffer->buf.copyBuffer(uma_direct->buffer, staging->buffer, {copy});
+            ggml_vk_ctx_end(warmup_ctx);
+            ggml_vk_submit(warmup_ctx, device->fence);
             (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
             device->device.resetFences({device->fence});
             memcpy(host_data.data(), staging->ptr, size);
@@ -6948,12 +6951,12 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
 
     ggml_vk_destroy_buffer(staging);
     ggml_vk_destroy_buffer(uma_direct);
-    ggml_vk_command_pool_cleanup(device, device->transfer_queue.cmd_pool);
+    ggml_vk_command_pool_cleanup(device, benchmark_pool);
+    benchmark_pool.destroy(device->device);
 }
 
 static void ggml_vk_calibrate_uma_thresholds(vk_device& device) {
     if (!device->uma) return;
-
 
     ggml_vk_run_uma_benchmarks(device);
     VK_LOG_DEBUG("ggml_vulkan: calibrated UMA read threshold: " << device->uma_read_threshold << ", write threshold: " << device->uma_write_threshold);
