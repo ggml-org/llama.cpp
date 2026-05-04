@@ -63,6 +63,8 @@ extern "C" {
     struct llama_context;
     struct llama_sampler;
 
+    struct llama_paged_scheduler;
+
     typedef struct llama_memory_i * llama_memory_t;
 
     typedef int32_t llama_pos;
@@ -243,6 +245,22 @@ extern "C" {
         int8_t       *  logits;   // TODO: rename this to "output"
     } llama_batch;
 
+    // CPU-side metadata produced by the paged scheduler and consumed by
+    // llama_kv_cache_paged_context during graph build. These arrays are owned
+    // by the scheduler and must remain valid until the next scheduler step
+    // clears them.
+    typedef struct llama_paged_batch_info {
+        int32_t   n_blocks_per_seq = 0;
+        int32_t   n_seq            = 0;
+        int32_t   n_tokens         = 0;
+
+        int32_t * write_slots    = NULL;  // [n_tokens]
+        int32_t * block_table    = NULL;  // [n_seq * n_blocks_per_seq]
+        int32_t * context_lens   = NULL;  // [n_seq]
+        int32_t * batch_offsets  = NULL;  // [n_seq]
+        int32_t * batch_lens     = NULL;  // [n_seq]
+    } llama_paged_batch_info;
+
     enum llama_model_kv_override_type {
         LLAMA_KV_OVERRIDE_TYPE_INT,
         LLAMA_KV_OVERRIDE_TYPE_FLOAT,
@@ -374,6 +392,14 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+
+        // Paged KV cache (experimental)
+        // Opt-in block-indexing KV cache with continuous-batching scheduling
+        bool     kv_paged;           // enable paged KV cache
+        uint32_t block_size;         // tokens per physical KV block
+        uint32_t n_gpu_blocks;       // GPU block pool size
+        uint32_t n_cpu_blocks;       // CPU block pool size for swap-out
+        float    kv_paged_watermark; // percentage of GPU blocks reserved as safety margin [0, 0.1)
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
@@ -1558,6 +1584,53 @@ extern "C" {
             ggml_opt_epoch_callback   callback_train,
             ggml_opt_epoch_callback   callback_eval);
 
+    //
+    // Paged inference
+    //
+    struct llama_paged_seq_state {
+        int32_t request_id;
+        int32_t n_prompt;
+        int32_t n_decoded;
+        int32_t n_past;
+        int64_t t_arrival_us;
+        int64_t t_first_token_us;
+    };
+
+    typedef void (*llama_paged_on_finish_cb)(int32_t             request_id,
+                                             const llama_token * tokens,
+                                             int32_t             n_tokens,
+                                             void *              user_data);
+    LLAMA_API struct llama_paged_scheduler * llama_paged_scheduler_init(struct llama_context * ctx);
+    LLAMA_API void llama_paged_scheduler_free(struct llama_paged_scheduler * sched);
+
+    // Queueing and stepping.
+    LLAMA_API bool llama_paged_scheduler_add_request(struct llama_paged_scheduler * sched,
+                                                     const llama_token *            tokens,
+                                                     int32_t                        n_tokens,
+                                                     int32_t                        request_id);
+
+    LLAMA_API bool llama_paged_scheduler_prepare_batch(struct llama_paged_scheduler * sched,
+                                                       struct llama_batch *           batch);
+
+    LLAMA_API void llama_paged_scheduler_update(struct llama_paged_scheduler * sched,
+                                                struct llama_batch *           batch,
+                                                const llama_token *            tokens,
+                                                const int8_t *                 stop_flags);
+
+    // Introspection.
+    LLAMA_API bool llama_paged_scheduler_get_seq_state(struct llama_paged_scheduler * sched,
+                                                       int32_t                        request_id,
+                                                       struct llama_paged_seq_state * out_state);
+
+    // Returns the current batch's paged routing metadata. Valid until the next
+    // call to llama_paged_scheduler_prepare_batch on this scheduler. Do not free.
+    LLAMA_API const struct llama_paged_batch_info * llama_paged_scheduler_get_batch_info(
+        const struct llama_paged_scheduler * sched);
+
+    // Optional finish callback.
+    LLAMA_API void llama_paged_scheduler_set_on_finish(struct llama_paged_scheduler * sched,
+                                                       llama_paged_on_finish_cb       cb,
+                                                       void *                         user_data);
 #ifdef __cplusplus
 }
 #endif

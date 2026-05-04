@@ -14,7 +14,7 @@ llm_build_falcon::llm_build_falcon(const llama_model & model, const llm_graph_pa
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn = build_attn_inp_kv();
+    auto * inp_attn = build_attn_inp_kv_auto();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 

@@ -2097,6 +2097,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 // nop
             } break;
+        case GGML_OP_PAGED_ATTN:
+            {
+                ggml_compute_forward_paged_attn(params, tensor);
+            } break;
         case GGML_OP_COUNT:
             {
                 GGML_ABORT("fatal error");
@@ -2427,6 +2431,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 GGML_ABORT("fatal error");
             }
+        case GGML_OP_PAGED_ATTN:
+            {
+                n_tasks = 0;
+            } break;
         default:
             {
                 fprintf(stderr, "%s: op not implemented: ", __func__);

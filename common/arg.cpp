@@ -1328,7 +1328,50 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, bool value) {
             params.kv_unified = value;
         }
-    ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BATCHED, LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
+    ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BATCHED, LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL, LLAMA_EXAMPLE_PAGED}));
+    add_opt(common_arg(
+        {"-kvp", "--kv-paged"},
+        {"-no-kvp", "--no-kv-paged"},
+        "use paged KV buffer shared across all sequences (default: disabled)",
+        [](common_params & params, bool value) {
+            params.kv_paged = value;
+        }
+    ).set_env("LLAMA_ARG_KV_PAGED").set_examples({LLAMA_EXAMPLE_PAGED}));
+    add_opt(common_arg(
+        {"-ncpub", "--n-cpu-blocks"}, "N",
+        "number of physical CPU blocks for paged KV cache (default: 1)",
+        [](common_params & params, int value) {
+            params.n_cpu_blocks = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_PAGED}));
+    add_opt(common_arg(
+        {"-ngpub", "--n-gpu-blocks"}, "N",
+        "number of physical GPU blocks for paged KV cache (default: 1)",
+        [](common_params & params, int value) {
+            params.n_gpu_blocks = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_PAGED}));
+    add_opt(common_arg(
+        {"-kvbls", "--kv-block-size"}, "N",
+        "fixed number of tokens for a given paged block (default: 16)",
+        [](common_params & params, int value) {
+            if (value <= 0 || (value & (value - 1)) != 0) {
+                throw std::invalid_argument("--kv-block-size must be a positive power of 2");
+            }
+            params.block_size = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_PAGED}));
+    add_opt(common_arg(
+        {"--kv-paged-watermark"}, "N",
+        "fraction of blocks reserved before processing new requests (default: 0.05, range [0.0, 1.0))",
+        [](common_params & params, const std::string & value) {
+            float potential_watermark = std::stof(value);
+            if (potential_watermark < 0.0f || potential_watermark >= 1.0f) {
+                throw std::invalid_argument("--kv-paged-watermark must be in range [0.0, 1.0)");
+            }
+            params.kv_paged_watermark = potential_watermark;
+        }
+    ).set_examples({LLAMA_EXAMPLE_PAGED}));
     add_opt(common_arg(
         {"--cache-idle-slots"},
         {"--no-cache-idle-slots"},
@@ -2152,7 +2195,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.n_sequences = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PARALLEL}));
+    ).set_examples({LLAMA_EXAMPLE_PARALLEL, LLAMA_EXAMPLE_PAGED}));
     add_opt(common_arg(
         {"-cb", "--cont-batching"},
         {"-nocb", "--no-cont-batching"},

@@ -578,6 +578,8 @@ extern "C" {
         GGML_OP_GLU,
 
         GGML_OP_COUNT,
+
+        GGML_OP_PAGED_ATTN,
     };
 
     enum ggml_unary_op {
@@ -2823,6 +2825,21 @@ extern "C" {
     GGML_API struct ggml_threadpool_params ggml_threadpool_params_default(int n_threads);
     GGML_API void                          ggml_threadpool_params_init   (struct ggml_threadpool_params * p, int n_threads);
     GGML_API bool                          ggml_threadpool_params_match  (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
+
+    GGML_API struct ggml_tensor * ggml_paged_attn(struct ggml_context * ctx,
+                                                  struct ggml_tensor  * q,
+                                                  struct ggml_tensor  * k_new,
+                                                  struct ggml_tensor  * v_new,
+                                                  struct ggml_tensor  * k_cache,
+                                                  struct ggml_tensor  * v_cache,
+                                                  struct ggml_tensor  * block_table,
+                                                  struct ggml_tensor  * write_slots,
+                                                  struct ggml_tensor  * context_lens,
+                                                  struct ggml_tensor  * batch_offsets,
+                                                  struct ggml_tensor  * batch_lens,
+                                                  float                 scale,
+                                                  int                   block_size,
+                                                  int                   max_blocks);
 
 #ifdef  __cplusplus
 }

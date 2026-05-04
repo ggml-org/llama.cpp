@@ -46,11 +46,12 @@ struct llama_context {
 
     ggml_backend_sched_t get_sched() const;
 
-    uint32_t n_ctx()     const;
-    uint32_t n_ctx_seq() const;
-    uint32_t n_batch()   const;
-    uint32_t n_ubatch()  const;
-    uint32_t n_seq_max() const;
+    uint32_t n_ctx()      const;
+    uint32_t n_ctx_seq()  const;
+    uint32_t n_batch()    const;
+    uint32_t n_ubatch()   const;
+    uint32_t n_seq_max()  const;
+    uint32_t block_size() const;
 
     uint32_t n_threads()       const;
     uint32_t n_threads_batch() const;
