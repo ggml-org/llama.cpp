@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""Convert a HuggingFace SDXL-Turbo model directory to a single GGUF file.
+"""Convert a HuggingFace SDXL-Turbo model directory to one or more GGUF files.
 
-The output packs all four components into one file with prefixed tensor names:
+The output packs all four components into each file with prefixed tensor names:
   te1.*   - CLIP ViT-L/14 text encoder (text_encoder/)
   te2.*   - OpenCLIP ViT-bigG/14 text encoder (text_encoder_2/)
   vae.*   - Variational Autoencoder (vae/)
   unet.*  - Denoising U-Net (unet/)
 
-Supported weight types via --q-type:
-  f32    - float32 (2D weights; 4D conv kernels always stay f16)
-  f16    - float16 [default]
-  q8_0   - Q8_0 for 2D weights; 1D biases/norms stay f32, 4D conv stay f16
+Multiple --q-type values are accepted; the model is loaded once and all
+requested variants are written in a single pass:
 
-For K-quants (Q2_K, Q4_K_S, Q4_K_M, Q5_K_M, Q6_K …) convert to f16 first
-then quantize with the llama-quantize C++ binary:
-  ./llama-quantize sdxl-turbo-f16.gguf sdxl-turbo-q4_k_m.gguf Q4_K_M
+  python convert-sdxl-to-gguf.py -m ./sdxl-turbo --q-type f16 q8_0 Q4_K_M
 
-Usage:
-  python convert-sdxl-to-gguf.py -m ./sdxl-turbo -o ./output
-  python convert-sdxl-to-gguf.py -m ./sdxl-turbo --q-type q8_0
+Weight type rules (applied per tensor):
+  1D (biases, norms)   → always f32
+  4D (conv kernels)    → always f16
+  2D (weight matrices) → --q-type value; q8_0 falls back to f16 for
+                         rows not divisible by 32
+
+Python-native types (no binary needed):  f32  f16  q8_0
+K-quant types (require llama-quantize):  Q2_K  Q3_K_S  Q3_K_M  Q3_K_L
+                                         Q4_K_S  Q4_K_M  Q5_K_S  Q5_K_M  Q6_K
+
+For K-quants an f16 GGUF is written first (reusing one already requested if
+available), llama-quantize is called once per K-quant type, then the
+temporary f16 file is removed automatically.
 """
 
 from __future__ import annotations
@@ -53,7 +59,6 @@ except ImportError:
 # Quantization type registry
 # ---------------------------------------------------------------------------
 
-# Maps --q-type string → GGUFFileType int (for add_file_type metadata)
 _FTYPE_VALUE: dict[str, int] = {
     "f32":    0,
     "f16":    1,
@@ -69,7 +74,6 @@ _FTYPE_VALUE: dict[str, int] = {
     "Q6_K":   18,
 }
 
-# These require the C++ llama-quantize binary; handled as a post-processing step
 _K_QUANTS: frozenset[str] = frozenset(
     {"Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q4_K_S", "Q4_K_M", "Q5_K_S", "Q5_K_M", "Q6_K"}
 )
@@ -77,10 +81,7 @@ _K_QUANTS: frozenset[str] = frozenset(
 _ALL_Q_TYPES = ["f32", "f16", "q8_0"] + sorted(_K_QUANTS)
 
 
-def run_llama_quantize(
-    f16_path: str, out_path: str, q_type: str, binary: str
-) -> None:
-    """Call the llama-quantize C++ binary to produce a K-quant GGUF."""
+def run_llama_quantize(f16_path: str, out_path: str, q_type: str, binary: str) -> None:
     if not os.path.isfile(binary):
         raise FileNotFoundError(
             f"llama-quantize binary not found at {binary!r}. "
@@ -97,7 +98,6 @@ def run_llama_quantize(
 # ---------------------------------------------------------------------------
 
 def load_tensors(component_dir: str) -> dict[str, torch.Tensor]:
-    """Load tensors from a component sub-directory (safetensors or pytorch)."""
     d = component_dir
     candidates = [
         os.path.join(d, "model.safetensors"),
@@ -137,63 +137,65 @@ def load_config(component_dir: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def convert_tensor(
-    data: torch.Tensor, name: str, q_type: str
+    data: torch.Tensor, name: str, q_type: str, verbose: bool = True
 ) -> tuple[np.ndarray, GGMLQuantizationType | None]:
     """Return (array, raw_dtype) applying smart per-tensor dtype rules.
 
-    Rules:
-      1D  (bias, norm, scalar) → always f32, raw_dtype=None
-      4D  (conv kernel)        → always f16, raw_dtype=None
-      2D  (weight matrix)      → q_type; fallback to f16 if shape is incompatible
+    1D (bias, norm, scalar) → f32, None
+    4D (conv kernel)        → f16, None  (GGML conv has no f32 kernel support)
+    2D (weight matrix)      → q_type; q8_0 falls back to f16 on incompatible shape
     """
     arr = data.squeeze().float().numpy()
     n_dims = arr.ndim
 
-    # 1D: biases, LayerNorm/GroupNorm weights, scalars
     if n_dims == 1:
         out = arr.astype(np.float32)
-        print(f"  {name} | f32 | {out.shape}")
+        if verbose:
+            print(f"  {name} | f32 | {out.shape}")
         return out, None
 
-    # 4D: convolution kernels — GGML conv has no f32 kernel support
     if n_dims == 4:
         out = arr.astype(np.float16)
-        print(f"  {name} | f16 (conv) | {out.shape}")
+        if verbose:
+            print(f"  {name} | f16 (conv) | {out.shape}")
         return out, None
 
-    # 2D and other: apply requested type
     if q_type == "f32":
         out = arr.astype(np.float32)
-        print(f"  {name} | f32 | {out.shape}")
+        if verbose:
+            print(f"  {name} | f32 | {out.shape}")
         return out, None
 
     if q_type == "f16":
         out = arr.astype(np.float16)
-        print(f"  {name} | f16 | {out.shape}")
+        if verbose:
+            print(f"  {name} | f16 | {out.shape}")
         return out, None
 
     if q_type == "q8_0":
         if can_quantize_to_q8_0(arr):
             out = quantize_q8_0(arr)
-            print(f"  {name} | q8_0 | {arr.shape}")
+            if verbose:
+                print(f"  {name} | q8_0 | {arr.shape}")
             return out, GGMLQuantizationType.Q8_0
         else:
-            # Row width not a multiple of 32 — fall back gracefully
             out = arr.astype(np.float16)
-            print(f"  {name} | f16 (q8_0 fallback, row={arr.shape[-1]}) | {arr.shape}")
+            if verbose:
+                print(f"  {name} | f16 (q8_0 fallback, row={arr.shape[-1]}) | {arr.shape}")
             return out, None
 
     raise ValueError(f"Unsupported q_type: {q_type!r}")
 
 
-def add_gguf_tensor(
-    fout: GGUFWriter,
-    name: str,
-    data: torch.Tensor,
-    q_type: str,
+def add_tensor_to_all(
+    writers: dict[str, GGUFWriter], name: str, data: torch.Tensor
 ) -> None:
-    arr, raw_dtype = convert_tensor(data, name, q_type)
-    fout.add_tensor(name, arr, raw_dtype=raw_dtype)
+    """Convert and write a tensor to every open GGUF writer in one pass."""
+    first = True
+    for q_type, fout in writers.items():
+        arr, raw_dtype = convert_tensor(data, name, q_type, verbose=first)
+        fout.add_tensor(name, arr, raw_dtype=raw_dtype)
+        first = False
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +209,6 @@ _TE_SKIP = frozenset([
 
 
 def get_te_tensor_name(hf_name: str, prefix: str) -> str | None:
-    """Map a HuggingFace CLIP text-encoder tensor name to a prefixed GGUF name."""
     if hf_name in _TE_SKIP:
         return None
 
@@ -236,10 +237,8 @@ def get_te_tensor_name(hf_name: str, prefix: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 def get_vae_tensor_name(hf_name: str) -> str:
-    """Map a HuggingFace AutoencoderKL tensor name to a GGUF vae.* name."""
     name = hf_name
 
-    # Encoder path
     name = re.sub(r"encoder\.down_blocks\.(\d+)\.resnets\.(\d+)", r"encoder.down.\1.res.\2", name)
     name = re.sub(r"encoder\.down_blocks\.(\d+)\.downsamplers\.0", r"encoder.down.\1.downsample", name)
     name = re.sub(r"encoder\.mid_block\.resnets\.0\b", "encoder.mid.res0", name)
@@ -247,7 +246,6 @@ def get_vae_tensor_name(hf_name: str) -> str:
     name = re.sub(r"encoder\.mid_block\.attentions\.0\b", "encoder.mid.attn", name)
     name = name.replace("encoder.conv_norm_out", "encoder.norm_out")
 
-    # Decoder path
     name = re.sub(r"decoder\.up_blocks\.(\d+)\.resnets\.(\d+)", r"decoder.up.\1.res.\2", name)
     name = re.sub(r"decoder\.up_blocks\.(\d+)\.upsamplers\.0", r"decoder.up.\1.upsample", name)
     name = re.sub(r"decoder\.mid_block\.resnets\.0\b", "decoder.mid.res0", name)
@@ -255,7 +253,6 @@ def get_vae_tensor_name(hf_name: str) -> str:
     name = re.sub(r"decoder\.mid_block\.attentions\.0\b", "decoder.mid.attn", name)
     name = name.replace("decoder.conv_norm_out", "decoder.norm_out")
 
-    # Attention sub-layers inside VAE (single-head, no cross-attn)
     name = name.replace(".processor.", ".")
     name = re.sub(r"\.to_q\b", ".q", name)
     name = re.sub(r"\.to_k\b", ".k", name)
@@ -270,14 +267,11 @@ def get_vae_tensor_name(hf_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 def get_unet_tensor_name(hf_name: str) -> str:
-    """Map a HuggingFace UNet2DConditionModel tensor name to a GGUF unet.* name."""
     name = hf_name
 
-    # Time / conditioning embeddings
     name = name.replace("time_embedding.", "time_embed.")
     name = name.replace("add_embedding.", "add_embed.")
 
-    # Down blocks
     name = re.sub(r"down_blocks\.(\d+)\.resnets\.(\d+)", r"down.\1.res.\2", name)
     name = re.sub(
         r"down_blocks\.(\d+)\.attentions\.(\d+)\.transformer_blocks\.(\d+)",
@@ -286,7 +280,6 @@ def get_unet_tensor_name(hf_name: str) -> str:
     )
     name = re.sub(r"down_blocks\.(\d+)\.downsamplers\.0\b", r"down.\1.downsample", name)
 
-    # Mid block
     name = re.sub(r"mid_block\.resnets\.0\b", "mid.res0", name)
     name = re.sub(r"mid_block\.resnets\.1\b", "mid.res1", name)
     name = re.sub(
@@ -295,7 +288,6 @@ def get_unet_tensor_name(hf_name: str) -> str:
         name,
     )
 
-    # Up blocks
     name = re.sub(r"up_blocks\.(\d+)\.resnets\.(\d+)", r"up.\1.res.\2", name)
     name = re.sub(
         r"up_blocks\.(\d+)\.attentions\.(\d+)\.transformer_blocks\.(\d+)",
@@ -304,10 +296,8 @@ def get_unet_tensor_name(hf_name: str) -> str:
     )
     name = re.sub(r"up_blocks\.(\d+)\.upsamplers\.0\b", r"up.\1.upsample", name)
 
-    # Output
     name = name.replace("conv_norm_out", "norm_out")
 
-    # Attention sub-layers
     name = re.sub(r"\.to_q\b", ".q", name)
     name = re.sub(r"\.to_k\b", ".k", name)
     name = re.sub(r"\.to_v\b", ".v", name)
@@ -361,11 +351,11 @@ def write_unet_metadata(fout: GGUFWriter, cfg: dict) -> None:
         tl = [tl]
     fout.add_array("sdxl.unet.transformer_layers_per_block", list(tl))
 
-    if "addition_embed_type" in cfg and cfg["addition_embed_type"] is not None:
+    if cfg.get("addition_embed_type") is not None:
         fout.add_string("sdxl.unet.addition_embed_type", cfg["addition_embed_type"])
-    if "addition_time_embed_dim" in cfg and cfg["addition_time_embed_dim"] is not None:
+    if cfg.get("addition_time_embed_dim") is not None:
         fout.add_uint32("sdxl.unet.addition_time_embed_dim", cfg["addition_time_embed_dim"])
-    if "projection_class_embeddings_input_dim" in cfg and cfg["projection_class_embeddings_input_dim"] is not None:
+    if cfg.get("projection_class_embeddings_input_dim") is not None:
         fout.add_uint32(
             "sdxl.unet.projection_class_embeddings_input_dim",
             cfg["projection_class_embeddings_input_dim"],
@@ -373,81 +363,111 @@ def write_unet_metadata(fout: GGUFWriter, cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Component converters
+# Component converters — write to all open writers simultaneously
 # ---------------------------------------------------------------------------
 
-def add_text_encoder(fout: GGUFWriter, model_dir: str, prefix: str, q_type: str) -> None:
-    """Write one text encoder (TE1 or TE2) into the GGUF file."""
+def add_text_encoder(writers: dict[str, GGUFWriter], model_dir: str, prefix: str) -> None:
     component = "text_encoder" if prefix == "te1" else "text_encoder_2"
     comp_dir = os.path.join(model_dir, component)
     cfg = load_config(comp_dir)
     tensors = load_tensors(comp_dir)
 
-    write_te_metadata(fout, cfg, prefix)
+    for fout in writers.values():
+        write_te_metadata(fout, cfg, prefix)
 
     for hf_name, data in tensors.items():
         gguf_name = get_te_tensor_name(hf_name, prefix)
         if gguf_name is None:
             print(f"  skipping {hf_name}")
             continue
-        add_gguf_tensor(fout, gguf_name, data, q_type)
+        add_tensor_to_all(writers, gguf_name, data)
 
 
-def add_vae(fout: GGUFWriter, model_dir: str, q_type: str) -> None:
+def add_vae(writers: dict[str, GGUFWriter], model_dir: str) -> None:
     comp_dir = os.path.join(model_dir, "vae")
     cfg = load_config(comp_dir)
     tensors = load_tensors(comp_dir)
 
-    write_vae_metadata(fout, cfg)
+    for fout in writers.values():
+        write_vae_metadata(fout, cfg)
 
     for hf_name, data in tensors.items():
-        gguf_name = get_vae_tensor_name(hf_name)
-        add_gguf_tensor(fout, gguf_name, data, q_type)
+        add_tensor_to_all(writers, get_vae_tensor_name(hf_name), data)
 
 
-def add_unet(fout: GGUFWriter, model_dir: str, q_type: str) -> None:
+def add_unet(writers: dict[str, GGUFWriter], model_dir: str) -> None:
     comp_dir = os.path.join(model_dir, "unet")
     cfg = load_config(comp_dir)
     tensors = load_tensors(comp_dir)
 
-    write_unet_metadata(fout, cfg)
+    for fout in writers.values():
+        write_unet_metadata(fout, cfg)
 
     for hf_name, data in tensors.items():
-        gguf_name = get_unet_tensor_name(hf_name)
-        add_gguf_tensor(fout, gguf_name, data, q_type)
+        add_tensor_to_all(writers, get_unet_tensor_name(hf_name), data)
+
+
+def write_all_components(
+    writers: dict[str, GGUFWriter], model_dir: str, args: argparse.Namespace
+) -> None:
+    if not args.no_text_enc_1:
+        print("\n=== Text Encoder 1 (CLIP ViT-L/14) ===")
+        add_text_encoder(writers, model_dir, "te1")
+
+    if not args.no_text_enc_2:
+        print("\n=== Text Encoder 2 (OpenCLIP ViT-bigG/14) ===")
+        add_text_encoder(writers, model_dir, "te2")
+
+    if not args.no_vae:
+        print("\n=== VAE ===")
+        add_vae(writers, model_dir)
+
+    if not args.no_unet:
+        print("\n=== UNet ===")
+        add_unet(writers, model_dir)
+
+
+def finalize_writers(writers: dict[str, GGUFWriter], paths: dict[str, str]) -> None:
+    for q_type, fout in writers.items():
+        print(f"\nWriting {paths[q_type]}")
+        fout.write_header_to_file()
+        fout.write_kv_data_to_file()
+        fout.write_tensors_to_file()
+        fout.close()
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# CLI
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Convert SDXL-Turbo HuggingFace model to GGUF",
+        description="Convert SDXL-Turbo HuggingFace model to one or more GGUF files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Weight type rules:
-  1D tensors (biases, norms)  → always f32
-  4D tensors (conv kernels)   → always f16
-  2D tensors (weight matrices)→ --q-type value
+examples:
+  # single variant
+  python convert-sdxl-to-gguf.py -m ./sdxl-turbo --q-type Q4_K_M
 
-Python-native types (no extra binary needed):  f32  f16  q8_0
-K-quant types (requires llama-quantize binary): Q2_K  Q3_K_S  Q3_K_M  Q3_K_L
-                                                Q4_K_S  Q4_K_M  Q5_K_S  Q5_K_M  Q6_K
-
-For K-quants the script writes an f16 GGUF internally, runs llama-quantize,
-then removes the intermediate file automatically.
+  # multiple variants in one pass (model loaded once)
+  python convert-sdxl-to-gguf.py -m ./sdxl-turbo --q-type f16 q8_0 Q4_K_M Q5_K_M
 """,
     )
     ap.add_argument("-m", "--model-dir", required=True,
                     help="Path to the SDXL-Turbo model directory (HuggingFace format)")
     ap.add_argument("-o", "--output-dir", default=None,
-                    help="Directory for the output GGUF file (default: model dir)")
+                    help="Directory for the output GGUF files (default: model dir)")
     ap.add_argument(
         "--q-type",
+        nargs="+",
         choices=_ALL_Q_TYPES,
-        default="f16",
-        help="Weight quantization type (default: f16)",
+        default=["f16"],
+        metavar="TYPE",
+        help=(
+            f"One or more weight types (default: f16). "
+            f"Python-native: f32 f16 q8_0. "
+            f"K-quants (need llama-quantize): {' '.join(sorted(_K_QUANTS))}"
+        ),
     )
     ap.add_argument(
         "--llama-quantize",
@@ -467,91 +487,90 @@ then removes the intermediate file automatically.
     return ap.parse_args()
 
 
-def _write_gguf(
-    fout: GGUFWriter,
-    args: argparse.Namespace,
-    model_dir: str,
-    write_q_type: str,
-) -> None:
-    """Write all selected components into fout using write_q_type."""
-    if not args.no_text_enc_1:
-        print("\n=== Text Encoder 1 (CLIP ViT-L/14) ===")
-        add_text_encoder(fout, model_dir, "te1", write_q_type)
-
-    if not args.no_text_enc_2:
-        print("\n=== Text Encoder 2 (OpenCLIP ViT-bigG/14) ===")
-        add_text_encoder(fout, model_dir, "te2", write_q_type)
-
-    if not args.no_vae:
-        print("\n=== VAE ===")
-        add_vae(fout, model_dir, write_q_type)
-
-    if not args.no_unet:
-        print("\n=== UNet ===")
-        add_unet(fout, model_dir, write_q_type)
-
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main() -> None:
     args = parse_args()
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    q_types: list[str] = []
+    for qt in args.q_type:
+        if qt not in seen:
+            seen.add(qt)
+            q_types.append(qt)
 
     model_dir = args.model_dir
     output_dir = args.output_dir if args.output_dir is not None else model_dir
     os.makedirs(output_dir, exist_ok=True)
 
-    q_type = args.q_type
-    is_k_quant = q_type in _K_QUANTS
+    # Split into what Python can write directly vs what needs llama-quantize
+    python_types = [qt for qt in q_types if qt not in _K_QUANTS]
+    k_quant_types = [qt for qt in q_types if qt in _K_QUANTS]
 
-    # Read the top-level model_index.json for the model name
+    # K-quants need an f16 GGUF as input; reuse the one we're already writing
+    # if possible, otherwise write a temporary one and delete it after.
+    f16_is_temp = bool(k_quant_types) and "f16" not in python_types
+    if f16_is_temp:
+        python_types.append("f16")
+
+    # Build output paths
+    def out_path(qt: str, temp: bool = False) -> str:
+        if temp:
+            return os.path.join(output_dir, "sdxl-turbo-f16-tmp.gguf")
+        return os.path.join(output_dir, f"sdxl-turbo-{qt.lower()}.gguf")
+
+    paths = {
+        qt: out_path(qt, temp=(qt == "f16" and f16_is_temp))
+        for qt in python_types
+    }
+
+    # Read model name once
     model_index_path = os.path.join(model_dir, "model_index.json")
     if os.path.exists(model_index_path):
         with open(model_index_path, "r", encoding="utf-8") as f:
-            model_index = json.load(f)
-        model_name = model_index.get("_name_or_path", os.path.basename(model_dir))
+            model_name = json.load(f).get("_name_or_path", os.path.basename(model_dir))
     else:
         model_name = os.path.basename(model_dir)
 
-    fname_out = os.path.join(output_dir, f"sdxl-turbo-{q_type.lower()}.gguf")
-
-    if is_k_quant:
-        # Step 1: write an f16 GGUF to a temporary path in the output dir
-        fname_f16_tmp = os.path.join(output_dir, "sdxl-turbo-f16-tmp.gguf")
-        print(f"K-quant requested ({q_type}): writing intermediate f16 to {fname_f16_tmp}")
-
-        fout = GGUFWriter(path=fname_f16_tmp, arch="sdxl")
+    # Open all writers and write shared header metadata
+    writers: dict[str, GGUFWriter] = {}
+    for qt in python_types:
+        fout = GGUFWriter(path=paths[qt], arch="sdxl")
         fout.add_name(model_name)
         fout.add_description("SDXL-Turbo model (text encoders + VAE + UNet)")
-        fout.add_file_type(_FTYPE_VALUE["f16"])
-        _write_gguf(fout, args, model_dir, "f16")
+        fout.add_file_type(_FTYPE_VALUE[qt])
+        writers[qt] = fout
 
-        print(f"\nWriting intermediate GGUF: {fname_f16_tmp}")
-        fout.write_header_to_file()
-        fout.write_kv_data_to_file()
-        fout.write_tensors_to_file()
-        fout.close()
+    types_label = ", ".join(python_types) + (
+        f"  [then K-quants: {', '.join(k_quant_types)}]" if k_quant_types else ""
+    )
+    print(f"Writing types: {types_label}")
 
-        # Step 2: quantize to the requested K-quant type
+    # Single pass over the model — all writers receive every tensor
+    write_all_components(writers, model_dir, args)
+    finalize_writers(writers, paths)
+
+    output_files = [paths[qt] for qt in python_types if not (qt == "f16" and f16_is_temp)]
+
+    # K-quant pass: call llama-quantize once per type using the f16 GGUF
+    if k_quant_types:
+        f16_path = paths["f16"]
         try:
-            run_llama_quantize(fname_f16_tmp, fname_out, q_type, args.llama_quantize)
+            for kq in k_quant_types:
+                kq_path = out_path(kq)
+                run_llama_quantize(f16_path, kq_path, kq, args.llama_quantize)
+                output_files.append(kq_path)
         finally:
-            # Always clean up the temp file, even if quantization fails
-            if os.path.exists(fname_f16_tmp):
-                os.unlink(fname_f16_tmp)
-                print(f"Removed intermediate file: {fname_f16_tmp}")
-    else:
-        # Python-native types: write directly
-        fout = GGUFWriter(path=fname_out, arch="sdxl")
-        fout.add_name(model_name)
-        fout.add_description("SDXL-Turbo model (text encoders + VAE + UNet)")
-        fout.add_file_type(_FTYPE_VALUE[q_type])
-        _write_gguf(fout, args, model_dir, q_type)
+            if f16_is_temp and os.path.exists(f16_path):
+                os.unlink(f16_path)
+                print(f"Removed intermediate: {f16_path}")
 
-        print(f"\nWriting GGUF file: {fname_out}")
-        fout.write_header_to_file()
-        fout.write_kv_data_to_file()
-        fout.write_tensors_to_file()
-        fout.close()
-
-    print(f"\nDone. Output: {fname_out}")
+    print("\nDone. Output files:")
+    for p in output_files:
+        print(f"  {p}")
 
 
 if __name__ == "__main__":
