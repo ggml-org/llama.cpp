@@ -297,14 +297,18 @@ llama_memory_context_ptr llama_memory_deepseek4::init_batch(
     const bool batch_prefill = deepseek4_batch_prefill_enabled();
     std::vector<llama_ubatch> ubatches;
     while (true) {
-        llama_ubatch ubatch = batch_prefill ? balloc.split_seq_deepseek4_prefill(n_ubatch, model.hparams.n_swa) : balloc.split_seq(1);
+        // Note: a batched-prefill split helper was prototyped in earlier work
+        // but is not currently exposed by llama_batch_allocr. Fall through to
+        // the single-token split until that helper lands as a separate change.
+        (void) batch_prefill;
+        llama_ubatch ubatch = balloc.split_seq(1);
         if (ubatch.n_tokens == 0) {
             break;
         }
 
-        if ((!batch_prefill && ubatch.n_tokens != 1) || ubatch.n_seqs_unq != 1) {
-            LLAMA_LOG_ERROR("%s: DeepSeek4 runtime currently supports %s from a single sequence per ubatch\n",
-                    __func__, batch_prefill ? "batched contiguous tokens" : "a single token");
+        if (ubatch.n_tokens != 1 || ubatch.n_seqs_unq != 1) {
+            LLAMA_LOG_ERROR("%s: DeepSeek4 runtime currently supports a single token from a single sequence per ubatch\n",
+                    __func__);
             return std::make_unique<llama_memory_deepseek4_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
