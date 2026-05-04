@@ -781,13 +781,6 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_f8_e4m3_b128,
         .from_float_ref           = (ggml_from_float_t) quantize_row_f8_e4m3_b128_ref,
     },
-    [GGML_TYPE_W4A16_AUTOROUND] = {
-        .type_name                = "w4a16_autoround",
-        .blck_size                = QK_W4A16_AUTOROUND,
-        .type_size                = sizeof(block_w4a16_autoround),
-        .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_w4a16_autoround,
-    },
     [GGML_TYPE_Q2_K] = {
         .type_name                = "q2_K",
         .blck_size                = QK_K,
@@ -1458,7 +1451,6 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_MXFP4:         wtype = GGML_TYPE_MXFP4; break;
         case GGML_FTYPE_MOSTLY_NVFP4:         wtype = GGML_TYPE_NVFP4; break;
         case GGML_FTYPE_MOSTLY_F8_E4M3_MXFP4: wtype = GGML_TYPE_F8_E4M3_B128; break;
-        case GGML_FTYPE_MOSTLY_W4A16_AUTOROUND: wtype = GGML_TYPE_W4A16_AUTOROUND; break;
         case GGML_FTYPE_MOSTLY_Q2_K:          wtype = GGML_TYPE_Q2_K;  break;
         case GGML_FTYPE_MOSTLY_Q3_K:          wtype = GGML_TYPE_Q3_K;  break;
         case GGML_FTYPE_MOSTLY_Q4_K:          wtype = GGML_TYPE_Q4_K;  break;
