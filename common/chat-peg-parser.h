@@ -96,6 +96,9 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     // Return a parser that parses the prefix of a string, up to a given delimiter.
     common_peg_parser prefix(const std::string & s, const std::string & delimiter = {});
 
+    // Return a parser that parses all elements of tag, but leading and trailing spaces are optional
+    common_peg_parser optspace(const std::string & tag);
+
     // Legacy-compatible helper for building standard JSON tool calls
     // Used by tests and manual parsers
     // name_key/args_key: JSON key names for function name and arguments
