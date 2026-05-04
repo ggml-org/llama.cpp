@@ -23,10 +23,10 @@ static __global__ void lightning_indexer_kernel_wmma(
         size_t nb21, size_t nb22, size_t nb23
     ) {
 
-    constexpr int K_VECS_PER_BLOCK = 16;
+    constexpr int K_VECS_PER_BLOCK = 32;
     constexpr int WARPS_PER_BLOCK = 8;
     constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WARP_SIZE;
-    constexpr int HEADS_PER_INNER_LOOP = 16;
+    constexpr int HEADS_PER_INNER_LOOP = 8;
     constexpr int K_EMBD_PER_INNER_LOOP = 16;
     constexpr int n_embd_padded = n_embd + 8;
 
@@ -483,7 +483,7 @@ void ggml_cuda_op_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         if (GGML_CUDA_CC_IS_NVIDIA(cc) && ampere_mma_available(cc) && src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) {
             // use wmma kernel
-            constexpr int K_VECS_PER_BLOCK = 16;
+            constexpr int K_VECS_PER_BLOCK = 32;
             constexpr int WARPS_PER_BLOCK = 8;
 
             dim3 block(32, WARPS_PER_BLOCK);
