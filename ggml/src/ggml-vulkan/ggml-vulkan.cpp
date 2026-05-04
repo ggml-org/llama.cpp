@@ -7175,12 +7175,6 @@ static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size
         return true;
     }
 
-        // For small non-cached UMA reads, skip direct mapped reads and force the GPU copy path.
-        // When async staging is not available, signal the caller to fall back to a sync path.
-        if (!sync_staging) {
-            return false;
-        }
-
     // TODO: staging_offset is not used
 
     // Check if dst is pinned memory
