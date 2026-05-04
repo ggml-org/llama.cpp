@@ -116,6 +116,15 @@ struct llama_context {
             llama_memory_context_i * mctx,
                        ggml_status & ret);
 
+    // MoE expert offload: munlock cold expert pages so they can be demand-paged
+    void apply_moe_offload();
+
+    // Persist expert activation counts to/from a file (for hot-start across runs)
+    void save_expert_stats(const char * path) const;
+    bool load_expert_stats(const char * path);
+    void save_expert_stats_default() const;
+    void load_expert_stats_default();
+
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
 
@@ -248,6 +257,14 @@ private:
     const llama_model & model;
 
     llama_cparams cparams;
+
+    // MoE expert offload counters
+    int32_t moe_hot_count = 0;
+    std::vector<int32_t> moe_hot_per_layer; // per-layer hot counts; empty = use moe_hot_count for all
+    bool moe_auto_mode = false; // --moe-hot-count auto was requested
+    std::vector<std::vector<uint64_t>> expert_counts;
+    int64_t moe_token_counter = 0; // token counter for periodic reclassification
+    int32_t moe_reclassify_count = 0; // reclassification counter for periodic save
 
     llama_adapter_cvec_ptr  cvec;
     llama_adapter_loras_ptr loras;

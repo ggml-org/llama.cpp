@@ -16,6 +16,12 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <cstdio>
+#include <algorithm>
+#include <string>
+
+#include <sys/mman.h>
+#include <sys/stat.h> // mkdir
 
 //
 // llama_context
@@ -64,6 +70,26 @@ llama_context::llama_context(
 
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
+    cparams.moe_hot_count     = params.moe_hot_count;
+
+    if (params.moe_hot_per_layer && params.moe_hot_per_layer_n > 0) {
+        // explicit per-layer list
+        moe_hot_per_layer.assign(params.moe_hot_per_layer,
+                                  params.moe_hot_per_layer + params.moe_hot_per_layer_n);
+        moe_hot_count = *std::max_element(moe_hot_per_layer.begin(), moe_hot_per_layer.end());
+    } else if (cparams.moe_hot_count == -1 && hparams.n_expert > 0) {
+        // auto mode: default to uniform 64, stats loading will override per-layer
+        moe_auto_mode = true;
+        moe_hot_count = 64;
+        moe_hot_per_layer.assign(hparams.n_layer, moe_hot_count);
+    } else if (cparams.moe_hot_count > 0 && hparams.n_expert > 0) {
+        moe_hot_count = cparams.moe_hot_count;
+        moe_hot_per_layer.assign(hparams.n_layer, moe_hot_count);
+    }
+
+    if (moe_hot_count > 0 && hparams.n_expert > 0) {
+        expert_counts.resize(hparams.n_layer, std::vector<uint64_t>(hparams.n_expert, 0));
+    }
 
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
@@ -364,9 +390,294 @@ llama_context::llama_context(
             sampling.token_ids_full_vocab[i] = i;
         }
     }
+
+    if (moe_hot_count > 0) {
+        apply_moe_offload();
+    }
+}
+
+void llama_context::apply_moe_offload() {
+    const auto & hparams = model.hparams;
+    if (moe_hot_count <= 0 || hparams.n_expert <= 0 || moe_hot_per_layer.empty()) {
+        return;
+    }
+    int64_t n_expert = hparams.n_expert;
+    size_t total_unlocked = 0;
+    int munlock_errors = 0;
+    int hot_min = *std::min_element(moe_hot_per_layer.begin(), moe_hot_per_layer.end());
+    int hot_max = *std::max_element(moe_hot_per_layer.begin(), moe_hot_per_layer.end());
+
+    auto unlock_experts_for_layer = [&](const ggml_tensor * t, int hot_count) {
+        if (!t || t->ne[2] != n_expert) return;
+        const size_t expert_size = ggml_nbytes(t) / n_expert;
+        for (uint32_t e = (uint32_t)hot_count; e < (uint32_t)n_expert; ++e) {
+            void * addr = (uint8_t *)t->data + e * expert_size;
+            if (munlock(addr, expert_size) != 0) {
+                munlock_errors++;
+            }
+            total_unlocked += expert_size;
+        }
+    };
+
+    for (size_t il = 0; il < model.layers.size() && il < moe_hot_per_layer.size(); ++il) {
+        int hot = moe_hot_per_layer[il];
+        const auto & layer = model.layers[il];
+        unlock_experts_for_layer(layer.ffn_gate_exps, hot);
+        unlock_experts_for_layer(layer.ffn_up_exps, hot);
+        unlock_experts_for_layer(layer.ffn_down_exps, hot);
+        unlock_experts_for_layer(layer.ffn_gate_up_exps, hot);
+    }
+
+    LLAMA_LOG_INFO("%s: MoE expert offload: hot range [%d..%d]/%lld per layer"
+        " (unlocked %zu MB, %d errors)\n",
+        __func__, hot_min, hot_max, (long long)n_expert,
+        total_unlocked / (1024*1024), munlock_errors);
+
+    // persistent expert counts across runs: init from saved stats if available
+    load_expert_stats_default();
+}
+
+// File format for expert activation counts:
+//   [magic:4] = "EST1"
+//   [n_layer:i32]   [n_expert:i32]   [pad:4]
+//   [counts]: layer × n_expert × u64
+//
+// Layout is dense for the first n_layer, even though some archs vary n_expert per layer.
+static constexpr uint32_t EXPERT_STATS_MAGIC = 0x31545345; // "EST1" little-endian
+
+static std::string default_expert_stats_path(const llama_model & model) {
+    // Build a stable filename from the model name
+    std::string base = model.name;
+    if (base == "n/a" || base.empty()) {
+        base = model.arch_name();
+    }
+    // Sanitize: keep only alphanumeric, underscore, hyphen
+    std::string safe;
+    for (char c : base) {
+        if (isalnum(c) || c == '_' || c == '-') safe += c;
+    }
+    if (safe.empty()) safe = "unknown";
+
+    const char * dir = getenv("LLAMA_EXPERT_STATS_DIR");
+    std::string path;
+    if (dir && dir[0]) {
+        path = dir;
+    } else {
+        path = getenv("HOME");
+        path += "/.llama";
+    }
+    path += "/expert_" + safe + ".bin";
+    return path;
+}
+
+void llama_context::save_expert_stats(const char * path) const {
+    if (model.hparams.n_expert <= 0 || expert_counts.empty()) {
+        return;
+    }
+
+    // ensure directory exists (simplified: strip filename, mkdir the parent)
+    const char * sep = strrchr(path, '/');
+    if (sep && sep != path) {
+        std::string dir(path, sep - path);
+        mkdir(dir.c_str(), 0755);
+    }
+
+    uint32_t n_layer = (uint32_t)expert_counts.size();
+    uint32_t n_expert = (uint32_t)model.hparams.n_expert;
+
+    FILE * f = fopen(path, "wb");
+    if (!f) {
+        LLAMA_LOG_WARN("%s: cannot write %s\n", __func__, path);
+        return;
+    }
+    uint32_t magic = EXPERT_STATS_MAGIC;
+    fwrite(&magic, sizeof(magic), 1, f);
+    fwrite(&n_layer, sizeof(n_layer), 1, f);
+    fwrite(&n_expert, sizeof(n_expert), 1, f);
+    uint32_t pad = 0;
+    fwrite(&pad, sizeof(pad), 1, f); // padding
+
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        fwrite(expert_counts[il].data(), sizeof(uint64_t), n_expert, f);
+    }
+    fclose(f);
+    LLAMA_LOG_INFO("%s: saved expert activation stats to %s\n", __func__, path);
+}
+
+bool llama_context::load_expert_stats(const char * path) {
+    if (model.hparams.n_expert <= 0 || expert_counts.empty()) {
+        return false;
+    }
+    FILE * f = fopen(path, "rb");
+    if (!f) return false;
+
+    uint32_t magic, n_layer, n_expert, pad;
+    if (fread(&magic, sizeof(magic), 1, f) != 1 || magic != EXPERT_STATS_MAGIC) {
+        fclose(f);
+        return false;
+    }
+    if (fread(&n_layer, sizeof(n_layer), 1, f) != 1 ||
+        fread(&n_expert, sizeof(n_expert), 1, f) != 1 ||
+        fread(&pad, sizeof(pad), 1, f) != 1) {
+        fclose(f);
+        return false;
+    }
+    uint32_t expect_layers = (uint32_t)expert_counts.size();
+    uint32_t expect_expert = (uint32_t)model.hparams.n_expert;
+    if (n_layer != expect_layers || n_expert != expect_expert) {
+        LLAMA_LOG_WARN("%s: model architecture mismatch (%dx%d vs saved %dx%d), ignoring stats\n",
+            __func__, expect_layers, expect_expert, n_layer, n_expert);
+        fclose(f);
+        return false;
+    }
+
+    std::vector<uint64_t> buf(n_expert);
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (fread(buf.data(), sizeof(uint64_t), n_expert, f) != n_expert) {
+            fclose(f);
+            return false;
+        }
+        for (uint32_t e = 0; e < n_expert; ++e) {
+            expert_counts[il][e] += buf[e]; // accumulate, don't replace
+        }
+    }
+    fclose(f);
+
+    // Apply initial mlock based on loaded stats (per-layer)
+    const auto & hparams = model.hparams;
+    for (size_t il = 0; il < expert_counts.size() && il < model.layers.size(); ++il) {
+        int hot = (il < moe_hot_per_layer.size()) ? moe_hot_per_layer[il] : moe_hot_count;
+        std::vector<uint32_t> sorted_idx(hparams.n_expert);
+        for (uint32_t e = 0; e < hparams.n_expert; ++e) sorted_idx[e] = e;
+        std::sort(sorted_idx.begin(), sorted_idx.end(),
+            [&](uint32_t a, uint32_t b) {
+                return expert_counts[il][a] > expert_counts[il][b];
+            });
+
+        auto reclassify = [&](ggml_tensor * t) {
+            if (!t || t->ne[2] != hparams.n_expert) return;
+            size_t expert_size = ggml_nbytes(t) / hparams.n_expert;
+            for (uint32_t r = 0; r < hparams.n_expert; ++r) {
+                uint32_t eid = sorted_idx[r];
+                void * addr = (uint8_t *)t->data + eid * expert_size;
+                if ((int32_t)r < hot) {
+                    mlock(addr, expert_size);
+                } else {
+                    munlock(addr, expert_size);
+                }
+            }
+        };
+        const auto & layer = model.layers[il];
+        reclassify(layer.ffn_gate_exps);
+        reclassify(layer.ffn_up_exps);
+        reclassify(layer.ffn_down_exps);
+        reclassify(layer.ffn_gate_up_exps);
+    }
+
+    LLAMA_LOG_INFO("%s: loaded and applied expert activation stats from %s\n", __func__, path);
+    return true;
+}
+
+void llama_context::save_expert_stats_default() const {
+    save_expert_stats(default_expert_stats_path(model).c_str());
+}
+
+void llama_context::load_expert_stats_default() {
+    if (!load_expert_stats(default_expert_stats_path(model).c_str())) {
+        return; // no file yet — uniform default stays
+    }
+    if (!moe_auto_mode) {
+        return; // explicit moe-hot-count, don't override
+    }
+
+    // Auto-calculate optimal per-layer hot counts from accumulated statistics
+    const auto & hparams = model.hparams;
+    constexpr float COVERAGE_TARGET = 99.0f;
+    constexpr int32_t HOT_MIN = 4;
+    constexpr int32_t HOT_MAX = 128;
+
+    for (size_t il = 0; il < expert_counts.size() && il < hparams.n_layer; ++il) {
+        auto & counts = expert_counts[il];
+        int64_t total = 0;
+        for (auto c : counts) total += c;
+        if (total == 0) continue;
+
+        // Sort by frequency descending
+        std::vector<uint32_t> idx(hparams.n_expert);
+        for (uint32_t e = 0; e < hparams.n_expert; ++e) idx[e] = e;
+        std::sort(idx.begin(), idx.end(), [&](uint32_t a, uint32_t b) {
+            return counts[a] > counts[b];
+        });
+
+        // Find how many experts needed for COVERAGE_TARGET
+        int64_t running = 0;
+        int32_t needed = hparams.n_expert; // fallback
+        for (uint32_t r = 0; r < hparams.n_expert; ++r) {
+            running += counts[idx[r]];
+            if (running * 100.0 / total >= COVERAGE_TARGET) {
+                needed = r + 1;
+                break;
+            }
+        }
+
+        // Clamp within [HOT_MIN, HOT_MAX], never exceed n_expert
+        needed = std::max(HOT_MIN, std::min(needed, (int32_t)hparams.n_expert));
+        needed = std::min(needed, HOT_MAX);
+
+        if (il < moe_hot_per_layer.size()) {
+            moe_hot_per_layer[il] = needed;
+        }
+    }
+
+    moe_hot_count = *std::max_element(moe_hot_per_layer.begin(), moe_hot_per_layer.end());
+
+    // Re-apply mlock/munlock with the new optimal per-layer counts
+    // First unlock everything, then re-lock top-K per layer
+    for (size_t il = 0; il < model.layers.size() && il < moe_hot_per_layer.size(); ++il) {
+        int hot = moe_hot_per_layer[il];
+        auto reclassify = [&](ggml_tensor * t) {
+            if (!t || t->ne[2] != hparams.n_expert) return;
+            size_t expert_size = ggml_nbytes(t) / hparams.n_expert;
+            // Unlock all first (simple: the layer will have the right hot count)
+            for (uint32_t e = (uint32_t)hot; e < (uint32_t)hparams.n_expert; ++e) {
+                void * addr = (uint8_t *)t->data + e * expert_size;
+                munlock(addr, expert_size);
+            }
+        };
+        const auto & layer = model.layers[il];
+        reclassify(layer.ffn_gate_exps);
+        reclassify(layer.ffn_up_exps);
+        reclassify(layer.ffn_down_exps);
+        reclassify(layer.ffn_gate_up_exps);
+    }
+
+    int hot_min = *std::min_element(moe_hot_per_layer.begin(), moe_hot_per_layer.end());
+    int hot_max = *std::max_element(moe_hot_per_layer.begin(), moe_hot_per_layer.end());
+    int hot_total = 0;
+    int hot_count_h4 = 0, hot_count_h128 = 0;
+    std::string detail;
+    for (size_t il = 0; il < moe_hot_per_layer.size(); ++il) {
+        int h = moe_hot_per_layer[il];
+        hot_total += h;
+        if (h == 4) hot_count_h4++;
+        else if (h == 128) hot_count_h128++;
+        else {
+            if (!detail.empty()) detail += ", ";
+            detail += std::string(il < 3 ? "H" : "S") + std::to_string(il) + "=" + std::to_string(h);
+        }
+    }
+    int hot_avg = hot_total / (int)moe_hot_per_layer.size();
+
+    LLAMA_LOG_INFO("%s: per-layer hot counts [%d..%d], avg=%d, %dx4 %dx128, dev=%s\n",
+        __func__, hot_min, hot_max, hot_avg,
+        hot_count_h4, hot_count_h128,
+        detail.empty() ? "-" : detail.c_str());
 }
 
 llama_context::~llama_context() {
+    if (moe_hot_count > 0) {
+        save_expert_stats_default();
+    }
     if (!model.hparams.no_alloc) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
@@ -1251,6 +1562,79 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
+    // MoE expert offload: track which experts were selected
+    if (moe_hot_count > 0 && !expert_counts.empty()) {
+        for (size_t i = 0; i < res->expert_id_tensors.size() && i < expert_counts.size(); ++i) {
+            ggml_tensor * t = res->expert_id_tensors[i];
+            if (!t) continue;
+            const int32_t n_expert_used = t->ne[0];
+            const int32_t n_tok         = t->ne[1];
+            std::vector<int32_t> ids(n_expert_used * n_tok);
+            ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
+            for (int32_t e = 0; e < (int32_t)ids.size(); ++e) {
+                const int32_t expert_id = ids[e];
+                if (expert_id >= 0 && expert_id < (int32_t)expert_counts[i].size()) {
+                    expert_counts[i][expert_id]++;
+                }
+            }
+        }
+        moe_token_counter += ubatch.n_tokens;
+
+        // periodic reclassification of hot/cold experts
+        constexpr int64_t MOE_RECLASSIFY_INTERVAL = 256;
+        if (moe_token_counter >= MOE_RECLASSIFY_INTERVAL) {
+            moe_token_counter = 0;
+            const auto & hparams = model.hparams;
+            for (size_t il = 0; il < expert_counts.size() && il < hparams.n_layer; ++il) {
+                // build index vector of expert ids sorted by popularity (descending)
+                std::vector<uint32_t> sorted_expert_idx(hparams.n_expert);
+                for (uint32_t e = 0; e < hparams.n_expert; ++e) {
+                    sorted_expert_idx[e] = e;
+                }
+                std::sort(sorted_expert_idx.begin(), sorted_expert_idx.end(),
+                    [&](uint32_t a, uint32_t b) {
+                        return expert_counts[il][a] > expert_counts[il][b];
+                    });
+
+                // Per-layer hot threshold
+                int hot_limit = (il < moe_hot_per_layer.size())
+                    ? moe_hot_per_layer[il] : moe_hot_count;
+
+                // top-k become hot → mlock, rest become cold → munlock
+                auto reclassify_experts = [&](ggml_tensor * t) {
+                    if (!t || t->ne[2] != hparams.n_expert) return;
+                    const size_t expert_size = ggml_nbytes(t) / hparams.n_expert;
+                    for (uint32_t r = 0; r < hparams.n_expert; ++r) {
+                        const uint32_t expert_id = sorted_expert_idx[r];
+                        void * addr = (uint8_t *)t->data + expert_id * expert_size;
+                        if ((int32_t)r < hot_limit) {
+                            mlock(addr, expert_size);
+                        } else {
+                            munlock(addr, expert_size);
+                        }
+                    }
+                };
+                if (il < model.layers.size()) {
+                    const auto & layer = model.layers[il];
+                    reclassify_experts(layer.ffn_gate_exps);
+                    reclassify_experts(layer.ffn_up_exps);
+                    reclassify_experts(layer.ffn_down_exps);
+                    reclassify_experts(layer.ffn_gate_up_exps);
+                }
+
+                // don't reset — accumulate across windows for persistent hot-spot detection
+            }
+
+            // periodic save to file (every ~2560 tokens = 10 reclassifications)
+            constexpr int32_t MOE_SAVE_INTERVAL = 10;
+            moe_reclassify_count++;
+            if (moe_reclassify_count >= MOE_SAVE_INTERVAL) {
+                moe_reclassify_count = 0;
+                save_expert_stats_default();
+            }
+        }
+    }
+
     ret = GGML_STATUS_SUCCESS;
 
     return res;
@@ -2096,7 +2480,10 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         // count is much smaller than the number of GGML objects allocated while
         // building those graphs, so reserve a larger metadata arena than the
         // generic tensor-count heuristic would provide.
-        return std::max<uint32_t>(524288u, n_tokens * 192 + 64u * model.n_tensors());
+        // ubatch=1024 requires over 524K tensor slots for the compressor loop
+        // (dsv4_build_compressor_decode_chunk iterates per-token),
+        // so the floor is doubled from 512K to 1M.
+        return std::max<uint32_t>(1048576u, n_tokens * 192 + 64u * model.n_tensors());
     }
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
     for (const auto & lora : model.loras) {
@@ -2949,8 +3336,11 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
-        /*.sampler                     =*/ nullptr,
-        /*.n_sampler                   =*/ 0,
+        /*.moe_hot_count               =*/ 0,
+        /*.moe_hot_per_layer           =*/ nullptr,
+        /*.moe_hot_per_layer_n         =*/ 0,
+        /*.samplers                    =*/ nullptr,
+        /*.n_samplers                  =*/ 0,
     };
 
     return result;

@@ -484,6 +484,9 @@ struct common_params {
     int32_t control_vector_layer_end   = -1; // layer range for control vector
     bool    offline                    = false;
 
+    int32_t moe_hot_count   = 0;     // number of hot MoE experts to keep in RAM (0 = disabled)
+    std::vector<int32_t> moe_hot_per_layer; // per-layer hot counts (auto = empty, explicit = n_layers)
+
     int32_t ppl_stride      = 0;     // stride for perplexity calculations. If left at 0, the pre-existing approach will be used.
     int32_t ppl_output_type = 0;     // = 0 -> ppl output is as usual, = 1 -> ppl output is num_tokens, ppl, one per line
                                      //                                       (which is more convenient to use for plotting)

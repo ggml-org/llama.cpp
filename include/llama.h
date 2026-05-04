@@ -375,6 +375,10 @@ extern "C" {
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
 
+        int32_t moe_hot_count;  // [EXPERIMENTAL] number of hot MoE experts to keep in RAM (0 = disabled)
+        const int32_t * moe_hot_per_layer;  // [EXPERIMENTAL] per-layer hot counts (nullptr = uniform)
+        size_t moe_hot_per_layer_n;
+
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)

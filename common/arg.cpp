@@ -2219,6 +2219,33 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MLOCK"));
     add_opt(common_arg(
+        {"--moe-hot-count"}, "N|auto|N1,N2,...",
+        "number of hot MoE experts per layer to keep in RAM (0 = disabled, auto = calculated from stats, comma-list = per-layer, default: 0)",
+        [](common_params & params, const std::string & value) {
+            if (value == "auto") {
+                params.moe_hot_count = -1; // -1 = auto-detect from stats
+                params.moe_hot_per_layer.clear();
+            } else if (value.find(',') != std::string::npos) {
+                // per-layer comma-separated list
+                params.moe_hot_per_layer.clear();
+                size_t pos = 0, next;
+                do {
+                    next = value.find(',', pos);
+                    std::string token = value.substr(pos, next - pos);
+                    int32_t v = std::stoi(token);
+                    params.moe_hot_per_layer.push_back(v);
+                    pos = next + 1;
+                } while (next != std::string::npos);
+                params.moe_hot_count = *std::max_element(
+                    params.moe_hot_per_layer.begin(), params.moe_hot_per_layer.end());
+            } else {
+                int32_t v = std::stoi(value);
+                params.moe_hot_count = v;
+                params.moe_hot_per_layer.clear();
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--mmap"},
         {"--no-mmap"},
         string_format("whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock) (default: %s)", params.use_mmap ? "enabled" : "disabled"),
