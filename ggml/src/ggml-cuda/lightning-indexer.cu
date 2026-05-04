@@ -1,3 +1,4 @@
+#include "common.cuh"
 #include "lightning-indexer.cuh"
 #include "fattn-common.cuh"
 #include "convert.cuh"
@@ -8,6 +9,7 @@ typedef union {
 } half4;
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
 #include <mma.h>
 namespace wmma = nvcuda::wmma;
@@ -208,7 +210,30 @@ static __global__ void lightning_indexer_kernel_wmma(
     }
 }
 
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#else // defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+
+template <int64_t n_embd, int64_t n_head, ggml_type type_K>
+static __global__ void lightning_indexer_kernel_wmma(
+        const float * src0, const char * src1, const float * src2, float * dst,
+        const float scale_embd, const float scale_heads,
+        int64_t n_stream, int64_t n_batch, int64_t n_kv,
+        size_t nb1, size_t nb2, size_t nb3,
+        size_t nb01, size_t nb02, size_t nb03,
+        size_t nb11, size_t nb12, size_t nb13,
+        size_t nb21, size_t nb22, size_t nb23
+    ) {
+    GGML_UNUSED_VARS(src0, src1, src2, dst,
+        scale_embd, scale_heads,
+        n_stream, n_batch, n_kv,
+        nb1, nb2, nb3,
+        nb01, nb02, nb03,
+        nb11, nb12, nb13,
+        nb21, nb22, nb23);
+    NO_DEVICE_CODE;
+}
+
+#endif // defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
 // TODO there is one ugly assumption used in this kernel - that WARP_SIZE is equal to 32
 // thanks to that one warp operating on float4 or half4 processes whole indexer K/Q vectors
