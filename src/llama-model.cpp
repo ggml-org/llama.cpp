@@ -278,6 +278,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen35moe(params);
         case LLM_ARCH_QWEN35_MTP:
             return new llama_model_qwen35_mtp(params);
+        case LLM_ARCH_QWEN35MOE_MTP:
+            return new llama_model_qwen35moe_mtp(params);
         case LLM_ARCH_MISTRAL3:
             return new llama_model_mistral3(params);
         case LLM_ARCH_MIMO2:
@@ -1411,7 +1413,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    const bool partial_load = (arch == LLM_ARCH_QWEN35_MTP);
+    const bool partial_load = (arch == LLM_ARCH_QWEN35_MTP || arch == LLM_ARCH_QWEN35MOE_MTP);
     ml.done_getting_tensors(partial_load);
 
     // populate tensors_by_name
@@ -2334,6 +2336,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN35_MTP:
+        case LLM_ARCH_QWEN35MOE_MTP:
             return LLAMA_ROPE_TYPE_IMROPE;
 
         case LLM_ARCH_GLM4:
