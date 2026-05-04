@@ -1,7 +1,87 @@
 #include "models.h"
 
+void llama_model_gemma3::load_arch_hparams(llama_model_loader & ml) {
+    const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+    if (found_swa && hparams.n_swa > 0) {
+        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+        uint32_t swa_period = 6;
+        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+        hparams.set_swa_pattern(swa_period);
+
+        ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+    } else {
+        hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+    }
+
+    hparams.f_final_logit_softcapping = 0.0f;
+    ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping, false);
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+    switch (hparams.n_layer) {
+        case 18: type = LLM_TYPE_270M; break;
+        case 26: type = LLM_TYPE_1B; break;
+        case 32: type = LLM_TYPE_8B; break; // Rnj-1
+        case 34: type = LLM_TYPE_4B; break;
+        case 48: type = LLM_TYPE_12B; break;
+        case 62: type = LLM_TYPE_27B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
+
+    // ref: https://github.com/google/gemma_pytorch/blob/014acb7ac4563a5f77c76d7ff98f31b568c16508/gemma/config.py#L289
+    hparams.f_attention_scale = type == LLM_TYPE_27B
+        ? 1.0f / std::sqrt(float(hparams.n_embd / hparams.n_head(0)))
+        : 1.0f / std::sqrt(float(hparams.n_embd_head_k()));
+}
+
+void llama_model_gemma3::load_arch_tensors(llama_model_loader &) {
+    LLAMA_LOAD_LOCALS;
+
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+    // output
+    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+    // if output is NULL, init from the input tok embed
+    if (output == NULL) {
+        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,   "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+    }
+
+    // Dense linear weights
+    dense_2_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.dense_2_feat_out}, TENSOR_NOT_REQUIRED);
+    dense_3_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_3_OUT, "weight"), {hparams.dense_3_feat_in, n_embd}, TENSOR_NOT_REQUIRED);
+
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = layers[i];
+
+        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
+        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
+        layer.attn_k_norm    = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM,    "weight", i), {n_embd_head_k}, 0);
+        layer.attn_q_norm    = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM,    "weight", i), {n_embd_head_k}, 0);
+
+        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+        layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
+    }
+}
+
+std::unique_ptr<llm_graph_context> llama_model_gemma3::build_arch_graph(const llm_graph_params & params) const {
+    if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
+        return std::make_unique<graph<true>>(*this, params);
+    } else {
+        return std::make_unique<graph<false>>(*this, params);
+    }
+}
+
 template <bool iswa>
-llm_build_gemma3<iswa>::llm_build_gemma3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_gemma3::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_k();
 
     ggml_tensor * cur;
@@ -141,5 +221,5 @@ llm_build_gemma3<iswa>::llm_build_gemma3(const llama_model & model, const llm_gr
     ggml_build_forward_expand(gf, cur);
 }
 
-template struct llm_build_gemma3<false>;
-template struct llm_build_gemma3<true>;
+template struct llama_model_gemma3::graph<false>;
+template struct llama_model_gemma3::graph<true>;

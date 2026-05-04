@@ -1,7 +1,71 @@
 #include "models.h"
 
+void llama_model_phi3::load_arch_hparams(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+    switch (hparams.n_layer) {
+        case 24: type = LLM_TYPE_1B; break;
+        case 32: type = LLM_TYPE_3B; break;
+        case 40: type = LLM_TYPE_14B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
+
+    const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+
+    if (found_swa && hparams.n_swa > 0) {
+        LLAMA_LOG_WARN("%s: Phi SWA is currently disabled - results might be suboptimal for some models (see %s)\n",
+                __func__, "https://github.com/ggml-org/llama.cpp/pull/13676");
+
+        // TODO: fix conversion scripts to correctly populate `n_swa` and `n_swa_pattern`
+        hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+
+        hparams.n_swa         = 0;
+        hparams.set_swa_pattern(1);
+    }
+}
+
+void llama_model_phi3::load_arch_tensors(llama_model_loader &) {
+    LLAMA_LOAD_LOCALS;
+
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
+
+    // output
+    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+    // if output is NULL, init from the input tok embed
+    if (output == NULL) {
+        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+    }
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = layers[i];
+
+        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
+
+        create_tensor_qkv(layer, i, n_embd, n_embd, n_embd_gqa, n_embd_gqa, TENSOR_NOT_REQUIRED);
+        layer.wo   = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd, n_embd }, 0);
+
+        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+
+        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
+        layer.ffn_up = create_tensor(tn(LLM_TENSOR_FFN_UP, "weight", i), { n_embd, 2 * n_ff }, 0);
+
+        layer.rope_long  = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_LONG,  "weight", i), { n_rot/2 }, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+        layer.rope_short = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_SHORT, "weight", i), { n_rot/2 }, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+    }
+}
+
+std::unique_ptr<llm_graph_context> llama_model_phi3::build_arch_graph(const llm_graph_params & params) const {
+    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+        return std::make_unique<graph<true>> (*this, params);
+    } else {
+        return std::make_unique<graph<false>>(*this, params);
+    }
+}
+
 template<bool iswa>
-llm_build_phi3<iswa>::llm_build_phi3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -128,5 +192,5 @@ llm_build_phi3<iswa>::llm_build_phi3(const llama_model & model, const llm_graph_
 }
 
 // Explicit template instantiations
-template struct llm_build_phi3<false>;
-template struct llm_build_phi3<true>;
+template struct llama_model_phi3::graph<false>;
+template struct llama_model_phi3::graph<true>;
