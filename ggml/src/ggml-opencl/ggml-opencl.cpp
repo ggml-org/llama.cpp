@@ -6547,11 +6547,30 @@ static const char * ggml_backend_opencl_device_get_description(ggml_backend_dev_
 }
 
 static void ggml_backend_opencl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    // no memory to report
-    *free  = 0;
-    *total = 0;
+    const ggml_backend_opencl_device_context * dev_ctx =
+        (const ggml_backend_opencl_device_context *) dev->context;
 
-    GGML_UNUSED(dev);
+    cl_ulong global_mem_size = 0;
+    const cl_int err = clGetDeviceInfo(
+        dev_ctx->device,
+        CL_DEVICE_GLOBAL_MEM_SIZE,
+        sizeof(global_mem_size),
+        &global_mem_size,
+        nullptr);
+
+    if (err != CL_SUCCESS || global_mem_size == 0) {
+        *free  = 0;
+        *total = 0;
+        return;
+    }
+
+    static const size_t opencl_extra_margin = 1024ull*1024ull*1024ull;
+
+    // OpenCL does not provide reliable currently-free device memory.
+    // Use total/global memory as a best-effort upper bound.
+    // Improved safety: Reduce by a 1GiB extra margin for common --fit
+    *total = (size_t) global_mem_size;
+    *free  = *total > opencl_extra_margin ? *total - opencl_extra_margin : 0;
 }
 
 static enum ggml_backend_dev_type ggml_backend_opencl_device_get_type(ggml_backend_dev_t dev) {
