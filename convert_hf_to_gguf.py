@@ -9223,6 +9223,57 @@ class DeepseekV4Model(DeepseekV2Model):
         self._native_quant_output_types: dict[str, gguf.GGMLQuantizationType] = {}
         self._native_quant_scales: dict[str, Callable[[], Tensor]] = {}
 
+    def set_vocab(self):
+        # transformers does not (yet) know about model_type=deepseek_v4, so the
+        # default AutoTokenizer.from_pretrained() in DeepseekV2Model.set_vocab
+        # fails inside AutoConfig before tokenizer files are touched. The V4
+        # tokenizer is a vanilla PreTrainedTokenizerFast (model-agnostic), so
+        # try the parent path first and fall back to a direct load.
+        try:
+            super().set_vocab()
+            return
+        except (AttributeError, KeyError, ValueError) as e:
+            logger.info("DeepseekV4: AutoTokenizer path failed (%s); loading PreTrainedTokenizerFast directly", e)
+
+        from transformers import PreTrainedTokenizerFast
+        tokenizer = PreTrainedTokenizerFast.from_pretrained(self.dir_model)
+
+        tokens: list[str] = []
+        toktypes: list[int] = []
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
+        assert max(tokenizer.vocab.values()) < vocab_size
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+        reverse_vocab = {id_: tok for tok, id_ in tokenizer.vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
+        added_tokens_decoder = tokenizer.added_tokens_decoder
+
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+                continue
+            token: str = reverse_vocab[i]
+            if token in added_vocab:
+                if not added_tokens_decoder[i].normalized:
+                    token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                    toktypes.append(gguf.TokenType.CONTROL)
+                else:
+                    token = token.replace(b"\xe2\x96\x81".decode("utf-8"), " ")
+                    toktypes.append(gguf.TokenType.USER_DEFINED)
+            else:
+                toktypes.append(gguf.TokenType.NORMAL)
+            tokens.append(token)
+
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
     def dequant_model(self):
         quant_method = (self.hparams.get("quantization_config") or {}).get("quant_method")
         if quant_method == "fp8":
@@ -13691,6 +13742,7 @@ class LazyTorchTensor(gguf.LazyBase):
 
 
 if (torch_float8_e8m0fnu := getattr(torch, "float8_e8m0fnu", None)) is not None:
+    LazyTorchTensor._dtype_map[torch_float8_e8m0fnu] = np.uint8
     LazyTorchTensor._dtype_byteswap_map[torch_float8_e8m0fnu] = np.uint8
     LazyTorchTensor._dtype_str_map["F8_E8M0"] = torch_float8_e8m0fnu
 
