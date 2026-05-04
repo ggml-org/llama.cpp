@@ -6818,10 +6818,12 @@ static std::optional<size_t> ggml_vk_parse_uma_threshold(const char* env_var_nam
         return std::nullopt;
     }
 
-    if (parsed > std::numeric_limits<size_t>::max()) {
-        GGML_LOG_WARN("ggml_vulkan: %s='%s' exceeds size_t max (%zu), falling back to benchmarked threshold\n",
-            env_var_name, threshold_env, std::numeric_limits<size_t>::max());
-        return std::nullopt;
+    if constexpr (sizeof(size_t) < sizeof(unsigned long long)) {
+        if (parsed > std::numeric_limits<size_t>::max()) {
+            GGML_LOG_WARN("ggml_vulkan: %s='%s' exceeds size_t max (%zu), falling back to benchmarked threshold\n",
+                env_var_name, threshold_env, std::numeric_limits<size_t>::max());
+            return std::nullopt;
+        }
     }
 
     return (size_t) parsed;
