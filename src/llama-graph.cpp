@@ -2686,7 +2686,9 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
 void llm_graph_context::build_dense_out(
     ggml_tensor * dense_2,
     ggml_tensor * dense_2_b,
-    ggml_tensor * dense_3) const {
+    ggml_tensor * dense_3,
+    ggml_tensor * dense_3_b,
+    llm_ffn_op_type act) const {
     if (!cparams.embeddings || !(dense_2 || dense_2_b || dense_3)) {
         return;
     }
@@ -2699,8 +2701,15 @@ void llm_graph_context::build_dense_out(
     if (dense_2_b) {
         cur = ggml_add(ctx0, cur, dense_2_b);
     }
+    // Apply activation function between dense_2 and dense_3
+    if (dense_3 && act != LLM_FFN_SILU) {
+        cur = ggml_relu(ctx0, cur);
+    }
     if (dense_3) {
         cur = ggml_mul_mat(ctx0, dense_3, cur);
+    }
+    if (dense_3_b) {
+        cur = ggml_add(ctx0, cur, dense_3_b);
     }
     cb(cur, "result_embd_pooled", -1);
     res->t_embd_pooled = cur;

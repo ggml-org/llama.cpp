@@ -4770,6 +4770,32 @@ class Qwen3Model(Qwen2Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("JinaForRanking")
+class JinaForRankingModel(Qwen3Model):
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+    """jina-reranker-v3: Qwen3 with 2-layer MLP projector for cosine similarity reranking.
+
+    Architecture:
+        - Base: Qwen3 (hidden_size=1024)
+        - Projector: 1024 -> 512 -> 512 with ReLU activation
+        - Pooling: LAST token (not RANK/classifier)
+        - Scoring: Cosine similarity of projected embeddings
+
+    Usage:
+        llama-embedding --pooling last -m model.gguf -p "your text"
+    """
+
+    def _is_qwen3_reranker(self) -> bool:
+        """Override to prevent cls_out extraction from lm_head."""
+        return False
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+        self.gguf_writer.add_embedding_length_out(512)
+
+
 @ModelBase.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE

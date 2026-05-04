@@ -82,9 +82,11 @@ class TensorNameMap:
         ),
         MODEL_TENSOR.DENSE_2_OUT: (
             "dense_2_out",  # embeddinggemma
+            "projector.0",  # jina-reranker-v3
         ),
         MODEL_TENSOR.DENSE_3_OUT: (
             "dense_3_out",  # embeddinggemma
+            "projector.2",  # jina-reranker-v3
         ),
         # Output norm
         MODEL_TENSOR.OUTPUT_NORM: (
