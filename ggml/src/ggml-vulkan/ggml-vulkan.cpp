@@ -111,8 +111,6 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
-#define GGML_VK_MAX_NODES 8192
-
 #define VK_CHECK(err, msg)                                          \
     do {                                                            \
         vk::Result err_ = (err);                                    \
