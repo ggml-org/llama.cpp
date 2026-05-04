@@ -228,11 +228,13 @@ struct ggml_webgpu_get_rows_pipeline_key_hash {
 /** Row Norm **/
 
 struct ggml_webgpu_row_norm_pipeline_key {
-    ggml_op op;
-    bool    inplace;
+    ggml_op   op;
+    ggml_type src_type;
+    ggml_type dst_type;
+    bool      inplace;
 
     bool operator==(const ggml_webgpu_row_norm_pipeline_key & other) const {
-        return op == other.op && inplace == other.inplace;
+        return op == other.op && src_type == other.src_type && dst_type == other.dst_type && inplace == other.inplace;
     }
 };
 
@@ -240,6 +242,8 @@ struct ggml_webgpu_row_norm_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_row_norm_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.op);
+        ggml_webgpu_hash_combine(seed, key.src_type);
+        ggml_webgpu_hash_combine(seed, key.dst_type);
         ggml_webgpu_hash_combine(seed, key.inplace);
         return seed;
     }
@@ -1097,6 +1101,8 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_row_norm_pipeline_key key = {};
         key.op                                = context.dst->op;
+        key.src_type                          = context.src0->type;
+        key.dst_type                          = context.dst->type;
         key.inplace                           = ggml_webgpu_tensor_equal(context.src0, context.dst);
 
         auto it = row_norm_pipelines.find(key);
@@ -1111,6 +1117,10 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("RMS_NORM");
                 variant = "rms_norm";
                 break;
+            case GGML_OP_NORM:
+                defines.push_back("NORM");
+                variant = "norm";
+                break;
             case GGML_OP_L2_NORM:
                 defines.push_back("L2_NORM");
                 variant = "l2_norm";
@@ -1122,6 +1132,22 @@ class ggml_webgpu_shader_lib {
         if (key.inplace) {
             defines.push_back("INPLACE");
             variant += "_inplace";
+        }
+
+        if (key.src_type == GGML_TYPE_F32) {
+            defines.push_back("SRC_F32");
+            variant += "_src_f32";
+        } else if (key.src_type == GGML_TYPE_F16) {
+            defines.push_back("SRC_F16");
+            variant += "_src_f16";
+        }
+
+        if (key.dst_type == GGML_TYPE_F32) {
+            defines.push_back("DST_F32");
+            variant += "_dst_f32";
+        } else if (key.dst_type == GGML_TYPE_F16) {
+            defines.push_back("DST_F16");
+            variant += "_dst_f16";
         }
 
         const uint32_t row_norm_wg_size = 128u;
