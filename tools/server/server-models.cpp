@@ -515,10 +515,23 @@ void server_models::unload_lru() {
         for (const auto & m : mapping) {
             if (m.second.meta.is_running()) {
                 count_active++;
- if (m.second.meta.last_used < lru_last_used) {
+                if (m.second.meta.last_used < lru_last_used) {
                     lru_model_name = m.first;
                     lru_last_used = m.second.meta.last_used;
-  }
+                }
+            }
+        }
+    }
+    if (!lru_model_name.empty() && count_active >= (size_t)base_params.models_max) {
+        SRV_INF("models_max limit reached, removing LRU name=%s\n", lru_model_name.c_str());
+        unload(lru_model_name);
+        // wait for unload to complete
+        {
+            std::unique_lock<std::mutex> lk(mutex);
+            cv.wait(lk, [this, &lru_model_name]() {
+                return mapping[lru_model_name].meta.status == SERVER_MODEL_STATUS_UNLOADED;
+            });
+        }
     }
 }
 
@@ -536,8 +549,6 @@ bool server_models::has_pending_requests(const std::string & name) {
     std::unique_lock<std::mutex> lk(mutex);
     auto it = pending_counts.find(name);
     if (it != pending_counts.end()) {
-        // pending count of 1 means only the current request is served (the drain window is satisfied)
-        // pending count > 1 means there are queued requests waiting
         return it->second > 1;
     }
     return false;
@@ -603,19 +614,6 @@ server_http_res_ptr server_models::proxy_request_priority(const server_http_req 
     }
 
     return proxy_request(req, method, target_name, update_last_used);
-}
-    }
-    if (!lru_model_name.empty() && count_active >= (size_t)base_params.models_max) {
-        SRV_INF("models_max limit reached, removing LRU name=%s\n", lru_model_name.c_str());
-        unload(lru_model_name);
-        // wait for unload to complete
-        {
-            std::unique_lock<std::mutex> lk(mutex);
-            cv.wait(lk, [this, &lru_model_name]() {
-                return mapping[lru_model_name].meta.status == SERVER_MODEL_STATUS_UNLOADED;
-            });
-        }
-    }
 }
 
 void server_models::load(const std::string & name) {
@@ -884,36 +882,7 @@ bool server_models::ensure_model_ready(const std::string & name) {
 }
 
 server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used) {
-    auto meta = get_meta(name);
-    if (!meta.has_value()) {
-        throw std::runtime_error("model name=" + name + " is not found");
-    }
-    if (!meta->is_running()) {
-        throw std::invalid_argument("model name=" + name + " is not running");
-    }
-    if (update_last_used) {
-        std::unique_lock<std::mutex> lk(mutex);
-        mapping[name].meta.last_used = ggml_time_ms();
-    }
-    SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
-    std::string proxy_path = req.path;
-    if (!req.query_string.empty()) {
-        proxy_path += '?' + req.query_string;
-    }
-    auto proxy = std::make_unique<server_http_proxy>(
-            method,
-            "http",
-            CHILD_ADDR,
-            meta->port,
-            proxy_path,
-            req.headers,
-            req.body,
-            req.files,
-            req.should_stop,
-            base_params.timeout_read,
-            base_params.timeout_write
-            );
-    return proxy;
+    return proxy_request_priority(req, method, name, update_last_used);
 }
 
 bool server_models::is_child_server() {
@@ -1018,7 +987,6 @@ void server_models_routes::init_routes() {
                     {"params", json{}},
                     {"n_ctx",  0},
                 }},
-                {"priority",   0},
                 {"webui_settings", webui_settings},
                 {"build_info",     std::string(llama_build_info())},
             });
@@ -1048,18 +1016,6 @@ void server_models_routes::init_routes() {
             return error_res;
         }
         return models.proxy_request(req, method, name, true); // update last usage for POST request only
-    };
-
-    this->proxy_post_priority = [this](const server_http_req & req) {
-        std::string method = "POST";
-        json body = json::parse(req.body);
-        std::string name = json_value(body, "model", std::string());
-        bool autoload = is_autoload(params, req);
-        auto error_res = std::make_unique<server_http_res>();
-        if (!router_validate_model(name, models, autoload, error_res)) {
-            return error_res;
-        }
-        return models.proxy_request_priority(req, method, name, true); // update last usage
     };
 
     this->post_router_models_load = [this](const server_http_req & req) {
@@ -1111,7 +1067,6 @@ void server_models_routes::init_routes() {
                 {"owned_by", "llamacpp"}, // for OAI-compat
                 {"created",  t},          // for OAI-compat
                 {"status",   status},
-                {"priority", meta.priority},
                 // TODO: add other fields, may require reading GGUF metadata
             });
         }
@@ -1441,7 +1396,7 @@ server_http_proxy::server_http_proxy(
         msg_t header;
         if (pipe->read(header, should_stop)) {
             SRV_DBG("%s", "received response headers\n");
-        this->status  = header.status;
+            this->status  = header.status;
             this->headers = std::move(header.headers);
             if (!header.content_type.empty()) {
                 this->content_type = std::move(header.content_type);
@@ -1450,76 +1405,4 @@ server_http_proxy::server_http_proxy(
             SRV_DBG("%s", "no response headers received (request cancelled?)\n");
         }
     }
-}
-
-std::string server_models::get_running_model_name() {
-    std::unique_lock<std::mutex> lk(mutex);
-    for (const auto & [name, inst] : mapping) {
-        if (inst.meta.is_running()) {
-            return name;
-        }
-    }
-    return "";
-}
-
-bool server_models::has_pending_requests(const std::string & name) {
-    std::unique_lock<std::mutex> lk(mutex);
-    auto it = pending_counts.find(name);
-    if (it != pending_counts.end()) {
-        return it->second > 1;
-    }
-    return false;
-}
-
-server_http_res_ptr server_models::proxy_request_priority(const server_http_req & req, const std::string & method, const std::string & target_name, bool update_last_used) {
-    auto target_meta = get_meta(target_name);
-    if (!target_meta.has_value()) {
-        throw std::runtime_error("model name=" + target_name + " is not found");
-    }
-
-    const int target_priority = target_meta->priority;
-
-    if (target_meta->is_running()) {
-        {
-            std::lock_guard<std::mutex> lk(mutex);
-            pending_counts[target_name]++;
-        }
-        if (update_last_used) {
-            std::unique_lock<std::mutex> lk(mutex);
-            mapping[target_name].meta.last_used = ggml_time_ms();
-        }
-        SRV_INF("proxying request to model %s on port %d (priority %d)\n", target_name.c_str(), target_meta->port, target_priority);
-        std::string proxy_path = req.path;
-        if (!req.query_string.empty()) {
-            proxy_path += '?' + req.query_string;
-        }
-        auto proxy = std::make_unique<server_http_proxy>(
-                method, "http", CHILD_ADDR, target_meta->port, proxy_path,
-                req.headers, req.body, req.files, req.should_stop,
-                base_params.timeout_read, base_params.timeout_write);
-        return proxy;
-    }
-
-    std::string running_name = get_running_model_name();
-    if (running_name.empty()) {
-        ensure_model_ready(target_name);
-    } else {
-        auto running_meta = get_meta(running_name);
-        if (running_meta.has_value()) {
-            const int running_priority = running_meta->priority;
-            if (target_priority > running_priority) {
-                bool running_has_pending = has_pending_requests(running_name);
-                if (!running_has_pending) {
-                    SRV_INF("preempting model %s (priority %d) for model %s (priority %d)\n",
-                            running_name.c_str(), running_priority, target_name.c_str(), target_priority);
-                    std::lock_guard<std::mutex> lk(mutex);
-                    stopping_models.insert(running_name);
-                    cv_stop.notify_all();
-                }
-            }
-        }
-        ensure_model_ready(target_name);
-    }
-
-    return proxy_request(req, method, target_name, update_last_used);
 }
