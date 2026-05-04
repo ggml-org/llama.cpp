@@ -123,44 +123,40 @@ ggml_cgraph * clip_graph_minicpmv4_6::build() {
     const int qw         = half_w / 2;
     const int n_ds2      = qh * qw;             // after final merger 2x2 downsample
 
+    auto add_i32_input = [&](const char * name, int n) {
+        ggml_tensor * t = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n);
+        ggml_set_name(t, name);
+        ggml_set_input(t);
+        return t;
+    };
+
     // position indices for ViT learned positional embeddings
-    struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
-    ggml_set_name(positions, "positions");
-    ggml_set_input(positions);
+    ggml_tensor * positions = add_i32_input("positions", n_pos);
     ggml_tensor * learned_pos_embd = ggml_get_rows(ctx0, model.position_embeddings, positions);
 
     // ViT merger window reorder indices + block-diagonal mask
     // (mask layout follows qwen2vl: -inf except for 4x4 blocks on the diagonal,
     // so each window-major group of 4 tokens only attends to itself)
-    struct ggml_tensor * vit_merger_window_idx     = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
-    ggml_set_name(vit_merger_window_idx, "vit_merger_window_idx");         ggml_set_input(vit_merger_window_idx);
-    struct ggml_tensor * vit_merger_inv_window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
-    ggml_set_name(vit_merger_inv_window_idx, "vit_merger_inv_window_idx"); ggml_set_input(vit_merger_inv_window_idx);
-    struct ggml_tensor * vit_merger_window_mask    = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
-    ggml_set_name(vit_merger_window_mask, "vit_merger_window_mask");       ggml_set_input(vit_merger_window_mask);
+    ggml_tensor * vit_merger_window_idx     = add_i32_input("vit_merger_window_idx", n_pos);
+    ggml_tensor * vit_merger_inv_window_idx = add_i32_input("vit_merger_inv_window_idx", n_pos);
+    ggml_tensor * vit_merger_window_mask    = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
+    ggml_set_name(vit_merger_window_mask, "vit_merger_window_mask");
+    ggml_set_input(vit_merger_window_mask);
     if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
         vit_merger_window_mask = ggml_cast(ctx0, vit_merger_window_mask, GGML_TYPE_F16);
     }
 
     // ViT merger 2x2 downsample gather indices
-    struct ggml_tensor * vit_merger_ds_idx_0 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_ds);
-    ggml_set_name(vit_merger_ds_idx_0, "vit_merger_ds_idx_0"); ggml_set_input(vit_merger_ds_idx_0);
-    struct ggml_tensor * vit_merger_ds_idx_1 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_ds);
-    ggml_set_name(vit_merger_ds_idx_1, "vit_merger_ds_idx_1"); ggml_set_input(vit_merger_ds_idx_1);
-    struct ggml_tensor * vit_merger_ds_idx_2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_ds);
-    ggml_set_name(vit_merger_ds_idx_2, "vit_merger_ds_idx_2"); ggml_set_input(vit_merger_ds_idx_2);
-    struct ggml_tensor * vit_merger_ds_idx_3 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_ds);
-    ggml_set_name(vit_merger_ds_idx_3, "vit_merger_ds_idx_3"); ggml_set_input(vit_merger_ds_idx_3);
+    ggml_tensor * vit_merger_ds_idx_0 = add_i32_input("vit_merger_ds_idx_0", n_ds);
+    ggml_tensor * vit_merger_ds_idx_1 = add_i32_input("vit_merger_ds_idx_1", n_ds);
+    ggml_tensor * vit_merger_ds_idx_2 = add_i32_input("vit_merger_ds_idx_2", n_ds);
+    ggml_tensor * vit_merger_ds_idx_3 = add_i32_input("vit_merger_ds_idx_3", n_ds);
 
     // final merger 2x2 downsample gather indices
-    struct ggml_tensor * merger_ds_idx_0 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_ds2);
-    ggml_set_name(merger_ds_idx_0, "merger_ds_idx_0"); ggml_set_input(merger_ds_idx_0);
-    struct ggml_tensor * merger_ds_idx_1 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_ds2);
-    ggml_set_name(merger_ds_idx_1, "merger_ds_idx_1"); ggml_set_input(merger_ds_idx_1);
-    struct ggml_tensor * merger_ds_idx_2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_ds2);
-    ggml_set_name(merger_ds_idx_2, "merger_ds_idx_2"); ggml_set_input(merger_ds_idx_2);
-    struct ggml_tensor * merger_ds_idx_3 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_ds2);
-    ggml_set_name(merger_ds_idx_3, "merger_ds_idx_3"); ggml_set_input(merger_ds_idx_3);
+    ggml_tensor * merger_ds_idx_0 = add_i32_input("merger_ds_idx_0", n_ds2);
+    ggml_tensor * merger_ds_idx_1 = add_i32_input("merger_ds_idx_1", n_ds2);
+    ggml_tensor * merger_ds_idx_2 = add_i32_input("merger_ds_idx_2", n_ds2);
+    ggml_tensor * merger_ds_idx_3 = add_i32_input("merger_ds_idx_3", n_ds2);
 
     // patch embedding + positional embedding
     ggml_tensor * inp = build_inp();
@@ -185,11 +181,17 @@ ggml_cgraph * clip_graph_minicpmv4_6::build() {
 
         {
             ggml_tensor * Qcur = build_mm(layer.q_w, cur);
-            if (layer.q_b) Qcur = ggml_add(ctx0, Qcur, layer.q_b);
+            if (layer.q_b) {
+                Qcur = ggml_add(ctx0, Qcur, layer.q_b);
+            }
             ggml_tensor * Kcur = build_mm(layer.k_w, cur);
-            if (layer.k_b) Kcur = ggml_add(ctx0, Kcur, layer.k_b);
+            if (layer.k_b) {
+                Kcur = ggml_add(ctx0, Kcur, layer.k_b);
+            }
             ggml_tensor * Vcur = build_mm(layer.v_w, cur);
-            if (layer.v_b) Vcur = ggml_add(ctx0, Vcur, layer.v_b);
+            if (layer.v_b) {
+                Vcur = ggml_add(ctx0, Vcur, layer.v_b);
+            }
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
             Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
@@ -243,11 +245,17 @@ ggml_cgraph * clip_graph_minicpmv4_6::build() {
         cb(cur, "vit_merger_window_reorder", -1);
 
         ggml_tensor * Qcur = build_mm(model.vit_merger_attn_q_w, cur);
-        if (model.vit_merger_attn_q_b) Qcur = ggml_add(ctx0, Qcur, model.vit_merger_attn_q_b);
+        if (model.vit_merger_attn_q_b) {
+            Qcur = ggml_add(ctx0, Qcur, model.vit_merger_attn_q_b);
+        }
         ggml_tensor * Kcur = build_mm(model.vit_merger_attn_k_w, cur);
-        if (model.vit_merger_attn_k_b) Kcur = ggml_add(ctx0, Kcur, model.vit_merger_attn_k_b);
+        if (model.vit_merger_attn_k_b) {
+            Kcur = ggml_add(ctx0, Kcur, model.vit_merger_attn_k_b);
+        }
         ggml_tensor * Vcur = build_mm(model.vit_merger_attn_v_w, cur);
-        if (model.vit_merger_attn_v_b) Vcur = ggml_add(ctx0, Vcur, model.vit_merger_attn_v_b);
+        if (model.vit_merger_attn_v_b) {
+            Vcur = ggml_add(ctx0, Vcur, model.vit_merger_attn_v_b);
+        }
 
         Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
         Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
@@ -311,11 +319,17 @@ ggml_cgraph * clip_graph_minicpmv4_6::build() {
 
             {
                 ggml_tensor * Qcur = build_mm(layer.q_w, cur);
-                if (layer.q_b) Qcur = ggml_add(ctx0, Qcur, layer.q_b);
+                if (layer.q_b) {
+                    Qcur = ggml_add(ctx0, Qcur, layer.q_b);
+                }
                 ggml_tensor * Kcur = build_mm(layer.k_w, cur);
-                if (layer.k_b) Kcur = ggml_add(ctx0, Kcur, layer.k_b);
+                if (layer.k_b) {
+                    Kcur = ggml_add(ctx0, Kcur, layer.k_b);
+                }
                 ggml_tensor * Vcur = build_mm(layer.v_w, cur);
-                if (layer.v_b) Vcur = ggml_add(ctx0, Vcur, layer.v_b);
+                if (layer.v_b) {
+                    Vcur = ggml_add(ctx0, Vcur, layer.v_b);
+                }
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos_ds);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos_ds);
