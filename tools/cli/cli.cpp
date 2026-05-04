@@ -1,4 +1,3 @@
-#include "chat-auto-parser-helpers.h"
 #include "chat.h"
 #include "common.h"
 #include "arg.h"
@@ -108,10 +107,10 @@ struct cli_context {
 
                 if (!chat_params.thinking_start_tag.empty()) {
                     task.params.sampling.reasoning_budget_start =
-                        common_tokenize(vocab, trim_whitespace(chat_params.thinking_start_tag), false, true);
+                        common_tokenize(vocab, chat_params.thinking_start_tag, false, true);
                 }
                 task.params.sampling.reasoning_budget_end =
-                    common_tokenize(vocab, trim_whitespace(chat_params.thinking_end_tag), false, true);
+                    common_tokenize(vocab, chat_params.thinking_end_tag, false, true);
                 task.params.sampling.reasoning_budget_forced =
                     common_tokenize(vocab, defaults.sampling.reasoning_budget_message + chat_params.thinking_end_tag, false, true);
             }
