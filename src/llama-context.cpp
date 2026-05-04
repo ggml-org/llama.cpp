@@ -2593,9 +2593,14 @@ size_t llama_context::state_set_data(const uint8_t * src, size_t size) {
     }
 }
 
+static constexpr uint32_t io_magic = 0xaf143cd8;
+
 size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags) {
     llama_io_write_dummy io(flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
     try {
+        io.write(&io_magic, sizeof(io_magic));
+        io.write(&seq_id, sizeof(seq_id));
+
         return state_seq_write_data(io, seq_id, flags);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error getting state size: %s\n", __func__, err.what());
@@ -2612,6 +2617,9 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
     }
 
     try {
+        io->write(&io_magic, sizeof(io_magic));
+        io->write(&seq_id, sizeof(seq_id));
+
         return state_seq_write_data(*io, seq_id, flags);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error saving state: %s\n", __func__, err.what());
@@ -2622,12 +2630,40 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
 size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
     std::unique_ptr<llama_io_read_i> io;
     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
-        io = std::make_unique<llama_io_read_device>(src, size, mem_storage[seq_id]);
+        // create a temporary io to read the magic and the src seq_id
+        io = std::make_unique<llama_io_read_host>(src, size);
+
+        uint32_t magic_read;
+        io->read(&magic_read, sizeof(magic_read));
+        if (io_magic != magic_read) {
+            throw std::runtime_error("wrong sequence state magic");
+        }
+
+        llama_seq_id seq_id_read;
+        io->read(&seq_id_read, sizeof(seq_id_read));
+
+        GGML_ASSERT(mem_storage.find(seq_id_read) != mem_storage.end());
+
+        io = std::make_unique<llama_io_read_device>(src, size, mem_storage[seq_id_read]);
     } else {
         io = std::make_unique<llama_io_read_host>(src, size);
     }
 
     try {
+        uint32_t magic_read;
+        io->read(&magic_read, sizeof(magic_read));
+        if (io_magic != magic_read) {
+            throw std::runtime_error("wrong sequence state magic");
+        }
+
+        const bool need_seq_match = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+        llama_seq_id seq_id_read;
+        io->read(&seq_id_read, sizeof(seq_id_read));
+        if (need_seq_match && seq_id != seq_id_read) {
+            throw std::runtime_error("wrong sequence id");
+        }
+
         return state_seq_read_data(*io, seq_id, flags);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading state: %s\n", __func__, err.what());
