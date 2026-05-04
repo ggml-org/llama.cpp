@@ -44,15 +44,20 @@ void im2col(const uint ow, const uint z_idx) {
 
     const uint KHKW = p.KH * p.KW;
 
+    // Precompute base input coordinates
     const int base_iw = int(ow * p.s0) - p.p0;
     const int base_ih = int(oh * p.s1) - p.p1;
 
+    // Precompute step deltas
     const uint delta_ic  = BLOCK_SIZE / KHKW;
     const uint delta_rem = BLOCK_SIZE % KHKW;
+
     const uint delta_ky  = delta_rem / p.KW;
     const uint delta_kx  = delta_rem % p.KW;
+
     const uint delta_ic_offset = delta_ic * p.offset_delta;
 
+    // If using BDA mode, precompute the base pointer  and step size
 #if BDA
     const BDA_STORAGE_T base_dst_addr = p.dst_addr + D_SIZE * dst_row;
     const uint bda_step = D_SIZE * BLOCK_SIZE;
@@ -63,12 +68,16 @@ void im2col(const uint ow, const uint z_idx) {
         const uint wg_offset = wg_x * 512;
 
         uint chw_idx = wg_offset + gidx;
+
         uint ic  = chw_idx / KHKW;
         uint rem = chw_idx % KHKW;
+
         uint ky  = rem / p.KW;
         uint kx  = rem % p.KW;
+
         uint ic_offset = src_batch + ic * p.offset_delta;
 
+        // Initialize running pointer/index for the destination buffer
 #if BDA
         BDA_STORAGE_T current_dst_addr = base_dst_addr + D_SIZE * chw_idx;
 #else
@@ -95,18 +104,21 @@ void im2col(const uint ow, const uint z_idx) {
             data_d[current_dst_idx] = D_TYPE(val);
             current_dst_idx += BLOCK_SIZE;
 #endif
-            chw_idx += BLOCK_SIZE;
+
+            chw_idx   += BLOCK_SIZE;
             ic_offset += delta_ic_offset;
-            kx += delta_kx;
-            ky += delta_ky;
+            kx        += delta_kx;
+            ky        += delta_ky;
 
+            // Handle X axis wrap
             uint kx_wrap = uint(kx >= p.KW);
-            kx -= kx_wrap * p.KW;
-            ky += kx_wrap;
+            kx          -= kx_wrap * p.KW;
+            ky          += kx_wrap;
 
+            // Handle Y axis wrap
             uint ky_wrap = uint(ky >= p.KH);
-            ky -= ky_wrap * p.KH;
-            ic_offset += ky_wrap * p.offset_delta;
+            ky          -= ky_wrap * p.KH;
+            ic_offset   += ky_wrap * p.offset_delta;
         }
 
         wg_x += gl_NumWorkGroups.x;
