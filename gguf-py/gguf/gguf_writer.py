@@ -1151,6 +1151,9 @@ class GGUFWriter:
     def add_vision_head_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT, value)
 
+    def add_vision_head_count_kv(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT_KV, value)
+
     def add_vision_attention_layernorm_eps(self, value: float) -> None:
         self.add_float32(Keys.ClipVision.Attention.LAYERNORM_EPS, value)
 
@@ -1221,6 +1224,13 @@ class GGUFWriter:
 
     def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
         self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
+
+    def add_vision_wa_pattern_mode(self, modes: Sequence[int]) -> None:
+        """Add per-layer window-attention mode for vision encoders (e.g. mimovl).
+
+        Values: -1 = full attention, 0 = row-major windowed, 1 = column-major windowed
+        """
+        self.add_array(Keys.ClipVision.WA_PATTERN_MODE, modes)
 
     def add_vision_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
