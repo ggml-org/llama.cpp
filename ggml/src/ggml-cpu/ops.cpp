@@ -3723,16 +3723,16 @@ enum ggml_rms_norm_fuse_op {
 template <ggml_rms_norm_fuse_op FUSE_OP>
 static void ggml_compute_forward_rms_norm_f32(
         const ggml_compute_params * params,
-        ggml_tensor * rms_norm_dst,
-        ggml_tensor * fused_dst = nullptr) {
+        ggml_tensor * dst_rms_norm,
+        ggml_tensor * dst_fused = nullptr) {
 
-    const ggml_tensor * src0 = rms_norm_dst->src[0];
+    const ggml_tensor * src0 = dst_rms_norm->src[0];
     const ggml_tensor * src1 = nullptr;
-    ggml_tensor       * dst  = rms_norm_dst;
+    ggml_tensor       * dst  = dst_rms_norm;
 
     if constexpr (FUSE_OP == GGML_RMS_NORM_FUSE_MUL) {
-        src1 = (fused_dst->src[0] == rms_norm_dst) ? fused_dst->src[1] : fused_dst->src[0];
-        dst  = fused_dst;
+        src1 = (dst_fused->src[0] == dst_rms_norm) ? dst_fused->src[1] : dst_fused->src[0];
+        dst  = dst_fused;
     }
 
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
@@ -3745,7 +3745,7 @@ static void ggml_compute_forward_rms_norm_f32(
     GGML_TENSOR_BINARY_OP_LOCALS
 
     float eps;
-    memcpy(&eps, rms_norm_dst->op_params, sizeof(float));
+    memcpy(&eps, dst_rms_norm->op_params, sizeof(float));
     GGML_ASSERT(eps >= 0.0f);
 
     // TODO: optimize
@@ -3808,18 +3808,18 @@ void ggml_compute_forward_rms_norm(
 // This avoids materializing the intermediate rms_norm result in memory.
 void ggml_compute_forward_rms_norm_mul_fused(
         const ggml_compute_params * params,
-        ggml_tensor * rms_norm_dst,
-        ggml_tensor * mul_dst) {
+        ggml_tensor * dst_rms_norm,
+        ggml_tensor * dst_mul) {
 
-    GGML_ASSERT(mul_dst != nullptr);
-    GGML_ASSERT(mul_dst->src[0] == rms_norm_dst || mul_dst->src[1] == rms_norm_dst);
+    GGML_ASSERT(dst_mul != nullptr);
+    GGML_ASSERT(dst_mul->src[0] == dst_rms_norm || dst_mul->src[1] == dst_rms_norm);
 
-    const ggml_tensor * src0 = rms_norm_dst->src[0];
+    const ggml_tensor * src0 = dst_rms_norm->src[0];
 
     switch (src0->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_rms_norm_f32<GGML_RMS_NORM_FUSE_MUL>(params, rms_norm_dst, mul_dst);
+                ggml_compute_forward_rms_norm_f32<GGML_RMS_NORM_FUSE_MUL>(params, dst_rms_norm, dst_mul);
             } break;
         default:
             {
