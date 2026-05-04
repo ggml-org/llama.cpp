@@ -106,18 +106,26 @@ OutputVector translate_permute(const NodeContext & context) {
             auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(
                 src, ov::op::v0::Constant::create(ov::element::i64, {4}, {n_seq, ctx_per_seq, n_heads, head_size}),
                 false);
-            auto slice1 =
-                std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
-            auto slice2 = std::make_shared<ov::op::v8::Slice>(slice1, zero, attention_size, one, one);
+            ov::Output<ov::Node> after_seq_slice;
+            if (n_seq == 1) {
+                after_seq_slice = src_reshaped;
+            } else {
+                after_seq_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
+            }
+            auto slice2 = std::make_shared<ov::op::v8::Slice>(after_seq_slice, zero, attention_size, one, one);
             res = std::make_shared<ov::op::v1::Transpose>(slice2, perm);
         } else {
             auto three = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
             auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(
                 src, ov::op::v0::Constant::create(ov::element::i64, {4}, {n_seq, n_heads, head_size, ctx_per_seq}),
                 false);
-            auto slice1 =
-                std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
-            auto slice2 = std::make_shared<ov::op::v8::Slice>(slice1, zero, attention_size, one, three);
+            ov::Output<ov::Node> after_seq_slice;
+            if (n_seq == 1) {
+                after_seq_slice = src_reshaped;
+            } else {
+                after_seq_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
+            }
+            auto slice2 = std::make_shared<ov::op::v8::Slice>(after_seq_slice, zero, attention_size, one, three);
             res = slice2;
         }
     }
