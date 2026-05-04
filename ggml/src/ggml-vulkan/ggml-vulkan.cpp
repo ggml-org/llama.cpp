@@ -7274,14 +7274,6 @@ static bool ggml_vk_buffer_read_async(vk_context subctx, vk_buffer& src, size_t 
 static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_t size) {
     VK_LOG_DEBUG("ggml_vk_buffer_read(" << src->buffer << ", " << offset << ", " << size << ")");
 
-    // If the device is not an UMA device the memory is host-accessible through rebar. While writing
-    // through PCIe is sufficient fast reading back data from PCIe is slower than going through
-    // the HW device to host copy path.
-    if (ggml_vk_should_use_uma_direct_transfer(src, size, false)) {
-        memcpy(dst, (uint8_t *) src->ptr + offset, size);
-        return;
-    }
-
     std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
 
     vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
