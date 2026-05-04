@@ -11,12 +11,12 @@ static __global__ void snake_kernel(
         const float * __restrict__ a,
         const float * __restrict__ inv_b,
         T           * __restrict__ dst,
-        const int T_len,
-        const int C) {
+        const int    total,
+        const uint3  T_len_fastdiv) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= T_len * C) return;
+    if (idx >= total) return;
 
-    const int c = idx / T_len;
+    const int c = (int) fastdiv((uint32_t) idx, T_len_fastdiv);
 
     const float xi = ggml_cuda_cast<float>(x[idx]);
     const float s  = sinf(a[c] * xi);
@@ -33,9 +33,10 @@ static void launch_snake(ggml_backend_cuda_context & ctx,
     const float * a_d     = (const float *)a->data;
     const float * inv_b_d = (const float *)inv_b->data;
 
-    const int T = (int)x->ne[0];
-    const int C = (int)x->ne[1];
-    const int total = T * C;
+    const int   T = (int)x->ne[0];
+    const int   C = (int)x->ne[1];
+    const int   total = T * C;
+    const uint3 T_len_fastdiv = init_fastdiv_values((uint64_t) T);
 
     const int block_size = 256;
     const int grid_size  = (total + block_size - 1) / block_size;
@@ -45,15 +46,15 @@ static void launch_snake(ggml_backend_cuda_context & ctx,
     switch (x->type) {
         case GGML_TYPE_F32: {
             snake_kernel<<<grid_size, block_size, 0, stream>>>(
-                (const float *)x->data, a_d, inv_b_d, (float *)dst->data, T, C);
+                (const float *)x->data, a_d, inv_b_d, (float *)dst->data, total, T_len_fastdiv);
         } break;
         case GGML_TYPE_F16: {
             snake_kernel<<<grid_size, block_size, 0, stream>>>(
-                (const half *)x->data, a_d, inv_b_d, (half *)dst->data, T, C);
+                (const half *)x->data, a_d, inv_b_d, (half *)dst->data, total, T_len_fastdiv);
         } break;
         case GGML_TYPE_BF16: {
             snake_kernel<<<grid_size, block_size, 0, stream>>>(
-                (const nv_bfloat16 *)x->data, a_d, inv_b_d, (nv_bfloat16 *)dst->data, T, C);
+                (const nv_bfloat16 *)x->data, a_d, inv_b_d, (nv_bfloat16 *)dst->data, total, T_len_fastdiv);
         } break;
         default:
             GGML_ABORT("snake: unsupported type");
