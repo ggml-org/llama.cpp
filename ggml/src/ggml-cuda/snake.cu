@@ -1,23 +1,12 @@
 #include "snake.cuh"
+#include "convert.cuh"
 
 // Fused Snake activation: y = x + sin^2(a * x) * inv_b
 // x: [T, C] (T contiguous), a: [1, C], inv_b: [1, C]
 // Supports F32, F16, BF16 data with F32 compute.
 
 template <typename T>
-static __device__ __forceinline__ float snake_load(T x);
-template <> __device__ __forceinline__ float snake_load(float x)          { return x; }
-template <> __device__ __forceinline__ float snake_load(half x)           { return __half2float(x); }
-template <> __device__ __forceinline__ float snake_load(nv_bfloat16 x)    { return __bfloat162float(x); }
-
-template <typename T>
-static __device__ __forceinline__ T snake_store(float x);
-template <> __device__ __forceinline__ float       snake_store<float>(float x)       { return x; }
-template <> __device__ __forceinline__ half        snake_store<half>(float x)        { return __float2half(x); }
-template <> __device__ __forceinline__ nv_bfloat16 snake_store<nv_bfloat16>(float x) { return __float2bfloat16(x); }
-
-template <typename T>
-static __global__ void kernel_snake(
+static __global__ void snake_kernel(
         const T     * __restrict__ x,
         const float * __restrict__ a,
         const float * __restrict__ inv_b,
@@ -29,9 +18,9 @@ static __global__ void kernel_snake(
 
     const int c = idx / T_len;
 
-    const float xi = snake_load(x[idx]);
+    const float xi = ggml_cuda_cast<float>(x[idx]);
     const float s  = sinf(a[c] * xi);
-    dst[idx] = snake_store<T>(xi + s * s * inv_b[c]);
+    dst[idx] = ggml_cuda_cast<T>(xi + s * s * inv_b[c]);
 }
 
 // Internal launcher with explicit x/a/inv_b/dst tensors.
@@ -55,15 +44,15 @@ static void launch_snake(ggml_backend_cuda_context & ctx,
 
     switch (x->type) {
         case GGML_TYPE_F32: {
-            kernel_snake<<<grid_size, block_size, 0, stream>>>(
+            snake_kernel<<<grid_size, block_size, 0, stream>>>(
                 (const float *)x->data, a_d, inv_b_d, (float *)dst->data, T, C);
         } break;
         case GGML_TYPE_F16: {
-            kernel_snake<<<grid_size, block_size, 0, stream>>>(
+            snake_kernel<<<grid_size, block_size, 0, stream>>>(
                 (const half *)x->data, a_d, inv_b_d, (half *)dst->data, T, C);
         } break;
         case GGML_TYPE_BF16: {
-            kernel_snake<<<grid_size, block_size, 0, stream>>>(
+            snake_kernel<<<grid_size, block_size, 0, stream>>>(
                 (const nv_bfloat16 *)x->data, a_d, inv_b_d, (nv_bfloat16 *)dst->data, T, C);
         } break;
         default:
