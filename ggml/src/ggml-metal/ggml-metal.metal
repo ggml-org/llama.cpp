@@ -10526,8 +10526,9 @@ kernel void kernel_opt_step_adamw_f32(
     const float wd     = pars[4];
     const float beta1h = pars[5];
     const float beta2h = pars[6];
+    const float gclip  = pars[7];
 
-    const float gi = g[gid];
+    const float gi = (gclip > 0.0f) ? clamp(g[gid], -gclip, gclip) : g[gid];
     const float gmi = g_m[gid] * beta1 +      gi * (1.0f - beta1);
     const float gvi = g_v[gid] * beta2 + gi * gi * (1.0f - beta2);
 
