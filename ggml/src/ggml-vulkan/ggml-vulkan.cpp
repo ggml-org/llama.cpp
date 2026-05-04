@@ -6742,12 +6742,19 @@ static bool ggml_vk_submit_transfer_ctx(ggml_backend_vk_context * ctx) {
     }
 
     vk_context cpy_ctx = ctx->transfer_ctx.lock();
-    ggml_vk_ctx_end(cpy_ctx);
 
     for (auto& cpy : cpy_ctx->in_memcpys) {
         memcpy(cpy.dst, cpy.src, cpy.n);
     }
+    for (auto& mset : cpy_ctx->memsets) {
+        memset(mset.dst, mset.val, mset.n);
+    }
     ggml_vk_record_host_write_barrier(cpy_ctx);
+    ggml_vk_ctx_end(cpy_ctx);
+
+    cpy_ctx->in_memcpys.clear();
+    cpy_ctx->memsets.clear();
+    cpy_ctx->out_memcpys.clear();
 
     ctx->transfer_semaphore.value++;
     cpy_ctx->seqs.back().back().signal_semaphores.push_back(ctx->transfer_semaphore);
@@ -14248,13 +14255,14 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
             cmd_buf = compute_ctx->s->buffer;
         }
 
-        ggml_vk_ctx_end(compute_ctx);
-
         for (auto& cpy : compute_ctx->in_memcpys) {
             memcpy(cpy.dst, cpy.src, cpy.n);
         }
-
+        for (auto& mset : compute_ctx->memsets) {
+            memset(mset.dst, mset.val, mset.n);
+        }
         ggml_vk_record_host_write_barrier(compute_ctx);
+        ggml_vk_ctx_end(compute_ctx);
 
         ggml_vk_submit(compute_ctx, {});
         ctx->submit_pending = true;
