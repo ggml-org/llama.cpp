@@ -68,12 +68,9 @@ static __global__ void lightning_indexer_kernel_wmma(
         const int i_head = i_q / (n_embd / 4);
         const int i_embd = i_q % (n_embd / 4);
         const float4 q = *(const float4 *) (q_base + i_head*nb01 + i_embd*sizeof(float4));
-        const half4 q_packed {
-            .h2 = {
-                __float22half2_rn(make_float2(q.x, q.y)),
-                __float22half2_rn(make_float2(q.z, q.w))
-            }
-        };
+        half4 q_packed;
+        q_packed.h2[0] = __float22half2_rn(make_float2(q.x, q.y));
+        q_packed.h2[1] = __float22half2_rn(make_float2(q.z, q.w));
         q_shared_h[i_head][i_embd] = q_packed.i2;
     }
 
@@ -160,12 +157,9 @@ static __global__ void lightning_indexer_kernel_wmma(
             for (int i_q = tid, i_q_next = 0; i_q < n_q_tile; i_q += THREADS_PER_BLOCK) {
                 const int i_head = i_q / (n_embd / 4);
                 const int i_embd = i_q % (n_embd / 4);
-                const half4 q_packed {
-                    .h2 = {
-                        __float22half2_rn(make_float2(q_next[i_q_next].x, q_next[i_q_next].y)),
-                        __float22half2_rn(make_float2(q_next[i_q_next].z, q_next[i_q_next].w))
-                    }
-                };
+                half4 q_packed;
+                q_packed.h2[0] = __float22half2_rn(make_float2(q_next[i_q_next].x, q_next[i_q_next].y));
+                q_packed.h2[1] = __float22half2_rn(make_float2(q_next[i_q_next].z, q_next[i_q_next].w));
                 q_shared_h[i_head][i_embd] = q_packed.i2;
                 ++i_q_next;
             }
@@ -273,12 +267,9 @@ static __global__ void lightning_indexer_kernel_vec(
             q_shared_f[i_head][i_embd] = *(const float4 *) (q_base + i_head*nb01 + i_embd*sizeof(float4));
         } else {
             const float4 q = *(const float4 *) (q_base + i_head*nb01 + i_embd*sizeof(float4));
-            const half4 q_packed {
-                .h2 = {
-                    __float22half2_rn(make_float2(q.x, q.y)),
-                    __float22half2_rn(make_float2(q.z, q.w))
-                }
-            };
+            half4 q_packed;
+            q_packed.h2[0] = __float22half2_rn(make_float2(q.x, q.y));
+            q_packed.h2[1] = __float22half2_rn(make_float2(q.z, q.w));
             q_shared_h[i_head][i_embd] = q_packed.i2;
         }
     }
@@ -363,7 +354,8 @@ static __global__ void lightning_indexer_kernel_vec(
             }
         } else {
             // dot product of halfs for remaining types
-            const half4 q_vec { .i2 = q_shared_h[i_head][i_lane] };
+            half4 q_vec;
+            q_vec.i2 = q_shared_h[i_head][i_lane];
             const half2 q_h0 = q_vec.h2[0];
             const half2 q_h1 = q_vec.h2[1];
 
