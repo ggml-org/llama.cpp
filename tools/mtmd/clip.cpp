@@ -642,7 +642,8 @@ ggml_tensor * clip_graph::build_attn(
         ggml_tensor * v_cur,
         ggml_tensor * kq_mask,
         float kq_scale,
-        int il) const {
+        int il,
+        ggml_tensor * sinks) const {
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
     ggml_build_forward_expand(gf, q_cur);
@@ -665,6 +666,9 @@ ggml_tensor * clip_graph::build_attn(
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, 0.0f, 0.0f);
         ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
+        if (sinks != nullptr) {
+            ggml_flash_attn_ext_add_sinks(cur, sinks);
+        }
 
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
 
@@ -677,6 +681,9 @@ ggml_tensor * clip_graph::build_attn(
         // ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
 
         kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, 0.0f);
+        if (sinks != nullptr) {
+            ggml_soft_max_add_sinks(kq, sinks);
+        }
 
         ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
         cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);

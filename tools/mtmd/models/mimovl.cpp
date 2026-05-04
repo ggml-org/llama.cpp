@@ -1,14 +1,10 @@
 #include "models.h"
 
 // MiMoVL vision tower for MiMo-V2.5 (non-Pro). Qwen2.5-VL-shaped ViT, except:
-//   1. GQA in attention (32 Q / 8 KV heads, head_dim 64). The converter
-//      splits the fused qkv weight; ggml_mul_mat broadcasts n_head_kv to
-//      n_head via interleave.
-//   2. Per-head attention sinks on every windowed layer. These follow the
-//      GPT-OSS/FA3 semantic that sglang's reference impl and b12x's SM120
-//      kernel use: the sinks adjust the softmax denominator via row_scale
-//      (equivalently, a virtual extra K column with V=0), so they decay
-//      attention weight without contributing to the output.
+//   1. GQA in attention (32 Q / 8 KV heads, head_dim 64).
+//   2. Per-head attention sinks on every windowed layer. The sinks adjust
+//      the softmax denominator (equivalently, a virtual extra K column with V=0),
+//      so they decay attention weight without contributing to the output.
 //   3. Per-layer window-attention mode in hparams.wa_pattern_mode:
 //        -1 -> full,  0 -> row-window+sinks,  1 -> col-window+sinks.
 //      Col mode transposes the merge-unit grid on entry and restores
@@ -17,8 +13,6 @@
 //   4. 1D banded sliding window (|q-k| > window_size -> -inf) as a
 //      single 2D mask broadcast across heads.
 //   5. Per-block MLP biases.
-// Everything else (patch embed Conv3D split, rotary, RMSNorm, merger)
-// is identical to Qwen2.5-VL.
 ggml_cgraph * clip_graph_mimovl::build() {
     GGML_ASSERT(model.patch_embeddings_0 != nullptr);
     GGML_ASSERT(model.patch_embeddings_1 != nullptr);
@@ -37,9 +31,11 @@ ggml_cgraph * clip_graph_mimovl::build() {
 
     // MiMoVL has head_dim=64 with n_embd=1280, so n_embd is NOT n_head*head_dim
     // (the base class's d_head = n_embd/n_head = 40 is wrong here). Derive
-    // head_dim from the Q projection's output width.
-    GGML_ASSERT(model.layers[0].q_w != nullptr);
-    const int head_dim     = model.layers[0].q_w->ne[1] / n_head;
+    // head_dim from the fused QKV projection: rows = (n_head + 2*n_head_kv)*head_dim.
+    GGML_ASSERT(model.layers[0].qkv_w != nullptr);
+    const int qkv_rows     = model.layers[0].qkv_w->ne[1];
+    const int head_dim     = qkv_rows / (n_head + 2 * n_head_kv);
+    GGML_ASSERT(head_dim * (n_head + 2 * n_head_kv) == qkv_rows);
     const float attn_scale = 1.0f / std::sqrt((float) head_dim);
 
     // ggml_rope_multi VISION layout: the non-CPU kernels only read positions from
@@ -91,6 +87,10 @@ ggml_cgraph * clip_graph_mimovl::build() {
     ggml_set_name(window_mask, "mimovl_window_mask");
     ggml_set_input(window_mask);
 
+    ggml_tensor * window_mask_attn = (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED)
+        ? ggml_cast(ctx0, window_mask, GGML_TYPE_F16)
+        : window_mask;
+
     // Reorder helper: permute patches at merge-unit granularity. The patch
     // sequence is laid out as n_units groups of merge_unit (=4) consecutive
     // patches; the row<->col transpose only permutes whole groups. We keep
@@ -126,14 +126,17 @@ ggml_cgraph * clip_graph_mimovl::build() {
         cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_RMS, eps, il);
         cb(cur, "ln1", il);
 
-        // Q/K/V projections + biases (GQA: Q has n_head, K/V have n_head_kv).
-        ggml_tensor * Qcur = ggml_add(ctx0, build_mm(layer.q_w, cur), layer.q_b);
-        ggml_tensor * Kcur = ggml_add(ctx0, build_mm(layer.k_w, cur), layer.k_b);
-        ggml_tensor * Vcur = ggml_add(ctx0, build_mm(layer.v_w, cur), layer.v_b);
+        // Fused QKV with GQA. HF row layout is [Q | K | V] along axis 0
+        ggml_tensor * qkv = build_mm(layer.qkv_w, cur);
+        qkv = ggml_add(ctx0, qkv, layer.qkv_b);
 
-        Qcur = ggml_reshape_3d(ctx0, Qcur, head_dim, n_head,    n_pos);
-        Kcur = ggml_reshape_3d(ctx0, Kcur, head_dim, n_head_kv, n_pos);
-        Vcur = ggml_reshape_3d(ctx0, Vcur, head_dim, n_head_kv, n_pos);
+        const size_t row    = ggml_row_size(qkv->type, head_dim);
+        const size_t off_k  = ggml_row_size(qkv->type, n_head    * head_dim);
+        const size_t off_v  = ggml_row_size(qkv->type, (n_head + n_head_kv) * head_dim);
+
+        ggml_tensor * Qcur = ggml_view_3d(ctx0, qkv, head_dim, n_head,    n_pos, row, qkv->nb[1], 0);
+        ggml_tensor * Kcur = ggml_view_3d(ctx0, qkv, head_dim, n_head_kv, n_pos, row, qkv->nb[1], off_k);
+        ggml_tensor * Vcur = ggml_view_3d(ctx0, qkv, head_dim, n_head_kv, n_pos, row, qkv->nb[1], off_v);
 
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
@@ -146,78 +149,14 @@ ggml_cgraph * clip_graph_mimovl::build() {
         cb(Qcur, "Qcur_rope", il);
         cb(Kcur, "Kcur_rope", il);
 
-        // Attention.
-        //
-        // Full layers use plain build_attn (no mask, no sinks). Windowed
-        // layers go through ggml_flash_attn_ext with the row/col window
-        // mask and ggml_flash_attn_ext_add_sinks for the per-head sink.
-        // Non-FA fallback uses the equivalent manual concat+pad trick:
-        // append a virtual sink K column to kq and zero-pad V's K dim,
-        // so the sink shows up in the softmax denominator but contributes
-        // 0 to the weighted V sum.
-        ggml_tensor * attn_out;
-        if (is_full) {
-            attn_out = build_attn(layer.o_w, layer.o_b,
-                                  Qcur, Kcur, Vcur, nullptr, attn_scale, il);
-        } else if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
-            ggml_build_forward_expand(gf, Qcur);
-            ggml_build_forward_expand(gf, Kcur);
-            ggml_build_forward_expand(gf, Vcur);
-
-            ggml_tensor * q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
-            ggml_tensor * k = ggml_permute(ctx0, Kcur, 0, 2, 1, 3);
-            ggml_tensor * v = ggml_permute(ctx0, Vcur, 0, 2, 1, 3);
-            k = ggml_cast(ctx0, k, GGML_TYPE_F16);
-            v = ggml_cast(ctx0, v, GGML_TYPE_F16);
-            ggml_tensor * mask_fa = ggml_cast(ctx0, window_mask, GGML_TYPE_F16);
-
-            ggml_tensor * cur_attn = ggml_flash_attn_ext(ctx0, q, k, v, mask_fa, attn_scale, 0.0f, 0.0f);
-            ggml_flash_attn_ext_set_prec(cur_attn, GGML_PREC_F32);
+        // Full layers: plain attention. Windowed layers: same path, plus a
+        // banded mask and per-head sinks.
+        ggml_tensor * mask  = is_full ? nullptr : window_mask_attn;
+        ggml_tensor * sinks = is_full ? nullptr : layer.attn_sinks;
+        if (!is_full) {
             GGML_ASSERT(layer.attn_sinks != nullptr);
-            ggml_flash_attn_ext_add_sinks(cur_attn, layer.attn_sinks);
-            cur_attn = ggml_reshape_2d(ctx0, cur_attn,
-                                       cur_attn->ne[0] * cur_attn->ne[1],
-                                       cur_attn->ne[2] * cur_attn->ne[3]);
-            cb(cur_attn, "kqv_out", il);
-
-            attn_out = build_mm(layer.o_w, cur_attn);
-            attn_out = ggml_add(ctx0, attn_out, layer.o_b);
-        } else {
-            ggml_build_forward_expand(gf, Qcur);
-            ggml_build_forward_expand(gf, Kcur);
-            ggml_build_forward_expand(gf, Vcur);
-
-            ggml_tensor * q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
-            ggml_tensor * k = ggml_permute(ctx0, Kcur, 0, 2, 1, 3);
-            ggml_tensor * v = ggml_permute(ctx0, Vcur, 1, 2, 0, 3);
-            v = ggml_cont(ctx0, v);
-
-            ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
-            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-            kq = ggml_scale(ctx0, kq, attn_scale);
-            kq = ggml_add(ctx0, kq, window_mask);
-            cb(kq, "kq_masked", il);
-
-            GGML_ASSERT(layer.attn_sinks != nullptr);
-            {
-                ggml_tensor * s = ggml_reshape_3d(ctx0, layer.attn_sinks, 1, 1, n_head);
-                ggml_tensor * sink_target = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_pos, n_head);
-                ggml_tensor * sink_col = ggml_repeat(ctx0, s, sink_target);
-                kq = ggml_concat(ctx0, kq, sink_col, 0);   // (n_pos+1, n_pos, n_head)
-                v  = ggml_pad(ctx0, v, 1, 0, 0, 0);        // (n_pos+1, head_dim, n_head_kv)
-                cb(kq, "kq_sink_ext", il);
-            }
-
-            kq = ggml_soft_max(ctx0, kq);
-
-            ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
-            ggml_tensor * cur_attn = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-            cur_attn = ggml_cont_2d(ctx0, cur_attn, cur_attn->ne[0] * cur_attn->ne[1], cur_attn->ne[2] * cur_attn->ne[3]);
-            cb(cur_attn, "kqv_out", il);
-
-            attn_out = build_mm(layer.o_w, cur_attn);
-            attn_out = ggml_add(ctx0, attn_out, layer.o_b);
         }
+        ggml_tensor * attn_out = build_attn(layer.o_w, layer.o_b, Qcur, Kcur, Vcur, mask, attn_scale, il, sinks);
         cb(attn_out, "attn_out", il);
 
         // Residual 1.
@@ -256,7 +195,7 @@ ggml_cgraph * clip_graph_mimovl::build() {
     cb(inpL, "post_ln", -1);
 
     // Spatial merge: pack each merge_unit (=4) of patches into a single
-    // (n_embd*merge_unit)-wide row, then run the 2-layer MLP (no biases).
+    // (n_embd*merge_unit)-wide row, then run the 2-layer MLP.
     ggml_tensor * embeddings = ggml_reshape_3d(ctx0, inpL, n_embd * merge_unit, n_units, batch_size);
     embeddings = build_ffn(embeddings,
         model.mm_0_w, nullptr,

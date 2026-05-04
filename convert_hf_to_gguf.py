@@ -9794,17 +9794,6 @@ class MiMoV2VisionModel(MmprojModel):
             yield (embd_name + ".weight.1", data_torch[:, :, 1, ...])
             return
 
-        # Fused qkv with GQA: HF stores [Q | K | V] row-stacked along axis 0.
-        # Q.rows = n_q*head_dim, K.rows = V.rows = n_kv*head_dim.
-        if ".attn.qkv." in name:
-            q_size  = self.n_q_heads  * self.head_dim
-            kv_size = self.num_kv_heads * self.head_dim
-            wq, wk, wv = data_torch.split([q_size, kv_size, kv_size], dim=0)
-            yield from super().modify_tensors(wq, name.replace(".attn.qkv.", ".attn.q."), bid)
-            yield from super().modify_tensors(wk, name.replace(".attn.qkv.", ".attn.k."), bid)
-            yield from super().modify_tensors(wv, name.replace(".attn.qkv.", ".attn.v."), bid)
-            return
-
         yield from super().modify_tensors(data_torch, name, bid)
 
 
