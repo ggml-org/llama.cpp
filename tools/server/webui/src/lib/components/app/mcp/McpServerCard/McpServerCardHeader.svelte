@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Cable, ExternalLink } from '@lucide/svelte';
+	import { ExternalLink } from '@lucide/svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Badge } from '$lib/components/ui/badge';
 	import { McpCapabilitiesBadges } from '$lib/components/app/mcp';
@@ -43,13 +43,9 @@
 							(e.currentTarget as HTMLImageElement).style.display = 'none';
 						}}
 					/>
-				{:else}
-					<div class="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-muted">
-						<Cable class="h-3 w-3 text-muted-foreground" />
-					</div>
 				{/if}
 
-				<p class="min-w-0 shrink-0 truncate leading-none font-medium">{displayName}</p>
+				<p class="min-w-0 shrink-0 truncate leading-6 font-medium">{displayName}</p>
 
 				{#if serverInfo?.version}
 					<Badge variant="secondary" class="h-4 min-w-0 truncate px-1 text-[10px]">
