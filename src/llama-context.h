@@ -177,7 +177,8 @@ struct llama_context {
             ggml_opt_result_t       result_eval,
             int64_t                 idata_split,
             ggml_opt_epoch_callback callback_train,
-            ggml_opt_epoch_callback callback_eval);
+            ggml_opt_epoch_callback callback_eval,
+            bool                    shuffle);
 
     void opt_epoch_iter(
             ggml_opt_dataset_t               dataset,
@@ -185,6 +186,7 @@ struct llama_context {
             const std::vector<llama_token> & tokens,
             const std::vector<llama_token> & labels_sparse,
             llama_batch                    & batch,
+            float                            reward_scale,
             ggml_opt_epoch_callback          callback,
             bool                             train,
             int64_t                          idata_in_loop,
