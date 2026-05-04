@@ -1,4 +1,4 @@
-#include "lightning_indexer.cuh"
+#include "lightning-indexer.cuh"
 #include "fattn-common.cuh"
 #include "convert.cuh"
 
