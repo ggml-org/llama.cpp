@@ -3380,7 +3380,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-draft-poll", "--poll-draft"}, "<0|1>",
-        "Use polling to wait for draft model work (default: same as --poll])",
+        "Use polling to wait for draft model work (default: same as --poll)",
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams.poll = value;
         }
