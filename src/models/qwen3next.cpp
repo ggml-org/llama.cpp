@@ -1,8 +1,113 @@
 #include "models.h"
-
 #include "llama-memory-recurrent.h"
 
-llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_graph_params & params) :
+void llama_model_qwen3next::load_arch_hparams(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
+    ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
+
+    // Load linear attention (gated delta net) parameters
+    ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+    ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+    ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+    ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+    ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+    // Mark recurrent layers (linear attention layers)
+    {
+        uint32_t full_attn_interval = 4;
+        ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
+        for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+            hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+        }
+    }
+
+    switch (hparams.n_layer) {
+        case 48: type = LLM_TYPE_80B_A3B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
+}
+
+void llama_model_qwen3next::load_arch_tensors(llama_model_loader &) {
+    LLAMA_LOAD_LOCALS;
+
+    if (n_expert == 0) {
+        throw std::runtime_error(arch_name() + " model cannot have zero experts");
+    }
+
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
+
+    // output
+    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
+    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+
+    // if output is NULL, init from the input tok embed
+    if (output == NULL) {
+        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
+    }
+
+    const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+
+    // Calculate dimensions from hyperparameters
+    const int64_t head_k_dim = hparams.ssm_d_state;
+    const int64_t head_v_dim = hparams.ssm_d_state;
+    const int64_t n_k_heads  = hparams.ssm_n_group;
+    const int64_t n_v_heads  = hparams.ssm_dt_rank;
+    const int64_t key_dim    = head_k_dim * n_k_heads;
+    const int64_t value_dim  = head_v_dim * n_v_heads;
+    const int64_t conv_dim   = key_dim * 2 + value_dim;
+
+    // Calculate projection sizes
+    const int64_t qkvz_dim = key_dim * 2 + value_dim * 2;
+    const int64_t ba_dim   = n_v_heads * 2;
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = layers[i];
+        const uint32_t n_ff_shexp = hparams.n_ff_shexp > 0 ? hparams.n_ff_shexp : hparams.n_ff(i);
+
+        layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), { n_embd }, 0);
+        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, 0);
+
+        if (!hparams.is_recurrent(i)) {
+            // Attention layers
+            create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head * 2, n_embd_k_gqa, n_embd_v_gqa, 0);
+            layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
+
+            // Q/K normalization for attention layers
+            layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
+            layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
+        } else {
+            // Linear attention (gated delta net) specific tensors
+            // Create tensors with calculated dimensions
+            // note: ssm_in is used by legacy GGUF
+            layer.ssm_in         = create_tensor(tn(LLM_TENSOR_SSM_IN,         "weight", i), { n_embd, qkvz_dim }, TENSOR_NOT_REQUIRED);
+            layer.wqkv           = create_tensor(tn(LLM_TENSOR_ATTN_QKV,       "weight", i), { n_embd, key_dim * 2 + value_dim }, TENSOR_NOT_REQUIRED);
+            layer.wqkv_gate      = create_tensor(tn(LLM_TENSOR_ATTN_GATE,      "weight", i), { n_embd, value_dim }, TENSOR_NOT_REQUIRED);
+            layer.ssm_conv1d     = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,     "weight", i), { hparams.ssm_d_conv, conv_dim }, 0);
+            layer.ssm_dt         = create_tensor(tn(LLM_TENSOR_SSM_DT,         "bias",   i), { hparams.ssm_dt_rank }, 0);
+            layer.ssm_a          = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN,             i), { hparams.ssm_dt_rank }, 0);
+            layer.ssm_beta_alpha = create_tensor(tn(LLM_TENSOR_SSM_BETA_ALPHA, "weight", i), { n_embd, ba_dim }, 0);
+            layer.ssm_norm       = create_tensor(tn(LLM_TENSOR_SSM_NORM,       "weight", i), { head_v_dim }, 0);
+            layer.ssm_out        = create_tensor(tn(LLM_TENSOR_SSM_OUT,        "weight", i), { value_dim, n_embd }, 0);
+        }
+
+        layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), { n_embd, n_expert }, 0);
+        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd, n_expert }, 0);
+        create_tensor_gate_up_exps(layer, i, n_embd, n_ff_exp, n_expert, 0);
+
+        // Shared experts
+        layer.ffn_gate_inp_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", i), { n_embd }, 0);
+        layer.ffn_gate_shexp     = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP,     "weight", i), { n_embd, n_ff_shexp }, 0);
+        layer.ffn_up_shexp       = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,       "weight", i), { n_embd, n_ff_shexp }, 0);
+        layer.ffn_down_shexp     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,     "weight", i), { n_ff_shexp, n_embd }, 0);
+    }
+}
+
+std::unique_ptr<llm_graph_context> llama_model_qwen3next::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(*this, params);
+}
+
+llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_params & params) :
     llm_build_delta_net_base(params), model(model) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
@@ -87,7 +192,7 @@ static ggml_tensor * get_slice_2d(ggml_context * ctx0, ggml_tensor * t, int64_t 
         t->nb[1], t->nb[2], t->nb[3], t->nb[2] * c);
 }
 
-ggml_tensor * llm_build_qwen3next::build_norm_gated(
+ggml_tensor * llama_model_qwen3next::graph::build_norm_gated(
         ggml_tensor * input,
         ggml_tensor * weights,
         ggml_tensor * gate,
@@ -98,7 +203,7 @@ ggml_tensor * llm_build_qwen3next::build_norm_gated(
     return ggml_mul(ctx0, normalized, gated_silu);
 }
 
-ggml_tensor * llm_build_qwen3next::build_layer_attn(
+ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
         llm_graph_input_attn_kv * inp,
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
@@ -178,7 +283,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
     return cur;
 }
 
-std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_qkvz(
+std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen3next::graph::build_qkvz(
                 ggml_tensor * input,
                         int   il) {
     const int64_t d_inner      = hparams.ssm_d_inner;
@@ -259,7 +364,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_qkvz(
     }
 }
 
-ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
+ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
         llm_graph_input_rs * inp,
         ggml_tensor *        cur,
         int                  il) {
@@ -468,7 +573,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     return cur;
 }
 
-ggml_tensor * llm_build_qwen3next::build_layer_ffn(ggml_tensor * cur, const int il) {
+ggml_tensor * llama_model_qwen3next::graph::build_layer_ffn(ggml_tensor * cur, const int il) {
     // Check if this is an MoE layer
     if (model.layers[il].ffn_gate_inp != nullptr) {
         // MoE branch

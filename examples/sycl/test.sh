@@ -38,7 +38,7 @@ SEED=0
 GPUS_SETTING=""
 
 INPUT_PROMPT="Building a website can be done in 10 simple steps:\nStep 1:"
-MODEL_FILE=models/llama-2-7b.Q4_0.gguf
+MODEL_FILE=../models/llama-2-7b.Q4_0.gguf
 NGL=99
 CONTEXT=4096
 GGML_SYCL_DEVICE=-1
@@ -122,9 +122,10 @@ if [ $GGML_SYCL_DEVICE -ne -1 ]; then
     export ONEAPI_DEVICE_SELECTOR="level_zero:${$GGML_SYCL_DEVICE}"
     echo "ONEAPI_DEVICE_SELECTOR=${ONEAPI_DEVICE_SELECTOR}"
 else
-   echo "Use all Intel GPUs, including iGPU & dGPU"
+    echo "Use all Intel GPUs, including iGPU & dGPU"
+    GPUS_SETTING="-sm ${SPLIT_MODE}"
  fi
 
-echo "run cmd: ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 400 -e -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE}  --mmap "
-ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 400 -e -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --mmap
+echo "run cmd: ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE}  --mmap "
+ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --mmap
 

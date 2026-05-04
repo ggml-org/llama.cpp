@@ -39,7 +39,7 @@
  * <McpServersSettings />
  * ```
  */
-export { default as McpServersSettings } from './McpServersSettings.svelte';
+export { default as McpServersSettings } from '../settings/SettingsMcpServers.svelte';
 
 /**
  * **McpActiveServersAvatars** - Active MCP servers indicator
@@ -68,33 +68,6 @@ export { default as McpServersSettings } from './McpServersSettings.svelte';
  * ```
  */
 export { default as McpActiveServersAvatars } from './McpActiveServersAvatars.svelte';
-
-/**
- * **McpServersSelector** - Quick MCP server toggle dropdown
- *
- * Compact dropdown for quickly enabling/disabling MCP servers for the current chat.
- * Uses McpActiveServersAvatars as trigger and shows searchable server list with switches.
- *
- * **Architecture:**
- * - Uses DropdownMenuSearchable for searchable dropdown UI
- * - McpActiveServersAvatars as the trigger element
- * - Integrates with conversationsStore for per-chat toggle
- * - Runs health checks on dropdown open
- *
- * **Features:**
- * - Searchable server list by name/URL
- * - Switch toggles matching McpServersSettings behavior
- * - Error state display for unhealthy servers
- * - Footer link to full MCP settings dialog
- *
- * @example
- * ```svelte
- * <McpServersSelector
- *   onSettingsClick={() => showMcpSettings = true}
- * />
- * ```
- */
-export { default as McpServersSelector } from './McpServersSelector.svelte';
 
 /**
  * **McpCapabilitiesBadges** - Server capabilities display
@@ -216,7 +189,7 @@ export { default as McpServerCardSkeleton } from './McpServerCardSkeleton.svelte
 export { default as McpServerInfo } from './McpServerInfo.svelte';
 
 /**
- * **McpResourceBrowser** - MCP resources tree browser
+ * **McpResourcesBrowser** - MCP resources tree browser
  *
  * Tree view component showing resources grouped by server.
  * Supports resource selection and quick attach actions.
@@ -229,7 +202,7 @@ export { default as McpServerInfo } from './McpServerInfo.svelte';
  * - Refresh all resources action
  * - Loading states per server
  */
-export { default as McpResourceBrowser } from './McpResourceBrowser/McpResourceBrowser.svelte';
+export { default as McpResourcesBrowser } from './McpResourcesBrowser/McpResourcesBrowser.svelte';
 
 /**
  * **McpResourcePreview** - MCP resource content preview

@@ -21,11 +21,11 @@ if ($null -ne $env:V) {
 }
 
 if ($null -ne $env:PROF) {
-    $env:GGML_HEXAGON_PROFILE=$env:PROF; $env:GGML_HEXAGON_OPSYNC=1
+    $env:GGML_HEXAGON_PROFILE=$env:PROF
 }
 
-if ($null -ne $env:OPMASK) {
-    $env:GGML_HEXAGON_OPMASK=$env:OPMASK
+if ($null -ne $env:OPSTAGE) {
+    $env:GGML_HEXAGON_OPSTAGE=$env:OPSTAGE
 }
 
 if ($null -ne $env:NHVX) {

@@ -138,25 +138,54 @@ struct Params {
 };
 
 @group(0) @binding(0) var<storage, read_write> Q: array<f32>;
+#ifdef KV_OVERLAP
+@group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
+#define V K
+#else
 @group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
 @group(0) @binding(2) var<storage, read_write> V: array<KV_TYPE>;
+#endif
 
 #if defined(MASK) && defined(SINKS)
-@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
-@group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
-#define DST_BINDING 5
-#define PARAMS_BINDING 6
-#elif defined(MASK)
-@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
-#define DST_BINDING 4
-#define PARAMS_BINDING 5
-#elif defined(SINKS)
+#ifdef KV_OVERLAP
+@group(0) @binding(2) var<storage, read_write> mask: array<f16>;
 @group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
 #define DST_BINDING 4
 #define PARAMS_BINDING 5
 #else
+@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
+@group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
+#define DST_BINDING 5
+#define PARAMS_BINDING 6
+#endif
+#elif defined(MASK)
+#ifdef KV_OVERLAP
+@group(0) @binding(2) var<storage, read_write> mask: array<f16>;
 #define DST_BINDING 3
 #define PARAMS_BINDING 4
+#else
+@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
+#define DST_BINDING 4
+#define PARAMS_BINDING 5
+#endif
+#elif defined(SINKS)
+#ifdef KV_OVERLAP
+@group(0) @binding(2) var<storage, read_write> sinks: array<f32>;
+#define DST_BINDING 3
+#define PARAMS_BINDING 4
+#else
+@group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
+#define DST_BINDING 4
+#define PARAMS_BINDING 5
+#endif
+#else
+#ifdef KV_OVERLAP
+#define DST_BINDING 2
+#define PARAMS_BINDING 3
+#else
+#define DST_BINDING 3
+#define PARAMS_BINDING 4
+#endif
 #endif
 
 @group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<vec4<f32>>;

@@ -100,6 +100,9 @@ private:
     std::condition_variable cv_stop;
     std::set<std::string> stopping_models;
 
+    // set to true while load_models() is executing a reload; load() will wait until clear
+    bool is_reloading = false;
+
     common_preset_context ctx_preset;
 
     common_params base_params;
@@ -118,6 +121,11 @@ private:
 public:
     server_models(const common_params & params, int argc, char ** argv);
 
+    // (re-)load the list of models from various sources and prepare the metadata mapping
+    // - if this is called the first time, simply populate the metadata
+    // - if this is called subsequently (e.g. when refreshing from disk):
+    //   - if a model is running but updated or removed from the source, it will be unloaded
+    //   - if a model is not running, it will be added or updated according to the source
     void load_models();
 
     // check if a model instance exists (thread-safe)
@@ -202,6 +210,7 @@ public:
                       const std::string & path,
                       const std::map<std::string, std::string> & headers,
                       const std::string & body,
+                      const std::map<std::string, uploaded_file> & files,
                       const std::function<bool()> should_stop,
                       int32_t timeout_read,
                       int32_t timeout_write
