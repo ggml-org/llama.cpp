@@ -2927,6 +2927,7 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             } else {
                 return ggml_webgpu_row_norm(ctx, src0, node);
             }
+        case GGML_OP_NORM:
         case GGML_OP_L2_NORM:
             return ggml_webgpu_row_norm(ctx, src0, node);
         case GGML_OP_ROPE:
@@ -4071,6 +4072,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 break;
             }
         case GGML_OP_RMS_NORM:
+        case GGML_OP_NORM:
         case GGML_OP_L2_NORM:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;
             break;
