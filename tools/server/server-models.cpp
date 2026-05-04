@@ -243,9 +243,8 @@ void server_models::add_model(server_model_meta && meta) {
     };
 }
 
-// TODO: allow refreshing cached model list
 void server_models::load_models() {
-    // loading models from 3 sources:
+    // Phase 1: load presets from all sources — pure I/O, no lock needed
     // 1. cached models
     common_presets cached_models = ctx_preset.load_from_cache();
     SRV_INF("Loaded %zu cached model presets\n", cached_models.size());
@@ -270,112 +269,266 @@ void server_models::load_models() {
 
     // note: if a model exists in both cached and local, local takes precedence
     common_presets final_presets;
-    for (const auto & [name, preset] : cached_models) {
-        final_presets[name] = preset;
-    }
-    for (const auto & [name, preset] : local_models) {
-        final_presets[name] = preset;
-    }
-
-    // process custom presets from INI
+    for (const auto & [name, preset] : cached_models) final_presets[name] = preset;
+    for (const auto & [name, preset] : local_models)  final_presets[name] = preset;
     for (const auto & [name, custom] : custom_presets) {
         if (final_presets.find(name) != final_presets.end()) {
-            // apply custom config if exists
-            common_preset & target = final_presets[name];
-            target.merge(custom);
+            final_presets[name].merge(custom);
         } else {
-            // otherwise add directly
             final_presets[name] = custom;
         }
     }
-
-    // server base preset from CLI args take highest precedence
+    // server base preset from CLI args takes highest precedence
     for (auto & [name, preset] : final_presets) {
         preset.merge(base_preset);
     }
 
-    // convert presets to server_model_meta and add to mapping
-    for (const auto & preset : final_presets) {
-        server_model_meta meta{
-            /* preset       */ preset.second,
-            /* name         */ preset.first,
-            /* aliases      */ {},
-            /* tags         */ {},
-            /* port         */ 0,
-            /* status       */ SERVER_MODEL_STATUS_UNLOADED,
-            /* last_used    */ 0,
-            /* args         */ std::vector<std::string>(),
-            /* exit_code    */ 0,
-            /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
-        };
-        add_model(std::move(meta));
-    }
-
-    // log available models
-    {
-        std::unordered_set<std::string> custom_names;
-        for (const auto & [name, preset] : custom_presets) {
-            custom_names.insert(name);
+    // Helpers that read `mapping` — must be called while holding the lock.
+    std::unordered_set<std::string> custom_names;
+    for (const auto & [name, preset] : custom_presets) custom_names.insert(name);
+    auto join_set = [](const std::set<std::string> & s) {
+        std::string result;
+        for (const auto & v : s) {
+            if (!result.empty()) result += ", ";
+            result += v;
         }
-        auto join_set = [](const std::set<std::string> & s) {
-            std::string result;
-            for (const auto & v : s) {
-                if (!result.empty()) {
-                    result += ", ";
-                }
-                result += v;
-            }
-            return result;
-        };
-
+        return result;
+    };
+    auto log_available_models = [&]() {
         SRV_INF("Available models (%zu) (*: custom preset)\n", mapping.size());
         for (const auto & [name, inst] : mapping) {
             bool has_custom = custom_names.find(name) != custom_names.end();
             std::string info;
-            if (!inst.meta.aliases.empty()) {
-                info += " (aliases: " + join_set(inst.meta.aliases) + ")";
-            }
-            if (!inst.meta.tags.empty()) {
-                info += " [tags: " + join_set(inst.meta.tags) + "]";
-            }
+            if (!inst.meta.aliases.empty()) info += " (aliases: " + join_set(inst.meta.aliases) + ")";
+            if (!inst.meta.tags.empty())    info += " [tags: "    + join_set(inst.meta.tags)    + "]";
             SRV_INF("  %c %s%s\n", has_custom ? '*' : ' ', name.c_str(), info.c_str());
         }
-    }
-
-    // handle custom stop-timeout option
-    for (auto & [name, inst] : mapping) {
-        std::string val;
-        if (inst.meta.preset.get_option(COMMON_ARG_PRESET_STOP_TIMEOUT, val)) {
-            try {
-                inst.meta.stop_timeout = std::stoi(val);
-            } catch (...) {
-                SRV_WRN("invalid stop-timeout value '%s' for model '%s', using default %d seconds\n",
-                    val.c_str(), name.c_str(), DEFAULT_STOP_TIMEOUT);
-                inst.meta.stop_timeout = DEFAULT_STOP_TIMEOUT;
+    };
+    auto apply_stop_timeout = [&]() {
+        for (auto & [name, inst] : mapping) {
+            std::string val;
+            if (inst.meta.preset.get_option(COMMON_ARG_PRESET_STOP_TIMEOUT, val)) {
+                try {
+                    inst.meta.stop_timeout = std::stoi(val);
+                } catch (...) {
+                    SRV_WRN("invalid stop-timeout value '%s' for model '%s', using default %d seconds\n",
+                        val.c_str(), name.c_str(), DEFAULT_STOP_TIMEOUT);
+                    inst.meta.stop_timeout = DEFAULT_STOP_TIMEOUT;
+                }
             }
         }
-    }
+    };
+    // update_args() injects HOST/PORT/ALIAS, so strip them before comparing presets
+    auto preset_options_for_compare = [](common_preset p) {
+        p.unset_option("LLAMA_ARG_HOST");
+        p.unset_option("LLAMA_ARG_PORT");
+        p.unset_option("LLAMA_ARG_ALIAS");
+        return p.options;
+    };
 
-    // load any autoload models
-    std::vector<std::string> models_to_load;
-    for (const auto & [name, inst] : mapping) {
-        std::string val;
-        if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val)) {
-            if (common_arg_utils::is_truthy(val)) {
+    // Phase 2: acquire the lock once for all mapping mutations.
+    // We temporarily release it only when calling functions that acquire it internally
+    // (unload, load) or when joining threads (the monitoring thread calls update_status
+    // which locks the mutex, so joining while holding it would deadlock).
+    std::unique_lock<std::mutex> lk(mutex);
+    bool is_first_load = mapping.empty();
+
+    if (is_first_load) {
+        // FIRST LOAD: add all models, then unlock for autoloading
+        for (const auto & [name, preset] : final_presets) {
+            server_model_meta meta{
+                /* preset       */ preset,
+                /* name         */ name,
+                /* aliases      */ {},
+                /* tags         */ {},
+                /* port         */ 0,
+                /* status       */ SERVER_MODEL_STATUS_UNLOADED,
+                /* last_used    */ 0,
+                /* args         */ std::vector<std::string>(),
+                /* exit_code    */ 0,
+                /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
+            };
+            add_model(std::move(meta));
+        }
+        apply_stop_timeout();
+        log_available_models();
+
+        std::vector<std::string> models_to_load;
+        for (const auto & [name, inst] : mapping) {
+            std::string val;
+            if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
                 models_to_load.push_back(name);
             }
         }
-    }
-    if ((int)models_to_load.size() > base_params.models_max) {
-        throw std::runtime_error(string_format(
-            "number of models to load on startup (%zu) exceeds models_max (%d)",
-            models_to_load.size(),
-            base_params.models_max
-        ));
-    }
-    for (const auto & name : models_to_load) {
-        SRV_INF("(startup) loading model %s\n", name.c_str());
-        load(name);
+        if ((int)models_to_load.size() > base_params.models_max) {
+            throw std::runtime_error(string_format(
+                "number of models to load on startup (%zu) exceeds models_max (%d)",
+                models_to_load.size(), base_params.models_max));
+        }
+
+        lk.unlock();
+        for (const auto & name : models_to_load) {
+            SRV_INF("(startup) loading model %s\n", name.c_str());
+            load(name);
+        }
+    } else {
+        // RELOAD: diff the new preset list against the current mapping and reconcile
+        is_reloading = true;
+
+        // find running models whose source was removed or whose preset changed
+        std::vector<std::string> to_unload;
+        for (const auto & [name, inst] : mapping) {
+            if (!inst.meta.is_running()) continue;
+            auto it = final_presets.find(name);
+            if (it == final_presets.end()) {
+                to_unload.push_back(name); // removed from source
+            } else if (preset_options_for_compare(inst.meta.preset) != preset_options_for_compare(it->second)) {
+                to_unload.push_back(name); // preset changed
+            }
+        }
+
+        // unload() acquires the lock internally, so release before each call
+        for (const auto & name : to_unload) {
+            SRV_INF("(reload) unloading model name=%s (source updated or removed)\n", name.c_str());
+            lk.unlock();
+            unload(name);
+            lk.lock();
+        }
+
+        // wait for all targeted models to reach UNLOADED; cv.wait handles unlock/relock
+        cv.wait(lk, [&]() {
+            for (const auto & name : to_unload) {
+                auto it = mapping.find(name);
+                if (it != mapping.end() && it->second.meta.is_running()) return false;
+            }
+            return true;
+        });
+
+        // collect all threads to join in one pass while the lock is held:
+        // - monitoring threads from just-unloaded models (to_unload)
+        // - threads of already-UNLOADED models that are being removed from source
+        std::vector<std::thread> threads_to_join;
+        for (const auto & name : to_unload) {
+            auto it = mapping.find(name);
+            if (it != mapping.end() && it->second.th.joinable()) {
+                threads_to_join.push_back(std::move(it->second.th));
+            }
+        }
+        for (auto & [name, inst] : mapping) {
+            if (final_presets.find(name) == final_presets.end() && !inst.meta.is_running() && inst.th.joinable()) {
+                threads_to_join.push_back(std::move(inst.th));
+            }
+        }
+
+        // join outside the lock — monitoring thread calls update_status (needs lock)
+        lk.unlock();
+        for (auto & th : threads_to_join) th.join();
+        lk.lock();
+
+        // erase models no longer in any source
+        for (auto it = mapping.begin(); it != mapping.end(); ) {
+            if (final_presets.find(it->first) == final_presets.end()) {
+                SRV_INF("(reload) removing model name=%s (no longer in source)\n", it->first.c_str());
+                GGML_ASSERT(!it->second.th.joinable()); // must have been joined above
+                it = mapping.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        // update presets for non-running models still in source
+        for (auto & [name, inst] : mapping) {
+            if (inst.meta.is_running()) continue;
+            auto it = final_presets.find(name);
+            if (it == final_presets.end()) continue; // erased above
+
+            inst.meta.preset = it->second;
+
+            // re-parse aliases, then validate against other models
+            std::set<std::string> new_aliases;
+            std::string alias_str;
+            if (inst.meta.preset.get_option("LLAMA_ARG_ALIAS", alias_str) && !alias_str.empty()) {
+                for (auto & alias : string_split<std::string>(alias_str, ',')) {
+                    alias = string_strip(alias);
+                    if (!alias.empty()) new_aliases.insert(alias);
+                }
+            }
+            inst.meta.aliases.clear();
+            for (const auto & alias : new_aliases) {
+                bool conflict = false;
+                for (const auto & [other_name, other_inst] : mapping) {
+                    if (other_name == name) continue;
+                    if (other_name == alias || other_inst.meta.aliases.count(alias)) {
+                        SRV_WRN("(reload) alias '%s' for model '%s' conflicts with model '%s', skipping\n",
+                            alias.c_str(), name.c_str(), other_name.c_str());
+                        conflict = true;
+                        break;
+                    }
+                }
+                if (!conflict) inst.meta.aliases.insert(alias);
+            }
+
+            // re-parse tags
+            inst.meta.tags.clear();
+            std::string tags_str;
+            if (inst.meta.preset.get_option("LLAMA_ARG_TAGS", tags_str) && !tags_str.empty()) {
+                for (auto & tag : string_split<std::string>(tags_str, ',')) {
+                    tag = string_strip(tag);
+                    if (!tag.empty()) inst.meta.tags.insert(tag);
+                }
+            }
+
+            inst.meta.exit_code = 0; // clear failed state so the model can be reloaded
+            inst.meta.update_args(ctx_preset, bin_path);
+        }
+
+        // add models that are new in this reload
+        std::vector<std::string> newly_added;
+        for (const auto & [name, preset] : final_presets) {
+            if (mapping.find(name) == mapping.end()) {
+                server_model_meta meta{
+                    /* preset       */ preset,
+                    /* name         */ name,
+                    /* aliases      */ {},
+                    /* tags         */ {},
+                    /* port         */ 0,
+                    /* status       */ SERVER_MODEL_STATUS_UNLOADED,
+                    /* last_used    */ 0,
+                    /* args         */ std::vector<std::string>(),
+                    /* exit_code    */ 0,
+                    /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
+                };
+                add_model(std::move(meta));
+                newly_added.push_back(name);
+            }
+        }
+
+        apply_stop_timeout();
+
+        // clear reload flag before unlocking for autoload — load() blocks on !is_reloading,
+        // so clearing it here (while still locked) prevents a deadlock in the autoload calls below
+        is_reloading = false;
+        cv.notify_all();
+
+        log_available_models();
+
+        // collect autoload candidates while still under the lock
+        std::vector<std::string> to_autoload;
+        for (const auto & name : newly_added) {
+            auto it = mapping.find(name);
+            if (it != mapping.end()) {
+                std::string val;
+                if (it->second.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
+                    to_autoload.push_back(name);
+                }
+            }
+        }
+
+        lk.unlock();
+        for (const auto & name : to_autoload) {
+            SRV_INF("(reload) loading new model %s\n", name.c_str());
+            load(name);
+        }
     }
 }
 
@@ -536,7 +689,10 @@ void server_models::load(const std::string & name) {
     }
     unload_lru();
 
-    std::lock_guard<std::mutex> lk(mutex);
+    std::unique_lock<std::mutex> lk(mutex);
+    // edge case: block until any in-progress reload has finished so we always load
+    // against the freshest preset and a consistent mapping state
+    cv.wait(lk, [this]() { return !is_reloading; });
 
     auto meta = mapping[name].meta;
     if (meta.status != SERVER_MODEL_STATUS_UNLOADED) {
@@ -993,7 +1149,11 @@ void server_models_routes::init_routes() {
         return res;
     };
 
-    this->get_router_models = [this](const server_http_req &) {
+    this->get_router_models = [this](const server_http_req & req) {
+        bool reload = !req.get_param("reload", "").empty();
+        if (reload) {
+            models.load_models();
+        }
         auto res = std::make_unique<server_http_res>();
         json models_json = json::array();
         auto all_models = models.get_all_meta();
