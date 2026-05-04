@@ -7,8 +7,18 @@ The output packs all four components into one file with prefixed tensor names:
   vae.*   - Variational Autoencoder (vae/)
   unet.*  - Denoising U-Net (unet/)
 
+Supported weight types via --q-type:
+  f32    - float32 (2D weights; 4D conv kernels always stay f16)
+  f16    - float16 [default]
+  q8_0   - Q8_0 for 2D weights; 1D biases/norms stay f32, 4D conv stay f16
+
+For K-quants (Q2_K, Q4_K_S, Q4_K_M, Q5_K_M, Q6_K …) convert to f16 first
+then quantize with the llama-quantize C++ binary:
+  ./llama-quantize sdxl-turbo-f16.gguf sdxl-turbo-q4_k_m.gguf Q4_K_M
+
 Usage:
   python convert-sdxl-to-gguf.py -m ./sdxl-turbo -o ./output
+  python convert-sdxl-to-gguf.py -m ./sdxl-turbo --q-type q8_0
 """
 
 from __future__ import annotations
@@ -28,13 +38,29 @@ import torch
 repo_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo_root))
 
-from gguf import GGUFWriter  # noqa: E402
+from gguf import GGUFWriter, GGMLQuantizationType  # noqa: E402
+from gguf.quants import quantize_q8_0, can_quantize_to_q8_0  # noqa: E402
 
 try:
     from safetensors.torch import load_file as safetensors_load
     HAS_SAFETENSORS = True
 except ImportError:
     HAS_SAFETENSORS = False
+
+
+# ---------------------------------------------------------------------------
+# Quantization type registry
+# ---------------------------------------------------------------------------
+
+# Maps --q-type string → GGUFFileType int (for add_file_type metadata)
+_FTYPE_VALUE: dict[str, int] = {
+    "f32":  0,   # ALL_F32
+    "f16":  1,   # MOSTLY_F16
+    "q8_0": 7,   # MOSTLY_Q8_0
+}
+
+_K_QUANT_NAMES = ("Q2_K", "Q3_K", "Q4_K", "Q5_K", "Q6_K",
+                  "Q2_K_S", "Q4_K_S", "Q4_K_M", "Q5_K_S", "Q5_K_M")
 
 
 # ---------------------------------------------------------------------------
@@ -78,30 +104,67 @@ def load_config(component_dir: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Dtype handling (mirrors the CLIP converter logic)
+# Dtype / quantization logic
 # ---------------------------------------------------------------------------
 
-FTYPE_STR = ["f32", "f16"]
+def convert_tensor(
+    data: torch.Tensor, name: str, q_type: str
+) -> tuple[np.ndarray, GGMLQuantizationType | None]:
+    """Return (array, raw_dtype) applying smart per-tensor dtype rules.
 
-
-def convert_tensor(data: torch.Tensor, name: str, ftype: int) -> np.ndarray:
-    """Return a numpy array with the target dtype and print a progress line."""
+    Rules:
+      1D  (bias, norm, scalar) → always f32, raw_dtype=None
+      4D  (conv kernel)        → always f16, raw_dtype=None
+      2D  (weight matrix)      → q_type; fallback to f16 if shape is incompatible
+    """
     arr = data.squeeze().float().numpy()
     n_dims = arr.ndim
 
-    if n_dims == 4:
-        # Conv kernels: always f16
-        arr = arr.astype(np.float16)
-        ftype_cur = 1
-    elif ftype == 1 and n_dims == 2 and name.endswith(".weight"):
-        arr = arr.astype(np.float16)
-        ftype_cur = 1
-    else:
-        arr = arr.astype(np.float32)
-        ftype_cur = 0
+    # 1D: biases, LayerNorm/GroupNorm weights, scalars
+    if n_dims == 1:
+        out = arr.astype(np.float32)
+        print(f"  {name} | f32 | {out.shape}")
+        return out, None
 
-    print(f"  {name} | {FTYPE_STR[ftype_cur]} | {arr.shape}")
-    return arr
+    # 4D: convolution kernels — GGML conv has no f32 kernel support
+    if n_dims == 4:
+        out = arr.astype(np.float16)
+        print(f"  {name} | f16 (conv) | {out.shape}")
+        return out, None
+
+    # 2D and other: apply requested type
+    if q_type == "f32":
+        out = arr.astype(np.float32)
+        print(f"  {name} | f32 | {out.shape}")
+        return out, None
+
+    if q_type == "f16":
+        out = arr.astype(np.float16)
+        print(f"  {name} | f16 | {out.shape}")
+        return out, None
+
+    if q_type == "q8_0":
+        if can_quantize_to_q8_0(arr):
+            out = quantize_q8_0(arr)
+            print(f"  {name} | q8_0 | {arr.shape}")
+            return out, GGMLQuantizationType.Q8_0
+        else:
+            # Row width not a multiple of 32 — fall back gracefully
+            out = arr.astype(np.float16)
+            print(f"  {name} | f16 (q8_0 fallback, row={arr.shape[-1]}) | {arr.shape}")
+            return out, None
+
+    raise ValueError(f"Unsupported q_type: {q_type!r}")
+
+
+def add_gguf_tensor(
+    fout: GGUFWriter,
+    name: str,
+    data: torch.Tensor,
+    q_type: str,
+) -> None:
+    arr, raw_dtype = convert_tensor(data, name, q_type)
+    fout.add_tensor(name, arr, raw_dtype=raw_dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +347,7 @@ def write_unet_metadata(fout: GGUFWriter, cfg: dict) -> None:
 # Component converters
 # ---------------------------------------------------------------------------
 
-def add_text_encoder(fout: GGUFWriter, model_dir: str, prefix: str, ftype: int) -> None:
+def add_text_encoder(fout: GGUFWriter, model_dir: str, prefix: str, q_type: str) -> None:
     """Write one text encoder (TE1 or TE2) into the GGUF file."""
     component = "text_encoder" if prefix == "te1" else "text_encoder_2"
     comp_dir = os.path.join(model_dir, component)
@@ -298,10 +361,10 @@ def add_text_encoder(fout: GGUFWriter, model_dir: str, prefix: str, ftype: int) 
         if gguf_name is None:
             print(f"  skipping {hf_name}")
             continue
-        fout.add_tensor(gguf_name, convert_tensor(data, gguf_name, ftype))
+        add_gguf_tensor(fout, gguf_name, data, q_type)
 
 
-def add_vae(fout: GGUFWriter, model_dir: str, ftype: int) -> None:
+def add_vae(fout: GGUFWriter, model_dir: str, q_type: str) -> None:
     comp_dir = os.path.join(model_dir, "vae")
     cfg = load_config(comp_dir)
     tensors = load_tensors(comp_dir)
@@ -310,10 +373,10 @@ def add_vae(fout: GGUFWriter, model_dir: str, ftype: int) -> None:
 
     for hf_name, data in tensors.items():
         gguf_name = get_vae_tensor_name(hf_name)
-        fout.add_tensor(gguf_name, convert_tensor(data, gguf_name, ftype))
+        add_gguf_tensor(fout, gguf_name, data, q_type)
 
 
-def add_unet(fout: GGUFWriter, model_dir: str, ftype: int) -> None:
+def add_unet(fout: GGUFWriter, model_dir: str, q_type: str) -> None:
     comp_dir = os.path.join(model_dir, "unet")
     cfg = load_config(comp_dir)
     tensors = load_tensors(comp_dir)
@@ -322,7 +385,7 @@ def add_unet(fout: GGUFWriter, model_dir: str, ftype: int) -> None:
 
     for hf_name, data in tensors.items():
         gguf_name = get_unet_tensor_name(hf_name)
-        fout.add_tensor(gguf_name, convert_tensor(data, gguf_name, ftype))
+        add_gguf_tensor(fout, gguf_name, data, q_type)
 
 
 # ---------------------------------------------------------------------------
@@ -331,14 +394,28 @@ def add_unet(fout: GGUFWriter, model_dir: str, ftype: int) -> None:
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Convert SDXL-Turbo HuggingFace model to GGUF"
+        description="Convert SDXL-Turbo HuggingFace model to GGUF",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Weight type rules:
+  1D tensors (biases, norms)  → always f32
+  4D tensors (conv kernels)   → always f16
+  2D tensors (weight matrices)→ --q-type value (with f16 fallback for q8_0 if shape incompatible)
+
+For K-quants (Q4_K_M, Q2_K, etc.) first convert to f16, then run:
+  ./llama-quantize sdxl-turbo-f16.gguf sdxl-turbo-q4_k_m.gguf Q4_K_M
+""",
     )
     ap.add_argument("-m", "--model-dir", required=True,
                     help="Path to the SDXL-Turbo model directory (HuggingFace format)")
     ap.add_argument("-o", "--output-dir", default=None,
                     help="Directory for the output GGUF file (default: model dir)")
-    ap.add_argument("--use-f32", action="store_true", default=False,
-                    help="Save weights in float32 (default: float16)")
+    ap.add_argument(
+        "--q-type",
+        choices=["f32", "f16", "q8_0"],
+        default="f16",
+        help="Weight quantization type for 2D tensors (default: f16)",
+    )
     ap.add_argument("--no-text-enc-1", action="store_true", default=False,
                     help="Skip Text Encoder 1 (CLIP ViT-L/14)")
     ap.add_argument("--no-text-enc-2", action="store_true", default=False,
@@ -357,16 +434,9 @@ def main() -> None:
     output_dir = args.output_dir if args.output_dir is not None else model_dir
     os.makedirs(output_dir, exist_ok=True)
 
-    ftype = 0 if args.use_f32 else 1
-    ftype_str = FTYPE_STR[ftype]
+    q_type = args.q_type
 
-    if args.use_f32:
-        print(
-            "WARNING: Weights for convolution ops are always saved in f16, "
-            "as the conv op in GGML does not support 32-bit kernel weights."
-        )
-
-    fname_out = os.path.join(output_dir, f"sdxl-turbo-{ftype_str}.gguf")
+    fname_out = os.path.join(output_dir, f"sdxl-turbo-{q_type}.gguf")
     fout = GGUFWriter(path=fname_out, arch="sdxl")
 
     # Read the top-level model_index.json for the model name
@@ -380,27 +450,27 @@ def main() -> None:
 
     fout.add_name(model_name)
     fout.add_description("SDXL-Turbo model (text encoders + VAE + UNet)")
-    fout.add_file_type(ftype)
+    fout.add_file_type(_FTYPE_VALUE[q_type])
 
     # --- Text Encoder 1 ---
     if not args.no_text_enc_1:
         print("\n=== Text Encoder 1 (CLIP ViT-L/14) ===")
-        add_text_encoder(fout, model_dir, "te1", ftype)
+        add_text_encoder(fout, model_dir, "te1", q_type)
 
     # --- Text Encoder 2 ---
     if not args.no_text_enc_2:
         print("\n=== Text Encoder 2 (OpenCLIP ViT-bigG/14) ===")
-        add_text_encoder(fout, model_dir, "te2", ftype)
+        add_text_encoder(fout, model_dir, "te2", q_type)
 
     # --- VAE ---
     if not args.no_vae:
         print("\n=== VAE ===")
-        add_vae(fout, model_dir, ftype)
+        add_vae(fout, model_dir, q_type)
 
     # --- UNet ---
     if not args.no_unet:
         print("\n=== UNet ===")
-        add_unet(fout, model_dir, ftype)
+        add_unet(fout, model_dir, q_type)
 
     print(f"\nWriting GGUF file: {fname_out}")
     fout.write_header_to_file()
@@ -409,6 +479,14 @@ def main() -> None:
     fout.close()
 
     print(f"Done. Output: {fname_out}")
+
+    if q_type == "f16":
+        print(
+            "\nTip: to produce K-quant variants run:\n"
+            f"  ./llama-quantize {fname_out} "
+            f"{fname_out.replace('-f16.gguf', '-q4_k_m.gguf')} Q4_K_M\n"
+            "Available types: Q2_K  Q3_K_M  Q4_K_S  Q4_K_M  Q5_K_S  Q5_K_M  Q6_K"
+        )
 
 
 if __name__ == "__main__":
