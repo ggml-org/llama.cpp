@@ -81,38 +81,36 @@ static void ssm_scan_f32_sycl(
         const int64_t n_head, const int64_t n_group, const int64_t n_tok, const int64_t n_seq,
         dpct::queue_ptr stream) {
 
-    if (src3_nb1 == sizeof(float)) {
-        if (d_state == 128) {
-            constexpr int threads   = 128;
-            constexpr int num_warps = threads / WARP_SIZE;
-            const sycl::range<2> grid(n_seq, (n_head * head_dim + num_warps - 1) / num_warps);
-            const sycl::range<2> block(1, threads);
-            stream->parallel_for(
-                sycl::nd_range<2>(grid * block, block),
-                [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                    ssm_scan_f32_group<128 / WARP_SIZE, 128>(
-                        src0, src1, src2, src3, src4, src5, src6, dst,
-                        src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                        src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, item);
-                });
-        } else if (d_state == 256) {
-            constexpr int threads   = 256;
-            constexpr int num_warps = threads / WARP_SIZE;
-            const sycl::range<2> grid(n_seq, (n_head * head_dim + num_warps - 1) / num_warps);
-            const sycl::range<2> block(1, threads);
-            stream->parallel_for(
-                sycl::nd_range<2>(grid * block, block),
-                [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                    ssm_scan_f32_group<256 / WARP_SIZE, 256>(
-                        src0, src1, src2, src3, src4, src5, src6, dst,
-                        src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                        src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, item);
-                });
-        } else {
-            GGML_ABORT("ssm_scan: unsupported d_state (must be 128 or 256)");
-        }
+    // NOTE: if you change conditions here, be sure to update the corresponding supports_op condition!
+    GGML_ASSERT(src3_nb1 == sizeof(float));
+    if (d_state == 128) {
+        constexpr int threads   = 128;
+        constexpr int num_warps = threads / WARP_SIZE;
+        const sycl::range<2> grid(n_seq, (n_head * head_dim + num_warps - 1) / num_warps);
+        const sycl::range<2> block(1, threads);
+        stream->parallel_for(
+            sycl::nd_range<2>(grid * block, block),
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                ssm_scan_f32_group<128 / WARP_SIZE, 128>(
+                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, item);
+            });
+    } else if (d_state == 256) {
+        constexpr int threads   = 256;
+        constexpr int num_warps = threads / WARP_SIZE;
+        const sycl::range<2> grid(n_seq, (n_head * head_dim + num_warps - 1) / num_warps);
+        const sycl::range<2> block(1, threads);
+        stream->parallel_for(
+            sycl::nd_range<2>(grid * block, block),
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                ssm_scan_f32_group<256 / WARP_SIZE, 256>(
+                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, item);
+            });
     } else {
-        GGML_ABORT("ssm_scan: Mamba-1 not yet ported to SYCL");
+        GGML_ABORT("ssm_scan: unsupported d_state (must be 128 or 256)");
     }
 }
 
