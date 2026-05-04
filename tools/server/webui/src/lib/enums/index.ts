@@ -1,13 +1,21 @@
-export { AttachmentType } from './attachment';
+export {
+	AttachmentType,
+	AttachmentMenuItemId,
+	AttachmentItemEnabledWhen,
+	AttachmentAction,
+	AttachmentItemVisibleWhen
+} from './attachment';
 
 export { AgenticSectionType, ToolCallType } from './agentic';
 
 export {
 	ChatMessageStatsView,
 	ContentPartType,
+	ConversationSelectionMode,
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
+	PdfViewMode,
 	ReasoningFormat
 } from './chat';
 
@@ -47,6 +55,8 @@ export { ServerRole, ServerModelStatus } from './server';
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings';
 
-export { ColorMode, McpPromptVariant, UrlProtocol } from './ui';
+export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } from './ui';
 
 export { KeyboardKey } from './keyboard';
+
+export { ToolSource, ToolPermissionDecision, ToolResponseField } from './tools';

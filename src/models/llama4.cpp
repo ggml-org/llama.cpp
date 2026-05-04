@@ -1,7 +1,109 @@
 #include "models.h"
 
+void llama_model_llama4::load_arch_hparams(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+    ml.get_key(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,   hparams.n_moe_layer_step);
+
+    const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+    if (found_swa && hparams.n_swa == 0) {
+        hparams.swa_type             = LLAMA_SWA_TYPE_NONE;
+        hparams.n_no_rope_layer_step = hparams.n_layer; // always use rope
+    } else {
+        hparams.swa_type                = LLAMA_SWA_TYPE_CHUNKED;
+        hparams.n_swa                   = 8192;
+        hparams.n_attn_temp_floor_scale = 8192;
+        hparams.f_attn_temp_scale       = 0.1f;
+        hparams.f_attn_temp_offset      = 1.0f;
+        uint32_t swa_period             = 4; // pattern: 3 chunked - 1 full
+        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+        hparams.set_swa_pattern(swa_period);
+
+        hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+        hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+        ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+    }
+
+    switch (hparams.n_expert) {
+        case 0: {
+            // MobileLLM (no MoE)
+            switch (hparams.n_embd) {
+                case 2048: type = LLM_TYPE_140M; break;
+                case 4096: type = LLM_TYPE_360M; break;
+                case 6144: type = LLM_TYPE_950M; break;
+                default:   type = LLM_TYPE_UNKNOWN;
+            }
+        } break;
+        case 16:  type = LLM_TYPE_17B_16E; break;
+        case 128: type = LLM_TYPE_17B_128E; break;
+        default:  type = LLM_TYPE_UNKNOWN;
+    }
+
+    hparams.use_kq_norm = type != LLM_TYPE_17B_128E;
+}
+
+void llama_model_llama4::load_arch_tensors(llama_model_loader &) {
+    LLAMA_LOAD_LOCALS;
+
+    if (n_expert == 0) {
+        throw std::runtime_error(arch_name() + " model cannot have zero experts");
+    }
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+    // output
+    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+    // if output is NULL, init from the input tok embed
+    if (output == NULL) {
+        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+    }
+
+    for (int i = 0; i < n_layer; ++i) {
+        const bool is_moe_layer = hparams.n_moe_layer_step > 0 && (i + 1) % hparams.n_moe_layer_step == 0;
+
+        auto & layer = layers[i];
+
+        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
+        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+        layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+
+        if (is_moe_layer) {
+            const int64_t n_ff_exp = hparams.n_ff_exp;
+
+            layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
+            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
+            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff_exp, n_embd, n_expert}, 0);
+            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
+
+            // Shared expert
+            const int64_t n_ff_shexp = n_ff_exp;
+            layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {    n_embd, n_ff_shexp}, 0);
+            layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd    }, 0);
+            layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {    n_embd, n_ff_shexp}, 0);
+        } else {
+            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+        }
+    }
+}
+
+std::unique_ptr<llm_graph_context> llama_model_llama4::build_arch_graph(const llm_graph_params & params) const {
+    if (hparams.swa_type == LLAMA_SWA_TYPE_NONE) {
+        return std::make_unique<graph<false>>(*this, params);
+    } else {
+        return std::make_unique<graph<true>>(*this, params);
+    }
+}
+
 template <bool iswa>
-llm_build_llama4<iswa>::llm_build_llama4(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -167,5 +269,5 @@ llm_build_llama4<iswa>::llm_build_llama4(const llama_model & model, const llm_gr
 }
 
 // Explicit template instantiations
-template struct llm_build_llama4<false>;
-template struct llm_build_llama4<true>;
+template struct llama_model_llama4::graph<false>;
+template struct llama_model_llama4::graph<true>;

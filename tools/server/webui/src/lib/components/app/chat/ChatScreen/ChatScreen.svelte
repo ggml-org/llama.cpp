@@ -1,26 +1,32 @@
 <script lang="ts">
+	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
 	import { afterNavigate } from '$app/navigation';
+	import { page } from '$app/state';
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatScreenForm,
-		ChatScreenHeader,
 		ChatMessages,
+		ChatScreenDragOverlay,
 		ChatScreenProcessingInfo,
 		DialogEmptyFileAlert,
+		DialogFileUploadError,
 		DialogChatError,
 		ServerLoadingSplash,
 		DialogConfirmation
 	} from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { KeyboardKey } from '$lib/enums';
+	import { setProcessingInfoContext } from '$lib/contexts';
+	import { ErrorDialogType } from '$lib/enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
 		chatStore,
 		errorDialog,
 		isLoading,
 		isChatStreaming,
 		isEditing,
-		getAddFilesHandler
+		getAddFilesHandler,
+		activeProcessingState
 	} from '$lib/stores/chat.svelte';
 	import {
 		conversationsStore,
@@ -32,11 +38,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
-	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
-	import { fade, fly, slide } from 'svelte/transition';
-	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
-	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -79,6 +81,12 @@
 
 	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
 
+	let showProcessingInfo = $derived(
+		isCurrentConversationLoading ||
+			(config().keepStatsVisible && !!page.params.id) ||
+			activeProcessingState() !== null
+	);
+
 	let isRouter = $derived(isRouterMode());
 
 	let conversationModel = $derived(
@@ -108,9 +116,16 @@
 
 	let modelPropsVersion = $state(0);
 
+	setProcessingInfoContext({
+		get showProcessingInfo() {
+			return showProcessingInfo;
+		}
+	});
+
 	$effect(() => {
 		if (activeModelId) {
 			const cached = modelsStore.getModelProps(activeModelId);
+
 			if (!cached) {
 				modelsStore.fetchModelProps(activeModelId).then(() => {
 					modelPropsVersion++;
@@ -122,6 +137,7 @@
 	let hasAudioModality = $derived.by(() => {
 		if (activeModelId) {
 			void modelPropsVersion;
+
 			return modelsStore.modelSupportsAudio(activeModelId);
 		}
 
@@ -208,20 +224,13 @@
 		processFiles(files);
 	}
 
-	function handleKeydown(event: KeyboardEvent) {
-		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
-
-		if (
-			isCtrlOrCmd &&
-			event.shiftKey &&
-			(event.key === KeyboardKey.D_LOWER || event.key === KeyboardKey.D_UPPER)
-		) {
-			event.preventDefault();
+	const { handleKeydown } = useKeyboardShortcuts({
+		deleteActiveConversation: () => {
 			if (activeConversation()) {
 				showDeleteDialog = true;
 			}
 		}
-	}
+	});
 
 	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
 		if (draft.message || draft.files.length > 0) {
@@ -342,9 +351,9 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<ChatScreenHeader />
-
-{#if !isEmpty}
+{#if isServerLoading}
+	<ServerLoadingSplash />
+{:else}
 	<div
 		bind:this={chatScrollContainer}
 		aria-label="Chat interface with file drop zone"
@@ -356,26 +365,42 @@
 		onscroll={handleScroll}
 		role="main"
 	>
-		<div class="flex flex-col">
-			<ChatMessages
-				class="mb-16 md:mb-24"
-				messages={activeMessages()}
-				onUserAction={() => {
-					autoScroll.enable();
-					autoScroll.scrollToBottom();
-				}}
-			/>
+		<div class="flex grow flex-col pt-14">
+			{#if !isEmpty}
+				<ChatMessages
+					messages={activeMessages()}
+					onUserAction={() => {
+						autoScroll.enable();
+						autoScroll.scrollToBottom();
+					}}
+				/>
+			{/if}
 
 			<div
-				class="pointer-events-none sticky right-0 bottom-4 left-0 mt-auto"
-				in:slide={{ duration: 150, axis: 'y' }}
+				class="pointer-events-none {isEmpty
+					? 'absolute bottom-[calc(50dvh-7rem)]'
+					: 'sticky bottom-4'} right-4 left-4 mt-auto pt-16 transition-all duration-200"
 			>
-				<ChatScreenProcessingInfo />
+				{#if isEmpty}
+					<div class="mb-8 px-4 text-center" use:fadeInView={{ duration: 300 }}>
+						<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
+
+						<p class="text-muted-foreground md:text-lg">
+							{serverStore.props?.modalities?.audio
+								? 'Record audio, type a message '
+								: 'Type a message'} or upload files to get started
+						</p>
+					</div>
+				{/if}
+
+				{#if page.params.id}
+					<ChatScreenProcessingInfo />
+				{/if}
 
 				{#if hasPropsError}
 					<div
 						class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1"
-						in:fly={{ y: 10, duration: 250 }}
+						use:fadeInView={{ y: 10, duration: 250 }}
 					>
 						<Alert.Root variant="destructive">
 							<AlertTriangle class="h-4 w-4" />
@@ -405,146 +430,15 @@
 						onSend={handleSendMessage}
 						onStop={() => chatStore.stopGeneration()}
 						onSystemPromptAdd={handleSystemPromptAdd}
-						showHelperText={false}
 						bind:uploadedFiles
 					/>
 				</div>
 			</div>
 		</div>
 	</div>
-{:else if isServerLoading}
-	<!-- Server Loading State -->
-	<ServerLoadingSplash />
-{:else}
-	<div
-		aria-label="Welcome screen with file drop zone"
-		class="flex h-full items-center justify-center"
-		ondragenter={handleDragEnter}
-		ondragleave={handleDragLeave}
-		ondragover={handleDragOver}
-		ondrop={handleDrop}
-		role="main"
-	>
-		<div class="w-full max-w-[48rem] px-4">
-			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
-				<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">llama.cpp</h1>
-
-				<p class="text-muted-foreground md:text-lg">
-					{serverStore.props?.modalities?.audio
-						? 'Record audio, type a message '
-						: 'Type a message'} or upload files to get started
-				</p>
-			</div>
-
-			{#if hasPropsError}
-				<div class="mb-4" in:fly={{ y: 10, duration: 250 }}>
-					<Alert.Root variant="destructive">
-						<AlertTriangle class="h-4 w-4" />
-
-						<Alert.Title class="flex items-center justify-between">
-							<span>Server unavailable</span>
-
-							<button
-								onclick={() => serverStore.fetch()}
-								disabled={isServerLoading}
-								class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
-							>
-								<RefreshCw class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}" />
-								{isServerLoading ? 'Retrying...' : 'Retry'}
-							</button>
-						</Alert.Title>
-
-						<Alert.Description>{serverError()}</Alert.Description>
-					</Alert.Root>
-				</div>
-			{/if}
-
-			<div in:fly={{ y: 10, duration: 250, delay: hasPropsError ? 0 : 300 }}>
-				<ChatScreenForm
-					disabled={hasPropsError}
-					{initialMessage}
-					isLoading={isCurrentConversationLoading}
-					onFileRemove={handleFileRemove}
-					onFileUpload={handleFileUpload}
-					onSend={handleSendMessage}
-					onStop={() => chatStore.stopGeneration()}
-					onSystemPromptAdd={handleSystemPromptAdd}
-					showHelperText
-					bind:uploadedFiles
-				/>
-			</div>
-		</div>
-	</div>
 {/if}
 
-<!-- File Upload Error Alert Dialog -->
-<AlertDialog.Root bind:open={showFileErrorDialog}>
-	<AlertDialog.Portal>
-		<AlertDialog.Overlay />
-
-		<AlertDialog.Content class="flex max-w-md flex-col">
-			<AlertDialog.Header>
-				<AlertDialog.Title>File Upload Error</AlertDialog.Title>
-
-				<AlertDialog.Description class="text-sm text-muted-foreground">
-					Some files cannot be uploaded with the current model.
-				</AlertDialog.Description>
-			</AlertDialog.Header>
-
-			<div class="!max-h-[50vh] min-h-0 flex-1 space-y-4 overflow-y-auto">
-				{#if fileErrorData.generallyUnsupported.length > 0}
-					<div class="space-y-2">
-						<h4 class="text-sm font-medium text-destructive">Unsupported File Types</h4>
-
-						<div class="space-y-1">
-							{#each fileErrorData.generallyUnsupported as file (file.name)}
-								<div class="rounded-md bg-destructive/10 px-3 py-2">
-									<p class="font-mono text-sm break-all text-destructive">
-										{file.name}
-									</p>
-
-									<p class="mt-1 text-xs text-muted-foreground">File type not supported</p>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
-
-				{#if fileErrorData.modalityUnsupported.length > 0}
-					<div class="space-y-2">
-						<div class="space-y-1">
-							{#each fileErrorData.modalityUnsupported as file (file.name)}
-								<div class="rounded-md bg-destructive/10 px-3 py-2">
-									<p class="font-mono text-sm break-all text-destructive">
-										{file.name}
-									</p>
-
-									<p class="mt-1 text-xs text-muted-foreground">
-										{fileErrorData.modalityReasons[file.name] || 'Not supported by current model'}
-									</p>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
-			</div>
-
-			<div class="rounded-md bg-muted/50 p-3">
-				<h4 class="mb-2 text-sm font-medium">This model supports:</h4>
-
-				<p class="text-sm text-muted-foreground">
-					{fileErrorData.supportedTypes.join(', ')}
-				</p>
-			</div>
-
-			<AlertDialog.Footer>
-				<AlertDialog.Action onclick={() => (showFileErrorDialog = false)}>
-					Got it
-				</AlertDialog.Action>
-			</AlertDialog.Footer>
-		</AlertDialog.Content>
-	</AlertDialog.Portal>
-</AlertDialog.Root>
+<DialogFileUploadError bind:open={showFileErrorDialog} {fileErrorData} />
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}
@@ -575,21 +469,3 @@
 	open={Boolean(activeErrorDialog)}
 	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
 />
-
-<style>
-	.conversation-chat-form {
-		position: relative;
-
-		&::after {
-			content: '';
-			position: absolute;
-			bottom: 0;
-			z-index: -1;
-			left: 0;
-			right: 0;
-			width: 100%;
-			height: 2.375rem;
-			background-color: var(--background);
-		}
-	}
-</style>

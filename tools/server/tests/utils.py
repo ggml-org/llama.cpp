@@ -5,6 +5,8 @@
 
 import subprocess
 import os
+
+TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
 import re
 import json
 from json import JSONDecodeError
@@ -83,15 +85,15 @@ class ServerProcess:
     kv_unified: bool | None = False
     server_slots: bool | None = False
     pooling: str | None = None
-    draft: int | None = None
     api_key: str | None = None
     models_dir: str | None = None
     models_max: int | None = None
+    models_preset: str | None = None
     no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
     enable_ctx_shift: int | None = False
-    draft_min: int | None = None
-    draft_max: int | None = None
+    spec_draft_n_min: int | None = None
+    spec_draft_n_max: int | None = None
     no_webui: bool | None = None
     jinja: bool | None = None
     reasoning_format: Literal['deepseek', 'none', 'nothink'] | None = None
@@ -157,6 +159,8 @@ class ServerProcess:
             server_args.extend(["--models-dir", self.models_dir])
         if self.models_max is not None:
             server_args.extend(["--models-max", self.models_max])
+        if self.models_preset:
+            server_args.extend(["--models-preset", self.models_preset])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
@@ -165,8 +169,6 @@ class ServerProcess:
             server_args.extend(["--threads", self.n_threads])
         if self.n_gpu_layer:
             server_args.extend(["--n-gpu-layers", self.n_gpu_layer])
-        if self.draft is not None:
-            server_args.extend(["--draft", self.draft])
         if self.server_continuous_batching:
             server_args.append("--cont-batching")
         if self.server_embeddings:
@@ -214,10 +216,10 @@ class ServerProcess:
             server_args.append("--context-shift")
         if self.api_key:
             server_args.extend(["--api-key", self.api_key])
-        if self.draft_max:
-            server_args.extend(["--draft-max", self.draft_max])
-        if self.draft_min:
-            server_args.extend(["--draft-min", self.draft_min])
+        if self.spec_draft_n_max:
+            server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
+        if self.spec_draft_n_min:
+            server_args.extend(["--spec-draft-n-min", self.spec_draft_n_min])
         if self.no_webui:
             server_args.append("--no-webui")
         if self.no_models_autoload:

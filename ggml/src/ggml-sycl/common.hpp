@@ -28,6 +28,13 @@
 
 namespace syclexp = sycl::ext::oneapi::experimental;
 
+#if defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/oneapi/bfloat16.hpp>)
+    #include <sycl/ext/oneapi/bfloat16.hpp>
+    #ifndef GGML_SYCL_HAS_BF16
+        #define GGML_SYCL_HAS_BF16
+    #endif
+#endif
+
 #if GGML_SYCL_DNNL
 #include "dnnl.hpp"
 #include "dnnl_sycl.hpp"
@@ -217,7 +224,7 @@ struct sycl_device_info {
                        // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
     size_t  total_vram;
-    //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
+    sycl_hw_info hw_info;
     optimize_feature opt_feature;
 };
 

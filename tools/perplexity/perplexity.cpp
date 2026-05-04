@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "fit.h"
 #include "log.h"
 #include "llama.h"
 
@@ -2087,7 +2088,7 @@ int main(int argc, char ** argv) {
 
     LOG("\n");
     llama_perf_context_print(ctx);
-    llama_memory_breakdown_print(ctx);
+    common_memory_breakdown_print(ctx);
 
     llama_backend_free();
 

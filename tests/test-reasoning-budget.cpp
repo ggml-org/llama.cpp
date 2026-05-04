@@ -70,20 +70,20 @@ static void test_reasoning_budget(
         llama_sampler_apply(sampler, &cur_p);
 
         // Check if forcing is active (all logits except one should be -INFINITY)
-        size_t finite_count = 0;
-        llama_token finite_token = -1;
+        size_t not_neg_inf = 0;
+        llama_token not_neg_inf_token = -1;
         for (size_t j = 0; j < cur.size(); j++) {
-            if (std::isfinite(cur[j].logit)) {
-                finite_count++;
-                finite_token = cur[j].id;
+            if (std::isfinite(cur[j].logit) || cur[j].logit > 0) { // +INFINITY
+                not_neg_inf++;
+                not_neg_inf_token = cur[j].id;
             }
         }
 
         llama_sampler_accept(sampler, sequence[i]);
 
-        fprintf(stderr, "    i=%zu: token=%d, finite_count=%zu, finite_token=%d\n", i, (int)sequence[i], finite_count, (int)finite_token);
+        fprintf(stderr, "    i=%zu: token=%d, not_neg_inf_count=%zu, not_neg_inf_token=%d\n", i, (int)sequence[i], not_neg_inf, (int)not_neg_inf_token);
 
-        if (finite_count == 1) {
+        if (not_neg_inf == 1) {
             if (actual_force_start == SIZE_MAX) {
                 actual_force_start = i;
             }
@@ -227,7 +227,30 @@ int main(void) {
             3);     // forcing continues through i=3
     }
 
-    printf("OK (5 tests passed)\n");
+    // Test 6: Multi-block thinking. First block ends naturally at i=2, second
+    // start tag at i=3 re-arms the budget, which then exhausts at i=5.
+    // Regression: before this fix, DONE absorbed all subsequent tokens and a
+    // second <think> block ran unbudgeted.
+    // Flow: i=0 accept(100)->COUNTING rem=2; i=1 accept(50)->rem=1;
+    //       i=2 accept(101)->end_matcher matches, DONE;
+    //       i=3 accept(100)->re-arm, COUNTING rem=2;
+    //       i=4 accept(60)->rem=1; i=5 accept(61)->rem=0->FORCING;
+    //       i=6 apply()->forces token[0]=102, accept(62)->force_pos=1, stay FORCING;
+    //       i=7 apply()->forces token[1]=101, accept(63)->force_pos=2->DONE.
+    {
+        const std::vector<llama_token> start = {100};
+        const std::vector<llama_token> end = {101};
+        const std::vector<llama_token> forced = {102, 101};
+        const std::vector<llama_token> sequence = {100, 50, 101, 100, 60, 61, 62, 63};
+
+        test_reasoning_budget("multi-block re-arms budget after DONE", sequence, start, end, forced,
+            2,      // budget of 2 tokens (per block)
+            REASONING_BUDGET_IDLE,
+            6,      // forcing starts at i=6 (after second block exhausts at i=5)
+            7);     // forcing continues through i=7
+    }
+
+    printf("OK (6 tests passed)\n");
 
     printf("Testing UTF-8 boundary detection... ");
     test_utf8_boundary_detection();
