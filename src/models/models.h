@@ -407,8 +407,9 @@ struct llm_build_llama : public llm_graph_context {
     llm_build_llama(const llama_model & model, const llm_graph_params & params);
 };
 
-struct llm_build_llama_iswa : public llm_graph_context {
-    llm_build_llama_iswa(const llama_model & model, const llm_graph_params & params);
+template <bool iswa>
+struct llm_build_llama4 : public llm_graph_context {
+    llm_build_llama4(const llama_model & model, const llm_graph_params & params);
 };
 
 struct llm_build_maincoder : public llm_graph_context {
@@ -495,7 +496,7 @@ struct llm_build_phi2 : public llm_graph_context {
     llm_build_phi2(const llama_model & model, const llm_graph_params & params);
 };
 
-template<bool iswa>
+template <bool iswa>
 struct llm_build_phi3 : public llm_graph_context {
     llm_build_phi3(const llama_model & model, const llm_graph_params & params);
 };
@@ -701,12 +702,13 @@ struct llm_build_step35_iswa : public llm_graph_context {
     llm_build_step35_iswa(const llama_model & model, const llm_graph_params & params);
 };
 
-struct llm_build_t5_dec : public llm_graph_context {
-    llm_build_t5_dec(const llama_model & model, const llm_graph_params & params);
+template <bool is_enc>
+struct llm_build_t5 : public llm_graph_context {
+    llm_build_t5(const llama_model & model, const llm_graph_params & params);
 };
 
-struct llm_build_t5_enc : public llm_graph_context {
-    llm_build_t5_enc(const llama_model & model, const llm_graph_params & params);
+struct llm_build_t5encoder : public llm_build_t5<true> {
+    llm_build_t5encoder(const llama_model & model, const llm_graph_params & params);
 };
 
 struct llm_build_wavtokenizer_dec : public llm_graph_context {

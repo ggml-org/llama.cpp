@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
-	import Page from '../../../src/routes/+page.svelte';
+	import Page from '../../../src/routes/(chat)/+page.svelte';
 
 	let sidebarOpen = $state(false);
 </script>

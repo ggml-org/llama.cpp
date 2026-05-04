@@ -11,7 +11,7 @@
  */
 
 /**
- * **ModelsSelector** - Model selection dropdown
+ * **ModelsSelectorDropdown** - Model selection dropdown (desktop)
  *
  * Dropdown for selecting AI models with status indicators,
  * search, and model information display. Adapts UI based on server mode.
@@ -35,20 +35,20 @@
  *
  * @example
  * ```svelte
- * <ModelsSelector
+ * <ModelsSelectorDropdown
  *   currentModel={conversation.modelId}
  *   onModelChange={(id, name) => updateModel(id)}
  *   useGlobalSelection
  * />
  * ```
  */
-export { default as ModelsSelector } from './ModelsSelector.svelte';
+export { default as ModelsSelectorDropdown } from './ModelsSelectorDropdown.svelte';
 
 /**
  * **ModelsSelectorList** - Grouped model options list
  *
  * Renders grouped model options (loaded, favorites, available) with section
- * headers and org subgroups. Shared between ModelsSelector and ModelsSelectorSheet
+ * headers and org subgroups. Shared between ModelsSelectorDropdown and ModelsSelectorSheet
  * to avoid template duplication.
  *
  * Accepts an optional `renderOption` snippet to customize how each option is
@@ -68,8 +68,8 @@ export { default as ModelsSelectorOption } from './ModelsSelectorOption.svelte';
 /**
  * **ModelsSelectorSheet** - Mobile model selection sheet
  *
- * Bottom sheet variant of ModelsSelector optimized for touch interaction
- * on mobile devices. Same functionality as ModelsSelector but uses Sheet UI
+ * Bottom sheet variant of ModelsSelectorDropdown optimized for touch interaction
+ * on mobile devices. Same functionality as ModelsSelectorDropdown but uses Sheet UI
  * instead of DropdownMenu.
  */
 export { default as ModelsSelectorSheet } from './ModelsSelectorSheet.svelte';

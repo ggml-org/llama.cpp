@@ -42,16 +42,8 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
         const auto n_embd_head = hparams.n_embd_head_v();
         const auto n_head_kv   = hparams.n_head_kv(il);
 
-        auto * q = build_lora_mm(model.layers[il].wq, cur);
-        cb(q, "model.layers.{}.self_attn.q_proj", il);
-        auto * k = build_lora_mm(model.layers[il].wk, cur);
-        cb(k, "model.layers.{}.self_attn.k_proj", il);
-        auto * v = build_lora_mm(model.layers[il].wv, cur);
-        cb(v, "model.layers.{}.self_attn.v_proj", il);
-
-        q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, n_tokens);
-        k = ggml_reshape_3d(ctx0, k, n_embd_head, n_head_kv, n_tokens);
-        v = ggml_reshape_3d(ctx0, v, n_embd_head, n_head_kv, n_tokens);
+        auto [q, k, v] = build_qkv(model.layers[il], cur,
+                n_embd_head, n_head, n_head_kv, il);
 
         // qk norm
         q = build_norm(q, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
@@ -66,7 +58,7 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
                           attn_factor, beta_fast, beta_slow);
 
         cur = build_attn(inp_attn,
-                model.layers[il].wo, NULL,
+                model.layers[il].wo, NULL, model.layers[il].wo_s,
                 q, k, v, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
 
         cb(cur, "model.layers.{}.self_attn.out_proj", il);

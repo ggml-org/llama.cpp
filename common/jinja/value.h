@@ -129,27 +129,25 @@ struct value_t {
     // Note: only for debugging and error reporting purposes
     virtual std::string type() const { return ""; }
 
-    virtual int64_t as_int() const { throw std::runtime_error(type() + " is not an int value"); }
-    virtual double as_float() const { throw std::runtime_error(type() + " is not a float value"); }
-    virtual string as_string() const { throw std::runtime_error(type() + " is not a string value"); }
-    virtual bool as_bool() const { throw std::runtime_error(type() + " is not a bool value"); }
-    virtual const std::vector<value> & as_array() const { throw std::runtime_error(type() + " is not an array value"); }
-    virtual const std::vector<std::pair<value, value>> & as_ordered_object() const { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value invoke(const func_args &) const { throw std::runtime_error(type() + " is not a function value"); }
+    virtual int64_t as_int() const { throw_type_error("is not an int value"); }
+    virtual double as_float() const { throw_type_error("is not a float value"); }
+    virtual string as_string() const { throw_type_error("is not a string value"); }
+    virtual bool as_bool() const { throw_type_error("is not a bool value"); }
+    virtual const std::vector<value> & as_array() const { throw_type_error("is not an array value"); }
+    virtual const std::vector<std::pair<value, value>> & as_ordered_object() const { throw_type_error("is not an object value"); }
+    virtual value invoke(const func_args &) const { throw_type_error("is not a function value"); }
     virtual bool is_none() const { return false; }
     virtual bool is_undefined() const { return false; }
-    virtual const func_builtins & get_builtins() const {
-        throw std::runtime_error("No builtins available for type " + type());
-    }
+    virtual const func_builtins & get_builtins() const { throw_type_error("has no builtins"); }
 
-    virtual bool has_key(const value &) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual void insert(const value & /* key */, const value & /* val */) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const value & /* key */, value & /* default_val */) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const value & /* key */) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const std::string & /* key */, value & /* default_val */) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const std::string & /* key */) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(int64_t /* idx */, value & /* default_val */) { throw std::runtime_error(type() + " is not an array value"); }
-    virtual value & at(int64_t /* idx */) { throw std::runtime_error(type() + " is not an array value"); }
+    virtual bool has_key(const value &) { throw_type_error("is not an object value"); }
+    virtual void insert(const value & /* key */, const value & /* val */) { throw_type_error("is not an object value"); }
+    virtual value & at(const value & /* key */, value & /* default_val */) { throw_type_error("is not an object value"); }
+    virtual value & at(const value & /* key */) { throw_type_error("is not an object value"); }
+    virtual value & at(const std::string & /* key */, value & /* default_val */) { throw_type_error("is not an object value"); }
+    virtual value & at(const std::string & /* key */) { throw_type_error("is not an object value"); }
+    virtual value & at(int64_t /* idx */, value & /* default_val */) { throw_type_error("is not an array value"); }
+    virtual value & at(int64_t /* idx */) { throw_type_error("is not an array value"); }
 
     virtual bool is_numeric() const { return false; }
     virtual bool is_hashable() const { return false; }
@@ -162,6 +160,11 @@ struct value_t {
 
     // Note: only for debugging purposes
     virtual std::string as_repr() const { return as_string().str(); }
+
+private:
+    [[noreturn]] void throw_type_error(const char* expected) const {
+        throw std::runtime_error(type() + " " + expected);
+    }
 
 protected:
     virtual bool equivalent(const value_t &) const = 0;

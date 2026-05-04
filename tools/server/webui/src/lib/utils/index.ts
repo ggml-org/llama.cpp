@@ -13,7 +13,7 @@ export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './a
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
-export { getAttachmentDisplayItems } from './attachment-display';
+export { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from './attachment-display';
 export { isTextFile, isImageFile, isPdfFile, isAudioFile } from './attachment-type';
 
 // Textarea utilities
@@ -55,7 +55,7 @@ export {
 
 // File preview utilities
 export { getFileTypeLabel } from './file-preview';
-export { getPreviewText } from './text';
+export { getPreviewText, generateConversationTitle } from './text';
 
 // File type utilities
 export {
@@ -190,3 +190,6 @@ export {
 // Cryptography utilities
 
 export { uuid } from './uuid';
+
+// CSS utilities
+export { remToPx } from './css';

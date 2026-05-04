@@ -1,5 +1,21 @@
 # collaborators can optionally add themselves here to indicate their availability for reviewing related PRs
-# multiplie collaborators per item can be specified
+# multiple collaborators per item can be specified
+#
+# ggml-org/ci               : CISC, danbev, ggerganov, netrunnereve, ngxson, taronaeo
+# ggml-org/ggml-cann        : hipudding
+# ggml-org/ggml-cuda        : JohannesGaessler, am17an, IMbackK, ORippler
+# ggml-org/ggml-hexagon     : lhez, max-krasnyansky
+# ggml-org/ggml-metal       : ggerganov
+# ggml-org/ggml-opencl      : lhez, max-krasnyansky
+# ggml-org/ggml-rpc         : rgerganov
+# ggml-org/ggml-sycl        : arthw
+# ggml-org/ggml-vulkan      : 0cc4m, jeffbolznv
+# ggml-org/ggml-webgpu      : reeselevine
+# ggml-org/ggml-zdnn        : taronaeo
+# ggml-org/llama-common     : ggerganov, aldehir, angt, danbev, ngxson, pwilkin
+# ggml-org/llama-mtmd       : ngxson
+# ggml-org/llama-server     : ggerganov, ngxson, allozaur, angt, ServeurpersoCom
+# ggml-org/llama-webui      : allozaur
 
 /.devops/*.Dockerfile                   @ngxson
 /.github/actions/                       @ggml-org/ci
@@ -7,6 +23,7 @@
 /ci/                                    @ggerganov
 /cmake/                                 @ggerganov
 /common/                                @ggml-org/llama-common
+/common/fit.*                           @JohannesGaessler
 /common/jinja/                          @CISC
 /common/ngram-map.*                     @srogmann
 /convert_*.py                           @CISC
@@ -36,28 +53,29 @@
 /examples/speculative/                  @ggerganov
 /ggml/cmake/                            @ggerganov
 /ggml/include/                          @ggerganov
+/ggml/src/ggml-backend-meta.cpp         @JohannesGaessler
 /ggml/src/ggml-cann/                    @ggml-org/ggml-cann
 /ggml/src/ggml-common.h                 @ggerganov
 /ggml/src/ggml-cpu/                     @ggerganov
 /ggml/src/ggml-cpu/spacemit/            @alex-spacemit
 /ggml/src/ggml-cuda/                    @ggml-org/ggml-cuda
-/ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
-/ggml/src/ggml-hip/                     @IMbackK
 /ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
+/ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
+/ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
+/ggml/src/ggml-hip/                     @IMbackK
 /ggml/src/ggml-impl.h                   @ggerganov
 /ggml/src/ggml-metal/                   @ggml-org/ggml-metal
 /ggml/src/ggml-opencl/                  @ggml-org/ggml-opencl
-/ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
+/ggml/src/ggml-openvino/                @cavusmustafa @wine99
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
 /ggml/src/ggml-rpc/                     @ggml-org/ggml-rpc
 /ggml/src/ggml-sycl/                    @ggml-org/ggml-sycl
 /ggml/src/ggml-threading.*              @ggerganov
-/ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-virtgpu/                 @kpouget
+/ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-webgpu/                  @ggml-org/ggml-webgpu
 /ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn @Andreas-Krebbel @AlekseiNikiforovIBM
-/ggml/src/ggml-openvino/                @cavusmustafa @wine99
 /ggml/src/ggml.c                        @ggerganov
 /ggml/src/ggml.cpp                      @ggerganov
 /ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
