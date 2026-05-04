@@ -453,6 +453,7 @@ struct llama_model_rnd1 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+
 struct llama_model_qwen2vl : public llama_model_base {
     llama_model_qwen2vl(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

@@ -1068,7 +1068,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     constexpr int  nbatch_V2       = ggml_cuda_fattn_mma_get_nbatch_V2     (DKQ, DV, ncols);
     constexpr int  nbatch_combine  = ggml_cuda_fattn_mma_get_nbatch_combine(DKQ, DV, ncols);
     constexpr bool Q_in_reg        = ggml_cuda_fattn_mma_get_Q_in_reg      (DKQ, DV, ncols);
-    constexpr int  nstages         = ggml_cuda_fattn_mma_get_nstages(DKQ, DV, ncols1, ncols2, use_top_k);
+    constexpr int  nstages         = ggml_cuda_fattn_mma_get_nstages       (DKQ, DV, ncols1, ncols2, use_top_k);
 
     if (cols_per_warp > ncols) {
         NO_DEVICE_CODE;
