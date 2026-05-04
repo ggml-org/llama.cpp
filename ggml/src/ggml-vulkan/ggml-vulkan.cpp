@@ -6748,9 +6748,6 @@ static bool ggml_vk_submit_transfer_ctx(ggml_backend_vk_context * ctx) {
         memcpy(cpy.dst, cpy.src, cpy.n);
     }
     ggml_vk_record_host_write_barrier(cpy_ctx);
-    cpy_ctx->in_memcpys.clear();
-    cpy_ctx->memsets.clear();
-    cpy_ctx->out_memcpys.clear();
 
     ctx->transfer_semaphore.value++;
     cpy_ctx->seqs.back().back().signal_semaphores.push_back(ctx->transfer_semaphore);
@@ -13674,7 +13671,6 @@ static void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
     VK_LOG_DEBUG("ggml_vk_compute_forward(" << tensor << ", name=" << tensor->name << ", op=" << ggml_op_name(tensor->op) << ", type=" << tensor->type << ", ne0=" << tensor->ne[0] << ", ne1=" << tensor->ne[1] << ", ne2=" << tensor->ne[2] << ", ne3=" << tensor->ne[3] << ", nb0=" << tensor->nb[0] << ", nb1=" << tensor->nb[1] << ", nb2=" << tensor->nb[2] << ", nb3=" << tensor->nb[3] << ", view_src=" << tensor->view_src << ", view_offs=" << tensor->view_offs << ")");
 
     vk_context subctx = ctx->tensor_ctxs[tensor_idx].lock();
-    GGML_ASSERT(subctx);
 
     // Only run if ctx hasn't been submitted yet
     if (!subctx->seqs.empty()) {
@@ -13708,9 +13704,12 @@ static void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
     }
 
     if (tensor_idx == subctx->exit_tensor_idx) {
-        // in_memcpys/memsets are consumed before submission. Keep out_memcpys queued
-        // until ggml_vk_synchronize() observes GPU completion for this submission.
+        // Do staging buffer copies
+        for (auto& cpy : subctx->out_memcpys) {
+            memcpy(cpy.dst, cpy.src, cpy.n);
+        }
         subctx->in_memcpys.clear();
+        subctx->out_memcpys.clear();
         subctx->memsets.clear();
     }
 }
@@ -14287,21 +14286,12 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
             cmd_buf->in_use = false;
             cmd_buf->buf.reset();
         }
-
-        // Process deferred host copies only after the fence signals GPU completion.
-        // Iterate strong context references so copies are not dropped if weak tensor_ctxs entries are unset.
-        for (auto & tensor_ctx : ctx->gc.contexts) {
-            for (auto & cpy : tensor_ctx->out_memcpys) {
-                memcpy(cpy.dst, cpy.src, cpy.n);
-            }
-
-            tensor_ctx->out_memcpys.clear();
-            tensor_ctx->in_memcpys.clear();
-            tensor_ctx->memsets.clear();
-        }
     }
 
     if (do_transfer) {
+        for (auto& cpy : compute_ctx->out_memcpys) {
+            memcpy(cpy.dst, cpy.src, cpy.n);
+        }
         ctx->compute_ctx.reset();
     }
 }
