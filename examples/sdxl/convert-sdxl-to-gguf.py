@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -54,13 +55,41 @@ except ImportError:
 
 # Maps --q-type string → GGUFFileType int (for add_file_type metadata)
 _FTYPE_VALUE: dict[str, int] = {
-    "f32":  0,   # ALL_F32
-    "f16":  1,   # MOSTLY_F16
-    "q8_0": 7,   # MOSTLY_Q8_0
+    "f32":    0,
+    "f16":    1,
+    "q8_0":   7,
+    "Q2_K":   10,
+    "Q3_K_S": 11,
+    "Q3_K_M": 12,
+    "Q3_K_L": 13,
+    "Q4_K_S": 14,
+    "Q4_K_M": 15,
+    "Q5_K_S": 16,
+    "Q5_K_M": 17,
+    "Q6_K":   18,
 }
 
-_K_QUANT_NAMES = ("Q2_K", "Q3_K", "Q4_K", "Q5_K", "Q6_K",
-                  "Q2_K_S", "Q4_K_S", "Q4_K_M", "Q5_K_S", "Q5_K_M")
+# These require the C++ llama-quantize binary; handled as a post-processing step
+_K_QUANTS: frozenset[str] = frozenset(
+    {"Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q4_K_S", "Q4_K_M", "Q5_K_S", "Q5_K_M", "Q6_K"}
+)
+
+_ALL_Q_TYPES = ["f32", "f16", "q8_0"] + sorted(_K_QUANTS)
+
+
+def run_llama_quantize(
+    f16_path: str, out_path: str, q_type: str, binary: str
+) -> None:
+    """Call the llama-quantize C++ binary to produce a K-quant GGUF."""
+    if not os.path.isfile(binary):
+        raise FileNotFoundError(
+            f"llama-quantize binary not found at {binary!r}. "
+            "Build it with: cmake --build build --target llama-quantize  "
+            "or pass --llama-quantize /path/to/llama-quantize"
+        )
+    cmd = [binary, f16_path, out_path, q_type]
+    print(f"\nRunning: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
 
 
 # ---------------------------------------------------------------------------
@@ -400,10 +429,14 @@ def parse_args() -> argparse.Namespace:
 Weight type rules:
   1D tensors (biases, norms)  → always f32
   4D tensors (conv kernels)   → always f16
-  2D tensors (weight matrices)→ --q-type value (with f16 fallback for q8_0 if shape incompatible)
+  2D tensors (weight matrices)→ --q-type value
 
-For K-quants (Q4_K_M, Q2_K, etc.) first convert to f16, then run:
-  ./llama-quantize sdxl-turbo-f16.gguf sdxl-turbo-q4_k_m.gguf Q4_K_M
+Python-native types (no extra binary needed):  f32  f16  q8_0
+K-quant types (requires llama-quantize binary): Q2_K  Q3_K_S  Q3_K_M  Q3_K_L
+                                                Q4_K_S  Q4_K_M  Q5_K_S  Q5_K_M  Q6_K
+
+For K-quants the script writes an f16 GGUF internally, runs llama-quantize,
+then removes the intermediate file automatically.
 """,
     )
     ap.add_argument("-m", "--model-dir", required=True,
@@ -412,9 +445,16 @@ For K-quants (Q4_K_M, Q2_K, etc.) first convert to f16, then run:
                     help="Directory for the output GGUF file (default: model dir)")
     ap.add_argument(
         "--q-type",
-        choices=["f32", "f16", "q8_0"],
+        choices=_ALL_Q_TYPES,
         default="f16",
-        help="Weight quantization type for 2D tensors (default: f16)",
+        help="Weight quantization type (default: f16)",
+    )
+    ap.add_argument(
+        "--llama-quantize",
+        default="./llama-quantize",
+        metavar="PATH",
+        help="Path to the llama-quantize binary, required for K-quant types "
+             "(default: ./llama-quantize)",
     )
     ap.add_argument("--no-text-enc-1", action="store_true", default=False,
                     help="Skip Text Encoder 1 (CLIP ViT-L/14)")
@@ -427,6 +467,30 @@ For K-quants (Q4_K_M, Q2_K, etc.) first convert to f16, then run:
     return ap.parse_args()
 
 
+def _write_gguf(
+    fout: GGUFWriter,
+    args: argparse.Namespace,
+    model_dir: str,
+    write_q_type: str,
+) -> None:
+    """Write all selected components into fout using write_q_type."""
+    if not args.no_text_enc_1:
+        print("\n=== Text Encoder 1 (CLIP ViT-L/14) ===")
+        add_text_encoder(fout, model_dir, "te1", write_q_type)
+
+    if not args.no_text_enc_2:
+        print("\n=== Text Encoder 2 (OpenCLIP ViT-bigG/14) ===")
+        add_text_encoder(fout, model_dir, "te2", write_q_type)
+
+    if not args.no_vae:
+        print("\n=== VAE ===")
+        add_vae(fout, model_dir, write_q_type)
+
+    if not args.no_unet:
+        print("\n=== UNet ===")
+        add_unet(fout, model_dir, write_q_type)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -435,9 +499,7 @@ def main() -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     q_type = args.q_type
-
-    fname_out = os.path.join(output_dir, f"sdxl-turbo-{q_type}.gguf")
-    fout = GGUFWriter(path=fname_out, arch="sdxl")
+    is_k_quant = q_type in _K_QUANTS
 
     # Read the top-level model_index.json for the model name
     model_index_path = os.path.join(model_dir, "model_index.json")
@@ -448,45 +510,48 @@ def main() -> None:
     else:
         model_name = os.path.basename(model_dir)
 
-    fout.add_name(model_name)
-    fout.add_description("SDXL-Turbo model (text encoders + VAE + UNet)")
-    fout.add_file_type(_FTYPE_VALUE[q_type])
+    fname_out = os.path.join(output_dir, f"sdxl-turbo-{q_type.lower()}.gguf")
 
-    # --- Text Encoder 1 ---
-    if not args.no_text_enc_1:
-        print("\n=== Text Encoder 1 (CLIP ViT-L/14) ===")
-        add_text_encoder(fout, model_dir, "te1", q_type)
+    if is_k_quant:
+        # Step 1: write an f16 GGUF to a temporary path in the output dir
+        fname_f16_tmp = os.path.join(output_dir, "sdxl-turbo-f16-tmp.gguf")
+        print(f"K-quant requested ({q_type}): writing intermediate f16 to {fname_f16_tmp}")
 
-    # --- Text Encoder 2 ---
-    if not args.no_text_enc_2:
-        print("\n=== Text Encoder 2 (OpenCLIP ViT-bigG/14) ===")
-        add_text_encoder(fout, model_dir, "te2", q_type)
+        fout = GGUFWriter(path=fname_f16_tmp, arch="sdxl")
+        fout.add_name(model_name)
+        fout.add_description("SDXL-Turbo model (text encoders + VAE + UNet)")
+        fout.add_file_type(_FTYPE_VALUE["f16"])
+        _write_gguf(fout, args, model_dir, "f16")
 
-    # --- VAE ---
-    if not args.no_vae:
-        print("\n=== VAE ===")
-        add_vae(fout, model_dir, q_type)
+        print(f"\nWriting intermediate GGUF: {fname_f16_tmp}")
+        fout.write_header_to_file()
+        fout.write_kv_data_to_file()
+        fout.write_tensors_to_file()
+        fout.close()
 
-    # --- UNet ---
-    if not args.no_unet:
-        print("\n=== UNet ===")
-        add_unet(fout, model_dir, q_type)
+        # Step 2: quantize to the requested K-quant type
+        try:
+            run_llama_quantize(fname_f16_tmp, fname_out, q_type, args.llama_quantize)
+        finally:
+            # Always clean up the temp file, even if quantization fails
+            if os.path.exists(fname_f16_tmp):
+                os.unlink(fname_f16_tmp)
+                print(f"Removed intermediate file: {fname_f16_tmp}")
+    else:
+        # Python-native types: write directly
+        fout = GGUFWriter(path=fname_out, arch="sdxl")
+        fout.add_name(model_name)
+        fout.add_description("SDXL-Turbo model (text encoders + VAE + UNet)")
+        fout.add_file_type(_FTYPE_VALUE[q_type])
+        _write_gguf(fout, args, model_dir, q_type)
 
-    print(f"\nWriting GGUF file: {fname_out}")
-    fout.write_header_to_file()
-    fout.write_kv_data_to_file()
-    fout.write_tensors_to_file()
-    fout.close()
+        print(f"\nWriting GGUF file: {fname_out}")
+        fout.write_header_to_file()
+        fout.write_kv_data_to_file()
+        fout.write_tensors_to_file()
+        fout.close()
 
-    print(f"Done. Output: {fname_out}")
-
-    if q_type == "f16":
-        print(
-            "\nTip: to produce K-quant variants run:\n"
-            f"  ./llama-quantize {fname_out} "
-            f"{fname_out.replace('-f16.gguf', '-q4_k_m.gguf')} Q4_K_M\n"
-            "Available types: Q2_K  Q3_K_M  Q4_K_S  Q4_K_M  Q5_K_S  Q5_K_M  Q6_K"
-        )
+    print(f"\nDone. Output: {fname_out}")
 
 
 if __name__ == "__main__":
