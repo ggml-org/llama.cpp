@@ -1,7 +1,8 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 import { ServerModelStatus, ModelModality } from '$lib/enums';
-import { ModelsService, PropsService } from '$lib/services';
+import { ModelsService } from '$lib/services/models.service';
+import { PropsService } from '$lib/services/props.service';
 import { serverStore } from '$lib/stores/server.svelte';
 import { TTLCache } from '$lib/utils';
 import {
