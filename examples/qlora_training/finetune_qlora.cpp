@@ -713,7 +713,7 @@ static std::string generate_response(
 
     std::string output;
     const llama_token eos = llama_vocab_eos(vocab);
-    const llama_token nl  = llama_vocab_nl(vocab);
+    //const llama_token nl  = llama_vocab_nl(vocab);
 
     // For ChatML models <|im_end|> is the turn-end marker but may not be the
     // vocab EOS token.  Look it up by tokenizing the string and taking the
