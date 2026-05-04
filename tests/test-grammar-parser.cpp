@@ -3,7 +3,9 @@
 #endif
 
 #include "llama.h"
-#include "grammar-parser.h"
+
+// TODO: shold not include libllama sources
+#include "../src/llama-grammar.h"
 
 #include <cassert>
 
@@ -22,7 +24,8 @@ static const char * type_str(llama_gretype type) {
 
 static void verify_parsing(const char *grammar_bytes, const std::vector<std::pair<std::string, uint32_t>> expected, const std::vector<llama_grammar_element> &expected_rules) {
     uint32_t index = 0;
-    grammar_parser::parse_state parsed_grammar = grammar_parser::parse(grammar_bytes);
+    llama_grammar_parser parsed_grammar;
+    parsed_grammar.parse(grammar_bytes);
 
     std::map<uint32_t, std::string> symbol_names;
     for (auto it = parsed_grammar.symbol_ids.begin(); it != parsed_grammar.symbol_ids.end(); ++it) {
@@ -129,9 +132,10 @@ static void verify_parsing(const char *grammar_bytes, const std::vector<std::pai
     }
 }
 
-static void verify_failure(const char *grammar_bytes) {
+static void verify_failure(const char * grammar_bytes) {
     fprintf(stderr, "Testing expected failure:%s\n", grammar_bytes);
-    auto result = grammar_parser::parse(grammar_bytes);
+    llama_grammar_parser result;
+    result.parse(grammar_bytes);
     assert(result.rules.empty() && "should have failed");
 }
 
@@ -139,6 +143,10 @@ int main()
 {
     verify_failure(R"""(
         root ::= "a"{,}"
+    )""");
+
+    verify_failure(R"""(
+        root ::= (((((([^x]*){0,99}){0,99}){0,99}){0,99}){0,99}){0,99}
     )""");
 
     verify_failure(R"""(
@@ -508,6 +516,20 @@ int main()
         {LLAMA_GRETYPE_CHAR_ALT, '\n'},
         {LLAMA_GRETYPE_RULE_REF, /* ws_12 */ 12},
         {LLAMA_GRETYPE_ALT, 0},
+        {LLAMA_GRETYPE_END, 0},
+    });
+
+    // <[1000]> = "<think>"
+    // <[1001]> = "</think>"
+    verify_parsing(R"""(
+        root  ::= <[1000]> !<[1001]> <[1001]>
+    )""", {
+        {"root", 0}
+    }, {
+        // root (index 0)
+        {LLAMA_GRETYPE_TOKEN, 1000},
+        {LLAMA_GRETYPE_TOKEN_NOT, 1001},
+        {LLAMA_GRETYPE_TOKEN, 1001},
         {LLAMA_GRETYPE_END, 0},
     });
 

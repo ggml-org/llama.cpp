@@ -1,0 +1,120 @@
+# collaborators can optionally add themselves here to indicate their availability for reviewing related PRs
+# multiple collaborators per item can be specified
+#
+# ggml-org/ci               : CISC, danbev, ggerganov, netrunnereve, ngxson, taronaeo
+# ggml-org/ggml-cann        : hipudding
+# ggml-org/ggml-cuda        : JohannesGaessler, am17an, IMbackK, ORippler
+# ggml-org/ggml-hexagon     : lhez, max-krasnyansky
+# ggml-org/ggml-metal       : ggerganov
+# ggml-org/ggml-opencl      : lhez, max-krasnyansky
+# ggml-org/ggml-rpc         : rgerganov
+# ggml-org/ggml-sycl        : arthw
+# ggml-org/ggml-vulkan      : 0cc4m, jeffbolznv
+# ggml-org/ggml-webgpu      : reeselevine
+# ggml-org/ggml-zdnn        : taronaeo
+# ggml-org/llama-common     : ggerganov, aldehir, angt, danbev, ngxson, pwilkin
+# ggml-org/llama-mtmd       : ngxson
+# ggml-org/llama-server     : ggerganov, ngxson, allozaur, angt, ServeurpersoCom
+# ggml-org/llama-webui      : allozaur
+
+/.devops/*.Dockerfile                   @ngxson
+/.github/actions/                       @ggml-org/ci
+/.github/workflows/                     @ggml-org/ci
+/ci/                                    @ggerganov
+/cmake/                                 @ggerganov
+/common/                                @ggml-org/llama-common
+/common/fit.*                           @JohannesGaessler
+/common/jinja/                          @CISC
+/common/ngram-map.*                     @srogmann
+/convert_*.py                           @CISC
+/docs/backend/snapdragon/               @ggml-org/ggml-hexagon
+/examples/batched.swift/                @ggerganov
+/examples/batched/                      @ggerganov
+/examples/convert-llama2c-to-ggml/      @ggerganov
+/examples/debug/                        @danbev @pwilkin
+/examples/deprecation-warning/          @ggerganov
+/examples/diffusion/                    @am17an
+/examples/embedding/                    @ggerganov
+/examples/eval-callback/                @ggerganov
+/examples/export-docs/                  @ggerganov
+/examples/gen-docs/                     @ggerganov
+/examples/gguf/                         @ggerganov
+/examples/llama.android/                @ggerganov @hanyin-arm @naco-siren
+/examples/llama.swiftui/                @ggerganov
+/examples/llama.vim                     @ggerganov
+/examples/lookahead/                    @ggerganov
+/examples/lookup/                       @JohannesGaessler
+/examples/model-conversion/             @danbev
+/examples/parallel/                     @ggerganov
+/examples/passkey/                      @ggerganov
+/examples/retrieval/                    @ggerganov
+/examples/save-load-state/              @ggerganov
+/examples/speculative-simple/           @ggerganov
+/examples/speculative/                  @ggerganov
+/ggml/cmake/                            @ggerganov
+/ggml/include/                          @ggerganov
+/ggml/src/ggml-backend-meta.cpp         @JohannesGaessler
+/ggml/src/ggml-cann/                    @ggml-org/ggml-cann
+/ggml/src/ggml-common.h                 @ggerganov
+/ggml/src/ggml-cpu/                     @ggerganov
+/ggml/src/ggml-cpu/spacemit/            @alex-spacemit
+/ggml/src/ggml-cuda/                    @ggml-org/ggml-cuda
+/ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
+/ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
+/ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
+/ggml/src/ggml-hip/                     @IMbackK
+/ggml/src/ggml-impl.h                   @ggerganov
+/ggml/src/ggml-metal/                   @ggml-org/ggml-metal
+/ggml/src/ggml-opencl/                  @ggml-org/ggml-opencl
+/ggml/src/ggml-openvino/                @cavusmustafa @wine99
+/ggml/src/ggml-opt.cpp                  @JohannesGaessler
+/ggml/src/ggml-quants.*                 @ggerganov
+/ggml/src/ggml-rpc/                     @ggml-org/ggml-rpc
+/ggml/src/ggml-sycl/                    @ggml-org/ggml-sycl
+/ggml/src/ggml-threading.*              @ggerganov
+/ggml/src/ggml-virtgpu/                 @kpouget
+/ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
+/ggml/src/ggml-webgpu/                  @ggml-org/ggml-webgpu
+/ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn @Andreas-Krebbel @AlekseiNikiforovIBM
+/ggml/src/ggml.c                        @ggerganov
+/ggml/src/ggml.cpp                      @ggerganov
+/ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
+/gguf-py/                               @CISC
+/media/                                 @ggerganov
+/scripts/gen*                           @ggerganov
+/scripts/get*                           @ggerganov
+/scripts/sync*                          @ggerganov
+/scripts/snapdragon/                    @ggml-org/ggml-hexagon
+/src/                                   @ggerganov
+/src/llama-adapter.*                    @CISC
+/src/llama-arch.*                       @CISC
+/src/llama-chat.*                       @ngxson
+/src/llama-graph.*                      @CISC
+/src/llama-model.*                      @CISC
+/src/llama-vocab.*                      @CISC
+/src/models/                            @CISC
+/tests/                                 @ggerganov
+/tests/test-chat.*                      @pwilkin
+/tests/test-llama-archs.cpp             @JohannesGaessler
+/tools/batched-bench/                   @ggerganov
+/tools/cli/                             @ngxson
+/tools/completion/                      @ggerganov
+/tools/mtmd/                            @ggml-org/llama-mtmd
+/tools/perplexity/                      @ggerganov
+/tools/parser/                          @pwilkin
+/tools/quantize/                        @ggerganov
+/tools/rpc/                             @ggml-org/ggml-rpc
+/tools/server/*                         @ggml-org/llama-server # no subdir
+/tools/server/tests/                    @ggml-org/llama-server
+/tools/server/webui/                    @ggml-org/llama-webui
+/tools/tokenize/                        @ggerganov
+/tools/tts/                             @ggerganov
+/vendor/                                @ggerganov
+/AUTHORS                                @ggerganov
+/CMakeLists.txt                         @ggerganov
+/CONTRIBUTING.md                        @ggerganov
+/LICENSE                                @ggerganov
+/README.md                              @ggerganov
+/SECURITY.md                            @ggerganov
+/build-xcframework.sh                   @danbev
+requirements*.txt                       @CISC

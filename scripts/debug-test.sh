@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 PROG=${0##*/}
 build_dir="build-ci-debug"
@@ -109,8 +109,7 @@ rm -rf "$build_dir" && mkdir "$build_dir" || abort "Failed to make $build_dir"
 # Step 2: Setup Build Environment and Compile Test Binaries
 ###########################################################
 
-# Note: test-eval-callback requires -DLLAMA_CURL
-cmake -B "./$build_dir" -DCMAKE_BUILD_TYPE=Debug -DLLAMA_CUDA=1 -DLLAMA_CURL=1 || abort "Failed to build enviroment"
+cmake -B "./$build_dir" -DCMAKE_BUILD_TYPE=Debug -DGGML_CUDA=1 || abort "Failed to build environment"
 pushd "$build_dir"
 make -j || abort "Failed to compile"
 popd > /dev/null || exit 1
@@ -127,7 +126,7 @@ printf "\n\nGathering tests that fit REGEX: ${test_suite} ...\n"
 pushd "$build_dir"
 tests=($(ctest -R ${test_suite} -V -N | grep -E " +Test +#[0-9]+*" | cut -d':' -f2 | awk '{$1=$1};1'))
 if [ ${#tests[@]} -eq 0 ]; then
-    abort "No tests avaliable... check your compliation process..."
+    abort "No tests available... check your compilation process..."
 fi
 popd > /dev/null || exit 1
 
@@ -137,7 +136,7 @@ popd > /dev/null || exit 1
 
 # Select test number
 if [ -z $test_number ]; then
-    # List out avaliable tests
+    # List out available tests
     printf "Which test would you like to debug?\n"
     id=0
     for s in "${tests[@]}"

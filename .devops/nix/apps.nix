@@ -10,7 +10,6 @@
             "llama-embedding"
             "llama-server"
             "llama-quantize"
-            "llama-train-text-from-scratch"
           ];
           mkApp = name: {
             type = "app";

@@ -4,8 +4,10 @@
 # Package versions must stay compatible across all top-level python scripts.
 #
 
--r ./requirements/requirements-convert-legacy-llama.txt
+-r ./requirements/requirements-convert_legacy_llama.txt
 
--r ./requirements/requirements-convert-hf-to-gguf.txt
--r ./requirements/requirements-convert-hf-to-gguf-update.txt
--r ./requirements/requirements-convert-llama-ggml-to-gguf.txt
+-r ./requirements/requirements-convert_hf_to_gguf.txt
+-r ./requirements/requirements-convert_hf_to_gguf_update.txt
+-r ./requirements/requirements-convert_llama_ggml_to_gguf.txt
+-r ./requirements/requirements-convert_lora_to_gguf.txt
+-r ./requirements/requirements-tool_bench.txt

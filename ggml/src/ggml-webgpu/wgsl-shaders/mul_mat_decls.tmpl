@@ -1,0 +1,1165 @@
+#ifdef VEC
+#define VEC_SIZE 4
+#define SHMEM_TYPE vec4<f16>
+#define DST_TYPE vec4<f32>
+#define SRC0_TYPE vec4<SRC0_INNER_TYPE>
+#define SRC1_TYPE vec4<SRC1_INNER_TYPE>
+
+fn store_shmem(val: vec4<f16>, idx: u32) {
+    shmem[idx] = val.x;
+    shmem[idx + 1] = val.y;
+    shmem[idx + 2] = val.z;
+    shmem[idx + 3] = val.w;
+}
+#endif // VEC
+
+#ifdef SCALAR
+#define VEC_SIZE 1
+#define SHMEM_TYPE f16
+#define DST_TYPE f32
+#define SRC0_TYPE SRC0_INNER_TYPE
+#define SRC1_TYPE SRC1_INNER_TYPE
+
+fn store_shmem(val: f16, idx: u32) {
+    shmem[idx] = val;
+}
+#endif // SCALAR
+
+#ifdef INIT_SRC0_SHMEM_FLOAT
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id * VEC_SIZE; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE * VEC_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+        let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
+        let src0_val = select( // taking a slight performance hit to avoid oob
+            SRC0_TYPE(0.0),
+            src0[src0_idx/VEC_SIZE],
+            global_m < params.m && global_k < params.k);
+        store_shmem(SHMEM_TYPE(src0_val), elem_idx);
+    }
+}
+#endif // INIT_SRC0_SHMEM_FLOAT
+
+#ifndef MUL_MAT_ID
+#ifdef INIT_SRC1_SHMEM_FLOAT
+fn init_shmem_src1(thread_id: u32, batch_offset: u32, offset_n: u32, k_outer: u32) {
+    for (var elem_idx = thread_id * VEC_SIZE; elem_idx < TILE_SRC1_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE * VEC_SIZE) {
+        let tile_n = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_n = offset_n + tile_n;
+        let global_k = k_outer + tile_k;
+        let src1_idx = batch_offset + global_n * params.stride_11 + global_k;
+        let src1_val = select(
+            SRC1_TYPE(0.0),
+            src1[src1_idx/VEC_SIZE],
+            global_n < params.n && global_k < params.k);
+        store_shmem(SHMEM_TYPE(src1_val), TILE_SRC0_SHMEM + elem_idx);
+    }
+}
+#endif // INIT_SRC1_SHMEM_FLOAT
+#endif
+
+#ifdef INIT_SRC0_SHMEM_Q1_0
+const BLOCK_SIZE = 128u;
+const BLOCK_SIZE_BYTES = 18u;
+const NQ = 8u; // 8 weights (1 byte of qs) per thread per iteration
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var i = thread_id * NQ; i < TILE_SRC0_SHMEM; i += TOTAL_WORKGROUP_SIZE * NQ) {
+        let tile_m = i / TILE_K;
+        let tile_k_start = i % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k_start = k_outer + tile_k_start;
+
+        if (global_m >= params.m) {
+            break;
+        }
+
+        let block_k = global_k_start / BLOCK_SIZE;
+        let byte_in_block = (global_k_start % BLOCK_SIZE) / 8u;
+        let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+        let d = load_f16_at_src0(block_byte_base);
+        let q_byte = load_u32_at_src0(block_byte_base + 2u + byte_in_block) & 0xFFu;
+
+        for (var bit = 0u; bit < NQ; bit++) {
+            let global_k = global_k_start + bit;
+            if (global_k < params.k) {
+                shmem[i + bit] = select(-d, d, ((q_byte >> bit) & 1u) != 0u);
+            }
+        }
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q1_0
+
+#ifdef INIT_SRC0_SHMEM_Q4_0
+const BLOCK_SIZE = 32u;
+const BLOCK_SIZE_BYTES = 18u;
+// the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
+override BLOCKS_K = TILE_K/BLOCK_SIZE;
+const NQ = 16u;
+const WEIGHTS_PER_F16 = 4u; // 4 weights per f16
+const F16_PER_THREAD = NQ / WEIGHTS_PER_F16;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var i = thread_id * NQ; i < TILE_SRC0_SHMEM; i += TOTAL_WORKGROUP_SIZE * NQ) {
+        let blck_idx = i / BLOCK_SIZE;
+        let block_offset = (i % BLOCK_SIZE) / WEIGHTS_PER_F16;
+        let shmem_idx = blck_idx * BLOCK_SIZE + block_offset * 2u;
+
+        let tile_m = blck_idx / BLOCKS_K;
+        let global_m = offset_m + tile_m;
+        let block_k = blck_idx % BLOCKS_K;
+        let global_k = k_outer / BLOCK_SIZE + block_k;
+
+        if (global_m < params.m && global_k < params.k / BLOCK_SIZE) {
+            let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
+            let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+            let d = load_f16_at_src0(block_byte_base);
+
+            for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+                let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
+                let q_packed = load_u32_at_src0(q_byte_offset);
+                for (var k = 0u; k < 4u; k++) {
+                    let q_byte = get_byte(q_packed, k);
+                    let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
+                    let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
+                    shmem[shmem_idx + j * 2 + k] = q_lo;
+                    shmem[shmem_idx + j * 2 + k + 16u] = q_hi;
+                }
+            }
+        }
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q4_0
+
+#ifdef INIT_SRC0_SHMEM_Q4_1
+const BLOCK_SIZE = 32u;
+const BLOCK_SIZE_BYTES = 20u;
+// the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
+override BLOCKS_K = TILE_K/BLOCK_SIZE;
+const NQ = 16u;
+const WEIGHTS_PER_F16 = 4u; // 4 weights per f16
+const F16_PER_THREAD = NQ / WEIGHTS_PER_F16;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var i = thread_id * NQ; i < TILE_SRC0_SHMEM; i += TOTAL_WORKGROUP_SIZE * NQ) {
+        let blck_idx = i / BLOCK_SIZE;
+        let block_offset = (i % BLOCK_SIZE) / WEIGHTS_PER_F16;
+        let shmem_idx = blck_idx * BLOCK_SIZE + block_offset * 2u;
+
+        let tile_m = blck_idx / BLOCKS_K;
+        let global_m = offset_m + tile_m;
+        let block_k = blck_idx % BLOCKS_K;
+        let global_k = k_outer / BLOCK_SIZE + block_k;
+
+        if (global_m < params.m && global_k < params.k / BLOCK_SIZE) {
+            let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
+            let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+            let d = load_f16_at_src0(block_byte_base);
+            let m = load_f16_at_src0(block_byte_base + 2u);
+
+            for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+                let q_byte_offset = block_byte_base + 4u + 2u * (block_offset + j);
+                let q_packed = load_u32_at_src0(q_byte_offset);
+                for (var k = 0u; k < 4u; k++) {
+                    let q_byte = get_byte(q_packed, k);
+                    let q_lo = f16(q_byte & 0xF) * d + m;
+                    let q_hi = f16((q_byte >> 4) & 0xF) * d + m;
+                    shmem[shmem_idx + j * 2 + k] = q_lo;
+                    shmem[shmem_idx + j * 2 + k + 16u] = q_hi;
+                }
+            }
+        }
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q4_1
+
+#ifdef INIT_SRC0_SHMEM_Q5_0
+// 32 weights per block, each at 4 bits each = 32 * 4 = 128 bits / 16 = 8 f16s per block
+const BLOCK_SIZE = 32u;
+const BLOCK_SIZE_BYTES = 22u;
+// the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
+// tile_k is defined as 32u, so blocks_k ends up being 1 always
+override BLOCKS_K = TILE_K / BLOCK_SIZE;
+const NQ = 16u;
+const WEIGHTS_PER_F16 = 4u; // 4 weights per f16
+const F16_PER_THREAD = NQ / WEIGHTS_PER_F16; // 16 / 4 = 4 f16s per thread, each thread should handle 4 f16s * 4 weights per = 16 weights
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+
+    for (var i = thread_id * NQ; i < TILE_SRC0_SHMEM; i += TOTAL_WORKGROUP_SIZE * NQ) {
+        let blck_idx    = i / BLOCK_SIZE;
+        let block_offset = (i % BLOCK_SIZE) / WEIGHTS_PER_F16;
+        let shmem_idx   = blck_idx * BLOCK_SIZE + block_offset * 2u;
+
+        let tile_m   = blck_idx / BLOCKS_K;
+        let global_m = offset_m + tile_m;
+        let block_k  = blck_idx % BLOCKS_K;
+        let global_k = k_outer / BLOCK_SIZE + block_k;
+
+        if (global_m < params.m && global_k < params.k / BLOCK_SIZE) {
+            let src0_idx  = batch_offset + global_m * params.stride_01 + global_k;
+            let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+
+            let d  = load_f16_at_src0(block_byte_base);
+            let qh_packed = load_u32_at_src0(block_byte_base + 2u);
+
+            for (var j = 0u; j < 2; j++) {
+                let q_byte_offset = block_byte_base + 6u + 2u * (block_offset + j * 2u);
+                let q_packed = load_u32_at_src0(q_byte_offset);
+
+                let j_adjusted = j + (block_offset / 2u);
+
+
+                for (var k = 0u; k < 4u; k++) {
+                    let q_byte = get_byte(q_packed, k);
+
+                    let qh_hi = (qh_packed >> (j_adjusted * 4 + k + 12)) & 0x10;
+                    let q_hi = (f16(((q_byte >> 4) & 0xF) | qh_hi) - 16.0) * d;
+                    let qh_lo = ((qh_packed >> (j_adjusted * 4 + k)) << 4) & 0x10;
+                    let q_lo = (f16((q_byte & 0xF) | qh_lo) - 16.0) * d;
+
+                    shmem[shmem_idx + j * 4u + k]        = q_lo; // store first weight
+                    shmem[shmem_idx + j * 4u + k + 16u]  = q_hi; // store second weight
+                }
+            }
+        }
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q5_0
+
+#ifdef INIT_SRC0_SHMEM_Q5_1
+// 32 weights per block, each at 4 bits each = 32 * 4 = 128 bits / 16 = 8 f16s per block
+const BLOCK_SIZE = 32u;
+const BLOCK_SIZE_BYTES = 24u;
+// the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
+// tile_k is defined as 32u, so blocks_k ends up being 1 always
+override BLOCKS_K = TILE_K / BLOCK_SIZE;
+const NQ = 16u;
+const WEIGHTS_PER_F16 = 4u; // 4 weights per f16
+const F16_PER_THREAD = NQ / WEIGHTS_PER_F16; // 16 / 4 = 4 f16s per thread, each thread should handle 4 f16s * 4 weights per = 16 weights
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+
+    for (var i = thread_id * NQ; i < TILE_SRC0_SHMEM; i += TOTAL_WORKGROUP_SIZE * NQ) {
+        let blck_idx    = i / BLOCK_SIZE;
+        let block_offset = (i % BLOCK_SIZE) / WEIGHTS_PER_F16;
+        let shmem_idx   = blck_idx * BLOCK_SIZE + block_offset * 2u;
+
+        let tile_m   = blck_idx / BLOCKS_K;
+        let global_m = offset_m + tile_m;
+        let block_k  = blck_idx % BLOCKS_K;
+        let global_k = k_outer / BLOCK_SIZE + block_k;
+
+        if (global_m < params.m && global_k < params.k / BLOCK_SIZE) {
+            let src0_idx  = batch_offset + global_m * params.stride_01 + global_k;
+            let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+
+            let d  = load_f16_at_src0(block_byte_base);
+            let m = load_f16_at_src0(block_byte_base + 2u);
+            let qh_packed = load_u32_at_src0(block_byte_base + 4u);
+
+            for (var j = 0u; j < 2; j++) {
+
+                let q_byte_offset = block_byte_base + 8u + 2u * (block_offset + j * 2u);
+                let q_packed = load_u32_at_src0(q_byte_offset);
+
+                let j_adjusted = j + (block_offset / 2u);
+
+
+                for (var k = 0u; k < 4u; k++) {
+                    let q_byte = get_byte(q_packed, k);
+
+                    let qh_hi = (qh_packed >> (j_adjusted * 4 + k + 12)) & 0x10;
+                    let q_hi = (f16(((q_byte >> 4) & 0xF) | qh_hi)) * d + m;
+                    let qh_lo = ((qh_packed >> (j_adjusted * 4 + k)) << 4) & 0x10;
+                    let q_lo = (f16((q_byte & 0xF) | qh_lo)) * d + m;
+
+                    shmem[shmem_idx + j * 4u + k]        = q_lo; // store first weight
+                    shmem[shmem_idx + j * 4u + k + 16u]  = q_hi; // store second weight
+                }
+            }
+        }
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q5_1
+
+#ifdef INIT_SRC0_SHMEM_Q8_0
+const BLOCK_SIZE = 32u;
+const BLOCK_SIZE_BYTES = 34u;
+// the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
+override BLOCKS_K = TILE_K/BLOCK_SIZE;
+const NQ = 16u;
+const WEIGHTS_PER_F16 = 2u; // 2 8-bit weights per f16
+const F16_PER_THREAD = NQ / WEIGHTS_PER_F16; // 8 f16s per thread
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var i = thread_id * NQ; i < TILE_SRC0_SHMEM; i += TOTAL_WORKGROUP_SIZE * NQ) {
+        let blck_idx = i / BLOCK_SIZE;
+        let block_offset = (i % BLOCK_SIZE) / WEIGHTS_PER_F16;
+        let shmem_idx = blck_idx * BLOCK_SIZE + block_offset * 2u;
+
+        let tile_m = blck_idx / BLOCKS_K;
+        let global_m = offset_m + tile_m;
+        let block_k = blck_idx % BLOCKS_K;
+        let global_k = k_outer / BLOCK_SIZE + block_k;
+
+        if (global_m < params.m && global_k < params.k / BLOCK_SIZE) {
+            let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
+            let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+            let d = load_f16_at_src0(block_byte_base);
+
+            for (var j = 0u; j < F16_PER_THREAD; j+=2) {
+                let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
+                let q_packed = load_u32_at_src0(q_byte_offset);
+                for (var k = 0u; k < 4u; k++) {
+                    let q_byte = get_byte_i32(q_packed, k);
+
+                    let q_val = f16(q_byte) * d;
+                    shmem[shmem_idx + j * 2 + k] = q_val;
+                }
+            }
+        }
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q8_0
+
+#ifdef INIT_SRC0_SHMEM_Q8_1
+const BLOCK_SIZE = 32u;
+const BLOCK_SIZE_BYTES = 36u;
+// the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
+override BLOCKS_K = TILE_K/BLOCK_SIZE;
+const NQ = 16u;
+const WEIGHTS_PER_F16 = 2u; // 2 8-bit weights per f16
+const F16_PER_THREAD = NQ / WEIGHTS_PER_F16; // 8 f16s per thread, 2 threads per block
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var i = thread_id * NQ; i < TILE_SRC0_SHMEM; i += TOTAL_WORKGROUP_SIZE * NQ) {
+        let blck_idx = i / BLOCK_SIZE;
+        let block_offset = (i % BLOCK_SIZE) / WEIGHTS_PER_F16;
+        let shmem_idx = blck_idx * BLOCK_SIZE + block_offset * 2u;
+
+        let tile_m = blck_idx / BLOCKS_K;
+        let global_m = offset_m + tile_m;
+        let block_k = blck_idx % BLOCKS_K;
+        let global_k = k_outer / BLOCK_SIZE + block_k;
+
+        if (global_m < params.m && global_k < params.k / BLOCK_SIZE) {
+            let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
+            let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+            let d = load_f16_at_src0(block_byte_base);
+            let m = load_f16_at_src0(block_byte_base + 2u);
+
+            for (var j = 0u; j < F16_PER_THREAD; j+=2) {
+                let q_byte_offset = block_byte_base + 4u + 2u * (block_offset + j);
+                let q_packed = load_u32_at_src0(q_byte_offset);
+                for (var k = 0u; k < 4u; k++) {
+                    let q_byte = get_byte_i32(q_packed, k);
+
+                    let q_val = f16(q_byte) * d + m;
+                    shmem[shmem_idx + j * 2 + k] = q_val;
+                }
+            }
+        }
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q8_1
+
+#ifdef INIT_SRC0_SHMEM_Q2_K
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 84u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    // Use standard thread layout instead of lane/row_group
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+
+        let d = load_f16_at_src0(block_byte_base + 80u);
+        let dmin = load_f16_at_src0(block_byte_base + 82u);
+
+        // Decode the element at position k_in_block
+        let block_of_32 = k_in_block / 32u;
+        let pos_in_32 = k_in_block % 32u;
+
+        let q_b_idx = (block_of_32 / 4u) * 32u;
+        let shift = (block_of_32 % 4u) * 2u;
+        let k = (pos_in_32 / 16u) * 16u;
+        let l = pos_in_32 % 16u;
+
+        let is = k_in_block / 16u;
+
+        let sc_packed = load_u32_at_src0(block_byte_base + 4u * (is / 4u));
+        let sc = get_byte(sc_packed, is % 4u);
+
+        let dl = d * f16(sc & 0xFu);
+        let ml = dmin * f16(sc >> 4u);
+
+        let q_idx = q_b_idx + k + l;
+        let q_packed = load_u32_at_src0(block_byte_base + 16u + 4u * (q_idx / 4u));
+        let q_byte = get_byte(q_packed, q_idx % 4u);
+        let qs_val = (q_byte >> shift) & 3u;
+
+        let q_val = f16(qs_val) * dl - ml;
+        shmem[elem_idx] = q_val;
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q2_K
+
+#ifdef INIT_SRC0_SHMEM_Q3_K
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 110u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+
+        let d = load_f16_at_src0(block_byte_base + 108u);
+
+        // Load and unpack scales
+        let kmask1: u32 = 0x03030303u;
+        let kmask2: u32 = 0x0f0f0f0fu;
+
+        var scale_vals: array<u32, 4>;
+        for (var i: u32 = 0u; i < 4u; i++) {
+            scale_vals[i] = load_u32_at_src0(block_byte_base + 96u + 4u * i);
+        }
+
+        var tmp: u32 = scale_vals[2];
+        scale_vals[2] = ((scale_vals[0] >> 4u) & kmask2) | (((tmp >> 4u) & kmask1) << 4u);
+        scale_vals[3] = ((scale_vals[1] >> 4u) & kmask2) | (((tmp >> 6u) & kmask1) << 4u);
+        scale_vals[0] = (scale_vals[0] & kmask2) | ((tmp & kmask1) << 4u);
+        scale_vals[1] = (scale_vals[1] & kmask2) | (((tmp >> 2u) & kmask1) << 4u);
+
+        // Load hmask and qs arrays
+        var hmask_vals: array<u32, 8>;
+        for (var i: u32 = 0u; i < 8u; i++) {
+            hmask_vals[i] = load_u32_at_src0(block_byte_base + 4u * i);
+        }
+
+        var qs_vals: array<u32, 16>;
+        for (var i: u32 = 0u; i < 16u; i++) {
+            qs_vals[i] = load_u32_at_src0(block_byte_base + 32u + 4u * i);
+        }
+
+        let half = k_in_block / 128u;           // 0 or 1
+        let pos_in_half = k_in_block % 128u;    // 0-127
+        let shift_group = pos_in_half / 32u;    // 0-3
+        let pos_in_32 = pos_in_half % 32u;      // 0-31
+        let k_group = pos_in_32 / 16u;          // 0 or 1
+        let l = pos_in_32 % 16u;                // 0-15
+
+        let q_b_idx = half * 32u;               // 0 or 32
+        let shift = shift_group * 2u;           // 0, 2, 4, 6
+        let k = k_group * 16u;                  // 0 or 16
+        let is = k_in_block / 16u;              // 0-15
+
+        // m increments every 32 elements across entire 256 element block
+        let m_shift = k_in_block / 32u;         // 0-7
+        let m: u32 = 1u << m_shift;             // 1,2,4,8,16,32,64,128
+
+        let sc = get_byte(scale_vals[is / 4u], is % 4u);
+        let dl = d * (f16(sc) - 32.0);
+
+        let q_idx = q_b_idx + k + l;
+        let hm_idx = k + l;
+
+        let q_byte = get_byte(qs_vals[q_idx / 4u], q_idx % 4u);
+        let hmask_byte = get_byte(hmask_vals[hm_idx / 4u], hm_idx % 4u);
+
+        let hm = select(4.0, 0.0, (hmask_byte & m) != 0);
+        let qs_val = (q_byte >> shift) & 3u;
+
+        let q_val = (f16(qs_val) - f16(hm)) * dl;
+        shmem[elem_idx] = q_val;
+    }
+}
+
+#endif // INIT_SRC0_SHMEM_Q3_K
+
+#ifdef INIT_SRC0_SHMEM_Q4_K
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 144u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+
+        let d = load_f16_at_src0(block_byte_base);
+        let dmin = load_f16_at_src0(block_byte_base + 2u);
+
+        // Map k_in_block to loop structure:
+        // Outer loop over 64-element groups (alternating q_b_idx)
+        // Inner loop over 2 shifts per group
+        let group_of_64 = k_in_block / 64u;  // 0-3 (maps to q_b_idx)
+        let pos_in_64 = k_in_block % 64u;    // 0-63
+        let shift_group = pos_in_64 / 32u;   // 0 or 1
+        let l = pos_in_64 % 32u;             // 0-31
+
+        let q_b_idx = group_of_64 * 32u;     // 0, 32, 64, 96
+        let shift = shift_group * 4u;        // 0 or 4
+        let is = k_in_block / 32u;           // 0-7
+
+        var sc: u32;
+        var mn: u32;
+
+        let scale_base = block_byte_base + 4u;
+
+        if (is < 4u) {
+            let sc_byte = get_byte(load_u32_at_src0(scale_base), is % 4u);
+            let min_byte = get_byte(load_u32_at_src0(scale_base + 4), is % 4u);
+            sc = sc_byte & 63u;
+            mn = min_byte & 63u;
+        } else {
+            let sc_min_lo = get_byte(load_u32_at_src0(scale_base + 8), (is + 4u) % 4u);
+            let sc_hi = get_byte(load_u32_at_src0(scale_base), (is - 4u) % 4u);
+            let min_hi = get_byte(load_u32_at_src0(scale_base + 4), is % 4u);
+
+            sc = (sc_min_lo & 0xFu) | ((sc_hi >> 6u) << 4u);
+            mn = (sc_min_lo >> 4u) | ((min_hi >> 6u) << 4u);
+        }
+
+        let dl = d * f16(sc);
+        let ml = dmin * f16(mn);
+
+        let q_idx = q_b_idx + l;
+        let q_packed = load_u32_at_src0(block_byte_base + 16u + 4u * (q_idx / 4u));
+
+        let q_byte = get_byte(q_packed, q_idx % 4u);
+        let qs_val = (q_byte >> shift) & 0xFu;
+
+        let q_val = f16(qs_val) * dl - ml;
+        shmem[elem_idx] = q_val;
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q4_K
+
+#ifdef INIT_SRC0_SHMEM_Q5_K
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 176u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+
+        let d = load_f16_at_src0(block_byte_base);
+        let dmin = load_f16_at_src0(block_byte_base + 2u);
+
+
+        // The original loop processes elements in groups of 64
+        // Each group of 64: q_b_idx cycles through [0,32,64,96], shift cycles [0,4]
+        // But u increments EVERY 32 elements (after each l loop)
+        let group_of_64 = k_in_block / 64u;  // 0-3
+        let pos_in_64 = k_in_block % 64u;    // 0-63
+        let shift_group = pos_in_64 / 32u;   // 0 or 1
+        let l = pos_in_64 % 32u;             // 0-31
+
+        let q_b_idx = group_of_64 * 32u;     // 0, 32, 64, 96
+        let shift = shift_group * 4u;        // 0 or 4
+        let is = k_in_block / 32u;           // 0-7
+
+        // u increments every 32 elements (0->1, 1->2, 2->4, 3->8, 4->16, 5->32, 6->64, 7->128)
+        let u_shift = k_in_block / 32u;      // 0-7
+        let u: u32 = 1u << u_shift;
+
+        var sc: u32;
+        var mn: u32;
+
+        let scale_base = block_byte_base + 4u;
+
+        if (is < 4u) {
+            let sc_byte = get_byte(load_u32_at_src0(scale_base), is % 4u);
+            let min_byte = get_byte(load_u32_at_src0(scale_base + 4), is % 4u);
+            sc = sc_byte & 63u;
+            mn = min_byte & 63u;
+        } else {
+            let sc_min_lo = get_byte(load_u32_at_src0(scale_base + 8), (is + 4u) % 4u);
+            let sc_hi = get_byte(load_u32_at_src0(scale_base), (is - 4u) % 4u);
+            let min_hi = get_byte(load_u32_at_src0(scale_base + 4), is % 4u);
+
+            sc = (sc_min_lo & 0xFu) | ((sc_hi >> 6u) << 4u);
+            mn = (sc_min_lo >> 4u) | ((min_hi >> 6u) << 4u);
+        }
+
+        let dl = d * f16(sc);
+        let ml = dmin * f16(mn);
+
+        let q_idx = q_b_idx + l;
+        let q_packed = load_u32_at_src0(block_byte_base + 48u + 4u * (q_idx / 4u));
+
+        let q_byte = get_byte(q_packed, q_idx % 4u);
+
+        let qh_packed = load_u32_at_src0(block_byte_base + 16u + 4u * (l / 4u));
+
+        let qh_byte = get_byte(qh_packed, l % 4u);
+
+        let qs_val = (q_byte >> shift) & 0xFu;
+        let qh_val = select(0.0, 16.0, (qh_byte & u) != 0);
+
+        let q_val = (f16(qs_val) + f16(qh_val)) * dl - ml;
+        shmem[elem_idx] = q_val;
+    }
+}
+
+#endif // INIT_SRC0_SHMEM_Q5_K
+
+#ifdef INIT_SRC0_SHMEM_Q6_K
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 210u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+
+        let half = k_in_block / 128u;
+        let pos_in_half = k_in_block % 128u;
+        let quarter = pos_in_half / 32u;
+        let l = pos_in_half % 32u;
+
+        let ql_b_idx = half * 64u;
+        let qh_b_idx = half * 32u;
+        let sc_b_idx = half * 8u;
+
+        // Load only ql13 word needed
+        let ql13_flat = ql_b_idx + l;
+        let ql13 = load_u32_at_src0(block_byte_base + ql13_flat);
+        let ql13_b = get_byte(ql13, 0u);
+
+        // Load only ql24 word needed
+        let ql24_flat = ql_b_idx + l + 32u;
+        let ql24 = load_u32_at_src0(block_byte_base + ql24_flat);
+        let ql24_b = get_byte(ql24, 0u);
+
+        // Load only qh word needed
+        let qh_flat = qh_b_idx + l;
+        let qh = load_u32_at_src0(block_byte_base + 128u + qh_flat);
+        let qh_b = get_byte(qh, 0u);
+
+        let q1 = f16((ql13_b & 0xFu) | ((qh_b & 3u) << 4u)) - f16(32.0);
+        let q2 = f16((ql24_b & 0xFu) | (((qh_b >> 2u) & 3u) << 4u)) - f16(32.0);
+        let q3 = f16((ql13_b >> 4u) | (((qh_b >> 4u) & 3u) << 4u)) - f16(32.0);
+        let q4 = f16((ql24_b >> 4u) | (((qh_b >> 6u) & 3u) << 4u)) - f16(32.0);
+
+        // Load only the scale word needed
+        let is = l / 16u;
+        let sc_idx = sc_b_idx + is + quarter * 2u;
+        let sc = load_u32_at_src0(block_byte_base + 192u + sc_idx);
+        let sc_val = get_byte_i32(sc, 0u);
+
+        let d = load_f16_at_src0(block_byte_base + 208u);
+
+        var q_val: f16;
+        if (quarter == 0u) {
+            q_val = q1;
+        } else if (quarter == 1u) {
+            q_val = q2;
+        } else if (quarter == 2u) {
+            q_val = q3;
+        } else {
+            q_val = q4;
+        }
+
+        shmem[elem_idx] = d * f16(sc_val) * q_val;
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q6_K
+
+#ifdef INIT_SRC0_SHMEM_IQ4_NL
+const BLOCK_SIZE = 32u;
+const BLOCK_SIZE_BYTES = 18u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k    = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx        = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+        let d               = load_f16_at_src0(block_byte_base);
+
+        let pos       = k_in_block % 16u;
+        let nib_shift = (k_in_block / 16u) * 4u;
+        let q_packed  = load_u32_at_src0(block_byte_base + 2u + (pos / 4u) * 4u);
+        let nib       = (get_byte(q_packed, pos % 4u) >> nib_shift) & 0xFu;
+
+        shmem[elem_idx] = d * f16(kvalues_iq4nl[nib]);
+    }
+}
+#endif // INIT_SRC0_SHMEM_IQ4_NL
+
+#ifdef INIT_SRC0_SHMEM_IQ4_XS
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 136u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k    = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx        = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+
+        let d_scales_h = load_u32_at_src0(block_byte_base);
+        let d          = bitcast<vec2<f16>>(d_scales_h).x;
+        let scales_h   = d_scales_h >> 16u;
+
+        let ib  = k_in_block / 32u;
+        let pos = k_in_block % 32u;
+
+        let scales_l_word = load_u32_at_src0(block_byte_base + 4u);
+        let ls_lo         = (get_byte(scales_l_word, ib / 2u) >> ((ib & 1u) * 4u)) & 0xFu;
+        let ls_hi         = ((scales_h >> (2u * ib)) & 3u) << 4u;
+        let dl            = d * f16(i32(ls_lo | ls_hi) - 32);
+
+        let iqs       = ib * 16u + (pos % 16u);
+        let nib_shift = (pos / 16u) * 4u;
+        let q_packed  = load_u32_at_src0(block_byte_base + 8u + (iqs / 4u) * 4u);
+        let nib       = (get_byte(q_packed, iqs % 4u) >> nib_shift) & 0xFu;
+
+        shmem[elem_idx] = dl * f16(kvalues_iq4nl[nib]);
+    }
+}
+#endif // INIT_SRC0_SHMEM_IQ4_XS
+
+#ifdef INIT_SRC0_SHMEM_IQ1_S
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 50u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k    = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx        = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+        let d               = load_f16_as_f32_at_src0(block_byte_base);
+
+        let ib  = k_in_block / 32u;
+        let pos = k_in_block % 32u;
+        let l   = pos / 8u;
+        let j   = pos % 8u;
+
+        let qh    = load_u32_at_src0(block_byte_base + 34u + ib * 2u) & 0xFFFFu;
+        let dl    = d * (2.0 * f32((qh >> 12u) & 7u) + 1.0);
+        let delta = select(IQ1_DELTA, -IQ1_DELTA, (qh & 0x8000u) != 0u);
+
+        let qs_w = load_u32_at_src0(block_byte_base + 2u + ib * 4u);
+        let ig   = (get_byte(qs_w, l) | (((qh >> (3u * l)) & 7u) << 8u)) * 8u;
+
+        let gw = iq1_grid[(ig + j) / 16u];
+        let g  = (gw >> (((ig + j) % 16u) * 2u)) & 3u;
+        let gs = bitcast<i32>(g << 30u) >> 30u;
+
+        shmem[elem_idx] = f16(dl * (f32(gs) + delta));
+    }
+}
+#endif // INIT_SRC0_SHMEM_IQ1_S
+
+#ifdef INIT_SRC0_SHMEM_IQ1_M
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 56u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k    = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx        = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+
+        let scales0 = load_u32_at_src0(block_byte_base + 48u);
+        let scales1 = load_u32_at_src0(block_byte_base + 52u);
+        let scale_packed = ((scales0 >> 12u) & 0xFu) |
+                           ((scales0 >> 24u) & 0x00F0u) |
+                           ((scales1 >>  4u) & 0x0F00u) |
+                           ((scales1 >> 16u) & 0xF000u);
+        let d = f32(bitcast<vec2<f16>>(scale_packed).x);
+
+        let ib  = k_in_block / 32u;
+        let pos = k_in_block % 32u;
+        let l   = pos / 8u;
+        let j   = pos % 8u;
+
+        let scales = select(scales0, scales1, ib >= 4u);
+        let sw = (scales >> (16u * ((ib / 2u) % 2u))) & 0xFFFFu;
+        let s_pair = (sw >> (6u * (ib % 2u) + 3u * (l / 2u))) & 0x7u;
+        let dl     = d * f32(2u * s_pair + 1u);
+
+        let qh_word = load_u32_at_src0(block_byte_base + 32u + (ib / 2u) * 4u);
+        let qh      = qh_word >> (16u * (ib % 2u));
+        let qh_nib  = (qh >> (4u * l)) & 0xFu;
+
+        let qs_w = load_u32_at_src0(block_byte_base + ib * 4u);
+        let idx  = get_byte(qs_w, l) | ((qh_nib & 7u) << 8u);
+        let delta = select(IQ1_DELTA, -IQ1_DELTA, (qh_nib & 0x8u) != 0u);
+
+        let ig = idx * 8u;
+        let gw = iq1_grid[(ig + j) / 16u];
+        let g  = (gw >> (((ig + j) % 16u) * 2u)) & 3u;
+        let gs = bitcast<i32>(g << 30u) >> 30u;
+
+        shmem[elem_idx] = f16(dl * (f32(gs) + delta));
+    }
+}
+#endif // INIT_SRC0_SHMEM_IQ1_M
+
+#ifdef INIT_SRC0_SHMEM_IQ2_XXS
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 66u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k    = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx        = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+        let d               = load_f16_as_f32_at_src0(block_byte_base);
+
+        let entry_idx = k_in_block / 8u;
+        let j         = k_in_block % 8u;
+
+        let ib = entry_idx & ~3u;
+        let l  = entry_idx & 3u;
+
+        let aux0 = load_u32_at_src0(block_byte_base + 2u + ib * 2u);
+        let aux1 = load_u32_at_src0(block_byte_base + 2u + (ib + 2u) * 2u);
+        let db   = d * (0.5 + f32(aux1 >> 28u)) * 0.25;
+
+        let ig    = get_byte(aux0, l) * 8u;
+        let is    = (aux1 >> (7u * l)) & 127u;
+        let signs = get_byte(ksigns_iq2xs[is / 4u], is % 4u);
+
+        let g = get_byte(iq2xxs_grid[(ig + j) / 4u], (ig + j) % 4u);
+        let m = select(1.0, -1.0, (get_byte(kmask_iq2xs[j / 4u], j % 4u) & signs) != 0u);
+
+        shmem[elem_idx] = f16(db * f32(g) * m);
+    }
+}
+#endif // INIT_SRC0_SHMEM_IQ2_XXS
+
+#ifdef INIT_SRC0_SHMEM_IQ2_XS
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 74u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k    = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx        = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+        let d               = load_f16_as_f32_at_src0(block_byte_base);
+
+        let entry_idx = k_in_block / 8u;
+        let j         = k_in_block % 8u;
+
+        let ib = entry_idx & ~3u;
+        let l  = entry_idx & 3u;
+
+        let scales_word = load_u32_at_src0(block_byte_base + 66u + (ib / 16u) * 4u);
+        let s           = get_byte(scales_word, (ib % 16u) / 4u);
+        let s_nib       = select(s & 0xFu, (s >> 4u) & 0xFu, (l / 2u) != 0u);
+        let dl          = d * (0.5 + f32(s_nib)) * 0.25;
+
+        let qs_word = load_u32_at_src0(block_byte_base + 2u + (ib + l) * 2u);
+        let qs_val  = qs_word & 0xFFFFu;
+        let ig      = (qs_val & 511u) * 8u;
+        let is      = qs_val >> 9u;
+        let signs   = get_byte(ksigns_iq2xs[is / 4u], is % 4u);
+
+        let g = get_byte(iq2xs_grid[(ig + j) / 4u], (ig + j) % 4u);
+        let m = select(1.0, -1.0, (get_byte(kmask_iq2xs[j / 4u], j % 4u) & signs) != 0u);
+
+        shmem[elem_idx] = f16(dl * f32(g) * m);
+    }
+}
+#endif // INIT_SRC0_SHMEM_IQ2_XS
+
+#ifdef INIT_SRC0_SHMEM_IQ2_S
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 82u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k    = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx        = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+        let d               = load_f16_as_f32_at_src0(block_byte_base);
+
+        let ib = k_in_block / 32u;
+        let l  = (k_in_block % 32u) / 8u;
+        let j  = k_in_block % 8u;
+
+        let scales_word = load_u32_at_src0(block_byte_base + 74u + (ib / 4u) * 4u);
+        let s           = get_byte(scales_word, ib % 4u);
+        let s_nib       = select(s & 0xFu, (s >> 4u) & 0xFu, (l / 2u) != 0u);
+        let dl          = d * (0.5 + f32(s_nib)) * 0.25;
+
+        let qs_word = load_u32_at_src0(block_byte_base + 2u + ib * 4u);
+        let qh_word = load_u32_at_src0(block_byte_base + 66u + (ib / 4u) * 4u);
+        let qh_b    = (get_byte(qh_word, ib % 4u) << (8u - 2u * l)) & 0x300u;
+        let ig      = (get_byte(qs_word, l) | qh_b) * 8u;
+
+        let signs_word = load_u32_at_src0(block_byte_base + 34u + ib * 4u);
+        let signs      = get_byte(signs_word, l);
+
+        let g = get_byte(iq2s_grid[(ig + j) / 4u], (ig + j) % 4u);
+        let m = select(1.0, -1.0, (get_byte(kmask_iq2xs[j / 4u], j % 4u) & signs) != 0u);
+
+        shmem[elem_idx] = f16(dl * f32(g) * m);
+    }
+}
+#endif // INIT_SRC0_SHMEM_IQ2_S
+
+#ifdef INIT_SRC0_SHMEM_IQ3_XXS
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 98u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k    = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx        = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+        let d               = load_f16_as_f32_at_src0(block_byte_base);
+
+        let ib_pair = k_in_block / 32u;
+        let in_pair = k_in_block % 32u;
+        let l       = in_pair / 8u;
+        let in_l    = in_pair % 8u;
+        let k2      = in_l / 4u;
+        let j       = in_l % 4u;
+
+        let ib            = ib_pair * 2u;
+        let sc_sign_off   = block_byte_base + 2u + (ib + 32u) * 2u;
+        let sc_sign       = load_u32_at_src0(sc_sign_off);
+        let db            = d * (0.5 + f32(sc_sign >> 28u)) * 0.5;
+        let is            = (sc_sign >> (7u * l)) & 127u;
+        let signs         = get_byte(ksigns_iq2xs[is / 4u], is % 4u);
+
+        let ig_word = load_u32_at_src0(block_byte_base + 2u + (ib * 2u + l) * 2u) & 0xFFFFu;
+        let ig_byte = get_byte(ig_word, k2);
+        let g       = get_byte(iq3xxs_grid[ig_byte], j);
+        let m       = select(1.0, -1.0, (get_byte(kmask_iq2xs[k2], j) & signs) != 0u);
+
+        shmem[elem_idx] = f16(db * f32(g) * m);
+    }
+}
+#endif // INIT_SRC0_SHMEM_IQ3_XXS
+
+#ifdef INIT_SRC0_SHMEM_IQ3_S
+const BLOCK_SIZE = 256u;
+const BLOCK_SIZE_BYTES = 110u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var elem_idx = thread_id; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE) {
+        let tile_m = elem_idx / TILE_K;
+        let tile_k = elem_idx % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k = k_outer + tile_k;
+
+        if (global_m >= params.m || global_k >= params.k) {
+            shmem[elem_idx] = f16(0.0);
+            continue;
+        }
+
+        let block_k    = global_k / BLOCK_SIZE;
+        let k_in_block = global_k % BLOCK_SIZE;
+
+        let src0_idx        = batch_offset + global_m * params.stride_01 + block_k;
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+        let d               = load_f16_as_f32_at_src0(block_byte_base);
+
+        let ib   = k_in_block / 64u;
+        let rest = k_in_block % 64u;
+        let k    = rest / 32u;
+        let in_k = rest % 32u;
+        let l    = in_k / 8u;
+        let in_l = in_k % 8u;
+        let k2   = in_l / 4u;
+        let j    = in_l % 4u;
+
+        let scales_word = load_u32_at_src0(block_byte_base + 106u);
+        let s           = get_byte(scales_word, ib);
+        let s_nib       = select(s & 0xFu, (s >> 4u) & 0xFu, k != 0u);
+        let dl          = d * (1.0 + 2.0 * f32(s_nib));
+
+        let qh_word = load_u32_at_src0(block_byte_base + 66u + (ib / 2u) * 4u);
+        let qh_byte = get_byte(qh_word, (ib % 2u) * 2u + k);
+
+        let ig_word = load_u32_at_src0(block_byte_base + 2u + (ib * 8u + k * 4u + l) * 2u) & 0xFFFFu;
+        let ig_lo   = get_byte(ig_word, 0u) | ((qh_byte << (8u - 2u * l)) & 256u);
+        let ig_hi   = get_byte(ig_word, 1u) | ((qh_byte << (7u - 2u * l)) & 256u);
+        let ig      = select(ig_lo, ig_hi, k2 != 0u);
+
+        let signs_word = load_u32_at_src0(block_byte_base + 74u + (ib * 2u + k) * 4u);
+        let signs      = get_byte(signs_word, l);
+
+        let g = get_byte(iq3s_grid[ig], j);
+        let m = select(1.0, -1.0, (get_byte(kmask_iq2xs[k2], j) & signs) != 0u);
+
+        shmem[elem_idx] = f16(dl * f32(g) * m);
+    }
+}
+#endif // INIT_SRC0_SHMEM_IQ3_S

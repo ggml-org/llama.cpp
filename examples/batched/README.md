@@ -3,7 +3,7 @@
 The example demonstrates batched generation from a given prompt
 
 ```bash
-./llama-batched -m ./models/llama-7b-v2/ggml-model-f16.gguf -p "Hello my name is" -np 4
+./llama-batched -m ./models/llama-7b-v2/ggml-model-f16.gguf -p "Hello my name is" -np 4 --kv-unified
 
 ...
 

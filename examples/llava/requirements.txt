@@ -1,3 +1,0 @@
--r ../../requirements/requirements-convert-legacy-llama.txt
-pillow~=10.2.0
-torch~=2.1.1

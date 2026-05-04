@@ -132,7 +132,7 @@ class LlamaState: ObservableObject {
         messageLog += "\(text)"
 
         Task.detached {
-            while await llamaContext.n_cur < llamaContext.n_len {
+            while await !llamaContext.is_done {
                 let result = await llamaContext.completion_loop()
                 await MainActor.run {
                     self.messageLog += "\(result)"

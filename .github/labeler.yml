@@ -1,32 +1,37 @@
 # https://github.com/actions/labeler
-Kompute:
-    - changed-files:
-        - any-glob-to-any-file:
-            - ggml-kompute.h
-            - ggml-kompute.cpp
-            - README-kompute.md
 Apple Metal:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml-metal.h
-            - ggml-metal.cpp
+            - ggml/include/ggml-metal.h
+            - ggml/src/ggml-metal/**
             - README-metal.md
 SYCL:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml-sycl.h
-            - ggml-sycl.cpp
-            - README-sycl.md
+            - ggml/include/ggml-sycl.h
+            - ggml/src/ggml-sycl/**
+            - docs/backend/SYCL.md
+            - examples/sycl/**
 Nvidia GPU:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml-cuda.h
-            - ggml-cuda/**
+            - ggml/include/ggml-cuda.h
+            - ggml/src/ggml-cuda/**
 Vulkan:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml_vk_generate_shaders.py
-            - ggml-vulkan*
+            - ggml/include/ggml-vulkan.h
+            - ggml/src/ggml-vulkan/**
+IBM zDNN:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-zdnn.h
+            - ggml/src/ggml-zdnn/**
+AMD ZenDNN:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-zendnn.h
+            - ggml/src/ggml-zendnn/**
 documentation:
     - changed-files:
         - any-glob-to-any-file:
@@ -44,7 +49,9 @@ build:
             - CMakePresets.json
 examples:
     - changed-files:
-        - any-glob-to-any-file: examples/**
+        - any-glob-to-any-file:
+            - examples/**
+            - tools/**
 devops:
     - changed-files:
         - any-glob-to-any-file:
@@ -66,18 +73,26 @@ android:
     - changed-files:
         - any-glob-to-any-file:
             - examples/llama.android/**
+server/webui:
+    - changed-files:
+        - any-glob-to-any-file:
+            - tools/server/webui/**
+            - tools/server/public/**
 server:
     - changed-files:
         - any-glob-to-any-file:
-            - examples/server/**
+            - tools/server/**
+
+
+
 ggml:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml.c
-            - ggml.h
-            - ggml-*.c
-            - ggml-*.h
-            - ggml-cuda/**
+            - ggml/**
+model:
+    - changed-files:
+        - any-glob-to-any-file:
+            - src/models/**
 nix:
     - changed-files:
         - any-glob-to-any-file:
@@ -87,3 +102,35 @@ nix:
 embedding:
     - changed-files:
         - any-glob-to-any-file: examples/embedding/
+jinja parser:
+    - changed-files:
+        - any-glob-to-any-file:
+            - common/jinja/**
+Ascend NPU:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-cann.h
+            - ggml/src/ggml-cann/**
+            - docs/backend/CANN.md
+OpenCL:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-opencl.h
+            - ggml/src/ggml-opencl/**
+            - docs/backend/OPENCL.md
+Hexagon:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-hexagon.h
+            - ggml/src/ggml-hexagon/**
+WebGPU:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-webgpu.h
+            - ggml/src/ggml-webgpu/**
+OpenVINO:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-openvino.h
+            - ggml/src/ggml-openvino/**
+            - docs/backend/OPENVINO.md

@@ -2,65 +2,108 @@
 #undef NDEBUG
 #endif
 
-#define LLAMA_API_INTERNAL
-
-#include "ggml.h"
-#include "llama.h"
-#include "grammar-parser.h"
 #include "json-schema-to-grammar.h"
-#include "unicode.h"
+
+#include "../src/unicode.h"
+#include "../src/llama-grammar.h"
+
+#include <nlohmann/json.hpp>
+
 #include <cassert>
 #include <string>
 #include <vector>
 
 using json = nlohmann::ordered_json;
 
-//#define INCLUDE_FAILING_TESTS 1
+static llama_grammar * build_grammar_with_root(const std::string & grammar_str, const char * grammar_root) {
+    return llama_grammar_init_impl(nullptr, grammar_str.c_str(), grammar_root, false, nullptr, 0, nullptr, 0);
+}
 
-static llama_grammar* build_grammar(const std::string & grammar_str) {
-    auto parsed_grammar = grammar_parser::parse(grammar_str.c_str());
-
-    // Ensure we parsed correctly
-    assert(!parsed_grammar.rules.empty());
-
-    // Ensure we have a root node
-    assert(!(parsed_grammar.symbol_ids.find("root") == parsed_grammar.symbol_ids.end()));
-
-    std::vector<const llama_grammar_element*> grammar_rules(parsed_grammar.c_rules());
-    llama_grammar* grammar = llama_grammar_init(
-        grammar_rules.data(), grammar_rules.size(), parsed_grammar.symbol_ids.at("root"));
-
-    return grammar;
+static llama_grammar * build_grammar(const std::string & grammar_str) {
+    return build_grammar_with_root(grammar_str, "root");
 }
 
 static bool test_build_grammar_fails(const std::string & grammar_str) {
     fprintf(stderr, "⚫ Testing failure for grammar: %s\n", grammar_str.c_str());
     bool grammar_fails = false;
-    try {
-        build_grammar(grammar_str);
+    llama_grammar * grammar = build_grammar(grammar_str);
+    if (grammar != nullptr) {
         fprintf(stderr, "  ❌ Expected build failure, but succeeded\n");
-    } catch (const std::exception & err) {
+    } else {
         grammar_fails = true;
         fprintf(stdout, "  ✅︎\n");
     }
     return grammar_fails;
 }
 
-static bool match_string(const std::string & input, llama_grammar* grammar) {
-    auto decoded = decode_utf8(input, {});
+struct token_and_piece {
+    llama_token token;
+    std::string piece;
+};
 
-    const auto & code_points = decoded.first;
+// token() encodes a 32-bit ID as 5 bytes: a 0xff marker followed by the ID in big-endian order.
+static std::string token(llama_token id) {
+    return std::string{
+        static_cast<char>(0xff),
+        static_cast<char>((id >> 24) & 0xff),
+        static_cast<char>((id >> 16) & 0xff),
+        static_cast<char>((id >> 8) & 0xff),
+        static_cast<char>(id & 0xff)
+    };
+}
 
-    for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
-        auto prev_stacks = grammar->stacks;
-        llama_grammar_accept(grammar->rules, prev_stacks, *it, grammar->stacks);
-        if (grammar->stacks.empty()) {
+// parse_tokens() parses the token encodes above and UTF-8 text.
+static std::vector<token_and_piece> parse_tokens(const std::string & input) {
+    std::vector<token_and_piece> result;
+    result.reserve(input.size());
+    size_t offset = 0;
+    while (offset < input.size()) {
+        try {
+            if (static_cast<unsigned char>(input[offset]) == 0xff) {
+                if (offset + 5 > input.size()) {
+                    throw std::runtime_error("not enough bytes for token id");
+                }
+                uint32_t val =
+                    (static_cast<unsigned char>(input[offset + 1]) << 24) |
+                    (static_cast<unsigned char>(input[offset + 2]) << 16) |
+                    (static_cast<unsigned char>(input[offset + 3]) << 8)  |
+                    (static_cast<unsigned char>(input[offset + 4]));
+                auto piece = "<[" + std::to_string(val) + "]>";
+                result.push_back({static_cast<llama_token>(val), piece});
+                offset += 5;
+            } else {
+                uint32_t cpt = unicode_cpt_from_utf8(input, offset);
+                result.push_back({0, unicode_cpt_to_utf8(cpt)});
+            }
+        } catch (const std::invalid_argument & /*ex*/) {
+            // Silently ignore invalid UTF-8 input to avoid leaking the exception beyond llama_tokenize
+            ++offset;
+            result.push_back({0, unicode_cpt_to_utf8(0xFFFD)}); // replacement character
+        }
+    }
+    return result;
+}
+
+static bool match_string(const std::string & input, llama_grammar * grammar) {
+    const auto parsed = parse_tokens(input);
+
+    auto & stacks_cur = llama_grammar_get_stacks(grammar);
+
+    for (const auto & in : parsed) {
+        try {
+            llama_grammar_accept_token(*grammar, in.token, in.piece);
+        } catch (const std::runtime_error & /*e*/) {
+            // normally this shouldn't get hit because of llama_grammar_apply
+            return false;
+        }
+
+        if (stacks_cur.empty()) {
             // no stacks means that the grammar failed to match at this point
             return false;
         }
     }
 
-    for (const auto & stack : grammar->stacks) {
+    for (const auto & stack : stacks_cur) {
         if (stack.empty()) {
             // An empty stack means that the grammar has been completed
             return true;
@@ -74,10 +117,12 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
     fprintf(stderr, "⚫ Testing %s\n%s\n", test_desc.c_str(), grammar_str.c_str());
     fflush(stderr);
 
-    auto grammar = build_grammar(grammar_str);
+    auto * grammar = build_grammar(grammar_str);
 
     // Save the original grammar stacks so that we can reset after every new string we want to test
-    auto original_stacks = grammar->stacks;
+    const llama_grammar_stacks stacks_org = llama_grammar_get_stacks(grammar); // copy
+
+    llama_grammar_stacks & stacks_cur = llama_grammar_get_stacks(grammar);
 
     fprintf(stderr, "  🔵 Valid strings:\n");
 
@@ -114,7 +159,7 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
         assert(matched);
 
         // Reset the grammar stacks
-        grammar->stacks = original_stacks;
+        stacks_cur = stacks_org;
     }
 
     fprintf(stderr, "  🟠 Invalid strings:\n");
@@ -134,20 +179,288 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
         assert(!matched);
 
         // Reset the grammar stacks
-        grammar->stacks = original_stacks;
+        stacks_cur = stacks_org;
     }
 
     // Clean up allocated memory
-    llama_grammar_free(grammar);
+    llama_grammar_free_impl(grammar);
 }
 static void test_grammar(const std::string & test_desc, const std::string & grammar_str, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
     test(test_desc + ". Grammar: " + grammar_str, grammar_str, passing_strings, failing_strings);
 }
 static void test_schema(const std::string & test_desc, const std::string & schema_str, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
-    test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str)), passing_strings, failing_strings);
+    test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str), true), passing_strings, failing_strings);
 }
 
 static void test_simple_grammar() {
+    test_schema(
+        "min 0",
+        R"""({
+            "type": "integer",
+            "minimum": 0
+        })""",
+        // Passing strings
+        {
+            "0",
+            "10",
+            "12",
+            "10000",
+        },
+        // Failing strings
+        {
+            "-1",
+            "-10",
+            "-10000",
+            "-100000000000000000000000000000000",
+            "100000000000000000000000000000000",
+            "00",
+            "01",
+            "-0",
+        }
+    );
+    test_schema(
+        "min 2",
+        // Schema
+        R"""({
+            "type": "integer",
+            "minimum": 2
+        })""",
+        // Passing strings
+        {
+            "2",
+            "3",
+            "4",
+            "10",
+            "20",
+            "1234567890000000",
+        },
+        // Failing strings
+        {
+            "0",
+            "1",
+            "-1",
+            "-100",
+            "0",
+            "1",
+            "01",
+            "02",
+            "12345678900000000",
+        }
+    );
+    test_schema(
+        "min 456",
+        R"""({
+            "type": "integer",
+            "minimum": 456
+        })""",
+        // Passing strings
+        {
+            "456",
+            "4560",
+            "457",
+            "460",
+            "500",
+        },
+        // Failing strings
+        {
+            "455",
+            "356",
+            "50",
+            "050",
+            "-1",
+            "-456",
+        }
+    );
+    test_schema(
+        "min -123",
+        R"""({
+            "type": "integer",
+            "minimum": -123
+        })""",
+        // Passing strings
+        {
+            "-123",
+            "-122",
+            "-11",
+            "-1",
+            "0",
+            "1",
+            "123",
+            "1234",
+            "2345",
+        },
+        // Failing strings
+        {
+            "-1234",
+            "-124",
+        }
+    );
+
+    test_schema(
+        "max 9999",
+        // Schema
+        R"""({
+            "type": "integer",
+            "maximum": 9999
+        })""",
+        // Passing strings
+        {
+            "-99999",
+            "0",
+            "9999",
+        },
+        // Failing strings
+        {
+            "10000",
+            "99991",
+        }
+    );
+    test_schema(
+        "max -9999",
+        // Schema
+        R"""({
+            "type": "integer",
+            "maximum": -9999
+        })""",
+        // Passing strings
+        {
+            "-10000",
+            "-9999",
+        },
+        // Failing strings
+        {
+            "-9998",
+            "0",
+            "9999",
+        }
+    );
+    test_schema(
+        "min 5 max 30",
+        // Schema
+        R"""({
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 30
+        })""",
+        // Passing strings
+        {
+            "5",
+            "10",
+            "30",
+        },
+        // Failing strings
+        {
+            "05",
+            "4",
+            "-1",
+            "31",
+            "123",
+            "0123",
+        }
+    );
+    test_schema(
+        "min 1 max 900719925474091",
+        // Schema
+        R"""({
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 900719925474091
+        })""",
+        // Passing strings
+        {
+            "1",
+            "2",
+            "10",
+            "900719925474090",
+            "900719925474091",
+        },
+        // Failing strings
+        {
+            "0",
+            "01",
+            "900719925474092",
+            "9007199254740910",
+        }
+    );
+    test_schema(
+        "min -1 max 1",
+        R"""({
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 1
+        })""",
+        // Passing strings
+        {
+            "-1",
+            "0",
+            "1",
+        },
+        // Failing strings
+        {
+            "-11",
+            "-10",
+            "-2",
+            "2",
+            "10",
+            "11",
+        }
+    );
+    test_schema(
+        "min -123 max 42",
+        R"""({
+            "type": "integer",
+            "minimum": -123,
+            "maximum": 42
+        })""",
+        // Passing strings
+        {
+            "-123",
+            "-122",
+            "-13",
+            "-11",
+            "-2",
+            "-1",
+            "0",
+            "1",
+            "5",
+            "10",
+            "39",
+            "40",
+            "42",
+        },
+        // Failing strings
+        {
+            "-0123",
+            "-124",
+            "-1123",
+            "-200",
+            "43",
+            "123",
+            "0123",
+        }
+    );
+    test_schema(
+        "exclusive min / max",
+        // Schema
+        R"""({
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "exclusiveMaximum": 10000
+        })""",
+        // Passing strings
+        {
+            "1",
+            "9999",
+        },
+        // Failing strings
+        {
+            "0",
+            "01",
+            "10000",
+            "99999",
+        }
+    );
+
     // Test case for a simple grammar
     test_grammar(
         "simple grammar",
@@ -168,6 +481,30 @@ static void test_simple_grammar() {
             "/ 3",
             "1+2+3+4+5+",
             "12a45",
+        }
+    );
+
+    // Test case for a simple grammar with tokens
+    test_grammar(
+        "simple grammar with tokens",
+        R"""(
+            root ::= <[10]> content <[11]>
+            content ::= (!<[11]>)*)""",
+        // Passing strings
+        {
+            token(10) + "hello world" + token(11),
+            token(10) + "text with " + token(12) + " other tokens " + token(13) + " mixed in" + token(11),
+            token(10) + token(11),
+            token(10) + token(12) + token(13) + token(14) + token(15) + token(11),
+            token(10) + "a" + token(11),
+        },
+        // Failing strings
+        {
+            token(10) + "missing end token",
+            token(10),
+            "missing start token" + token(11),
+            token(10) + token(11) + token(11),  // double end token
+            token(11) + "wrong order" + token(10),
         }
     );
 }
@@ -231,6 +568,34 @@ static void test_complex_grammar() {
             "123+456*789-123/456+789*123-456/789+123*456-789/123+456*789-123/456+789*123-456/",
         }
     );
+
+    // Test case for a more complex grammar with tokens
+    test_grammar(
+        "complex grammar with tokens",
+        R"""(
+            root ::= reasoning+ content tool-call*
+            reasoning ::= <[10]> (!<[11]>)* <[11]>
+            content ::= <[20]> (!<[21]>)* <[21]>
+            tool-call ::= <[12]> name <[13]> args <[14]>
+            name ::= (!<[13]>)+
+            args ::= (!<[14]>)*)""",
+        // Passing strings
+        {
+            token(10) + "I am thinking" + token(11) + token(20) + "hello world!" + token(21) + token(12) + "search" + token(13) + "query=test" + token(14),
+            token(10) + "reasoning 1" + token(11) + token(10) + "reasoning 2" + token(11) + token(20) + token(21) + token(12) + "tool" + token(13) + token(14),
+            token(10) + token(11) + token(20) + "content" + token(21),
+            token(10) + "think" + token(12) + " nested" + token(11) + token(20) + token(10) + "more content" + token(21) + token(12) + "fn" + token(13) + "x=1,y=2" + token(14) + token(12) + "fn2" + token(13) + token(14),
+            token(10) + "reasoning" + token(11) + token(10) + "more" + token(11) + token(10) + "even more" + token(11) + token(20) + "text" + token(21) + token(12) + "a" + token(13) + "b" + token(14) + token(12) + "c" + token(13) + "d" + token(14),
+        },
+        // Failing strings
+        {
+            token(20) + "content only" + token(21),
+            token(10) + "no closing reasoning",
+            token(10) + token(11) + token(20) + "no closing content",
+            token(10) + token(11) + token(20) + token(21) + token(12) + "incomplete tool",
+            token(10) + token(11) + token(11) + token(20) + token(21),
+        }
+    );
 }
 
 static void test_special_chars() {
@@ -254,7 +619,7 @@ static void test_special_chars() {
             "aaaaabcccc",
             "aaaabccc",
             "aaaabccccc",
-            "🔵🟠✅❌abc❌✅🟠🔵"
+            "🔵🟠✅❌abc❌✅🟠🔵",
             "🔵🟠abc🟠🔵"
         }
     );
@@ -423,6 +788,24 @@ static void test_quantifiers() {
             "0xFF 0x12 0xAB 0x00 0x00 0x00",
         }
     );
+    test_grammar(
+        "segfault",
+        // Grammar
+        R"""(
+            root ::= ( [x]* )*
+        )""",
+        // Passing strings
+        {
+            "",
+            "x",
+            "xx"
+        },
+        // Failing strings
+        {
+            "y",
+            "yy"
+        }
+    );
 }
 
 static void test_failure_missing_root() {
@@ -434,7 +817,8 @@ static void test_failure_missing_root() {
         term ::= number
         number ::= [0-9]+)""";
 
-    grammar_parser::parse_state parsed_grammar = grammar_parser::parse(grammar_str.c_str());
+    llama_grammar_parser parsed_grammar;
+    parsed_grammar.parse(grammar_str.c_str());
 
     // Ensure we parsed correctly
     assert(!parsed_grammar.rules.empty());
@@ -456,7 +840,8 @@ static void test_failure_missing_reference() {
 
     fprintf(stderr, "    Expected error:  ");
 
-    grammar_parser::parse_state parsed_grammar = grammar_parser::parse(grammar_str.c_str());
+    llama_grammar_parser parsed_grammar;
+    parsed_grammar.parse(grammar_str.c_str());
 
     // Ensure we did NOT parsed correctly
     assert(parsed_grammar.rules.empty());
@@ -497,6 +882,36 @@ static void test_failure_left_recursion() {
     fprintf(stderr, "  ✅︎ Passed\n");
 }
 
+static void test_failure_missing_root_symbol() {
+    fprintf(stderr, "⚫ Testing missing root symbol:\n");
+
+    const std::string grammar_str = R"""(
+        root ::= "foobar"
+    )""";
+
+    llama_grammar * failure_result = build_grammar_with_root(grammar_str, "nonexistent");
+    assert(failure_result == nullptr);
+
+    fprintf(stderr, "  ✅︎ Passed\n");
+}
+
+static void test_custom_root_symbol_check() {
+    fprintf(stderr, "⚫ Testing custom root symbol check:\n");
+
+    const std::string custom_root_grammar_str = R"""(
+        foobar ::= "foobar"
+    )""";
+
+    llama_grammar * failure_result = build_grammar_with_root(custom_root_grammar_str, "root");
+    assert(failure_result == nullptr);
+
+    llama_grammar * success_result = build_grammar_with_root(custom_root_grammar_str, "foobar");
+    assert(success_result != nullptr);
+    llama_grammar_free_impl(success_result);
+
+    fprintf(stderr, "  ✅︎ Passed\n");
+}
+
 static void test_json_schema() {
     // Note that this is similar to the regular grammar tests,
     //  but we convert each json schema to a grammar before parsing.
@@ -510,7 +925,7 @@ static void test_json_schema() {
         )""",
         // Passing strings
         {
-            "{}",
+            R"""({})""",
             R"""({"foo": "bar"})""",
         },
         // Failing strings
@@ -518,7 +933,7 @@ static void test_json_schema() {
             "",
             "[]",
             "null",
-            "\"\"",
+            R"""("")""",
             "true",
         }
     );
@@ -526,16 +941,14 @@ static void test_json_schema() {
     test_schema(
         "exotic formats (list)",
         // Schema
-        R"""(
-            {
+        R"""({
             "items": [
                 { "format": "date" },
                 { "format": "uuid" },
                 { "format": "time" },
                 { "format": "date-time" }
             ]
-            }
-        )""",
+        })""",
         // Passing strings
         {
             // "{}", // NOTE: This string passes for this schema on https://www.jsonschemavalidator.net/ -- should it?
@@ -554,125 +967,113 @@ static void test_json_schema() {
     test_schema(
         "string",
         // Schema
-        R"""(
-            {
-                "type": "string"
-            }
-        )""",
+        R"""({
+            "type": "string"
+        })""",
         // Passing strings
         {
-            "\"foo\"",
-            "\"bar\"",
-            "\"\"",
+            R"""("foo")""",
+            R"""("bar")""",
+            R"""("")""",
         },
         // Failing strings
         {
-            "{}",
-            "\"foo\": \"bar\"",
+            R"""({})""",
+            R"""("foo": "bar")""",
         }
     );
 
     test_schema(
         "string w/ min length 1",
         // Schema
-        R"""(
-            {
-                "type": "string",
-                "minLength": 1
-            }
-        )""",
+        R"""({
+            "type": "string",
+            "minLength": 1
+        })""",
         // Passing strings
         {
-            "\"foo\"",
-            "\"bar\"",
+            R"""("foo")""",
+            R"""("bar")""",
         },
         // Failing strings
         {
-            "\"\"",
-            "{}",
-            "\"foo\": \"bar\"",
+            R"""("")""",
+            R"""({})""",
+            R"""("foo": "bar")""",
         }
     );
 
     test_schema(
         "string w/ min length 3",
         // Schema
-        R"""(
-            {
+        R"""({
                 "type": "string",
                 "minLength": 3
-            }
-        )""",
+        })""",
         // Passing strings
         {
-            "\"foo\"",
-            "\"bar\"",
-            "\"foobar\"",
+            R"""("foo")""",
+            R"""("bar")""",
+            R"""("foobar")""",
         },
         // Failing strings
         {
-            "\"\"",
-            "\"f\"",
-            "\"fo\"",
+            R"""("")""",
+            R"""("f")""",
+            R"""("fo")""",
         }
     );
 
     test_schema(
         "string w/ max length",
         // Schema
-        R"""(
-            {
-                "type": "string",
-                "maxLength": 3
-            }
-        )""",
+        R"""({
+            "type": "string",
+            "maxLength": 3
+        })""",
         // Passing strings
         {
-            "\"foo\"",
-            "\"bar\"",
-            "\"\"",
-            "\"f\"",
-            "\"fo\"",
+            R"""("foo")""",
+            R"""("bar")""",
+            R"""("")""",
+            R"""("f")""",
+            R"""("fo")""",
         },
         // Failing strings
         {
-            "\"foobar\"",
+            R"""("foobar")""",
         }
     );
 
     test_schema(
         "string w/ min & max length",
         // Schema
-        R"""(
-            {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 4
-            }
-        )""",
+        R"""({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4
+        })""",
         // Passing strings
         {
-            "\"foo\"",
-            "\"bar\"",
-            "\"f\"",
-            "\"barf\"",
+            R"""("foo")""",
+            R"""("bar")""",
+            R"""("f")""",
+            R"""("barf")""",
         },
         // Failing strings
         {
-            "\"\"",
-            "\"barfo\"",
-            "\"foobar\"",
+            R"""("")""",
+            R"""("barfo")""",
+            R"""("foobar")""",
         }
     );
 
     test_schema(
         "boolean",
         // Schema
-        R"""(
-            {
-                "type": "boolean"
-            }
-        )""",
+        R"""({
+            "type": "boolean"
+        })""",
         // Passing strings
         {
             "true",
@@ -680,123 +1081,171 @@ static void test_json_schema() {
         },
         // Failing strings
         {
-            "\"\"",
-            "\"true\"",
-            "True",
-            "FALSE",
+            R"""("")""",
+            R"""("true")""",
+            R"""(True)""",
+            R"""(FALSE)""",
         }
     );
 
     test_schema(
         "integer",
         // Schema
-        R"""(
-            {
-                "type": "integer"
-            }
-        )""",
+        R"""({
+            "type": "integer"
+        })""",
         // Passing strings
         {
-            "0",
-            "12345",
-            "1234567890123456"
+            R"""(0)""",
+            R"""(12345)""",
+            R"""(1234567890123456)""",
         },
         // Failing strings
         {
-            "",
-            "01",
-            "007",
-            "12345678901234567"
+            R"""()""",
+            R"""(01)""",
+            R"""(007)""",
+            R"""(12345678901234567  )""",
         }
     );
 
     test_schema(
         "string const",
         // Schema
-        R"""(
-            {
-                "const": "foo"
-            }
-        )""",
+        R"""({
+            "const": "foo"
+        })""",
         // Passing strings
         {
-            "\"foo\"",
+            R"""("foo")""",
         },
         // Failing strings
         {
-            "foo",
-            "\"bar\"",
+            R"""(foo)""",
+            R"""("bar")""",
         }
     );
 
     test_schema(
         "non-string const",
         // Schema
-        R"""(
-            {
-                "const": true
-            }
-        )""",
+        R"""({
+            "const": true
+        })""",
         // Passing strings
         {
-            "true",
+            R"""(true)""",
         },
         // Failing strings
         {
-            "",
-            "foo",
-            "\"true\"",
+            R"""()""",
+            R"""(foo)""",
+            R"""("true")""",
         }
     );
 
     test_schema(
         "non-string const",
         // Schema
+        R"""({
+            "enum": ["red", "amber", "green", null, 42, ["foo"]]
+        })""",
+        // Passing strings
+        {
+            R"""("red")""",
+            R"""(null)""",
+            R"""(42)""",
+            R"""(["foo"])""",
+        },
+        // Failing strings
+        {
+            R"""()""",
+            R"""(420)""",
+            R"""(true)""",
+            R"""(foo)""",
+        }
+    );
+
+    test_schema(
+        "simple pattern",
+        // Schema
+        R"""({
+            "pattern": "^[a-zA-Z0-9_-]*$"
+        })""",
+        // Passing strings
+        {
+            R"""("")""",
+            R"""("He_llo-12")""",
+        },
+        // Failing strings
+        {
+            R"""("!")""",
+            R"""("Hello World")""",
+        }
+    );
+
+    test_schema(
+        "pattern with escapes",
+        // Schema
+        R"""({
+            "pattern": "^a\\^\\$\\.\\[\\]\\(\\)\\|\\{\\}\\*\\+\\?b$"
+        })""",
+        // Passing strings
+        {
+            R"""("a^$.[]()|{}*+?b")""",
+        },
+        // Failing strings
+        {
+            R"""("ab")""",
+        }
+    );
+
+    test_schema(
+        "",
+        // Schema
         R"""(
             {
-                "enum": ["red", "amber", "green", null, 42, ["foo"]]
+                "type": ["array", "null"],
+                "items": { "type": "string" }
             }
         )""",
         // Passing strings
         {
-            "\"red\"",
             "null",
-            "42",
-            "[\"foo\"]",
+            "[]",
+            "[\"123\"]",
+            "[\"foo\", \"bar\"]",
         },
         // Failing strings
         {
             "",
-            "420",
-            "true",
-            "foo",
+            "[123]",
+            "\"foo\"",
+            "[\"foo\", 42]",
         }
     );
-
 
     test_schema(
         "min+max items",
         // Schema
-        R"""(
-            {
-                "items": {
-                    "type": ["number", "integer"]
-                },
-                "minItems": 3,
-                "maxItems": 5
-            }
-        )""",
+        R"""({
+            "items": {
+                "type": ["number", "integer"]
+            },
+            "minItems": 3,
+            "maxItems": 5
+        })""",
         // Passing strings
         {
-            "[1, 2, 3]",
-            "[1, 2, 3, 4]",
-            "[1, 2, 3, 4, 5]",
+            R"""([1, 2, 3])""",
+            R"""([1, 2, 3, 4])""",
+            R"""([1, 2, 3, 4, 5])""",
         },
         // Failing strings
         {
-            "[1, 2]",
-            "[1, 2, 3, 4, 5, 6]",
-            "1"
+            R"""([1, 2])""",
+            R"""([1, 2, 3, 4, 5, 6])""",
+            R"""(1)""",
         }
     );
 
@@ -804,16 +1253,14 @@ static void test_json_schema() {
     test_schema(
         "object properties",
         // Schema
-        R"""(
-            {
+        R"""({
             "type": "object",
             "properties": {
                 "number": { "type": "number" },
                 "street_name": { "type": "string" },
                 "street_type": { "enum": ["Street", "Avenue", "Boulevard"] }
             }
-            }
-        )""",
+        })""",
         // Passing strings
         {
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue"})""",
@@ -822,13 +1269,7 @@ static void test_json_schema() {
             R"""({ "number": 1600, "street_name": "Pennsylvania" })""",
             // "By extension, even an empty object is valid"
             R"""({})""",
-            // "By default, providing additional properties is valid"
-#ifdef INCLUDE_FAILING_TESTS
-            // TODO: The following should pass, but currently FAILS. Additional properties should be permitted by default.
-            R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
-            // TODO: Spaces should be permitted around enum values, but currently they fail to pass.
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
-#endif
         },
         // Failing strings
         {
@@ -838,16 +1279,41 @@ static void test_json_schema() {
             R"""({ "street_name": "Pennsylvania", "number": 1600 })""",
             // Reorder properties
             R"""({ "number": "1600", "street_name": "Pennsylvania", "street_type":"Avenue"})""",
+            // "Additional properties default to false for generation, even though the spec says true.
+            R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
+
         }
     );
 
+    test_schema(
+        "additional properties can't override other properties",
+        R"""({
+            "properties": {
+                "a": {"type": "integer"},
+                "b": {"type": "integer"}
+            },
+            "additionalProperties": true
+        })""",
+        // Passing strings
+        {
+            R"""({"a": 42})""",
+            R"""({"c": ""})""",
+            R"""({"a": 42, "c": ""})""",
+            R"""({"a_": ""})""",
+        },
+        // Failing strings
+        {
+            R"""()""",
+            R"""({"a": ""})""",
+            R"""({"a": "", "b": ""})""",
+        }
+    );
 
     // Properties (from: https://json-schema.org/understanding-json-schema/reference/object#properties)
     test_schema(
         "object properties, additionalProperties: true",
         // Schema
-        R"""(
-            {
+        R"""({
             "type": "object",
             "properties": {
                 "number": { "type": "number" },
@@ -855,26 +1321,18 @@ static void test_json_schema() {
                 "street_type": { "enum": ["Street", "Avenue", "Boulevard"] }
             },
             "additionalProperties": true
-            }
-        )""",
+        })""",
         // Passing strings
         {
             // "By extension, even an empty object is valid"
             R"""({})""",
-#ifdef INCLUDE_FAILING_TESTS
-            // TODO: Following line should pass and doesn't
             R"""({"number":1600,"street_name":"Pennsylvania","street_type":"Avenue"})""",
             // "By default, leaving out properties is valid"
-            // TODO: Following line should pass and doesn't
             R"""({ "street_name": "Pennsylvania" })""",
-            // TODO: Following line should pass and doesn't
             R"""({ "number": 1600, "street_name": "Pennsylvania" })""",
             // "By default, providing additional properties is valid"
-            // TODO: The following should pass, but currently FAILS. Additional properties should be permitted by default.
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
-            // TODO: Spaces should be permitted around enum values, but currently they fail to pass.
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
-#endif
         },
         // Failing strings
         {
@@ -889,8 +1347,7 @@ static void test_json_schema() {
     test_schema(
         "required + optional props each in original order",
         // Schema
-        R"""(
-            {
+        R"""({
             "type": "object",
             "properties": {
                 "number": { "type": "number" },
@@ -898,18 +1355,15 @@ static void test_json_schema() {
                 "street_type": { "enum": ["Street", "Avenue", "Boulevard"] }
             },
             "additionalProperties": false
-            }
-        )""",
+        })""",
         // Passing strings
         {
             R"""({ "street_name": "Pennsylvania" })""",
             R"""({ "number": 1600, "street_type":"Avenue"})""",
             R"""({ "number": 1600, "street_name": "Pennsylvania" })""",
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue"})""",
-#ifdef INCLUDE_FAILING_TESTS
-            // TODO: Spaces should be permitted around enum values, but currently they fail to pass.
+            // Spaces are permitted around enum values
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
-#endif
         },
         // Failing strings
         {
@@ -923,18 +1377,16 @@ static void test_json_schema() {
     test_schema(
         "required + optional props each in original order",
         // Schema
-        R"""(
-            {
-                "properties": {
-                    "b": {"type": "string"},
-                    "a": {"type": "string"},
-                    "d": {"type": "string"},
-                    "c": {"type": "string"}
-                },
-                "required": ["a", "b"],
-                "additionalProperties": false
-            }
-        )""",
+        R"""({
+            "properties": {
+                "b": {"type": "string"},
+                "a": {"type": "string"},
+                "d": {"type": "string"},
+                "c": {"type": "string"}
+            },
+            "required": ["a", "b"],
+            "additionalProperties": false
+        })""",
         // Passing strings
         {
             R"""({"b": "foo", "a": "bar"})""",
@@ -954,8 +1406,7 @@ static void test_json_schema() {
     test_schema(
         "required props",
         // Schema
-        R"""(
-            {
+        R"""({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$id": "https://example.com/product.schema.json",
             "title": "Product",
@@ -1001,8 +1452,7 @@ static void test_json_schema() {
                 }
             },
             "required": [ "productId", "productName", "price" ]
-            }
-        )""",
+        })""",
         // Passing strings
         {
             R"""({"productId": 1, "productName": "A green door", "price": 12.50})""",
@@ -1035,6 +1485,8 @@ int main() {
     test_failure_missing_root();
     test_failure_missing_reference();
     test_failure_left_recursion();
+    test_failure_missing_root_symbol();
+    test_custom_root_symbol_check();
     test_json_schema();
     fprintf(stdout, "All tests passed.\n");
     return 0;

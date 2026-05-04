@@ -3,7 +3,7 @@
 Demonstration of simple retrieval technique based on cosine similarity
 
 More info:
-https://github.com/ggerganov/llama.cpp/pull/6193
+https://github.com/ggml-org/llama.cpp/pull/6193
 
 ### How to use
 
@@ -15,7 +15,7 @@ https://github.com/ggerganov/llama.cpp/pull/6193
 `retrieval` example can be tested as follows:
 
 ```bash
-make -j && ./llama-retrieval --model ./models/bge-base-en-v1.5-f16.gguf --top-k 3 --context-file README.md --context-file License --chunk-size 100 --chunk-separator .
+llama-retrieval --model ./models/bge-base-en-v1.5-f16.gguf --top-k 3 --context-file README.md --context-file License --chunk-size 100 --chunk-separator .
 ```
 
 This chunks and embeds all given files and starts a loop requesting query inputs:

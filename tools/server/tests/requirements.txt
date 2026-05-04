@@ -1,0 +1,8 @@
+aiohttp~=3.9.3
+pytest~=8.3.3
+huggingface_hub>=1.5.0,<2.0
+numpy~=1.26.4
+openai~=2.14.0
+prometheus-client~=0.20.0
+requests~=2.32.3
+wget~=3.2

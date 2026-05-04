@@ -1,0 +1,284 @@
+// Chat support (incl. tool call grammar constraining & output parsing) w/ generic & custom template handlers.
+
+#pragma once
+
+#include "common.h"
+#include "peg-parser.h"
+#include "jinja/parser.h"
+#include "jinja/runtime.h"
+#include "jinja/caps.h"
+
+#include "nlohmann/json_fwd.hpp"
+
+#include <chrono>
+#include <functional>
+#include <map>
+#include <string>
+#include <vector>
+
+using chat_template_caps = jinja::caps;
+using json = nlohmann::ordered_json;
+
+struct common_chat_templates;
+
+namespace autoparser {
+struct generation_params;
+}  // namespace autoparser
+
+struct common_chat_tool_call {
+    std::string name;
+    std::string arguments;
+    std::string id;
+
+    bool operator==(const common_chat_tool_call & other) const {
+        return name == other.name && arguments == other.arguments && id == other.id;
+    }
+};
+
+struct common_chat_msg_content_part {
+    std::string type;
+    std::string text;
+
+    // TODO @ngxson : no known chat templates support reasoning_content in content parts yet
+    //                this can be useful for models with interleaved thinking (like Kimi-K2)
+    //                if you see any templates explicitly support this, please ping me
+    // std::string reasoning_content;
+
+    bool operator==(const common_chat_msg_content_part & other) const {
+        return type == other.type && text == other.text;
+    }
+};
+
+struct common_chat_template {
+    jinja::program prog;
+    std::string bos_tok;
+    std::string eos_tok;
+    std::string src;
+    chat_template_caps caps;
+
+    common_chat_template(const std::string & src, const std::string & bos_token, const std::string & eos_token) {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(src);
+        this->prog = jinja::parse_from_tokens(lexer_res);
+
+        this->src = lexer_res.source;
+        this->bos_tok = bos_token;
+        this->eos_tok = eos_token;
+
+        this->caps = jinja::caps_get(prog);
+        // LOG_INF("%s: caps:\n%s\n", __func__, this->caps.to_string().c_str());
+    }
+
+    const std::string & source() const { return src; }
+    const std::string & bos_token() const { return bos_tok; }
+    const std::string & eos_token() const { return eos_tok; }
+
+    chat_template_caps original_caps() const {
+        return caps;
+    }
+};
+
+struct common_chat_msg {
+    std::string                               role;
+    std::string                               content;
+    std::vector<common_chat_msg_content_part> content_parts;
+    std::vector<common_chat_tool_call>        tool_calls;
+    std::string                               reasoning_content;
+    std::string                               tool_name;
+    std::string                               tool_call_id;
+
+    nlohmann::ordered_json to_json_oaicompat(bool concat_typed_text = false) const;
+
+    bool empty() const {
+        return content.empty() && content_parts.empty() && tool_calls.empty() && reasoning_content.empty() &&
+               tool_name.empty() && tool_call_id.empty();
+    }
+
+    void set_tool_call_ids(std::vector<std::string> &           ids_cache,
+                           const std::function<std::string()> & gen_tool_call_id) {
+        for (auto i = 0u; i < tool_calls.size(); i++) {
+            if (ids_cache.size() <= i) {
+                auto id = tool_calls[i].id;
+                if (id.empty()) {
+                    id = gen_tool_call_id();
+                }
+                ids_cache.push_back(id);
+            }
+            tool_calls[i].id = ids_cache[i];
+        }
+    }
+
+    bool operator==(const common_chat_msg & other) const {
+        return role == other.role && content == other.content && content_parts == other.content_parts &&
+               tool_calls == other.tool_calls && reasoning_content == other.reasoning_content &&
+               tool_name == other.tool_name && tool_call_id == other.tool_call_id;
+    }
+
+    bool operator!=(const common_chat_msg & other) const { return !(*this == other); }
+};
+
+struct common_chat_msg_diff {
+    std::string           reasoning_content_delta;
+    std::string           content_delta;
+    size_t                tool_call_index = std::string::npos;
+    common_chat_tool_call tool_call_delta;
+
+    static std::vector<common_chat_msg_diff> compute_diffs(const common_chat_msg & msg_prv,
+                                                           const common_chat_msg & msg_new);
+
+    bool operator==(const common_chat_msg_diff & other) const {
+        return content_delta == other.content_delta && tool_call_index == other.tool_call_index &&
+               tool_call_delta == other.tool_call_delta;
+    }
+};
+
+struct common_chat_tool {
+    std::string name;
+    std::string description;
+    std::string parameters;
+};
+
+enum common_chat_tool_choice {
+    COMMON_CHAT_TOOL_CHOICE_AUTO,
+    COMMON_CHAT_TOOL_CHOICE_REQUIRED,
+    COMMON_CHAT_TOOL_CHOICE_NONE,
+};
+
+enum common_chat_format {
+    COMMON_CHAT_FORMAT_CONTENT_ONLY,
+
+    // These are intended to be parsed by the PEG parser
+    COMMON_CHAT_FORMAT_PEG_SIMPLE,
+    COMMON_CHAT_FORMAT_PEG_NATIVE,
+    COMMON_CHAT_FORMAT_PEG_GEMMA4,
+
+    COMMON_CHAT_FORMAT_COUNT,  // Not a format, just the # formats
+};
+
+struct common_chat_templates_inputs {
+    std::vector<common_chat_msg>          messages;
+    std::string                           grammar;
+    std::string                           json_schema;
+    bool                                  add_generation_prompt = true;
+    bool                                  use_jinja             = true;
+    // Parameters below only supported when use_jinja is true
+    std::vector<common_chat_tool>         tools;
+    common_chat_tool_choice               tool_choice         = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    bool                                  parallel_tool_calls = false;
+    common_reasoning_format               reasoning_format    = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool enable_thinking"
+    bool                                  enable_thinking     = true;
+    std::chrono::system_clock::time_point now                 = std::chrono::system_clock::now();
+    std::map<std::string, std::string>    chat_template_kwargs;
+    bool                                  add_bos = false;
+    bool                                  add_eos = false;
+    bool                                  force_pure_content = false;
+};
+
+struct common_chat_params {
+    common_chat_format                  format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    std::string                         prompt;
+    std::string                         grammar;
+    bool                                grammar_lazy         = false;
+    std::string                         generation_prompt;
+    bool                                supports_thinking    = false;
+    std::string                         thinking_start_tag;  // e.g., "<think>"
+    std::string                         thinking_end_tag;    // e.g., "</think>"
+    std::vector<common_grammar_trigger> grammar_triggers;
+    std::vector<std::string>            preserved_tokens;
+    std::vector<std::string>            additional_stops;
+    std::string                         parser;
+};
+
+// per-message parsing syntax
+// should be derived from common_chat_params
+struct common_chat_parser_params {
+    common_chat_format      format               = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    common_reasoning_format reasoning_format     = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool parse_reasoning"
+    // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
+    bool                    reasoning_in_content = false;
+    std::string             generation_prompt;
+    bool                    parse_tool_calls     = true;
+    bool                    debug                = false;  // Enable debug output for PEG parser
+    common_peg_arena        parser               = {};
+    common_chat_parser_params() = default;
+    common_chat_parser_params(const common_chat_params & chat_params) {
+        format  = chat_params.format;
+        generation_prompt = chat_params.generation_prompt;
+    }
+};
+
+// Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
+bool common_chat_verify_template(const std::string & tmpl, bool use_jinja);
+
+void common_chat_templates_free(struct common_chat_templates * tmpls);
+
+struct common_chat_templates_deleter {
+    void operator()(common_chat_templates * tmpls) { common_chat_templates_free(tmpls); }
+};
+
+typedef std::unique_ptr<struct common_chat_templates, common_chat_templates_deleter> common_chat_templates_ptr;
+
+common_chat_templates_ptr common_chat_templates_init(const struct llama_model * model,
+                                                     const std::string &        chat_template_override,
+                                                     const std::string &        bos_token_override = "",
+                                                     const std::string &        eos_token_override = "");
+
+bool        common_chat_templates_was_explicit(const struct common_chat_templates * tmpls);
+std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant = "");
+
+struct common_chat_params common_chat_templates_apply(const struct common_chat_templates *        tmpls,
+                                                      const struct common_chat_templates_inputs & inputs);
+
+// Format single message, while taking into account the position of that message in chat history
+std::string common_chat_format_single(const struct common_chat_templates * tmpls,
+                                      const std::vector<common_chat_msg> & past_msg,
+                                      const common_chat_msg &              new_msg,
+                                      bool                                 add_ass,
+                                      bool                                 use_jinja);
+
+// Returns an example of formatted chat
+std::string common_chat_format_example(const struct common_chat_templates *       tmpls,
+                                       bool                                       use_jinja,
+                                       const std::map<std::string, std::string> & chat_template_kwargs);
+
+const char *    common_chat_format_name(common_chat_format format);
+common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_parser_params & params);
+common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const std::string & input, bool is_partial, const common_chat_parser_params & params);
+
+// used by arg and server
+const char *            common_reasoning_format_name(common_reasoning_format format);
+common_reasoning_format common_reasoning_format_from_name(const std::string & format);
+
+common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
+
+bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates);
+
+// Parses a JSON array of messages in OpenAI's chat completion API format.
+std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const nlohmann::ordered_json & messages);
+
+std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const nlohmann::ordered_json & tools);
+
+// DEPRECATED: only used in tests
+nlohmann::ordered_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
+
+nlohmann::ordered_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
+
+// get template caps, useful for reporting to server /props endpoint
+std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
+
+std::string common_chat_template_direct_apply(
+    const common_chat_template & tmpl,
+    const autoparser::generation_params & inputs);
+
+std::optional<common_chat_params> common_chat_try_specialized_template(
+        const common_chat_template &          tmpl,
+        const std::string &                   src,
+        autoparser::generation_params & params);
+
+// specialized per-task preset
+struct common_chat_prompt_preset {
+    std::string system;
+    std::string user;
+};
+
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates);

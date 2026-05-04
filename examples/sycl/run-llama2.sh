@@ -1,37 +1,31 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 #  MIT license
 #  Copyright (C) 2024 Intel Corporation
 #  SPDX-License-Identifier: MIT
-
-INPUT2="Building a website can be done in 10 simple steps:\nStep 1:"
+export ONEAPI_DEVICE_SELECTOR="level_zero:0"
 source /opt/intel/oneapi/setvars.sh
-
-if [ $# -gt 0 ]; then
-    GGML_SYCL_DEVICE=$1
-    GGML_SYCL_SINGLE_GPU=1
-else
-    GGML_SYCL_DEVICE=0
-    GGML_SYCL_SINGLE_GPU=0
-fi
 
 #export GGML_SYCL_DEBUG=1
 
-
 #ZES_ENABLE_SYSMAN=1, Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory. Recommended to use when --split-mode = layer.
 
-if [ $GGML_SYCL_SINGLE_GPU -eq 1 ]; then
+INPUT_PROMPT="Building a website can be done in 10 simple steps:\nStep 1:"
+MODEL_FILE=models/llama-2-7b.Q4_0.gguf
+NGL=99
+CONTEXT=4096
+
+#support malloc device memory more than 4GB.
+export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
+
+LOAD_MODE='--mmap'
+if [ $# -gt 0 ]; then
+    GGML_SYCL_DEVICE=$1
     echo "use $GGML_SYCL_DEVICE as main GPU"
     #use signle GPU only
-    ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m models/llama-2-7b.Q4_0.gguf -p "${INPUT2}" -n 400 -e -ngl 33 -s 0 -mg $GGML_SYCL_DEVICE -sm none
+    ZES_ENABLE_SYSMAN=1 ./build/bin/llama-completion -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s 0 -c ${CONTEXT} -mg $GGML_SYCL_DEVICE -sm none ${LOAD_MODE}
+
 else
     #use multiple GPUs with same max compute units
-    ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m models/llama-2-7b.Q4_0.gguf -p "${INPUT2}" -n 400 -e -ngl 33 -s 0
+    ZES_ENABLE_SYSMAN=1 ./build/bin/llama-completion -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s 0 -c ${CONTEXT} ${LOAD_MODE}
 fi
-
-#use main GPU only
-#ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m models/llama-2-7b.Q4_0.gguf -p "${INPUT2}" -n 400 -e -ngl 33 -s 0 -mg $GGML_SYCL_DEVICE -sm none
-
-#use multiple GPUs with same max compute units
-#ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m models/llama-2-7b.Q4_0.gguf -p "${INPUT2}" -n 400 -e -ngl 33 -s 0
-

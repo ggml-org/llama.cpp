@@ -1,4 +1,3 @@
-# Server build and tests
 name: Server
 
 on:
@@ -15,10 +14,40 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'examples/server/**.*']
+    paths: [
+      '.github/workflows/server.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'examples/server/**.*']
+    paths: [
+      '.github/workflows/server.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
+
+env:
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_LOG_VERBOSITY: 10
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
@@ -28,14 +57,19 @@ jobs:
   server:
     runs-on: ubuntu-latest
 
+    name: server (${{ matrix.wf_name }})
     strategy:
       matrix:
-        sanitizer: [ADDRESS, THREAD, UNDEFINED]
-        build_type: [RelWithDebInfo]
+        build_type: [Release]
+        wf_name: ["default"]
         include:
           - build_type: Release
-            sanitizer: ""
-      fail-fast: false # While -DLLAMA_SANITIZE_THREAD=ON is broken
+            extra_args: ""
+            wf_name:    "default"
+          - build_type: Release
+            extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
+            wf_name:    "backend-sampling"
+      fail-fast: false
 
     steps:
       - name: Dependencies
@@ -50,134 +84,82 @@ jobs:
             curl \
             wget \
             language-pack-en \
-            libcurl4-openssl-dev
+            libssl-dev
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Python setup
-        id: setup_python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Tests dependencies
-        id: test_dependencies
-        run: |
-          pip install -r examples/server/tests/requirements.txt
-
-      - name: Verify server deps
-        id: verify_server_deps
-        run: |
-          git config --global --add safe.directory $(realpath .)
-          cd examples/server
-          git ls-files --others --modified
-          git status
-          ./deps.sh
-          git status
-          not_ignored_files="$(git ls-files --others --modified)"
-          echo "Modified files: ${not_ignored_files}"
-          if [ -n "${not_ignored_files}" ]; then
-            echo "Repository is dirty or server deps are not built as expected"
-            echo "${not_ignored_files}"
-            exit 1
-          fi
-
-      - name: Build (no OpenMP)
-        id: cmake_build_no_openmp
-        if: ${{ matrix.sanitizer == 'THREAD' }}
-        run: |
-          cmake -B build \
-              -DLLAMA_NATIVE=OFF \
-              -DLLAMA_BUILD_SERVER=ON \
-              -DLLAMA_CURL=ON \
-              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-              -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-              -DLLAMA_OPENMP=OFF ;
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
-
       - name: Build
         id: cmake_build
-        if: ${{ matrix.sanitizer != 'THREAD' }}
         run: |
           cmake -B build \
-              -DLLAMA_NATIVE=OFF \
-              -DLLAMA_BUILD_SERVER=ON \
-              -DLLAMA_CURL=ON \
-              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-              -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON ;
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
+
+      - name: Python setup
+        id: setup_python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          pip-install: -r tools/server/tests/requirements.txt
 
       - name: Tests
         id: server_integration_tests
+        if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) }}
         run: |
-          cd examples/server/tests
-          PORT=8888 ./tests.sh
+          cd tools/server/tests
+          export ${{ matrix.extra_args }}
+          pytest -v -x -m "not slow"
 
       - name: Slow tests
         id: server_integration_tests_slow
         if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
         run: |
-          cd examples/server/tests
-          PORT=8888 ./tests.sh --stop --no-skipped --no-capture --tags slow
-
+          cd tools/server/tests
+          export ${{ matrix.extra_args }}
+          SLOW_TESTS=1 pytest -v -x
 
   server-windows:
-    runs-on: windows-2019
+    runs-on: windows-2022
 
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: libCURL
-        id: get_libcurl
-        env:
-          CURL_VERSION: 8.6.0_6
-        run: |
-          curl.exe -o $env:RUNNER_TEMP/curl.zip -L "https://curl.se/windows/dl-${env:CURL_VERSION}/curl-${env:CURL_VERSION}-win64-mingw.zip"
-          mkdir $env:RUNNER_TEMP/libcurl
-          tar.exe -xvf $env:RUNNER_TEMP/curl.zip --strip-components=1 -C $env:RUNNER_TEMP/libcurl
-
       - name: Build
         id: cmake_build
         run: |
-          cmake -B build -DLLAMA_CURL=ON -DCURL_LIBRARY="$env:RUNNER_TEMP/libcurl/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:RUNNER_TEMP/libcurl/include"
+          cmake -B build -DLLAMA_BUILD_BORINGSSL=ON -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
 
       - name: Python setup
         id: setup_python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-
-      - name: Tests dependencies
-        id: test_dependencies
-        run: |
-          pip install -r examples/server/tests/requirements.txt
-
-      - name: Copy Libcurl
-        id: prepare_libcurl
-        run: |
-          cp $env:RUNNER_TEMP/libcurl/bin/libcurl-x64.dll ./build/bin/Release/libcurl-x64.dll
+          pip-install: -r tools/server/tests/requirements.txt
 
       - name: Tests
         id: server_integration_tests
         if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
         run: |
-          cd examples/server/tests
-          behave.exe --summary --stop --no-capture --exclude 'issues|wrong_usages|passkey' --tags llama.cpp
+          cd tools/server/tests
+          $env:PYTHONIOENCODING = ":replace"
+          pytest -v -x -m "not slow"
 
       - name: Slow tests
         id: server_integration_tests_slow
         if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
         run: |
-          cd examples/server/tests
-          behave.exe --stop --no-skipped --no-capture --tags slow
+          cd tools/server/tests
+          $env:SLOW_TESTS = "1"
+          pytest -v -x

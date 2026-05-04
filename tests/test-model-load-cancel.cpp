@@ -21,7 +21,7 @@ int main(int argc, char *argv[] ) {
         (void) ctx;
         return progress > 0.50;
     };
-    auto * model = llama_load_model_from_file(model_path, params);
+    auto * model = llama_model_load_from_file(model_path, params);
     llama_backend_free();
     return model == nullptr ? EXIT_SUCCESS : EXIT_FAILURE;
 }

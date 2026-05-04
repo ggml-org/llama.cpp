@@ -1,0 +1,22 @@
+// FastRPC IDL interface for GGML HTP
+
+#ifndef HTP_IDL
+#define HTP_IDL
+
+#include "AEEStdDef.idl"
+#include "remote.idl"
+
+struct htp_iface_pmu_conf {
+    uint32 events[8];
+};
+
+interface htp_iface : remote_handle64 {
+    AEEResult start(in uint32 sess_id, in uint64 dsp_queue_id, in uint32 n_hvx, in uint32 use_hmx, in uint64 max_vmem);
+    AEEResult stop();
+    AEEResult mmap(in uint32 fd, in uint32 size);
+    AEEResult munmap(in uint32 fd);
+    AEEResult profiler(in uint32 mode, in htp_iface_pmu_conf pmu);
+    AEEResult etm(in uint32 enable);
+};
+
+#endif /* HTP_IDL */

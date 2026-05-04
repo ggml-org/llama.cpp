@@ -1,6 +1,0 @@
-aiohttp~=3.9.3
-behave~=1.2.6
-huggingface_hub~=0.20.3
-numpy~=1.24.4
-openai~=0.25.0
-prometheus-client~=0.20.0
