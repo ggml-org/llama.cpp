@@ -7235,9 +7235,9 @@ static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_
     // through PCIe is sufficient fast reading back data from PCIe is slower than going through
     // the HW device to host copy path.
     if (ggml_vk_should_use_uma_direct_transfer(src, size, false)) {
-            memcpy(dst, (uint8_t *) src->ptr + offset, size);
-            return;
-        }
+        memcpy(dst, (uint8_t *) src->ptr + offset, size);
+        return;
+    }
 
     std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
 
