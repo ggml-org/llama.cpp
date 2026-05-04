@@ -6789,13 +6789,9 @@ static void ggml_vk_ensure_sync_staging_buffer_internal(vk_device& device, vk_bu
     if (*staging_ptr == nullptr || (*staging_ptr)->size < size) {
         VK_LOG_MEMORY("ggml_vk_ensure_sync_staging_buffer(" << size << ")");
         ggml_vk_destroy_buffer(*staging_ptr);
-        if (device->uma) {
-            *staging_ptr = ggml_vk_create_buffer_device(device, size);
-        } else {
-            *staging_ptr = ggml_vk_create_buffer_check(device, size,
-                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
-                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-        }
+        *staging_ptr = ggml_vk_create_buffer_check(device, size,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     }
 }
 
@@ -6850,6 +6846,10 @@ static size_t ggml_vk_benchmark_uma_threshold(
     CPUOp cpu_op,
     GPUOp gpu_op)
 {
+    // Threshold semantics: copy_size <= threshold → use CPU direct path.
+    // We find the last size where CPU is still at least as fast as GPU, so that
+    // the threshold is the largest size where direct transfer is beneficial.
+    size_t threshold = 0;
     for (size_t size : sizes) {
         const int iterations = 50;
 
@@ -6863,11 +6863,16 @@ static size_t ggml_vk_benchmark_uma_threshold(
         auto end_gpu = std::chrono::high_resolution_clock::now();
         double gpu_time = std::chrono::duration<double, std::micro>(end_gpu - start_gpu).count() / iterations;
 
-        if (gpu_time < cpu_time) {
-            return size;
+        if (cpu_time <= gpu_time) {
+            // CPU is at least as fast at this size — include it in the direct range.
+            threshold = size;
+        } else {
+            // GPU wins from here on; stop scanning.
+            return threshold;
         }
     }
 
+    // CPU was fastest (or tied) for all tested sizes — use default.
     return default_threshold;
 }
 
@@ -6878,8 +6883,9 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
     vk_command_pool benchmark_pool;
     benchmark_pool.init(device, &device->transfer_queue);
 
-    // uma_direct: host-visible device-local buffer (the UMA direct-mapped path).
-    vk_buffer uma_direct = ggml_vk_create_buffer(device, sizes.back(), {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
+    // uma_direct: use the same allocation path as runtime tensor buffers so that
+    // calibration measures the same memory type (DeviceLocal|HostVisible|HostCoherent on UMA).
+    vk_buffer uma_direct = ggml_vk_create_buffer_device(device, sizes.back());
     GGML_ASSERT(uma_direct->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
     GGML_ASSERT(uma_direct->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
@@ -7273,6 +7279,13 @@ static bool ggml_vk_buffer_read_async(vk_context subctx, vk_buffer& src, size_t 
 
 static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_t size) {
     VK_LOG_DEBUG("ggml_vk_buffer_read(" << src->buffer << ", " << offset << ", " << size << ")");
+
+    if (src->device->uma &&
+        (src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) &&
+        ggml_vk_use_uma_direct_read(src, size)) {
+        memcpy(dst, (uint8_t *) src->ptr + offset, size);
+        return;
+    }
 
     std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
 
