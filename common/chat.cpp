@@ -2221,8 +2221,8 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, autoparser);
         auto_params.supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
         if (auto_params.supports_thinking) {
-            auto_params.thinking_start_tag = autoparser.reasoning.start;
-            auto_params.thinking_end_tag   = autoparser.reasoning.end;
+            auto_params.thinking_start_tag = trim_whitespace(autoparser.reasoning.start);
+            auto_params.thinking_end_tag   = trim_whitespace(autoparser.reasoning.end);
         }
         auto_params.generation_prompt = params.generation_prompt;
         common_peg_arena arena;

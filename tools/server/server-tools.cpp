@@ -694,6 +694,35 @@ struct server_tool_apply_diff : server_tool {
 };
 
 //
+// get_datetime: returns the current date and time
+//
+
+struct server_tool_get_datetime : server_tool {
+    server_tool_get_datetime() {
+        name = "get_datetime";
+        display_name = "Get Date & Time";
+        permission_write = false;
+    }
+
+    json get_definition() override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Returns the current date and time"},
+            }},
+        };
+    }
+
+    json invoke(json) override {
+        auto now = std::chrono::system_clock::now();
+        auto time = std::chrono::system_clock::to_time_t(now);
+
+        return {{"result", std::ctime(&time)}};
+    }
+};
+
+//
 // public API
 //
 
@@ -706,6 +735,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_write_file>());
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_apply_diff>());
+    tools.push_back(std::make_unique<server_tool_get_datetime>());
     return tools;
 }
 

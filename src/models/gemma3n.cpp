@@ -1,5 +1,86 @@
 #include "models.h"
 
+void llama_model_gemma3n::load_arch_hparams(llama_model_loader & ml) {
+    uint32_t swa_period = 5;
+    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+    hparams.set_swa_pattern(swa_period);
+
+    hparams.n_layer_kv_from_start     = 20;
+    hparams.f_attention_scale         = 1.0f;
+
+    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,          hparams.rope_freq_base_train_swa, false);
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+    switch (hparams.n_layer) {
+        case 30: type = LLM_TYPE_E2B; break;
+        case 35: type = LLM_TYPE_E4B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
+}
+
+void llama_model_gemma3n::load_arch_tensors(llama_model_loader &) {
+    LLAMA_LOAD_LOCALS;
+
+    const int64_t n_altup      = hparams.n_altup;
+    const int64_t laurel_rank  = hparams.laurel_rank;
+    const int64_t n_embd_altup = hparams.n_embd_altup;
+
+    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+    // if output is NULL, init from the input tok embed
+    if (output == NULL) {
+        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+    }
+
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+    altup_proj        = create_tensor(tn(LLM_TENSOR_ALTUP_PROJ,        "weight"), {n_embd, n_embd, n_altup - 1}, 0);
+    altup_unembd_proj = create_tensor(tn(LLM_TENSOR_ALTUP_UNEMBD_PROJ, "weight"), {n_embd, n_embd, n_altup - 1}, 0);
+
+    per_layer_tok_embd   = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"), {n_embd_altup * n_layer, n_vocab}, 0);
+    per_layer_model_proj = create_tensor(tn(LLM_TENSOR_PER_LAYER_MODEL_PROJ, "weight", 0), {n_embd, n_embd_altup * n_layer}, 0);
+    per_layer_proj_norm  = create_tensor(tn(LLM_TENSOR_PER_LAYER_PROJ_NORM,  "weight", 0), {n_embd_altup}, 0);
+
+    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = layers[i];
+
+        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
+        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+        layer.attn_q_norm    = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM,    "weight", i), {n_embd_head_k}, 0);
+        layer.attn_k_norm    = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM,    "weight", i), {n_embd_head_k}, 0);
+        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
+
+        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+        layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
+
+        // altup & laurel
+        layer.per_layer_inp_gate   = create_tensor(tn(LLM_TENSOR_PER_LAYER_INP_GATE,  "weight", i), {n_embd, n_embd_altup}, 0);
+        layer.per_layer_proj       = create_tensor(tn(LLM_TENSOR_PER_LAYER_PROJ,      "weight", i), {n_embd_altup, n_embd}, 0);
+        layer.per_layer_post_norm  = create_tensor(tn(LLM_TENSOR_PER_LAYER_POST_NORM, "weight", i), {n_embd}, 0);
+        layer.altup_correct_coef   = create_tensor(tn(LLM_TENSOR_ALTUP_CORRECT_COEF,  "weight", i), {n_altup, n_altup}, 0);
+        layer.altup_correct_scale  = create_tensor(tn(LLM_TENSOR_ALTUP_CORRECT_SCALE, "weight", i), {n_embd}, 0);
+        layer.altup_predict_coef   = create_tensor(tn(LLM_TENSOR_ALTUP_PREDICT_COEF,  "weight", i), {n_altup, n_altup * n_altup}, 0);
+        layer.altup_router         = create_tensor(tn(LLM_TENSOR_ALTUP_ROUTER,        "weight", i), {n_embd, n_altup}, 0);
+        layer.altup_router_norm    = create_tensor(tn(LLM_TENSOR_ALTUP_ROUTER_NORM,   "weight", i), {n_embd}, 0);
+        layer.laurel_l             = create_tensor(tn(LLM_TENSOR_LAUREL_L,            "weight", i), {n_embd, laurel_rank}, 0);
+        layer.laurel_r             = create_tensor(tn(LLM_TENSOR_LAUREL_R,            "weight", i), {laurel_rank, n_embd}, 0);
+        layer.laurel_post_norm     = create_tensor(tn(LLM_TENSOR_LAUREL_POST_NORM,    "weight", i), {n_embd}, 0);
+    }
+}
+
+std::unique_ptr<llm_graph_context> llama_model_gemma3n::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(*this, params);
+}
+
 // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
 static ggml_tensor * ggml_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
     GGML_ASSERT(idx < (int) x->ne[2]);
@@ -7,7 +88,7 @@ static ggml_tensor * ggml_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, in
                         idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
 }
 
-llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const llm_graph_params & params) :
+llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params),
     model(model),
     n_embd_head(model.hparams.n_embd_head_k()),
@@ -229,13 +310,13 @@ llm_build_gemma3n_iswa::llm_build_gemma3n_iswa(const llama_model & model, const 
     ggml_build_forward_expand(gf, cur);
 }
 
-ggml_tensor * llm_build_gemma3n_iswa::calc_magnitude(ggml_tensor * x) {
+ggml_tensor * llama_model_gemma3n::graph::calc_magnitude(ggml_tensor * x) {
     return ggml_sqrt(ctx0, ggml_sum_rows(ctx0, ggml_sqr(ctx0, x)));
 }
 
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_altup, n_layer, n_tokens]
-ggml_tensor * llm_build_gemma3n_iswa::build_inp_per_layer() {
+ggml_tensor * llama_model_gemma3n::graph::build_inp_per_layer() {
     auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
     ggml_tensor * inp_per_layer;
     float tok_embd_scale = sqrtf((float) n_embd_altup);
@@ -268,7 +349,7 @@ ggml_tensor * llm_build_gemma3n_iswa::build_inp_per_layer() {
 // equivalent to project_per_layer_inputs() in python code
 // this calculates the per-layer inputs, so the final tensor shape will have n_layer as the last dim
 // output shape: [n_embd_altup, n_tokens, n_layer]
-ggml_tensor * llm_build_gemma3n_iswa::project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer) {
+ggml_tensor * llama_model_gemma3n::graph::project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer) {
     const float per_layer_projection_scale = 1.0f / sqrtf((float) n_embd);
     const float per_layer_input_scale      = 1.0f / sqrtf(2.0f);
 
@@ -291,7 +372,7 @@ ggml_tensor * llm_build_gemma3n_iswa::project_per_layer_inputs(ggml_tensor * inp
 
 // input cur shape: [n_altup, n_tokens]
 // output    shape: [n_altup, n_tokens]
-ggml_tensor * llm_build_gemma3n_iswa::laurel(ggml_tensor * cur, int il) {
+ggml_tensor * llama_model_gemma3n::graph::laurel(ggml_tensor * cur, int il) {
     ggml_tensor * tmp = cur;
     tmp               = build_lora_mm(model.layers[il].laurel_l, tmp);
     tmp               = build_lora_mm(model.layers[il].laurel_r, tmp);
@@ -303,7 +384,7 @@ ggml_tensor * llm_build_gemma3n_iswa::laurel(ggml_tensor * cur, int il) {
 
 // input x shape: [n_embd, n_tokens]
 // output  shape: [n_embd, n_tokens]
-ggml_tensor * llm_build_gemma3n_iswa::gaussian_topk(ggml_tensor * x) {
+ggml_tensor * llama_model_gemma3n::graph::gaussian_topk(ggml_tensor * x) {
     ggml_tensor * mean = ggml_mean(ctx0, x);
     ggml_tensor * std  = ggml_sqrt(ctx0, ggml_scale(ctx0, ggml_sum_rows(ctx0, ggml_sqr(ctx0, ggml_sub(ctx0, x, mean))),
                                                     1.0f / (float) (x->ne[0] - 1)));
@@ -318,7 +399,7 @@ ggml_tensor * llm_build_gemma3n_iswa::gaussian_topk(ggml_tensor * x) {
 // equivalent to compute_router_modalities() in python code
 // input x shape: [n_embd,  n_tokens]
 // output  shape: [n_altup, n_tokens]
-ggml_tensor * llm_build_gemma3n_iswa::altup_compute_router_modalities(ggml_tensor * x, int il) {
+ggml_tensor * llama_model_gemma3n::graph::altup_compute_router_modalities(ggml_tensor * x, int il) {
     ggml_tensor * router_inputs = build_norm(x, model.layers[il].altup_router_norm, NULL, LLM_NORM_RMS, il);
 
     // router_input_scale
@@ -330,7 +411,7 @@ ggml_tensor * llm_build_gemma3n_iswa::altup_compute_router_modalities(ggml_tenso
 
 // input cur shape: [n_embd, n_tokens, n_altup]
 // output    shape: [n_embd, n_tokens, n_altup]
-ggml_tensor * llm_build_gemma3n_iswa::altup_predict(ggml_tensor * cur, int il) {
+ggml_tensor * llama_model_gemma3n::graph::altup_predict(ggml_tensor * cur, int il) {
     ggml_tensor * activated  = ggml_view_2d_slice(ctx0, cur, i_altup_act);      // [n_embd, n_tokens]
     ggml_tensor * modalities = altup_compute_router_modalities(activated, il);  // [n_altup, n_tokens]
     cb(modalities, "modalities", il);
@@ -355,7 +436,7 @@ ggml_tensor * llm_build_gemma3n_iswa::altup_predict(ggml_tensor * cur, int il) {
 // input predictions       shape: [n_embd, n_tokens, n_altup]
 // input activated         shape: [n_embd, n_tokens]
 // output                  shape: [n_embd, n_tokens, n_altup]
-ggml_tensor * llm_build_gemma3n_iswa::altup_correct(ggml_tensor * predictions, ggml_tensor * activated, int il) {
+ggml_tensor * llama_model_gemma3n::graph::altup_correct(ggml_tensor * predictions, ggml_tensor * activated, int il) {
     ggml_tensor * modalities = altup_compute_router_modalities(activated, il);  // [n_altup, n_tokens]
     cb(modalities, "modalities", il);
 
