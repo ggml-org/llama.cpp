@@ -6830,35 +6830,55 @@ static size_t ggml_vk_benchmark_uma_threshold(
 
 static void ggml_vk_run_uma_benchmarks(vk_device& device) {
     const std::vector<size_t> sizes = { 4 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024 };
-    vk_buffer dst = ggml_vk_create_buffer(device, sizes.back(), {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
-    GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
-    GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
-    vk_buffer src = ggml_vk_create_buffer(device, sizes.back(), {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
-    GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
-    GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+    // uma_direct: host-visible device-local buffer (the UMA direct-mapped path).
+    vk_buffer uma_direct = ggml_vk_create_buffer(device, sizes.back(), {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
+    GGML_ASSERT(uma_direct->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
+    GGML_ASSERT(uma_direct->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    // staging: host-visible buffer used as the intermediate in the GPU staging path,
+    // mirroring ggml_vk_ensure_sync_staging_buffer which requests HostCached.
+    vk_buffer staging = ggml_vk_create_buffer(device, sizes.back(),
+        {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
+    GGML_ASSERT(staging->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
+    GGML_ASSERT(staging->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+
     std::vector<uint8_t> host_data(sizes.back(), 0);
 
+    // Warmup: exercise both the GPU copy path and the CPU memcpy path so that
+    // caches and driver state are in a representative steady state before timing.
     for (int i = 0; i < 5; ++i) {
+        // GPU copy warmup (staging -> uma_direct, as in the write staging path).
+        memcpy(staging->ptr, host_data.data(), sizes.back());
         vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
         ggml_vk_ctx_begin(device, subctx);
         vk::BufferCopy copy{ 0, 0, sizes.back() };
-        subctx->s->buffer->buf.copyBuffer(src->buffer, dst->buffer, {copy});
+        subctx->s->buffer->buf.copyBuffer(staging->buffer, uma_direct->buffer, {copy});
         ggml_vk_ctx_end(subctx);
         ggml_vk_submit(subctx, device->fence);
         (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
         device->device.resetFences({device->fence});
+        // CPU direct-write warmup.
+        memcpy(uma_direct->ptr, host_data.data(), sizes.back());
     }
 
+    // Write threshold: compare CPU direct write (host -> uma_direct) against the
+    // real GPU staging path (host -> staging memcpy + GPU copyBuffer staging -> uma_direct).
     device->uma_write_threshold = ggml_vk_benchmark_uma_threshold(
         sizes,
         GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT,
-        [&](size_t size) { memcpy(dst->ptr, host_data.data(), size); },
         [&](size_t size) {
+            // CPU direct path: write straight into the mapped UMA buffer.
+            memcpy(uma_direct->ptr, host_data.data(), size);
+        },
+        [&](size_t size) {
+            // GPU staging path: memcpy into staging, then GPU copies staging -> uma_direct.
+            memcpy(staging->ptr, host_data.data(), size);
             vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
             ggml_vk_ctx_begin(device, subctx);
             vk::BufferCopy copy{ 0, 0, size };
-            subctx->s->buffer->buf.copyBuffer(src->buffer, dst->buffer, {copy});
+            subctx->s->buffer->buf.copyBuffer(staging->buffer, uma_direct->buffer, {copy});
             ggml_vk_ctx_end(subctx);
             ggml_vk_submit(subctx, device->fence);
             (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
@@ -6866,24 +6886,31 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
         }
     );
 
+    // Read threshold: compare CPU direct read (uma_direct -> host) against the
+    // real GPU staging path (GPU copyBuffer uma_direct -> staging + memcpy staging -> host).
     device->uma_read_threshold = ggml_vk_benchmark_uma_threshold(
         sizes,
         GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT,
-        [&](size_t size) { memcpy(host_data.data(), dst->ptr, size); },
         [&](size_t size) {
+            // CPU direct path: read straight from the mapped UMA buffer.
+            memcpy(host_data.data(), uma_direct->ptr, size);
+        },
+        [&](size_t size) {
+            // GPU staging path: GPU copies uma_direct -> staging, then memcpy out.
             vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
             ggml_vk_ctx_begin(device, subctx);
             vk::BufferCopy copy{ 0, 0, size };
-            subctx->s->buffer->buf.copyBuffer(dst->buffer, src->buffer, {copy});
+            subctx->s->buffer->buf.copyBuffer(uma_direct->buffer, staging->buffer, {copy});
             ggml_vk_ctx_end(subctx);
             ggml_vk_submit(subctx, device->fence);
             (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
             device->device.resetFences({device->fence});
+            memcpy(host_data.data(), staging->ptr, size);
         }
     );
 
-    ggml_vk_destroy_buffer(src);
-    ggml_vk_destroy_buffer(dst);
+    ggml_vk_destroy_buffer(staging);
+    ggml_vk_destroy_buffer(uma_direct);
     ggml_vk_command_pool_cleanup(device, device->transfer_queue.cmd_pool);
 }
 
