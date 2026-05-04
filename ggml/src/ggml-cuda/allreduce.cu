@@ -259,11 +259,12 @@ struct ggml_cuda_ar_event_slot {
 // PointerForRegisteredMem is 0 and the host pointer can't be used as a
 // device pointer.
 struct ggml_cuda_ar_host_mapping {
-    void * host = nullptr;   // cudaFreeHost handle
-    char * dev  = nullptr;   // device-side pointer for kernels / cudaMemset / cudaMemcpyAsync
+    uint8_t * host = nullptr;   // cudaFreeHost handle; also the H-side ptr for cudaMemcpyAsync
+    uint8_t * dev  = nullptr;   // device-side pointer for kernels / cudaMemset
 
     cudaError_t alloc(size_t bytes) {
-        cudaError_t rc = cudaHostAlloc(&host, bytes, cudaHostAllocPortable | cudaHostAllocMapped);
+        cudaError_t rc = cudaHostAlloc(reinterpret_cast<void **>(&host), bytes,
+                                       cudaHostAllocPortable | cudaHostAllocMapped);
         if (rc != cudaSuccess) {
             host = nullptr;
             return rc;
@@ -629,7 +630,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
                 (nbytes - offset) : chunk_bytes;
 
             CUDA_CHECK(cudaMemcpyAsync(
-                p->host_large[i].dev + offset, reinterpret_cast<char *>(src_buf[i]) + offset, this_bytes,
+                p->host_large[i].host + offset, reinterpret_cast<char *>(src_buf[i]) + offset, this_bytes,
                 cudaMemcpyDeviceToHost, p->streams[i]));
             CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].cpy[c], p->streams[i]));
         }
@@ -660,7 +661,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
 
             CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->ev_pool[peer][slot].cpy[c]));
             CUDA_CHECK(cudaMemcpyAsync(
-                p->dev_tmp[i] + offset, p->host_large[peer].dev + offset, this_bytes,
+                p->dev_tmp[i] + offset, p->host_large[peer].host + offset, this_bytes,
                 cudaMemcpyHostToDevice, p->streams[i]));
         }
 
