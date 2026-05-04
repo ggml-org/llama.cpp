@@ -3558,8 +3558,7 @@ struct test_relu_sqr : public test_case {
 
 // SNAKE activation fusion: y = x + sin(a*x)^2 * inv_b
 // CUDA backend matches the naive 5-op chain (mul, sin, sqr, mul, add)
-// and dispatches a single fused kernel. CPU runs the chain naively, so
-// agreement between backends proves the fused kernel preserves the math.
+// and dispatches a single fused kernel.
 struct test_snake_fuse : public test_case {
     const ggml_type type;
     const std::array<int64_t, 2> ne;   // [T, C]
