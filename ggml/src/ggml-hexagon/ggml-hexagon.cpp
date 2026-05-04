@@ -12,9 +12,12 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <sstream>
+#include <iomanip>
 #include <unordered_set>
 #include <unordered_map>
 #include <regex>
+#include <queue>
 
 #ifdef _WIN32
 #    include <sal.h>
@@ -41,20 +44,31 @@
 #include "htp_iface.h"
 #include "htp-drv.h"
 
-static size_t opt_ndev         = 1;
-static size_t opt_nhvx         = 0; // use all
-static int    opt_arch         = 0; // autodetect
-static int    opt_etm          = 0;
-static int    opt_verbose      = 0;
-static int    opt_profile      = 0;
-static int    opt_hostbuf      = 1; // hostbuf ON by default
-static int    opt_use_hmx      = 1; // when set, enable HMX; when 0, use HVX only
+using intvec  = std::vector<int>;
+using uintvec = std::vector<unsigned int>;
+using u32vec  = std::vector<uint32_t>;
+
+static int    opt_arch    = 0; // autodetect
+static size_t opt_ndev    = 1;
+static size_t opt_nhvx    = 0; // use all
+static int    opt_use_hmx = 1; // when set, enable HMX; when 0, use HVX only
+static size_t opt_vmem    = HTP_OP_MAX_VMEM_DEFAULT;  // max available va space for buffer mappings
+static size_t opt_mbuf    = 1ul * 1024 * 1024 * 1024; // max buffer size
+static int    opt_etm     = 0;
+static int    opt_verbose = 0;
+static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
+static int    opt_hostbuf = 1; // hostbuf ON by default
+
+// Default PMU events, if profiling with PMU (mode=2) is enabled
+// See https://docs.qualcomm.com/doc/80-N2040-60/topic/pmu-events.html
+//     https://docs.qualcomm.com/doc/80-N2040-61/topic/hvx-pmu-events.html
+static u32vec opt_pmu_evt { 0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C };
 
 // Enable all stages by default
-static int opt_opmask   = HTP_OPMASK_QUEUE | HTP_OPMASK_COMPUTE;
-static int opt_opsync   = 0;  // synchronous ops
+static int opt_opstage  = HTP_OPSTAGE_QUEUE | HTP_OPSTAGE_COMPUTE;
 static int opt_opbatch  = 1024; // max number of ops in a batch
 static int opt_opqueue  = 16;   // max number of pending batches
+
 static std::regex* opt_opfilter = NULL; // regex of ops to not claim
 
 #define HEX_VERBOSE(...) \
@@ -99,24 +113,30 @@ static void ggml_hexagon_dump_op_supp(const std::string &sess_name, const struct
     if (!opt_verbose) return;
 
     op_desc desc(op);
-    GGML_LOG_DEBUG("ggml-hex: %s supports-op %s : %s : %s : %s : %s : %s : %s\n", sess_name.c_str(),
+    GGML_LOG_DEBUG("ggml-hex: %s supports-op %s: %s : %s : %s : %s : %s : %s\n", sess_name.c_str(),
                 ggml_op_desc(op), desc.names, desc.dims, desc.types, desc.strides, desc.buffs, supp ? "yes" : "no");
 }
 
 static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const ggml_tensor * op,
-                                      uint32_t op_usec, uint32_t op_cycles, uint32_t op_pkts, uint64_t call_usec) {
+                                      uint32_t op_usec, uint32_t op_cycles, const uint32_t pmu[]) {
     if (!opt_profile) return;
 
+    char pmu_str[256] = "";
+    if (opt_profile > 1) {
+        static_assert(HTP_PROF_PMU_NCNT == 8, "current implementation assumes 8 PMU counters");
+        sprintf(pmu_str, " pmu [%u,%u,%u,%u,%u,%u,%u,%u]",
+                pmu[0], pmu[1], pmu[2], pmu[3], pmu[4], pmu[5], pmu[6], pmu[7]);
+    }
+
     op_desc desc(op);
-    GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : %s : op-usec %u op-cycles %u op-pkts %u (%f) call-usec %llu\n", sess_name.c_str(),
-                ggml_op_desc(op), desc.names, desc.dims, desc.types, desc.strides, desc.buffs,
-                op_usec, op_cycles, op_pkts, (float) op_cycles / op_pkts, (unsigned long long) call_usec);
+    GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : usec %u cycles %u%s\n", sess_name.c_str(),
+            ggml_op_desc(op), desc.names, desc.dims, desc.types, desc.strides, op_usec, op_cycles, pmu_str);
 }
 
 // ** backend sessions
 
 struct ggml_hexagon_opbatch;
-struct ggml_hexagon_opshm;
+struct ggml_hexagon_opqueue;
 
 struct ggml_hexagon_session {
     std::string      name;
@@ -132,8 +152,8 @@ struct ggml_hexagon_session {
     bool             valid_iface;
 
     std::atomic<int>      op_pending;
-    ggml_hexagon_opbatch *op_batch;
-    ggml_hexagon_opshm   *op_shm;
+    ggml_hexagon_opbatch* op_batch;
+    ggml_hexagon_opqueue* op_queue;
 
     ggml_backend_buffer_type buffer_type        = {};
     ggml_backend_buffer_type repack_buffer_type = {};
@@ -173,33 +193,30 @@ struct ggml_hexagon_shared_buffer {
     bool                   mapped;
     bool                   pinned;
 
-    void mmap(bool pinned = false) {
-        int err = fastrpc_mmap(sess->domain_id, this->fd, (void *) this->base, 0, this->size, FASTRPC_MAP_FD_DELAYED);
+    void mmap() {
+        fastrpc_map_flags flags = this->pinned ? FASTRPC_MAP_FD : FASTRPC_MAP_FD_DELAYED;
+
+        int err = fastrpc_mmap(sess->domain_id, this->fd, (void *) this->base, 0, this->size, flags);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: %s buffer mapping failed : domain_id %d size %zu fd %d error 0x%08x\n", sess->c_name(),
                     sess->domain_id, this->size, this->fd, (unsigned) err);
             throw std::runtime_error("ggml-hex: fastrpc_mmap failed (see log for details)");
         }
 
-        if (pinned) {
-            err = htp_iface_mmap(sess->handle, this->fd, this->size, pinned);
-            if (err != 0) {
-                GGML_LOG_ERROR("ggml-hex: %s buffer pinning failed : domain_id %d size %zu fd %d error 0x%08x\n", sess->c_name(),
-                        sess->domain_id, this->size, this->fd, (unsigned) err);
-                throw std::runtime_error("ggml-hex: htp_iface_mmap failed (see log for details)");
-            }
-        }
-
-        this->mapped = true;
-        this->pinned = pinned;
         HEX_VERBOSE("ggml-hex: %s mapped buffer: base %p size %zu fd %d pinned %u\n",
                 sess->c_name(), (void *) this->base, this->size, this->fd, pinned);
+
+        this->mapped = true;
     }
 
     void unmap() {
         if (!this->mapped) return;
 
-        htp_iface_munmap(sess->handle, this->fd);
+        if (!this->pinned) {
+            // HTP might still hold a reference, tell it drop it
+            htp_iface_munmap(sess->handle, this->fd);
+        }
+
         fastrpc_munmap(sess->domain_id, this->fd, (void *) this->base, this->size);
 
         HEX_VERBOSE("ggml-hex: %s unmapped buffer: base %p size %zu fd %d\n", sess->c_name(),
@@ -209,7 +226,7 @@ struct ggml_hexagon_shared_buffer {
         this->fd     = -1;
     }
 
-    void alloc(size_t size, bool pinned = false) {
+    void alloc(size_t size) {
         if (this->base) return;
 
         this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, size);
@@ -227,8 +244,7 @@ struct ggml_hexagon_shared_buffer {
 
         HEX_VERBOSE("ggml-hex: %s allocated buffer: base %p size %zu fd %d pinned %d\n", sess->c_name(),
                     (void *) this->base, this->size, this->fd, (int) pinned);
-
-        mmap(pinned);
+        mmap();
     }
 
     void free() {
@@ -244,15 +260,14 @@ struct ggml_hexagon_shared_buffer {
     }
 
     ggml_hexagon_shared_buffer(ggml_hexagon_session * sess, size_t size, bool pinned = false) {
-        size += 4 * 1024;  // extra page for padding
-
         this->sess   = sess;
         this->size   = 0;
         this->base   = nullptr;
         this->fd     = -1;
         this->mapped = false;
+        this->pinned = pinned;
 
-        alloc(size, pinned);
+        alloc(size);
     }
 
     ~ggml_hexagon_shared_buffer() {
@@ -1457,6 +1472,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
+        size += 4 * 1024;  // guard page
         ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
@@ -1469,6 +1485,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_repack_buffer_type_alloc_buffe
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
+        size += 4 * 1024;  // guard page
         ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
@@ -1487,7 +1504,7 @@ static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffe
 }
 
 static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buffer_type) {
-    return 1UL * 1024 * 1024 * 1024;  // 1GB per buffer
+    return opt_mbuf; // typically 1GB per buffer
     GGML_UNUSED(buffer_type);
 }
 
@@ -1521,65 +1538,14 @@ static ggml_backend_buffer_type_i ggml_backend_hexagon_repack_buffer_type_interf
 
 // Backend session implementation
 
-struct ggml_hexagon_opshm {
-    ggml_hexagon_shared_buffer *sbuf;
-
-    std::vector<bool> block_mask;
-    size_t            block_size;
-
-    uint8_t * base()     const { return this->sbuf->base; }
-    int       fd()       const { return this->sbuf->fd;   }
-    size_t    n_blocks() const { return this->block_mask.size(); }
-
-    ggml_hexagon_opshm(ggml_hexagon_session *sess, size_t max_batch, size_t max_pending) {
-        size_t n_bufs    = HTP_OP_MAX_BUFS;
-        size_t n_ops     = max_batch;
-        size_t n_tensors = n_ops + n_ops * HTP_OP_MAX_INPUTS;
-
-        block_mask.resize(max_pending, true);
-
-        block_size = sizeof(htp_buf_desc) * n_bufs    +
-                     sizeof(htp_tensor)   * n_tensors +
-                     sizeof(htp_op_desc)  * n_ops;
-
-        sbuf = new ggml_hexagon_shared_buffer(sess, block_size * block_mask.size(), true /* pinned */);
-
-        if (opt_verbose) {
-            GGML_LOG_INFO("ggml-hex: %s allocated shared buf %zu : block-size %zu max-batch %zu max-pending %zu\n",
-                    sess->c_name(), (size_t) sbuf->size, block_size, max_batch, max_pending);
-        }
-    }
-
-    ~ggml_hexagon_opshm() {
-        delete sbuf;
-    }
-
-    uint8_t * allocate() {
-        auto it = std::find(block_mask.begin(), block_mask.end(), true);
-        if (it == block_mask.end())
-            return nullptr;
-
-        unsigned int i = std::distance(block_mask.begin(), it);
-        uint8_t*  addr = sbuf->base + (i * block_size);
-        block_mask[i]  = false;
-
-        HEX_VERBOSE("ggml-hex: %s allocated op shm #%u %p\n", sbuf->sess->c_name(), i, (void*) addr);
-        return addr;
-    }
-
-    void release(uint8_t * addr) {
-        int i = (addr - sbuf->base) / block_size;
-        block_mask[i] = true;
-        HEX_VERBOSE("ggml-hex: %s released op shm #%u %p\n", sbuf->sess->c_name(), i, (void*) addr);
-    }
-};
-
 struct ggml_hexagon_opbatch {
-    const char* name;
+    ggml_hexagon_session*            sess;
 
-    std::vector<htp_buf_desc> buffers;
-    std::vector<htp_tensor>   tensors;
-    std::vector<htp_op_desc>  ops;
+    std::vector<const ggml_tensor*>  ops;       // pointers to original ops
+
+    std::vector<htp_buf_desc>        h_bufs;    // htp buffer descriptors
+    std::vector<htp_tensor>          h_tens;    // htp tensor descriptors
+    std::vector<htp_op_desc>         h_ops;     // htp op descriptors
 
     std::unordered_map<int, int>                b_map; // buffer fd   to index
     std::unordered_map<const ggml_tensor*, int> t_map; // tensor ptr  to index
@@ -1606,22 +1572,27 @@ struct ggml_hexagon_opbatch {
         d_map.clear();
     }
 
-    ggml_hexagon_opbatch(ggml_hexagon_session *sess, size_t max_batch) {
-        name = sess->c_name();
+    ggml_hexagon_opbatch(ggml_hexagon_session *sess, size_t batch_size, size_t max_vmem) {
+        this->sess = sess;
 
         n_bufs_max = HTP_OP_MAX_BUFS;
-        n_ops_max  = max_batch;
+        n_ops_max  = batch_size;
         n_tens_max = n_ops_max + n_ops_max * HTP_OP_MAX_INPUTS;
 
-        b_vmem_max = HTP_OP_MAX_VMEM;
+        b_vmem_max = max_vmem;
 
-        buffers.resize(n_bufs_max);
-        tensors.resize(n_tens_max);
         ops.resize(n_ops_max);
+
+        h_bufs.resize(n_bufs_max);
+        h_tens.resize(n_tens_max);
+        h_ops.resize(n_ops_max);
 
         b_map.reserve(n_bufs_max);
         t_map.reserve(n_tens_max);
         d_map.reserve(n_tens_max);
+
+        GGML_LOG_INFO("ggml-hex: %s op batching: n-bufs %u n-tensors %u n-ops %u vmem %zu\n",
+                sess->c_name(), n_bufs_max, n_tens_max, n_ops_max, b_vmem_max);
 
         reset();
     }
@@ -1640,7 +1611,7 @@ struct ggml_hexagon_opbatch {
 
         b_map.insert({sbuf->fd, bi});
 
-        htp_buf_desc &b = buffers[bi];
+        htp_buf_desc &b = h_bufs[bi];
         b.base = (uint64_t) sbuf->base;
         b.fd   = sbuf->fd;
         b.size = sbuf->size;
@@ -1664,7 +1635,7 @@ struct ggml_hexagon_opbatch {
         // First lookup by tensor data
         auto range = d_map.equal_range(t->data);
         for (auto it = range.first; it != range.second; ++it) {
-            htp_tensor * h = &tensors[it->second];
+            htp_tensor * h = &h_tens[it->second];
             if (same_shape(h, t)) { return it->second; }
         }
 
@@ -1682,7 +1653,7 @@ struct ggml_hexagon_opbatch {
         uint64_t t_offset = (uint8_t *) t->data - sbuf->base;
         size_t   t_size   = ggml_nbytes(t);
 
-        htp_tensor &h = tensors[ti];
+        htp_tensor &h = h_tens[ti];
         h.bi    = add_buffer(sbuf);
         h.data  = t_offset;
         h.size  = t_size;
@@ -1737,65 +1708,170 @@ struct ggml_hexagon_opbatch {
     // assumes that fit_op() was called first and returned true
     void add_op(htp_op_code opcode, const struct ggml_tensor * t) {
         // Add new op
-        htp_op_desc &o = ops[n_ops++];
+
+        unsigned int n = n_ops++;
         GGML_ASSERT(n_ops <= n_ops_max);
 
+        ops[n] = t;
+
+        htp_op_desc &o = h_ops[n];
         memcpy(&o.params, &t->op_params, sizeof(t->op_params));
         o.opcode = opcode;
         o.flags  = 0;
 
-        if (!(opt_opmask & HTP_OPMASK_COMPUTE)) {
+        if (!(opt_opstage & HTP_OPSTAGE_COMPUTE)) {
             o.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
         }
 
-        ggml_hexagon_dump_op_exec(name, t, o.flags);
+        ggml_hexagon_dump_op_exec(sess->c_name(), t, o.flags);
 
         for (unsigned int i=0; i < HTP_OP_MAX_INPUTS; i++) {
             o.src[i] = t->src[i] ? add_tensor(t->src[i]) : 0xffff;
         }
         o.dst = add_tensor(t);
     }
+};
 
-    size_t flush(uint8_t * mem_addr, size_t mem_size) {
-        static_assert(sizeof(htp_buf_desc) % 8 == 0, "sizeof(htp_buf_desc) must be multiple of 8");
-        static_assert(sizeof(htp_tensor)   % 8 == 0, "sizeof(htp_tensor) must be multiple of 8");
-        static_assert(sizeof(htp_op_desc)  % 8 == 0, "sizeof(htp_op_desc) must be multiple of 8");
+struct ggml_hexagon_opqueue {
+    // Shared buffer for storing batches
+    ggml_hexagon_shared_buffer *shm_buf;
+    size_t                      shm_blk_size;
 
-        const size_t b_size = sizeof(htp_buf_desc) * n_bufs;
-        const size_t t_size = sizeof(htp_tensor)   * n_tens;
-        const size_t o_size = sizeof(htp_op_desc)  * n_ops;
+    using opvec = std::vector<const ggml_tensor*>;
 
-        const size_t m_size = b_size + t_size + o_size;
-        GGML_ASSERT(m_size <= mem_size);
+    std::queue<unsigned int>    done;       // completed batch ids
+    std::vector<opvec>          op_cache;   // per batch op cache
+    std::vector<uint64_t>       start_usec; // per batch start time
 
-        uint8_t * b_ptr = (uint8_t *) mem_addr;
-        uint8_t * t_ptr = (uint8_t *) b_ptr + b_size;
-        uint8_t * o_ptr = (uint8_t *) t_ptr + t_size;
+    ggml_hexagon_opqueue(ggml_hexagon_session *sess, size_t batch_size, size_t depth) {
+        size_t n_bufs    = HTP_OP_MAX_BUFS;
+        size_t n_ops     = batch_size;
+        size_t n_tensors = n_ops + n_ops * HTP_OP_MAX_INPUTS;
 
-        memcpy(b_ptr, (void *) buffers.data(), b_size);
-        memcpy(t_ptr, (void *) tensors.data(), t_size);
-        memcpy(o_ptr, (void *) ops.data(),     o_size);
+        shm_blk_size = sizeof(htp_buf_desc)  * n_bufs    +
+                       sizeof(htp_tensor)    * n_tensors +
+                       sizeof(htp_op_desc)   * n_ops     +
+                       sizeof(htp_prof_desc) * n_ops;
 
-        HEX_VERBOSE("ggml-hex: %s flush-opbatch : n-bufs %u n-tensors %u n-ops %u vmem %zu : b-size %zu t-size %zu o-size %zu\n",
-                name, n_bufs, n_tens, n_ops, b_vmem, b_size, t_size, o_size);
+        shm_buf = new ggml_hexagon_shared_buffer(sess, shm_blk_size * depth, true /* pinned */);
+
+        op_cache.resize(depth);
+        start_usec.resize(depth, 0);
+
+        // init done queue
+        for (unsigned int i = 0; i < depth; i++) { done.push(i); }
+
+        if (opt_verbose) {
+            GGML_LOG_INFO("ggml-hex: %s allocated op-queue : batch-size %zu depth %zu shm-size %zu shm-block-size %zu\n",
+                    sess->c_name(), batch_size, depth, shm_buf->size, shm_blk_size);
+        }
+    }
+
+    ~ggml_hexagon_opqueue() {
+        delete shm_buf;
+    }
+
+    // push new batch
+    bool push(htp_opbatch_req& req, dspqueue_buffer& dbuf, ggml_hexagon_opbatch* op_batch) {
+        static_assert(sizeof(htp_opbatch_req) % 8 == 0, "sizeof(htp_opbatch_req) must be multiple of 8");
+        static_assert(sizeof(htp_opbatch_rsp) % 8 == 0, "sizeof(htp_opbatch_rsp) must be multiple of 8");
+        static_assert(sizeof(htp_buf_desc)    % 8 == 0, "sizeof(htp_buf_desc) must be multiple of 8");
+        static_assert(sizeof(htp_tensor)      % 8 == 0, "sizeof(htp_tensor) must be multiple of 8");
+        static_assert(sizeof(htp_op_desc)     % 8 == 0, "sizeof(htp_op_desc) must be multiple of 8");
+        static_assert(sizeof(htp_prof_desc)   % 8 == 0, "sizeof(htp_prof_desc) must be multiple of 8");
+
+        if (done.empty()) { return false; }
+
+        req.id        = done.front(); done.pop(); // batch id
+        req.n_bufs    = op_batch->n_bufs;
+        req.n_tensors = op_batch->n_tens;
+        req.n_ops     = op_batch->n_ops;
+
+        op_cache[req.id]   = op_batch->ops;
+        start_usec[req.id] = ggml_time_us();
+
+        const size_t b_size = sizeof(htp_buf_desc)  * req.n_bufs;
+        const size_t t_size = sizeof(htp_tensor)    * req.n_tensors;
+        const size_t o_size = sizeof(htp_op_desc)   * req.n_ops;
+        const size_t p_size = sizeof(htp_prof_desc) * req.n_ops;
+
+        dbuf.ptr      = shm_buf->base + (req.id * shm_blk_size);
+        dbuf.fd       = shm_buf->fd;
+        dbuf.flags    = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
+        dbuf.offset   = (uint8_t*) dbuf.ptr - (uint8_t*) shm_buf->base;
+        dbuf.size     = b_size + t_size + o_size + p_size;
+
+        GGML_ASSERT(dbuf.size <= shm_blk_size);
+
+        uint8_t * m_ptr = (uint8_t*) dbuf.ptr;
+        uint8_t * b_ptr = m_ptr; m_ptr += b_size;
+        uint8_t * t_ptr = m_ptr; m_ptr += t_size;
+        uint8_t * o_ptr = m_ptr;
+
+        memcpy(b_ptr, (void *) op_batch->h_bufs.data(), b_size);
+        memcpy(t_ptr, (void *) op_batch->h_tens.data(), t_size);
+        memcpy(o_ptr, (void *) op_batch->h_ops.data(),  o_size);
+
+        HEX_VERBOSE("ggml-hex: %s op-queue push batch #%u : n-bufs %u n-tensors %u n-ops %u vmem %zu : b-size %zu t-size %zu o-size %zu m-size %zu\n",
+                shm_buf->sess->c_name(), req.id, req.n_bufs, req.n_tensors, req.n_ops, op_batch->b_vmem,
+                b_size, t_size, o_size, (size_t) dbuf.size);
+
+        op_batch->reset();
 
         if (opt_verbose > 1) {
             htp_buf_desc *b = (htp_buf_desc*) b_ptr;
-            for (unsigned int i=0; i < n_bufs; i++) {
-                GGML_LOG_DEBUG("ggml-hex: %s htp-buf #%u : fd %d base %p size %zu\n", name, i,
+            for (unsigned int i=0; i < req.n_bufs; i++) {
+                GGML_LOG_DEBUG("ggml-hex: %s htp-buf #%u : fd %d base %p size %zu\n", shm_buf->sess->c_name(), i,
                             b[i].fd, (void *) b[i].base, (size_t) b[i].size);
             }
             htp_tensor *t = (htp_tensor*) t_ptr;
-            for (unsigned int i=0; i < n_tens; i++) {
+            for (unsigned int i=0; i < req.n_tensors; i++) {
                 GGML_LOG_DEBUG("ggml-hex: %s htp-tensor #%u : bi %u offset %u size %u : %zu:%zu:%zu:%zu\n",
-                            name, i, t[i].bi, t[i].data, t[i].size,
+                            shm_buf->sess->c_name(), i, t[i].bi, t[i].data, t[i].size,
                             (size_t) t[i].ne[0], (size_t) t[i].ne[1], (size_t) t[i].ne[2], (size_t) t[i].ne[3]);
             }
         }
 
-        reset();
+        return true;
+    }
 
-        return m_size;
+    void pop(htp_opbatch_rsp rsp, dspqueue_buffer dbuf) {
+        GGML_ASSERT(rsp.id < op_cache.size());
+
+        done.push(rsp.id);
+
+        const size_t b_size = sizeof(htp_buf_desc)  * rsp.n_bufs;
+        const size_t t_size = sizeof(htp_tensor)    * rsp.n_tensors;
+        const size_t o_size = sizeof(htp_op_desc)   * rsp.n_ops;
+        const size_t p_size = sizeof(htp_prof_desc) * rsp.n_ops;
+
+        const size_t m_size = b_size + t_size + o_size + p_size;
+        GGML_ASSERT(m_size <= shm_blk_size);
+
+        HEX_VERBOSE("ggml-hex: %s op-queue pop batch #%u : n-bufs %u n-tensors %u n-ops %u : m-size %zu b-size %zu t-size %zu o-size %zu\n",
+                shm_buf->sess->c_name(), rsp.id, rsp.n_bufs, rsp.n_tensors, rsp.n_ops,
+                (size_t) dbuf.size, b_size, t_size, o_size);
+
+        uint8_t * m_ptr = (uint8_t*) dbuf.ptr;
+        uint8_t * p_ptr = m_ptr + (b_size + t_size + o_size);
+
+        if (opt_profile && rsp.n_ops > 0) {
+            auto & ops = op_cache[rsp.id];
+
+            uint64_t batch_usec = ggml_time_us() - start_usec[rsp.id];
+            uint32_t htp_usec   = 0;
+
+            GGML_ASSERT(rsp.n_ops <= ops.size());
+
+            const htp_prof_desc * pd = (const htp_prof_desc *) p_ptr;
+            for (uint32_t i = 0; i < rsp.n_ops; i++) {
+                htp_usec += pd[i].usecs;
+                ggml_hexagon_dump_op_prof(shm_buf->sess->name, ops[i], pd[i].usecs, pd[i].cycles, pd[i].pmu);
+            }
+
+            GGML_LOG_DEBUG("ggml-hex: %s profile-batch n-ops %u batch-dur-usec %lld htp-ops-usec %u\n",
+                           shm_buf->sess->c_name(), rsp.n_ops, (long long) batch_usec, htp_usec);
+        }
     }
 };
 
@@ -1824,17 +1900,12 @@ void ggml_hexagon_session::flush_pending(bool all) {
             GGML_ABORT("ggml-hex: %s dspcall : bad response : size %u dspbufs %u\n", this->c_name(), rsp_size, n_dbufs);
         }
 
-        op_shm->release((uint8_t*) dbuf.ptr);
-
         if (rsp.status != HTP_STATUS_OK) {
             GGML_LOG_ERROR("ggml-hex: %s dspcall : dsp-rsp: %s\n", this->c_name(), status_to_str(rsp.status));
             // TODO: handle errors
         }
 
-        // FIXME: profile will be per opreq
-        // this->prof_usecs  = rsp.prof_usecs;
-        // this->prof_cycles = rsp.prof_cycles;
-        // this->prof_pkts   = rsp.prof_pkts;
+        op_queue->pop(rsp, dbuf);
 
         this->op_pending--;  // atomic dec
 
@@ -1845,27 +1916,18 @@ void ggml_hexagon_session::flush_pending(bool all) {
 void ggml_hexagon_session::flush_batch() {
     if (op_batch->empty()) { return; }
 
-    htp_opbatch_req req;
-    req.n_bufs    = op_batch->n_bufs;
-    req.n_tensors = op_batch->n_tens;
-    req.n_ops     = op_batch->n_ops;
+    htp_opbatch_req req {};
+    dspqueue_buffer dbuf{};
 
-    dspqueue_buffer dbuf;
-    dbuf.fd     = op_shm->fd();
-    dbuf.flags  = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
-    dbuf.ptr    = op_shm->allocate();
-    if (!dbuf.ptr) {
+    if (!op_queue->push(req, dbuf, op_batch)) {
         flush_pending(false);
-        dbuf.ptr = op_shm->allocate();
+        op_queue->push(req, dbuf, op_batch);
     }
-
-    dbuf.offset = (uint8_t*) dbuf.ptr - (uint8_t*) op_shm->base();
-    dbuf.size   = op_batch->flush((uint8_t*) dbuf.ptr, op_shm->block_size);
 
     // Bump pending flag (cleared in the session::flush once we get the response)
     this->op_pending++;  // atomic inc
 
-    HEX_VERBOSE("ggml-hex: %s: queue-opbatch : %p size %u\n", this->c_name(), dbuf.ptr, dbuf.size);
+    HEX_VERBOSE("ggml-hex: %s queue-opbatch: %p size %u\n", this->c_name(), dbuf.ptr, dbuf.size);
 
     int err = dspqueue_write(this->queue, 0, 1, &dbuf, sizeof(req), (const uint8_t*) &req, DSPQUEUE_TIMEOUT);
     if (err != 0) {
@@ -1886,6 +1948,35 @@ void ggml_hexagon_session::flush(bool all) {
     flush_pending(all);
 }
 
+static size_t ggml_hexagon_measure_max_vmem(ggml_hexagon_session *sess) {
+    // Allocate a bunch pinned buffers till failure.
+    // This is kind of expensive but handy for figuring out exactly how much we can mmap on a specific device.
+    // Typically we're going to allocate all/most of these buffers anyway for the model weights.
+
+    std::vector<ggml_hexagon_shared_buffer *> sbufs;
+
+    const size_t MiB = 1024 * 1024;
+    const size_t GiB = MiB  * 1024;
+
+    size_t vmem = 0;
+    size_t step = 256u * MiB;
+
+    try {
+        sbufs.push_back(new ggml_hexagon_shared_buffer(sess, GiB, true)); vmem += GiB;
+        sbufs.push_back(new ggml_hexagon_shared_buffer(sess, GiB, true)); vmem += GiB;
+        sbufs.push_back(new ggml_hexagon_shared_buffer(sess, GiB, true)); vmem += GiB;
+
+        while (1) {
+            sbufs.push_back(new ggml_hexagon_shared_buffer(sess, step, true));
+            vmem += step;
+        }
+    } catch (...) { }
+
+    for (auto b : sbufs) { delete b; }
+
+    return vmem - step; // backoff to account for overhead from internal mappings
+}
+
 void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     this->valid_session = false;
     this->valid_handle  = false;
@@ -1899,7 +1990,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
     this->op_pending  = 0;
 
-    GGML_LOG_INFO("ggml-hex: allocating new session: %s\n", this->name.c_str());
+    GGML_LOG_DEBUG("ggml-hex: %s allocating new session\n", this->name.c_str());
 
     domain * my_domain = get_domain(this->domain_id);
     if (my_domain == NULL) {
@@ -1975,9 +2066,6 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
     this->valid_handle = true;
 
-    GGML_LOG_INFO("ggml-hex: new session: %s : session-id %d domain-id %d uri %s handle 0x%lx\n", this->name.c_str(),
-                  this->session_id, this->domain_id, session_uri, (unsigned long) this->handle);
-
     // Enable FastRPC QoS mode
     {
         struct remote_rpc_control_latency l;
@@ -1988,6 +2076,9 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
             GGML_LOG_WARN("ggml-hex: failed to enable fastrpc QOS mode: 0x%08x\n", (unsigned) err);
         }
     }
+
+    GGML_LOG_INFO("ggml-hex: %s new session : session-id %d domain-id %d uri %s handle 0x%lx\n", this->c_name(),
+                  this->session_id, this->domain_id, session_uri, (unsigned long) this->handle);
 
     const size_t req_q_size = (sizeof(htp_opbatch_req) * opt_opqueue * 2) + 1024;
     const size_t rsp_q_size = (sizeof(htp_opbatch_rsp) * opt_opqueue * 2) + 1024;
@@ -2016,25 +2107,39 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     }
 
     if (opt_etm) {
-        err = htp_iface_enable_etm(this->handle);
+        err = htp_iface_etm(this->handle, 1);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: failed to enable ETM tracing: 0x%08x\n", (unsigned) err);
         }
     }
 
-    // Start the DSP-side service. We need to pass the queue ID to the
-    // DSP in a FastRPC call; the DSP side will import the queue and start
-    // listening for packets in a callback.
-    err = htp_iface_start(this->handle, dev_id, this->queue_id, opt_nhvx, opt_use_hmx);
+    if (opt_profile) {
+        htp_iface_pmu_conf pmu_conf{};
+        std::copy(opt_pmu_evt.begin(), opt_pmu_evt.end(), pmu_conf.events);
+
+        err = htp_iface_profiler(this->handle, opt_profile, &pmu_conf);
+        if (err != 0) {
+            GGML_LOG_ERROR("ggml-hex: failed to enable profiling: 0x%08x\n", (unsigned) err);
+        }
+    }
+
+    // Allocate buffers and state for op batching
+    this->op_queue = new ggml_hexagon_opqueue(this, opt_opbatch, opt_opqueue);
+
+    if (!opt_vmem) {
+        opt_vmem = ggml_hexagon_measure_max_vmem(this);
+        GGML_LOG_INFO("ggml-hex: %s measured max vmem %zu\n", this->c_name(), opt_vmem);
+    }
+
+    this->op_batch = new ggml_hexagon_opbatch(this, opt_opbatch, opt_vmem);
+
+    // Start dspqueue/opbatch processing
+    err = htp_iface_start(this->handle, dev_id, this->queue_id, opt_nhvx, opt_use_hmx, opt_vmem);
     if (err != 0) {
-        GGML_LOG_ERROR("ggml-hex: failed to start session: 0x%08x\n", (unsigned) err);
+        GGML_LOG_ERROR("ggml-hex: %s failed to start session: 0x%08x\n", this->c_name(), (unsigned) err);
         throw std::runtime_error("ggml-hex: iface start failed (see log for details)");
     }
     this->valid_iface = true;
-
-    // Allocate buffers and state for op batching
-    this->op_batch = new ggml_hexagon_opbatch(this, opt_opbatch);
-    this->op_shm   = new ggml_hexagon_opshm(this, opt_opbatch, opt_opqueue);
 }
 
 void ggml_hexagon_session::release() noexcept(true) {
@@ -2042,21 +2147,29 @@ void ggml_hexagon_session::release() noexcept(true) {
 
     int err;
 
-    delete this->op_batch;
-    delete this->op_shm;
-
-    // Stop the DSP-side service and close the queue
     if (this->valid_iface) {
+        // Stop dspqueue/opbatch processing
         err = htp_iface_stop(this->handle);
         if (err != 0) {
             GGML_ABORT("ggml-hex: htp_iface_stop failed: 0x%08x\n", (unsigned) err);
         }
     }
 
+    delete this->op_batch;
+    delete this->op_queue;
+
     if (opt_etm) {
-        err = htp_iface_disable_etm(this->handle);
+        err = htp_iface_etm(this->handle, 0);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: warn : failed to disable ETM tracing: 0x%08x\n", (unsigned) err);
+        }
+    }
+
+    if (opt_profile) {
+        htp_iface_pmu_conf pmu_conf{};
+        err = htp_iface_profiler(this->handle, 0, &pmu_conf);
+        if (err != 0) {
+            GGML_LOG_ERROR("ggml-hex: warn : failed to disable profiling: 0x%08x\n", (unsigned) err);
         }
     }
 
@@ -2077,7 +2190,7 @@ ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) n
     repack_buffer_type.device = dev;
 
     op_batch = nullptr;
-    op_shm   = nullptr;
+    op_queue = nullptr;
 
     try {
         allocate(dev_id);
@@ -2141,8 +2254,7 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
         return false;
     }
 
-    if (dst->ne[2] != 1 || dst->ne[3] != 1) {
-        // FA during prompt still needs work
+    if (dst->ne[3] != 1) {
         return false;
     }
 
@@ -2308,8 +2420,8 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
         return false;
     }
 
-    // TODO: add support for non-contigiuos tensors
-    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+    // TODO: add support for non-contiguous elements within a row
+    if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous_rows(dst)) {
         return false;
     }
 
@@ -2596,6 +2708,62 @@ static bool ggml_hexagon_supported_cumsum(const struct ggml_hexagon_session * se
     return true;
 }
 
+static bool ggml_hexagon_supported_diag(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    // diag only supports F32 currently
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // Input must have ne[1] == 1 (vector input)
+    if (src0->ne[1] != 1) {
+        return false;
+    }
+
+    // Output must be square in first two dimensions
+    if (dst->ne[0] != dst->ne[1] || dst->ne[0] != src0->ne[0]) {
+        return false;
+    }
+
+    GGML_UNUSED(sess);
+    return true;
+}
+
+static bool ggml_hexagon_supported_solve_tri(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0]; // A
+    const struct ggml_tensor * src1 = op->src[1]; // B
+    const struct ggml_tensor * dst  = op;         // X
+
+    if (!src0 || !src1) {
+        return false;
+    }
+
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (src0->ne[0] != src0->ne[1]) {
+        return false;
+    }
+
+    if (src0->ne[1] != src1->ne[1]) {
+        return false;
+    }
+
+    if (src0->ne[2] != src1->ne[2] || src0->ne[3] != src1->ne[3]) {
+        return false;
+    }
+
+    if (dst->ne[0] != src1->ne[0] || dst->ne[1] != src1->ne[1] || dst->ne[2] != src1->ne[2] || dst->ne[3] != src1->ne[3]) {
+        return false;
+    }
+
+    GGML_UNUSED(sess);
+    return true;
+}
+
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     return sess->c_name();
@@ -2632,7 +2800,9 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_ROPE:           return HTP_OP_ROPE;
         case GGML_OP_REPEAT:         return HTP_OP_REPEAT;
         case GGML_OP_CUMSUM:         return HTP_OP_CUMSUM;
-
+        case GGML_OP_FILL:           return HTP_OP_FILL;
+        case GGML_OP_DIAG:           return HTP_OP_DIAG;
+        case GGML_OP_SOLVE_TRI:      return HTP_OP_SOLVE_TRI;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
                 case GGML_UNARY_OP_SILU:     return HTP_OP_UNARY_SILU;
@@ -2673,7 +2843,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * n = graph->nodes[i];
-        if (op_is_compute(n)) {
+        if (op_is_compute(n) && (opt_opstage & HTP_OPSTAGE_QUEUE)) {
             sess->enqueue_op(op_remap_to_htp(n), n);
         }
     }
@@ -2865,8 +3035,8 @@ static struct ggml_backend_i hexagon_backend_i = {
     /* .free                    = */ ggml_backend_hexagon_free,
     /* .set_tensor_async        = */ NULL,
     /* .get_tensor_async        = */ NULL,
-    /* .get_tensor_2d_async     = */ NULL,
     /* .set_tensor_2d_async     = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL,
     /* .synchronize             = */ ggml_backend_hexagon_synchronize,
     /* .graph_plan_create       = */ NULL,
@@ -3029,6 +3199,17 @@ static bool ggml_hexagon_supported_repeat(const struct ggml_hexagon_session * se
     return true;
 }
 
+static bool ggml_hexagon_supported_fill(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * dst = op;
+
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    GGML_UNUSED(sess);
+    return true;
+}
+
 static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
 
@@ -3159,6 +3340,18 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             supp = ggml_hexagon_supported_cumsum(sess, op);
             break;
 
+        case GGML_OP_FILL:
+            supp = ggml_hexagon_supported_fill(sess, op);
+            break;
+
+        case GGML_OP_DIAG:
+            supp = ggml_hexagon_supported_diag(sess, op);
+            break;
+
+        case GGML_OP_SOLVE_TRI:
+            supp = ggml_hexagon_supported_solve_tri(sess, op);
+            break;
+
         default:
             break;
     }
@@ -3225,21 +3418,6 @@ struct ggml_hexagon_registry {
 ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
     GGML_LOG_INFO("ggml-hex: Hexagon backend (experimental) : allocating new registry : ndev %zu\n", opt_ndev);
 
-    if (!opt_arch) {
-        int err = get_hex_arch_ver(CDSP_DOMAIN_ID, &opt_arch);
-        if (err != 0) {
-            GGML_LOG_ERROR("ggml-hex: failed to query HTP version (err %d) defaulting to v73\n", err);
-            opt_arch = 73;
-        }
-    }
-
-#if defined(__ANDROID__)
-    if (opt_arch < 75) {
-        opt_ndev = 1;
-        GGML_LOG_WARN("ggml-hex: forcing ndev to 1 for SoCs archs lower than v75.\n");
-    }
-#endif
-
     GGML_LOG_INFO("ggml-hex: Hexagon Arch version v%d\n", opt_arch);
 
     // Create devices / sessions
@@ -3294,6 +3472,26 @@ static void * ggml_backend_hexagon_get_proc_address(ggml_backend_reg_t reg, cons
     return NULL;
 }
 
+template<typename T> std::vector<T> str_to_vec(const char* str) {
+    std::stringstream ss(str);
+    std::vector<T> v;
+    std::string    t;
+
+    while (std::getline(ss, t, ',')) {
+        v.push_back(std::stoul(t, nullptr, 0));
+    }
+
+    return v;
+}
+
+template<typename T, int BASE=10> std::string vec_to_str(std::vector<T> v) {
+    std::stringstream ss;
+    ss << std::setbase(BASE) << std::showbase;
+    for (auto i : v) { ss << i << ','; }
+    auto str = ss.str(); str.pop_back(); // drop last comma
+    return str;
+}
+
 static void ggml_hexagon_init(ggml_backend_reg * reg) {
     // Basic sanity checks to make sure definitions match
     static_assert((unsigned int) HTP_TYPE_Q4_0 == (unsigned int) GGML_TYPE_Q4_0,
@@ -3305,45 +3503,79 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     static_assert((unsigned int) HTP_TYPE_IQ4_NL == (unsigned int) GGML_TYPE_IQ4_NL,
                   "please update hexagon_type to match ggml_type");
 
-    const char * str_verbose = getenv("GGML_HEXAGON_VERBOSE");
-    const char * str_hostbuf = getenv("GGML_HEXAGON_HOSTBUF");
-    const char * str_opmask  = getenv("GGML_HEXAGON_OPMASK");
-    const char * str_opsync  = getenv("GGML_HEXAGON_OPSYNC");
-    const char * str_opbatch = getenv("GGML_HEXAGON_OPBATCH");
-    const char * str_opqueue = getenv("GGML_HEXAGON_OPQUEUE");
-    const char * str_opfilter= getenv("GGML_HEXAGON_OPFILTER");
-    const char * str_profile = getenv("GGML_HEXAGON_PROFILE");
-    const char * str_etm     = getenv("GGML_HEXAGON_ETM");
-    const char * str_nhvx    = getenv("GGML_HEXAGON_NHVX");
-    const char * str_use_hmx = getenv("GGML_HEXAGON_USE_HMX");
-    const char * str_ndev    = getenv("GGML_HEXAGON_NDEV");
-    const char * str_arch    = getenv("GGML_HEXAGON_ARCH");
+    const char * str_verbose  = getenv("GGML_HEXAGON_VERBOSE");
+    const char * str_hostbuf  = getenv("GGML_HEXAGON_HOSTBUF");
+    const char * str_opstage  = getenv("GGML_HEXAGON_OPSTAGE");
+    const char * str_opbatch  = getenv("GGML_HEXAGON_OPBATCH");
+    const char * str_opqueue  = getenv("GGML_HEXAGON_OPQUEUE");
+    const char * str_opfilter = getenv("GGML_HEXAGON_OPFILTER");
+    const char * str_profile  = getenv("GGML_HEXAGON_PROFILE");
+    const char * str_etm      = getenv("GGML_HEXAGON_ETM");
+    const char * str_nhvx     = getenv("GGML_HEXAGON_NHVX");
+    const char * str_use_hmx  = getenv("GGML_HEXAGON_USE_HMX");
+    const char * str_ndev     = getenv("GGML_HEXAGON_NDEV");
+    const char * str_arch     = getenv("GGML_HEXAGON_ARCH");
+    const char * str_vmem     = getenv("GGML_HEXAGON_VMEM");
+    const char * str_mbuf     = getenv("GGML_HEXAGON_MBUF");
+
+    // Init Arch first since it affects other defaults
+    if (!str_arch) {
+        int err = get_hex_arch_ver(CDSP_DOMAIN_ID, &opt_arch);
+        if (err != 0) {
+            GGML_LOG_ERROR("ggml-hex: failed to query HTP version (err %d) defaulting to v73\n", err);
+            opt_arch = 73;
+        }
+    } else {
+        if (str_arch[0] == 'v' || str_arch[0] == 'V') {
+            str_arch++;
+        }
+        opt_arch = strtoul(str_arch, NULL, 0);
+    }
+
+    size_t MiB = 1024 * 1024;
+
+    // Update vmem default
+    opt_vmem = opt_arch >= 75 ? HTP_OP_MAX_VMEM_DEFAULT : 3000 * MiB;
 
     auto RE_ICASE = std::regex_constants::icase;
 
-    opt_opfilter     = str_opfilter     ? new std::regex(str_opfilter, RE_ICASE) : NULL;
-    opt_verbose      = str_verbose ? atoi(str_verbose) : 0;
-    opt_hostbuf      = str_hostbuf ? atoi(str_hostbuf) : opt_hostbuf;
-    opt_opmask       = str_opmask  ? strtoul(str_opmask, NULL, 0)  : opt_opmask;
-    opt_opsync       = str_opsync  ? atoi(str_opsync)              : opt_opsync;
-    opt_opbatch      = str_opbatch ? strtoul(str_opbatch, NULL, 0) : opt_opbatch;
-    opt_opqueue      = str_opqueue ? strtoul(str_opqueue, NULL, 0) : opt_opqueue;
-    opt_profile      = str_profile ? atoi(str_profile) : 0;
-    opt_etm          = str_etm     ? atoi(str_etm)     : 0;
-    opt_nhvx         = str_nhvx    ? strtoul(str_nhvx, NULL, 0) : opt_nhvx;
-    opt_use_hmx      = str_use_hmx ? atoi(str_use_hmx) : opt_use_hmx;
-    opt_ndev         = str_ndev    ? strtoul(str_ndev, NULL, 0) : opt_ndev;
-    opt_hostbuf      = str_hostbuf ? atoi(str_hostbuf) : opt_hostbuf;
+    opt_opfilter  = str_opfilter ? new std::regex(str_opfilter, RE_ICASE) : NULL;
+    opt_verbose   = str_verbose  ? atoi(str_verbose)                      : 0;
+    opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf)                      : opt_hostbuf;
+    opt_opstage   = str_opstage  ? strtoul(str_opstage, NULL, 0)          : opt_opstage;
+    opt_opbatch   = str_opbatch  ? strtoul(str_opbatch, NULL, 0)          : opt_opbatch;
+    opt_opqueue   = str_opqueue  ? strtoul(str_opqueue, NULL, 0)          : opt_opqueue;
+    opt_profile   = str_profile  ? atoi(str_profile)                      : 0;
+    opt_etm       = str_etm      ? atoi(str_etm)                          : 0;
+    opt_nhvx      = str_nhvx     ? strtoul(str_nhvx, NULL, 0)             : opt_nhvx;
+    opt_use_hmx   = str_use_hmx  ? atoi(str_use_hmx)                      : opt_use_hmx;
+    opt_ndev      = str_ndev     ? strtoul(str_ndev, NULL, 0)             : opt_ndev;
+    opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf)                      : opt_hostbuf;
+    opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;
+    opt_vmem      = str_vmem     ? strtoul(str_vmem, NULL, 0) * MiB       : opt_vmem;
 
     if (opt_ndev > GGML_HEXAGON_MAX_SESSIONS) {
         opt_ndev = GGML_HEXAGON_MAX_SESSIONS;
     }
 
-    if (str_arch) {
-        if (str_arch[0] == 'v') {
-            str_arch++;
-        }
-        opt_arch = strtoul(str_arch, NULL, 0);
+#if defined(__ANDROID__)
+    if (opt_arch < 75) {
+        opt_ndev = 1;
+        GGML_LOG_WARN("ggml-hex: forcing ndev to 1 for SoCs archs lower than v75.\n");
+    }
+#endif
+
+    if (str_profile) {
+        opt_pmu_evt = [&]() -> std::vector<uint32_t> {
+            auto v  = str_to_vec<uint32_t>(str_profile);
+            switch (v.size()) {
+                case 1:  opt_profile = v[0]; return opt_pmu_evt; // mode with default pmu events
+                case 8:  opt_profile = 2;    return v;           // mode with custom  pmu events
+                default: opt_profile = 0;    return {};          // garbage input
+            }}();
+        if (opt_profile == 1) opt_pmu_evt = {};
+        GGML_LOG_INFO("ggml-hex: Profiling mode %u : pmu-evt [ %s ]\n", opt_profile,
+                vec_to_str<uint32_t, 16>(opt_pmu_evt).c_str());
     }
 
     reg->context = new ggml_hexagon_registry(reg);

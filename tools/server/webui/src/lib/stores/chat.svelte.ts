@@ -30,7 +30,8 @@ import {
 	findDescendantMessages,
 	findLeafNode,
 	findMessageById,
-	isAbortError
+	isAbortError,
+	generateConversationTitle
 } from '$lib/utils';
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
@@ -71,6 +72,12 @@ class ChatStore {
 		| null = null;
 	private _pendingDraftMessage = $state<string>('');
 	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
+
+	/** Reactive: queued pending messages for non-agentic streaming */
+	private _pendingMessages = new SvelteMap<
+		string,
+		{ content: string; extras?: DatabaseMessageExtra[] }
+	>();
 
 	private setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);
@@ -175,6 +182,19 @@ class ChatStore {
 		}
 	}
 
+	/**
+	 * Abort the current agentic flow signal without clearing loading state.
+	 * Used by "Send immediately" to force the agentic loop to exit so that
+	 * the pending steering message can be re-sent.
+	 */
+	abortCurrentFlow(convId: string): void {
+		const c = this.abortControllers.get(convId);
+		if (c) {
+			c.abort();
+			this.abortControllers.delete(convId);
+		}
+	}
+
 	private showErrorDialog(state: ErrorDialogState | null): void {
 		this.errorDialogState = state;
 	}
@@ -240,6 +260,35 @@ class ChatStore {
 
 	private isChatLoadingInternal(convId: string): boolean {
 		return this.chatStreamingStates.has(convId);
+	}
+
+	hasPendingMessage(convId: string): boolean {
+		return this._pendingMessages.has(convId);
+	}
+
+	pendingMessageContent(convId: string): string | null {
+		return this._pendingMessages.get(convId)?.content ?? null;
+	}
+
+	pendingMessageExtras(convId: string): DatabaseMessageExtra[] | undefined {
+		return this._pendingMessages.get(convId)?.extras;
+	}
+
+	injectPendingMessage(convId: string, content: string, extras?: DatabaseMessageExtra[]): void {
+		this._pendingMessages.set(convId, { content, extras });
+	}
+
+	clearPendingMessage(convId: string): void {
+		this._pendingMessages.delete(convId);
+	}
+
+	consumePendingMessage(
+		convId: string
+	): { content: string; extras?: DatabaseMessageExtra[] } | null {
+		const msg = this._pendingMessages.get(convId);
+		if (!msg) return null;
+		this._pendingMessages.delete(convId);
+		return msg;
 	}
 
 	private touchConversationState(convId: string): void {
@@ -461,7 +510,18 @@ class ChatStore {
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
 		if (!content.trim() && (!extras || extras.length === 0)) return;
 		const activeConv = conversationsStore.activeConversation;
-		if (activeConv && this.isChatLoadingInternal(activeConv.id)) return;
+
+		// If agentic loop is running, inject as a steering message instead of starting a new flow
+		if (activeConv && agenticStore.isRunning(activeConv.id)) {
+			agenticStore.injectSteeringMessage(activeConv.id, content, extras);
+			return;
+		}
+
+		// If non-agentic streaming is active, queue as a pending message to send after completion
+		if (activeConv && this.isChatLoadingInternal(activeConv.id)) {
+			this.injectPendingMessage(activeConv.id, content, extras);
+			return;
+		}
 
 		// Cancel any in-flight pre-encode request
 		this.cancelPreEncode();
@@ -504,7 +564,10 @@ class ChatStore {
 				allExtras
 			);
 			if (isNewConversation && content)
-				await conversationsStore.updateConversationName(currentConv.id, content.trim());
+				await conversationsStore.updateConversationName(
+					currentConv.id,
+					generateConversationTitle(content, Boolean(config().titleGenerationUseFirstLine))
+				);
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
@@ -743,10 +806,16 @@ class ChatStore {
 				this.setStreamingActive(false);
 				if (isAbortError(error)) {
 					cleanupStreamingState();
+					// If aborted with a pending message (e.g. "Send immediately"), re-send it
+					const pending = this.consumePendingMessage(convId);
+					if (pending) {
+						this.sendMessage(pending.content, pending.extras);
+					}
 					return;
 				}
 				console.error('Streaming error:', error);
 				cleanupStreamingState();
+				this.clearPendingMessage(convId);
 				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 				if (idx !== -1) {
 					const failedMessage = conversationsStore.removeMessageAtIndex(idx);
@@ -766,8 +835,7 @@ class ChatStore {
 
 		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
 
-		const agenticConfig = agenticStore.getConfig(config(), perChatOverrides);
-		if (agenticConfig.enabled) {
+		{
 			const agenticResult = await agenticStore.runAgenticFlow({
 				conversationId: convId,
 				messages: allMessages,
@@ -776,10 +844,16 @@ class ChatStore {
 				signal: abortController.signal,
 				perChatOverrides
 			});
-			if (agenticResult.handled) return;
+			if (agenticResult.handled) {
+				// Check if there's a pending steering message to re-send
+				const pending = agenticStore.consumePendingSteeringMessage(convId);
+				if (pending) {
+					await this.sendMessage(pending.content, pending.extras);
+				}
+				return;
+			}
 		}
 
-		// Non-agentic path: direct streaming into the single assistant message
 		await ChatService.sendMessage(
 			allMessages,
 			{
@@ -819,6 +893,12 @@ class ChatStore {
 					cleanupStreamingState();
 					if (onComplete) await onComplete(content);
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+
+					// Check if there's a pending message queued during streaming
+					const pending = this.consumePendingMessage(convId);
+					if (pending) {
+						await this.sendMessage(pending.content, pending.extras);
+					}
 				},
 				onError: streamCallbacks.onError
 			},
@@ -839,6 +919,7 @@ class ChatStore {
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);
 		this.setProcessingState(convId, null);
+		this.clearPendingMessage(convId);
 	}
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
 		const conversationId = convId || conversationsStore.activeConversation?.id;
@@ -896,7 +977,7 @@ class ChatStore {
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationTitleWithConfirmation(
 					activeConv.id,
-					newContent.trim()
+					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
 			for (const message of messagesToRemove) await DatabaseService.deleteMessage(message.id);
@@ -1317,7 +1398,7 @@ class ChatStore {
 			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
 				await conversationsStore.updateConversationTitleWithConfirmation(
 					activeConv.id,
-					newContent.trim()
+					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
 			}
 
@@ -1391,7 +1472,7 @@ class ChatStore {
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationTitleWithConfirmation(
 					activeConv.id,
-					newContent.trim()
+					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
 			await conversationsStore.refreshActiveMessages();
 			if (msg.role === MessageRole.USER)
@@ -1684,3 +1765,13 @@ export const isChatStreaming = () => chatStore.isStreaming();
 export const isEditing = () => chatStore.isEditing();
 export const isLoading = () => chatStore.isLoading;
 export const pendingEditMessageId = () => chatStore.pendingEditMessageId;
+export const chatHasPendingMessage = (convId: string) => chatStore.hasPendingMessage(convId);
+export const chatPendingMessageContent = (convId: string) =>
+	chatStore.pendingMessageContent(convId);
+export const chatPendingMessageExtras = (convId: string) => chatStore.pendingMessageExtras(convId);
+export const chatClearPendingMessage = (convId: string) => chatStore.clearPendingMessage(convId);
+export const chatInjectPendingMessage = (
+	convId: string,
+	content: string,
+	extras?: DatabaseMessageExtra[]
+) => chatStore.injectPendingMessage(convId, content, extras);

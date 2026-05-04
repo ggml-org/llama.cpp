@@ -120,7 +120,7 @@ llm_build_plm::llm_build_plm(const llama_model & model, const llm_graph_params &
             cb(k_states, "k_states", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL,
+                    model.layers[il].wo, NULL, model.layers[il].wo_s,
                     q_states, k_states, v_states, nullptr, nullptr, nullptr, kq_scale, il);
         }
         if (il == n_layer - 1 && inp_out_ids) {

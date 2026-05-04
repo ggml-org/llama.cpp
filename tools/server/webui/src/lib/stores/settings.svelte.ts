@@ -327,6 +327,9 @@ class SettingsStore {
 		const propsDefaults = this.getServerDefaults();
 		if (Object.keys(propsDefaults).length === 0) return;
 
+		const webuiSettings = serverStore.webuiSettings;
+		const webuiSettingsKeys = new Set(webuiSettings ? Object.keys(webuiSettings) : []);
+
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
 			const currentValue = getConfigValue(this.config, key);
 
@@ -336,12 +339,18 @@ class SettingsStore {
 			// if user value matches server, it's not a real override
 			if (normalizedCurrent === normalizedDefault) {
 				this.userOverrides.delete(key);
+
+				if (
+					!webuiSettingsKeys.has(key) &&
+					getConfigValue(SETTING_CONFIG_DEFAULT, key) === undefined
+				) {
+					setConfigValue(this.config, key, undefined);
+				}
 			}
 		}
 
 		// webui settings need actual values in config (no placeholder mechanism),
 		// so write them for non-overridden keys
-		const webuiSettings = serverStore.webuiSettings;
 		if (webuiSettings) {
 			for (const [key, value] of Object.entries(webuiSettings)) {
 				if (!this.userOverrides.has(key) && value !== undefined) {

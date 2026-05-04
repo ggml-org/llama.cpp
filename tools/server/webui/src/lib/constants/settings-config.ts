@@ -8,13 +8,14 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	systemMessage: '',
 	showSystemMessage: true,
 	theme: ColorMode.SYSTEM,
-	showThoughtInProgress: false,
+	showThoughtInProgress: true,
 	disableReasoningParsing: false,
 	excludeReasoningFromContext: false,
 	showRawOutputSwitch: false,
 	keepStatsVisible: false,
 	showMessageStats: true,
 	askForTitleConfirmation: false,
+	titleGenerationUseFirstLine: false,
 	pasteLongTextToFileLen: 2500,
 	copyTextAttachmentsAsPlainText: false,
 	pdfAsImage: false,
@@ -118,6 +119,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
 	askForTitleConfirmation:
 		'Ask for confirmation before automatically changing conversation title when editing the first message.',
+	titleGenerationUseFirstLine:
+		'Use only the first non-empty line of the prompt to generate the conversation title.',
 	pdfAsImage:
 		'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
 	disableAutoScroll:
