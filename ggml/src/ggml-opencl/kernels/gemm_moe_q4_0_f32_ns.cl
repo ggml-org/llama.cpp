@@ -107,8 +107,8 @@ kernel void kernel_gemm_moe_q4_0_f32_ns(
         __global     uint *           src2,
         __global     ushort *         src2_emap,
         __write_only image1d_buffer_t dst,
-	    __global     int *            total_tiles,
-        uint ne00,            
+        __global     int *            total_tiles,
+        uint ne00,
         uint ne01
 ) {
     uint block_id_m = get_global_id(1); // m_tile
@@ -204,11 +204,11 @@ kernel void kernel_gemm_moe_q4_0_f32_ns(
     if (get_local_id(0) < TILESIZE_N) {
         uint idx = src2[block_id_n * TILESIZE_N + get_local_id(0)];
         if (idx == 0xFFFFFFFF) {
-			idx = src2[block_id_n * TILESIZE_N + 0];
+            idx = src2[block_id_n * TILESIZE_N + 0];
         }
-		out_idx[get_local_id(0)] = idx * ne01;
+        out_idx[get_local_id(0)] = idx * ne01;
     }
-    
+
     barrier(CLK_LOCAL_MEM_FENCE);
 
     // Scatter results back to original position in output grid

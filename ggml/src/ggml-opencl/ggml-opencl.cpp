@@ -2895,10 +2895,11 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 #else
         const std::string kernel_src = read_file("gemv_moe_q4_0_f32_ns.cl");
 #endif
-        backend_ctx->program_gemv_moe_q4_0_f32_ns =
+        cl_program prog =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), CL_moe_compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_gemv_moe_q4_0_f32_ns = clCreateKernel(backend_ctx->program_gemv_moe_q4_0_f32_ns, "kernel_gemv_moe_q4_0_f32_ns", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemv_moe_q4_0_f32_ns = clCreateKernel(prog, "kernel_gemv_moe_q4_0_f32_ns", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
@@ -2911,10 +2912,11 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 #else
         const std::string kernel_src = read_file("gemm_moe_q4_0_f32_ns.cl");
 #endif
-        backend_ctx->program_gemm_moe_q4_0_f32_ns =
+        cl_program prog =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), CL_moe_compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_gemm_moe_q4_0_f32_ns = clCreateKernel(backend_ctx->program_gemm_moe_q4_0_f32_ns, "kernel_gemm_moe_q4_0_f32_ns", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemm_moe_q4_0_f32_ns = clCreateKernel(prog, "kernel_gemm_moe_q4_0_f32_ns", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
@@ -12961,8 +12963,11 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 } else { // for gemm
                     kernel = backend_ctx->kernel_gemm_moe_q4_0_f32_ns;
 
-                    if (strstr(src0->name, "as") != NULL) {
+                    // Reorder router if called from test-backend-ops or when new router is generated.
+                    // Otherwise reuse the reordered result from previous mul_mat_id call.
+                    if ((strstr(src0->name, "as") != NULL) || backend_ctx->toggle_reorder) {
                         moe_router_reoerder(backend, src2, ne20);
+                        backend_ctx->toggle_reorder = false;
                     }
 
                     cl_mem sub_buf_src1_pre, buf_src1_reordered, image_src1_reordered, sub_buf_dst, buf_dst_image;
@@ -12990,7 +12995,6 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     // Use pre-allocated placeholder
                     region.origin = 0;
                     region.size = ne00 * max_post_router_tile * n_tile_size * sizeof(float);
-                    GGML_ASSERT((region.size <= 145088768) && "[Runtime error] Q4_0 MoE ILA src1 allocation exceeds placeholder\n");
                     backend_ctx->prealloc_act_trans.allocate(backend_ctx->context, region.size);
                     buf_src1_reordered = clCreateSubBuffer(
                         backend_ctx->prealloc_act_trans.buffer,
