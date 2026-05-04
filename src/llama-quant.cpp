@@ -683,9 +683,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
                         LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
                                        __func__, tensor_name.c_str(), ggml_type_name(new_type), ggml_type_name(qtype));
                         new_type = qtype;
-                        manual = true;
-                        break;
                     }
+                    manual = true;
+                    break;
                 }
             }
         }
@@ -1283,7 +1283,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 llama_model_quantize_params llama_model_quantize_default_params() {
     llama_model_quantize_params result = {
         /*.nthread                     =*/ 0,
-        /*.ftype                       =*/ LLAMA_FTYPE_MOSTLY_Q5_1,
+        /*.ftype                       =*/ LLAMA_FTYPE_MOSTLY_Q8_0,
         /*.output_tensor_type          =*/ GGML_TYPE_COUNT,
         /*.token_embedding_type        =*/ GGML_TYPE_COUNT,
         /*.allow_requantize            =*/ false,

@@ -2,90 +2,114 @@
 	import '../app.css';
 	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
+	import { onMount } from 'svelte';
+	import { fade } from 'svelte/transition';
 	import {
-		ChatSidebar,
+		DesktopIconStrip,
 		DialogConversationTitleUpdate,
-		DialogChatSettings
+		SidebarNavigation
 	} from '$lib/components/app';
-	import { isLoading } from '$lib/stores/chat.svelte';
-	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
-	import { goto } from '$app/navigation';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import type { SettingsSectionTitle } from '$lib/constants';
-	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
-	import { setChatSettingsDialogContext } from '$lib/contexts';
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
+	import { conversations } from '$lib/stores/conversations.svelte';
 
 	let { children } = $props();
 
-	let isChatRoute = $derived(page.route.id === '/chat/[id]');
-	let isHomeRoute = $derived(page.route.id === '/');
-	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
-	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
-	let autoShowSidebarOnNewChat = $derived(config().autoShowSidebarOnNewChat);
 	let isMobile = new IsMobile();
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
+	let mounted = $state(false);
 	let innerHeight = $state<number | undefined>();
 	let chatSidebar:
 		| { activateSearchMode?: () => void; editActiveConversation?: () => void }
 		| undefined = $state();
 
-	// Conversation title update dialog state
 	let titleUpdateDialogOpen = $state(false);
 	let titleUpdateCurrentTitle = $state('');
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
-	let chatSettingsDialogOpen = $state(false);
-	let chatSettingsDialogInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
+	const panelNav = useSettingsNavigation();
 
-	setChatSettingsDialogContext({
-		open: (initialSection?: SettingsSectionTitle) => {
-			chatSettingsDialogInitialSection = initialSection;
-			chatSettingsDialogOpen = true;
-		}
-	});
+	function navigateToConversation(direction: -1 | 1) {
+		const allConvs = conversations();
+		if (allConvs.length === 0) return;
 
-	// Global keyboard shortcuts
-	function handleKeydown(event: KeyboardEvent) {
-		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+		const currentId = page.params.id;
 
-		if (isCtrlOrCmd && event.key === KeyboardKey.K_LOWER) {
-			event.preventDefault();
-			if (chatSidebar?.activateSearchMode) {
-				chatSidebar.activateSearchMode();
-				sidebarOpen = true;
-			}
+		if (!currentId) {
+			goto(`#/chat/${allConvs[direction === 1 ? 0 : allConvs.length - 1].id}`);
+
+			return;
 		}
 
-		if (isCtrlOrCmd && event.shiftKey && event.key === KeyboardKey.O_UPPER) {
-			event.preventDefault();
+		const idx = allConvs.findIndex((c) => c.id === currentId);
+		if (idx === -1) return;
+
+		const targetIdx = idx + direction;
+
+		if (targetIdx >= 0 && targetIdx < allConvs.length) {
+			goto(`#/chat/${allConvs[targetIdx].id}`);
+		} else {
 			goto('?new_chat=true#/');
 		}
+	}
 
-		if (event.shiftKey && isCtrlOrCmd && event.key === KeyboardKey.E_UPPER) {
-			event.preventDefault();
+	// Global keyboard shortcuts
+	const { handleKeydown } = useKeyboardShortcuts({
+		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
 
-			if (chatSidebar?.editActiveConversation) {
-				chatSidebar.editActiveConversation();
+		navigateToPrevConversation: () => navigateToConversation(-1),
+
+		navigateToNextConversation: () => navigateToConversation(1)
+	});
+
+	function checkApiKey() {
+		const apiKey = config().apiKey;
+
+		if (
+			(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
+			page.status !== 401 &&
+			page.status !== 403
+		) {
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json'
+			};
+
+			if (apiKey && apiKey.trim() !== '') {
+				headers.Authorization = `Bearer ${apiKey.trim()}`;
 			}
+
+			fetch(`${base}/props`, { headers })
+				.then((response) => {
+					if (response.status === 401 || response.status === 403) {
+						window.location.reload();
+					}
+				})
+				.catch((e) => {
+					console.error('Error checking API key:', e);
+				});
 		}
 	}
 
 	function handleTitleUpdateCancel() {
 		titleUpdateDialogOpen = false;
+
 		if (titleUpdateResolve) {
 			titleUpdateResolve(false);
 			titleUpdateResolve = null;
@@ -94,33 +118,21 @@
 
 	function handleTitleUpdateConfirm() {
 		titleUpdateDialogOpen = false;
+
 		if (titleUpdateResolve) {
 			titleUpdateResolve(true);
 			titleUpdateResolve = null;
 		}
 	}
 
+	onMount(() => {
+		mounted = true;
+	});
+
 	$effect(() => {
 		if (alwaysShowSidebarOnDesktop && isDesktop) {
 			sidebarOpen = true;
 			return;
-		}
-
-		if (isHomeRoute && !isNewChatMode) {
-			// Auto-collapse sidebar when navigating to home route (but not in new chat mode)
-			sidebarOpen = false;
-		} else if (isHomeRoute && isNewChatMode) {
-			// Keep sidebar open in new chat mode
-			sidebarOpen = true;
-		} else if (isChatRoute) {
-			// On chat routes, only auto-show sidebar if setting is enabled
-			if (autoShowSidebarOnNewChat) {
-				sidebarOpen = true;
-			}
-			// If setting is disabled, don't change sidebar state - let user control it manually
-		} else {
-			// Other routes follow default behavior
-			sidebarOpen = showSidebarByDefault;
 		}
 	});
 
@@ -182,31 +194,7 @@
 
 	// Monitor API key changes and redirect to error page if removed or changed when required
 	$effect(() => {
-		const apiKey = config().apiKey;
-
-		if (
-			(page.route.id === '/' || page.route.id === '/chat/[id]') &&
-			page.status !== 401 &&
-			page.status !== 403
-		) {
-			const headers: Record<string, string> = {
-				'Content-Type': 'application/json'
-			};
-
-			if (apiKey && apiKey.trim() !== '') {
-				headers.Authorization = `Bearer ${apiKey.trim()}`;
-			}
-
-			fetch(`${base}/props`, { headers })
-				.then((response) => {
-					if (response.status === 401 || response.status === 403) {
-						window.location.reload();
-					}
-				})
-				.catch((e) => {
-					console.error('Error checking API key:', e);
-				});
-		}
+		checkApiKey();
 	});
 
 	// Set up title update confirmation callback
@@ -229,12 +217,6 @@
 
 	<Toaster richColors />
 
-	<DialogChatSettings
-		open={chatSettingsDialogOpen}
-		onOpenChange={(open) => (chatSettingsDialogOpen = open)}
-		initialSection={chatSettingsDialogInitialSection}
-	/>
-
 	<DialogConversationTitleUpdate
 		bind:open={titleUpdateDialogOpen}
 		currentTitle={titleUpdateCurrentTitle}
@@ -245,16 +227,33 @@
 
 	<Sidebar.Provider bind:open={sidebarOpen}>
 		<div class="flex h-screen w-full" style:height="{innerHeight}px">
-			<Sidebar.Root class="h-full">
-				<ChatSidebar bind:this={chatSidebar} />
+			<Sidebar.Root variant="floating" class="h-full">
+				<SidebarNavigation bind:this={chatSidebar} />
 			</Sidebar.Root>
 
-			{#if !(alwaysShowSidebarOnDesktop && isDesktop)}
-				<Sidebar.Trigger
-					class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
-						? 'md:left-[var(--sidebar-width)]'
-						: 'md:left-0!'}"
-					style="translate: 1rem 1rem;"
+			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
+				{#if mounted}
+					<div in:fade={{ duration: 200 }}>
+						<Sidebar.Trigger
+							class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
+								? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
+								: 'left-0!'}"
+							style="translate: 1rem 1rem;"
+						/>
+					</div>
+				{/if}
+			{/if}
+
+			{#if isDesktop && !alwaysShowSidebarOnDesktop}
+				<DesktopIconStrip
+					{sidebarOpen}
+					onSearchClick={() => {
+						if (chatSidebar?.activateSearchMode) {
+							chatSidebar.activateSearchMode();
+						}
+
+						sidebarOpen = true;
+					}}
 				/>
 			{/if}
 

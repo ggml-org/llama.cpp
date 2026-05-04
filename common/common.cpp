@@ -70,7 +70,7 @@ common_time_meas::~common_time_meas() {
 // CPU utils
 //
 
-int32_t cpu_get_num_physical_cores() {
+int32_t common_cpu_get_num_physical_cores() {
 #ifdef __linux__
     // enumerate the set of thread siblings, num entries is num cores
     std::unordered_set<std::string> siblings;
@@ -185,11 +185,11 @@ static int cpu_count_math_cpus(int n_cpu) {
 /**
  * Returns number of CPUs on system that are useful for math.
  */
-int32_t cpu_get_num_math() {
+int32_t common_cpu_get_num_math() {
 #if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
     int n_cpu = sysconf(_SC_NPROCESSORS_ONLN);
     if (n_cpu < 1) {
-        return cpu_get_num_physical_cores();
+        return common_cpu_get_num_physical_cores();
     }
     if (is_hybrid_cpu()) {
         cpu_set_t affinity;
@@ -202,7 +202,7 @@ int32_t cpu_get_num_math() {
         }
     }
 #endif
-    return cpu_get_num_physical_cores();
+    return common_cpu_get_num_physical_cores();
 }
 
 // Helper for setting process priority
@@ -263,7 +263,7 @@ bool set_process_priority(enum ggml_sched_priority prio) {
 //
 
 
-void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model) {
+void postprocess_cpu_params(common_cpu_params & cpuparams, const common_cpu_params * role_model) {
     int32_t n_set = 0;
 
     if (cpuparams.n_threads < 0) {
@@ -271,7 +271,7 @@ void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model)
         if (role_model != nullptr) {
             cpuparams = *role_model;
         } else {
-            cpuparams.n_threads = cpu_get_num_math();
+            cpuparams.n_threads = common_cpu_get_num_math();
         }
     }
 
@@ -1521,7 +1521,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     return cparams;
 }
 
-struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_params & params) {
+struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const common_cpu_params & params) {
     struct ggml_threadpool_params tpp;
 
     ggml_threadpool_params_init(&tpp, params.n_threads); // setup the defaults
