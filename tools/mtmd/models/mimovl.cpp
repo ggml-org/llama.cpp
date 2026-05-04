@@ -1,5 +1,11 @@
 #include "models.h"
 
+ggml_tensor * clip_graph_mimovl::build_mm(ggml_tensor * w, ggml_tensor * x) const {
+    ggml_tensor * cur = ggml_mul_mat(ctx0, w, x);
+    ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+    return cur;
+}
+
 // MiMoVL vision tower for MiMo-V2.5 (non-Pro). Qwen2.5-VL-shaped ViT, except:
 //   1. GQA in attention (32 Q / 8 KV heads, head_dim 64).
 //   2. Per-head attention sinks on every windowed layer. The sinks adjust
