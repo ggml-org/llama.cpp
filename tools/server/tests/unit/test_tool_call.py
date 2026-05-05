@@ -126,69 +126,70 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
             actual_arguments = json.loads(actual_arguments)
         assert argument_key in actual_arguments, f"tool arguments: {actual_arguments}, expected: {argument_key}"
 
+# PR #22654: commented out since we're now allowing content before tool calls in tool_call: required, so we can't force this
+# in the tiny model just by using the grammar
+#
+# @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+# @pytest.mark.parametrize("template_name,tool,argument_key", [
+#     ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
+#     ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
+#     ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
+#     ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
+#     ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
+#     ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
+# ])
+# def test_completion_with_required_tool_tiny_fast(template_name: str, tool: dict, argument_key: str | None, stream: CompletionMode):
+#     global server
+#     n_predict = 1024
+#     # server = ServerPreset.stories15m_moe()
+#     server.jinja = True
+#     server.n_predict = n_predict
+#     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
+#     server.start()
+#     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED, temperature=0.0, top_k=1, top_p=1.0)
 
-@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
-@pytest.mark.parametrize("template_name,tool,argument_key", [
-    ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
-    ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
-    ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
-    ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
-    ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
-    ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
-])
-def test_completion_with_required_tool_tiny_fast(template_name: str, tool: dict, argument_key: str | None, stream: CompletionMode):
-    global server
-    n_predict = 1024
-    # server = ServerPreset.stories15m_moe()
-    server.jinja = True
-    server.n_predict = n_predict
-    server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start()
-    do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED, temperature=0.0, top_k=1, top_p=1.0)
+# @pytest.mark.slow
+# @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+# @pytest.mark.parametrize("template_name,tool,argument_key", [
+#     ("meta-llama-Llama-3.1-8B-Instruct",              TEST_TOOL,            "success"),
+#     ("meta-llama-Llama-3.1-8B-Instruct",              PYTHON_TOOL,          "code"),
 
+#     ("meetkai-functionary-medium-v3.1",               TEST_TOOL,            "success"),
+#     ("meetkai-functionary-medium-v3.1",               PYTHON_TOOL,          "code"),
 
-@pytest.mark.slow
-@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
-@pytest.mark.parametrize("template_name,tool,argument_key", [
-    ("meta-llama-Llama-3.1-8B-Instruct",              TEST_TOOL,            "success"),
-    ("meta-llama-Llama-3.1-8B-Instruct",              PYTHON_TOOL,          "code"),
+#     ("meetkai-functionary-medium-v3.2",               TEST_TOOL,            "success"),
+#     # Functionary v3.2 format supports raw python content, which w/ a dummy stories model will never end on its own.
+#     # ("meetkai-functionary-medium-v3.2",               PYTHON_TOOL,          "code"),
 
-    ("meetkai-functionary-medium-v3.1",               TEST_TOOL,            "success"),
-    ("meetkai-functionary-medium-v3.1",               PYTHON_TOOL,          "code"),
+#     ("NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use", TEST_TOOL,            "success"),
+#     ("NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use", PYTHON_TOOL,          "code"),
 
-    ("meetkai-functionary-medium-v3.2",               TEST_TOOL,            "success"),
-    # Functionary v3.2 format supports raw python content, which w/ a dummy stories model will never end on its own.
-    # ("meetkai-functionary-medium-v3.2",               PYTHON_TOOL,          "code"),
+#     ("meta-llama-Llama-3.2-3B-Instruct",              TEST_TOOL,            "success"),
+#     ("meta-llama-Llama-3.2-3B-Instruct",              PYTHON_TOOL,          "code"),
 
-    ("NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use", TEST_TOOL,            "success"),
-    ("NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use", PYTHON_TOOL,          "code"),
+#     ("mistralai-Mistral-Nemo-Instruct-2407",          TEST_TOOL,            "success"),
+#     ("mistralai-Mistral-Nemo-Instruct-2407",          PYTHON_TOOL,          "code"),
 
-    ("meta-llama-Llama-3.2-3B-Instruct",              TEST_TOOL,            "success"),
-    ("meta-llama-Llama-3.2-3B-Instruct",              PYTHON_TOOL,          "code"),
+#     ("NousResearch-Hermes-3-Llama-3.1-8B-tool_use",   TEST_TOOL,            "success"),
+#     ("NousResearch-Hermes-3-Llama-3.1-8B-tool_use",   PYTHON_TOOL,          "code"),
 
-    ("mistralai-Mistral-Nemo-Instruct-2407",          TEST_TOOL,            "success"),
-    ("mistralai-Mistral-Nemo-Instruct-2407",          PYTHON_TOOL,          "code"),
+#     ("deepseek-ai-DeepSeek-R1-Distill-Llama-8B",      TEST_TOOL,            "success"),
+#     ("deepseek-ai-DeepSeek-R1-Distill-Llama-8B",      PYTHON_TOOL,          "code"),
 
-    ("NousResearch-Hermes-3-Llama-3.1-8B-tool_use",   TEST_TOOL,            "success"),
-    ("NousResearch-Hermes-3-Llama-3.1-8B-tool_use",   PYTHON_TOOL,          "code"),
+#     ("fireworks-ai-llama-3-firefunction-v2",          TEST_TOOL,            "success"),
+#     # ("fireworks-ai-llama-3-firefunction-v2",          PYTHON_TOOL,          "codeFalse), True),
+#     # ("fireworks-ai-llama-3-firefunction-v2",          PYTHON_TOOL,          "code"),
 
-    ("deepseek-ai-DeepSeek-R1-Distill-Llama-8B",      TEST_TOOL,            "success"),
-    ("deepseek-ai-DeepSeek-R1-Distill-Llama-8B",      PYTHON_TOOL,          "code"),
-
-    ("fireworks-ai-llama-3-firefunction-v2",          TEST_TOOL,            "success"),
-    # ("fireworks-ai-llama-3-firefunction-v2",          PYTHON_TOOL,          "codeFalse), True),
-    # ("fireworks-ai-llama-3-firefunction-v2",          PYTHON_TOOL,          "code"),
-
-])
-def test_completion_with_required_tool_tiny_slow(template_name: str, tool: dict, argument_key: str | None, stream: CompletionMode):
-    global server
-    n_predict = 512
-    # server = ServerPreset.stories15m_moe()
-    server.jinja = True
-    server.n_predict = n_predict
-    server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_START_SLOW)
-    do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED)
+# ])
+# def test_completion_with_required_tool_tiny_slow(template_name: str, tool: dict, argument_key: str | None, stream: CompletionMode):
+#     global server
+#     n_predict = 512
+#     # server = ServerPreset.stories15m_moe()
+#     server.jinja = True
+#     server.n_predict = n_predict
+#     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
+#     server.start(timeout_seconds=TIMEOUT_START_SLOW)
+#     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED)
 
 
 @pytest.mark.slow
