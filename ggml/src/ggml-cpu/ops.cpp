@@ -1519,32 +1519,43 @@ void ggml_compute_forward_hc_weighted_sum(
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    // src0: [n_embd, hc_mult, n_batch], src1: [hc_mult, n_batch],
+    // dst:  [n_embd, n_batch]; src0->ne[3] / src1->ne[2..3] all == 1.
     GGML_ASSERT(src0->ne[1] == src1->ne[0]);
-    GGML_ASSERT(src0->ne[2] == 1 && src0->ne[3] == 1);
-    GGML_ASSERT(src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1);
-    GGML_ASSERT(dst->ne[0] == src0->ne[0] && dst->ne[1] == 1 && dst->ne[2] == 1 && dst->ne[3] == 1);
+    GGML_ASSERT(src0->ne[2] == src1->ne[1]);
+    GGML_ASSERT(src0->ne[3] == 1);
+    GGML_ASSERT(src1->ne[2] == 1 && src1->ne[3] == 1);
+    GGML_ASSERT(dst->ne[0] == src0->ne[0]);
+    GGML_ASSERT(dst->ne[1] == src0->ne[2]);
+    GGML_ASSERT(dst->ne[2] == 1 && dst->ne[3] == 1);
 
     const int64_t n_embd  = src0->ne[0];
     const int64_t hc_mult = src0->ne[1];
+    const int64_t n_batch = src0->ne[2];
 
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int64_t e0 = (n_embd * ith) / nth;
-    const int64_t e1 = (n_embd * (ith + 1)) / nth;
+    // Distribute work across (n_embd * n_batch) output elements so threads
+    // stay balanced even when n_batch == 1 (the legacy decode case).
+    const int64_t n_total = n_embd * n_batch;
+    const int64_t e_start = (n_total * ith) / nth;
+    const int64_t e_end   = (n_total * (ith + 1)) / nth;
 
     const char * x = (const char *) src0->data;
     const char * w = (const char *) src1->data;
     float * out = (float *) dst->data;
 
-    for (int64_t e = e0; e < e1; ++e) {
+    for (int64_t idx = e_start; idx < e_end; ++idx) {
+        const int64_t b = idx / n_embd;
+        const int64_t e = idx % n_embd;
         float sum = 0.0f;
         for (int64_t h = 0; h < hc_mult; ++h) {
-            const float xv = *(const float *) (x + e*src0->nb[0] + h*src0->nb[1]);
-            const float wv = *(const float *) (w + h*src1->nb[0]);
+            const float xv = *(const float *) (x + e*src0->nb[0] + h*src0->nb[1] + b*src0->nb[2]);
+            const float wv = *(const float *) (w + h*src1->nb[0] + b*src1->nb[1]);
             sum += xv * wv;
         }
-        out[e] = sum;
+        *(float *) ((char *) out + e*dst->nb[0] + b*dst->nb[1]) = sum;
     }
 }
 

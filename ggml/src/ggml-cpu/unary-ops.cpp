@@ -514,55 +514,39 @@ void ggml_compute_forward_sinkhorn_4x4(const ggml_compute_params * params, ggml_
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32);
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
-    GGML_ASSERT(src0->ne[0] == 4 && src0->ne[1] == 4 && src0->ne[2] == 1 && src0->ne[3] == 1);
+    GGML_ASSERT(src0->ne[0] == 4 && src0->ne[1] == 4);
+    GGML_ASSERT(src0->ne[3] == 1);
     GGML_ASSERT(ggml_is_contiguous(src0) && ggml_is_contiguous(dst));
 
-    if (params->ith != 0) {
-        return;
-    }
+    // Distribute the per-batch 4x4 problems across worker threads. Each
+    // thread handles a slice of the batch dimension (src0->ne[2]).
+    const int64_t n_batch = src0->ne[2];
+    const int ith = params->ith;
+    const int nth = params->nth;
 
-    const float * src = (const float *) src0->data;
-    float * out = (float *) dst->data;
-    float x[4][4];
+    const int64_t b0 = (n_batch * ith) / nth;
+    const int64_t b1 = (n_batch * (ith + 1)) / nth;
 
-    for (int r = 0; r < 4; ++r) {
-        float maxv = src[4*r + 0];
-        for (int c = 1; c < 4; ++c) {
-            maxv = fmaxf(maxv, src[4*r + c]);
-        }
+    for (int64_t b = b0; b < b1; ++b) {
+        const float * src = (const float *) ((const char *) src0->data + b * src0->nb[2]);
+        float * out = (float *) ((char *) dst->data + b * dst->nb[2]);
+        float x[4][4];
 
-        float sum = 0.0f;
-        for (int c = 0; c < 4; ++c) {
-            x[r][c] = expf(src[4*r + c] - maxv);
-            sum += x[r][c];
-        }
-
-        const float inv_sum = 1.0f / sum;
-        for (int c = 0; c < 4; ++c) {
-            x[r][c] = fmaxf(x[r][c] * inv_sum, 1e-6f);
-        }
-    }
-
-    for (int c = 0; c < 4; ++c) {
-        float sum = 0.0f;
         for (int r = 0; r < 4; ++r) {
-            sum += x[r][c];
-        }
-        const float inv_sum = 1.0f / fmaxf(sum, 1e-6f);
-        for (int r = 0; r < 4; ++r) {
-            x[r][c] *= inv_sum;
-        }
-    }
+            float maxv = src[4*r + 0];
+            for (int c = 1; c < 4; ++c) {
+                maxv = fmaxf(maxv, src[4*r + c]);
+            }
 
-    for (int it = 1; it < 20; ++it) {
-        for (int r = 0; r < 4; ++r) {
             float sum = 0.0f;
             for (int c = 0; c < 4; ++c) {
+                x[r][c] = expf(src[4*r + c] - maxv);
                 sum += x[r][c];
             }
-            const float inv_sum = 1.0f / fmaxf(sum, 1e-6f);
+
+            const float inv_sum = 1.0f / sum;
             for (int c = 0; c < 4; ++c) {
-                x[r][c] *= inv_sum;
+                x[r][c] = fmaxf(x[r][c] * inv_sum, 1e-6f);
             }
         }
 
@@ -576,11 +560,35 @@ void ggml_compute_forward_sinkhorn_4x4(const ggml_compute_params * params, ggml_
                 x[r][c] *= inv_sum;
             }
         }
-    }
 
-    for (int r = 0; r < 4; ++r) {
-        for (int c = 0; c < 4; ++c) {
-            out[4*r + c] = x[r][c];
+        for (int it = 1; it < 20; ++it) {
+            for (int r = 0; r < 4; ++r) {
+                float sum = 0.0f;
+                for (int c = 0; c < 4; ++c) {
+                    sum += x[r][c];
+                }
+                const float inv_sum = 1.0f / fmaxf(sum, 1e-6f);
+                for (int c = 0; c < 4; ++c) {
+                    x[r][c] *= inv_sum;
+                }
+            }
+
+            for (int c = 0; c < 4; ++c) {
+                float sum = 0.0f;
+                for (int r = 0; r < 4; ++r) {
+                    sum += x[r][c];
+                }
+                const float inv_sum = 1.0f / fmaxf(sum, 1e-6f);
+                for (int r = 0; r < 4; ++r) {
+                    x[r][c] *= inv_sum;
+                }
+            }
+        }
+
+        for (int r = 0; r < 4; ++r) {
+            for (int c = 0; c < 4; ++c) {
+                out[4*r + c] = x[r][c];
+            }
         }
     }
 }
