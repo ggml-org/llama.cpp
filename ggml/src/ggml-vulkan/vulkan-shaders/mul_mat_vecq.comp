@@ -87,8 +87,9 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
         }
     }
 
-    uint num_iters = p.ncols / (K_PER_ITER * BLOCK_SIZE);
-    if (num_iters * K_PER_ITER * BLOCK_SIZE + K_PER_ITER*tid < p.ncols) {
+    const uint col_stride = K_PER_ITER * BLOCK_SIZE;
+    uint num_iters = p.ncols / col_stride;
+    if (num_iters * col_stride + K_PER_ITER * tid < p.ncols) {
         num_iters++;
     }
 
@@ -98,7 +99,7 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
         // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < 4; ++k) {
             iter(temp, first_row, num_rows, col, b_qs_idx);
-            col += BLOCK_SIZE * K_PER_ITER;
+            col += col_stride;
         }
 
         num_iters -= 4;
@@ -106,11 +107,10 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 
     if (num_iters >= 2) {
         // Manually partially unroll the loop
-        [[unroll]] for (uint k = 0; k < 2; ++k) {
-            iter(temp, first_row, num_rows, col, b_qs_idx);
-            col += BLOCK_SIZE * K_PER_ITER;
-        }
-
+        iter(temp, first_row, num_rows, col, b_qs_idx);
+        col += col_stride;
+        iter(temp, first_row, num_rows, col, b_qs_idx);
+        col += col_stride;
         num_iters -= 2;
     }
 
