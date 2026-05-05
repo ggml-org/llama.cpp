@@ -120,11 +120,6 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head_v, n_head_kv_l, n_tokens);
             }
 
-            if (v_scale != 1.0f) {
-                Vcur = ggml_scale(ctx0, Vcur, v_scale);
-                cb(Vcur, "Vcur_scaled", il);
-            }
-
             Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, nullptr,
                 n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
@@ -147,6 +142,11 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
                     model.layers[il].wo, NULL, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, sinks, nullptr, 1.0f/sqrtf(float(n_embd_head_k)), il);
             cb(cur, "attn_out", il);
+
+            if (v_scale != 1.0f) {
+                cur = ggml_scale(ctx0, cur, v_scale);
+                cb(cur, "attn_out_scaled", il);
+            }
         }
 
         if (il == n_layer - 1 && inp_out_ids) {
