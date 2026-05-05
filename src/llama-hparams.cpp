@@ -71,7 +71,7 @@ uint32_t llama_hparams::n_rot(uint32_t il) const {
 }
 
 uint32_t llama_hparams::n_embd_inp() const {
-    uint32_t n_embd_inp = n_embd;
+    uint32_t n_embd_inp = n_embd_inp_impl > 0 ? n_embd_inp_impl : n_embd;
 
     if (n_deepstack_layers > 0) {
         n_embd_inp += n_embd * n_deepstack_layers;

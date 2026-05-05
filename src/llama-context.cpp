@@ -65,6 +65,8 @@ llama_context::llama_context(
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
+    cparams.output_layer_inp.resize(hparams.n_layer, false);
+
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
     // re-reserve when graph nodes change.
@@ -1168,6 +1170,16 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
+void llama_context::set_output_layer_inp(uint32_t layer_id, bool enable) {
+    LLAMA_LOG_DEBUG("%s: layer_id = %d, enable = %d\n", __func__, layer_id, enable);
+
+    GGML_ASSERT(layer_id < model.hparams.n_layer);
+
+    cparams.output_layer_inp[layer_id] = enable;
+
+    sched_need_reserve = true;
+}
+
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
@@ -1903,7 +1915,6 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         has_logits = true;
         has_embd   = true;
     }
-
 
     size_t backend_float_count = 0;
     size_t backend_token_count = 0;
@@ -3778,4 +3789,8 @@ void llama_opt_epoch(
 
 llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx) {
     return ctx->memory_breakdown();
+}
+
+void llama_set_output_layer_inp(struct llama_context * ctx, uint32_t layer_id, bool enable) {
+    ctx->set_output_layer_inp(layer_id, enable);
 }
