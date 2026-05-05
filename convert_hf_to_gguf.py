@@ -11227,6 +11227,22 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         elif bid in self._attn_layers:
             yield from GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
             return
+
+        # Skip multimodal tensors
+        if (
+            name.startswith(("encoder.", "projector.")) or
+            "image_" in name or
+            "layerwise_projectors" in name or
+            "spatial_projectors" in name or
+            "vision_" in name
+        ):
+                return
+
+        # De-alias language model tensors for multimodal models
+        for lm_prefix in ["language_model.", "model.language_model."]:
+            if name.startswith(lm_prefix):
+                name = name[len(lm_prefix):]
+
         yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
     def set_gguf_parameters(self):
