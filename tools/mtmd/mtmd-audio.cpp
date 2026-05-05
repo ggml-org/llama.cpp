@@ -811,12 +811,14 @@ static void log_mel_spectrogram_parakeet_worker_thread(
 void mtmd_audio_preprocessor_parakeet::initialize() {
     cache.fill_sin_cos_table(hparams.audio_n_fft);
 
-    GGML_ASSERT(!hparams.mel_filters.empty());
+    const size_t n_fft = hparams.audio_n_fft / 2 + 1;
+    GGML_ASSERT(hparams.mel_filters.size() == (size_t)hparams.n_mel_bins * n_fft);
     cache.filters.n_mel = hparams.n_mel_bins;
-    cache.filters.n_fft = hparams.audio_n_fft / 2 + 1;
+    cache.filters.n_fft = n_fft;
     cache.filters.data  = hparams.mel_filters;
 
-    GGML_ASSERT(!hparams.window.empty());
+    GGML_ASSERT(hparams.window.size() == (size_t)hparams.audio_window_len);
+    GGML_ASSERT(hparams.window.size() <= hparams.audio_n_fft);
     cache.hann_window = hparams.window;
 }
 
