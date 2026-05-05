@@ -21,7 +21,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
     const ggml_tensor * Q = dst->src[0];
 
     // for DeepSeek V3.2 sparse top-k attention force Q tiles to always correspond to only 1 token (ncols1 = 1)
-    if constexpr (ncols2 == 16 && DKQ == 576) {
+    if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_top_k(DKQ, DV, 1, ncols2)) {
         if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ctx, dst)) {
             ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 1, ncols2>(ctx, dst);
             return;

@@ -1753,6 +1753,10 @@ static __global__ void flash_attn_ext_f16(
 #endif // defined(FLASH_ATTN_AVAILABLE) && (defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || (defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)) || defined(AMD_MFMA_AVAILABLE))
 }
 
+constexpr bool ggml_cuda_flash_attn_ext_mma_f16_may_use_top_k(const int DKQ, const int DV, const int ncols1, const int ncols2) {
+    return DKQ == 576 && DV == 512 && ncols1 == 1 && ncols2 == 16;
+}
+
 extern bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 #if !defined(GGML_USE_MUSA)
@@ -1791,7 +1795,6 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     const int nwarps         = nthreads / warp_size_host;
 
     constexpr bool V_is_K_view = DKQ == 576; // Guaranteed by the kernel selection logic in fattn.cu
-    constexpr bool may_use_top_k = DKQ == 576 && ncols1 == 1; // limit kernel top_k code bloat to this one case
 
     const size_t nbytes_shared_KV_1stage = nbatch_fa            * std::max(nbatch_K2 + 4,  nbatch_V2 + 4) * sizeof(half2);
     const size_t nbytes_shared_KV_2stage = nbatch_fa            *         (nbatch_K2 + 4 + nbatch_V2 + 4) * sizeof(half2);
@@ -1817,7 +1820,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
 
     if (logit_softcap == 0.0f) {
         constexpr bool use_logit_softcap = false;
-        if constexpr (may_use_top_k) {
+        if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_top_k(DKQ, DV, ncols1, ncols2)) {
             if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ctx, dst)) {
                 constexpr bool use_top_k = true;
                 fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_top_k>;
