@@ -87,7 +87,8 @@ static std::optional<ov::Tensor> try_make_kv_sliced_tensor(std::shared_ptr<GgmlO
     if (ggml_tensor->op != GGML_OP_NONE || ggml_tensor->view_src != nullptr) {
         return std::nullopt;
     }
-    if (name.rfind("cache_k_l", 0) != 0 && name.rfind("cache_v_l", 0) != 0) {
+    const auto * op = ggml_decoder->get_tensor_used_op(ggml_tensor);
+    if (!GgmlOvDecoder::is_kvcache(ggml_tensor, op)) {
         return std::nullopt;
     }
 
