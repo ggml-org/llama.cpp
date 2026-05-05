@@ -35,8 +35,14 @@ class TalkieModel(TextModel):
         elif suffix in ("attn.attn_query.weight", "attn.attn_key.weight"):
             # absorb inverse rope
             head_dim = self.hparams["head_dim"]
-            by_head = data_torch.view(-1, head_dim, data_torch.shape[1])
-            by_head[:, head_dim // 2:] *= -1
+            shape = data_torch.shape
+            data_torch = torch.reshape(data_torch, (-1, head_dim, shape[-1]))
+            signs = torch.ones((1, head_dim, 1), dtype=data_torch.dtype)
+            signs[:, head_dim // 2 :, :] = -1
+            if self.lazy:
+                signs = LazyTorchTensor.from_eager(signs)
+            # (n_head, head_dim, n_in) -> (n_out, n_in)
+            data_torch = torch.reshape(data_torch * signs, shape)
         elif suffix == "attn.head_gain.head_g":
             # allow head gain to broadcast
             data_torch = data_torch.unsqueeze(-1)
