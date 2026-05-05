@@ -9216,6 +9216,8 @@ class DeepseekV4Model(TextModel):
 
     _qtype_aliases: dict[str, gguf.GGMLQuantizationType] = {
         "q8_0": gguf.GGMLQuantizationType.Q8_0,
+        "q6_k": gguf.GGMLQuantizationType.Q6_K,
+        "q5_k": gguf.GGMLQuantizationType.Q5_K,
         "q4_k": gguf.GGMLQuantizationType.Q4_K,
         "q4_k_m": gguf.GGMLQuantizationType.Q4_K,
         "q2_k": gguf.GGMLQuantizationType.Q2_K,

@@ -342,6 +342,9 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // do not quantize relative position bias (T5)
     quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
+    // do not quantize DeepSeek V4's integer-only expert mapping tensor
+    quantize &= name.find("ffn_gate_tid2eid") == std::string::npos;
+
     // do not quantize specific multimodal tensors
     quantize &= name.find(".position_embd") == std::string::npos;
     quantize &= name.find("sam.pos_embd")   == std::string::npos;

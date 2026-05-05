@@ -376,8 +376,6 @@ extern "C" {
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
 
         int32_t moe_hot_count;  // [EXPERIMENTAL] number of hot MoE experts to keep in RAM (0 = disabled)
-        const int32_t * moe_hot_per_layer;  // [EXPERIMENTAL] per-layer hot counts (nullptr = uniform)
-        size_t moe_hot_per_layer_n;
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
@@ -1019,6 +1017,10 @@ extern "C" {
     // Get the backend sampled token for the ith token.
     // Returns LLAMA_TOKEN_NULL if no token was sampled.
     LLAMA_API llama_token llama_get_sampled_token_ith(struct llama_context * ctx, int32_t i);
+
+    // Set per-layer MoE hot expert counts (call after context creation, before eval)
+    // Pass nullptr or empty to fall back to uniform moe_hot_count
+    LLAMA_API void llama_context_set_moe_hot_per_layer(struct llama_context * ctx, const int32_t * per_layer, size_t n);
 
     // Get the backend sampled probabilities for the ith token
     // The index matches llama_get_sampled_token_ith().

@@ -1238,6 +1238,10 @@ common_init_result::common_init_result(common_params & params) :
         return;
     }
 
+    if (!params.moe_hot_per_layer.empty()) {
+        llama_context_set_moe_hot_per_layer(lctx, params.moe_hot_per_layer.data(), params.moe_hot_per_layer.size());
+    }
+
     pimpl->context.reset(lctx);
 }
 
@@ -1515,8 +1519,6 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.swa_full          = params.swa_full;
     cparams.kv_unified        = params.kv_unified;
     cparams.moe_hot_count     = params.moe_hot_count;
-    cparams.moe_hot_per_layer = params.moe_hot_per_layer.empty() ? nullptr : params.moe_hot_per_layer.data();
-    cparams.moe_hot_per_layer_n = params.moe_hot_per_layer.size();
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;

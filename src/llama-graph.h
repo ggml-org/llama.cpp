@@ -687,6 +687,8 @@ public:
 
     ggml_cgraph * gf;
 
+    // MoE expert selection tensors for hot-count tracking (populated after graph compute)
+    std::vector<ggml_tensor *> expert_id_tensors;
     int64_t max_nodes;
 
 private:
@@ -753,6 +755,9 @@ struct llm_graph_context {
     ggml_backend_sched_t sched;
 
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?
+
+
+
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;

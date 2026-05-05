@@ -42,6 +42,8 @@ struct llama_cparams {
 
     enum llama_pooling_type pooling_type;
 
+    int32_t moe_hot_count = 0;
+
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
 };

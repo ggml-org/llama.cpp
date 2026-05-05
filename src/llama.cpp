@@ -556,3 +556,8 @@ const char * llama_print_system_info(void) {
     return s.c_str();
 }
 
+void llama_context_set_moe_hot_per_layer(struct llama_context * ctx, const int32_t * per_layer, size_t n) {
+    if (!ctx) return;
+    ctx->set_moe_hot_per_layer(per_layer, n);
+}
+

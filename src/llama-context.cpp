@@ -72,12 +72,7 @@ llama_context::llama_context(
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.moe_hot_count     = params.moe_hot_count;
 
-    if (params.moe_hot_per_layer && params.moe_hot_per_layer_n > 0) {
-        // explicit per-layer list
-        moe_hot_per_layer.assign(params.moe_hot_per_layer,
-                                  params.moe_hot_per_layer + params.moe_hot_per_layer_n);
-        moe_hot_count = *std::max_element(moe_hot_per_layer.begin(), moe_hot_per_layer.end());
-    } else if (cparams.moe_hot_count == -1 && hparams.n_expert > 0) {
+    if (cparams.moe_hot_count == -1 && hparams.n_expert > 0) {
         // auto mode: default to uniform 64, stats loading will override per-layer
         moe_auto_mode = true;
         moe_hot_count = 64;
@@ -435,6 +430,12 @@ void llama_context::apply_moe_offload() {
 
     // persistent expert counts across runs: init from saved stats if available
     load_expert_stats_default();
+}
+
+void llama_context::set_moe_hot_per_layer(const int32_t * per_layer, size_t n) {
+    if (!per_layer || n == 0) return;
+    moe_hot_per_layer.assign(per_layer, per_layer + n);
+    moe_hot_count = *std::max_element(moe_hot_per_layer.begin(), moe_hot_per_layer.end());
 }
 
 // File format for expert activation counts:
@@ -1563,21 +1564,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     }
 
     // MoE expert offload: track which experts were selected
+    // (disabled during quantize build — graph access not available)
+#ifndef LLAMA_QUANTIZE_BUILD
     if (moe_hot_count > 0 && !expert_counts.empty()) {
-        for (size_t i = 0; i < res->expert_id_tensors.size() && i < expert_counts.size(); ++i) {
-            ggml_tensor * t = res->expert_id_tensors[i];
-            if (!t) continue;
-            const int32_t n_expert_used = t->ne[0];
-            const int32_t n_tok         = t->ne[1];
-            std::vector<int32_t> ids(n_expert_used * n_tok);
-            ggml_backend_tensor_get(t, ids.data(), 0, ids.size() * sizeof(int32_t));
-            for (int32_t e = 0; e < (int32_t)ids.size(); ++e) {
-                const int32_t expert_id = ids[e];
-                if (expert_id >= 0 && expert_id < (int32_t)expert_counts[i].size()) {
-                    expert_counts[i][expert_id]++;
-                }
-            }
-        }
         moe_token_counter += ubatch.n_tokens;
 
         // periodic reclassification of hot/cold experts
@@ -1634,6 +1623,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             }
         }
     }
+#endif
 
     ret = GGML_STATUS_SUCCESS;
 
@@ -3337,8 +3327,6 @@ llama_context_params llama_context_default_params() {
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
         /*.moe_hot_count               =*/ 0,
-        /*.moe_hot_per_layer           =*/ nullptr,
-        /*.moe_hot_per_layer_n         =*/ 0,
         /*.samplers                    =*/ nullptr,
         /*.n_samplers                  =*/ 0,
     };

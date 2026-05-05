@@ -119,6 +119,9 @@ struct llama_context {
     // MoE expert offload: munlock cold expert pages so they can be demand-paged
     void apply_moe_offload();
 
+    // Set per-layer hot expert counts (overrides uniform moe_hot_count)
+    void set_moe_hot_per_layer(const int32_t * per_layer, size_t n);
+
     // Persist expert activation counts to/from a file (for hot-start across runs)
     void save_expert_stats(const char * path) const;
     bool load_expert_stats(const char * path);
