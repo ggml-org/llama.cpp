@@ -102,3 +102,14 @@ LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
 
 LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
+
+//
+// model/context data extraction
+//
+
+// set if the layer input embeddings should be outputed
+LLAMA_API void llama_set_output_layer_inp(struct llama_context * ctx, uint32_t layer_id, bool enable);
+
+LLAMA_API ggml_tensor * llama_model_get_tok_embd(const struct llama_model * model);
+LLAMA_API void          llama_model_set_tok_embd(      struct llama_model * model, ggml_tensor * tensor);
+

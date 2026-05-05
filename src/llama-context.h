@@ -126,6 +126,8 @@ struct llama_context {
                 int32_t   il_start,
                 int32_t   il_end);
 
+    void set_output_layer_inp(uint32_t layer_id, bool enable);
+
     // process a single ubatch with a specific graph type
     // if memory_context is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
