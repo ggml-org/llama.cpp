@@ -1,6 +1,7 @@
 #import "ggml-metal-device.h"
 
 #import "ggml-impl.h"
+#import "ggml-backend-impl.h"
 
 #include <Foundation/Foundation.h>
 
@@ -1735,6 +1736,47 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
         [cmd_buf commit];
         [cmd_buf waitUntilCompleted];
     }
+}
+
+bool ggml_metal_buffer_cpy_tensor(ggml_metal_buffer_t buf_dst, const struct ggml_tensor * src, struct ggml_tensor * dst) {
+    ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t)src->buffer->context;
+
+    const size_t size = ggml_nbytes(src);
+
+    // if both buffers are shared, we can use memcpy directly
+    if (buf_dst->is_shared && buf_src->is_shared) {
+        memcpy(dst->data, src->data, size);
+        return true;
+    }
+
+    // for private buffers, we need to use Metal blit commands
+    @autoreleasepool {
+        struct ggml_metal_buffer_id bid_src = ggml_metal_buffer_get_id(buf_src, src);
+        struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(buf_dst, dst);
+
+        if (bid_src.metal == nil || bid_dst.metal == nil) {
+            return false;
+        }
+
+        id<MTLCommandBuffer> cmd_buf = [buf_dst->dev->mtl_queue commandBufferWithUnretainedReferences];
+
+        {
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+            [encoder copyFromBuffer:bid_src.metal
+                       sourceOffset:bid_src.offs
+                           toBuffer:bid_dst.metal
+                  destinationOffset:bid_dst.offs
+                               size:size];
+
+            [encoder endEncoding];
+        }
+
+        [cmd_buf commit];
+        [cmd_buf waitUntilCompleted];
+    }
+
+    return true;
 }
 
 void ggml_metal_buffer_clear(ggml_metal_buffer_t buf, uint8_t value) {
