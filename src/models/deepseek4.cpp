@@ -804,11 +804,13 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
 
             ggml_tensor * comp_kv = mul_mat_checked(layer.attn_compress_kv, cur_attn, "build_attn_v4.comp_kv");
             ggml_tensor * comp_score = mul_mat_checked(layer.attn_compress_gate, cur_attn, "build_attn_v4.comp_score");
-            comp_kv = ggml_cont(ctx0, ggml_cast(ctx0, comp_kv, GGML_TYPE_F32));
-            comp_score = ggml_cont(ctx0, ggml_cast(ctx0, comp_score, GGML_TYPE_F32));
+            // mul_mat always produces a contiguous F32 output, so the
+            // cast/cont wrappers we used to use here are no-ops that just
+            // add CPY nodes to the prefill graph (43 layers x 2 nodes
+            // per ubatch). Drop them.
 
             ggml_tensor * ape_row = compression_ape_rows(layer.attn_compress_ape, comp_dim, comp_ratio);
-            comp_score = ggml_cont(ctx0, ggml_add(ctx0, comp_score, ape_row));
+            comp_score = ggml_add(ctx0, comp_score, ape_row);
             cb(comp_score, "attn_comp_score", il);
 
             ggml_tensor * comp_slot_idx = nullptr;
@@ -838,28 +840,93 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     GGML_ABORT("deepseek4: unsupported compress ratio %" PRId64, comp_ratio);
                 }
 
-                const int64_t n_comp_windows = multiwindow_r4 ? work_tokens / comp_ratio : 1;
-                ggml_tensor * final_carry_kv = nullptr;
-                ggml_tensor * final_carry_score = nullptr;
-                for (int64_t iw = 0; iw < n_comp_windows; ++iw) {
+                if (multiwindow_r4) {
+                    // Batched compression for prefill: instead of looping
+                    // n_comp_windows = work_tokens/comp_ratio times and emitting
+                    // O(n_comp_windows) graph nodes per layer per ubatch (~2.7K
+                    // per layer at ub=512), do all windows in one set of ops.
+                    //
+                    // The original loop builds two head_dim-tall slabs per
+                    // window (kv_prev and kv_cur) where comp_kv stacks two
+                    // logical "slots" along dim 0 (comp_dim = 2*head_dim).
+                    // We build each slab as a 3D batched tensor and then
+                    // concat them along dim 1 to recover the [head_dim, 2r]
+                    // per-window matrix.
+                    const int64_t n = work_tokens / comp_ratio;
+                    const int64_t r = comp_ratio;
+                    const size_t  type_size = ggml_type_size(GGML_TYPE_F32);
+                    const size_t  col_stride = comp_dim * type_size;
+
+                    // prev slab: iw=0 from state, iw>=1 from comp_kv first half
+                    ggml_tensor * state_first_kv = ggml_view_3d(ctx0, state.attn_comp_kv_state,
+                            head_dim, r, 1, col_stride, r * col_stride, 0);
+                    ggml_tensor * state_first_score = ggml_view_3d(ctx0, state.attn_comp_score_state,
+                            head_dim, r, 1, col_stride, r * col_stride, 0);
+                    ggml_tensor * comp_kv_prev_strided = (n > 1) ? ggml_view_3d(ctx0, comp_kv,
+                            head_dim, r, n - 1, col_stride, r * col_stride, 0) : nullptr;
+                    ggml_tensor * comp_score_prev_strided = (n > 1) ? ggml_view_3d(ctx0, comp_score,
+                            head_dim, r, n - 1, col_stride, r * col_stride, 0) : nullptr;
+                    ggml_tensor * prev_kv_b    = comp_kv_prev_strided    ? ggml_concat(ctx0, state_first_kv,    comp_kv_prev_strided,    2) : state_first_kv;
+                    ggml_tensor * prev_score_b = comp_score_prev_strided ? ggml_concat(ctx0, state_first_score, comp_score_prev_strided, 2) : state_first_score;
+
+                    // cur slab: comp_kv second half across all n windows
+                    ggml_tensor * cur_kv_b    = ggml_view_3d(ctx0, comp_kv,
+                            head_dim, r, n, col_stride, r * col_stride, head_dim * type_size);
+                    ggml_tensor * cur_score_b = ggml_view_3d(ctx0, comp_score,
+                            head_dim, r, n, col_stride, r * col_stride, head_dim * type_size);
+
+                    // [head_dim, 2r, n]
+                    ggml_tensor * batched_kv_slots    = ggml_concat(ctx0, prev_kv_b,    cur_kv_b,    1);
+                    ggml_tensor * batched_score_slots = ggml_concat(ctx0, prev_score_b, cur_score_b, 1);
+
+                    // permute (1, 0, 2, 3): [head_dim, 2r, n] -> [2r, head_dim, n]
+                    ggml_tensor * batched_kv_seq    = ggml_cont(ctx0, ggml_permute(ctx0, batched_kv_slots, 1, 0, 2, 3));
+                    ggml_tensor * batched_score_seq = ggml_cont(ctx0, ggml_permute(ctx0, batched_score_slots, 1, 0, 2, 3));
+
+                    ggml_tensor * batched_weights  = ggml_soft_max(ctx0, batched_score_seq);
+                    ggml_tensor * batched_weighted = ggml_mul(ctx0, batched_kv_seq, batched_weights);
+                    ggml_tensor * batched_flat     = sum_rows_checked(batched_weighted, "build_attn_v4.comp_sum_b");
+                    // [1, head_dim, n] -> [head_dim, n]
+                    batched_flat = cont_if_needed(reshape_2d_checked(batched_flat, head_dim, n, "build_attn_v4.comp_flat_b", il));
+                    batched_flat = build_norm(batched_flat, layer.attn_compress_norm, nullptr, LLM_NORM_RMS, il);
+
+                    // split nope/pe along dim 0
+                    ggml_tensor * batched_states = reshape_3d_checked(batched_flat, head_dim, 1, n, "build_attn_v4.comp_states_b", il);
+                    ggml_tensor * batched_nope = ggml_view_3d(ctx0, batched_states, nope_dim, 1, n,
+                            batched_states->nb[1], batched_states->nb[2], 0);
+                    ggml_tensor * batched_pe   = ggml_view_3d(ctx0, batched_states, rope_dim, 1, n,
+                            batched_states->nb[1], batched_states->nb[2], nope_dim * batched_states->nb[0]);
+                    batched_nope = ggml_fp8_act_quant(ctx0, cont_if_needed(batched_nope));
+
+                    // positions / cache indices: stride-r view picks up
+                    // the (r-1)-th token of each window.
+                    const size_t i32 = ggml_type_size(GGML_TYPE_I32);
+                    ggml_tensor * batched_pos = ggml_view_2d(ctx0, comp_pos, 1, n, r * i32, (r - 1) * i32);
+                    batched_pos = ggml_reshape_1d(ctx0, ggml_cont(ctx0, batched_pos), n);
+                    ggml_tensor * batched_cache_idx = ggml_view_2d(ctx0, comp_cache_idx, 1, n, r * i32, (r - 1) * i32);
+                    batched_cache_idx = ggml_reshape_1d(ctx0, ggml_cont(ctx0, batched_cache_idx), n);
+
+                    batched_pe = ggml_rope_ext(ctx0, batched_pe, batched_pos, nullptr, rope_dim, rope_type,
+                            layer_n_ctx_orig, layer_freq_base, layer_freq_scale,
+                            layer_ext_factor, layer_attn_factor, layer_beta_fast, layer_beta_slow);
+                    batched_states = ggml_concat(ctx0, batched_nope, batched_pe, 0);
+                    batched_flat = cont_if_needed(reshape_2d_checked(batched_states, head_dim, n, "build_attn_v4.comp_flat_b2", il));
+                    cb(batched_flat, "attn_comp_cache_b", il);
+
+                    updated_cache = ggml_set_rows(ctx0, updated_cache, batched_flat, batched_cache_idx);
+
+                    // overlap state seeding: final window is comp_kv[:, (n-1)*r:n*r]
+                    ggml_tensor * final_carry_kv    = matrix_block(comp_kv,    0, (n - 1) * r, comp_dim, r);
+                    ggml_tensor * final_carry_score = matrix_block(comp_score, 0, (n - 1) * r, comp_dim, r);
+                    updated_attn_comp_kv_state    = ggml_concat(ctx0, final_carry_kv,    final_carry_kv,    1);
+                    updated_attn_comp_score_state = ggml_concat(ctx0, final_carry_score, final_carry_score, 1);
+                } else {
                     ggml_tensor * comp_kv_slots = nullptr;
                     ggml_tensor * comp_score_slots = nullptr;
+                    ggml_tensor * final_carry_kv = nullptr;
+                    ggml_tensor * final_carry_score = nullptr;
 
-                    if (multiwindow_r4) {
-                        ggml_tensor * kv_prev = iw == 0 ?
-                            matrix_block(state.attn_comp_kv_state, 0, 0, head_dim, comp_ratio) :
-                            matrix_block(comp_kv, 0, (iw - 1) * comp_ratio, head_dim, comp_ratio);
-                        ggml_tensor * kv_cur = matrix_block(comp_kv, head_dim, iw * comp_ratio, head_dim, comp_ratio);
-                        ggml_tensor * score_prev = iw == 0 ?
-                            matrix_block(state.attn_comp_score_state, 0, 0, head_dim, comp_ratio) :
-                            matrix_block(comp_score, 0, (iw - 1) * comp_ratio, head_dim, comp_ratio);
-                        ggml_tensor * score_cur = matrix_block(comp_score, head_dim, iw * comp_ratio, head_dim, comp_ratio);
-
-                        comp_kv_slots = ggml_concat(ctx0, kv_prev, kv_cur, 1);
-                        comp_score_slots = ggml_concat(ctx0, score_prev, score_cur, 1);
-                        final_carry_kv = matrix_block(comp_kv, 0, iw * comp_ratio, comp_dim, comp_ratio);
-                        final_carry_score = matrix_block(comp_score, 0, iw * comp_ratio, comp_dim, comp_ratio);
-                    } else if (overlap) {
+                    if (overlap) {
                         ggml_tensor * kv_prev = matrix_block(updated_attn_comp_kv_state, 0, 0, head_dim, comp_ratio);
                         ggml_tensor * kv_cur = matrix_block(updated_attn_comp_kv_state, head_dim, comp_ratio, head_dim, comp_ratio);
                         ggml_tensor * score_prev = matrix_block(updated_attn_comp_score_state, 0, 0, head_dim, comp_ratio);
@@ -893,7 +960,7 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     ggml_tensor * comp_pe = ggml_view_3d(ctx0, comp_states, rope_dim, 1, 1, comp_states->nb[1], comp_states->nb[2], nope_dim * comp_states->nb[0]);
                     comp_nope = ggml_fp8_act_quant(ctx0, cont_if_needed(comp_nope));
 
-                    const int64_t token_in_ubatch = multiwindow_r4 ? (iw + 1) * comp_ratio - 1 : work_tokens - 1;
+                    const int64_t token_in_ubatch = work_tokens - 1;
                     ggml_tensor * comp_pos_i = ggml_view_1d(ctx0, comp_pos, 1, token_in_ubatch * comp_pos->nb[0]);
                     ggml_tensor * comp_cache_idx_i = ggml_view_1d(ctx0, comp_cache_idx, 1, token_in_ubatch * comp_cache_idx->nb[0]);
 
@@ -904,12 +971,12 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     cb(comp_flat, "attn_comp_cache", il);
 
                     updated_cache = ggml_set_rows(ctx0, updated_cache, comp_flat, comp_cache_idx_i);
-                }
 
-                if (overlap) {
-                    // HF seeds the next overlapping current window with the just-compressed window; new tokens overwrite it slot by slot.
-                    updated_attn_comp_kv_state = ggml_concat(ctx0, final_carry_kv, final_carry_kv, 1);
-                    updated_attn_comp_score_state = ggml_concat(ctx0, final_carry_score, final_carry_score, 1);
+                    if (overlap) {
+                        // HF seeds the next overlapping current window with the just-compressed window; new tokens overwrite it slot by slot.
+                        updated_attn_comp_kv_state = ggml_concat(ctx0, final_carry_kv, final_carry_kv, 1);
+                        updated_attn_comp_score_state = ggml_concat(ctx0, final_carry_score, final_carry_score, 1);
+                    }
                 }
             }
 
@@ -950,11 +1017,9 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
 
             ggml_tensor * indexer_comp_kv = mul_mat_checked(layer.indexer_compress_kv, cur_attn, "build_attn_v4.indexer_comp_kv");
             ggml_tensor * indexer_comp_score = mul_mat_checked(layer.indexer_compress_gate, cur_attn, "build_attn_v4.indexer_comp_score");
-            indexer_comp_kv = ggml_cont(ctx0, ggml_cast(ctx0, indexer_comp_kv, GGML_TYPE_F32));
-            indexer_comp_score = ggml_cont(ctx0, ggml_cast(ctx0, indexer_comp_score, GGML_TYPE_F32));
 
             ggml_tensor * indexer_ape_row = compression_ape_rows(layer.indexer_compress_ape, indexer_comp_dim, comp_ratio);
-            indexer_comp_score = ggml_cont(ctx0, ggml_add(ctx0, indexer_comp_score, indexer_ape_row));
+            indexer_comp_score = ggml_add(ctx0, indexer_comp_score, indexer_ape_row);
             cb(indexer_comp_score, "indexer_comp_score", il);
 
             if (!multiwindow_r4) {
@@ -966,28 +1031,75 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                 ggml_tensor * indexer_comp_pos = deepseek4_inputs->comp_pos_r4;
                 ggml_tensor * indexer_cache_idx = deepseek4_inputs->indexer_cache_idx_r4;
 
-                const int64_t n_comp_windows = multiwindow_r4 ? work_tokens / comp_ratio : 1;
-                ggml_tensor * final_carry_kv = nullptr;
-                ggml_tensor * final_carry_score = nullptr;
-                for (int64_t iw = 0; iw < n_comp_windows; ++iw) {
+                if (multiwindow_r4) {
+                    // See attn-side compression for the strided-view explanation.
+                    const int64_t n = work_tokens / comp_ratio;
+                    const int64_t r = comp_ratio;
+                    const size_t  type_size = ggml_type_size(GGML_TYPE_F32);
+                    const size_t  col_stride = indexer_comp_dim * type_size;
+
+                    ggml_tensor * state_first_kv = ggml_view_3d(ctx0, state.indexer_comp_kv_state,
+                            indexer_head_dim, r, 1, col_stride, r * col_stride, 0);
+                    ggml_tensor * state_first_score = ggml_view_3d(ctx0, state.indexer_comp_score_state,
+                            indexer_head_dim, r, 1, col_stride, r * col_stride, 0);
+                    ggml_tensor * comp_kv_prev_strided = (n > 1) ? ggml_view_3d(ctx0, indexer_comp_kv,
+                            indexer_head_dim, r, n - 1, col_stride, r * col_stride, 0) : nullptr;
+                    ggml_tensor * comp_score_prev_strided = (n > 1) ? ggml_view_3d(ctx0, indexer_comp_score,
+                            indexer_head_dim, r, n - 1, col_stride, r * col_stride, 0) : nullptr;
+                    ggml_tensor * prev_kv_b    = comp_kv_prev_strided    ? ggml_concat(ctx0, state_first_kv,    comp_kv_prev_strided,    2) : state_first_kv;
+                    ggml_tensor * prev_score_b = comp_score_prev_strided ? ggml_concat(ctx0, state_first_score, comp_score_prev_strided, 2) : state_first_score;
+
+                    ggml_tensor * cur_kv_b    = ggml_view_3d(ctx0, indexer_comp_kv,
+                            indexer_head_dim, r, n, col_stride, r * col_stride, indexer_head_dim * type_size);
+                    ggml_tensor * cur_score_b = ggml_view_3d(ctx0, indexer_comp_score,
+                            indexer_head_dim, r, n, col_stride, r * col_stride, indexer_head_dim * type_size);
+
+                    ggml_tensor * batched_kv_slots    = ggml_concat(ctx0, prev_kv_b,    cur_kv_b,    1);
+                    ggml_tensor * batched_score_slots = ggml_concat(ctx0, prev_score_b, cur_score_b, 1);
+
+                    ggml_tensor * batched_kv_seq    = ggml_cont(ctx0, ggml_permute(ctx0, batched_kv_slots, 1, 0, 2, 3));
+                    ggml_tensor * batched_score_seq = ggml_cont(ctx0, ggml_permute(ctx0, batched_score_slots, 1, 0, 2, 3));
+
+                    ggml_tensor * batched_weights  = ggml_soft_max(ctx0, batched_score_seq);
+                    ggml_tensor * batched_weighted = ggml_mul(ctx0, batched_kv_seq, batched_weights);
+                    ggml_tensor * batched_flat     = sum_rows_checked(batched_weighted, "build_attn_v4.indexer_comp_sum_b");
+                    batched_flat = cont_if_needed(reshape_2d_checked(batched_flat, indexer_head_dim, n, "build_attn_v4.indexer_comp_flat_b", il));
+                    batched_flat = build_norm(batched_flat, layer.indexer_compress_norm, nullptr, LLM_NORM_RMS, il);
+
+                    ggml_tensor * batched_states = reshape_3d_checked(batched_flat, indexer_head_dim, 1, n, "build_attn_v4.indexer_comp_states_b", il);
+                    ggml_tensor * batched_nope = ggml_view_3d(ctx0, batched_states, indexer_nope_dim, 1, n,
+                            batched_states->nb[1], batched_states->nb[2], 0);
+                    ggml_tensor * batched_pe   = ggml_view_3d(ctx0, batched_states, rope_dim, 1, n,
+                            batched_states->nb[1], batched_states->nb[2], indexer_nope_dim * batched_states->nb[0]);
+
+                    const size_t i32 = ggml_type_size(GGML_TYPE_I32);
+                    ggml_tensor * batched_pos = ggml_view_2d(ctx0, indexer_comp_pos, 1, n, r * i32, (r - 1) * i32);
+                    batched_pos = ggml_reshape_1d(ctx0, ggml_cont(ctx0, batched_pos), n);
+                    ggml_tensor * batched_cache_idx = ggml_view_2d(ctx0, indexer_cache_idx, 1, n, r * i32, (r - 1) * i32);
+                    batched_cache_idx = ggml_reshape_1d(ctx0, ggml_cont(ctx0, batched_cache_idx), n);
+
+                    batched_pe = ggml_rope_ext(ctx0, batched_pe, batched_pos, nullptr, rope_dim, rope_type,
+                            layer_n_ctx_orig, layer_freq_base, layer_freq_scale,
+                            layer_ext_factor, layer_attn_factor, layer_beta_fast, layer_beta_slow);
+                    batched_states = ggml_concat(ctx0, batched_nope, batched_pe, 0);
+                    batched_flat = cont_if_needed(reshape_2d_checked(batched_states, indexer_head_dim, n, "build_attn_v4.indexer_comp_flat_b2", il));
+                    batched_flat = ggml_mul_mat(ctx0, deepseek4_inputs->indexer_hadamard, batched_flat);
+                    batched_flat = ggml_fp4_act_quant(ctx0, cont_if_needed(batched_flat));
+                    cb(batched_flat, "indexer_comp_cache_b", il);
+
+                    updated_indexer_kv = ggml_set_rows(ctx0, updated_indexer_kv, batched_flat, batched_cache_idx);
+
+                    ggml_tensor * final_carry_kv    = matrix_block(indexer_comp_kv,    0, (n - 1) * r, indexer_comp_dim, r);
+                    ggml_tensor * final_carry_score = matrix_block(indexer_comp_score, 0, (n - 1) * r, indexer_comp_dim, r);
+                    updated_indexer_comp_kv_state    = ggml_concat(ctx0, final_carry_kv,    final_carry_kv,    1);
+                    updated_indexer_comp_score_state = ggml_concat(ctx0, final_carry_score, final_carry_score, 1);
+                } else {
                     ggml_tensor * indexer_comp_kv_slots = nullptr;
                     ggml_tensor * indexer_comp_score_slots = nullptr;
+                    ggml_tensor * final_carry_kv = nullptr;
+                    ggml_tensor * final_carry_score = nullptr;
 
-                    if (multiwindow_r4) {
-                        ggml_tensor * kv_prev = iw == 0 ?
-                            matrix_block(state.indexer_comp_kv_state, 0, 0, indexer_head_dim, comp_ratio) :
-                            matrix_block(indexer_comp_kv, 0, (iw - 1) * comp_ratio, indexer_head_dim, comp_ratio);
-                        ggml_tensor * kv_cur = matrix_block(indexer_comp_kv, indexer_head_dim, iw * comp_ratio, indexer_head_dim, comp_ratio);
-                        ggml_tensor * score_prev = iw == 0 ?
-                            matrix_block(state.indexer_comp_score_state, 0, 0, indexer_head_dim, comp_ratio) :
-                            matrix_block(indexer_comp_score, 0, (iw - 1) * comp_ratio, indexer_head_dim, comp_ratio);
-                        ggml_tensor * score_cur = matrix_block(indexer_comp_score, indexer_head_dim, iw * comp_ratio, indexer_head_dim, comp_ratio);
-
-                        indexer_comp_kv_slots = ggml_concat(ctx0, kv_prev, kv_cur, 1);
-                        indexer_comp_score_slots = ggml_concat(ctx0, score_prev, score_cur, 1);
-                        final_carry_kv = matrix_block(indexer_comp_kv, 0, iw * comp_ratio, indexer_comp_dim, comp_ratio);
-                        final_carry_score = matrix_block(indexer_comp_score, 0, iw * comp_ratio, indexer_comp_dim, comp_ratio);
-                    } else if (indexer_overlap) {
+                    if (indexer_overlap) {
                         ggml_tensor * kv_prev = matrix_block(updated_indexer_comp_kv_state, 0, 0, indexer_head_dim, comp_ratio);
                         ggml_tensor * kv_cur = matrix_block(updated_indexer_comp_kv_state, indexer_head_dim, comp_ratio, indexer_head_dim, comp_ratio);
                         ggml_tensor * score_prev = matrix_block(updated_indexer_comp_score_state, 0, 0, indexer_head_dim, comp_ratio);
@@ -1014,7 +1126,7 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     ggml_tensor * indexer_comp_nope = ggml_view_3d(ctx0, indexer_comp_states, indexer_nope_dim, 1, 1, indexer_comp_states->nb[1], indexer_comp_states->nb[2], 0);
                     ggml_tensor * indexer_comp_pe = ggml_view_3d(ctx0, indexer_comp_states, rope_dim, 1, 1, indexer_comp_states->nb[1], indexer_comp_states->nb[2], indexer_nope_dim * indexer_comp_states->nb[0]);
 
-                    const int64_t token_in_ubatch = multiwindow_r4 ? (iw + 1) * comp_ratio - 1 : work_tokens - 1;
+                    const int64_t token_in_ubatch = work_tokens - 1;
                     ggml_tensor * indexer_comp_pos_i = ggml_view_1d(ctx0, indexer_comp_pos, 1, token_in_ubatch * indexer_comp_pos->nb[0]);
                     ggml_tensor * indexer_cache_idx_i = ggml_view_1d(ctx0, indexer_cache_idx, 1, token_in_ubatch * indexer_cache_idx->nb[0]);
 
@@ -1027,12 +1139,12 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     cb(indexer_comp_flat, "indexer_comp_cache", il);
 
                     updated_indexer_kv = ggml_set_rows(ctx0, updated_indexer_kv, indexer_comp_flat, indexer_cache_idx_i);
-                }
 
-                if (indexer_overlap) {
-                    // HF seeds the next overlapping current window with the just-compressed window; new tokens overwrite it slot by slot.
-                    updated_indexer_comp_kv_state = ggml_concat(ctx0, final_carry_kv, final_carry_kv, 1);
-                    updated_indexer_comp_score_state = ggml_concat(ctx0, final_carry_score, final_carry_score, 1);
+                    if (indexer_overlap) {
+                        // HF seeds the next overlapping current window with the just-compressed window; new tokens overwrite it slot by slot.
+                        updated_indexer_comp_kv_state = ggml_concat(ctx0, final_carry_kv, final_carry_kv, 1);
+                        updated_indexer_comp_score_state = ggml_concat(ctx0, final_carry_score, final_carry_score, 1);
+                    }
                 }
             }
 
