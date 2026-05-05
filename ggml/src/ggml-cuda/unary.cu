@@ -346,7 +346,13 @@ void ggml_cuda_op_act_quant(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     }
 }
 
-static __global__ void sinkhorn_4x4_kernel(const float * src, float * dst) {
+static __global__ void sinkhorn_4x4_kernel(const float * src, float * dst, const int64_t n_batch) {
+    const int64_t b = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (b >= n_batch) {
+        return;
+    }
+    src += 16 * b;
+    dst += 16 * b;
     float x[4][4];
 
     for (int r = 0; r < 4; ++r) {
@@ -428,10 +434,15 @@ void ggml_cuda_op_sinkhorn_4x4(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     const ggml_tensor * src0 = dst->src[0];
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32);
-    GGML_ASSERT(src0->ne[0] == 4 && src0->ne[1] == 4 && src0->ne[2] == 1 && src0->ne[3] == 1);
+    GGML_ASSERT(src0->ne[0] == 4 && src0->ne[1] == 4 && src0->ne[3] == 1);
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
     GGML_ASSERT(ggml_is_contiguous(src0) && ggml_is_contiguous(dst));
 
-    sinkhorn_4x4_kernel<<<1, 1, 0, ctx.stream()>>>((const float *) src0->data, (float *) dst->data);
+    const int64_t n_batch = src0->ne[2];
+    constexpr int block_size = 64;
+    const int64_t num_blocks = (n_batch + block_size - 1) / block_size;
+    sinkhorn_4x4_kernel<<<(unsigned int) num_blocks, block_size, 0, ctx.stream()>>>(
+            (const float *) src0->data, (float *) dst->data, n_batch);
 }
 
 void ggml_cuda_op_abs(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
