@@ -35,6 +35,7 @@ import { browser } from '$app/environment';
 import {
 	CONFIG_LOCALSTORAGE_KEY,
 	SETTING_CONFIG_DEFAULT,
+	SETTINGS_KEYS,
 	USER_OVERRIDES_LOCALSTORAGE_KEY
 } from '$lib/constants';
 import { IsMobile } from '$lib/hooks/is-mobile.svelte';
@@ -124,9 +125,9 @@ class SettingsStore {
 			};
 
 			// Default sendOnEnter to false on mobile when the user has no saved preference
-			if (!('sendOnEnter' in savedVal)) {
+			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
 				if (new IsMobile().current) {
-					this.config.sendOnEnter = false;
+					this.config[SETTINGS_KEYS.SEND_ON_ENTER] = false;
 				}
 			}
 
@@ -148,7 +149,7 @@ class SettingsStore {
 	private loadTheme() {
 		if (!browser) return;
 
-		this.theme = localStorage.getItem('theme') || 'auto';
+		this.theme = localStorage.getItem(SETTINGS_KEYS.THEME) || 'auto';
 	}
 	/**
 	 *
@@ -249,9 +250,9 @@ class SettingsStore {
 
 		try {
 			if (this.theme === 'auto') {
-				localStorage.removeItem('theme');
+				localStorage.removeItem(SETTINGS_KEYS.THEME);
 			} else {
-				localStorage.setItem('theme', this.theme);
+				localStorage.setItem(SETTINGS_KEYS.THEME, this.theme);
 			}
 		} catch (error) {
 			console.error('Failed to save theme to localStorage:', error);

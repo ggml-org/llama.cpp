@@ -131,7 +131,8 @@
 					<Checkbox
 						id="showSystemMessage"
 						checked={Boolean(localConfig.showSystemMessage ?? true)}
-						onCheckedChange={(checked) => onConfigChange('showSystemMessage', Boolean(checked))}
+						onCheckedChange={(checked) =>
+							onConfigChange(SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, Boolean(checked))}
 					/>
 
 					<Label for="showSystemMessage" class="cursor-pointer text-sm font-normal">

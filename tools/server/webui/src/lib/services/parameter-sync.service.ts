@@ -1,4 +1,5 @@
 import { normalizeFloatingPoint } from '$lib/utils';
+import { SETTINGS_KEYS } from '$lib/constants';
 import type { SyncableParameter, ParameterRecord, ParameterInfo, ParameterValue } from '$lib/types';
 import { SyncableParameterType, ParameterSource } from '$lib/enums';
 
@@ -10,239 +11,284 @@ import { SyncableParameterType, ParameterSource } from '$lib/enums';
  */
 export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 	{
-		key: 'temperature',
-		serverKey: 'temperature',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{ key: 'top_k', serverKey: 'top_k', type: SyncableParameterType.NUMBER, canSync: true },
-	{ key: 'top_p', serverKey: 'top_p', type: SyncableParameterType.NUMBER, canSync: true },
-	{ key: 'min_p', serverKey: 'min_p', type: SyncableParameterType.NUMBER, canSync: true },
-	{
-		key: 'dynatemp_range',
-		serverKey: 'dynatemp_range',
+		key: SETTINGS_KEYS.TEMPERATURE,
+		serverKey: SETTINGS_KEYS.TEMPERATURE,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'dynatemp_exponent',
-		serverKey: 'dynatemp_exponent',
+		key: SETTINGS_KEYS.TOP_K,
+		serverKey: SETTINGS_KEYS.TOP_K,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'xtc_probability',
-		serverKey: 'xtc_probability',
+		key: SETTINGS_KEYS.TOP_P,
+		serverKey: SETTINGS_KEYS.TOP_P,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'xtc_threshold',
-		serverKey: 'xtc_threshold',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{ key: 'typ_p', serverKey: 'typ_p', type: SyncableParameterType.NUMBER, canSync: true },
-	{
-		key: 'repeat_last_n',
-		serverKey: 'repeat_last_n',
+		key: SETTINGS_KEYS.MIN_P,
+		serverKey: SETTINGS_KEYS.MIN_P,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'repeat_penalty',
-		serverKey: 'repeat_penalty',
+		key: SETTINGS_KEYS.DYNATEMP_RANGE,
+		serverKey: SETTINGS_KEYS.DYNATEMP_RANGE,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'presence_penalty',
-		serverKey: 'presence_penalty',
+		key: SETTINGS_KEYS.DYNATEMP_EXPONENT,
+		serverKey: SETTINGS_KEYS.DYNATEMP_EXPONENT,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'frequency_penalty',
-		serverKey: 'frequency_penalty',
+		key: SETTINGS_KEYS.XTC_PROBABILITY,
+		serverKey: SETTINGS_KEYS.XTC_PROBABILITY,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'dry_multiplier',
-		serverKey: 'dry_multiplier',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{ key: 'dry_base', serverKey: 'dry_base', type: SyncableParameterType.NUMBER, canSync: true },
-	{
-		key: 'dry_allowed_length',
-		serverKey: 'dry_allowed_length',
+		key: SETTINGS_KEYS.XTC_THRESHOLD,
+		serverKey: SETTINGS_KEYS.XTC_THRESHOLD,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'dry_penalty_last_n',
-		serverKey: 'dry_penalty_last_n',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{ key: 'max_tokens', serverKey: 'max_tokens', type: SyncableParameterType.NUMBER, canSync: true },
-	{ key: 'samplers', serverKey: 'samplers', type: SyncableParameterType.STRING, canSync: true },
-	{
-		key: 'backend_sampling',
-		serverKey: 'backend_sampling',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{
-		key: 'pasteLongTextToFileLen',
-		serverKey: 'pasteLongTextToFileLen',
+		key: SETTINGS_KEYS.TYP_P,
+		serverKey: SETTINGS_KEYS.TYP_P,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'pdfAsImage',
-		serverKey: 'pdfAsImage',
-		type: SyncableParameterType.BOOLEAN,
+		key: SETTINGS_KEYS.REPEAT_LAST_N,
+		serverKey: SETTINGS_KEYS.REPEAT_LAST_N,
+		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'showThoughtInProgress',
-		serverKey: 'showThoughtInProgress',
-		type: SyncableParameterType.BOOLEAN,
+		key: SETTINGS_KEYS.REPEAT_PENALTY,
+		serverKey: SETTINGS_KEYS.REPEAT_PENALTY,
+		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'keepStatsVisible',
-		serverKey: 'keepStatsVisible',
-		type: SyncableParameterType.BOOLEAN,
+		key: SETTINGS_KEYS.PRESENCE_PENALTY,
+		serverKey: SETTINGS_KEYS.PRESENCE_PENALTY,
+		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'showMessageStats',
-		serverKey: 'showMessageStats',
-		type: SyncableParameterType.BOOLEAN,
+		key: SETTINGS_KEYS.FREQUENCY_PENALTY,
+		serverKey: SETTINGS_KEYS.FREQUENCY_PENALTY,
+		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'askForTitleConfirmation',
-		serverKey: 'askForTitleConfirmation',
-		type: SyncableParameterType.BOOLEAN,
+		key: SETTINGS_KEYS.DRY_MULTIPLIER,
+		serverKey: SETTINGS_KEYS.DRY_MULTIPLIER,
+		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'titleGenerationUseFirstLine',
-		serverKey: 'titleGenerationUseFirstLine',
-		type: SyncableParameterType.BOOLEAN,
+		key: SETTINGS_KEYS.DRY_BASE,
+		serverKey: SETTINGS_KEYS.DRY_BASE,
+		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'disableAutoScroll',
-		serverKey: 'disableAutoScroll',
-		type: SyncableParameterType.BOOLEAN,
+		key: SETTINGS_KEYS.DRY_ALLOWED_LENGTH,
+		serverKey: SETTINGS_KEYS.DRY_ALLOWED_LENGTH,
+		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'renderUserContentAsMarkdown',
-		serverKey: 'renderUserContentAsMarkdown',
-		type: SyncableParameterType.BOOLEAN,
+		key: SETTINGS_KEYS.DRY_PENALTY_LAST_N,
+		serverKey: SETTINGS_KEYS.DRY_PENALTY_LAST_N,
+		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'autoMicOnEmpty',
-		serverKey: 'autoMicOnEmpty',
-		type: SyncableParameterType.BOOLEAN,
+		key: SETTINGS_KEYS.MAX_TOKENS,
+		serverKey: SETTINGS_KEYS.MAX_TOKENS,
+		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'pyInterpreterEnabled',
-		serverKey: 'pyInterpreterEnabled',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{
-		key: 'enableContinueGeneration',
-		serverKey: 'enableContinueGeneration',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{
-		key: 'fullHeightCodeBlocks',
-		serverKey: 'fullHeightCodeBlocks',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{
-		key: 'systemMessage',
-		serverKey: 'systemMessage',
+		key: SETTINGS_KEYS.SAMPLERS,
+		serverKey: SETTINGS_KEYS.SAMPLERS,
 		type: SyncableParameterType.STRING,
 		canSync: true
 	},
 	{
-		key: 'showSystemMessage',
-		serverKey: 'showSystemMessage',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{ key: 'theme', serverKey: 'theme', type: SyncableParameterType.STRING, canSync: true },
-	{
-		key: 'copyTextAttachmentsAsPlainText',
-		serverKey: 'copyTextAttachmentsAsPlainText',
+		key: SETTINGS_KEYS.BACKEND_SAMPLING,
+		serverKey: SETTINGS_KEYS.BACKEND_SAMPLING,
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	},
 	{
-		key: 'showRawOutputSwitch',
-		serverKey: 'showRawOutputSwitch',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{
-		key: 'alwaysShowSidebarOnDesktop',
-		serverKey: 'alwaysShowSidebarOnDesktop',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{
-		key: 'showRawModelNames',
-		serverKey: 'showRawModelNames',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{ key: 'mcpServers', serverKey: 'mcpServers', type: SyncableParameterType.STRING, canSync: true },
-	{
-		key: 'agenticMaxTurns',
-		serverKey: 'agenticMaxTurns',
+		key: SETTINGS_KEYS.PASTE_LONG_TEXT_TO_FILE_LEN,
+		serverKey: SETTINGS_KEYS.PASTE_LONG_TEXT_TO_FILE_LEN,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'agenticMaxToolPreviewLines',
-		serverKey: 'agenticMaxToolPreviewLines',
+		key: SETTINGS_KEYS.PDF_AS_IMAGE,
+		serverKey: SETTINGS_KEYS.PDF_AS_IMAGE,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
+		serverKey: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.KEEP_STATS_VISIBLE,
+		serverKey: SETTINGS_KEYS.KEEP_STATS_VISIBLE,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
+		serverKey: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
+		serverKey: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
+		serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
+		serverKey: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN,
+		serverKey: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
+		serverKey: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,
+		serverKey: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
+		serverKey: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS,
+		serverKey: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.SYSTEM_MESSAGE,
+		serverKey: SETTINGS_KEYS.SYSTEM_MESSAGE,
+		type: SyncableParameterType.STRING,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE,
+		serverKey: SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.THEME,
+		serverKey: SETTINGS_KEYS.THEME,
+		type: SyncableParameterType.STRING,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
+		serverKey: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
+		serverKey: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.ALWAYS_SHOW_SIDEBAR_ON_DESKTOP,
+		serverKey: SETTINGS_KEYS.ALWAYS_SHOW_SIDEBAR_ON_DESKTOP,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
+		serverKey: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.MCP_SERVERS,
+		serverKey: SETTINGS_KEYS.MCP_SERVERS,
+		type: SyncableParameterType.STRING,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.AGENTIC_MAX_TURNS,
+		serverKey: SETTINGS_KEYS.AGENTIC_MAX_TURNS,
 		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
 	{
-		key: 'showToolCallInProgress',
-		serverKey: 'showToolCallInProgress',
+		key: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
+		serverKey: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
+		serverKey: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	},
 	{
-		key: 'alwaysShowAgenticTurns',
-		serverKey: 'alwaysShowAgenticTurns',
+		key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
+		serverKey: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	},
 	{
-		key: 'excludeReasoningFromContext',
-		serverKey: 'excludeReasoningFromContext',
+		key: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
+		serverKey: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	},
 	{
-		key: 'sendOnEnter',
-		serverKey: 'sendOnEnter',
+		key: SETTINGS_KEYS.SEND_ON_ENTER,
+		serverKey: SETTINGS_KEYS.SEND_ON_ENTER,
 		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	}
@@ -298,7 +344,7 @@ export class ParameterSyncService {
 
 			// Handle samplers array conversion to string
 			if (serverParams.samplers && Array.isArray(serverParams.samplers)) {
-				extracted.samplers = serverParams.samplers.join(';');
+				extracted[SETTINGS_KEYS.SAMPLERS] = serverParams.samplers.join(';');
 			}
 		}
 
