@@ -10467,7 +10467,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
     const bool kda = (neg0 == S_v);
 
-    const bool keep_intermediates = (const bool) ggml_get_op_params_i32(dst, 0);
+    const bool keep_intermediates = (bool) ggml_get_op_params_i32(dst, 0);
 
     const int64_t per_thread = S_v + (keep_intermediates ? S_v * S_v : 0);
     const int ith = params->ith;
