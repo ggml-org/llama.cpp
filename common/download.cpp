@@ -939,9 +939,17 @@ std::string common_docker_resolve_model(const std::string & docker) {
 
 std::vector<common_cached_model_info> common_list_cached_models() {
     std::unordered_set<std::string> seen;
+    std::unordered_set<std::string> vision_repos;
     std::vector<common_cached_model_info> result;
 
     auto files = hf_cache::get_cached_files();
+
+    for (const auto & f : files) {
+        if (f.path.find("mmproj") != std::string::npos &&
+            string_ends_with(f.path, ".gguf")) {
+            vision_repos.insert(f.repo_id);
+        }
+    }
 
     for (const auto & f : files) {
         auto split = get_gguf_split_info(f.path);
@@ -950,7 +958,11 @@ std::vector<common_cached_model_info> common_list_cached_models() {
             continue;
         }
         if (seen.insert(f.repo_id + ":" + split.tag).second) {
-            result.push_back({f.repo_id, split.tag});
+            common_cached_model_info info;
+            info.repo = f.repo_id;
+            info.tag = split.tag;
+            info.input_modalities_image = vision_repos.count(f.repo_id) > 0;
+            result.push_back(std::move(info));
         }
     }
 

@@ -161,6 +161,8 @@ void common_preset::merge(const common_preset & other) {
     for (const auto & [opt, val] : other.options) {
         options[opt] = val; // overwrite existing options
     }
+    // capability flags are OR-ed so they survive cascade
+    input_modalities_image = input_modalities_image || other.input_modalities_image;
 }
 
 void common_preset::apply_to_params(common_params & params) const {
@@ -366,6 +368,7 @@ common_presets common_preset_context::load_from_cache() const {
     for (const auto & model : cached_models) {
         common_preset preset;
         preset.name = model.to_string();
+        preset.input_modalities_image = model.input_modalities_image;
         preset.set_option(*this, "LLAMA_ARG_HF_REPO", model.to_string());
         out[preset.name] = preset;
     }
@@ -434,6 +437,7 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
     for (const auto & model : models) {
         common_preset preset;
         preset.name = model.name;
+        preset.input_modalities_image = !model.path_mmproj.empty();
         preset.set_option(*this, "LLAMA_ARG_MODEL", model.path);
         if (!model.path_mmproj.empty()) {
             preset.set_option(*this, "LLAMA_ARG_MMPROJ", model.path_mmproj);

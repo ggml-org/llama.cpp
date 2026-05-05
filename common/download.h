@@ -42,6 +42,7 @@ std::pair<std::string, std::string> common_download_split_repo_tag(const std::st
 struct common_cached_model_info {
     std::string repo;
     std::string tag;
+    bool input_modalities_image = false; // true if the repo also contains an mmproj file
     std::string to_string() const {
         return repo + ":" + tag;
     }

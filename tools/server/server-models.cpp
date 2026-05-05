@@ -1176,14 +1176,23 @@ void server_models_routes::init_routes() {
                 status["exit_code"] = meta.exit_code;
                 status["failed"]    = true;
             }
+            json input_modalities = json::array({"text"});
+            if (meta.preset.input_modalities_image) {
+                input_modalities.push_back("image");
+            }
+            json architecture {
+                {"input_modalities",  input_modalities},
+                {"output_modalities", json::array({"text"})},
+            };
             models_json.push_back(json {
-                {"id",       meta.name},
-                {"aliases",  meta.aliases},
-                {"tags",     meta.tags},
-                {"object",   "model"},    // for OAI-compat
-                {"owned_by", "llamacpp"}, // for OAI-compat
-                {"created",  t},          // for OAI-compat
-                {"status",   status},
+                {"id",           meta.name},
+                {"aliases",      meta.aliases},
+                {"tags",         meta.tags},
+                {"object",       "model"},    // for OAI-compat
+                {"owned_by",     "llamacpp"}, // for OAI-compat
+                {"created",      t},          // for OAI-compat
+                {"status",       status},
+                {"architecture", architecture},
                 // TODO: add other fields, may require reading GGUF metadata
             });
         }

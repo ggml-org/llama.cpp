@@ -19,6 +19,9 @@ struct common_preset_context;
 struct common_preset {
     std::string name;
 
+    // true if the underlying model has a multimodal projector (mmproj) available
+    bool input_modalities_image = false;
+
     // options are stored as common_arg to string mapping, representing CLI arg and its value
     std::map<common_arg, std::string> options;
 
