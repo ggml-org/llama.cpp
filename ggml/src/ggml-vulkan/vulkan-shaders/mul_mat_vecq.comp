@@ -27,8 +27,7 @@ vec2 cache_b_ds;
 
 #include "mul_mat_vecq_funcs.glsl"
 
-void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint tid, const uint i, const uint b_qs_idx) {
-    const uint col = i*BLOCK_SIZE + tid*K_PER_ITER;
+void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint col, const uint b_qs_idx) {
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
         // Preload data_b block
         const uint b_block_idx = (j*p.batch_stride_b + col) / QUANT_K_Q8_1 + b_offset;
@@ -92,32 +91,31 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     if (num_iters * K_PER_ITER * BLOCK_SIZE + K_PER_ITER*tid < p.ncols) {
         num_iters++;
     }
-    int unroll_count = 4;
-    uint unrolled_iters = num_iters & ~(unroll_count - 1);
 
     const uint b_qs_idx = tid % (32 / K_PER_ITER);
-    uint i = 0;
-    while (i < unrolled_iters) {
+    uint col = tid * K_PER_ITER;
+    while (num_iters >= 4) {
         // Manually partially unroll the loop
-        [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
-            iter(temp, first_row, num_rows, tid, i*K_PER_ITER, b_qs_idx);
-            i++;
+        [[unroll]] for (uint k = 0; k < 4; ++k) {
+            iter(temp, first_row, num_rows, col, b_qs_idx);
+            col += BLOCK_SIZE * K_PER_ITER;
         }
+
+        num_iters -= 4;
     }
 
-    unroll_count = 2;
-    unrolled_iters = num_iters & ~(unroll_count - 1);
-
-    while (i < unrolled_iters) {
+    if (num_iters >= 2) {
         // Manually partially unroll the loop
-        [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
-            iter(temp, first_row, num_rows, tid, i*K_PER_ITER, b_qs_idx);
-            i++;
+        [[unroll]] for (uint k = 0; k < 2; ++k) {
+            iter(temp, first_row, num_rows, col, b_qs_idx);
+            col += BLOCK_SIZE * K_PER_ITER;
         }
+
+        num_iters -= 2;
     }
-    while (i < num_iters) {
-        iter(temp, first_row, num_rows, tid, i*K_PER_ITER, b_qs_idx);
-        i++;
+
+    if (num_iters > 0) {
+        iter(temp, first_row, num_rows, col, b_qs_idx);
     }
 
     reduce_result(temp, d_offset, first_row, num_rows, tid);
