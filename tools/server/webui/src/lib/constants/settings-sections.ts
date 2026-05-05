@@ -95,6 +95,12 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
 				label: 'Use first non-empty line for conversation title',
 				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
+				label: 'Use LLM to generate conversation title',
+				type: SettingsFieldType.CHECKBOX,
+				isExperimental: true
 			}
 		]
 	},
