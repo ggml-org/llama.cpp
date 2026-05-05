@@ -36,7 +36,16 @@ import {
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
-	SYSTEM_MESSAGE_PLACEHOLDER
+	SYSTEM_MESSAGE_PLACEHOLDER,
+	TITLE_MAX_LENGTH,
+	TITLE_TRUNCATE_AT,
+	TITLE_TRUNCATION_SUFFIX,
+	TITLE_MIN_LENGTH,
+	TITLE_FALLBACK,
+	TITLE_CLEANUP_REGEXES,
+	TITLE_PREFIX_PATTERN,
+	TITLE_QUOTE_PATTERN,
+	createTitlePrompt
 } from '$lib/constants';
 import type {
 	ChatMessageTimings,
@@ -44,7 +53,7 @@ import type {
 	ChatStreamCallbacks,
 	ErrorDialogState
 } from '$lib/types/chat';
-import type { ApiProcessingState, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
+import type { ApiChatMessageData, ApiProcessingState, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
 import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 
 interface ConversationStateEntry {
@@ -937,69 +946,36 @@ class ChatStore {
 		assistantMessage: DatabaseMessage,
 		convId: string
 	): Promise<void> {
-		const titlePrompt = `Based on the following interaction, generate a short, concise title (maximum 6-8 words) that captures the main topic. Return ONLY the title text, nothing else. Do not use quotes.
-
-User: ${firstUserMessage.content}
-
-Assistant: ${assistantMessage.content}
-
-Title:`;
-
-		let titleResponse = '';
 		const effectiveModel =
 			isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
 
-		const titleHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-		if (config().apiKey) titleHeaders.Authorization = `Bearer ${config().apiKey}`;
-		const titleRes = await fetch('./v1/chat/completions', {
-			method: 'POST',
-			headers: titleHeaders,
-			body: JSON.stringify({
-				model: effectiveModel || undefined,
-				messages: [{ role: 'user', content: titlePrompt }],
-				stream: true,
-				chat_template_kwargs: { enable_thinking: false }
-			})
-		});
+		const titleMessage: ApiChatMessageData = {
+			role: MessageRole.USER,
+			content: createTitlePrompt(firstUserMessage.content, assistantMessage.content)
+		};
 
-		if (!titleRes.ok) {
-			console.error('Title generation failed:', titleRes.status);
+		const titleResponse = await ChatService.generateTitle(titleMessage, effectiveModel);
+
+		if (!titleResponse) {
 			return;
 		}
 
-		const reader = titleRes.body?.getReader();
-		const decoder = new TextDecoder();
-		while (true) {
-			const { done, value } = (await reader?.read()) ?? { done: true, value: undefined };
-			if (done) break;
-			const text = decoder.decode(value, { stream: true });
-			for (const line of text.split('\n').filter((l) => l.startsWith('data: '))) {
-				try {
-					const parsed = JSON.parse(line.slice(6));
-					const content = parsed.choices?.[0]?.delta?.content;
-					if (content) titleResponse += content;
-				} catch {
-					// skip
-				}
-			}
-		}
-
 		let cleanTitle = titleResponse
-			.replace(/<think>[^]*?<\/think>/gi, '')
-			.replace(/<thinking[^]*?<\/thinking>/gi, '')
+			.replace(TITLE_CLEANUP_REGEXES.THINK_TAG, '')
+			.replace(TITLE_CLEANUP_REGEXES.TALKING_TAG, '')
 			.trim();
 		cleanTitle = cleanTitle
-			.replace(/^(Title:|Subject:|Topic:)\s*/i, '')
-			.replace(/^["]|["]$/g, '')
+			.replace(TITLE_PREFIX_PATTERN, '')
+			.replace(TITLE_QUOTE_PATTERN, '')
 			.trim();
-		if (cleanTitle.length > 60) {
-			cleanTitle = cleanTitle.substring(0, 57) + '...';
+		if (cleanTitle.length > TITLE_MAX_LENGTH) {
+			cleanTitle = cleanTitle.substring(0, TITLE_TRUNCATE_AT) + TITLE_TRUNCATION_SUFFIX;
 		}
-		if (!cleanTitle || cleanTitle.length < 3) {
+		if (!cleanTitle || cleanTitle.length < TITLE_MIN_LENGTH) {
 			const firstLine = firstUserMessage.content.split('\n').find((l) => l.trim().length > 0);
-			cleanTitle = firstLine ? firstLine.trim().substring(0, 60) : 'New Chat';
+			cleanTitle = firstLine ? firstLine.trim().substring(0, TITLE_MAX_LENGTH) : TITLE_FALLBACK;
 		}
-		if (cleanTitle && cleanTitle.length >= 3) {
+		if (cleanTitle && cleanTitle.length >= TITLE_MIN_LENGTH) {
 			await conversationsStore.updateConversationName(convId, cleanTitle);
 		}
 	}

@@ -14,11 +14,84 @@ import {
 	ReasoningFormat,
 	UrlProtocol
 } from '$lib/enums';
-import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
+import type { ApiChatMessageContentPart, ApiChatMessageData, ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 
 export class ChatService {
+	/**
+	 *
+	 *
+	 * Title Generation
+	 *
+	 *
+	 */
+
+	/**
+	 * Sends a streaming chat completion request for generating a chat title.
+	 * Returns the aggregated content string from the stream.
+	 *
+	 * @param message - The single message to send (a user message containing the title generation prompt)
+	 * @param model - Optional model name to use (required in ROUTER mode)
+	 * @param signal - Optional AbortSignal to cancel the request
+	 * @returns {Promise<string>} The aggregated title text, or empty string if request failed
+	 * @static
+	 */
+	static async generateTitle(
+		message: ApiChatMessageData,
+		model?: string | null,
+		signal?: AbortSignal
+	): Promise<string> {
+		try {
+			const response = await fetch('./v1/chat/completions', {
+				method: 'POST',
+				headers: getJsonHeaders(),
+				body: JSON.stringify({
+					messages: [message],
+					model: model || undefined,
+					stream: true,
+					chat_template_kwargs: { enable_thinking: false }
+				}),
+				signal
+			});
+
+			if (!response.ok) {
+				console.error('Title generation failed:', response.status);
+				return '';
+			}
+
+			const reader = response.body?.getReader();
+			if (!reader) return '';
+
+			const decoder = new TextDecoder();
+			let aggregatedContent = '';
+
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					const text = decoder.decode(value, { stream: true });
+					for (const line of text.split('\n').filter((l) => l.startsWith('data: '))) {
+						try {
+							const parsed = JSON.parse(line.slice(6));
+							const content = parsed.choices?.[0]?.delta?.content;
+							if (content) aggregatedContent += content;
+						} catch {
+							// skip malformed chunks
+						}
+					}
+				}
+			} finally {
+				reader.releaseLock();
+			}
+
+			return aggregatedContent;
+		} catch {
+			return '';
+		}
+	}
+
 	/**
 	 *
 	 *
