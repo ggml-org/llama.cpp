@@ -3716,8 +3716,8 @@ void ggml_compute_forward_norm(
 // fusion kinds that can be combined with the rms_norm computation in a single pass.
 // extend this enum when adding new fused variants (e.g. FUSE_ADD, FUSE_MUL_ADD, ...).
 enum ggml_rms_norm_fuse_op {
-    GGML_RMS_NORM_FUSE_NONE,
-    GGML_RMS_NORM_FUSE_MUL,
+    GGML_RMS_NORM_FUSE_OP_NONE,
+    GGML_RMS_NORM_FUSE_OP_MUL,
 };
 
 template <ggml_rms_norm_fuse_op FUSE_OP>
@@ -3730,7 +3730,7 @@ static void ggml_compute_forward_rms_norm_f32(
     const ggml_tensor * src1 = nullptr;
     ggml_tensor       * dst  = dst_rms_norm;
 
-    if constexpr (FUSE_OP == GGML_RMS_NORM_FUSE_MUL) {
+    if constexpr (FUSE_OP == GGML_RMS_NORM_FUSE_OP_MUL) {
         src1 = (dst_fused->src[0] == dst_rms_norm) ? dst_fused->src[1] : dst_fused->src[0];
         dst  = dst_fused;
     }
@@ -3768,7 +3768,7 @@ static void ggml_compute_forward_rms_norm_f32(
 
                 float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
 
-                if constexpr (FUSE_OP == GGML_RMS_NORM_FUSE_MUL) {
+                if constexpr (FUSE_OP == GGML_RMS_NORM_FUSE_OP_MUL) {
                     const int64_t i11 = i01 % ne11;
                     const int64_t i12 = i02 % ne12;
                     const int64_t i13 = i03 % ne13;
@@ -3795,7 +3795,7 @@ void ggml_compute_forward_rms_norm(
     switch (src0->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_rms_norm_f32<GGML_RMS_NORM_FUSE_NONE>(params, dst);
+                ggml_compute_forward_rms_norm_f32<GGML_RMS_NORM_FUSE_OP_NONE>(params, dst);
             } break;
         default:
             {
@@ -3819,7 +3819,7 @@ void ggml_compute_forward_rms_norm_mul_fused(
     switch (src0->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_rms_norm_f32<GGML_RMS_NORM_FUSE_MUL>(params, dst_rms_norm, dst_mul);
+                ggml_compute_forward_rms_norm_f32<GGML_RMS_NORM_FUSE_OP_MUL>(params, dst_rms_norm, dst_mul);
             } break;
         default:
             {
