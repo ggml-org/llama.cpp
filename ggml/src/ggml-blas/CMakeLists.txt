@@ -70,7 +70,7 @@ if (BLAS_FOUND)
 
     message(STATUS "BLAS found, Includes: ${BLAS_INCLUDE_DIRS}")
 
-    target_compile_options(ggml-blas PRIVATE ${BLAS_LINKER_FLAGS})
+    target_link_options(ggml-blas PRIVATE ${BLAS_LINKER_FLAGS})
 
     if ("${GGML_BLAS_VENDOR}" STREQUAL "")
         message(WARNING "GGML_BLAS_VENDOR is not set; some methods may not link properly.")
