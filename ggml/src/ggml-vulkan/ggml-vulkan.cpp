@@ -6839,6 +6839,12 @@ static size_t ggml_vk_uma_non_cached_direct_write_threshold(vk_device& device) {
     return cache.value_or(device->uma_write_threshold);
 }
 
+static void flush_cache() {
+    static std::vector<uint8_t> flush_buffer(32 * 1024 * 1024, 0);
+    volatile uint8_t sum = 0;
+    for (auto b : flush_buffer) sum += b;
+}
+
 template<typename CPUOp, typename GPUOp>
 static size_t ggml_vk_benchmark_uma_threshold(
     const std::vector<size_t>& sizes,
@@ -6846,22 +6852,37 @@ static size_t ggml_vk_benchmark_uma_threshold(
     CPUOp cpu_op,
     GPUOp gpu_op)
 {
+    if (sizes.empty()) {
+        return default_threshold;
+    }
+
     // Threshold semantics: copy_size <= threshold → use CPU direct path.
     // We find the last size where CPU is still at least as fast as GPU, so that
     // the threshold is the largest size where direct transfer is beneficial.
     size_t threshold = 0;
     for (size_t size : sizes) {
         const int iterations = 50;
+        std::vector<double> cpu_times(iterations);
+        std::vector<double> gpu_times(iterations);
 
-        auto start_cpu = std::chrono::high_resolution_clock::now();
-        for (int i = 0; i < iterations; ++i) cpu_op(size);
-        auto end_cpu = std::chrono::high_resolution_clock::now();
-        double cpu_time = std::chrono::duration<double, std::micro>(end_cpu - start_cpu).count() / iterations;
+        for (int i = 0; i < iterations; ++i) {
+            flush_cache();
+            auto s_cpu = std::chrono::high_resolution_clock::now();
+            cpu_op(size);
+            auto e_cpu = std::chrono::high_resolution_clock::now();
+            cpu_times[i] = std::chrono::duration<double, std::micro>(e_cpu - s_cpu).count();
 
-        auto start_gpu = std::chrono::high_resolution_clock::now();
-        for (int i = 0; i < iterations; ++i) gpu_op(size);
-        auto end_gpu = std::chrono::high_resolution_clock::now();
-        double gpu_time = std::chrono::duration<double, std::micro>(end_gpu - start_gpu).count() / iterations;
+            flush_cache();
+            auto s_gpu = std::chrono::high_resolution_clock::now();
+            gpu_op(size);
+            auto e_gpu = std::chrono::high_resolution_clock::now();
+            gpu_times[i] = std::chrono::duration<double, std::micro>(e_gpu - s_gpu).count();
+        }
+
+        std::sort(cpu_times.begin(), cpu_times.end());
+        std::sort(gpu_times.begin(), gpu_times.end());
+        double cpu_time = cpu_times[iterations / 2];
+        double gpu_time = gpu_times[iterations / 2];
 
         if (cpu_time <= gpu_time) {
             // CPU is at least as fast at this size — include it in the direct range.
@@ -6872,8 +6893,8 @@ static size_t ggml_vk_benchmark_uma_threshold(
         }
     }
 
-    // CPU was fastest (or tied) for all tested sizes — use default.
-    return default_threshold;
+    // CPU was fastest (or tied) for all tested sizes.
+    return threshold;
 }
 
 static void ggml_vk_run_uma_benchmarks(vk_device& device) {
@@ -6905,7 +6926,7 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
     // each submission, so ggml_vk_ctx_begin always starts with an empty context.
     vk_context warmup_ctx = ggml_vk_create_temporary_context(benchmark_pool);
     for (int i = 0; i < 5; ++i) {
-        // GPU copy warmup (staging -> uma_direct, as in the write staging path).
+        // Warmup writes (host -> uma_direct).
         memcpy(staging->ptr, host_data.data(), sizes.back());
         ggml_vk_ctx_begin(device, warmup_ctx);
         GGML_ASSERT(warmup_ctx->seqs.size() == 1); // seqs must be cleared by prior submit
@@ -6915,8 +6936,19 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
         ggml_vk_submit(warmup_ctx, device->fence);
         (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
         device->device.resetFences({device->fence});
-        // CPU direct-write warmup.
         memcpy(uma_direct->ptr, host_data.data(), sizes.back());
+
+        // Warmup reads (uma_direct -> host).
+        memcpy(host_data.data(), uma_direct->ptr, sizes.back());
+        ggml_vk_ctx_begin(device, warmup_ctx);
+        GGML_ASSERT(warmup_ctx->seqs.size() == 1);
+        vk::BufferCopy copy_read{ 0, 0, sizes.back() };
+        warmup_ctx->s->buffer->buf.copyBuffer(uma_direct->buffer, staging->buffer, {copy_read});
+        ggml_vk_ctx_end(warmup_ctx);
+        ggml_vk_submit(warmup_ctx, device->fence);
+        (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
+        device->device.resetFences({device->fence});
+        memcpy(host_data.data(), staging->ptr, sizes.back());
     }
 
     // Write threshold: compare CPU direct write (host -> uma_direct) against the
