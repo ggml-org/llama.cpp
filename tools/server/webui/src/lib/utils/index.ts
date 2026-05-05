@@ -41,6 +41,9 @@ export { setConfigValue, getConfigValue, configToParameterRecord } from './confi
 // CORS Proxy
 export { buildProxiedUrl, getProxiedUrlString, buildProxiedHeaders } from './cors-proxy';
 
+// URL utilities
+export { extractRootDomain } from './url';
+
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';
 

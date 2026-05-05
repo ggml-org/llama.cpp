@@ -29,7 +29,8 @@ import {
 	getProxiedUrlString,
 	parseMcpServerSettings,
 	detectMcpTransportFromUrl,
-	uuid
+	uuid,
+	extractRootDomain
 } from '$lib/utils';
 import {
 	MCPConnectionPhase,
@@ -412,7 +413,9 @@ class MCPStore {
 	#isValidIconUri(src: string): boolean {
 		try {
 			if (src.startsWith(UrlProtocol.DATA)) return true;
+
 			const url = new URL(src);
+
 			return url.protocol === UrlProtocol.HTTPS;
 		} catch {
 			return false;
@@ -494,6 +497,38 @@ class MCPStore {
 			if (mcpIconUrl) {
 				return mcpIconUrl;
 			}
+		}
+
+		// Fallback: try favicon from root domain
+		const fallbackUrl = this.#getServerFaviconFallback(server.url);
+		if (fallbackUrl) {
+			return fallbackUrl;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Construct a fallback favicon URL from the MCP server URL.
+	 * e.g. https://mcp.exa.ai/mcp -> https://exa.ai/favicon.ico
+	 */
+	#getServerFaviconFallback(serverUrl: string): string | null {
+		try {
+			const url = new URL(serverUrl);
+			const rootDomain = extractRootDomain(url);
+			if (!rootDomain) return null;
+
+			const origin = `${url.protocol}//${rootDomain}`;
+			const candidates = ['favicon.ico', 'favicon.svg', 'favicon.png'];
+
+			for (const path of candidates) {
+				const faviconUrl = `${origin}/${path}`;
+				if (this.#isValidIconUri(faviconUrl)) {
+					return this.#proxyIconSrc(faviconUrl);
+				}
+			}
+		} catch {
+			// Invalid URL, return null
 		}
 
 		return null;
