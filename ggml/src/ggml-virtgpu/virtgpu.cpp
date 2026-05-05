@@ -1,4 +1,5 @@
 #include "virtgpu.h"
+#include "ggml-remoting.h"
 
 #include <stdio.h>
 #include <unistd.h>
