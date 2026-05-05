@@ -1018,6 +1018,8 @@ void server_models_routes::init_routes() {
         return models.proxy_request(req, method, name, true); // update last usage for POST request only
     };
 
+    this->proxy_post_priority = this->proxy_post;
+
     this->post_router_models_load = [this](const server_http_req & req) {
         auto res = std::make_unique<server_http_res>();
         json body = json::parse(req.body);
