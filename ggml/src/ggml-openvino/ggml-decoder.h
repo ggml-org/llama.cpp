@@ -20,13 +20,15 @@ struct ModelParams {
     int n_heads_kv = -1;
     int head_size = -1;
     int32_t rope_params[15];
+    bool mixed_rope_params = false;
     std::vector<int> swa_layers;
 
     std::vector<std::string> kv_names;
     size_t kv_buffer_ctx_id = 0;
 
     bool same_rope_params(const ModelParams & other) const {
-        return memcmp(rope_params, other.rope_params, sizeof(int32_t) * 15) == 0;
+        return mixed_rope_params == other.mixed_rope_params &&
+               memcmp(rope_params, other.rope_params, sizeof(int32_t) * 15) == 0;
     }
 
     bool can_reuse_dynamically(const ModelParams & other) const { return same_rope_params(other); }
@@ -171,6 +173,8 @@ public:
     int get_input_len() const { return m_compute_params.input_len; }
 
     virtual int32_t * get_rope_params() const override { return const_cast<int32_t *>(m_model_params.rope_params); }
+
+    virtual bool has_mixed_rope_params() const override { return m_model_params.mixed_rope_params; }
 
     virtual std::map<std::string, std::string> get_kv_param_res_names() const override;
 

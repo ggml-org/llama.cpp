@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <openvino/core/any.hpp>
 #include <openvino/core/graph_util.hpp>
 #include <openvino/core/shape.hpp>
@@ -63,10 +64,74 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
     }
 }
 
+// For a KV cache input, return an ov::Tensor sized to n_kv (== attention_size
+// for that layer) instead of the fully-allocated ctx_per_seq. Pre-conditions:
+//   * non-static (CPU/GPU) backend, single sequence, seq_active_start == 0
+//   * ggml KV layout is a contiguous [1, 1, ctx_per_seq, n_heads_kv*head_size]
+//     so the first n_kv rows are the live prefix and shrinking the ctx axis
+//     gives a valid tensor over the same host storage
+//   * not an SWA layer (ring cache): once the window has wrapped the first
+//     n_kv rows no longer contain the live prefix
+// On any unmet pre-condition returns std::nullopt; the caller falls back to
+// the full-size tensor.
+static std::optional<ov::Tensor> try_make_kv_sliced_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
+                                                           const std::string & name,
+                                                           const ggml_tensor * ggml_tensor) {
+    static const bool disabled = getenv("GGML_OPENVINO_DISABLE_KV_SLICE") != nullptr;
+    if (disabled) {
+        return std::nullopt;
+    }
+    if (ggml_decoder->is_static() || ggml_decoder->is_stateful()) {
+        return std::nullopt;
+    }
+    if (ggml_tensor->op != GGML_OP_NONE || ggml_tensor->view_src != nullptr) {
+        return std::nullopt;
+    }
+    if (name.rfind("cache_k_l", 0) != 0 && name.rfind("cache_v_l", 0) != 0) {
+        return std::nullopt;
+    }
+
+    const auto & compute_params = ggml_decoder->get_compute_params();
+    if (compute_params.n_seq_active != 1 || compute_params.seq_active_start != 0) {
+        return std::nullopt;
+    }
+
+    int layer;
+    try {
+        layer = extract_layer_from_name(name);
+    } catch (...) {
+        return std::nullopt;
+    }
+
+    const bool is_swa = ggml_decoder->is_swa_layer(layer);
+    if (is_swa) {
+        return std::nullopt;
+    }
+    const int ctx_per_seq = ggml_decoder->get_ctx_per_seq();
+    const int n_kv        = compute_params.attention_size;
+    if (ctx_per_seq <= 0 || n_kv <= 0 || n_kv >= ctx_per_seq) {
+        return std::nullopt;
+    }
+
+    ov::Shape full_shape = ggml_decoder->get_shape(ggml_tensor);
+    if (full_shape.size() != 4 || full_shape[0] != 1 || full_shape[1] != 1 ||
+        static_cast<int>(full_shape[2]) != ctx_per_seq) {
+        return std::nullopt;
+    }
+
+    ov::Shape sliced_shape = full_shape;
+    sliced_shape[2] = static_cast<size_t>(n_kv);
+    return ov::Tensor(ggml_decoder->get_ov_type(ggml_tensor), sliced_shape, ggml_tensor->data);
+}
+
 ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
                                    std::shared_ptr<ov::InferRequest> infer_request,
                                    int output_index,
                                    const ggml_tensor * ggml_tensor) {
+    if (auto sliced = try_make_kv_sliced_tensor(ggml_decoder, std::string(ggml_tensor->name), ggml_tensor)) {
+        return *sliced;
+    }
+
     if (ggml_tensor->extra != nullptr && !ggml_decoder->is_splited_model()) {
         auto * extra_base = static_cast<ggml_openvino_extra_base *>(ggml_tensor->extra);
         if (extra_base->type != ggml_openvino_extra_base::Type::TENSOR) {
@@ -673,6 +738,10 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
 namespace {
 ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & name) {
     const auto * ggml_tensor = ggml_decoder->get_input_ggml_tensor(name);
+
+    if (auto sliced = try_make_kv_sliced_tensor(ggml_decoder, name, ggml_tensor)) {
+        return *sliced;
+    }
 
     if (ggml_tensor->extra != nullptr && !ggml_decoder->is_splited_model()) {
         // GGML_LOG_DEBUG("Using ggml_tensor->extra as ov::Tensor for input: %s\n", name.c_str());

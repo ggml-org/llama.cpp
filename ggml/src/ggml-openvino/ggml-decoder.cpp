@@ -341,6 +341,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         return -1;
     };
 
+    bool rope_seen = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
         std::string name = std::string(node->name);
@@ -423,7 +424,17 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             }
         }
         if (node->op == GGML_OP_ROPE) {
-            memcpy(model_params.rope_params, node->op_params, sizeof(int32_t) * 15);
+            // When multiple ROPE ops in the graph disagree on op_params (e.g. gemma4's
+            // mixed SWA/non-SWA layers with different n_dims or freq_base), we cannot
+            // share a single precomputed rope_sin/rope_cos. Track divergence so the
+            // translator falls back to per-op make_sin_cos in that case.
+            static_assert(sizeof(model_params.rope_params) == sizeof(int32_t) * 15, "rope_params size");
+            if (!rope_seen) {
+                memcpy(model_params.rope_params, node->op_params, sizeof(int32_t) * 15);
+                rope_seen = true;
+            } else if (memcmp(model_params.rope_params, node->op_params, sizeof(int32_t) * 15) != 0) {
+                model_params.mixed_rope_params = true;
+            }
         }
     }
     auto * output_tensor = cgraph->nodes[cgraph->n_nodes - 1];

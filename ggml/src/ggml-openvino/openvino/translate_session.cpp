@@ -124,6 +124,13 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
 }
 
 void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
+    // When ROPE ops in the graph have divergent op_params (e.g. gemma4's mixed
+    // SWA/non-SWA layers with different n_dims or freq_base), a shared sin/cos
+    // precompute cannot broadcast across every ROPE use. Skip it here and let
+    // translate_rope() build sin/cos per-op from its own op_params.
+    if (ggml_model_decoder.has_mixed_rope_params()) {
+        return;
+    }
     int32_t * rope_params = ggml_model_decoder.get_rope_params();
     if (tensor_map.find("inp_pos") == tensor_map.end() || rope_params == nullptr) {
         return;
