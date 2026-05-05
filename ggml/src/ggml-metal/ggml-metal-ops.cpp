@@ -1601,6 +1601,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
 
     int ida = 0;
 
+    const int32_t keep_intermediates = (ggml_get_op_params_i32(op, 0) != 0) ? 1 : 0;
+
     ggml_metal_kargs_gated_delta_net args = {
         /*.ne00 =*/ ne00,
         /*.ne01 =*/ ne01,
@@ -1637,6 +1639,7 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         /*.nb1  =*/ nb1,
         /*.nb2  =*/ nb2,
         /*.nb3  =*/ nb3,
+        /*.keep_intermediates =*/ keep_intermediates,
     };
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);

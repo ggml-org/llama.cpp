@@ -2621,6 +2621,19 @@ kernel void kernel_gated_delta_net_impl(
             dst_attn[t*args.ne21*S_v] = y*scale;
         }
 
+        if (args.keep_intermediates) {
+            const uint s_off       = args.ne23*args.ne22*args.ne21*S_v;
+            const uint snap_stride = S_v*S_v*args.ne21*args.ne23;
+            const uint state_base  = (i23*args.ne21 + i21)*S_v*S_v + i20*S_v;
+
+            device float * dst_snap = (device float *) (dst) + s_off + t*snap_stride + state_base;
+
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                const short is = tx*NSG + j;
+                dst_snap[is] = ls[j];
+            }
+        }
+
         q_ptr += args.ns02;
         k_ptr += args.ns12;
         v_ptr += args.ns22;
@@ -2629,11 +2642,13 @@ kernel void kernel_gated_delta_net_impl(
         g_ptr += args.ne21*G;
     }
 
-    device float * dst_state = (device float *) (dst) + args.ne23*args.ne22*args.ne21*S_v + (i23*args.ne21 + i21)*S_v*S_v + i20*S_v;
+    if (!args.keep_intermediates) {
+        device float * dst_state = (device float *) (dst) + args.ne23*args.ne22*args.ne21*S_v + (i23*args.ne21 + i21)*S_v*S_v + i20*S_v;
 
-    FOR_UNROLL (short j = 0; j < NSG; j++) {
-        const short is = tx*NSG + j;
-        dst_state[is] = ls[j];
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            const short is = tx*NSG + j;
+            dst_state[is] = ls[j];
+        }
     }
 
 #undef S_v
