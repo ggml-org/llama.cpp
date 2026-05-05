@@ -582,74 +582,7 @@ class ChatStore {
 			);
 
 			if (config().titleGenerationUseLLM && isNewConversation && firstUserMessage) {
-				const titlePrompt = `Based on the following interaction, generate a short, concise title (maximum 6-8 words) that captures the main topic. Return ONLY the title text, nothing else. Do not use quotes.
-
-User: ${firstUserMessage.content}
-
-Assistant: ${assistantMessage.content}
-
-Title:`;
-
-				let titleResponse = '';
-				const titleAbort = new AbortController();
-				const effectiveModel =
-					isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
-
-				const titleHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-				if (config().apiKey) titleHeaders.Authorization = `Bearer ${config().apiKey}`;
-				const titleRes = await fetch('./v1/chat/completions', {
-					method: 'POST',
-					headers: titleHeaders,
-					body: JSON.stringify({
-						model: effectiveModel || undefined,
-						messages: [{ role: 'user', content: titlePrompt }],
-						stream: true,
-						chat_template_kwargs: { enable_thinking: false }
-					}),
-					signal: titleAbort.signal
-				});
-
-				if (!titleRes.ok) {
-					console.error('Title generation failed:', titleRes.status);
-					return;
-				}
-
-				const reader = titleRes.body?.getReader();
-				const decoder = new TextDecoder();
-				while (true) {
-					const { done, value } = (await reader?.read()) ?? { done: true, value: undefined };
-					if (done) break;
-					const text = decoder.decode(value, { stream: true });
-					for (const line of text.split('\n').filter((l) => l.startsWith('data: '))) {
-						try {
-							const parsed = JSON.parse(line.slice(6));
-							const content = parsed.choices?.[0]?.delta?.content;
-							if (content) titleResponse += content;
-						} catch {
-							// skip
-						}
-					}
-				}
-
-				// Strip thinking blocks from the full output
-				let cleanTitle = titleResponse
-					.replace(/<think>[^]*?<\/think>/gi, '')
-					.replace(/<thinking[^]*?<\/thinking>/gi, '')
-					.trim();
-				cleanTitle = cleanTitle
-					.replace(/^(Title:|Subject:|Topic:)\s*/i, '')
-					.replace(/^["]|["]$/g, '')
-					.trim();
-				if (cleanTitle.length > 60) {
-					cleanTitle = cleanTitle.substring(0, 57) + '...';
-				}
-				if (!cleanTitle || cleanTitle.length < 3) {
-					const firstLine = firstUserMessage.content.split('\n').find((l) => l.trim().length > 0);
-					cleanTitle = firstLine ? firstLine.trim().substring(0, 60) : 'New Chat';
-				}
-				if (cleanTitle && cleanTitle.length >= 3) {
-					await conversationsStore.updateConversationName(currentConv.id, cleanTitle);
-				}
+				await this.generateTitleWithLLM(firstUserMessage, assistantMessage, currentConv.id);
 			}
 		} catch (error) {
 			if (isAbortError(error)) {
@@ -998,6 +931,79 @@ Title:`;
 		this.setProcessingState(convId, null);
 		this.clearPendingMessage(convId);
 	}
+
+	private async generateTitleWithLLM(
+		firstUserMessage: DatabaseMessage,
+		assistantMessage: DatabaseMessage,
+		convId: string
+	): Promise<void> {
+		const titlePrompt = `Based on the following interaction, generate a short, concise title (maximum 6-8 words) that captures the main topic. Return ONLY the title text, nothing else. Do not use quotes.
+
+User: ${firstUserMessage.content}
+
+Assistant: ${assistantMessage.content}
+
+Title:`;
+
+		let titleResponse = '';
+		const effectiveModel =
+			isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
+
+		const titleHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+		if (config().apiKey) titleHeaders.Authorization = `Bearer ${config().apiKey}`;
+		const titleRes = await fetch('./v1/chat/completions', {
+			method: 'POST',
+			headers: titleHeaders,
+			body: JSON.stringify({
+				model: effectiveModel || undefined,
+				messages: [{ role: 'user', content: titlePrompt }],
+				stream: true,
+				chat_template_kwargs: { enable_thinking: false }
+			})
+		});
+
+		if (!titleRes.ok) {
+			console.error('Title generation failed:', titleRes.status);
+			return;
+		}
+
+		const reader = titleRes.body?.getReader();
+		const decoder = new TextDecoder();
+		while (true) {
+			const { done, value } = (await reader?.read()) ?? { done: true, value: undefined };
+			if (done) break;
+			const text = decoder.decode(value, { stream: true });
+			for (const line of text.split('\n').filter((l) => l.startsWith('data: '))) {
+				try {
+					const parsed = JSON.parse(line.slice(6));
+					const content = parsed.choices?.[0]?.delta?.content;
+					if (content) titleResponse += content;
+				} catch {
+					// skip
+				}
+			}
+		}
+
+		let cleanTitle = titleResponse
+			.replace(/<think>[^]*?<\/think>/gi, '')
+			.replace(/<thinking[^]*?<\/thinking>/gi, '')
+			.trim();
+		cleanTitle = cleanTitle
+			.replace(/^(Title:|Subject:|Topic:)\s*/i, '')
+			.replace(/^["]|["]$/g, '')
+			.trim();
+		if (cleanTitle.length > 60) {
+			cleanTitle = cleanTitle.substring(0, 57) + '...';
+		}
+		if (!cleanTitle || cleanTitle.length < 3) {
+			const firstLine = firstUserMessage.content.split('\n').find((l) => l.trim().length > 0);
+			cleanTitle = firstLine ? firstLine.trim().substring(0, 60) : 'New Chat';
+		}
+		if (cleanTitle && cleanTitle.length >= 3) {
+			await conversationsStore.updateConversationName(convId, cleanTitle);
+		}
+	}
+
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
 		const conversationId = convId || conversationsStore.activeConversation?.id;
 		if (!conversationId) return;
