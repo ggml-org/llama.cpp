@@ -1433,7 +1433,7 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
     ggml_init_params params = {
-        /*.mem_size   =*/ 1024*1024*1024, // FIXME
+        /*.mem_size   =*/ size_t(2)*1024*1024*1024, // FIXME: should be computed from n_tensors and n_bufts
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
@@ -1454,7 +1454,7 @@ struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struc
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
     ggml_init_params params = {
-        /*.mem_size   =*/ 1024*1024*1024, // FIXME
+        /*.mem_size   =*/ size_t(2)*1024*1024*1024, // FIXME: should be computed from n_tensors and n_bufts
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
