@@ -1064,11 +1064,31 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, rope_dim, rope_type,
                             layer_n_ctx_orig, layer_freq_base, layer_freq_scale, layer_ext_factor, layer_attn_factor, layer_beta_fast, layer_beta_slow);
                     indexer_q = ggml_concat(ctx0, indexer_q_nope, indexer_q_pe, 0);
-                    // Keep work_tokens as a separate dim through the hadamard
-                    // mul_mat and quant so each query keeps its own indexer Q.
-                    // The decode case is the work_tokens=1 special case below.
+
                     if (work_tokens > 1) {
-                        indexer_q = cont_if_needed(reshape_3d_checked(indexer_q, indexer_head_dim, hparams.indexer_n_head, work_tokens, "build_attn_v4.indexer_q_b", il));
+                        // Batched prefill ubatch-shared top-k: collapse the
+                        // work_tokens axis BEFORE the score mul_mat by summing
+                        // indexer_q across queries. This avoids materializing
+                        // a per-query [n_comp, n_head, work_tokens] score
+                        // tensor (which OOMs at ub=512 + long context where
+                        // n_comp * 64 * 512 * 4 bytes per layer x 21 r=4
+                        // layers blows past 10 GB on the GPUs). The scoring
+                        // becomes mul_mat(kv [128, n_comp], sum_q [128, 64])
+                        // -> [n_comp, 64], which is the same shape as the
+                        // existing decode (work_tokens=1) path. The
+                        // approximation is small in practice because
+                        // adjacent prefill tokens share most of their
+                        // top-k preferences.
+                        // shape: [head_dim, n_head, work_tokens] -> permute
+                        // to [work_tokens, head_dim, n_head] -> sum_rows
+                        // along dim 0 -> [1, head_dim, n_head] -> reshape
+                        // to [head_dim, n_head] (matches decode shape).
+                        // ggml_permute(t, a0, a1, a2, a3) sends old dim k to
+                        // new dim a_k, so to get (work_tokens, head_dim, n_head)
+                        // we need: head_dim(0)->1, n_head(1)->2, work_tokens(2)->0.
+                        indexer_q = ggml_cont(ctx0, ggml_permute(ctx0, indexer_q, 1, 2, 0, 3));
+                        indexer_q = sum_rows_checked(indexer_q, "build_attn_v4.indexer_q_sum_b");
+                        indexer_q = cont_if_needed(reshape_2d_checked(indexer_q, indexer_head_dim, hparams.indexer_n_head, "build_attn_v4.indexer_q_collapsed", il));
                     } else {
                         indexer_q = cont_if_needed(reshape_2d_checked(indexer_q, indexer_head_dim, hparams.indexer_n_head, "build_attn_v4.indexer_q", il));
                     }
@@ -1077,7 +1097,8 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     cb(indexer_q, "indexer_q", il);
 
                     ggml_tensor * indexer_kv_prefix = ggml_view_2d(ctx0, updated_indexer_kv, indexer_head_dim, n_comp, updated_indexer_kv->nb[1], 0);
-                    // For work_tokens > 1 the result is [n_comp, indexer_n_head, work_tokens].
+                    // After the work_tokens collapse, this is now always
+                    // [n_comp, indexer_n_head] -- same shape as decode.
                     ggml_tensor * index_scores = ggml_mul_mat(ctx0, indexer_kv_prefix, indexer_q);
                     index_scores = ggml_relu(ctx0, index_scores);
 
@@ -1085,33 +1106,20 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     const float index_scale = 1.0f / std::sqrt(float(indexer_head_dim)) / std::sqrt(float(hparams.indexer_n_head));
                     index_weights = ggml_scale(ctx0, index_weights, index_scale);
                     if (work_tokens > 1) {
-                        index_weights = reshape_3d_checked(index_weights, 1, hparams.indexer_n_head, work_tokens, "build_attn_v4.index_weights_b", il);
+                        // index_weights starts as [indexer_n_head, work_tokens];
+                        // collapse the work_tokens axis the same way as the
+                        // queries so the per-head weighting stays consistent
+                        // with the collapsed scores.
+                        index_weights = ggml_cont(ctx0, ggml_transpose(ctx0, index_weights));
+                        index_weights = sum_rows_checked(index_weights, "build_attn_v4.index_weights_sum_b");
+                        index_weights = reshape_2d_checked(index_weights, 1, hparams.indexer_n_head, "build_attn_v4.index_weights_collapsed", il);
                     } else {
                         index_weights = reshape_2d_checked(index_weights, 1, hparams.indexer_n_head, "build_attn_v4.index_weights", il);
                     }
                     index_scores = ggml_mul(ctx0, index_scores, index_weights);
-                    if (work_tokens > 1) {
-                        // Aggregate per-query scores into a single ubatch-wide
-                        // top-k. Sum across both indexer_n_head and the
-                        // work_tokens axis so every query in the ubatch
-                        // shares one selected prefix. This is an
-                        // approximation that trades a small quality drop
-                        // for the ability to batch attention; adjacent
-                        // prefill tokens overwhelmingly want similar
-                        // top-k slots so the loss is in practice small.
-                        // Shape evolves [n_comp, n_head, n_batch] ->
-                        //               [n_comp, n_head*n_batch] ->
-                        //               [n_head*n_batch, n_comp] ->
-                        //               [1, n_comp] -> [n_comp, 1]
-                        index_scores = cont_if_needed(reshape_2d_checked(index_scores, n_comp, hparams.indexer_n_head * work_tokens, "build_attn_v4.index_scores_flat", il));
-                        index_scores = ggml_cont(ctx0, ggml_transpose(ctx0, index_scores));
-                        index_scores = sum_rows_checked(index_scores, "build_attn_v4.index_scores_sum");
-                        index_scores = reshape_2d_checked(index_scores, n_comp, 1, "build_attn_v4.index_scores_collapsed", il);
-                    } else {
-                        index_scores = ggml_cont(ctx0, ggml_transpose(ctx0, index_scores));
-                        index_scores = sum_rows_checked(index_scores, "build_attn_v4.index_scores");
-                        index_scores = reshape_2d_checked(index_scores, n_comp, 1, "build_attn_v4.index_scores", il);
-                    }
+                    index_scores = ggml_cont(ctx0, ggml_transpose(ctx0, index_scores));
+                    index_scores = sum_rows_checked(index_scores, "build_attn_v4.index_scores");
+                    index_scores = reshape_2d_checked(index_scores, n_comp, 1, "build_attn_v4.index_scores", il);
                     cb(index_scores, "index_scores", il);
 
                     ggml_tensor * selected_comp = ggml_argsort_top_k(ctx0, index_scores, hparams.indexer_top_k);
