@@ -2991,12 +2991,10 @@ int op_matmul(struct htp_ops_context * octx) {
         return op_matmul_hvx(octx);
     }
 
-    // M alignment: when M > 32 but not 32-aligned, we split into
-    // HMX (first m_hmx = M & ~31 rows) + HVX (remaining m_tail rows).
-    // When M <= 32 and not 32-aligned, fall back entirely to HVX.
+    // M alignment: Use HMX when M >= 32, the last partial tile (m_total % 32 rows)
+    //  is handled by HMX itself; when M < 32  fall back to HVX.
     const int m_total = (int) src1->ne[1];
-    const int m_tail  = m_total % 32;
-    const int m_hmx   = m_total - m_tail;
+    const int m_hmx   = m_total & ~31;   // 0 when M < 32
 
     if (m_hmx == 0) {
         return op_matmul_hvx(octx);
@@ -3009,7 +3007,6 @@ int op_matmul(struct htp_ops_context * octx) {
     int k = (int) src0->ne[0];  // inner dimension
     int n = (int) src0->ne[1];  // weight columns
 
-    // --- Phase 1: HMX on the first m_hmx (32-aligned) rows ---
     int ret = -1;
 
     // Row strides in elements. For compact tensors these equal k; for
@@ -3027,7 +3024,7 @@ int op_matmul(struct htp_ops_context * octx) {
                 .dst             = (float *) dst->data,
                 .activation      = (float *) src1->data,
                 .permuted_weight = (const __fp16 *) src0->data,
-                .m               = m_hmx,
+                .m               = m_total,
                 .k               = k,
                 .n               = n,
                 .act_stride      = act_stride,
@@ -3048,38 +3045,17 @@ int op_matmul(struct htp_ops_context * octx) {
         } else {
             ret = hmx_mat_mul_permuted_w16a32(octx->ctx,
                     (float*) dst->data, (float*) src1->data, (const __fp16 *) src0->data,
-                    m_hmx, k, n, act_stride, wgt_stride);
+                    m_total, k, n, act_stride, wgt_stride);
         }
     } else {
         ret = hmx_mat_mul_permuted_qk_0_d16a32(octx->ctx,
                     (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
-                    m_hmx, k, n, (int) src0->type);
+                    m_total, k, n, (int) src0->type);
     }
 
     if (ret != 0) {
         FARF(HIGH, "HMX matmul failed (ret=%d), falling back to HVX", ret);
         return op_matmul(octx);
-    }
-
-    // --- Phase 2: HVX on the remaining m_tail rows ---
-    if (m_tail > 0) {
-        // copy of src1 and dst
-        struct htp_tensor src1_tail = *src1;
-        struct htp_tensor dst_tail  = *dst;
-
-        src1_tail.ne[1] = m_tail; // only tail rows
-        dst_tail.ne[1]  = m_tail; // only tail rows
-
-        // Offset activation and dst pointers past the HMX-processed rows.
-        // Use nb[1] (row stride in bytes) to compute the byte offset.
-        src1_tail.data += (uint32_t) m_hmx * src1->nb[1];
-        dst_tail.data  += (uint32_t) m_hmx * dst->nb[1];
-
-        octx->src[1] = &src1_tail;
-        octx->dst    = &dst_tail;
-
-        FARF(HIGH, "hmx-matmul: HVX tail m_tail %d src1 %p dst %p", m_tail, (void *) src1_tail.data, (void *) dst_tail.data);
-        return op_matmul_hvx(octx);
     }
 
     return 0;
