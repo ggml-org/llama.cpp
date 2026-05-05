@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <tuple>
 #include <vector>
 
@@ -96,19 +97,23 @@ public:
 
         set_i32_input(comp_slot_idx_r128, [](int32_t p) { return p % 128; });
 
-        for (ggml_tensor * mask : kq_masks) {
+        for (size_t mi = 0; mi < kq_masks.size(); ++mi) {
+            ggml_tensor * mask = kq_masks[mi];
             if (!mask || !mask->buffer) {
                 continue;
             }
 
-            const int64_t n_kv = mask->ne[0];
-            const int64_t n_q  = mask->ne[1];
+            const int64_t n_kv_padded = mask->ne[0];
+            const int64_t n_q         = mask->ne[1];
+            // n_kv_total[mi] is the actual (unpadded) size; slots in
+            // [n_kv_total, n_kv_padded) are padding and stay at -INFINITY.
+            const int64_t n_kv_actual = (mi < kq_mask_n_kv_total.size()) ? kq_mask_n_kv_total[mi] : n_kv_padded;
             f32_data.assign(ggml_nelements(mask), -INFINITY);
             for (int64_t iq = 0; iq < n_q; ++iq) {
                 const int32_t q_pos = ubatch->pos ? ubatch->pos[std::min<int64_t>(iq, n_tokens - 1)] : 0;
-                for (int64_t ikv = 0; ikv < n_kv; ++ikv) {
+                for (int64_t ikv = 0; ikv < n_kv_actual; ++ikv) {
                     if (ikv >= (int64_t) n_swa || ikv <= q_pos) {
-                        f32_data[iq*n_kv + ikv] = 0.0f;
+                        f32_data[iq*n_kv_padded + ikv] = 0.0f;
                     }
                 }
             }
@@ -135,6 +140,11 @@ public:
     ggml_tensor * comp_slot_idx_r128 = nullptr;
     ggml_tensor * indexer_hadamard = nullptr;
     std::vector<ggml_tensor *> kq_masks;
+    std::vector<int64_t>       kq_mask_n_kv_total;
+    // Cache shared kq_mask tensors keyed by (n_kv_total, work_tokens) so all
+    // V4 layers with the same comp_ratio reuse a single graph input. Without
+    // this we hit GGML_SCHED_MAX_SPLIT_INPUTS (30) at >30 layers.
+    std::map<std::pair<int64_t,int64_t>, ggml_tensor *> kq_mask_by_shape;
 
     std::vector<int32_t> i32_data;
     std::vector<float> f32_data;
@@ -1063,21 +1073,47 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
             }
         }
         const int64_t n_kv_total = n_kv + n_comp_attn;
-        ggml_tensor * kv_states = reshape_3d_checked(kv_prefix, head_dim, 1, n_kv_total, "build_attn_v4.kv_states", il);
-        ggml_tensor * kq_mask = nullptr;
-        if (work_tokens > 1) {
-            kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv_total, work_tokens);
-            ggml_set_input(kq_mask);
-            ggml_format_name(kq_mask, "deepseek4_kq_mask_l%d", il);
-            deepseek4_inputs->kq_masks.push_back(kq_mask);
+        // FA kernels for K[0]=512 require K->ne[1] (= n_kv_total after permute)
+        // to be a multiple of FATTN_KQ_STRIDE, and require a non-null mask.
+        // Without this, the auto-FA reservation graph (which runs with
+        // work_tokens=1 and arbitrary n_kv_total) reports unsupported on CUDA,
+        // the scheduler places the FA tensor on CPU, and auto-FA disables
+        // FA globally for the entire context. Pad both kv_states and the
+        // mask to the next multiple of 256 so FA stays on GPU; the padded
+        // K/V slots are masked out with -INFINITY and contribute nothing.
+        constexpr int64_t kq_pad = 256;
+        const int64_t n_kv_total_padded = ((n_kv_total + kq_pad - 1) / kq_pad) * kq_pad;
+        const int64_t kv_pad = n_kv_total_padded - n_kv_total;
+        if (kv_pad > 0) {
+            kv_prefix = ggml_pad(ctx0, kv_prefix, 0, (int) kv_pad, 0, 0);
         }
+        ggml_tensor * kv_states = reshape_3d_checked(kv_prefix, head_dim, 1, n_kv_total_padded, "build_attn_v4.kv_states", il);
+
+        ggml_tensor * kq_mask = nullptr;
+        {
+            const auto key = std::make_pair(n_kv_total_padded, (int64_t) work_tokens);
+            auto it = deepseek4_inputs->kq_mask_by_shape.find(key);
+            if (it != deepseek4_inputs->kq_mask_by_shape.end()) {
+                kq_mask = it->second;
+            } else {
+                kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv_total_padded, work_tokens);
+                ggml_set_input(kq_mask);
+                ggml_format_name(kq_mask, "deepseek4_kq_mask_%lldx%lld", (long long) n_kv_total_padded, (long long) work_tokens);
+                deepseek4_inputs->kq_masks.push_back(kq_mask);
+                deepseek4_inputs->kq_mask_n_kv_total.push_back(n_kv_total);
+                deepseek4_inputs->kq_mask_by_shape[key] = kq_mask;
+            }
+        }
+
+        // Flash attention requires the mask in F16; the dense path takes F32.
+        ggml_tensor * kq_mask_arg = cparams.flash_attn ? ggml_cast(ctx0, kq_mask, GGML_TYPE_F16) : kq_mask;
 
         ggml_tensor * out = build_attn_mha(
                 q_states,
                 kv_states,
                 kv_states,
                 nullptr,
-                kq_mask,
+                kq_mask_arg,
                 layer.attn_sinks,
                 nullptr,
                 1.0f / sqrtf(float(head_dim)),
