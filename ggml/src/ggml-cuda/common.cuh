@@ -37,6 +37,15 @@
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIP)
 
+// x4 pack for q8_1 blocks:
+// - 4 x ds first (16 bytes)
+// - then 4 blocks of qs, packed as 32 x int32 (128 bytes total)
+struct block_q8_1_x4 {
+    half2   ds[4];
+    int32_t qs[4 * QK8_1 / 4];
+};
+static_assert(sizeof(block_q8_1_x4) == 4 * sizeof(block_q8_1), "Unexpected block_q8_1_x4 size");
+
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
