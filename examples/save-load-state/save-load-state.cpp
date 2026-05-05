@@ -41,6 +41,9 @@ int main(int argc, char ** argv) {
     std::string result3;
 
     // init
+
+    ggml_backend_load_all();
+
     auto llama_init = common_init_from_params(params);
 
     auto * model = llama_init->model();
