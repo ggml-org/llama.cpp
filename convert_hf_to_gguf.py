@@ -9337,8 +9337,8 @@ class MimoV2Model(TextModel):
         # may extend past rows_per_rank with phantom rows not in the weight).
         # Naive repeat_interleave aligns rank 0 only and mis-applies scales to
         # later ranks once rows_per_rank isn't a multiple of bs.
-        # Re-group the per-rank [Q_per|K_per|V_per] rows into a unified
-        # [Q | K | V] layout so the standard split in modify_tensors works.
+        # Re-group the per-rank [Q_per|K_per|V_per] rows into a single fused
+        # [Q | K | V] tensor matching the un-sharded original layout.
         q_size = n_q * hd
         k_size = n_kv * hd
         v_size = n_kv * vhd
@@ -9474,25 +9474,6 @@ class MimoV2Model(TextModel):
 
         # MiMo-V2.5 (non-Pro) ships audio/visual modules we don't run in llama.cpp
         if name.startswith(("audio_encoder.", "visual.", "speech_embeddings.")):
-            return
-
-        # split fused qkv_proj into separate q/k/v tensors (MiMoV2ForCausalLM uses fused_qkv layout)
-        if "self_attn.qkv_proj" in name:
-            assert bid is not None
-            is_swa = self.hparams["hybrid_layer_pattern"][bid] == 1
-            num_q_heads = self.hparams["swa_num_attention_heads" if is_swa else "num_attention_heads"]
-            num_kv_heads = self.hparams["swa_num_key_value_heads" if is_swa else "num_key_value_heads"]
-            head_dim = self.hparams["swa_head_dim" if is_swa else "head_dim"]
-            v_head_dim = self.hparams["swa_v_head_dim" if is_swa else "v_head_dim"]
-            q_size = num_q_heads * head_dim
-            k_size = num_kv_heads * head_dim
-            v_size = num_kv_heads * v_head_dim
-            q, k, v = data_torch.split([q_size, k_size, v_size], dim=0)
-            suffix = ".weight" if name.endswith(".weight") else ".bias"
-            base = name.replace(f"qkv_proj{suffix}", "")
-            yield from super().modify_tensors(q, f"{base}q_proj{suffix}", bid)
-            yield from super().modify_tensors(k, f"{base}k_proj{suffix}", bid)
-            yield from super().modify_tensors(v, f"{base}v_proj{suffix}", bid)
             return
 
         # process the experts separately

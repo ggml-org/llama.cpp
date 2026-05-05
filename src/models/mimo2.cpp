@@ -85,24 +85,44 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
             cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
 
-            // compute Q and K and RoPE them
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            cb(Qcur, "Qcur", il);
+            ggml_tensor * Qcur;
+            ggml_tensor * Kcur;
+            ggml_tensor * Vcur;
 
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            cb(Kcur, "Kcur", il);
+            if (model.layers[il].wqkv) {
+                // Fused qkv_proj — Q/K share head_dim_k, V uses head_dim_v
+                ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
+                cb(qkv, "wqkv", il);
 
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            cb(Vcur, "Vcur", il);
+                const size_t row_k    = ggml_row_size(qkv->type, n_embd_head_k);
+                const size_t row_v    = ggml_row_size(qkv->type, n_embd_head_v);
+                const size_t row_full = qkv->nb[1];
+                const size_t k_off    = row_k * n_head_l;
+                const size_t v_off    = k_off + row_k * n_head_kv_l;
+
+                Qcur = ggml_view_3d(ctx0, qkv, n_embd_head_k, n_head_l,    n_tokens, row_k, row_full, 0);
+                Kcur = ggml_view_3d(ctx0, qkv, n_embd_head_k, n_head_kv_l, n_tokens, row_k, row_full, k_off);
+                Vcur = ggml_view_3d(ctx0, qkv, n_embd_head_v, n_head_kv_l, n_tokens, row_v, row_full, v_off);
+            } else {
+                // Split path
+                Qcur = build_lora_mm(model.layers[il].wq, cur);
+                cb(Qcur, "Qcur", il);
+
+                Kcur = build_lora_mm(model.layers[il].wk, cur);
+                cb(Kcur, "Kcur", il);
+
+                Vcur = build_lora_mm(model.layers[il].wv, cur);
+                cb(Vcur, "Vcur", il);
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, n_head_l,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv_l, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head_v, n_head_kv_l, n_tokens);
+            }
 
             if (v_scale != 1.0f) {
                 Vcur = ggml_scale(ctx0, Vcur, v_scale);
                 cb(Vcur, "Vcur_scaled", il);
             }
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, n_head_l,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv_l, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head_v, n_head_kv_l, n_tokens);
 
             Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, nullptr,
