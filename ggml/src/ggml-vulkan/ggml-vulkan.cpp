@@ -6649,14 +6649,17 @@ static void ggml_vk_end_submission(vk_submission& s, std::vector<vk_semaphore> w
     s.signal_semaphores = std::move(signal_semaphores);
 }
 
-static void ggml_vk_record_host_write_barrier(vk_context& ctx) {
+static void ggml_vk_record_host_barrier(vk_context& ctx, bool is_write) {
     if (ctx->s == nullptr) {
         return;
     }
 
     const bool transfer_queue = ctx->p->q->transfer_only;
 
-    if (!ctx->in_memcpys.empty() || !ctx->memsets.empty()) {
+    if (is_write) {
+        if (ctx->in_memcpys.empty() && ctx->memsets.empty()) {
+            return;
+        }
         ctx->s->buffer->buf.pipelineBarrier(
             vk::PipelineStageFlagBits::eHost,
             ctx->p->q->stage_flags,
@@ -6668,17 +6671,10 @@ static void ggml_vk_record_host_write_barrier(vk_context& ctx) {
             {},
             {}
         );
-    }
-}
-
-static void ggml_vk_record_host_read_barrier(vk_context& ctx) {
-    if (ctx->s == nullptr) {
-        return;
-    }
-
-    const bool transfer_queue = ctx->p->q->transfer_only;
-
-    if (!ctx->out_memcpys.empty()) {
+    } else {
+        if (ctx->out_memcpys.empty()) {
+            return;
+        }
         ctx->s->buffer->buf.pipelineBarrier(
             ctx->p->q->stage_flags,
             vk::PipelineStageFlagBits::eHost,
@@ -6691,6 +6687,14 @@ static void ggml_vk_record_host_read_barrier(vk_context& ctx) {
             {}
         );
     }
+}
+
+static void ggml_vk_record_host_write_barrier(vk_context& ctx) {
+    ggml_vk_record_host_barrier(ctx, true);
+}
+
+static void ggml_vk_record_host_read_barrier(vk_context& ctx) {
+    ggml_vk_record_host_barrier(ctx, false);
 }
 
 static void ggml_vk_ctx_end(vk_context& ctx) {
@@ -6851,10 +6855,15 @@ static size_t ggml_vk_benchmark_uma_threshold(
     }
 
     // Threshold semantics: copy_size <= threshold → use CPU direct path.
-    // We find the last size where CPU is still at least as fast as GPU, so that
-    // the threshold is the largest size where direct transfer is beneficial.
+    // We use binary search to find the largest size where CPU is at least as fast as GPU.
+    size_t low = 0;
+    size_t high = sizes.size() - 1;
     size_t threshold = 0;
-    for (size_t size : sizes) {
+
+    while (low <= high) {
+        size_t mid = low + (high - low) / 2;
+        size_t size = sizes[mid];
+
         const int iterations = 20;
         std::vector<double> cpu_times(iterations);
         std::vector<double> gpu_times(iterations);
@@ -6877,20 +6886,27 @@ static size_t ggml_vk_benchmark_uma_threshold(
         double gpu_time = gpu_times[iterations / 2];
 
         if (cpu_time <= gpu_time) {
-            // CPU is at least as fast at this size — include it in the direct range.
             threshold = size;
+            low = mid + 1;
         } else {
-            // GPU wins from here on; stop scanning.
-            return threshold;
+            high = mid - 1;
         }
     }
 
-    // CPU was fastest (or tied) for all tested sizes.
     return threshold;
 }
 
 static void ggml_vk_run_uma_benchmarks(vk_device& device) {
-    const std::vector<size_t> sizes = { 4 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024 };
+    const std::vector<size_t> benchmark_sizes = {
+        4 * 1024,
+        16 * 1024,
+        64 * 1024,
+        256 * 1024,
+        1024 * 1024,
+        4 * 1024 * 1024,
+        16 * 1024 * 1024,
+        64 * 1024 * 1024
+    };
 
     // Use a dedicated command pool for benchmarks to avoid interfering with the global transfer pool
     vk_command_pool benchmark_pool;
@@ -6898,19 +6914,19 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
 
     // uma_direct: use the same allocation path as runtime tensor buffers so that
     // calibration measures the same memory type (DeviceLocal|HostVisible|HostCoherent on UMA).
-    vk_buffer uma_direct = ggml_vk_create_buffer_device(device, sizes.back());
+    vk_buffer uma_direct = ggml_vk_create_buffer_device(device, benchmark_sizes.back());
     GGML_ASSERT(uma_direct->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
     GGML_ASSERT(uma_direct->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
     // staging: host-visible buffer used as the intermediate in the GPU staging path,
     // mirroring ggml_vk_ensure_sync_staging_buffer which requests HostCached.
-    vk_buffer staging = ggml_vk_create_buffer(device, sizes.back(),
+    vk_buffer staging = ggml_vk_create_buffer(device, benchmark_sizes.back(),
         {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
          vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
     GGML_ASSERT(staging->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
     GGML_ASSERT(staging->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
-    std::vector<uint8_t> host_data(sizes.back(), 0);
+    std::vector<uint8_t> host_data(benchmark_sizes.back(), 0);
 
     // Warmup: exercise both the GPU copy path and the CPU memcpy path so that
     // caches and driver state are in a representative steady state before timing.
@@ -6919,35 +6935,34 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
     vk_context warmup_ctx = ggml_vk_create_temporary_context(benchmark_pool);
     for (int i = 0; i < 5; ++i) {
         // Warmup writes (host -> uma_direct).
-        memcpy(staging->ptr, host_data.data(), sizes.back());
+        memcpy(staging->ptr, host_data.data(), benchmark_sizes.back());
         ggml_vk_ctx_begin(device, warmup_ctx);
         GGML_ASSERT(warmup_ctx->seqs.size() == 1); // seqs must be cleared by prior submit
-        vk::BufferCopy copy{ 0, 0, sizes.back() };
+        vk::BufferCopy copy{ 0, 0, benchmark_sizes.back() };
         warmup_ctx->s->buffer->buf.copyBuffer(staging->buffer, uma_direct->buffer, {copy});
         ggml_vk_ctx_end(warmup_ctx);
         ggml_vk_submit(warmup_ctx, device->fence);
         (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
         device->device.resetFences({device->fence});
-        memcpy(uma_direct->ptr, host_data.data(), sizes.back());
+        memcpy(uma_direct->ptr, host_data.data(), benchmark_sizes.back());
 
         // Warmup reads (uma_direct -> host).
-        memcpy(host_data.data(), uma_direct->ptr, sizes.back());
+        memcpy(host_data.data(), uma_direct->ptr, benchmark_sizes.back());
         ggml_vk_ctx_begin(device, warmup_ctx);
         GGML_ASSERT(warmup_ctx->seqs.size() == 1);
-        vk::BufferCopy copy_read{ 0, 0, sizes.back() };
+        vk::BufferCopy copy_read{ 0, 0, benchmark_sizes.back() };
         warmup_ctx->s->buffer->buf.copyBuffer(uma_direct->buffer, staging->buffer, {copy_read});
         ggml_vk_ctx_end(warmup_ctx);
         ggml_vk_submit(warmup_ctx, device->fence);
         (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
         device->device.resetFences({device->fence});
-        memcpy(host_data.data(), staging->ptr, sizes.back());
+        memcpy(host_data.data(), staging->ptr, benchmark_sizes.back());
     }
 
     // Write threshold: compare CPU direct write (host -> uma_direct) against the
     // real GPU staging path (host -> staging memcpy + GPU copyBuffer staging -> uma_direct).
-    const std::vector<size_t> write_sizes = { 4 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024 };
     device->uma_write_threshold = ggml_vk_benchmark_uma_threshold(
-        write_sizes,
+        benchmark_sizes,
         GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT,
         [&](size_t size) {
             // CPU direct path: write straight into the mapped UMA buffer.
@@ -6975,7 +6990,7 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
         device->uma_read_threshold = 4 * 1024;
     } else {
         device->uma_read_threshold = ggml_vk_benchmark_uma_threshold(
-            sizes,
+            benchmark_sizes,
             GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT,
             [&](size_t size) {
                 // CPU direct path: read straight from the mapped UMA buffer.
