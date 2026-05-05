@@ -3102,6 +3102,38 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 
     bool use_cuda_graph = true;
+
+    // Large prefill graphs (e.g. DeepSeek4 batched prefill at ub>=768)
+    // exceed CUDA graph capture memory budgets even on otherwise capture-
+    // eligible nodes. Detect by examining any operation whose tensor
+    // dimensions scale with the prefill ubatch width. The threshold is a
+    // hardware-specific heuristic (works on dual RTX 3090 + 2080 Ti).
+    int64_t max_dim = 0;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE
+            || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+            continue;
+        }
+        for (int d = 1; d < GGML_MAX_DIMS; d++) {
+            if (node->ne[d] > max_dim) max_dim = node->ne[d];
+        }
+        for (int s = 0; s < GGML_MAX_SRC; s++) {
+            if (node->src[s]) {
+                for (int d = 1; d < GGML_MAX_DIMS; d++) {
+                    if (node->src[s]->ne[d] > max_dim) max_dim = node->src[s]->ne[d];
+                }
+            }
+        }
+    }
+    if (max_dim >= 384) {
+#ifndef NDEBUG
+        GGML_LOG_DEBUG("%s: disabling CUDA graphs due to large prefill dim (max = %lld)\n",
+                       __func__, (long long) max_dim);
+#endif
+        return false;
+    }
+
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
