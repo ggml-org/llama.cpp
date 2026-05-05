@@ -11,6 +11,7 @@
 #include "etsoc/isa/hart.h"
 #include "etsoc/common/utils.h"
 #include "etsoc/isa/barriers.h"
+#include "etsoc/isa/cacheops-umode.h"
 
 #define SOC_MINIONS_PER_SHIRE 32
 #define NUM_HARTS_PER_MINION 2
@@ -587,13 +588,24 @@ static void evict_region_past_l2(const void *addr, size_t bytes) {
     uint64_t end  = ((uint64_t)addr + bytes + CL - 1) & ~(CL - 1);
     uint64_t nlines = (end - base) / CL;
 
-    FENCE;
+    // FENCE;
+
     for (uint64_t off = 0; off < nlines; off += 16) {
         uint64_t batch = nlines - off;
         if (batch > 16) batch = 16;
         evict_past_l2((const void *)(base + off * CL), batch, CL);
     }
-    WAIT_CACHEOPS;
+ 
+    // cache_ops_priv_evict_sw(0, /*to_L2*/2, 0, 0, CL);
+
+
+
+    // WAIT_CACHEOPS;
+
+    // /* Use_tmask=0, dst=1 (L2/SP_RAM), set=0, way=0, num_lines=5 */
+    // status = cache_ops_priv_evict_sw(0, to_L2, 0, 0, 5);
+
+
 }
 
 #endif // PLATFORM_H
