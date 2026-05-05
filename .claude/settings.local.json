@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//h/code/cpp/ml/llama-cpp-qnn-builder/**)",
+      "Read(//d/mydoc/Tencent Files/710925301/nt_qq/nt_data/Pic/2026-05/Ori/**)"
+    ],
+    "additionalDirectories": [
+      "H:\\code\\cpp\\ml\\llama-cpp-qnn-builder"
+    ]
+  }
+}

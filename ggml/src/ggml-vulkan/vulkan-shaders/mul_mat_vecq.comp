@@ -27,13 +27,11 @@ vec2 cache_b_ds;
 
 #include "mul_mat_vecq_funcs.glsl"
 
-void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint tid, const uint i) {
+void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint tid, const uint i, const uint b_qs_idx) {
+    const uint col = i*BLOCK_SIZE + tid*K_PER_ITER;
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
-        const uint col = i*BLOCK_SIZE + tid*K_PER_ITER;
-
         // Preload data_b block
         const uint b_block_idx = (j*p.batch_stride_b + col) / QUANT_K_Q8_1 + b_offset;
-        const uint b_qs_idx = tid % (32 / K_PER_ITER);
         const uint b_block_idx_outer = b_block_idx / 4;
         const uint b_block_idx_inner = b_block_idx % 4;
         cache_b_ds = vec2(data_b[b_block_idx_outer].ds[b_block_idx_inner]);
@@ -97,11 +95,12 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     int unroll_count = 4;
     uint unrolled_iters = num_iters & ~(unroll_count - 1);
 
+    const uint b_qs_idx = tid % (32 / K_PER_ITER);
     uint i = 0;
     while (i < unrolled_iters) {
         // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
-            iter(temp, first_row, num_rows, tid, i*K_PER_ITER);
+            iter(temp, first_row, num_rows, tid, i*K_PER_ITER, b_qs_idx);
             i++;
         }
     }
@@ -112,12 +111,12 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     while (i < unrolled_iters) {
         // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
-            iter(temp, first_row, num_rows, tid, i*K_PER_ITER);
+            iter(temp, first_row, num_rows, tid, i*K_PER_ITER, b_qs_idx);
             i++;
         }
     }
     while (i < num_iters) {
-        iter(temp, first_row, num_rows, tid, i*K_PER_ITER);
+        iter(temp, first_row, num_rows, tid, i*K_PER_ITER, b_qs_idx);
         i++;
     }
 
