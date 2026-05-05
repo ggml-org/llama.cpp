@@ -484,11 +484,8 @@ struct llama_layer {
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
 
-    // gemma4 layer output scale
+    // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
-
-    // Talkie embedding skip scale
-    struct ggml_tensor * embd_skip_scale = nullptr;
 
     struct llama_layer_posnet posnet;
 

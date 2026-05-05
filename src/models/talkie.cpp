@@ -29,7 +29,7 @@ void llama_model_talkie::load_arch_tensors(llama_model_loader &) {
         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
 
-        layer.embd_skip_scale = create_tensor(tn(LLM_TENSOR_EMBD_SKIP_SCALE, "weight", i), {1}, 0);
+        layer.out_scale = create_tensor(tn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", i), {1}, 0);
     }
 }
 
@@ -120,7 +120,7 @@ llama_model_talkie::graph::graph(const llama_model & model, const llm_graph_para
 
         cur = ggml_add(ctx0, cur, ffn_inp);
 
-        ggml_tensor * skip = ggml_mul(ctx0, inp_skip, model.layers[il].embd_skip_scale);
+        ggml_tensor * skip = ggml_mul(ctx0, inp_skip, model.layers[il].out_scale);
         cb(skip, "embd_skip", il);
 
         cur = ggml_add(ctx0, cur, skip);

@@ -725,9 +725,6 @@ class TensorNameMap:
 
         MODEL_TENSOR.LAYER_OUT_SCALE: (
             "model.layers.{bid}.layer_scalar", # gemma4
-        ),
-
-        MODEL_TENSOR.EMBD_SKIP_SCALE: (
             "model.blocks.{bid}.embed_skip.a_g", # talkie
         ),
 
