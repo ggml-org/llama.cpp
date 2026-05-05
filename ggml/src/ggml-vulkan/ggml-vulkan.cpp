@@ -109,8 +109,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define GGML_VK_MAX_NODES 8192
 
-static constexpr size_t GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT = 512 * 1024;
-static constexpr size_t GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT = 256 * 1024;
+static constexpr size_t GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT = 16 * 1024;
 
 #define VK_CHECK(err, msg)                                          \
     do {                                                            \
@@ -623,7 +622,6 @@ struct vk_device_struct {
     uint32_t shader_core_count;
     bool uma;
     size_t uma_read_threshold;
-    size_t uma_write_threshold;
     bool prefer_host_memory;
     bool float_controls_rte_fp16;
     bool subgroup_basic;
@@ -6838,10 +6836,6 @@ static size_t ggml_vk_uma_non_cached_direct_read_threshold(vk_device& device) {
     return cache.value_or(device->uma_read_threshold);
 }
 
-static size_t ggml_vk_uma_non_cached_direct_write_threshold(vk_device& device) {
-    static const std::optional<size_t> cache = ggml_vk_parse_uma_threshold("GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD");
-    return cache.value_or(device->uma_write_threshold);
-}
 
 template<typename CPUOp, typename GPUOp>
 static size_t ggml_vk_benchmark_uma_threshold(
@@ -6899,13 +6893,16 @@ static size_t ggml_vk_benchmark_uma_threshold(
 static void ggml_vk_run_uma_benchmarks(vk_device& device) {
     const std::vector<size_t> benchmark_sizes = {
         4 * 1024,
+        8 * 1024,
         16 * 1024,
+        32 * 1024,
         64 * 1024,
+        128 * 1024,
         256 * 1024,
+        512 * 1024,
         1024 * 1024,
-        4 * 1024 * 1024,
-        16 * 1024 * 1024,
-        64 * 1024 * 1024
+        2 * 1024 * 1024,
+        4 * 1024 * 1024
     };
 
     // Use a dedicated command pool for benchmarks to avoid interfering with the global transfer pool
@@ -6959,27 +6956,6 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
         memcpy(host_data.data(), staging->ptr, benchmark_sizes.back());
     }
 
-    // Write threshold: compare CPU direct write (host -> uma_direct) against the
-    // real GPU staging path (host -> staging memcpy + GPU copyBuffer staging -> uma_direct).
-    device->uma_write_threshold = ggml_vk_benchmark_uma_threshold(
-        benchmark_sizes,
-        GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT,
-        [&](size_t size) {
-            // CPU direct path: write straight into the mapped UMA buffer.
-            memcpy(uma_direct->ptr, host_data.data(), size);
-        },
-        [&](size_t size) {
-            // GPU staging path: memcpy into staging, then GPU copies staging -> uma_direct.
-            memcpy(staging->ptr, host_data.data(), size);
-            ggml_vk_ctx_begin(device, warmup_ctx);
-            vk::BufferCopy copy{ 0, 0, size };
-            warmup_ctx->s->buffer->buf.copyBuffer(staging->buffer, uma_direct->buffer, {copy});
-            ggml_vk_ctx_end(warmup_ctx);
-            ggml_vk_submit(warmup_ctx, device->fence);
-            (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
-            device->device.resetFences({device->fence});
-        }
-    );
 
     // Read threshold: compare CPU direct read (uma_direct -> host) against the
     // real GPU staging path (GPU copyBuffer uma_direct -> staging + memcpy staging -> host).
@@ -6987,7 +6963,7 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
         // Uncached MMIO reads: direct path only wins below the GPU staging fixed overhead crossover.
         // On all tested hardware this is at or below 4KB. Hardcode rather than benchmark
         // since memcpy destination cache warmth makes calibration unreliable for uncached sources.
-        device->uma_read_threshold = 4 * 1024;
+        device->uma_read_threshold = GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT;
     } else {
         device->uma_read_threshold = ggml_vk_benchmark_uma_threshold(
             benchmark_sizes,
@@ -7020,7 +6996,7 @@ static void ggml_vk_calibrate_uma_thresholds(vk_device& device) {
     if (!device->uma) return;
 
     ggml_vk_run_uma_benchmarks(device);
-    VK_LOG_DEBUG("ggml_vulkan: calibrated UMA read threshold: " << device->uma_read_threshold << ", write threshold: " << device->uma_write_threshold);
+    VK_LOG_DEBUG("ggml_vulkan: calibrated UMA read threshold: " << device->uma_read_threshold);
 }
 
 static bool ggml_vk_use_uma_direct_read(vk_buffer & src, size_t copy_size) {
@@ -7030,12 +7006,6 @@ static bool ggml_vk_use_uma_direct_read(vk_buffer & src, size_t copy_size) {
     return host_cached || copy_size <= ggml_vk_uma_non_cached_direct_read_threshold(src->device);
 }
 
-static bool ggml_vk_use_uma_direct_write(const vk_buffer & dst, size_t copy_size) {
-    GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
-
-    const bool host_cached = (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) != vk::MemoryPropertyFlags{};
-    return host_cached || copy_size <= ggml_vk_uma_non_cached_direct_write_threshold(dst->device);
-}
 
 static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_context& subctx, vk_buffer& dst, size_t offset, const ggml_tensor * tensor, bool sync_staging = false) {
     VK_LOG_DEBUG("ggml_vk_buffer_write_nc_async(" << tensor << ")");
@@ -7136,7 +7106,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
 
 static bool ggml_vk_should_use_uma_direct_transfer(vk_buffer& buf, size_t size, bool is_write) {
     if (!(buf->device->uma && (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible))) return false;
-    return is_write ? ggml_vk_use_uma_direct_write(buf, size) : ggml_vk_use_uma_direct_read(buf, size);
+    return is_write ? true : ggml_vk_use_uma_direct_read(buf, size);
 }
 
 static void ggml_vk_deferred_memcpy_2d(void * dst, const void * src, size_t width, size_t height, size_t spitch, size_t dpitch, std::vector<vk_staging_memcpy> * list) {
