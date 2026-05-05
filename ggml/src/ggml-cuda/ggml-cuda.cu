@@ -1151,6 +1151,10 @@ struct ggml_backend_cuda_comm_context {
     std::vector<ggml_backend_t> backends;
     std::vector<int>            dev_ids;
 
+    // Internal AR pipeline.  Allocated lazily on first try_allreduce_internal
+    // call so a config that lives entirely on NCCL never spends VRAM / pinned
+    // host memory on it.  Guarded by ar_pipeline_init_flag (std::call_once).
+    std::once_flag              ar_pipeline_init_flag;
     ggml_cuda_ar_pipeline *     ar_pipeline = nullptr;
 
     // Provider chosen at init time from GGML_CUDA_ALLREDUCE; called directly
@@ -1250,13 +1254,29 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
 }
 #endif // GGML_USE_NCCL
 
+// Lazily initialise the internal AR pipeline on first use.  Returns true
+// when the pipeline is ready; false if init failed (e.g. n_devices != 2 or
+// pre-Ampere) — caller falls through to the next provider.
+static bool ggml_backend_cuda_comm_ensure_internal(ggml_backend_cuda_comm_context * comm_ctx) {
+    std::call_once(comm_ctx->ar_pipeline_init_flag, [&] {
+        comm_ctx->ar_pipeline = ggml_cuda_ar_pipeline_init(
+            comm_ctx->dev_ids.data(), comm_ctx->dev_ids.size());
+        if (comm_ctx->ar_pipeline == nullptr) {
+            // Clear any sticky CUDA error from the failed init so it can't
+            // leak into a later NCCL call.
+            (void) cudaGetLastError();
+        }
+    });
+    return comm_ctx->ar_pipeline != nullptr;
+}
+
 // Try the internal AllReduce.  Returns true on success.  Returns false when
 // the pipeline is unavailable or the input is unsupported, so the caller
 // falls through to the next provider.  Tensor-shape errors are logged but
 // still return false (the meta-backend butterfly will catch them).
 static bool ggml_backend_cuda_comm_try_allreduce_internal(
         ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
-    if (comm_ctx->ar_pipeline == nullptr) {
+    if (!ggml_backend_cuda_comm_ensure_internal(comm_ctx)) {
         return false;
     }
 
@@ -1382,14 +1402,9 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
         ret->dev_ids.push_back(static_cast<ggml_backend_cuda_context *>(backends[i]->context)->device);
     }
 
-    ret->ar_pipeline = ggml_cuda_ar_pipeline_init(ret->dev_ids.data(), n_backends);
-    if (ret->ar_pipeline == nullptr) {
-        // Clear any sticky CUDA error from the failed init so it can't leak
-        // into a later NCCL call.
-        (void) cudaGetLastError();
-        GGML_LOG_WARN("%s: internal AllReduce pipeline init failed; "
-                      "falling back to NCCL or butterfly\n", __func__);
-    }
+    // The internal AR pipeline is created on first try_allreduce_internal
+    // call (see ensure_internal) so a config that lives entirely on NCCL
+    // never spends resources on it.
 
     // Eager init and warning on targets where NCCL is the preferred provider
 #if defined(GGML_USE_NCCL) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && !defined(_WIN32)
