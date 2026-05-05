@@ -864,6 +864,9 @@ extern "C" {
 // work only with partial states, such as SWA KV cache or recurrent cache (e.g. Mamba)
 #define LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY 1
 
+// keeps the tensor data on device buffers (i.e. not accessible in host memory, but faster save/load)
+#define LLAMA_STATE_SEQ_FLAGS_ON_DEVICE 2
+
     typedef uint32_t llama_state_seq_flags;
 
     LLAMA_API size_t llama_state_seq_get_size_ext(
