@@ -6839,12 +6839,6 @@ static size_t ggml_vk_uma_non_cached_direct_write_threshold(vk_device& device) {
     return cache.value_or(device->uma_write_threshold);
 }
 
-static void flush_cache() {
-    static std::vector<uint8_t> flush_buffer(32 * 1024 * 1024, 0);
-    volatile uint8_t sum = 0;
-    for (auto b : flush_buffer) sum += b;
-}
-
 template<typename CPUOp, typename GPUOp>
 static size_t ggml_vk_benchmark_uma_threshold(
     const std::vector<size_t>& sizes,
@@ -6861,18 +6855,16 @@ static size_t ggml_vk_benchmark_uma_threshold(
     // the threshold is the largest size where direct transfer is beneficial.
     size_t threshold = 0;
     for (size_t size : sizes) {
-        const int iterations = 50;
+        const int iterations = 20;
         std::vector<double> cpu_times(iterations);
         std::vector<double> gpu_times(iterations);
 
         for (int i = 0; i < iterations; ++i) {
-            flush_cache();
             auto s_cpu = std::chrono::high_resolution_clock::now();
             cpu_op(size);
             auto e_cpu = std::chrono::high_resolution_clock::now();
             cpu_times[i] = std::chrono::duration<double, std::micro>(e_cpu - s_cpu).count();
 
-            flush_cache();
             auto s_gpu = std::chrono::high_resolution_clock::now();
             gpu_op(size);
             auto e_gpu = std::chrono::high_resolution_clock::now();
@@ -6953,8 +6945,9 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
 
     // Write threshold: compare CPU direct write (host -> uma_direct) against the
     // real GPU staging path (host -> staging memcpy + GPU copyBuffer staging -> uma_direct).
+    const std::vector<size_t> write_sizes = { 4 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024 };
     device->uma_write_threshold = ggml_vk_benchmark_uma_threshold(
-        sizes,
+        write_sizes,
         GGML_VK_UMA_NON_CACHED_DIRECT_WRITE_THRESHOLD_DEFAULT,
         [&](size_t size) {
             // CPU direct path: write straight into the mapped UMA buffer.
@@ -6975,25 +6968,32 @@ static void ggml_vk_run_uma_benchmarks(vk_device& device) {
 
     // Read threshold: compare CPU direct read (uma_direct -> host) against the
     // real GPU staging path (GPU copyBuffer uma_direct -> staging + memcpy staging -> host).
-    device->uma_read_threshold = ggml_vk_benchmark_uma_threshold(
-        sizes,
-        GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT,
-        [&](size_t size) {
-            // CPU direct path: read straight from the mapped UMA buffer.
-            memcpy(host_data.data(), uma_direct->ptr, size);
-        },
-        [&](size_t size) {
-            // GPU staging path: GPU copies uma_direct -> staging, then memcpy out.
-            ggml_vk_ctx_begin(device, warmup_ctx);
-            vk::BufferCopy copy{ 0, 0, size };
-            warmup_ctx->s->buffer->buf.copyBuffer(uma_direct->buffer, staging->buffer, {copy});
-            ggml_vk_ctx_end(warmup_ctx);
-            ggml_vk_submit(warmup_ctx, device->fence);
-            (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
-            device->device.resetFences({device->fence});
-            memcpy(host_data.data(), staging->ptr, size);
-        }
-    );
+    if (!(uma_direct->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached)) {
+        // Uncached MMIO reads: direct path only wins below the GPU staging fixed overhead crossover.
+        // On all tested hardware this is at or below 4KB. Hardcode rather than benchmark
+        // since memcpy destination cache warmth makes calibration unreliable for uncached sources.
+        device->uma_read_threshold = 4 * 1024;
+    } else {
+        device->uma_read_threshold = ggml_vk_benchmark_uma_threshold(
+            sizes,
+            GGML_VK_UMA_NON_CACHED_DIRECT_READ_THRESHOLD_DEFAULT,
+            [&](size_t size) {
+                // CPU direct path: read straight from the mapped UMA buffer.
+                memcpy(host_data.data(), uma_direct->ptr, size);
+            },
+            [&](size_t size) {
+                // GPU staging path: GPU copies uma_direct -> staging, then memcpy out.
+                ggml_vk_ctx_begin(device, warmup_ctx);
+                vk::BufferCopy copy{ 0, 0, size };
+                warmup_ctx->s->buffer->buf.copyBuffer(uma_direct->buffer, staging->buffer, {copy});
+                ggml_vk_ctx_end(warmup_ctx);
+                ggml_vk_submit(warmup_ctx, device->fence);
+                (void)device->device.waitForFences({device->fence}, true, UINT64_MAX);
+                device->device.resetFences({device->fence});
+                memcpy(host_data.data(), staging->ptr, size);
+            }
+        );
+    }
 
     ggml_vk_destroy_buffer(staging);
     ggml_vk_destroy_buffer(uma_direct);
