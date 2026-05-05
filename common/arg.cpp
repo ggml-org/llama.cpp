@@ -248,6 +248,8 @@ std::vector<std::string> common_arg::get_env() const {
 
 // Helper function to parse tensor buffer override strings
 static void parse_tensor_buffer_overrides(const std::string & value, std::vector<llama_model_tensor_buft_override> & overrides) {
+    ggml_backend_load_all();
+
     std::map<std::string, ggml_backend_buffer_type_t> buft_list;
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
         auto * dev = ggml_backend_dev_get(i);
@@ -803,6 +805,7 @@ static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & val
     if (dev_names.size() == 1 && dev_names[0] == "none") {
         devices.push_back(nullptr);
     } else {
+        ggml_backend_load_all();
         for (const auto & device : dev_names) {
             auto * dev = ggml_backend_dev_by_name(device.c_str());
             if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
@@ -820,6 +823,7 @@ static void add_rpc_devices(const std::string & servers) {
     if (rpc_servers.empty()) {
         throw std::invalid_argument("no RPC servers specified");
     }
+    ggml_backend_load_all();
     ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
     if (!rpc_reg) {
         throw std::invalid_argument("failed to find RPC backend");
@@ -1015,9 +1019,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     }
 
     params.use_color = tty_can_use_colors();
-
-    // load dynamic backends
-    ggml_backend_load_all();
 
     common_params_context ctx_arg(params);
     ctx_arg.print_usage = print_usage;
@@ -2275,6 +2276,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {
+            ggml_backend_load_all();
             std::vector<ggml_backend_dev_t> devices;
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 auto * dev = ggml_backend_dev_get(i);

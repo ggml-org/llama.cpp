@@ -68,6 +68,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    ggml_backend_load_all();
+
     LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
     mtmd::context_ptr ctx_mtmd;

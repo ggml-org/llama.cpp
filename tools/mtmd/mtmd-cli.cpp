@@ -295,6 +295,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    ggml_backend_load_all();
+
     mtmd_cli_context ctx(params);
     LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 

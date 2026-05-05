@@ -89,6 +89,10 @@ void llama_backend_init(void) {
         struct ggml_context * ctx = ggml_init(params);
         ggml_free(ctx);
     }
+
+    if (!ggml_backend_reg_count()) {
+        ggml_backend_load_all();
+    }
 }
 
 void llama_numa_init(enum ggml_numa_strategy numa) {
