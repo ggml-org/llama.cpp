@@ -31,6 +31,7 @@ layout(push_constant) uniform Parameters {
     uint sb1, sb2, sb3;
     uint neq1, rq3;
     float scale;
+    uint keep_intermediates;
 };
 
 layout(binding = 0) readonly  buffer QBuf     { FLOAT_TYPE data_q[];     };
@@ -102,6 +103,7 @@ void main() {
 
     const uint state_size = S_V * S_V;
     const uint state_base = (seq_id * H + head_id) * state_size;
+    const uint snap_stride = state_size * H * n_seqs;
 
     FLOAT_TYPE s_shard[ROWS_PER_LANE];
     [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
@@ -161,9 +163,18 @@ void main() {
         }
 
         attn_off += S_V * H;
+
+        if (keep_intermediates != 0) {
+            const uint snap_base = s_off + t * snap_stride + state_base + col * S_V;
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                data_dst[snap_base + r * LANES_PER_COLUMN + lane] = s_shard[r];
+            }
+        }
     }
 
-    [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-        data_dst[s_off + state_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+    if (keep_intermediates == 0) {
+        [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+            data_dst[s_off + state_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+        }
     }
 }

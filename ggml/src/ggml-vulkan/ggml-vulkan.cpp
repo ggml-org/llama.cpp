@@ -1497,6 +1497,7 @@ struct vk_op_gated_delta_net_push_constants {
     uint32_t sb1, sb2, sb3;
     uint32_t neq1, rq3;
     float scale;
+    uint32_t keep_intermediates;
 };
 
 struct vk_op_ssm_scan_push_constants {
@@ -10706,13 +10707,15 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
     const uint32_t rq3  = (uint32_t)(src_v->ne[3] / src_q->ne[3]);
 
     const float scale = 1.0f / sqrtf((float)S_v);
+    const uint32_t keep_intermediates = (uint32_t)(ggml_get_op_params_i32(dst, 0) != 0);
     const vk_op_gated_delta_net_push_constants pc = {
         H, n_tokens, n_seqs, s_off,
         sq1, sq2, sq3,
         sv1, sv2, sv3,
         sb1, sb2, sb3,
         neq1, rq3,
-        scale
+        scale,
+        keep_intermediates
     };
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
