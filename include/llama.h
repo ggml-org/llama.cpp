@@ -94,6 +94,13 @@ extern "C" {
         uint32_t n_layers;
         uint32_t max_blocks_per_seq;
 
+        // Stable u64 fingerprint of the model (architecture + weights identity).
+        // Used as the namespace for prefix-cache hash lookups.  Set by the Rust
+        // runtime when constructing the pool descriptor; 0 if unknown.
+        uint64_t model_fingerprint;
+
+        // ── Required callbacks ────────────────────────────────────────────────
+
         bool (*reserve)(
                 void * user_data,
                 uint64_t session_id,
@@ -106,6 +113,57 @@ extern "C" {
                 uint64_t session_id);
 
         bool (*touch)(
+                void * user_data,
+                uint64_t session_id);
+
+        // ── Optional prefix-cache callbacks ───────────────────────────────────
+        //
+        // When non-NULL, the KV cache implementation calls these instead of
+        // `reserve` / after a forward pass to enable GPU block reuse across
+        // requests that share a common prompt prefix.
+
+        // Like `reserve` but also performs a prefix-cache lookup.
+        //
+        // tokens[0..n_tokens]: full prompt token sequence (int32_t / llama_token).
+        // n_prefix_hits_out:   filled with the number of leading logical blocks
+        //   that came from the cache.  Their physical blocks are already in the
+        //   block table; the corresponding KV data was produced by a prior
+        //   forward pass and does not need to be recomputed.
+        bool (*reserve_prefix)(
+                void * user_data,
+                uint64_t session_id,
+                const int32_t * tokens,
+                uint32_t n_tokens,
+                uint32_t ** block_table_device_out,
+                uint32_t * n_logical_blocks_out,
+                uint32_t * n_prefix_hits_out);
+
+        // Donate newly computed KV blocks to the prefix cache so that future
+        // requests with the same prompt prefix can reuse them.
+        //
+        // Called after a successful forward pass.
+        //   tokens[0..n_tokens]: the token sequence decoded this pass.
+        //   n_skip:    leading logical blocks already in the cache (from a prior
+        //              reserve_prefix hit) — do not re-insert these.
+        //   n_promote: number of new logical blocks (beyond n_skip) to insert.
+        void (*promote_prefix)(
+                void * user_data,
+                uint64_t session_id,
+                const int32_t * tokens,
+                uint32_t n_tokens,
+                uint32_t n_skip,
+                uint32_t n_promote);
+
+        // ── Optional CPU offload/restore callback ─────────────────────────────
+        //
+        // Called at the start of `init_batch` to check whether the Rust runtime
+        // evicted the current GPU reservation to CPU while the context was idle.
+        //
+        // Returns the original `n_reserved_tokens` value if a restore is pending,
+        // or 0 if no restore is needed.  When non-zero, `init_batch` invalidates
+        // the current reservation and calls `reserve` / `reserve_prefix` again so
+        // the Rust side can re-upload KV data and supply a fresh block table.
+        uint32_t (*needs_restore)(
                 void * user_data,
                 uint64_t session_id);
     };

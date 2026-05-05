@@ -46,8 +46,18 @@ public:
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
 
+    // Promote newly computed KV blocks to the prefix cache.
+    //
+    // Must be called after a successful llama_decode() to make the session's
+    // freshly written KV blocks available for future requests.  No-op when the
+    // pool descriptor does not have a `promote_prefix` callback.
+    //
+    // n_new_logical: number of logical blocks beyond the cached prefix to donate.
+    void promote_to_cache(uint32_t n_new_logical);
+
 private:
     bool reserve_for_tokens(uint32_t tokens_needed);
+    bool reserve_for_tokens_prefix(const std::vector<int32_t> & tokens);
     void release_session();
 
     llama_memory_context_ptr make_status_context(llama_memory_status status) const;
@@ -55,7 +65,11 @@ private:
     llama_kapsl_kv_pool_desc * pool;
     uint64_t session_id;
     uint32_t * block_table_device = nullptr;
-    uint32_t n_reserved_blocks = 0;
-    uint32_t n_reserved_tokens = 0;
-    bool has_reservation = false;
+    uint32_t n_reserved_blocks    = 0;
+    uint32_t n_reserved_tokens    = 0;
+    bool     has_reservation      = false;
+
+    // Prefix-cache state — valid only when pool->reserve_prefix != nullptr.
+    uint32_t              n_prefix_hits = 0;  // leading logical blocks from cache
+    std::vector<int32_t>  last_tokens;         // token sequence from last init_batch
 };

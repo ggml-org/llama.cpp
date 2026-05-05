@@ -382,14 +382,79 @@ bool llama_kv_cache_kapsl::reserve_for_tokens(uint32_t tokens_needed) {
     }
 
     block_table_device = reserved_table;
-    n_reserved_blocks = reserved_blocks;
-    n_reserved_tokens = tokens_needed;
-    has_reservation = true;
+    n_reserved_blocks  = reserved_blocks;
+    n_reserved_tokens  = tokens_needed;
+    has_reservation    = true;
+    n_prefix_hits      = 0;
 
     pool->block_table_device = reserved_table;
     LLAMA_LOG_DEBUG("%s: reserved Kapsl KV blocks: session=%llu tokens=%u blocks=%u table=%p\n",
             __func__, (unsigned long long) session_id, tokens_needed, reserved_blocks, (void *) reserved_table);
     return true;
+}
+
+bool llama_kv_cache_kapsl::reserve_for_tokens_prefix(const std::vector<int32_t> & tokens) {
+    if (tokens.empty()) {
+        return true;
+    }
+    const uint32_t n_tokens = static_cast<uint32_t>(tokens.size());
+
+    if (has_reservation && n_tokens <= n_reserved_tokens) {
+        if (pool->touch != nullptr) {
+            return pool->touch(pool->user_data, session_id);
+        }
+        return true;
+    }
+
+    uint32_t * reserved_table   = nullptr;
+    uint32_t   n_logical_blocks = 0;
+    uint32_t   hits             = 0;
+
+    if (!pool->reserve_prefix(
+            pool->user_data, session_id,
+            tokens.data(), n_tokens,
+            &reserved_table, &n_logical_blocks, &hits)) {
+        LLAMA_LOG_ERROR("%s: Kapsl KV reserve_prefix failed: session=%llu tokens=%u\n",
+                __func__, (unsigned long long) session_id, n_tokens);
+        return false;
+    }
+    if (reserved_table == nullptr || n_logical_blocks == 0) {
+        LLAMA_LOG_ERROR("%s: Kapsl KV reserve_prefix returned empty table: session=%llu\n",
+                __func__, (unsigned long long) session_id);
+        return false;
+    }
+
+    block_table_device = reserved_table;
+    n_reserved_blocks  = n_logical_blocks;
+    n_reserved_tokens  = n_tokens;
+    has_reservation    = true;
+    n_prefix_hits      = hits;
+
+    pool->block_table_device = reserved_table;
+    LLAMA_LOG_DEBUG(
+        "%s: reserve_prefix: session=%llu tokens=%u logical_blocks=%u prefix_hits=%u table=%p\n",
+        __func__, (unsigned long long) session_id,
+        n_tokens, n_logical_blocks, hits, (void *) reserved_table);
+    return true;
+}
+
+void llama_kv_cache_kapsl::promote_to_cache(uint32_t n_new_logical) {
+    if (pool->promote_prefix == nullptr || !has_reservation || last_tokens.empty()) {
+        return;
+    }
+    if (n_new_logical == 0) {
+        return;
+    }
+    pool->promote_prefix(
+        pool->user_data,
+        session_id,
+        last_tokens.data(),
+        static_cast<uint32_t>(last_tokens.size()),
+        n_prefix_hits,
+        n_new_logical);
+    LLAMA_LOG_DEBUG(
+        "%s: promoted %u new logical blocks to prefix cache (skip=%u): session=%llu\n",
+        __func__, n_new_logical, n_prefix_hits, (unsigned long long) session_id);
 }
 
 void llama_kv_cache_kapsl::release_session() {
@@ -417,10 +482,36 @@ llama_memory_context_ptr llama_kv_cache_kapsl::init_batch(
         bool embd_all) {
     GGML_UNUSED(embd_all);
 
+    // Check whether the Rust runtime evicted the GPU reservation to CPU while
+    // this context was idle.  If so, invalidate the current reservation so
+    // that the reserve / reserve_prefix callback is triggered below, which
+    // will re-upload KV data and return a fresh block table.
+    if (pool->needs_restore != nullptr) {
+        const uint32_t restore_n = pool->needs_restore(pool->user_data, session_id);
+        if (restore_n > 0) {
+            LLAMA_LOG_DEBUG(
+                "%s: CPU-evicted reservation detected — forcing re-reserve "
+                "(session=%llu, original_tokens=%u)\n",
+                __func__, (unsigned long long) session_id, restore_n);
+            has_reservation   = false;
+            n_reserved_tokens = 0;
+            n_reserved_blocks = 0;
+            block_table_device = nullptr;
+            pool->block_table_device = nullptr;
+        }
+    }
+
     balloc.split_reset();
 
     std::vector<llama_ubatch> ubatches;
     uint32_t tokens_needed = 0;
+
+    // Collect token IDs and maximum position.  token_seq is indexed by position
+    // so we can pass a contiguous array to reserve_prefix.  Only populated when
+    // the pool has a reserve_prefix callback and the batch carries token IDs.
+    const bool want_prefix = (pool->reserve_prefix != nullptr);
+    std::vector<int32_t> token_seq;
+
     while (true) {
         auto ubatch = balloc.split_simple(n_ubatch);
         if (ubatch.n_tokens == 0) {
@@ -431,7 +522,14 @@ llama_memory_context_ptr llama_kv_cache_kapsl::init_batch(
             GGML_ASSERT(ubatch.n_pos > 0);
             const llama_pos pos = ubatch.pos[i * ubatch.n_pos];
             if (pos >= 0) {
-                tokens_needed = std::max(tokens_needed, (uint32_t) pos + 1);
+                const uint32_t upos = (uint32_t) pos;
+                tokens_needed = std::max(tokens_needed, upos + 1);
+                if (want_prefix && ubatch.token != nullptr) {
+                    if (token_seq.size() <= upos) {
+                        token_seq.resize(upos + 1, 0);
+                    }
+                    token_seq[upos] = (int32_t) ubatch.token[i];
+                }
             }
         }
         ubatches.push_back(std::move(ubatch));
@@ -441,12 +539,24 @@ llama_memory_context_ptr llama_kv_cache_kapsl::init_batch(
         return make_status_context(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
     }
 
-    if (!reserve_for_tokens(tokens_needed)) {
+    bool ok;
+    if (want_prefix && !token_seq.empty() && token_seq.size() == tokens_needed) {
+        ok = reserve_for_tokens_prefix(token_seq);
+        if (ok) {
+            last_tokens = std::move(token_seq);
+        }
+    } else {
+        ok = reserve_for_tokens(tokens_needed);
+        last_tokens.clear();
+    }
+
+    if (!ok) {
         return make_status_context(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
     }
 
-    LLAMA_LOG_DEBUG("%s: Kapsl external KV reserved %u blocks for %u tokens\n",
-            __func__, n_reserved_blocks, tokens_needed);
+    LLAMA_LOG_DEBUG(
+        "%s: Kapsl external KV reserved %u blocks for %u tokens (prefix_hits=%u)\n",
+        __func__, n_reserved_blocks, tokens_needed, n_prefix_hits);
     return std::make_unique<llama_kv_cache_kapsl_context>(
             LLAMA_MEMORY_STATUS_SUCCESS,
             pool,
