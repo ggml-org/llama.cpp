@@ -1245,6 +1245,12 @@ void ggml_compute_forward_mul_mat(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
+    const int32_t hint = ggml_get_op_params_i32(dst, 1);
+    if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref) {
+        ggml_compute_forward_fwht(params, dst);
+        return;
+    }
+
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int ith = params->ith;
