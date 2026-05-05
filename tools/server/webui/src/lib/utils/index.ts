@@ -39,7 +39,7 @@ export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } fr
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
 // CORS Proxy
-export { buildProxiedUrl, getProxiedUrlString, buildProxiedHeaders } from './cors-proxy';
+export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
 
 // URL utilities
 export { extractRootDomain } from './url';

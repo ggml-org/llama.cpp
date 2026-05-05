@@ -1,15 +1,14 @@
 <script lang="ts">
-	import { ExternalLink } from '@lucide/svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Badge } from '$lib/components/ui/badge';
-	import { McpCapabilitiesBadges } from '$lib/components/app/mcp';
+	import { McpCapabilitiesBadges, McpServerIdentity } from '$lib/components/app/mcp';
 	import { MCP_TRANSPORT_LABELS, MCP_TRANSPORT_ICONS } from '$lib/constants';
 	import { MCPTransportType } from '$lib/enums';
 	import type { MCPServerInfo, MCPCapabilitiesInfo } from '$lib/types';
 
 	interface Props {
 		displayName: string;
-		faviconUrl: string | null;
+		faviconUrl?: string | null;
 		enabled: boolean;
 		disabled?: boolean;
 		onToggle: (enabled: boolean) => void;
@@ -32,38 +31,16 @@
 
 <div class="space-y-3">
 	<div class="flex items-start justify-between gap-3">
-		<div class="grid min-w-0 gap-3">
-			<div class="flex items-center gap-2 overflow-hidden">
-				{#if faviconUrl}
-					<img
-						src={faviconUrl}
-						alt=""
-						class="h-5 w-5 shrink-0 rounded"
-						onerror={(e) => {
-							(e.currentTarget as HTMLImageElement).style.display = 'none';
-						}}
-					/>
-				{/if}
-
-				<p class="min-w-0 shrink-0 truncate leading-6 font-medium">{displayName}</p>
-
-				{#if serverInfo?.version}
-					<Badge variant="secondary" class="h-4 min-w-0 truncate px-1 text-[10px]">
-						v{serverInfo.version}
-					</Badge>
-				{/if}
-
-				{#if serverInfo?.websiteUrl}
-					<a
-						href={serverInfo.websiteUrl}
-						target="_blank"
-						rel="noopener noreferrer"
-						class="shrink-0 text-muted-foreground hover:text-foreground"
-						aria-label="Open website"
-					>
-						<ExternalLink class="h-3 w-3" />
-					</a>
-				{/if}
+		<div class="flex min-w-0 flex-col gap-3">
+			<div class="inline-flex items-center gap-2">
+				<McpServerIdentity
+					{displayName}
+					{faviconUrl}
+					{serverInfo}
+					iconClass="h-5 w-5"
+					iconRounded="rounded"
+					nameClass="leading-6 font-medium"
+				/>
 			</div>
 
 			{#if capabilities || transportType}

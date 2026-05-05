@@ -89,7 +89,6 @@
 					{:else}
 						<McpServerCard
 							{server}
-							faviconUrl={mcpStore.getServerFavicon(server.id)}
 							enabled={conversationsStore.isMcpServerEnabledForChat(server.id)}
 							onToggle={async () => {
 								const wasEnabled = conversationsStore.isMcpServerEnabledForChat(server.id);
