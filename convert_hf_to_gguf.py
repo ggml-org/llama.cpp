@@ -5525,17 +5525,25 @@ class _Qwen35MtpMixin:
     `mtp.*` to the standard layer-indexed nextn naming so the existing
     tensor_map handles them."""
 
+    # Class-level annotations so the type checker understands the attributes
+    # available on the concrete subclasses in the MRO
+    hparams: dict[str, Any]
+    model_arch: gguf.MODEL_ARCH
+    gguf_writer: gguf.GGUFWriter
+    block_count: int
+    tensor_map: gguf.TensorNameMap
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("mtp_num_hidden_layers", 0)
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     def set_gguf_parameters(self):
-        super().set_gguf_parameters()
+        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
         if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
             self.gguf_writer.add_nextn_predict_layers(n)
 
-    def modify_tensors(self, data_torch, name: str, bid):
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Multimodal Qwen3.5/3.6 wrap the text model under `model.language_model.*`.
         if name.startswith("model.language_model."):
             name = "model." + name[len("model.language_model."):]
@@ -5561,10 +5569,10 @@ class _Qwen35MtpMixin:
                 suffix = Path(name).suffix
                 tmpl   = remapper[stem] + suffix
                 for b in range(n_layer, self.block_count):
-                    yield from super().modify_tensors(data_torch, tmpl.format(bid=b), b)
+                    yield from super().modify_tensors(data_torch, tmpl.format(bid=b), b)  # ty: ignore[unresolved-attribute]
                 return
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)  # ty: ignore[unresolved-attribute]
 
 
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
