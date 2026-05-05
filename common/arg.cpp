@@ -427,6 +427,10 @@ static bool parse_bool_value(const std::string & value) {
     }
 }
 
+[[noreturn]] static void arg_removed(const std::string & msg) {
+    throw std::invalid_argument("the argument has been removed. " + msg);
+}
+
 //
 // CLI argument parsing functions
 //
@@ -3717,35 +3721,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--draft", "--draft-n", "--draft-max"}, "N",
         "the argument has been removed. use --spec-draft-n-max or --spec-ngram-mod-n-max",
         [](common_params & /*params*/, int /*value*/) {
-            throw std::invalid_argument("the argument has been removed. use --spec-draft-n-max or --spec-ngram-mod-n-max");
+            arg_removed("use --spec-draft-n-max or --spec-ngram-mod-n-max");
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DRAFT_MAX"));
     add_opt(common_arg(
         {"--draft-min", "--draft-n-min"}, "N",
         "the argument has been removed. use --spec-draft-n-min or --spec-ngram-mod-n-min",
         [](common_params & /*params*/, int /*value*/) {
-            throw std::invalid_argument("the argument has been removed. use --spec-draft-n-min or --spec-ngram-mod-n-min");
+            arg_removed("use --spec-draft-n-min or --spec-ngram-mod-n-min");
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DRAFT_MIN"));
     add_opt(common_arg(
         {"--spec-ngram-size-n"}, "N",
         "the argument has been removed. use the respective --spec-ngram-*-size-n or --spec-ngram-mod-n-match",
         [](common_params & /*params*/, int /*value*/) {
-            throw std::invalid_argument("the argument has been removed. use the respective --spec-ngram-*-size-n");
+            arg_removed("use the respective --spec-ngram-*-size-n");
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--spec-ngram-size-m"}, "N",
         "the argument has been removed. use the respective --spec-ngram-*-size-m",
         [](common_params & /*params*/, int /*value*/) {
-            throw std::invalid_argument("the argument has been removed. use the respective --spec-ngram-*-size-m");
+            arg_removed("use the respective --spec-ngram-*-size-m");
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--spec-ngram-min-hits"}, "N",
         "the argument has been removed. use the respective --spec-ngram-*-min-hits",
         [](common_params & /*params*/, int /*value*/) {
-            throw std::invalid_argument("the argument has been removed. use the respective --spec-ngram-*-min-hits");
+            arg_removed("use the respective --spec-ngram-*-min-hits");
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
 
