@@ -1287,10 +1287,7 @@ static bool ggml_backend_cuda_comm_try_allreduce_internal(
     const int64_t   ne   = ggml_nelements(tensors[0]);
     const ggml_type type = tensors[0]->type;
 
-    if (n_backends != 2) {
-        GGML_LOG_DEBUG("%s: internal unsupported: n_backends=%zu\n", __func__, n_backends);
-        return false;
-    }
+    GGML_ASSERT(n_backends == 2);
     if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && type != GGML_TYPE_BF16) {
         GGML_LOG_DEBUG("%s: internal unsupported: type=%d\n", __func__, (int) type);
         return false;
