@@ -294,21 +294,28 @@ llama_memory_context_ptr llama_memory_deepseek4::init_batch(
 
     balloc.split_reset();
 
-    const bool batch_prefill = deepseek4_batch_prefill_enabled();
+    // Only enable multi-token ubatches when batch_prefill is on AND the
+    // graph builder will agree (n_outputs != n_tokens, the prefill case).
+    // Otherwise the build sees work_tokens=1 (reserve_only) but the runtime
+    // would have given it a multi-token ubatch, and the mismatch corrupts
+    // logit reads.
+    const bool batch_prefill_active =
+        deepseek4_batch_prefill_enabled() &&
+        balloc.get_n_outputs() != balloc.get_n_tokens();
     std::vector<llama_ubatch> ubatches;
     while (true) {
-        // Note: a batched-prefill split helper was prototyped in earlier work
-        // but is not currently exposed by llama_batch_allocr. Fall through to
-        // the single-token split until that helper lands as a separate change.
-        (void) batch_prefill;
-        llama_ubatch ubatch = balloc.split_seq(1);
+        // Optional batched prefill (LLAMA_DEEPSEEK4_BATCH_PREFILL=1): split
+        // up to n_ubatch tokens per ubatch from a single sequence. Decoding
+        // and the unopt'ed path keep the legacy single-token semantics.
+        const uint32_t split_n = batch_prefill_active ? n_ubatch : 1;
+        llama_ubatch ubatch = balloc.split_seq(split_n);
         if (ubatch.n_tokens == 0) {
             break;
         }
 
-        if (ubatch.n_tokens != 1 || ubatch.n_seqs_unq != 1) {
-            LLAMA_LOG_ERROR("%s: DeepSeek4 runtime currently supports a single token from a single sequence per ubatch\n",
-                    __func__);
+        if (ubatch.n_seqs_unq != 1 || (!batch_prefill_active && ubatch.n_tokens != 1)) {
+            LLAMA_LOG_ERROR("%s: DeepSeek4 runtime currently supports a single sequence per ubatch (got n_tokens=%u, n_seqs=%u, batch_prefill=%d)\n",
+                    __func__, ubatch.n_tokens, ubatch.n_seqs_unq, batch_prefill_active ? 1 : 0);
             return std::make_unique<llama_memory_deepseek4_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
@@ -324,7 +331,7 @@ llama_memory_context_ptr llama_memory_deepseek4::init_batch(
     }
 
     if (log_batch) {
-        std::fprintf(stderr, "%s: prepared %zu %subatches\n", __func__, ubatches.size(), batch_prefill ? "" : "single-token ");
+        std::fprintf(stderr, "%s: prepared %zu %subatches\n", __func__, ubatches.size(), batch_prefill_active ? "" : "single-token ");
     }
 
     if (balloc.get_n_used() < balloc.get_n_tokens()) {
