@@ -103,4 +103,18 @@ set_and_check(GGML_LIB_DIR "@PACKAGE_GGML_LIB_INSTALL_DIR@")
 
 include("${CMAKE_CURRENT_LIST_DIR}/ggml-targets.cmake")
 
+foreach(_ggml_backend ${GGML_AVAILABLE_BACKENDS})
+    get_target_property(_ggml_backend_pfx ggml::${_ggml_backend} IMPORTED_LOCATION)
+    if (_ggml_backend_pfx)
+        message(STATUS "ggml::${_ggml_backend} at ${_ggml_backend_pfx}")
+    else()
+        foreach(config IN ITEMS DEBUG RELEASE MINSIZEREL RELWITHDEBUGINFO)
+            get_target_property(_ggml_backend_pfx ggml::${_ggml_backend} IMPORTED_LOCATION_${config})
+            if (_ggml_backend_pfx)
+                message(STATUS "ggml::${_ggml_backend} (${config}) at ${_ggml_backend_pfx}")
+            endif ()
+        endforeach()
+    endif()
+endforeach()
+
 check_required_components(ggml)
