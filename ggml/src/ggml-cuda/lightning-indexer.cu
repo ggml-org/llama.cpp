@@ -3,13 +3,13 @@
 #include "fattn-common.cuh"
 #include "convert.cuh"
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+
 typedef union {
     int2 i2;
     half2 h2[2];
 } half4;
-
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
 #include <mma.h>
 namespace wmma = nvcuda::wmma;
@@ -236,7 +236,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
 // TODO there is one ugly assumption used in this kernel - that WARP_SIZE is equal to 32
-// thanks to that one warp operating on float4 or half4 processes whole indexer K/Q vectors
+// thanks to that one warp operating on float4 processes whole indexer K/Q vectors
 // 32 * 4 = 128 (n_embd)
 
 template <int64_t n_embd, int64_t n_head, ggml_type type_K>
@@ -269,9 +269,7 @@ static __global__ void lightning_indexer_kernel_vec(
 
     // phase 1 - load (and dequantize if needed) K to registers
 
-    // K are loaded to registers either as float4 or half2 depending on K type
     float4 k_reg_f[K_VECS_PER_WARP];
-    half2  k_reg_h[K_VECS_PER_WARP][2];
 
     if constexpr (type_K == GGML_TYPE_F32) {
         // direct copy of float4
@@ -285,8 +283,8 @@ static __global__ void lightning_indexer_kernel_vec(
                 k_reg_f[k] = make_float4(0, 0, 0, 0);
             }
         }
-    } else if constexpr (type_K == GGML_TYPE_BF16) {
-        // dequantize bf16 to float
+    } else {
+        // dequantize remaining types to float
         constexpr dequantize_V_t dequantize_k = get_dequantize_V<type_K, float, 4>();
         #pragma unroll
         for (int k = 0; k < K_VECS_PER_WARP; ++k) {
@@ -296,31 +294,6 @@ static __global__ void lightning_indexer_kernel_vec(
                 dequantize_k(k_base, &k_reg_f[k], i_lane * 4);
             } else {
                 k_reg_f[k] = make_float4(0, 0, 0, 0);
-            }
-        }
-    } else if constexpr (type_K == GGML_TYPE_F16) {
-        // direct copy of halfs - separate case for some extra performance
-        #pragma unroll
-        for (int k = 0; k < K_VECS_PER_WARP; ++k) {
-            int i_kv = start_kv + k;
-            if (i_kv < n_kv) {
-                const int2 * k_base = (const int2 *) ((const char *) src1 + i_kv*nb12 + i_stream*nb13);
-                *(int2*) &k_reg_h[k] = k_base[i_lane];
-            } else {
-                *(int2*) &k_reg_h[k] = make_int2(0, 0);
-            }
-        }
-    } else {
-        // dequantize remaining types to half
-        constexpr dequantize_V_t dequantize_k = get_dequantize_V<type_K, half, 4>();
-        #pragma unroll
-        for (int k = 0; k < K_VECS_PER_WARP; ++k) {
-            int i_kv = start_kv + k;
-            if (i_kv < n_kv) {
-                const void * k_base = (const void *) ((const char *) src1 + i_kv*nb12 + i_stream*nb13);
-                dequantize_k(k_base, &k_reg_h[k][0], i_lane * 4);
-            } else {
-                *(int2*) &k_reg_h[k] = make_int2(0, 0);
             }
         }
     }
@@ -334,9 +307,7 @@ static __global__ void lightning_indexer_kernel_vec(
         // phase 2 - load weights and Q to shared memory
 
         __shared__ float  w_shared[n_head_inner];
-        // Q are loaded to shared memory either as float4 or half4 (stored as int2) depending on K type
         __shared__ float4 q_shared_f[n_head_inner][n_embd / 4];
-        __shared__ int2   q_shared_h[n_head_inner][n_embd / 4];
 
         if (tid < n_head_inner) {
             w_shared[tid] = w_base[i_head_0 + tid];
@@ -348,15 +319,7 @@ static __global__ void lightning_indexer_kernel_vec(
             const int i_head_inner = i_q / (n_embd / 4);
             const int i_head = i_head_0 + i_head_inner;
             const int i_embd = i_q % (n_embd / 4);
-            if constexpr (type_K == GGML_TYPE_F32 || type_K == GGML_TYPE_BF16) {
-                q_shared_f[i_head_inner][i_embd] = *(const float4 *) (q_base + i_head*nb01 + i_embd*sizeof(float4));
-            } else {
-                const float4 q = *(const float4 *) (q_base + i_head*nb01 + i_embd*sizeof(float4));
-                half4 q_packed;
-                q_packed.h2[0] = __float22half2_rn(make_float2(q.x, q.y));
-                q_packed.h2[1] = __float22half2_rn(make_float2(q.z, q.w));
-                q_shared_h[i_head_inner][i_embd] = q_packed.i2;
-            }
+            q_shared_f[i_head_inner][i_embd] = *(const float4 *) (q_base + i_head*nb01 + i_embd*sizeof(float4));
         }
 
         __syncthreads();
@@ -367,31 +330,15 @@ static __global__ void lightning_indexer_kernel_vec(
             const float w_val = w_shared[i_head_inner];
             float qk[K_VECS_PER_WARP] = { 0.0f };
 
-            if constexpr (type_K == GGML_TYPE_F32 || type_K == GGML_TYPE_BF16) {
-                // dot product of floats for f32 and bf16
-                const float4 q_vec = q_shared_f[i_head_inner][i_lane];
+            // dot product of floats
+            const float4 q_vec = q_shared_f[i_head_inner][i_lane];
 
-                #pragma unroll
-                for (int k = 0; k < K_VECS_PER_WARP; ++k) {
-                    ggml_cuda_mad(qk[k], q_vec.x, k_reg_f[k].x);
-                    ggml_cuda_mad(qk[k], q_vec.y, k_reg_f[k].y);
-                    ggml_cuda_mad(qk[k], q_vec.z, k_reg_f[k].z);
-                    ggml_cuda_mad(qk[k], q_vec.w, k_reg_f[k].w);
-                }
-            } else {
-                // dot product of halfs for remaining types
-                half4 q_vec;
-                q_vec.i2 = q_shared_h[i_head_inner][i_lane];
-                const half2 q_h0 = q_vec.h2[0];
-                const half2 q_h1 = q_vec.h2[1];
-
-                #pragma unroll
-                for (int k = 0; k < K_VECS_PER_WARP; ++k) {
-                    ggml_cuda_mad(qk[k], q_h0.x, k_reg_h[k][0].x);
-                    ggml_cuda_mad(qk[k], q_h0.y, k_reg_h[k][0].y);
-                    ggml_cuda_mad(qk[k], q_h1.x, k_reg_h[k][1].x);
-                    ggml_cuda_mad(qk[k], q_h1.y, k_reg_h[k][1].y);
-                }
+            #pragma unroll
+            for (int k = 0; k < K_VECS_PER_WARP; ++k) {
+                ggml_cuda_mad(qk[k], q_vec.x, k_reg_f[k].x);
+                ggml_cuda_mad(qk[k], q_vec.y, k_reg_f[k].y);
+                ggml_cuda_mad(qk[k], q_vec.z, k_reg_f[k].z);
+                ggml_cuda_mad(qk[k], q_vec.w, k_reg_f[k].w);
             }
 
             #pragma unroll
