@@ -536,7 +536,9 @@ static __device__ __forceinline__ q4_k_q8_1_x4_rhs load_q4_K_q8_1_x4_rhs(
         const block_q8_1_x4 * __restrict__ yx4,
         const int & kby, const int subblock) {
     const int block_offset = kby + subblock;
+    //divide by 4 to find which struct we need
     const int block_outer  = block_offset >> 2;
+    // Index inside, same as block_offset % 4
     const int block_inner  = block_offset & 3;
     const block_q8_1_x4 * by = yx4 + block_outer;
     const int4 * q8 = (const int4 *) (by->qs + block_inner * 8);
@@ -544,6 +546,10 @@ static __device__ __forceinline__ q4_k_q8_1_x4_rhs load_q4_K_q8_1_x4_rhs(
     q4_k_q8_1_x4_rhs rhs;
     rhs.q8_lo = q8[0];
     rhs.q8_hi = q8[1];
+
+    // Load scale + offset-correction terms:
+    //   ds.x = Q8 scale (d8)
+    //   ds.y = d8 * sum(q8) precomputed for offset correction
     rhs.ds = __half22float2(by->ds[block_inner]);
     return rhs;
 }
@@ -562,16 +568,19 @@ struct q4_k_block_header {
 
 static_assert(sizeof(q4_k_block_header) == 16, "Unexpected q4_k block header size");
 
-static __device__ __forceinline__ q4_k_block_header load_q4_K_block_header(
-        const block_q4_K * __restrict__ bq4_K) {
-    return ((const q4_k_block_header *) bq4_K)[0];
-}
-
 static __device__ __forceinline__ q4_k_scale_min load_q4_K_scale_min(
         const q4_k_block_header & header,
         const int subblock) {
+    // Lower half of packed scales (for subblocks 0–3)
     const uint32_t sc_lo = header.scale0;
+    // Lower half of packed mins 
     const uint32_t mb_lo = header.scale4;
+
+    // Upper half of packed scales and mins (for subblocks 4–7)
+    // Combine:
+    // - low 4 bits from scale8 (shifted down for mins)
+    // - high 2 bits from scale0/4 (shifted down) 
+    // This reconstructs 6-bit scale values that were split across words
     const uint32_t sc_hi = (header.scale8 & 0x0F0F0F0Fu) | ((header.scale0 & 0xC0C0C0C0u) >> 2);
     const uint32_t mb_hi = ((header.scale8 & 0xF0F0F0F0u) >> 4) | ((header.scale4 & 0xC0C0C0C0u) >> 2);
 
@@ -580,6 +589,7 @@ static __device__ __forceinline__ q4_k_scale_min load_q4_K_scale_min(
     const uint32_t mb_word = subblock < 4 ? mb_lo : mb_hi;
 
     q4_k_scale_min scale_min;
+    // shift to correct byte, mask lower 6 bits (0x3F = 6 bits) 0011 1111
     scale_min.scale = (sc_word >> shift) & 0x3Fu;
     scale_min.min   = (mb_word >> shift) & 0x3Fu;
     return scale_min;
@@ -1022,38 +1032,6 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
     return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, bq4_K->dm, d8);
 }
 
-// static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
-//         const void * __restrict__ vbq,
-//         const block_q8_1_x4 * __restrict__ yx4,
-//         const int & kby, const int & kbx, const int subblock_pair) {
-//     const block_q4_K * bq4_K = (const block_q4_K *) vbq + kbx;
-
-//     // One lane handles a 64-value pair of Q4_K subblocks so the packed q4 bytes and
-//     // block header are reused across both 32-value dots.
-//     const int subblock0 = 2 * subblock_pair;
-//     const int qs_idx = subblock_pair * 8;
-
-//     const uint4 packed_q4_lo = ((const uint4 *) ((const uint32_t *) bq4_K->qs + qs_idx + 0))[0];
-//     const uint4 packed_q4_hi = ((const uint4 *) ((const uint32_t *) bq4_K->qs + qs_idx + 4))[0];
-//     const q4_k_block_header header = load_q4_K_block_header(bq4_K);
-
-//     q4_k_q8_1_x4_rhs rhs[QR4_K];
-//     uint8_t sc[QR4_K];
-//     uint8_t m[QR4_K];
-
-// #pragma unroll
-//     for (int i = 0; i < QR4_K; ++i) {
-//         const int subblock = subblock0 + i;
-//         const q4_k_scale_min scale_min = load_q4_K_scale_min(header, subblock);
-
-//         rhs[i] = load_q4_K_q8_1_x4_rhs(yx4, kby, subblock);
-//         sc[i] = (uint8_t) scale_min.scale;
-//         m[i]  = (uint8_t) scale_min.min;
-//     }
-
-//     return vec_dot_q4_K_q8_1_x4_with_packed(packed_q4_lo, packed_q4_hi, rhs, sc, m, header.dm);
-// }
-
 static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
         const void * __restrict__ vbq,
         const block_q8_1_x4 * __restrict__ yx4,
@@ -1082,7 +1060,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
     v_lo = ((const uint4 *)(q4 + 0))[0];
     v_hi = ((const uint4 *)(q4 + 4))[0];
 
-    const q4_k_block_header header = load_q4_K_block_header(bq4_K);
+    const q4_k_block_header header = ((const q4_k_block_header *) bq4_K)[0];
 
 #pragma unroll
     // Loop through Q4 blocks (typically 2).
