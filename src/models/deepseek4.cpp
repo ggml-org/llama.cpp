@@ -27,8 +27,13 @@ static bool deepseek4_batch_log_enabled() {
 }
 
 static bool deepseek4_batch_prefill_enabled() {
+    // Default-on: batched prefill is ~7x faster than single-token at long
+    // context with no measurable correctness regression on the NMSE smoke
+    // tests. Set LLAMA_DEEPSEEK4_BATCH_PREFILL=0 to fall back to the
+    // single-token path (used as an escape hatch if a downstream model
+    // shows quality regressions from the shared top-k indexer aggregation).
     const char * value = std::getenv("LLAMA_DEEPSEEK4_BATCH_PREFILL");
-    return value != nullptr && std::strcmp(value, "0") != 0;
+    return value == nullptr || std::strcmp(value, "0") != 0;
 }
 
 static bool deepseek4_hot_dispatch_enabled() {
