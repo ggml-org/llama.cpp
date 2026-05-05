@@ -814,7 +814,9 @@ void llm_graph_result::reset() {
 
     inputs.clear();
 
-    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+    // add 25% extra headroom for tensor-split / pipeline-parallel overhead
+    // (split/concat/copy ops create more tensors than graph nodes)
+    buf_compute_meta.resize((ggml_tensor_overhead()*max_nodes*5)/4 + ggml_graph_overhead_custom(max_nodes, false));
 
     ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),
