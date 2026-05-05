@@ -437,7 +437,7 @@ int entry_point(struct ggml_et_glu_params* params, void* env) {
     if (src1) {
         evict_region_past_l2(src1->data, tensor_bytes(src1));
     }
-    et_barrier(ET_BARRIER_GLOBAL);
+    // et_barrier(ET_BARRIER_GLOBAL);
 #endif
 
     // Get tensor dimensions

@@ -39,7 +39,7 @@
 #define CACHE_LINE_F32_ELEMS  16   // 64 / 4
 #define CACHE_LINE_F16_ELEMS  32   // 64 / 2
 
-static inline size_t tensor_bytes_sr(const struct ggml_tensor *t) {
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
     return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
 }
 
@@ -144,8 +144,13 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
         return -1; // Null data pointer
     }
 
-    // evict_region_past_l2(src0_data, tensor_bytes_sr(src0));
-    // evict_region_past_l2(src1_data, tensor_bytes_sr(src1));
+#ifdef BUILD_FOR_UBERKERNEL
+    // et_barrier(ET_BARRIER_GLOBAL);
+    evict_region_past_l2(src0_data, tensor_bytes(src0));
+    evict_region_past_l2(src1_data, tensor_bytes(src1));
+    et_barrier(ET_BARRIER_GLOBAL);
+    // FENCE;
+#endif
 
     const int64_t ne00 = src0->ne[0];  // Source columns (row width)
     const int64_t ne01 = src0->ne[1];  // Source rows (number of rows to write)
@@ -250,6 +255,15 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
         if (my_end > total_cls) my_end = total_cls;
         if (my_start >= total_cls) return 0;
 
+#ifdef BUILD_FOR_UBERKERNEL
+    et_barrier(ET_BARRIER_GLOBAL);
+    // evict_region_past_l2(src0_data, tensor_bytes(src0));
+    // evict_region_past_l2(src1_data, tensor_bytes(src1));
+    // // et_barrier(ET_BARRIER_GLOBAL);
+    // FENCE;
+#endif
+
+
         for (int64_t cl = my_start; cl < my_end; cl++) {
             const int64_t group_idx   = cl / cls_per_group;
             const int64_t cl_in_group = cl % cls_per_group;
@@ -318,6 +332,16 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
                 }
             }
         }
+
+#ifdef BUILD_FOR_UBERKERNEL
+    et_barrier(ET_BARRIER_GLOBAL);
+    // evict_region_past_l2(src0_data, tensor_bytes(src0));
+    // evict_region_past_l2(src1_data, tensor_bytes(src1));
+    // // et_barrier(ET_BARRIER_GLOBAL);
+    // FENCE;
+#endif
+
+
     } else {
         // Fallback: nb1 not cache-line-aligned, so scattered destination rows
         // may share a cache line.  Use atomic global stores to bypass L1D.
@@ -355,5 +379,12 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
         }
     }
 
+#ifdef BUILD_FOR_UBERKERNEL
+    et_barrier(ET_BARRIER_GLOBAL);
+    // evict_region_past_l2(src0_data, tensor_bytes(src0));
+    // evict_region_past_l2(src1_data, tensor_bytes(src1));
+    // // et_barrier(ET_BARRIER_GLOBAL);
+    // FENCE;
+#endif
     return 0;
 }

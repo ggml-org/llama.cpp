@@ -156,7 +156,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
 #ifdef BUILD_FOR_UBERKERNEL
     evict_region_past_l2(src0->data, tensor_bytes(src0));
     evict_region_past_l2(src1->data, tensor_bytes(src1));
-    et_barrier(ET_BARRIER_GLOBAL);
+    // et_barrier(ET_BARRIER_GLOBAL);
 #endif
 
     enum ggml_op operation = dst->op;

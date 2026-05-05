@@ -57,7 +57,7 @@ int entry_point(struct ggml_et_norm_params* params, void* env) {
 
 #ifdef BUILD_FOR_UBERKERNEL
     evict_region_past_l2(src0->data, tensor_bytes(src0));
-    et_barrier(ET_BARRIER_GLOBAL);
+    // et_barrier(ET_BARRIER_GLOBAL);
 #endif
 
     if (eps < 0.0f) {
