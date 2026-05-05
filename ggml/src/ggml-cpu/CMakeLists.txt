@@ -485,6 +485,13 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             if (GGML_RV_ZIHINTPAUSE)
                 string(APPEND MARCH_STR "_zihintpause")
             endif()
+            if (GGML_CPU_RISCV64_SPACEMIT)
+                # `xsmtvdotii' is only required for GCC >= 15.
+                if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
+                    CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 15)
+                    string(APPEND MARCH_STR "_xsmtvdotii")
+                endif()
+            endif()
 
             list(APPEND ARCH_FLAGS "-march=${MARCH_STR}" -mabi=lp64d)
         else()
@@ -571,13 +578,13 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # Fetch KleidiAI sources:
         include(FetchContent)
-        set(KLEIDIAI_COMMIT_TAG "v1.22.0")
-        set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/archive/refs/tags/${KLEIDIAI_COMMIT_TAG}.tar.gz")
-        set(KLEIDIAI_ARCHIVE_MD5  "54049037570ab0ee0a0d126b2ba5ece1")
+        set(KLEIDIAI_COMMIT_TAG "v1.24.0")
+        set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/releases/download/${KLEIDIAI_COMMIT_TAG}/kleidiai-${KLEIDIAI_COMMIT_TAG}-src.tar.gz")
+        set(KLEIDIAI_RELEASE_ARCHIVE_MD5  "2f02ebe29573d45813e671eb304f2a00")
 
         set(KLEIDIAI_FETCH_ARGS
             URL ${KLEIDIAI_DOWNLOAD_URL}
-            URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5}
+            URL_HASH MD5=${KLEIDIAI_RELEASE_ARCHIVE_MD5}
         )
         if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
             list(APPEND KLEIDIAI_FETCH_ARGS DOWNLOAD_EXTRACT_TIMESTAMP NEW)

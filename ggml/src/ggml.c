@@ -55,8 +55,13 @@
 
 uint64_t ggml_graph_next_uid(void) {
 #ifdef _MSC_VER
+#if defined(_WIN32)
+    static volatile LONG counter = 1;
+    return (uint64_t) InterlockedIncrement(&counter) - 1;
+#else
     static volatile long long counter = 1;
     return (uint64_t) _InterlockedIncrement64(&counter) - 1;
+#endif
 #else
     static uint64_t counter = 1;
     return __atomic_fetch_add(&counter, 1, __ATOMIC_RELAXED);
@@ -3257,6 +3262,16 @@ void ggml_mul_mat_set_prec(
     const int32_t prec_i32 = (int32_t) prec;
 
     ggml_set_op_params_i32(a, 0, prec_i32);
+}
+
+void ggml_mul_mat_set_hint(
+        struct ggml_tensor * a,
+        enum ggml_op_hint    hint) {
+    GGML_ASSERT(a->op == GGML_OP_MUL_MAT);
+
+    const int32_t hint_i32 = (int32_t) hint;
+
+    ggml_set_op_params_i32(a, 1, hint_i32);
 }
 
 // ggml_mul_mat_id

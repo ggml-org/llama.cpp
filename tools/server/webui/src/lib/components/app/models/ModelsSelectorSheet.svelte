@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet';
-	import { cn } from '$lib/components/ui/utils';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import {
 		DialogModelInformation,
@@ -53,7 +52,7 @@
 	}
 </script>
 
-<div class={cn('relative inline-flex flex-col items-end gap-1', className)}>
+<div class={['relative inline-flex flex-col items-end gap-1', className]}>
 	{#if ms.loading && ms.options.length === 0 && ms.isRouter}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
@@ -67,17 +66,17 @@
 		{#if ms.isRouter}
 			<button
 				type="button"
-				class={cn(
-					`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
+				class={[
+					`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 					!ms.isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
 							: ms.isHighlightedCurrentModelActive
 								? 'text-foreground'
-								: 'text-muted-foreground',
-					sheetOpen ? 'text-foreground' : ''
-				)}
+								: 'text-foreground',
+					sheetOpen && 'text-foreground'
+				]}
 				style="max-width: min(calc(100cqw - 9rem), 20rem)"
 				disabled={disabled || ms.updating}
 				onclick={() => ms.handleOpenChange(true)}
@@ -155,16 +154,16 @@
 			</Sheet.Root>
 		{:else}
 			<button
-				class={cn(
-					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
+				class={[
+					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 					!ms.isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
 							: ms.isHighlightedCurrentModelActive
 								? 'text-foreground'
-								: 'text-muted-foreground'
-				)}
+								: 'text-foreground'
+				]}
 				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
 				onclick={() => ms.handleOpenChange(true)}
 				disabled={disabled || ms.updating}
