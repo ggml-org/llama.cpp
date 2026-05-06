@@ -594,6 +594,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
     for (int i = 0; i < 2; ++i) {
         ggml_cuda_set_device(p->devices[i]);
         cuda_ctx[i] = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+        GGML_ASSERT(cuda_ctx[i]->device == p->devices[i]);
 
         ggml_cuda_ar_wait_for_compute(p, cuda_ctx[i], i, slot);
 
@@ -768,6 +769,7 @@ bool ggml_cuda_ar_allreduce(
         for (int i = 0; i < n; ++i) {
             if (!compute_flag[i]) {
                 auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+                GGML_ASSERT(cuda_ctx->device == p->devices[i]);
                 ggml_cuda_set_device(p->devices[i]);
                 CUDA_CHECK(cudaMemsetAsync(tensors[i]->data, 0, (size_t) ne * sizeof(float), cuda_ctx->stream()));
             }
@@ -784,15 +786,16 @@ bool ggml_cuda_ar_allreduce(
         to_bf16_cuda_t to_bf16 = ggml_get_to_bf16_cuda(GGML_TYPE_F32);
         for (int i = 0; i < n; ++i) {
             auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+            GGML_ASSERT(cuda_ctx->device == p->devices[i]);
             bf16_tmp[i].pool = &cuda_ctx->pool();
             bf16_tmp[i].alloc(ne);
             ggml_cuda_set_device(p->devices[i]);
             if (compute_flag[i]) {
                 to_bf16(tensors[i]->data, bf16_tmp[i].get(), ne, cuda_ctx->stream());
+                CUDA_CHECK(cudaGetLastError());
             } else {
                 CUDA_CHECK(cudaMemsetAsync(bf16_tmp[i].get(), 0, nbytes, cuda_ctx->stream()));
             }
-            CUDA_CHECK(cudaGetLastError());
             copy_src_ptr[i] = bf16_tmp[i].get();
         }
     }
@@ -814,13 +817,13 @@ bool ggml_cuda_ar_allreduce(
         // post-conversion is needed.  Otherwise src == dst (same native type).
         if (use_bf16) {
             GGML_ASSERT(kernel_type == GGML_TYPE_BF16);
-            __nv_bfloat16 * src[GGML_CUDA_MAX_DEVICES];
-            float         * dst[GGML_CUDA_MAX_DEVICES];
+            nv_bfloat16 * src[GGML_CUDA_MAX_DEVICES];
+            float       * dst[GGML_CUDA_MAX_DEVICES];
             for (int i = 0; i < n; ++i) {
-                src[i] = static_cast<__nv_bfloat16 *>(copy_src_ptr[i]);
+                src[i] = static_cast<nv_bfloat16 *>(copy_src_ptr[i]);
                 dst[i] = static_cast<float *>(tensors[i]->data);
             }
-            ok = ggml_cuda_ar_allreduce_copy_outer<__nv_bfloat16, float>(
+            ok = ggml_cuda_ar_allreduce_copy_outer<nv_bfloat16, float>(
                 p, backends, src, dst, inner_compute, ne);
         } else {
             switch (kernel_type) {
@@ -832,9 +835,9 @@ bool ggml_cuda_ar_allreduce(
                     break;
                 }
                 case GGML_TYPE_BF16: {
-                    __nv_bfloat16 * buf[GGML_CUDA_MAX_DEVICES];
-                    for (int i = 0; i < n; ++i) buf[i] = static_cast<__nv_bfloat16 *>(tensors[i]->data);
-                    ok = ggml_cuda_ar_allreduce_copy_outer<__nv_bfloat16, __nv_bfloat16>(
+                    nv_bfloat16 * buf[GGML_CUDA_MAX_DEVICES];
+                    for (int i = 0; i < n; ++i) buf[i] = static_cast<nv_bfloat16 *>(tensors[i]->data);
+                    ok = ggml_cuda_ar_allreduce_copy_outer<nv_bfloat16, nv_bfloat16>(
                         p, backends, buf, buf, inner_compute, ne);
                     break;
                 }
@@ -873,6 +876,7 @@ bool ggml_cuda_ar_allreduce(
                 const int peer = 1 - i;  // valid for n == 2 only
                 ggml_cuda_set_device(p->devices[i]);
                 auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+                GGML_ASSERT(cuda_ctx->device == p->devices[i]);
                 cudaStream_t stream = cuda_ctx->stream();
 
                 char * data = static_cast<char *>(tensors[i]->data) + chunk_start * (int64_t) input_type_size;
@@ -897,12 +901,12 @@ bool ggml_cuda_ar_allreduce(
 
                 if (use_bf16) {
                     GGML_ASSERT(input_type == GGML_TYPE_F32);
-                    LAUNCH_AR_KERNEL(float, __nv_bfloat16);
+                    LAUNCH_AR_KERNEL(float, nv_bfloat16);
                 } else {
                     switch (input_type) {
-                        case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float,         float);         break;
-                        case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half,          half);          break;
-                        case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(__nv_bfloat16, __nv_bfloat16); break;
+                        case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float,       float);       break;
+                        case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half,        half);        break;
+                        case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(nv_bfloat16, nv_bfloat16); break;
                         default: GGML_ASSERT(false);
                     }
                 }
