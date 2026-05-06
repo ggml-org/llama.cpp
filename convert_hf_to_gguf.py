@@ -7823,6 +7823,51 @@ class Gemma4Model(Gemma3Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Gemma4AssistantForCausalLM")
+class Gemma4AssistantModel(Gemma4Model):
+    # Multi-Token Prediction (MTP) drafter for Gemma 4 ("assistant").
+    # Reference: https://huggingface.co/google/gemma-4-E4B-it-assistant
+    #            https://github.com/huggingface/transformers/tree/main/src/transformers/models/gemma4_assistant
+    model_arch = gguf.MODEL_ARCH.GEMMA4_ASSISTANT
+
+    def set_gguf_parameters(self):
+        # Reuse Gemma4 hparams (handles text_config merge, swa pattern, RoPE, etc.).
+        super().set_gguf_parameters()
+
+        # Top-level assistant fields (sit alongside text_config in the source config).
+        backbone_hidden_size = self.find_hparam(["backbone_hidden_size"])
+        self.gguf_writer.add_backbone_hidden_size(int(backbone_hidden_size))
+
+        num_centroids = int(self.find_hparam(["num_centroids"]))
+        top_k = int(self.find_hparam(["centroid_intermediate_top_k"]))
+        use_ordered = bool(self.find_hparam(["use_ordered_embeddings"], optional=True) or False)
+
+        self.gguf_writer.add_assistant_num_centroids(num_centroids)
+        self.gguf_writer.add_assistant_centroid_top_k(top_k)
+        self.gguf_writer.add_assistant_use_ordered_embeddings(use_ordered)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Buffers (no `.weight` suffix in safetensors) need the suffix appended so the
+        # tensor mapping can match canonical entries — same shim Gemma4 uses for
+        # `layer_scalar`/`per_dim_scale`.
+        if name.endswith("layer_scalar") or name.endswith("token_ordering"):
+            name = name + ".weight"
+
+        # Drop the rope_freqs synthetic tensor; we generate it ourselves below.
+        # Everything else is at the top level (no `language_model.` prefix unlike
+        # the multimodal Gemma 4) so we just delegate straight to ModelBase.
+        if name == "rope_freqs.weight":
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+
+        # `masked_embedding.token_ordering` is an int64 permutation buffer in
+        # the source checkpoint. The standard ModelBase pipeline upcasts
+        # non-float dtypes to F32 and force-stores 1-D tensors as F32 anyway,
+        # so we leave it floating: every value is < 2^18 << 2^24 mantissa, so
+        # the cast is bit-exact. The runtime side casts back to int when used.
+        yield from TextModel.modify_tensors(self, data_torch, name, bid)
+
+
 @ModelBase.register("Gemma4ForConditionalGeneration")
 class Gemma4VisionAudioModel(MmprojModel):
     has_audio_encoder = True

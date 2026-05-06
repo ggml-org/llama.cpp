@@ -158,6 +158,22 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_MSFA_NORM: (
             "model.vision_tower.timm_model.msfa.norm", # gemma3n
         ),
+
+        MODEL_TENSOR.ASSIST_PRE_PROJ: (
+            "pre_projection",                # gemma4_assistant
+        ),
+
+        MODEL_TENSOR.ASSIST_POST_PROJ: (
+            "post_projection",               # gemma4_assistant
+        ),
+
+        MODEL_TENSOR.ASSIST_EMBED_CENTROIDS: (
+            "masked_embedding.centroids",    # gemma4_assistant
+        ),
+
+        MODEL_TENSOR.ASSIST_TOKEN_ORDERING: (
+            "masked_embedding.token_ordering",  # gemma4_assistant (int64 buffer; convert appends `.weight`)
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {

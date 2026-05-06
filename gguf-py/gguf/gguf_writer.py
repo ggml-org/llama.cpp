@@ -751,6 +751,18 @@ class GGUFWriter:
     def add_activation_sparsity_scale(self, values: Sequence[float]) -> None:
         self.add_array(Keys.LLM.ACTIVATION_SPARSITY_SCALE.format(arch=self.arch), values)
 
+    def add_backbone_hidden_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.BACKBONE_HIDDEN_SIZE.format(arch=self.arch), value)
+
+    def add_assistant_num_centroids(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.ASSISTANT_NUM_CENTROIDS.format(arch=self.arch), value)
+
+    def add_assistant_centroid_top_k(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.ASSISTANT_CENTROID_TOP_K.format(arch=self.arch), value)
+
+    def add_assistant_use_ordered_embeddings(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.ASSISTANT_USE_ORDERED_EMBEDDINGS.format(arch=self.arch), value)
+
     def add_head_count(self, count: int | Sequence[int]) -> None:
         if isinstance(count, int):
             self.add_uint32(Keys.Attention.HEAD_COUNT.format(arch=self.arch), count)
