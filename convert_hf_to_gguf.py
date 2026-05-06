@@ -9314,7 +9314,7 @@ class DeepseekV32Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK32
 
     # TODO @ngxson : remove this when we support MTP for deepseek models
-    skip_mtp = True
+    skip_mtp = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
