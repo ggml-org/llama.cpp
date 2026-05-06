@@ -92,6 +92,12 @@ struct clip_hparams {
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
+    int32_t audio_chunk_size           = 0;
+    int32_t audio_conv_kernel_size     = 0;
+    int32_t audio_max_pos_emb          = 0;
+    int32_t audio_proj_window_size     = 0;
+    int32_t audio_proj_downsample_rate = 0;
+    int32_t audio_proj_head_count      = 0;
 
     // audio-to-mel preprocessor params
     int32_t audio_chunk_len   = -1; // in seconds
@@ -223,6 +229,21 @@ struct clip_layer {
     ggml_tensor * per_dim_scale_w   = nullptr;
     ggml_tensor * per_dim_k_scale_w = nullptr;
     ggml_tensor * ff_post_norm_1_w  = nullptr;
+
+    // granite_speech conformer per-layer
+    ggml_tensor * attn_rel_pos_emb = nullptr;
+
+    // granite_speech qformer cross-attention
+    ggml_tensor * cross_attn_q_w    = nullptr;
+    ggml_tensor * cross_attn_q_b    = nullptr;
+    ggml_tensor * cross_attn_k_w    = nullptr;
+    ggml_tensor * cross_attn_k_b    = nullptr;
+    ggml_tensor * cross_attn_v_w    = nullptr;
+    ggml_tensor * cross_attn_v_b    = nullptr;
+    ggml_tensor * cross_attn_o_w    = nullptr;
+    ggml_tensor * cross_attn_o_b    = nullptr;
+    ggml_tensor * cross_attn_norm_w = nullptr;
+    ggml_tensor * cross_attn_norm_b = nullptr;
 
     bool has_deepstack() const {
         return deepstack_fc1_w != nullptr;
@@ -514,6 +535,21 @@ struct clip_model {
     ggml_tensor * sscp_inp_proj_b = nullptr;
     ggml_tensor * audio_out_proj_w = nullptr;
     ggml_tensor * audio_out_proj_b = nullptr;
+
+    // granite_speech encoder
+    ggml_tensor * inp_proj_w    = nullptr;
+    ggml_tensor * inp_proj_b    = nullptr;
+    ggml_tensor * ctc_out_w     = nullptr;
+    ggml_tensor * ctc_out_b     = nullptr;
+    ggml_tensor * ctc_out_mid_w = nullptr;
+    ggml_tensor * ctc_out_mid_b = nullptr;
+    // qformer projector
+    ggml_tensor * qf_proj_query    = nullptr;
+    ggml_tensor * qf_proj_norm_w   = nullptr;
+    ggml_tensor * qf_proj_norm_b   = nullptr;
+    ggml_tensor * qf_proj_linear_w = nullptr;
+    ggml_tensor * qf_proj_linear_b = nullptr;
+    std::vector<clip_layer> qf_proj_layers;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
