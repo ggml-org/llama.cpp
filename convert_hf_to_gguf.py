@@ -11074,8 +11074,14 @@ class GraniteModel(LlamaModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
-        if name.startswith("encoder."):
-            return None
+        # Skip multimodal tensors
+        if (
+            name.startswith(("encoder.")) or
+            "image_" in name or
+            "layerwise_projectors" in name or
+            "spatial_projectors" in name
+        ):
+            return
         return super().filter_tensors(item)
 
 
