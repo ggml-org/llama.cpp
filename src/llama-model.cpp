@@ -285,7 +285,7 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
         case LLM_ARCH_STEP35:
             return new llama_model_step35(params);
         default:
-            GGML_ABORT("unimplemented model class");
+            throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }
 
 }
