@@ -10695,7 +10695,7 @@ class ExaoneMoEModel(Exaone4Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("GraniteForCausalLM")
+@ModelBase.register("GraniteForCausalLM", "GraniteSpeechForConditionalGeneration")
 class GraniteModel(LlamaModel):
     """Conversion for IBM's GraniteForCausalLM"""
     model_arch = gguf.MODEL_ARCH.GRANITE
@@ -10727,6 +10727,13 @@ class GraniteModel(LlamaModel):
         if logits_scale := self.hparams.get("logits_scaling"):
             self.gguf_writer.add_logit_scale(logits_scale)
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.startswith("encoder."):
+            return None
+        return super().filter_tensors(item)
 
 
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
@@ -12579,6 +12586,89 @@ class LFM2AudioModel(ConformerAudioModel):
             return None
 
         return super().filter_tensors(item)
+
+
+@ModelBase.register("GraniteSpeechForConditionalGeneration")
+class GraniteSpeechMmprojModel(MmprojModel):
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    _batch_norm_tensors: list[dict[str, Tensor]] | None = None
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return self.global_config.get("encoder_config")
+
+    def set_gguf_parameters(self):
+        assert self.hparams_audio is not None
+        a = self.hparams_audio
+        a["hidden_size"] = a["hidden_dim"]
+        a["intermediate_size"] = a["hidden_dim"] * a["feedforward_mult"]
+        a["num_attention_heads"] = a["num_heads"]
+        a["num_hidden_layers"] = a["num_layers"]
+
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE_SPEECH)
+        self.gguf_writer.add_audio_num_mel_bins(a["input_dim"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+        self.gguf_writer.add_audio_chunk_size(a["context_size"])
+        self.gguf_writer.add_audio_conv_kernel_size(a["conv_kernel_size"])
+        self.gguf_writer.add_audio_max_pos_emb(a["max_pos_emb"])
+
+        p = self.global_config
+        self.gguf_writer.add_audio_projector_window_size(p["window_size"])
+        self.gguf_writer.add_audio_projector_downsample_rate(p["downsample_rate"])
+        self.gguf_writer.add_audio_projector_head_count(p["projector_config"]["num_attention_heads"])
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if "encoder" in name or "projector" in name:
+            if ".conv" in name and ".weight" in name:
+                return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if "attention_dists" in name or "num_batches_tracked" in name:
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # fold running_mean, running_var and eps into weight and bias for batch_norm
+        if "batch_norm" in name and "encoder.layers." in name:
+            if self._batch_norm_tensors is None:
+                self._batch_norm_tensors = [{} for _ in range(self.block_count)]
+            assert bid is not None
+            self._batch_norm_tensors[bid][name] = data_torch
+            if len(self._batch_norm_tensors[bid]) < 4:
+                return
+            prefix = f"encoder.layers.{bid}.conv.batch_norm"
+            weight = self._batch_norm_tensors[bid][f"{prefix}.weight"]
+            bias = self._batch_norm_tensors[bid][f"{prefix}.bias"]
+            running_mean = self._batch_norm_tensors[bid][f"{prefix}.running_mean"]
+            running_var = self._batch_norm_tensors[bid][f"{prefix}.running_var"]
+            eps = 1e-5
+            a = weight / torch.sqrt(running_var + eps)
+            b = bias - running_mean * a
+            yield from super().modify_tensors(a, f"encoder.layers.{bid}.conv.batch_norm.weight", bid)
+            yield from super().modify_tensors(b, f"encoder.layers.{bid}.conv.batch_norm.bias", bid)
+            return
+
+        if ".attn.to_kv.weight" in name:
+            k_weight, v_weight = data_torch.chunk(2, dim=0)
+            yield from super().modify_tensors(k_weight, name.replace("to_kv", "to_k"), bid)
+            yield from super().modify_tensors(v_weight, name.replace("to_kv", "to_v"), bid)
+            return
+
+        if ("up_conv" in name or "down_conv" in name) and name.endswith(".weight"):
+            if data_torch.ndim == 3 and data_torch.shape[2] == 1:
+                data_torch = data_torch.squeeze(2)
+
+        if "depth_conv" in name and name.endswith(".weight"):
+            if data_torch.ndim == 3 and data_torch.shape[1] == 1:
+                data_torch = data_torch.squeeze(1)
+
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Lfm25AudioTokenizer")
