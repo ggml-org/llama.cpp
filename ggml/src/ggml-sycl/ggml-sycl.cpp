@@ -33,6 +33,12 @@
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
 #    include <sycl/ext/oneapi/experimental/async_alloc/async_alloc.hpp>
 #endif
+#if __has_include(<sycl/ext/oneapi/virtual_mem/virtual_mem.hpp>) && \
+    __has_include(<sycl/ext/oneapi/virtual_mem/physical_mem.hpp>)
+#    include <sycl/ext/oneapi/virtual_mem/physical_mem.hpp>
+#    include <sycl/ext/oneapi/virtual_mem/virtual_mem.hpp>
+#    define GGML_SYCL_USE_VMM
+#endif
 #include <sycl/half_type.hpp>
 
 #include "ggml.h"
@@ -1367,6 +1373,116 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
     }
 };
 
+// pool with virtual memory
+#if defined(GGML_SYCL_USE_VMM)
+struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
+    static const size_t SYCL_POOL_VMM_MAX_SIZE = 1ull << 35; // 32 GB
+
+    // physical_mem on Intel L0 v2 needs at least 2 MiB per allocation,
+    // even when get_mem_granularity reports a smaller value (64 KiB on
+    // Battlemage). Allocate physical commits in chunks of this size.
+    static const size_t PHYSICAL_CHUNK = 2ull << 20; // 2 MiB
+
+    int           device;
+    queue_ptr     qptr;
+    sycl::context ctx;
+    sycl::device  dev;
+
+    uintptr_t pool_addr = 0;
+    size_t    pool_used = 0;
+    size_t    pool_size = 0;
+    size_t    granularity;
+
+    // Owns the physical commits; their dtors release device memory.
+    // (CUDA only needs this vector under HIP; SYCL needs it always
+    // because physical_mem is the only handle to the commit.)
+    std::vector<sycl::ext::oneapi::experimental::physical_mem> mappings;
+
+    explicit ggml_sycl_pool_vmm(queue_ptr qptr_, int device_) :
+        device(device_),
+        qptr(qptr_),
+        ctx(qptr_->get_context()),
+        dev(qptr_->get_device()),
+        granularity(std::max<size_t>(
+            sycl::ext::oneapi::experimental::get_mem_granularity(dev, ctx),
+            PHYSICAL_CHUNK)) {
+    }
+
+    ~ggml_sycl_pool_vmm() {
+        if (pool_addr != 0) {
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::unmap(
+                reinterpret_cast<void *>(pool_addr), pool_size, ctx)));
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::free_virtual_mem(
+                pool_addr, SYCL_POOL_VMM_MAX_SIZE, ctx)));
+        }
+        // mappings vector dtor releases physical commits.
+    }
+
+    void * alloc(size_t size, size_t * actual_size) override {
+        // round up the allocation size to the alignment to ensure that all allocations are aligned for all data types
+        const size_t alignment = 128;
+        size = alignment * ((size + alignment - 1) / alignment);
+
+        size_t avail = pool_size - pool_used;
+
+        if (size > avail) {
+            // round up to the next multiple of the granularity
+            size_t reserve_size = size - avail;
+            reserve_size = granularity * ((reserve_size + granularity - 1) / granularity);
+
+            GGML_ASSERT(pool_size + reserve_size <= SYCL_POOL_VMM_MAX_SIZE);
+
+            // allocate more physical memory
+            sycl::ext::oneapi::experimental::physical_mem phys(dev, ctx, reserve_size);
+
+            // reserve virtual address space (if not already reserved)
+            if (pool_addr == 0) {
+                pool_addr = sycl::ext::oneapi::experimental::reserve_virtual_mem(
+                    SYCL_POOL_VMM_MAX_SIZE, ctx);
+            }
+
+            // map at the end of the pool
+            const uintptr_t start_ptr = pool_addr + pool_size;
+            phys.map(start_ptr, reserve_size,
+                     sycl::ext::oneapi::experimental::address_access_mode::read_write);
+
+            // keep the physical_mem handle alive (it owns the commit)
+            mappings.push_back(std::move(phys));
+
+            // add to the pool
+            pool_size += reserve_size;
+
+            //printf("sycl pool[%d]: size increased to %llu MB (reserved %llu MB)\n",
+            //       device, (unsigned long long) (pool_size/1024/1024),
+            //       (unsigned long long) (reserve_size/1024/1024));
+        }
+
+        GGML_ASSERT(pool_addr != 0);
+
+        void * ptr = reinterpret_cast<void *>(pool_addr + pool_used);
+        *actual_size = size;
+        pool_used += size;
+
+#ifdef DEBUG_SYCL_MALLOC
+        printf("sycl pool[%d]: allocated %llu bytes at %p\n", device, (unsigned long long) size, ptr);
+#endif
+
+        return ptr;
+    }
+
+    void free(void * ptr, size_t size) override {
+#ifdef DEBUG_SYCL_MALLOC
+        printf("sycl pool[%d]: freed %llu bytes at %p\n", device, (unsigned long long) size, ptr);
+#endif
+
+        pool_used -= size;
+
+        // all deallocations must be in reverse order of the allocations
+        GGML_ASSERT(ptr == reinterpret_cast<void *>(pool_addr + pool_used));
+    }
+};
+#endif // defined(GGML_SYCL_USE_VMM)
+
 struct ggml_sycl_pool_host : public ggml_sycl_pool {
     queue_ptr qptr;
     int       device;
@@ -1447,11 +1563,14 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_host(que
 }
 
 std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device) {
-    // TBD: NO VMM support
-    // if (ggml_sycl_info().devices[device].vmm) {
-    //     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_vmm(device));
-    // }
-   return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_leg(qptr, device));
+#if defined(GGML_SYCL_USE_VMM)
+    if (qptr->get_device().has(sycl::aspect::ext_oneapi_virtual_mem)) {
+        GGML_LOG_INFO("SYCL pool[%d]: VMM\n", device);
+        return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_vmm(qptr, device));
+    }
+#endif // defined(GGML_SYCL_USE_VMM)
+    GGML_LOG_INFO("SYCL pool[%d]: legacy\n", device);
+    return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_leg(qptr, device));
 }
 
 // TBD pool with virtual memory management
