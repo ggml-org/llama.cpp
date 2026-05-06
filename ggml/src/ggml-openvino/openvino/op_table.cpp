@@ -5,9 +5,11 @@
 #include <openvino/op/add.hpp>
 #include <openvino/op/divide.hpp>
 #include <openvino/op/gather.hpp>
+#include <openvino/op/gelu.hpp>
 #include <openvino/op/matmul.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/subtract.hpp>
+#include <openvino/op/tanh.hpp>
 
 namespace ov {
 namespace frontend {
@@ -32,9 +34,9 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_SOFT_MAX",       op::translate_soft_max                         },
         {"GGML_OP_SUB",            op::translate_1to1_match_2_inputs<v1::Subtract>},
         {"GGML_OP_TRANSPOSE",      op::translate_transpose                        },
-        {"GGML_UNARY_OP_GELU",     op::translate_unary_gelu                       },
+        {"GGML_UNARY_OP_GELU",     op::translate_1to1_match_1_input<v7::Gelu>     },
         {"GGML_UNARY_OP_SILU",     op::translate_unary_silu                       },
-        {"GGML_UNARY_OP_TANH",     op::translate_unary_tanh                       },
+        {"GGML_UNARY_OP_TANH",     op::translate_1to1_match_1_input<v0::Tanh>     },
         {"GGML_OP_VIEW",           op::translate_view                             },
         {"GGML_GLU_OP_SWIGLU",     op::translate_glu_swiglu                       },
         {"GGML_GLU_OP_GEGLU",      op::translate_glu_geglu                        },
