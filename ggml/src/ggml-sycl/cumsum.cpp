@@ -96,7 +96,7 @@ static void cumsum_f32_kernel(
     }
 }
 
-void ggml_sycl_op_cumsum(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+inline void ggml_sycl_op_cumsum(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
@@ -140,4 +140,9 @@ void ggml_sycl_op_cumsum(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                                   item, get_pointer(smem_acc));
             });
     });
+}
+
+void ggml_sycl_cumsum(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_cumsum(ctx, dst);
 }

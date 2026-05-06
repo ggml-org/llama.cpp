@@ -31,7 +31,7 @@ static void diag_kernel(T * __restrict__ dst, const T * __restrict__ src,
     (void)ne3;
 }
 
-void ggml_sycl_op_diag(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+inline void ggml_sycl_op_diag(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
 
     GGML_ASSERT(ggml_is_contiguous(dst));
@@ -59,4 +59,9 @@ void ggml_sycl_op_diag(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                         static_cast<const float *>(src0_d),
                         ne0, ne1, ne2, ne3, n_elems, item);
         });
+}
+
+void ggml_sycl_diag(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_diag(ctx, dst);
 }

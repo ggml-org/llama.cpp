@@ -114,7 +114,7 @@ static void ssm_scan_f32_sycl(
     }
 }
 
-void ggml_sycl_ssm_scan(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+inline void ggml_sycl_op_ssm_scan(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * src2 = dst->src[2];
@@ -148,4 +148,9 @@ void ggml_sycl_ssm_scan(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         src0->nb[2], src0->nb[3], src1->nb[2], src1->nb[3], src2->nb[1], src2->nb[2],
         src3->nb[1], src4->nb[2], src4->nb[3], src5->nb[2], src5->nb[3],
         s_off, nc, nr, nh, ng, n_t, n_s, stream);
+}
+
+void ggml_sycl_ssm_scan(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/7);
+    ggml_sycl_op_ssm_scan(ctx, dst);
 }

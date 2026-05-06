@@ -13,7 +13,7 @@ static void fill_kernel(T * dst, const int64_t k, const T value,
     dst[i] = value;
 }
 
-void ggml_sycl_op_fill(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+inline void ggml_sycl_op_fill(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(ggml_is_contiguous(dst));
 
     dpct::queue_ptr stream = ctx.stream();
@@ -47,4 +47,9 @@ void ggml_sycl_op_fill(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         default:
             GGML_ABORT("unsupported type");
     }
+}
+
+void ggml_sycl_fill(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/0);
+    ggml_sycl_op_fill(ctx, dst);
 }

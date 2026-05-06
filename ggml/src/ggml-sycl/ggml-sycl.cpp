@@ -4403,16 +4403,16 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             ggml_sycl_ssm_scan(ctx, dst);
             break;
         case GGML_OP_FILL:
-            ggml_sycl_op_fill(ctx, dst);
+            ggml_sycl_fill(ctx, dst);
             break;
         case GGML_OP_CUMSUM:
-            ggml_sycl_op_cumsum(ctx, dst);
+            ggml_sycl_cumsum(ctx, dst);
             break;
         case GGML_OP_DIAG:
-            ggml_sycl_op_diag(ctx, dst);
+            ggml_sycl_diag(ctx, dst);
             break;
         case GGML_OP_SOLVE_TRI:
-            ggml_sycl_op_solve_tri(ctx, dst);
+            ggml_sycl_solve_tri(ctx, dst);
             break;
         case GGML_OP_ROLL:
             ggml_sycl_roll(ctx, dst);
