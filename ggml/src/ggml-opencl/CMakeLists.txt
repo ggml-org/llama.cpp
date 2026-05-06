@@ -172,6 +172,10 @@ set(GGML_OPENCL_KERNELS
     flash_attn_f32
 )
 
+if (GGML_OPENCL_USE_ADRENO_KERNELS)
+    list(APPEND GGML_OPENCL_KERNELS adreno_xmem_gemm_f16_f32)
+endif ()
+
 foreach (K ${GGML_OPENCL_KERNELS})
     ggml_opencl_add_kernel(${K})
 endforeach()
