@@ -874,6 +874,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_minicpmv>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_MINICPMV4_6:
+            {
+                builder = std::make_unique<clip_graph_minicpmv4_6>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_INTERNVL:
             {
                 builder = std::make_unique<clip_graph_internvl>(ctx, img);
@@ -1229,6 +1233,20 @@ struct clip_model_loader {
                         // use default llava-uhd preprocessing params
                         if (hparams.minicpmv_version == 0) {
                             hparams.minicpmv_version = 2; // default to 2 if not set
+                        }
+                    } break;
+                case PROJECTOR_TYPE_MINICPMV4_6:
+                    {
+                        // MiniCPM-V 4.6 unified merger projector
+                        // ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension
+                        hparams.n_merge = 4;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+
+                        // borrow wa_layer_indexes for vit_merger insertion point
+                        std::vector<int> wa_layer_indexes_vec;
+                        get_arr_int(KEY_WIN_ATTN_LAYER_INDEXES, wa_layer_indexes_vec, false);
+                        if (!wa_layer_indexes_vec.empty()) {
+                            hparams.insert_layer_id = wa_layer_indexes_vec[0];
                         }
                     } break;
                 case PROJECTOR_TYPE_INTERNVL:
@@ -1737,6 +1755,7 @@ struct clip_model_loader {
                     || model.proj_type == PROJECTOR_TYPE_GEMMA3
                     || model.proj_type == PROJECTOR_TYPE_IDEFICS3
                     || model.proj_type == PROJECTOR_TYPE_MINICPMV
+                    || model.proj_type == PROJECTOR_TYPE_MINICPMV4_6
                 ) && layer.ff_up_w && layer.ff_down_w && layer.ff_down_w->ne[0] == hparams.n_embd;
             if (is_ffn_swapped) {
                 // swap up and down weights
@@ -1837,6 +1856,34 @@ struct clip_model_loader {
                     model.mm_model_ln_kv_b = get_tensor(string_format(TN_MINICPMV_LN, "kv", "bias"));
                     model.mm_model_ln_post_w = get_tensor(string_format(TN_MINICPMV_LN, "post", "weight"));
                     model.mm_model_ln_post_b = get_tensor(string_format(TN_MINICPMV_LN, "post", "bias"));
+                } break;
+            case PROJECTOR_TYPE_MINICPMV4_6:
+                {
+                    // ViT merger: window self-attention
+                    model.vit_merger_ln1_w     = get_tensor(string_format(TN_VIT_MERGER_LN1, "weight"));
+                    model.vit_merger_ln1_b     = get_tensor(string_format(TN_VIT_MERGER_LN1, "bias"));
+                    model.vit_merger_attn_q_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "weight"));
+                    model.vit_merger_attn_q_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "bias"), false);
+                    model.vit_merger_attn_k_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_K, "weight"));
+                    model.vit_merger_attn_k_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_K, "bias"), false);
+                    model.vit_merger_attn_v_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_V, "weight"));
+                    model.vit_merger_attn_v_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_V, "bias"), false);
+                    model.vit_merger_attn_o_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_O, "weight"));
+                    model.vit_merger_attn_o_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_O, "bias"), false);
+                    // ViT merger: MLP downsample
+                    model.vit_merger_ds_ln_w   = get_tensor(string_format(TN_VIT_MERGER_DS_LN, "weight"));
+                    model.vit_merger_ds_ln_b   = get_tensor(string_format(TN_VIT_MERGER_DS_LN, "bias"));
+                    model.vit_merger_ds_up_w   = get_tensor(string_format(TN_VIT_MERGER_DS_UP, "weight"));
+                    model.vit_merger_ds_up_b   = get_tensor(string_format(TN_VIT_MERGER_DS_UP, "bias"), false);
+                    model.vit_merger_ds_down_w = get_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "weight"));
+                    model.vit_merger_ds_down_b = get_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "bias"), false);
+                    // Final Merger (DownsampleMLP)
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B, false);
+                    model.mm_ffn_up_w     = get_tensor(string_format(TN_MM_UP,   "weight"));
+                    model.mm_ffn_up_b     = get_tensor(string_format(TN_MM_UP,   "bias"), false);
+                    model.mm_ffn_down_w   = get_tensor(string_format(TN_MM_DOWN, "weight"));
+                    model.mm_ffn_down_b   = get_tensor(string_format(TN_MM_DOWN, "bias"), false);
                 } break;
             case PROJECTOR_TYPE_GLM_EDGE:
                 {
@@ -3055,6 +3102,11 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                     }
                 }
             } break;
+        case PROJECTOR_TYPE_MINICPMV4_6:
+            {
+                // ViT merger 4x + final merger 4x = 16x total spatial downsample
+                n_patches = n_patches / 16;
+            } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
@@ -3376,6 +3428,92 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                     omega[i] = 1.0f / std::pow(base_freq, static_cast<float>(i) / (n_embd_proj / 4));
                 }
                 set_input_f32("omega", omega);
+            } break;
+        case PROJECTOR_TYPE_MINICPMV4_6:
+            {
+                // SigLIP position buckets (same as resampler path)
+                std::vector<int32_t> positions(pos_h * pos_w);
+                int bucket_coords_h[1024];
+                int bucket_coords_w[1024];
+                for (int i = 0; i < pos_h; i++){
+                    bucket_coords_h[i] = std::floor(70.0*i/pos_h);
+                }
+                for (int i = 0; i < pos_w; i++){
+                    bucket_coords_w[i] = std::floor(70.0*i/pos_w);
+                }
+                for (int i = 0, id = 0; i < pos_h; i++){
+                    for (int j = 0; j < pos_w; j++){
+                        positions[id++] = bucket_coords_h[i]*70 + bucket_coords_w[j];
+                    }
+                }
+                set_input_i32("positions", positions);
+
+                const int half_h = pos_h / 2;
+                const int half_w = pos_w / 2;
+
+                // window reorder indices for 2x2 windows
+                std::vector<int32_t> window_idx(n_pos);
+                std::vector<int32_t> inv_window_idx(n_pos);
+                {
+                    int k = 0;
+                    for (int wi = 0; wi < half_h; wi++) {
+                        for (int wj = 0; wj < half_w; wj++) {
+                            window_idx[k++] = (2*wi    ) * pos_w + (2*wj    );
+                            window_idx[k++] = (2*wi    ) * pos_w + (2*wj + 1);
+                            window_idx[k++] = (2*wi + 1) * pos_w + (2*wj    );
+                            window_idx[k++] = (2*wi + 1) * pos_w + (2*wj + 1);
+                        }
+                    }
+                    for (int i = 0; i < n_pos; i++) {
+                        inv_window_idx[window_idx[i]] = i;
+                    }
+                }
+                set_input_i32("vit_merger_window_idx",     window_idx);
+                set_input_i32("vit_merger_inv_window_idx", inv_window_idx);
+
+                // block-diagonal attention mask: tokens in the same 4-token
+                // window attend to each other (mask = 0), all other positions
+                // are masked out (-inf). matches the window-major reorder above.
+                std::vector<float> window_mask_data(n_pos * n_pos, std::numeric_limits<float>::lowest());
+                for (int wi = 0; wi < n_pos / 4; wi++) {
+                    for (int i = 0; i < 4; i++) {
+                        for (int j = 0; j < 4; j++) {
+                            window_mask_data[(wi*4 + i) * n_pos + (wi*4 + j)] = 0.0f;
+                        }
+                    }
+                }
+                set_input_f32("vit_merger_window_mask", window_mask_data);
+
+                // ViT merger 2x2 downsample indices
+                auto make_ds_idx = [](int off_r, int off_c, int ds_h, int ds_w, int stride_w) {
+                    std::vector<int32_t> idx(ds_h * ds_w);
+                    for (int i = 0; i < ds_h; i++) {
+                        for (int j = 0; j < ds_w; j++) {
+                            idx[i * ds_w + j] = (2*i + off_r) * stride_w + (2*j + off_c);
+                        }
+                    }
+                    return idx;
+                };
+                auto vit_merger_ds_0 = make_ds_idx(0, 0, half_h, half_w, pos_w);
+                auto vit_merger_ds_1 = make_ds_idx(0, 1, half_h, half_w, pos_w);
+                auto vit_merger_ds_2 = make_ds_idx(1, 0, half_h, half_w, pos_w);
+                auto vit_merger_ds_3 = make_ds_idx(1, 1, half_h, half_w, pos_w);
+                set_input_i32("vit_merger_ds_idx_0", vit_merger_ds_0);
+                set_input_i32("vit_merger_ds_idx_1", vit_merger_ds_1);
+                set_input_i32("vit_merger_ds_idx_2", vit_merger_ds_2);
+                set_input_i32("vit_merger_ds_idx_3", vit_merger_ds_3);
+
+                // final merger 2x2 downsample indices (operates on half_h x half_w grid)
+                const int qh = half_h / 2;
+                const int qw = half_w / 2;
+                auto m_ds_0 = make_ds_idx(0, 0, qh, qw, half_w);
+                auto m_ds_1 = make_ds_idx(0, 1, qh, qw, half_w);
+                auto m_ds_2 = make_ds_idx(1, 0, qh, qw, half_w);
+                auto m_ds_3 = make_ds_idx(1, 1, qh, qw, half_w);
+                set_input_i32("merger_ds_idx_0", m_ds_0);
+                set_input_i32("merger_ds_idx_1", m_ds_1);
+                set_input_i32("merger_ds_idx_2", m_ds_2);
+                set_input_i32("merger_ds_idx_3", m_ds_3);
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
@@ -3931,6 +4069,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:
             return ctx->model.mm_model_proj->ne[0];
+        case PROJECTOR_TYPE_MINICPMV4_6:
+            return ctx->model.mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_GLM_EDGE:
             return ctx->model.mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:
@@ -3996,6 +4136,9 @@ int clip_is_minicpmv(const struct clip_ctx * ctx) {
     // TODO: remove this function
     if (ctx->proj_type() == PROJECTOR_TYPE_MINICPMV) {
         return ctx->model.hparams.minicpmv_version;
+    }
+    if (ctx->proj_type() == PROJECTOR_TYPE_MINICPMV4_6) {
+        return 46;
     }
     return 0;
 }

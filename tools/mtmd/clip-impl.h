@@ -132,6 +132,17 @@
 #define TN_MINICPMV_ATTN       "resampler.attn.%s.%s"
 #define TN_MINICPMV_LN         "resampler.ln_%s.%s"
 
+// MiniCPM-V 4.6 ViT merger (window attention + MLP downsample),
+// matching the upstream `vit_merger` module name in transformers.
+#define TN_VIT_MERGER_LN1      "v.vit_merger.ln1.%s"
+#define TN_VIT_MERGER_ATTN_Q   "v.vit_merger.attn_q.%s"
+#define TN_VIT_MERGER_ATTN_K   "v.vit_merger.attn_k.%s"
+#define TN_VIT_MERGER_ATTN_V   "v.vit_merger.attn_v.%s"
+#define TN_VIT_MERGER_ATTN_O   "v.vit_merger.attn_out.%s"
+#define TN_VIT_MERGER_DS_LN    "v.vit_merger.ds_ln.%s"
+#define TN_VIT_MERGER_DS_UP    "v.vit_merger.ds_ffn_up.%s"
+#define TN_VIT_MERGER_DS_DOWN  "v.vit_merger.ds_ffn_down.%s"
+
 #define TN_GLM_ADAPER_CONV      "adapter.conv.%s"
 #define TN_GLM_ADAPTER_LINEAR   "adapter.linear.linear.%s"
 #define TN_GLM_ADAPTER_NORM_1   "adapter.linear.norm1.%s"
@@ -331,6 +342,7 @@ enum projector_type {
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANOCR,
     PROJECTOR_TYPE_HUNYUANVL,
+    PROJECTOR_TYPE_MINICPMV4_6,
     PROJECTOR_TYPE_GRANITE_SPEECH,
     PROJECTOR_TYPE_UNKNOWN,
 };
@@ -379,6 +391,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
     { PROJECTOR_TYPE_HUNYUANOCR, "hunyuanocr"},
     { PROJECTOR_TYPE_HUNYUANVL,  "hunyuanvl"},
+    { PROJECTOR_TYPE_MINICPMV4_6, "minicpmv4_6"},
     { PROJECTOR_TYPE_GRANITE_SPEECH, "granite_speech"},
 };
 
