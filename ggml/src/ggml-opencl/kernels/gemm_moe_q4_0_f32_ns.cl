@@ -141,7 +141,7 @@ kernel void kernel_gemm_moe_q4_0_f32_ns(
         // First sub-block
         uint q_sub_offset = row + ((ne01 * step) >> 3) + ((expert_id * ne00 * ne01) >> 3);
         uint s_sub_offset = row + ((ne01 * step) >> 5) + ((expert_id * ne00 * ne01) >> 5);
-        uint b_sub_offset = col * ne00 + step;   
+        uint b_sub_offset = col * ne00 + step;
 
         // Load scale for current Q4_0 block
         uint s_offset = s_sub_offset + get_global_id(0);
@@ -246,7 +246,7 @@ kernel void kernel_gemm_moe_q4_0_f32_ns(
     write_imagef(dst, out_idx[30] + m_offset, (reg_c.su));
     write_imagef(dst, out_idx[31] + m_offset, (reg_c.sv));
 
-    // Store zero padding parts to the index of first output in tile, override correct result in the end 
+    // Store zero padding parts to the index of first output in tile, override correct result in the end
     barrier(CLK_GLOBAL_MEM_FENCE);
     write_imagef(dst, out_idx[0] + m_offset, (reg_c.s0));
 }
