@@ -11172,6 +11172,10 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[new_arch]
             self.gguf_writer.add_architecture()
 
+            # If not explicitly enabled, disable vocab padding for non-hybrid
+            # models
+            self.hparams.setdefault("pad_vocab_size_multiple", 1)
+
         # n_group and d_inner are used during reshape_tensors for mamba2
         # NOTE: Explicitly include hparam prefix prefix for d_model to
         #   disambiguate with top-level head_dim
