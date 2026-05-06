@@ -57,6 +57,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GEMMA3,           "gemma3"           },
     { LLM_ARCH_GEMMA3N,          "gemma3n"          },
     { LLM_ARCH_GEMMA4,           "gemma4"           },
+    { LLM_ARCH_GEMMA4_ASSISTANT, "gemma4_assistant" },
     { LLM_ARCH_GEMMA_EMBEDDING,  "gemma-embedding"  },
     { LLM_ARCH_STARCODER2,       "starcoder2"       },
     { LLM_ARCH_MAMBA,            "mamba"            },
@@ -209,6 +210,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKEN_SHIFT_COUNT,                 "%s.token_shift_count"                 },
     { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
     { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },
+    { LLM_KV_BACKBONE_HIDDEN_SIZE,              "%s.n_embd_backbone"                   },
+    { LLM_KV_ASSISTANT_NUM_CENTROIDS,           "%s.n_centroids"                       },
+    { LLM_KV_ASSISTANT_CENTROID_TOP_K,          "%s.centroid_top_k"                    },
+    { LLM_KV_ASSISTANT_USE_ORDERED_EMBEDDINGS,  "%s.use_ordered_embeddings"            },
 
     { LLM_KV_ATTENTION_HEAD_COUNT,                   "%s.attention.head_count"                   },
     { LLM_KV_ATTENTION_HEAD_COUNT_KV,                "%s.attention.head_count_kv"                },
@@ -440,6 +445,10 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_LAUREL_L,                               "blk.%d.laurel_l" },
     { LLM_TENSOR_LAUREL_R,                               "blk.%d.laurel_r" },
     { LLM_TENSOR_LAUREL_POST_NORM,                       "blk.%d.laurel_post_norm" },
+    { LLM_TENSOR_ASSIST_PRE_PROJ,                        "mtp.pre_projection" },
+    { LLM_TENSOR_ASSIST_POST_PROJ,                       "mtp.post_projection" },
+    { LLM_TENSOR_ASSIST_EMBED_CENTROIDS,                 "mtp.centroids" },
+    { LLM_TENSOR_ASSIST_TOKEN_ORDERING,                  "mtp.token_ordering" },
     { LLM_TENSOR_DENSE_2_OUT,                            "dense_2" },
     { LLM_TENSOR_DENSE_3_OUT,                            "dense_3" },
     { LLM_TENSOR_FFN_NORM_EXPS,                          "blk.%d.ffn_norm_exps" },
@@ -727,6 +736,10 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_LAUREL_L,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_LAUREL_R,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_LAUREL_POST_NORM,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_ASSIST_PRE_PROJ,            {LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL_MAT}}, // backbone-hidden -> assistant-hidden
+    {LLM_TENSOR_ASSIST_POST_PROJ,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // assistant-hidden -> backbone-hidden
+    {LLM_TENSOR_ASSIST_EMBED_CENTROIDS,     {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // logits over centroid clusters
+    {LLM_TENSOR_ASSIST_TOKEN_ORDERING,      {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}}, // i32 vocab permutation
     // this tensor is loaded for T5, but never used
     {LLM_TENSOR_DEC_CROSS_ATTN_REL_B,       {LLM_TENSOR_LAYER_REPEATING, GGML_OP_NONE}},
     {LLM_TENSOR_CONV1D,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL}},

@@ -217,6 +217,12 @@ struct llama_hparams {
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
 
+    // gemma4_assistant (Multi-Token Prediction drafter)
+    uint32_t n_embd_backbone        = 0;     // hidden size of the target backbone (drafter input is 2x this)
+    uint32_t n_assist_centroids     = 0;     // number of centroids in the masked-embedding head
+    uint32_t n_assist_centroid_top_k = 0;    // top-K centroids selected per token
+    bool     use_ordered_embeddings = false; // if true, use centroid masked-embedding head; else direct lm_head
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggml-org/llama.cpp/pull/8141
     llama_token dec_start_token_id = LLAMA_TOKEN_NULL;

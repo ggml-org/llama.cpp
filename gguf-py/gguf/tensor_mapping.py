@@ -170,6 +170,18 @@ class TensorNameMap:
         MODEL_TENSOR.A_QF_PROJ_LINEAR: (
             "projector.linear",
         ),
+        MODEL_TENSOR.ASSIST_PRE_PROJ: (
+            "pre_projection",                   # gemma4_assistant
+        ),
+        MODEL_TENSOR.ASSIST_POST_PROJ: (
+            "post_projection",                  # gemma4_assistant
+        ),
+        MODEL_TENSOR.ASSIST_EMBED_CENTROIDS: (
+            "masked_embedding.centroids",       # gemma4_assistant
+        ),
+        MODEL_TENSOR.ASSIST_TOKEN_ORDERING: (
+            "masked_embedding.token_ordering",  # gemma4_assistant
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {

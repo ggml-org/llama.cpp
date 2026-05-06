@@ -153,6 +153,14 @@ class Keys:
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
 
+        # Multi-Token Prediction (MTP) drafter / "assistant" models that consume
+        # the target backbone's last-layer hidden states and KV cache directly.
+        # Currently used by gemma4_assistant.
+        BACKBONE_HIDDEN_SIZE              = "{arch}.n_embd_backbone"
+        ASSISTANT_NUM_CENTROIDS           = "{arch}.n_centroids"
+        ASSISTANT_CENTROID_TOP_K          = "{arch}.centroid_top_k"
+        ASSISTANT_USE_ORDERED_EMBEDDINGS  = "{arch}.use_ordered_embeddings"
+
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
         HEAD_COUNT_KV                = "{arch}.attention.head_count_kv"
@@ -430,6 +438,7 @@ class MODEL_ARCH(IntEnum):
     GEMMA3           = auto()
     GEMMA3N          = auto()
     GEMMA4           = auto()
+    GEMMA4_ASSISTANT = auto()
     GEMMA_EMBEDDING  = auto()
     STARCODER2       = auto()
     RWKV6            = auto()
@@ -581,6 +590,10 @@ class MODEL_TENSOR(IntEnum):
     PER_LAYER_PROJ       = auto() # gemma3n
     PER_LAYER_PROJ_NORM  = auto() # gemma3n
     PER_LAYER_POST_NORM  = auto() # gemma3n
+    ASSIST_PRE_PROJ          = auto() # gemma4_assistant: backbone_hidden -> assistant_hidden
+    ASSIST_POST_PROJ         = auto() # gemma4_assistant: assistant_hidden -> backbone_hidden
+    ASSIST_EMBED_CENTROIDS   = auto() # gemma4_assistant: centroid clustering for output embeddings
+    ASSIST_TOKEN_ORDERING    = auto() # gemma4_assistant: vocab permutation aligning token id <-> centroid bucket
     ALTUP_PROJ           = auto() # gemma3n
     ALTUP_UNEMBD_PROJ    = auto() # gemma3n
     ALTUP_CORRECT_COEF   = auto() # gemma3n
@@ -945,6 +958,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GEMMA3:           "gemma3",
     MODEL_ARCH.GEMMA3N:          "gemma3n",
     MODEL_ARCH.GEMMA4:           "gemma4",
+    MODEL_ARCH.GEMMA4_ASSISTANT: "gemma4_assistant",
     MODEL_ARCH.GEMMA_EMBEDDING:  "gemma-embedding",
     MODEL_ARCH.STARCODER2:       "starcoder2",
     MODEL_ARCH.RWKV6:            "rwkv6",
@@ -1097,6 +1111,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.PER_LAYER_INP_GATE:        "blk.{bid}.inp_gate",             # gemma3n
     MODEL_TENSOR.PER_LAYER_PROJ:            "blk.{bid}.proj",                 # gemma3n
     MODEL_TENSOR.PER_LAYER_POST_NORM:       "blk.{bid}.post_norm",            # gemma3n
+    MODEL_TENSOR.ASSIST_PRE_PROJ:           "mtp.pre_projection",             # gemma4_assistant
+    MODEL_TENSOR.ASSIST_POST_PROJ:          "mtp.post_projection",            # gemma4_assistant
+    MODEL_TENSOR.ASSIST_EMBED_CENTROIDS:    "mtp.centroids",                  # gemma4_assistant
+    MODEL_TENSOR.ASSIST_TOKEN_ORDERING:     "mtp.token_ordering",             # gemma4_assistant
     MODEL_TENSOR.ALTUP_CORRECT_COEF:        "blk.{bid}.altup_correct_coef",   # gemma3n
     MODEL_TENSOR.ALTUP_CORRECT_SCALE:       "blk.{bid}.altup_correct_scale",  # gemma3n
     MODEL_TENSOR.ALTUP_PREDICT_COEF:        "blk.{bid}.altup_predict_coef",   # gemma3n
@@ -2480,6 +2498,29 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.PER_LAYER_PROJ,
         MODEL_TENSOR.PER_LAYER_PROJ_NORM,
         MODEL_TENSOR.PER_LAYER_POST_NORM,
+    ],
+    MODEL_ARCH.GEMMA4_ASSISTANT: [
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        # 4-layer transformer; only Q is projected — K/V are read from the
+        # target backbone's last-layer cache (one entry per attention type).
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.LAYER_OUT_SCALE,
+        # assistant-specific projections and ordered embedding head
+        MODEL_TENSOR.ASSIST_PRE_PROJ,
+        MODEL_TENSOR.ASSIST_POST_PROJ,
+        MODEL_TENSOR.ASSIST_EMBED_CENTROIDS,
+        MODEL_TENSOR.ASSIST_TOKEN_ORDERING,
     ],
     MODEL_ARCH.GEMMA_EMBEDDING: [
         MODEL_TENSOR.TOKEN_EMBD,

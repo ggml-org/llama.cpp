@@ -555,6 +555,13 @@ struct llama_model {
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
 
+    // gemma4_assistant (MTP drafter): backbone <-> assistant projections and
+    // optional centroid-clustered output head.
+    struct ggml_tensor * assist_pre_proj         = nullptr; // [2*backbone, hidden]
+    struct ggml_tensor * assist_post_proj        = nullptr; // [hidden, backbone]
+    struct ggml_tensor * assist_embed_centroids  = nullptr; // [hidden, num_centroids]
+    struct ggml_tensor * assist_token_ordering   = nullptr; // i32 [vocab_size]
+
     std::vector<llama_layer> layers;
 
     //Dense linear projections for SentenceTransformers models like embeddinggemma
