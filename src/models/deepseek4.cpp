@@ -36,6 +36,33 @@ static bool deepseek4_batch_prefill_enabled() {
     return value == nullptr || std::strcmp(value, "0") != 0;
 }
 
+static bool deepseek4_indexer_collapse_q() {
+    // Default OFF: in batched prefill, the indexer keeps each query's score
+    // separate and only aggregates AT THE END (sum across n_head AND
+    // work_tokens) for a single ubatch-shared top-k. This is mathematically
+    // closer to the original per-token model and works correctly at long
+    // context (65K+ retrieval-style prompts).
+    //
+    // Set LLAMA_DEEPSEEK4_INDEXER_COLLAPSE_Q=1 to opt into the approximate
+    // path that sums indexer_q across queries BEFORE the score mul_mat.
+    // That cuts the score tensor from [n_comp, n_head, work_tokens] down
+    // to [n_comp, n_head] (fits in tight VRAM at large ub) and is faster
+    // per ubatch, but breaks long-context quality because the relu
+    // non-linearity in scoring means relu(sum_q (kv*q)) != sum_q
+    // relu(kv*q) -- the model attends to wrong KV slots.
+    static const bool enabled = []() {
+        const char * value = std::getenv("LLAMA_DEEPSEEK4_INDEXER_COLLAPSE_Q");
+        return value != nullptr && std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+static bool deepseek4_indexer_per_query() {
+    // Inverse of deepseek4_indexer_collapse_q (kept for code clarity at
+    // call sites). Per-query is the default; collapse-Q is opt-in.
+    return !deepseek4_indexer_collapse_q();
+}
+
 static bool deepseek4_hot_dispatch_enabled() {
     // Default OFF until the prompt-content-sensitive crash on certain expert
     // ID patterns is resolved. Set DS4_HOT_DISPATCH=1 to opt in.
@@ -1177,7 +1204,7 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                             layer_n_ctx_orig, layer_freq_base, layer_freq_scale, layer_ext_factor, layer_attn_factor, layer_beta_fast, layer_beta_slow);
                     indexer_q = ggml_concat(ctx0, indexer_q_nope, indexer_q_pe, 0);
 
-                    if (work_tokens > 1) {
+                    if (work_tokens > 1 && !deepseek4_indexer_per_query()) {
                         // Batched prefill ubatch-shared top-k: collapse the
                         // work_tokens axis BEFORE the score mul_mat by summing
                         // indexer_q across queries. This avoids materializing
@@ -1188,19 +1215,22 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                         // becomes mul_mat(kv [128, n_comp], sum_q [128, 64])
                         // -> [n_comp, 64], which is the same shape as the
                         // existing decode (work_tokens=1) path. The
-                        // approximation is small in practice because
-                        // adjacent prefill tokens share most of their
-                        // top-k preferences.
-                        // shape: [head_dim, n_head, work_tokens] -> permute
-                        // to [work_tokens, head_dim, n_head] -> sum_rows
-                        // along dim 0 -> [1, head_dim, n_head] -> reshape
-                        // to [head_dim, n_head] (matches decode shape).
-                        // ggml_permute(t, a0, a1, a2, a3) sends old dim k to
-                        // new dim a_k, so to get (work_tokens, head_dim, n_head)
-                        // we need: head_dim(0)->1, n_head(1)->2, work_tokens(2)->0.
+                        // approximation is small in practice for short
+                        // prompts but at very long context (65K+ retrieval-
+                        // style prompts) it can cause the model to attend
+                        // to wrong KV slots because relu(sum_q kv*q) !=
+                        // sum_q relu(kv*q). Set
+                        // LLAMA_DEEPSEEK4_INDEXER_PER_QUERY=1 to keep the
+                        // exact per-query path (more accurate, more VRAM,
+                        // requires a smaller -ub on tight VRAM hosts).
                         indexer_q = ggml_cont(ctx0, ggml_permute(ctx0, indexer_q, 1, 2, 0, 3));
                         indexer_q = sum_rows_checked(indexer_q, "build_attn_v4.indexer_q_sum_b");
                         indexer_q = cont_if_needed(reshape_2d_checked(indexer_q, indexer_head_dim, hparams.indexer_n_head, "build_attn_v4.indexer_q_collapsed", il));
+                    } else if (work_tokens > 1) {
+                        // Per-query path: keep work_tokens as a separate
+                        // dim through the score mul_mat. Used when
+                        // LLAMA_DEEPSEEK4_INDEXER_PER_QUERY=1 is set.
+                        indexer_q = cont_if_needed(reshape_3d_checked(indexer_q, indexer_head_dim, hparams.indexer_n_head, work_tokens, "build_attn_v4.indexer_q_b", il));
                     } else {
                         indexer_q = cont_if_needed(reshape_2d_checked(indexer_q, indexer_head_dim, hparams.indexer_n_head, "build_attn_v4.indexer_q", il));
                     }
@@ -1209,15 +1239,16 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     cb(indexer_q, "indexer_q", il);
 
                     ggml_tensor * indexer_kv_prefix = ggml_view_2d(ctx0, updated_indexer_kv, indexer_head_dim, n_comp, updated_indexer_kv->nb[1], 0);
-                    // After the work_tokens collapse, this is now always
-                    // [n_comp, indexer_n_head] -- same shape as decode.
+                    // After the work_tokens collapse this is [n_comp, n_head]
+                    // (same as decode). In per-query mode it is
+                    // [n_comp, n_head, work_tokens].
                     ggml_tensor * index_scores = ggml_mul_mat(ctx0, indexer_kv_prefix, indexer_q);
                     index_scores = ggml_relu(ctx0, index_scores);
 
                     ggml_tensor * index_weights = mul_mat_checked(layer.indexer_proj, cur_attn, "build_attn_v4.indexer_weights");
                     const float index_scale = 1.0f / std::sqrt(float(indexer_head_dim)) / std::sqrt(float(hparams.indexer_n_head));
                     index_weights = ggml_scale(ctx0, index_weights, index_scale);
-                    if (work_tokens > 1) {
+                    if (work_tokens > 1 && !deepseek4_indexer_per_query()) {
                         // index_weights starts as [indexer_n_head, work_tokens];
                         // collapse the work_tokens axis the same way as the
                         // queries so the per-head weighting stays consistent
@@ -1225,13 +1256,31 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                         index_weights = ggml_cont(ctx0, ggml_transpose(ctx0, index_weights));
                         index_weights = sum_rows_checked(index_weights, "build_attn_v4.index_weights_sum_b");
                         index_weights = reshape_2d_checked(index_weights, 1, hparams.indexer_n_head, "build_attn_v4.index_weights_collapsed", il);
+                    } else if (work_tokens > 1) {
+                        // Per-query: keep weights aligned with scores [.., n_head, work_tokens]
+                        index_weights = reshape_3d_checked(index_weights, 1, hparams.indexer_n_head, work_tokens, "build_attn_v4.index_weights_b", il);
                     } else {
                         index_weights = reshape_2d_checked(index_weights, 1, hparams.indexer_n_head, "build_attn_v4.index_weights", il);
                     }
                     index_scores = ggml_mul(ctx0, index_scores, index_weights);
-                    index_scores = ggml_cont(ctx0, ggml_transpose(ctx0, index_scores));
-                    index_scores = sum_rows_checked(index_scores, "build_attn_v4.index_scores");
-                    index_scores = reshape_2d_checked(index_scores, n_comp, 1, "build_attn_v4.index_scores", il);
+                    if (work_tokens > 1 && deepseek4_indexer_per_query()) {
+                        // Aggregate per-query scores into a single ubatch-wide
+                        // top-k. Sum across both indexer_n_head and the
+                        // work_tokens axis so every query in the ubatch
+                        // shares one selected prefix.
+                        // Shape evolves [n_comp, n_head, work_tokens] ->
+                        //               [n_comp, n_head*work_tokens] ->
+                        //               [n_head*work_tokens, n_comp] ->
+                        //               [1, n_comp] -> [n_comp, 1]
+                        index_scores = cont_if_needed(reshape_2d_checked(index_scores, n_comp, hparams.indexer_n_head * work_tokens, "build_attn_v4.index_scores_flat", il));
+                        index_scores = ggml_cont(ctx0, ggml_transpose(ctx0, index_scores));
+                        index_scores = sum_rows_checked(index_scores, "build_attn_v4.index_scores_sum");
+                        index_scores = reshape_2d_checked(index_scores, n_comp, 1, "build_attn_v4.index_scores_perq", il);
+                    } else {
+                        index_scores = ggml_cont(ctx0, ggml_transpose(ctx0, index_scores));
+                        index_scores = sum_rows_checked(index_scores, "build_attn_v4.index_scores");
+                        index_scores = reshape_2d_checked(index_scores, n_comp, 1, "build_attn_v4.index_scores", il);
+                    }
                     cb(index_scores, "index_scores", il);
 
                     ggml_tensor * selected_comp = ggml_argsort_top_k(ctx0, index_scores, hparams.indexer_top_k);
