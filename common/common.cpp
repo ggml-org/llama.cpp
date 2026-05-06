@@ -1439,6 +1439,10 @@ void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adap
     std::vector<float> scales;
 
     for (auto & la: lora) {
+        // skip unloaded adapters (null ptr)
+        if (la.ptr == nullptr) {
+            continue;
+        }
         loras.push_back(la.ptr);
         scales.push_back(la.scale);
     }

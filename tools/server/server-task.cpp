@@ -1959,6 +1959,29 @@ json server_task_result_apply_lora::to_json() {
 }
 
 //
+// server_task_result_load_lora
+//
+
+json server_task_result_load_lora::to_json() {
+    return json {
+        { "id",    id_lora },
+        { "path",  path },
+        { "scale", scale },
+    };
+}
+
+//
+// server_task_result_unload_lora
+//
+
+json server_task_result_unload_lora::to_json() {
+    return json {
+        { "id",      id_lora },
+        { "success", true },
+    };
+}
+
+//
 // server_prompt_cache
 //
 size_t server_prompt_cache::size() const {

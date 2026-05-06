@@ -122,6 +122,8 @@ struct server_routes {
     server_http_context::handler_t post_rerank;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
+    server_http_context::handler_t post_lora_adapters_load;
+    server_http_context::handler_t post_lora_adapters_unload;
 private:
     std::unique_ptr<server_res_generator> handle_completions_impl(
             const server_http_req & req,
