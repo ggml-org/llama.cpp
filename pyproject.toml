@@ -35,7 +35,11 @@ llama-ggml-vk-generate-shaders = "ggml_vk_generate_shaders:main"
 packages = [{ include = "*.py", from = "." }]
 
 [tool.poetry.dependencies]
-torch = {  source = "pytorch" }
+torch = [
+    { version = "~=2.6.0", source = "pypi", markers = "sys_platform == 'darwin'" },
+    { version = "~=2.6.0+cpu", source = "pytorch", markers = "sys_platform == 'linux'" },
+    { version = "~=2.6.0", source = "pypi", markers = "sys_platform == 'win32'" }
+]
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
