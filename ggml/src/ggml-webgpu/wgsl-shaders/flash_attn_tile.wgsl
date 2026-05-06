@@ -65,7 +65,7 @@ struct Params {
 #define V K
 #else
 @group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
-@group(0) @binding(2) var<storage, read_write> V: array<vec4<f16>>;
+@group(0) @binding(2) var<storage, read_write> V: array<vec4<KV_TYPE>>;
 #endif
 
 #if defined(MASK) && defined(SINKS)
