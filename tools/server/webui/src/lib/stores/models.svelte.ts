@@ -55,6 +55,10 @@ class ModelsStore {
 	selectedModelId = $state<string | null>(null);
 	selectedModelName = $state<string | null>(null);
 
+	// dedup concurrent fetch() callers, all awaiters share the same inflight promise
+	// without this, ?model=<name> URL handler raced an in-progress fetch and saw an empty list
+	private inflightFetch: Promise<void> | null = null;
+
 	private modelUsage = $state<Map<string, SvelteSet<string>>>(new Map());
 	private modelLoadingStates = new SvelteMap<string, boolean>();
 
@@ -258,9 +262,18 @@ class ModelsStore {
 	 * Also fetches modalities for MODEL mode (single model)
 	 */
 	async fetch(force = false): Promise<void> {
-		if (this.loading) return;
+		if (this.inflightFetch) return this.inflightFetch;
 		if (this.models.length > 0 && !force) return;
 
+		this.inflightFetch = this.runFetch();
+		try {
+			await this.inflightFetch;
+		} finally {
+			this.inflightFetch = null;
+		}
+	}
+
+	private async runFetch(): Promise<void> {
 		this.loading = true;
 		this.error = null;
 
