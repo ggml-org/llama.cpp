@@ -91,12 +91,38 @@ static ggml_sycl_device_info ggml_sycl_init() {
 //     GGML_LOG_INFO("%s: SYCL_USE_XMX: no\n", __func__);
 // #endif
     for (int i = 0; i < info.device_count; ++i) {
-        info.devices[i].vmm = 0;
         dpct::device_info prop;
         sycl::device device = dpct::dev_mgr::instance().get_device(i);
 
         SYCL_CHECK(CHECK_TRY_ERROR(dpct::get_device_info(
             prop, device)));
+
+#if defined(GGML_SYCL_USE_VMM)
+        info.devices[i].vmm = device.has(sycl::aspect::ext_oneapi_virtual_mem);
+        if (info.devices[i].vmm) {
+            // L0's required page size depends on the requested allocation
+            // size (see zeVirtualMemQueryPageSize in ze_api.h), but SYCL's
+            // get_mem_granularity is size-agnostic and returns the minimum
+            // (64 KiB on Battlemage). For multi-MiB physical_mem commits L0
+            // picks 2 MiB pages and rejects non-multiples with
+            // UR_RESULT_ERROR_INVALID_VALUE. Clamp to 2 MiB so the field is
+            // usable for any commit size this pool will request; verified
+            // against zeVirtualMemQueryPageSize on Battlemage, where the
+            // page size is 2 MiB flat from 2 MiB up to 32 GiB.
+            //
+            // The "right" fix is to call zeVirtualMemQueryPageSize directly
+            // via L0 backend interop, but that pulls in <level_zero/ze_api.h>
+            // and a -lze_loader link dependency on this TU. The clamp keeps
+            // the SYCL-only build clean; revisit if a device shows up where
+            // the page size for our commit range isn't 2 MiB.
+            const size_t physical_page = 2ull << 20; // 2 MiB
+            info.devices[i].vmm_granularity = std::max<size_t>(
+                sycl::ext::oneapi::experimental::get_mem_granularity(device, sycl::context(device)),
+                physical_page);
+        }
+#else
+        info.devices[i].vmm = false;
+#endif
 
         info.default_tensor_split[i] = total_vram;
         total_vram += prop.get_global_mem_size();
@@ -1378,11 +1404,6 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
 struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     static const size_t SYCL_POOL_VMM_MAX_SIZE = 1ull << 35; // 32 GB
 
-    // physical_mem on Intel L0 v2 needs at least 2 MiB per allocation,
-    // even when get_mem_granularity reports a smaller value (64 KiB on
-    // Battlemage). Allocate physical commits in chunks of this size.
-    static const size_t PHYSICAL_CHUNK = 2ull << 20; // 2 MiB
-
     int           device;
     queue_ptr     qptr;
     sycl::context ctx;
@@ -1403,9 +1424,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
         qptr(qptr_),
         ctx(qptr_->get_context()),
         dev(qptr_->get_device()),
-        granularity(std::max<size_t>(
-            sycl::ext::oneapi::experimental::get_mem_granularity(dev, ctx),
-            PHYSICAL_CHUNK)) {
+        granularity(ggml_sycl_info().devices[device_].vmm_granularity) {
     }
 
     ~ggml_sycl_pool_vmm() {
@@ -1564,7 +1583,7 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_host(que
 
 std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device) {
 #if defined(GGML_SYCL_USE_VMM)
-    if (qptr->get_device().has(sycl::aspect::ext_oneapi_virtual_mem)) {
+    if (ggml_sycl_info().devices[device].vmm) {
         GGML_LOG_INFO("SYCL pool[%d]: VMM\n", device);
         return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_vmm(qptr, device));
     }
@@ -1572,9 +1591,6 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(q
     GGML_LOG_INFO("SYCL pool[%d]: legacy\n", device);
     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_leg(qptr, device));
 }
-
-// TBD pool with virtual memory management
-// struct ggml_sycl_pool_vmm : public ggml_sycl_pool
 
 /// kernels
 typedef void (*ggml_sycl_op_mul_mat_t)(
