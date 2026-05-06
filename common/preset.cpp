@@ -348,6 +348,12 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
             }
         }
 
+        // A file-level version key is parsed into the implicit default section.
+        // Do not expose it as an empty default preset.
+        if (preset.name == COMMON_PRESET_DEFAULT_NAME && preset.options.empty()) {
+            continue;
+        }
+
         if (preset.name == "*") {
             // handle global preset
             global = preset;
