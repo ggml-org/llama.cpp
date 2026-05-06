@@ -18,7 +18,6 @@ class TensorNameMap:
             "tok_embeddings",                            # llama-pth
             "embeddings.word_embeddings",                # bert nomic-bert
             "embeddings.tok_embeddings",                 # modern-bert
-            "language_model.embedding.word_embeddings",  # persimmon
             "wte",                                       # gpt2
             "transformer.embd.wte",                      # phi2
             "model.tok_embeddings",                      # internlm2
@@ -32,7 +31,6 @@ class TensorNameMap:
             "rwkv.embeddings",                           # rwkv6
             "model.embeddings",                          # rwkv7
             "model.word_embeddings",                     # bailingmoe
-            "language_model.model.embed_tokens",         # llama4
             "encoder",                                   # neobert
             "model.transformer.wte",                     # llada
             "embed_tokens",                              # qwen3-embedding
@@ -94,7 +92,6 @@ class TensorNameMap:
             "norm",                                    # llama-pth
             "transformer.norm_f",                      # mpt dbrx
             "ln_f",                                    # refact bloom qwen gpt2
-            "language_model.encoder.final_layernorm",  # persimmon
             "model.final_layernorm",                   # persimmon
             "lm_head.ln",                              # phi2
             "model.norm_f",                            # mamba-qbert
@@ -171,7 +168,6 @@ class TensorNameMap:
             "transformer.h.{bid}.ln_mlp",                           # falcon40b
             "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe phimoe granite-hybrid
             "layers.{bid}.attention_norm",                          # llama-pth
-            "language_model.encoder.layers.{bid}.input_layernorm",  # persimmon
             "model.layers.{bid}.ln1",                               # yi
             "h.{bid}.ln_1",                                         # gpt2
             "transformer.h.{bid}.ln",                               # phi2
@@ -215,7 +211,6 @@ class TensorNameMap:
             "transformer.blocks.{bid}.norm_attn_norm.attn.Wqkv",                   # dbrx
             "transformer.h.{bid}.self_attention.query_key_value",                  # falcon
             "h.{bid}.self_attention.query_key_value",                              # bloom
-            "language_model.encoder.layers.{bid}.self_attention.query_key_value",  # persimmon
             "model.layers.{bid}.self_attn.query_key_value",                        # persimmon
             "model.layers.{bid}.attention.query_key_value",                        # bailingmoe2
             "h.{bid}.attn.c_attn",                                                 # gpt2
@@ -306,7 +301,6 @@ class TensorNameMap:
             "layers.{bid}.attn.Wo",                                         # modern-bert
             "transformer.layer.{bid}.attention.out_lin",                    # distillbert
             "transformer.h.{bid}.attn.out_proj",                            # gpt-j
-            "language_model.encoder.layers.{bid}.self_attention.dense",     # persimmon
             "model.layers.{bid}.self_attn.dense",                           # persimmon
             "model.layers.{bid}.attention.dense",                           # bailingmoe2
             "h.{bid}.attn.c_proj",                                          # gpt2
@@ -373,7 +367,6 @@ class TensorNameMap:
             "transformer.blocks.{bid}.norm_2",                               # mpt
             "model.layers.{bid}.post_attention_layernorm",                   # llama-hf nemotron olmoe phimoe
             "layers.{bid}.ffn_norm",                                         # llama-pth
-            "language_model.encoder.layers.{bid}.post_attention_layernorm",  # persimmon
             "model.layers.{bid}.ln2",                                        # yi
             "h.{bid}.ln_2",                                                  # gpt2
             "model.layers.{bid}.ffn_norm",                                   # internlm2
@@ -475,7 +468,6 @@ class TensorNameMap:
             "transformer.layer.{bid}.ffn.lin1",                       # distillbert
             "transformer.h.{bid}.mlp.fc_in",                          # gpt-j
             "transformer.h.{bid}.mlp.linear_3",                       # refact
-            "language_model.encoder.layers.{bid}.mlp.dense_h_to_4h",  # persimmon
             "model.layers.{bid}.mlp.dense_h_to_4h",                   # persimmon
             "transformer.h.{bid}.mlp.w1",                             # qwen
             "h.{bid}.mlp.c_fc",                                       # gpt2
@@ -608,7 +600,6 @@ class TensorNameMap:
             "layers.{bid}.mlp.Wo",                                    # modern-bert
             "transformer.layer.{bid}.ffn.lin2",                       # distillbert
             "transformer.h.{bid}.mlp.fc_out",                         # gpt-j
-            "language_model.encoder.layers.{bid}.mlp.dense_4h_to_h",  # persimmon
             "model.layers.{bid}.mlp.dense_4h_to_h",                   # persimmon
             "h.{bid}.mlp.c_proj",                                     # gpt2
             "transformer.h.{bid}.mlp.fc2",                            # phi2
@@ -663,7 +654,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_Q_NORM: (
-            "language_model.encoder.layers.{bid}.self_attention.q_layernorm",
+            "encoder.layers.{bid}.self_attention.q_layernorm",
             "model.layers.{bid}.self_attn.q_layernorm",                       # persimmon
             "model.layers.{bid}.self_attn.query_layernorm",                   # hunyuan
             "model.layers.{bid}.attention.query_layernorm",                   # bailingmoe2
@@ -679,7 +670,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_K_NORM: (
-            "language_model.encoder.layers.{bid}.self_attention.k_layernorm",
+            "encoder.layers.{bid}.self_attention.k_layernorm",
             "model.layers.{bid}.self_attn.k_layernorm",                       # persimmon
             "model.layers.{bid}.self_attn.key_layernorm",                     # hunyuan
             "model.layers.{bid}.attention.key_layernorm",                     # bailingmoe2
@@ -695,7 +686,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
-            "language_model.encoder.layers.{bid}.self_attention.rotary_emb.inv_freq",  # persimmon
+            "encoder.layers.{bid}.self_attention.rotary_emb.inv_freq",  # persimmon
         ),
 
         MODEL_TENSOR.LAYER_OUT_NORM: (
