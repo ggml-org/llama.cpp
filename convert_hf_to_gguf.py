@@ -9374,13 +9374,6 @@ class DeepseekV32Model(TextModel):
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("language_model."):
-            name = name.replace("language_model.", "")
-
-        # rename e_score_correction_bias tensors
-        if name.endswith("e_score_correction_bias"):
-            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
-
         # skip Multi-Token Prediction (MTP) layers
         if self.skip_mtp:
             block_count = self.hparams["num_hidden_layers"]
