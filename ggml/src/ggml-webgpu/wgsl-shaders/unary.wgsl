@@ -50,6 +50,20 @@ struct Params {
 @group(0) @binding(PARAMS_BINDING)
 var<uniform> params: Params;
 
+fn erf_approx(x: f32) -> f32 {
+    let s = select(-1.0, 1.0, x >= 0.0);
+    let ax = abs(x);
+
+    let t = 1.0 / (1.0 + 0.3275911 * ax);
+
+    let y = 1.0 -
+        (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+            - 0.284496736) * t + 0.254829592) * t) *
+        exp(-ax * ax);
+
+    return s * y;
+}
+
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.ne) {
@@ -124,27 +138,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
               min(1.0, max(0.0, (src[params.offset_src + src_idx] + 3.0) / 6.0));
 #endif
 #ifdef GELU
-    let res = 0.5 * src[params.offset_src + src_idx] *
-              (1.0 + tanh(clamp(sqrt(2.0 / 3.14159265) *
-                               (src[params.offset_src + src_idx] +
-                                0.044715 * pow(src[params.offset_src + src_idx], 3.0)),
-                               -9.010913, 9.010913)));
+    let res = 0.5 * src[params.offset_src + src_idx] * (1.0 + tanh(0.7978845608 * (src[params.offset_src + src_idx] + 0.044715 * src[params.offset_src + src_idx] * src[params.offset_src + src_idx] * src[params.offset_src + src_idx])));
 #endif
 #ifdef GELU_QUICK
-    let res = src[params.offset_src + src_idx] * 0.5 *
-              (1.0 + tanh(clamp(0.79788456 *
-                               (src[params.offset_src + src_idx] +
-                                0.044715 * src[params.offset_src + src_idx] *
-                                    src[params.offset_src + src_idx] * src[params.offset_src + src_idx]),
-                               -9.010913, 9.010913)));
+    let res = src[params.offset_src + src_idx] * (1.0 / (1.0 + exp(-1.702 * src[params.offset_src + src_idx])));
 #endif
 #ifdef GELU_ERF
-    let res = 0.5 * src[params.offset_src + src_idx] *
-              (1.0 + tanh(clamp(0.79788456 *
-                               (src[params.offset_src + src_idx] +
-                                0.044715 * src[params.offset_src + src_idx] *
-                                    src[params.offset_src + src_idx] * src[params.offset_src + src_idx]),
-                               -9.010913, 9.010913)));
+    let res = 0.5 * src[params.offset_src + src_idx] * (1.0 + erf_approx(src[params.offset_src + src_idx] * 0.70710678));
 #endif
 #ifdef XIELU
     let val = f32(src[params.offset_src + src_idx]);
