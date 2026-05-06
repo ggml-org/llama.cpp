@@ -41,7 +41,7 @@ torch = [
     { version = "~=2.6.0", source = "pypi", markers = "sys_platform == 'win32'" }
 ]
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.dev.dependencies]
 pytest = "^5.2"
 
 # Force wheel + cpu
