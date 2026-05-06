@@ -479,7 +479,6 @@ struct ggml_backend_opencl_context {
     cl_program program_conv_2d_f32;
     cl_program program_conv_2d_f16_f32;
     cl_program program_tsembd;
-    cl_program program_gemv_moe_q4_0_f32_ns, program_gemm_moe_q4_0_f32_ns;
     cl_program program_gemv_moe_mxfp4_f32, program_gemm_moe_mxfp4_f32;
     cl_program program_mul_mv_id_q4_0_f32_8x_flat;
     cl_program program_mul_mv_id_q8_0_f32, program_mul_mv_id_q8_0_f32_flat;
