@@ -53,7 +53,12 @@ import type {
 	ChatStreamCallbacks,
 	ErrorDialogState
 } from '$lib/types/chat';
-import type { ApiChatMessageData, ApiProcessingState, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
+import type {
+	ApiChatMessageData,
+	ApiProcessingState,
+	DatabaseMessage,
+	DatabaseMessageExtra
+} from '$lib/types';
 import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 
 interface ConversationStateEntry {
@@ -946,8 +951,7 @@ class ChatStore {
 		assistantMessage: DatabaseMessage,
 		convId: string
 	): Promise<void> {
-		const effectiveModel =
-			isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
+		const effectiveModel = isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
 
 		const titleMessage: ApiChatMessageData = {
 			role: MessageRole.USER,
