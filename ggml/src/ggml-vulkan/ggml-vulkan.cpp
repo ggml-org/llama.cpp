@@ -16332,6 +16332,17 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
         return arch == vk_device_architecture::INTEL_XE2;
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
+            // AMD's Vulkan driver (amdvlk64.dll, reported as either
+            // eAmdProprietary or eAmdOpenSource depending on packaging)
+            // crashes inside vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR
+            // on integrated GPUs (observed on Radeon 860M / RDNA 3.5 Strix
+            // Point) even though VK_KHR_cooperative_matrix and the
+            // cooperativeMatrix feature are advertised. Skip cooperative
+            // matrix on integrated devices to avoid the access violation.
+            // See https://github.com/GPUOpen-Drivers/AMDVLK/issues/422.
+            if (props.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) {
+                return false;
+            }
             // Workaround for AMD proprietary driver reporting support on all GPUs
             return arch == vk_device_architecture::AMD_RDNA3;
         }
