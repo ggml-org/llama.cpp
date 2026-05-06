@@ -10728,12 +10728,12 @@ class GraniteModel(LlamaModel):
             self.gguf_writer.add_logit_scale(logits_scale)
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith(("encoder.", "projector.")):
-            return
-        if name.startswith("language_model."):
-            name = name[len("language_model."):]
-        yield from super().modify_tensors(data_torch, name, bid)
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.startswith("encoder."):
+            return None
+        return super().filter_tensors(item)
 
 
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
@@ -12626,14 +12626,14 @@ class GraniteSpeechMmprojModel(MmprojModel):
                 return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("language_model."):
-            return
-        if "attention_dists" in name:
-            return
-        if "num_batches_tracked" in name:
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if "attention_dists" in name or "num_batches_tracked" in name:
+            return None
+        return super().filter_tensors(item)
 
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # fold running_mean, running_var and eps into weight and bias for batch_norm
         if "batch_norm" in name and "encoder.layers." in name:
             if self._batch_norm_tensors is None:
