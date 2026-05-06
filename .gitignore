@@ -152,3 +152,8 @@ poetry.toml
 # IDE
 *.code-workspace
 .windsurf/
+tsi-ggml/
+.tsi_submodules_initialized
+tsi-ggml-*.tz
+.env
+!build.yml

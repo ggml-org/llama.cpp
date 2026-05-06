@@ -6,7 +6,7 @@ include(CheckIncludeFileCXX)
 set(CMAKE_WARN_UNUSED_CLI YES)
 
 if (GGML_TSAVORITE)
-    
+
     if  (NOT DEFINED GGML_TSAVORITE_TARGET)
         set(GGML_TSAVORITE_TARGET "posix")
     endif()
@@ -14,13 +14,18 @@ if (GGML_TSAVORITE)
         set(GGML_TSAVORITE_TARGET "posix")
     endif()
 
-    # --- Host-arch aware MLIR SDK selection (CMake equivalent of uname -m case) ---
+    # ---------------------------------------------------------------------------
+    # MLIR_SDK_ARCH — host architecture, used only for locating SDK paths.
+    # The cross-compilation target is always aarch64 and is handled separately
+    # by arm.cmake via CMAKE_TOOLCHAIN_FILE. These are two distinct concerns:
+    #   MLIR_SDK_ARCH  = which SDK binaries to use (must match the build host)
+    #   cross target   = what the output binaries run on (always aarch64/FPGA)
+    # ---------------------------------------------------------------------------
     execute_process(
         COMMAND uname -m
         OUTPUT_VARIABLE HOST_M
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
-
     if (HOST_M STREQUAL "x86_64" OR HOST_M STREQUAL "amd64")
         set(MLIR_SDK_ARCH "x86_64")
     elseif (HOST_M STREQUAL "aarch64" OR HOST_M STREQUAL "arm64")
@@ -28,57 +33,156 @@ if (GGML_TSAVORITE)
     else()
         message(FATAL_ERROR "Unsupported host arch from uname -m: ${HOST_M}")
     endif()
+    message(STATUS "Host arch: ${HOST_M} => MLIR_SDK_ARCH=${MLIR_SDK_ARCH}")
 
-    # SDK_VERSION is passed from tsi-pkg-build.sh (e.g. source tsi-pkg-build.sh SDK_VERSION=0.4.0)
+    # SDK_VERSION is required. Passed via -DSDK_VERSION=<ver> or env var SDK_VERSION.
     if (NOT DEFINED SDK_VERSION AND DEFINED ENV{SDK_VERSION})
         set(SDK_VERSION "$ENV{SDK_VERSION}")
     endif()
     if (NOT DEFINED SDK_VERSION)
-       message(FATAL_ERROR "SDK_VERSION must be provided (e.g. source tsi-pkg-build.sh SDK_VERSION=0.4.1)")
+        message(FATAL_ERROR "SDK_VERSION must be provided (e.g. SDK_VERSION=0.4.2 source tsi-pkg-build.sh)")
     endif()
 
+    # ---------------------------------------------------------------------------
+    # MLIR_COMPILER_DIR
+    # Resolve order:
+    #   1) -DMLIR_COMPILER_DIR=<path>  (explicit cmake flag, highest priority)
+    #   2) ENV{MLIR_COMPILER_DIR}      (exported from tsi-pkg-build.sh)
+    #   3) Derived from SDK_VERSION    (fallback default)
+    # ---------------------------------------------------------------------------
     if (NOT DEFINED MLIR_COMPILER_DIR)
-        if (NOT DEFINED $ENV{MLIR_SDK_VERSION})
-            set (MLIR_COMPILER_DIR /proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${MLIR_SDK_ARCH}/compiler)
-            message("MLIR_SDK_VERSION not set defaulting to ${MLIR_COMPILER_DIR}")
+        if (DEFINED ENV{MLIR_COMPILER_DIR})
+            set(MLIR_COMPILER_DIR "$ENV{MLIR_COMPILER_DIR}")
+            message(STATUS "MLIR_COMPILER_DIR from environment: ${MLIR_COMPILER_DIR}")
         else()
-            set (MLIR_COMPILER_DIR $ENV{MLIR_SDK_VERSION}/compiler)
+            set(MLIR_COMPILER_DIR /proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${MLIR_SDK_ARCH}/compiler)
+            message(STATUS "MLIR_COMPILER_DIR defaulted to: ${MLIR_COMPILER_DIR}")
         endif()
     endif()
 
+    # ---------------------------------------------------------------------------
+    # RUNTIME_DIR
+    # Single source of truth for runtime + shim headers and libraries.
+    # For FPGA this is the installed runtime directory (install-fpga layout).
+    #
+    # Resolve order:
+    #   1) -DRUNTIME_DIR=<path>        (explicit cmake flag, highest priority)
+    #      Use this to point at a local runtime build, e.g.:
+    #        -DRUNTIME_DIR=/proj/work/<user>/runtime/install-fpga
+    #   2) ENV{RUNTIME_DIR}            (exported from tsi-pkg-build.sh)
+    #   3) Derived from SDK_VERSION    (fallback default, SDK-provided runtime)
+    #
+    # NOTE: When overriding RUNTIME_DIR to a local build, the local install must
+    # follow the standard install-fpga layout:
+    #   <RUNTIME_DIR>/include/   -- all runtime + shim headers (tsi-rt/shim/ etc.)
+    #   <RUNTIME_DIR>/lib/       -- all runtime + shim .so files
+    #   <RUNTIME_DIR>/lib/cmake/ -- CMake package files (TSIRuntime, TSICommonRuntime)
+    # ---------------------------------------------------------------------------
     if (NOT DEFINED RUNTIME_DIR)
-        if (NOT DEFINED $ENV{MLIR_SDK_VERSION})
-            set (RUNTIME_DIR /proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${MLIR_SDK_ARCH}/${GGML_TSAVORITE_TARGET}/runtime)
-            message("MLIR_SDK_VERSION not set defaulting to ${RUNTIME_DIR}")
+        if (DEFINED ENV{RUNTIME_DIR})
+            set(RUNTIME_DIR "$ENV{RUNTIME_DIR}")
+            message(STATUS "RUNTIME_DIR from environment: ${RUNTIME_DIR}")
         else()
-            set (RUNTIME_DIR $ENV{MLIR_SDK_VERSION}/${GGML_TSAVORITE_TARGET}/runtime)
+            if (${GGML_TSAVORITE_TARGET} STREQUAL fpga)
+                set(RUNTIME_DIR /proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${MLIR_SDK_ARCH}/fpga/runtime)
+            else()
+                set(RUNTIME_DIR /proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${MLIR_SDK_ARCH}/posix/runtime)
+            endif()
+            message(STATUS "RUNTIME_DIR defaulted to: ${RUNTIME_DIR}")
+        endif()
+    endif()
+
+    # ---------------------------------------------------------------------------
+    # TOOLBOX_DIR
+    # Provides the ARM cross-compilation toolchain file (arm.cmake).
+    # Always sourced from the SDK — not overridden by the local runtime build.
+    #
+    # Resolve order:
+    #   1) -DTOOLBOX_DIR=<path>        (explicit cmake flag)
+    #   2) ENV{TOOLBOX_DIR}            (exported from tsi-pkg-build.sh)
+    #   3) Derived from SDK_VERSION    (fallback default)
+    # ---------------------------------------------------------------------------
+    if (NOT DEFINED TOOLBOX_DIR)
+        if (DEFINED ENV{TOOLBOX_DIR})
+            set(TOOLBOX_DIR "$ENV{TOOLBOX_DIR}")
+            message(STATUS "TOOLBOX_DIR from environment: ${TOOLBOX_DIR}")
+        else()
+            set(TOOLBOX_DIR /proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${MLIR_SDK_ARCH}/toolbox/build/install-fpga)
+            message(STATUS "TOOLBOX_DIR defaulted to: ${TOOLBOX_DIR}")
         endif()
     endif()
 
     if (NOT DEFINED GGML_TSI_KERNEL_DIR)
-       set (GGML_TSI_KERNEL_DIR ${CMAKE_SOURCE_DIR}/ggml-tsi-kernel/${GGML_TSAVORITE_TARGET})
+        set(GGML_TSI_KERNEL_DIR ${CMAKE_SOURCE_DIR}/ggml-tsi-kernel/${GGML_TSAVORITE_TARGET})
     endif()
 
-
+    # ---------------------------------------------------------------------------
+    # TLIBS — libraries linked into the ggml-tsavorite backend
+    #
+    # FPGA:
+    #   - Runtime + shim .so files come exclusively from RUNTIME_DIR/lib/
+    #     (whether that is the SDK fpga/runtime or a local install-fpga override)
+    #   - Kernel host objects come from the ggml-tsi-kernel build
+    #   - MLIR compiler .so files (libFFMDeviceShim etc.) are NOT included here;
+    #     they are not needed for the FPGA cross-compiled target
+    #
+    # POSIX:
+    #   - Runtime + shim .so files come from RUNTIME_DIR/lib/
+    #   - MLIR compiler .so files come from MLIR_COMPILER_DIR/lib/
+    #   - Kernel host objects come from the ggml-tsi-kernel build
+    # ---------------------------------------------------------------------------
     if (${GGML_TSAVORITE_TARGET} STREQUAL fpga)
         set(CMAKE_CROSSCOMPILING ON)
         set(ARCH_FLAGS -march=armv8-a)
-        file(GLOB TLIBS  "${RUNTIME_DIR}/lib/*.so" "${GGML_TSI_KERNEL_DIR}/host/*.o" "${RUNTIME_DIR}/../utils/lib/TsavRTShimCAPI.cpp.o")
-        message("Setting target as fpga")
+        file(GLOB TLIBS
+            "${RUNTIME_DIR}/lib/*.so"
+            "${GGML_TSI_KERNEL_DIR}/host/*.o"
+        )
+        message(STATUS "Setting target as fpga")
     elseif (${GGML_TSAVORITE_TARGET} STREQUAL "posix")
-        file(GLOB TLIBS  "${RUNTIME_DIR}/lib/*.so" "${GGML_TSI_KERNEL_DIR}/host/*.o" "${MLIR_COMPILER_DIR}/lib/libFFMDeviceShim.so" "${MLIR_COMPILER_DIR}/lib/libTsavRTPosixShimCAPI.so" "${MLIR_COMPILER_DIR}/lib/libtxe-ffm-c-native.so" "${MLIR_COMPILER_DIR}/lib/libtxe-ffm-cpp.so" "${MLIR_COMPILER_DIR}/lib/libtvu_fau_full.so")
-        message("Setting target as posix for tsavorite")
+        file(GLOB TLIBS
+            "${RUNTIME_DIR}/lib/*.so"
+            "${GGML_TSI_KERNEL_DIR}/host/*.o"
+            "${MLIR_COMPILER_DIR}/lib/libFFMDeviceShim.so"
+            "${MLIR_COMPILER_DIR}/lib/libTsavRTPosixShimCAPI.so"
+            "${MLIR_COMPILER_DIR}/lib/libtxe-ffm-c-native.so"
+            "${MLIR_COMPILER_DIR}/lib/libtxe-ffm-cpp.so"
+            "${MLIR_COMPILER_DIR}/lib/libtvu_fau_full.so"
+        )
+        message(STATUS "Setting target as posix for tsavorite")
     endif()
 
     set(GGML_TSAVORITE_TARGET "${GGML_TSAVORITE_TARGET}" CACHE STRING "Target for tsavorite")
-    set (TSAVORITE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/ggml/src/ggml-tsavorite/include)
+    set(TSAVORITE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/ggml/src/ggml-tsavorite/include)
 
+    # ---------------------------------------------------------------------------
+    # Include directories
+    #
+    # RUNTIME_DIR/include  — runtime + shim headers (tsi-rt/shim/, tsi-rt/host/,
+    #                         tsi-rt/queues/, tsi-rt/memory/, tsi-rt/utils/, etc.)
+    #                         This is the single authoritative source for all
+    #                         tsi-rt headers. When RUNTIME_DIR points to a local
+    #                         build, its shim headers supersede the SDK's — there
+    #                         is no fallback to MLIR_COMPILER_DIR/include/tsi-rt/.
+    #
+    # MLIR_COMPILER_DIR/include — MLIR compiler headers (tsi-mlir/, CAPI/, txe/,
+    #                              HAL/, runtime/CAPI/, device/, etc.)
+    #                              Always sourced from the SDK.
+    #
+    # TOOLBOX_DIR/../../.. — toolbox headers (derived from SDK toolbox path)
+    # ---------------------------------------------------------------------------
     include_directories($ENV{TSAVORITE_SYSROOT_INCLUDE_DIR})
     include_directories(${TSAVORITE_INCLUDE_DIR})
-    include_directories(${MLIR_COMPILER_DIR}/include/tsi-rt/shim)
     include_directories(${RUNTIME_DIR}/include)
-    include_directories(${MLIR_COMPILER_DIR}/../toolbox/build/install-fpga/include)
-    message("tsavorite backend is enabled")
+    include_directories(${RUNTIME_DIR}/include/tsi-rt/shim)
+    include_directories(${MLIR_COMPILER_DIR}/include)
+    include_directories(${TOOLBOX_DIR}/include)
+
+    message(STATUS "tsavorite backend is enabled")
+    message(STATUS "  MLIR_COMPILER_DIR : ${MLIR_COMPILER_DIR}")
+    message(STATUS "  RUNTIME_DIR       : ${RUNTIME_DIR}")
+    message(STATUS "  TOOLBOX_DIR       : ${TOOLBOX_DIR}")
+    message(STATUS "  GGML_TSI_KERNEL_DIR: ${GGML_TSI_KERNEL_DIR}")
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

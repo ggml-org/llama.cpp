@@ -1,0 +1,43 @@
+# build.yml
+#
+# Single source of truth for the llama.cpp Tsavorite build configuration.
+# Read by the Makefile to generate .env, which is then sourced by all
+# build targets. Re-run `make env` after editing this file.
+#
+# Architecture is fixed at aarch64. The ARM cross-compiler toolchain is
+# fully encapsulated in the SDK toolbox arm.cmake and needs no entry here.
+#
+# -----------------------------------------------------------------------------
+# Override policy
+# -----------------------------------------------------------------------------
+# The three fields under `overrides` exist to support local development
+# workflows where a developer has a private build of the runtime, compiler,
+# or toolbox that they want to use instead of the SDK-provided version.
+#
+# DEFAULT BEHAVIOUR (empty string):
+#   All three paths are derived automatically from sdk.root + sdk.version.
+#   This is the correct value for all committed builds.
+#
+# LOCAL OVERRIDE (non-empty string):
+#   Set the field to an absolute path to redirect that component to a local
+#   build. Example:
+#     runtime_dir: "/proj/work/<user>/runtime/install-fpga"
+#
+# !! PRs with non-empty override values MUST be rejected during review. !!
+# !! These fields are for local developer use only and must never be     !!
+# !! committed to the main or release branches.                          !!
+# -----------------------------------------------------------------------------
+
+sdk:
+  root: /proj/rel/sw/tsi-sw/staging/sdk
+  version: "r.0.4.2"
+
+overrides:
+  mlir_compiler_dir: ""   # default: <sdk.root>/sdk-<sdk.version>/aarch64/compiler
+  toolbox_dir: ""         # default: <sdk.root>/sdk-<sdk.version>/aarch64/toolbox/build/install-fpga
+  runtime_dir: "/proj/work/rbhagavatula/runtime/install-fpga"         # default: <sdk.root>/sdk-<sdk.version>/aarch64/fpga/runtime
+
+toolchain:
+  # Host compiler used for cmake itself and POSIX builds.
+  # Adjust if gcc-13.3.0 is not at this path on your machine.
+  gcc: /proj/local/gcc-13.3.0

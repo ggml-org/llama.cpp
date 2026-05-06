@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# tsi-pkg-build.sh (source-safe)
+# tsi-pkg-build.sh
 #
-# USAGE (source is recommended)
-# ============================
+# USAGE
+# =====
+# Invoked by the Makefile after sourcing .env (which is generated from
+# build.yml by `make env`). Not intended to be sourced directly by users.
 #
-# source tsi-pkg-build.sh [build-mode] [flags...] [MLIR_COMPILER_DIR] [TOOLBOX_DIR]
+# Direct invocation (all required env vars must already be set):
+#   SDK_VERSION=r.0.4.2 \
+#   MLIR_COMPILER_DIR=... \
+#   TOOLBOX_DIR=... \
+#   RUNTIME_DIR=... \
+#   bash tsi-pkg-build.sh [build-mode] [flags...]
+#
+# Preferred: use the Makefile targets instead:
+#   make all
+#   make all BUILD_TYPE=release
+#   make clean
+#   make clean-all
+#   make package
 #
 # ------------------------------------------------------------------------------
 # Tsavorite Deployment Configuration (llama.cpp)
@@ -221,6 +235,24 @@
 # If SDK_VERSION is not provided, the script will fail fast.
 # This avoids hard-coded defaults and ensures the intended SDK version
 # is always selected intentionally by the user.
+#
+# ------------------------------------------------------------------------------
+# RUNTIME_DIR override (FPGA only)
+# ------------------------------------------------------------------------------
+# By default, RUNTIME_DIR is derived from SDK_VERSION and points to the SDK's
+# pre-packaged FPGA runtime:
+#
+#   /proj/rel/sw/tsi-sw/staging/sdk/sdk-r.<SDK_VERSION>/<arch>/fpga/runtime
+#
+# To use a locally built runtime (e.g. for shim development), set RUNTIME_DIR
+# before sourcing this script:
+#
+#   RUNTIME_DIR=/proj/work/<user>/runtime/install-fpga \
+#     SDK_VERSION=0.4.2 source tsi-pkg-build.sh debug build-fpga
+#
+# The directory pointed to by RUNTIME_DIR must follow the standard install-fpga
+# layout (include/, lib/, lib/cmake/). MLIR compiler libs and the ARM toolchain
+# file are always sourced from the SDK regardless of this override.
 # ------------------------------------------------------------------------------
 #
 # ==============================================================================
@@ -228,19 +260,15 @@ log_error(){ echo "ERROR: $*" >&2; }
 log_info(){ echo "INFO: $*"; }
 
 
-if [ -z "$SDK_VERSION" ]; then
-  echo "ERROR: SDK_VERSION not set. Usage: SDK_VERSION=<version> source tsi-pkg-build.sh"
-  return 1
+if [ -z "${SDK_VERSION:-}" ]; then
+  echo "ERROR: SDK_VERSION not set. Run via the Makefile: make all" >&2
+  exit 1
 fi
 
 export SDK_VERSION
 
-
-__TSI_SOURCED=0
-(return 0 2>/dev/null) && __TSI_SOURCED=1
 __TSI_OLD_SET="$(set +o)"
-__TSI_SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
-__TSI_SCRIPT_DIR="$(cd "$(dirname "${__TSI_SCRIPT_PATH}")" 2>/dev/null && pwd)"
+__TSI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
 
 
 # --- VENV TRACKING (FIX) ---
@@ -264,50 +292,32 @@ tolower(){ echo "$1" | tr '[:upper:]' '[:lower:]'; }
 
 die() {
   log_error "$*"
-  if [ "$__TSI_SOURCED" -eq 1 ]; then return 1; else exit 1; fi
+  exit 1
 }
 
 cleanup() {
-  # --- VENV RESTORE (FIX) ---
   if [ "${__TSI_CHANGED_VENV:-0}" -eq 1 ]; then
     if declare -F deactivate >/dev/null 2>&1; then
       deactivate >/dev/null 2>&1 || true
     else
       unset VIRTUAL_ENV 2>/dev/null || true
     fi
-    # If user was in a previous venv before we activated blob-creation, restore it.
-    if [ -n "${__OLD_VIRTUAL_ENV}" ] && [ -f "${__OLD_VIRTUAL_ENV}/bin/activate" ]; then
-      # shellcheck disable=SC1090
-      source "${__OLD_VIRTUAL_ENV}/bin/activate" >/dev/null 2>&1 || true
-    fi
   fi
-  # restore caller shell behavior
   eval "${__TSI_OLD_SET}" >/dev/null 2>&1 || true
   stty sane 2>/dev/null || true
-  trap - RETURN EXIT 2>/dev/null || true
+  trap - EXIT 2>/dev/null || true
 }
 
 usage() {
-  local p="${__TSI_SCRIPT_PATH}"
+  local p="${BASH_SOURCE[0]:-$0}"
   if [ -r "$p" ]; then
-    sed -n '1,320p' "$p" 2>/dev/null | sed 's/^# \{0,1\}//'
+    sed -n '1,50p' "$p" 2>/dev/null | sed 's/^# \{0,1\}//'
     return 0
   fi
-  # fallback (should rarely happen)
   cat <<'EOF'
 tsi-pkg-build.sh: unable to read script header for help output.
-Try: cat tsi-pkg-build.sh | sed -n '1,320p'
 EOF
   return 0
-}
-
-select_arch() {
-  local m; m="$(uname -m)"
-  case "$m" in
-    x86_64|amd64) echo "x86_64" ;;
-    aarch64|arm64) echo "aarch64" ;;
-    *) log_error "Unsupported host arch from uname -m: $m"; return 2 ;;
-  esac
 }
 
 # -------------------------
@@ -365,6 +375,7 @@ parse_args() {
   BUILD_TYPE=""
   MLIR_COMPILER_DIR_IN="${MLIR_COMPILER_DIR:-}"
   TOOLBOX_DIR_IN="${TOOLBOX_DIR:-}"
+  RUNTIME_DIR_IN="${RUNTIME_DIR:-}"
   ENABLE_COVERAGE_FLAG=""
 
   # submodules
@@ -528,7 +539,7 @@ parse_args() {
         log_info "clean-all selected"
         ;;
       *)
-        # positional paths
+        # positional paths: compiler dir, then toolbox dir
         if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
           MLIR_COMPILER_DIR_IN="$a"
         elif [ -z "${TOOLBOX_DIR_IN}" ]; then
@@ -551,30 +562,70 @@ parse_args() {
     BUILD_TYPE="debug"
   fi
 
-
   return 0
 }
 
-resolve_paths() {
-    local arch="$1"
+select_arch() {
+  local m; m="$(uname -m)"
+  case "$m" in
+    x86_64|amd64)   echo "x86_64" ;;
+    aarch64|arm64)  echo "aarch64" ;;
+    *) log_error "Unsupported host arch from uname -m: $m"; return 2 ;;
+  esac
+}
 
+resolve_paths() {
+    # arch here is the HOST arch — used only to select the right SDK binaries.
+    # The cross-compilation target (aarch64/FPGA output) is handled by arm.cmake
+    # and is independent of what machine this script runs on.
+    local arch
+    arch="$(select_arch)" || return $?
+
+    # ------------------------------------------------------------------
+    # MLIR_COMPILER_DIR: SDK compiler directory (always from SDK)
+    # ------------------------------------------------------------------
     if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
         MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${arch}}"
         MLIR_COMPILER_DIR_IN="${MLIR_SDK_VERSION}/compiler"
     fi
 
-    if [ -z "${TOOLBOX_DIR_IN}" ]; then
-        MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-$(dirname "${MLIR_COMPILER_DIR_IN}")}"
-        TOOLBOX_DIR_IN="${MLIR_SDK_VERSION}/toolbox/build/install-fpga"
-    fi
-
     MLIR_COMPILER_DIR="$(absdir "${MLIR_COMPILER_DIR_IN}")" \
         || die "MLIR_COMPILER_DIR not found: ${MLIR_COMPILER_DIR_IN}"
+
+    # ------------------------------------------------------------------
+    # TOOLBOX_DIR: SDK toolbox (provides arm.cmake for cross-compilation)
+    # Always sourced from the SDK regardless of RUNTIME_DIR override.
+    # ------------------------------------------------------------------
+    if [ -z "${TOOLBOX_DIR_IN}" ]; then
+        MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-$(dirname "${MLIR_COMPILER_DIR}")}"
+        TOOLBOX_DIR_IN="${MLIR_SDK_VERSION}/toolbox/build/install-fpga"
+    fi
 
     TOOLBOX_DIR="$(absdir "${TOOLBOX_DIR_IN}")" \
         || die "TOOLBOX_DIR not found: ${TOOLBOX_DIR_IN}"
 
-    # Derive TSICommon_DIR from TOOLBOX_DIR (SDK 0.4.1 compatible)
+    # ------------------------------------------------------------------
+    # RUNTIME_DIR: runtime + shim libraries and headers (FPGA only).
+    #
+    # Resolution order (first match wins):
+    #   1) RUNTIME_DIR already set in environment before sourcing this
+    #      script (user local build override), e.g.:
+    #        RUNTIME_DIR=/proj/work/<user>/runtime/install-fpga
+    #   2) Derived from SDK_VERSION (default SDK-provided runtime)
+    #
+    # The resolved directory must follow the standard install-fpga layout:
+    #   <RUNTIME_DIR>/include/   -- tsi-rt headers (shim, host, memory, ...)
+    #   <RUNTIME_DIR>/lib/       -- runtime + shim .so files
+    # ------------------------------------------------------------------
+    if [ -z "${RUNTIME_DIR_IN}" ]; then
+        MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-$(dirname "${MLIR_COMPILER_DIR}")}"
+        RUNTIME_DIR_IN="${MLIR_SDK_VERSION}/fpga/runtime"
+    fi
+
+    RUNTIME_DIR="$(absdir "${RUNTIME_DIR_IN}")" \
+        || die "RUNTIME_DIR not found: ${RUNTIME_DIR_IN}"
+
+    # Derive TSICommon_DIR from TOOLBOX_DIR (SDK 0.4.x compatible)
     TSICommon_DIR="${TOOLBOX_DIR}/lib/cmake/TSICommon"
     [ -d "${TSICommon_DIR}" ] || die "TSICommon_DIR not found: ${TSICommon_DIR}"
     export TSICommon_DIR
@@ -583,12 +634,14 @@ resolve_paths() {
     export MLIR_COMPILER_DIR
     export COMPILER_INSTALL_DIR="${MLIR_COMPILER_DIR}"
     export TOOLBOX_DIR
+    export RUNTIME_DIR
     export FAU_LOOKUP_TABLE_PATH="${MLIR_SDK_VERSION}/ffm/txe-ffm-cpp/third-party/FAU/include/"
 
     log_info "SDK_VERSION:        ${SDK_VERSION}"
-    log_info "MLIR_COMPILER_DIR: ${MLIR_COMPILER_DIR}"
-    log_info "TOOLBOX_DIR:       ${TOOLBOX_DIR}"
-    log_info "TSICommon_DIR:     ${TSICommon_DIR}"
+    log_info "MLIR_COMPILER_DIR:  ${MLIR_COMPILER_DIR}"
+    log_info "TOOLBOX_DIR:        ${TOOLBOX_DIR}"
+    log_info "RUNTIME_DIR:        ${RUNTIME_DIR}"
+    log_info "TSICommon_DIR:      ${TSICommon_DIR}"
 }
 
 setup_toolchain() {
@@ -761,6 +814,8 @@ build_posix_impl() {
 
   run cmake -B "${build_dir}" ${common} \
     -DCMAKE_C_COMPILER="${CC}" -DCMAKE_CXX_COMPILER="${CXX}" \
+    -DSDK_VERSION="${SDK_VERSION}" \
+    -DMLIR_COMPILER_DIR="${MLIR_COMPILER_DIR}" \
     -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} ${cflags_base}" \
     -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} ${cflags_base}" \
     ${ENABLE_COVERAGE_FLAG} || return 1
@@ -809,6 +864,7 @@ build_fpga_impl() {
   local want_tvu="$3"  # 1/0
 
   log_info "building llama.cpp/ggml for fpga (${build_dir})"
+  log_info "  RUNTIME_DIR: ${RUNTIME_DIR}"
 
   if [ "${DO_CLEAN_BUILD_DIRS}" -eq 1 ]; then
     log_info "clean rebuild: rm -rf ./${build_dir}"
@@ -825,6 +881,10 @@ build_fpga_impl() {
   run cmake -B "${build_dir}" \
     -DCMAKE_TOOLCHAIN_FILE="${ARM_TOOLCHAIN_FILE}" \
     -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DLLAMA_CURL=OFF \
+    -DSDK_VERSION="${SDK_VERSION}" \
+    -DMLIR_COMPILER_DIR="${MLIR_COMPILER_DIR}" \
+    -DRUNTIME_DIR="${RUNTIME_DIR}" \
+    -DTOOLBOX_DIR="${TOOLBOX_DIR}" \
     -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE ${supported}" \
     -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE ${supported}" \
     ${ENABLE_COVERAGE_FLAG} || return 1
@@ -952,8 +1012,6 @@ do_clean_all() {
 
 main() {
   set -o pipefail
-  local arch
-  arch="$(select_arch)" || return $?
   parse_args "$@" || return $?
   if [ "${SHOW_HELP}" -eq 1 ]; then
     usage
@@ -962,7 +1020,7 @@ main() {
   if [ "${DO_CLEAN_ALL}" -eq 1 ]; then do_clean_all; return 0; fi
   if [ "${DO_CLEAN}" -eq 1 ]; then do_clean; return 0; fi
 
-  resolve_paths "$arch" || return $?
+  resolve_paths || return $?
   setup_toolchain || return 1
   ensure_submodules "${GIT_SUBMODULE_PULL}" || return 1
 
@@ -1046,15 +1104,7 @@ main() {
   return 0
 }
 
-if [ "$__TSI_SOURCED" -eq 1 ]; then
-  trap cleanup RETURN
-else
-  trap cleanup EXIT
-fi
+trap cleanup EXIT
 
 main "$@"; __rc=$?
-if [ "$__TSI_SOURCED" -eq 1 ]; then
-  return "$__rc"
-else
-  exit "$__rc"
-fi
+exit "$__rc"
