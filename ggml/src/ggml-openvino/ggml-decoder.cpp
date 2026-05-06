@@ -1264,6 +1264,8 @@ std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
         {GGML_OP_SET_ROWS,       "GGML_OP_SET_ROWS"      },
         {GGML_OP_CPY,            "GGML_OP_CPY"           },
         {GGML_OP_FLASH_ATTN_EXT, "GGML_OP_FLASH_ATTN_EXT"},
+        {GGML_OP_L2_NORM,        "GGML_OP_L2_NORM"       },
+        {GGML_OP_PAD,            "GGML_OP_PAD"           },
     };
     static const std::map<ggml_unary_op, std::string> unary_ops = {
         {GGML_UNARY_OP_ABS,         "GGML_UNARY_OP_ABS"        },

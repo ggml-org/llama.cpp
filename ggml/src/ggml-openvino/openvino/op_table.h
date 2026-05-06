@@ -17,6 +17,7 @@ GGML_OP_CONVERTER(translate_permute);
 GGML_OP_CONVERTER(translate_reshape);
 GGML_OP_CONVERTER(translate_rms_norm);
 GGML_OP_CONVERTER(translate_norm);
+GGML_OP_CONVERTER(translate_l2_norm);
 GGML_OP_CONVERTER(translate_rope);
 GGML_OP_CONVERTER(translate_scale);
 GGML_OP_CONVERTER(translate_unary_silu);
@@ -28,6 +29,7 @@ GGML_OP_CONVERTER(translate_glu_geglu);
 GGML_OP_CONVERTER(translate_set_rows);
 GGML_OP_CONVERTER(translate_cpy);
 GGML_OP_CONVERTER(translate_flash_attn_ext);
+GGML_OP_CONVERTER(translate_pad);
 
 } // namespace op
 

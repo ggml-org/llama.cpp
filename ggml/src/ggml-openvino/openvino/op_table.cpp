@@ -29,6 +29,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_RESHAPE",        op::translate_reshape                          },
         {"GGML_OP_RMS_NORM",       op::translate_rms_norm                         },
         {"GGML_OP_NORM",           op::translate_norm                             },
+        {"GGML_OP_L2_NORM",        op::translate_l2_norm                          },
         {"GGML_OP_ROPE",           op::translate_rope                             },
         {"GGML_OP_SCALE",          op::translate_scale                            },
         {"GGML_OP_SOFT_MAX",       op::translate_soft_max                         },
@@ -43,6 +44,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_SET_ROWS",       op::translate_set_rows                         },
         {"GGML_OP_CPY",            op::translate_cpy                              },
         {"GGML_OP_FLASH_ATTN_EXT", op::translate_flash_attn_ext                   },
+        {"GGML_OP_PAD",            op::translate_pad                              },
     };
 }
 
