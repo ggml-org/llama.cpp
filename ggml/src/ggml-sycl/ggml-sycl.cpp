@@ -1405,7 +1405,6 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     static const size_t SYCL_POOL_VMM_MAX_SIZE = 1ull << 35; // 32 GB
 
     int           device;
-    queue_ptr     qptr;
     sycl::context ctx;
     sycl::device  dev;
 
@@ -1421,7 +1420,6 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
 
     explicit ggml_sycl_pool_vmm(queue_ptr qptr_, int device_) :
         device(device_),
-        qptr(qptr_),
         ctx(qptr_->get_context()),
         dev(qptr_->get_device()),
         granularity(ggml_sycl_info().devices[device_].vmm_granularity) {
