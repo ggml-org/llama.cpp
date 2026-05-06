@@ -109,16 +109,24 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data(
         ret.back().total = total;
     }
     for (size_t i = 0; i < nd; i++) {
+        ggml_backend_dev_t dev = llama_model_get_device(model, i);
+
         size_t free;
         size_t total;
-        ggml_backend_dev_memory(llama_model_get_device(model, i), &free, &total);
+        ggml_backend_dev_memory(dev, &free, &total);
 
-        // devices can return 0 bytes for free and total memory if they do not
-        // have any to report. in this case, we will use the host memory as a fallback
-        // fixes: https://github.com/ggml-org/llama.cpp/issues/18577
+        // Some non-GPU accelerator backends, such as BLAS, report 0/0 and rely on
+        // the host-memory fallback. For GPU-like backends, keep 0/0 so --fit does
+        // not assign anything to a device with an unknown memory budget.
         if (free == 0 && total == 0) {
-            free  = ret.back().free;
-            total = ret.back().total;
+            const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+            if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                LOG_WRN("%s: device %s did not report memory; --fit will not use it\n",
+                        __func__, ggml_backend_dev_name(dev));
+            } else {
+                free  = ret.back().free;
+                total = ret.back().total;
+            }
         }
         ret[i].free  = free;
         ret[i].total = total;
