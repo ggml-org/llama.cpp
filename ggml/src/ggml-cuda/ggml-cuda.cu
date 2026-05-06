@@ -23,6 +23,7 @@
 #include "ggml-cuda/diagmask.cuh"
 #include "ggml-cuda/diag.cuh"
 #include "ggml-cuda/fattn.cuh"
+#include "ggml-cuda/fwht.cuh"
 #include "ggml-cuda/getrows.cuh"
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmf.cuh"
@@ -2383,6 +2384,12 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
 }
 
 static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    int32_t hint;
+    memcpy(&hint, dst->op_params, sizeof(int32_t));
+    if (hint == GGML_HINT_SRC0_IS_HADAMARD) {
+        ggml_cuda_forward_fwht_f32(ctx, dst);
+        return;
+    }
     const bool split = ggml_backend_buft_is_cuda_split(src0->buffer->buft);
 
     // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
