@@ -944,6 +944,8 @@ private:
                 mtp_arch = "qwen35moe_mtp";
             } else if (std::string(trunk_arch) == "qwen35") {
                 mtp_arch = "qwen35_mtp";
+            } else if (std::string(trunk_arch) == "qwen3moe") {
+                mtp_arch = "qwen3moe_mtp";
             } else {
                 SRV_ERR("MTP not supported for trunk architecture '%s'\n", trunk_arch);
                 return false;

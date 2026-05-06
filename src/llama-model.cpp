@@ -2282,6 +2282,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_QWEN3MOE_MTP:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
         case LLM_ARCH_OLMO2:

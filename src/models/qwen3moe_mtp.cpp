@@ -43,8 +43,9 @@ void llama_model_qwen3moe_mtp::load_arch_tensors(llama_model_loader &) {
         layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), { n_embd }, 0);
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, 0);
 
-        // Q is doubled for gated attention (Q + gate); K and V are standard GQA dims.
-        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head * 2, n_embd_k_gqa, n_embd_v_gqa, 0);
+        // Plain GQA: Q is n_head * head_k, K and V are n_kv_head * head_*. No Q-gate
+        // (qwen3moe base does NOT gate Q the way qwen35moe does).
+        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
         layer.wo          = create_tensor(tn(LLM_TENSOR_ATTN_OUT,    "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
         layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
@@ -122,33 +123,14 @@ llama_model_qwen3moe_mtp::graph::graph(const llama_model & model, const llm_grap
     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
     cb(cur, "mtp_attn_norm", il);
 
-    ggml_tensor * Qcur_full = build_lora_mm(layer.wq, cur, layer.wq_s);
-    cb(Qcur_full, "mtp_Qcur_full", il);
+    // Use build_qkv to handle the wq/wk/wv split path uniformly with the rest
+    // of the codebase (deals with optional lora scales, clamps, output reshape).
+    auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur, n_embd_head, n_head, n_head_kv, il);
 
-    // Q is gated: first half is the query, second half is the gate.
-    ggml_tensor * Qcur = ggml_view_3d(ctx0, Qcur_full,
-            n_embd_head, n_head, n_tokens,
-            ggml_element_size(Qcur_full) * n_embd_head * 2,
-            ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
-            0);
     Qcur = build_norm(Qcur, layer.attn_q_norm, nullptr, LLM_NORM_RMS, il);
     cb(Qcur, "mtp_Qcur_normed", il);
-
-    ggml_tensor * gate = ggml_view_3d(ctx0, Qcur_full,
-            n_embd_head, n_head, n_tokens,
-            ggml_element_size(Qcur_full) * n_embd_head * 2,
-            ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
-            ggml_element_size(Qcur_full) * n_embd_head);
-    gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
-    cb(gate, "mtp_gate", il);
-
-    ggml_tensor * Kcur = build_lora_mm(layer.wk, cur, layer.wk_s);
-    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
     Kcur = build_norm(Kcur, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
     cb(Kcur, "mtp_Kcur_normed", il);
-
-    ggml_tensor * Vcur = build_lora_mm(layer.wv, cur, layer.wv_s);
-    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
     cb(Vcur, "mtp_Vcur", il);
 
     // Plain RoPE (no rope_sections / mRoPE).
@@ -165,9 +147,6 @@ llama_model_qwen3moe_mtp::graph::graph(const llama_model & model, const llm_grap
     cur = build_attn(inp_attn,
             nullptr, nullptr, nullptr,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
-    cb(cur, "mtp_attn_pregate", il);
-
-    cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, gate));
     cur = build_lora_mm(layer.wo, cur, layer.wo_s);
     cb(cur, "mtp_attn_out", il);
 
@@ -190,7 +169,7 @@ llama_model_qwen3moe_mtp::graph::graph(const llama_model & model, const llm_grap
             LLM_FFN_SILU, true,
             hparams.expert_weights_scale,
             LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
-            nullptr, layer.ffn_gate_up_exps,
+            nullptr, nullptr,  // probs_in, gate_up_exps (qwen3moe has no fused gate_up)
             layer.ffn_up_exps_s,
             layer.ffn_gate_exps_s,
             layer.ffn_down_exps_s);
