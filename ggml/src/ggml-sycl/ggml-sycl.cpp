@@ -718,7 +718,7 @@ catch (sycl::exception const &exc) {
 }
 
 static size_t ggml_backend_sycl_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
-    return 128;
+    return SYCL_BUFFER_ALIGNMENT;
     GGML_UNUSED(buft);
 }
 
@@ -1149,7 +1149,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_split_buffer_type_alloc_buffer(gg
 }
 
 static size_t ggml_backend_sycl_split_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
-    return 128;
+    return SYCL_BUFFER_ALIGNMENT;
     GGML_UNUSED(buft);
 }
 
@@ -1426,26 +1426,26 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     }
 
     ~ggml_sycl_pool_vmm() {
-        if (pool_addr != 0) {
-            SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::unmap(
-                reinterpret_cast<void *>(pool_addr), pool_size, ctx)));
-            SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::free_virtual_mem(
-                pool_addr, SYCL_POOL_VMM_MAX_SIZE, ctx)));
+        if (!pool_addr) {
+            return;
         }
+
         // mappings vector dtor releases physical commits.
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::unmap(
+            reinterpret_cast<void *>(pool_addr), pool_size, ctx)));
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::free_virtual_mem(
+            pool_addr, SYCL_POOL_VMM_MAX_SIZE, ctx)));
     }
 
     void * alloc(size_t size, size_t * actual_size) override {
         // round up the allocation size to the alignment to ensure that all allocations are aligned for all data types
-        const size_t alignment = 128;
-        size = alignment * ((size + alignment - 1) / alignment);
+        size = GGML_PAD(size, SYCL_BUFFER_ALIGNMENT);
 
         size_t avail = pool_size - pool_used;
 
         if (size > avail) {
             // round up to the next multiple of the granularity
-            size_t reserve_size = size - avail;
-            reserve_size = granularity * ((reserve_size + granularity - 1) / granularity);
+            size_t reserve_size = GGML_PAD(size - avail, granularity);
 
             GGML_ASSERT(pool_size + reserve_size <= SYCL_POOL_VMM_MAX_SIZE);
 
@@ -1454,8 +1454,10 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
 
             // reserve virtual address space (if not already reserved)
             if (pool_addr == 0) {
-                pool_addr = sycl::ext::oneapi::experimental::reserve_virtual_mem(
-                    SYCL_POOL_VMM_MAX_SIZE, ctx);
+                SYCL_CHECK(CHECK_TRY_ERROR(
+                    pool_addr = sycl::ext::oneapi::experimental::reserve_virtual_mem(
+                        SYCL_POOL_VMM_MAX_SIZE, ctx)
+                ));
             }
 
             // map at the end of the pool
@@ -1463,15 +1465,17 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
             phys.map(start_ptr, reserve_size,
                      sycl::ext::oneapi::experimental::address_access_mode::read_write);
 
-            // keep the physical_mem handle alive (it owns the commit)
+            // keep the physical_mem handle alive as it owns the commit
             mappings.push_back(std::move(phys));
 
             // add to the pool
             pool_size += reserve_size;
 
-            //printf("sycl pool[%d]: size increased to %llu MB (reserved %llu MB)\n",
-            //       device, (unsigned long long) (pool_size/1024/1024),
-            //       (unsigned long long) (reserve_size/1024/1024));
+#ifdef DEBUG_SYCL_MALLOC
+            GGML_LOG_INFO("sycl pool[%d]: size increased to %llu MB (reserved %llu MB)\n",
+                          device, (unsigned long long) (pool_size/1024/1024),
+                          (unsigned long long) (reserve_size/1024/1024));
+#endif
         }
 
         GGML_ASSERT(pool_addr != 0);
@@ -1481,7 +1485,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
         pool_used += size;
 
 #ifdef DEBUG_SYCL_MALLOC
-        printf("sycl pool[%d]: allocated %llu bytes at %p\n", device, (unsigned long long) size, ptr);
+        GGML_LOG_INFO("sycl pool[%d]: allocated %llu bytes at %p\n", device, (unsigned long long) size, ptr);
 #endif
 
         return ptr;
@@ -1489,7 +1493,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
 
     void free(void * ptr, size_t size) override {
 #ifdef DEBUG_SYCL_MALLOC
-        printf("sycl pool[%d]: freed %llu bytes at %p\n", device, (unsigned long long) size, ptr);
+        GGML_LOG_INFO("sycl pool[%d]: freed %llu bytes at %p\n", device, (unsigned long long) size, ptr);
 #endif
 
         pool_used -= size;

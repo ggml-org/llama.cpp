@@ -242,6 +242,12 @@ struct ggml_sycl_device_info {
 
 const ggml_sycl_device_info & ggml_sycl_info();
 
+// Reported by ggml_backend_sycl_buffer_type::get_alignment and used by the
+// VMM pool to round each alloc up. 128 covers warp-coalesced loads on every
+// supported arch (Intel Xe cache lines are 64 B, 128 is over-spec but
+// harmless) and matches ggml_backend_cuda_buffer_type's alignment.
+static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;
+
 struct ggml_sycl_pool {
     virtual ~ggml_sycl_pool() = default;
 
