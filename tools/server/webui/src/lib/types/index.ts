@@ -76,6 +76,7 @@ export type {
 	SettingsFieldConfig,
 	SettingsChatServiceOptions,
 	SettingsConfigType,
+	SettingsExportType,
 	ParameterValue,
 	ParameterRecord,
 	ParameterInfo,

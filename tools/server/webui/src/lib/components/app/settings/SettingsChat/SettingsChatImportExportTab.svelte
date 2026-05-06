@@ -2,6 +2,7 @@
 	import { Download, Upload, Trash2 } from '@lucide/svelte';
 	import { DialogConversationSelection, DialogConfirmation } from '$lib/components/app';
 	import { createMessageCountMap } from '$lib/utils';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
 	import { fade } from 'svelte/transition';
@@ -24,6 +25,69 @@
 
 	// Delete functionality state
 	let showDeleteDialog = $state(false);
+
+	// Settings import/export state
+	let showSettingsExportSummary = $state(false);
+	let showSettingsImportSummary = $state(false);
+
+	function handleSettingsExport() {
+		try {
+			const data = settingsStore.exportSettings();
+			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `llama_settings_${new Date().toISOString().split('T')[0]}.json`;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+
+			showSettingsExportSummary = true;
+			showSettingsImportSummary = false;
+			toast.success('Settings exported');
+		} catch (err) {
+			console.error('Failed to export settings:', err);
+			toast.error('Failed to export settings');
+		}
+	}
+
+	function handleSettingsImport() {
+		try {
+			const input = document.createElement('input');
+			input.type = HtmlInputType.FILE;
+			input.accept = FileExtensionText.JSON;
+
+			input.onchange = async (e) => {
+				const file = (e.target as HTMLInputElement)?.files?.[0];
+				if (!file) return;
+
+				try {
+					const text = await file.text();
+					const data = JSON.parse(text);
+
+					if (!data || typeof data !== 'object' || !data.config) {
+						toast.error('Invalid settings file: missing config');
+						return;
+					}
+
+					settingsStore.importSettings(data);
+
+					showSettingsImportSummary = true;
+					showSettingsExportSummary = false;
+					toast.success('Settings imported successfully');
+				} catch (err) {
+					console.error('Failed to import settings:', err);
+					toast.error('Failed to import settings');
+				}
+			};
+
+			input.click();
+		} catch (err) {
+			console.error('Failed to open file picker:', err);
+			toast.error('Failed to open file picker');
+		}
+	}
 
 	async function handleExportClick() {
 		try {
@@ -211,7 +275,8 @@
 			description="Export your chat settings and preferences as a JSON file."
 			IconComponent={Download}
 			buttonText="Export settings"
-			onclick={() => toast.info('Coming soon')}
+			onclick={handleSettingsExport}
+			summary={{ show: showSettingsExportSummary, verb: 'Exported', items: [] }}
 		/>
 
 		<SettingsChatImportExportSection
@@ -219,7 +284,8 @@
 			description="Import chat settings from a previously exported JSON file. This will merge with your existing settings."
 			IconComponent={Upload}
 			buttonText="Import settings"
-			onclick={() => toast.info('Coming soon')}
+			onclick={handleSettingsImport}
+			summary={{ show: showSettingsImportSummary, verb: 'Imported', items: [] }}
 		/>
 	</SettingsGroup>
 </div>

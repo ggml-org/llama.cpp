@@ -94,3 +94,18 @@ export interface SyncableParameter {
 	type: SyncableParameterType;
 	canSync: boolean;
 }
+
+/**
+ * Shape of the settings JSON export file.
+ * Versioned to allow future schema evolution.
+ */
+export interface SettingsExportType {
+	/** Export format version — bumped on breaking changes */
+	version: number;
+	/** Unix timestamp of export */
+	timestamp: number;
+	/** Full settings config (includes theme as a config key) */
+	config: SettingsConfigType;
+	/** Keys that differ from server defaults (derived, but persisted for fidelity) */
+	userOverrides: string[];
+}
