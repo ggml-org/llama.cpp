@@ -5534,17 +5534,17 @@ class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 class MiniCPMV4_6TextModel(Qwen3_5TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # drop vision tower / multimodal merger tensors -- they belong to the mmproj file
-        if name.startswith(("model.vision_tower.", "model.merger.")):
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.startswith("model.merger."):
+            return None
         # MTP tensors are not used at inference yet; align with Qwen3Next behaviour
         if name.startswith("mtp"):
-            return
-        # strip the language-model wrapper so the underlying Qwen3.5 tensor mapping matches
-        if name.startswith("model.language_model."):
-            name = "model." + name[len("model.language_model."):]
-        yield from super().modify_tensors(data_torch, name, bid)
+            return None
+
+        return super().filter_tensors(item)
 
 
 @ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
