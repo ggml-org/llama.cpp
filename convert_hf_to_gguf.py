@@ -7909,6 +7909,9 @@ class Gemma4Model(Gemma3Model):
         if ".experts." in name and not name.endswith(".weight"):
             name += ".weight"
 
+        if "language_model." not in name and "rope_freqs" not in name:
+            return None
+
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
