@@ -135,8 +135,7 @@ static __global__ void ggml_cuda_ar_kernel(
             for (int k = 0; k < ELEMS_PER_VEC; ++k) {
                 wire[k] = ggml_cuda_cast<Twire>(sendbuf[off + k]);
             }
-            *reinterpret_cast<float4 *>(&host_mine[off]) =
-                *reinterpret_cast<const float4 *>(wire);
+            ggml_cuda_memcpy_1<sizeof(wire)>(&host_mine[off], wire);
         }
         if (bid == 0 && tid < count - tail) {
             host_mine[tail + tid] = ggml_cuda_cast<Twire>(sendbuf[tail + tid]);
@@ -173,8 +172,7 @@ static __global__ void ggml_cuda_ar_kernel(
         for (int i = gtid; i < count_vec; i += gnt) {
             const int off = i * ELEMS_PER_VEC;
             Twire wire[ELEMS_PER_VEC];
-            *reinterpret_cast<float4 *>(wire) =
-                *reinterpret_cast<const float4 *>(&host_other[off]);
+            ggml_cuda_memcpy_1<sizeof(wire)>(wire, &host_other[off]);
             #pragma unroll
             for (int k = 0; k < ELEMS_PER_VEC; ++k) {
                 const Twire d_low = ggml_cuda_cast<Twire>(sendbuf[off + k]);
