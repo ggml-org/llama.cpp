@@ -6,6 +6,10 @@
 #include "server-task.h"
 #include "server-queue.h"
 
+#if defined(LLAMA_HAVE_CODEC)
+#include <codec/codec.h>
+#endif
+
 #include "build-info.h"
 #include "common.h"
 #include "llama.h"
@@ -3308,6 +3312,122 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr ||
             dynamic_cast<server_task_result_cmpl_final*>  (first_result.get()) != nullptr
         );
+
+        // ── Codec binary streaming (opt-in) ────────────────────────────────
+        // When the request body sets stream_format to "msgpack" or "protobuf",
+        // emit raw token IDs as Codec frames instead of JSON SSE. The wire
+        // shrinks ~14× (msgpack) or more with Content-Encoding negotiation,
+        // and downstream agents can feed the IDs straight back without a
+        // text round-trip. See https://github.com/wdunn001/Codec.
+#if defined(LLAMA_HAVE_CODEC)
+        const std::string stream_format = json_value(data, "stream_format", std::string("json"));
+        if (stream_format == "msgpack" || stream_format == "protobuf") {
+            const bool use_protobuf = stream_format == "protobuf";
+
+            auto encode_frame_bytes = [use_protobuf](
+                    const llama_tokens & tokens, bool done, const std::string & finish_reason) -> std::string {
+                std::vector<uint32_t> ids;
+                ids.reserve(tokens.size());
+                for (auto t : tokens) {
+                    // Negative IDs would indicate a server bug; clamp to 0 defensively.
+                    ids.push_back(t < 0 ? 0u : (uint32_t) t);
+                }
+                codec_frame_t frame;
+                codec_frame_init(&frame);
+                frame.ids = ids.data();
+                frame.ids_len = ids.size();
+                frame.done = done;
+                std::string fr = finish_reason;
+                frame.finish_reason = fr.empty() ? nullptr : fr.data();
+
+                codec_buffer_t buf{nullptr, 0};
+                codec_status_t st = use_protobuf
+                        ? codec_encode_protobuf(&frame, &buf)
+                        : codec_encode_msgpack(&frame, &buf);
+                // Don't let codec_frame_destroy free the borrowed pointers.
+                frame.ids = nullptr; frame.ids_len = 0; frame.finish_reason = nullptr;
+                if (st != CODEC_OK) {
+                    return std::string();
+                }
+                std::string out((const char *) buf.data, buf.len);
+                codec_buffer_free(&buf);
+                return out;
+            };
+
+            auto extract_finish_reason = [](server_task_result * r) -> std::string {
+                auto * fin = dynamic_cast<server_task_result_cmpl_final *>(r);
+                if (!fin) return "";
+                switch (fin->stop) {
+                    case STOP_TYPE_EOS:   return "eos_token";
+                    case STOP_TYPE_LIMIT: return "length";
+                    case STOP_TYPE_WORD:  return "stop_sequence";
+                    default:              return "";
+                }
+            };
+
+            // Capture-by-value for both inner lambdas so the closures stay
+            // valid after this function returns and `res->next` runs later
+            // from the streaming dispatcher.
+            auto frame_bytes_from_result = [encode_frame_bytes, extract_finish_reason](
+                    server_task_result * r, bool & is_terminal) -> std::string {
+                if (auto * partial = dynamic_cast<server_task_result_cmpl_partial *>(r)) {
+                    is_terminal = false;
+                    return encode_frame_bytes(partial->tokens, /*done=*/false, "");
+                }
+                auto * fin = dynamic_cast<server_task_result_cmpl_final *>(r);
+                GGML_ASSERT(fin != nullptr);
+                is_terminal = true;
+                return encode_frame_bytes(fin->tokens, /*done=*/true, extract_finish_reason(fin));
+            };
+
+            bool first_is_terminal = false;
+            res->data = frame_bytes_from_result(first_result.get(), first_is_terminal);
+            res->status = 200;
+            res->content_type = use_protobuf ? "application/x-protobuf" : "application/x-msgpack";
+            res->next = [res_this = res.get(), encode_frame_bytes,
+                         frame_bytes_from_result, &req](std::string & output) -> bool {
+                try {
+                    if (req.should_stop()) {
+                        return false;
+                    }
+                    if (!res_this->data.empty()) {
+                        output = std::move(res_this->data);
+                        res_this->data.clear();
+                        return true;
+                    }
+
+                    server_response_reader & rd = res_this->rd;
+                    if (!rd.has_next()) {
+                        // Codec has no [DONE] sentinel — done=true on the
+                        // final frame already terminated the stream.
+                        output.clear();
+                        return false;
+                    }
+
+                    auto result = rd.next(req.should_stop);
+                    if (result == nullptr) {
+                        GGML_ASSERT(req.should_stop());
+                        return false;
+                    }
+
+                    if (result->is_error()) {
+                        // Emit a terminal error frame so binary clients can
+                        // distinguish a server error from a clean truncation.
+                        output = encode_frame_bytes({}, /*done=*/true, "error");
+                        return false;
+                    }
+
+                    bool is_terminal = false;
+                    output = frame_bytes_from_result(result.get(), is_terminal);
+                    return !is_terminal;
+                } catch (const std::exception &) {
+                    output = encode_frame_bytes({}, /*done=*/true, "error");
+                    return false;
+                }
+            };
+            return res;
+        }
+#endif // LLAMA_HAVE_CODEC
 
         // next responses are streamed
         // to be sent immediately
