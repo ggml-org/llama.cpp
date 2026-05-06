@@ -3713,11 +3713,27 @@ void ggml_compute_forward_norm(
 
 // ggml_compute_forward_group_rms_norm
 
+// fusion kinds that can be combined with the rms_norm computation in a single pass.
+// extend this enum when adding new fused variants (e.g. FUSE_ADD, FUSE_MUL_ADD, ...).
+enum ggml_rms_norm_fuse_op {
+    GGML_RMS_NORM_FUSE_OP_NONE,
+    GGML_RMS_NORM_FUSE_OP_MUL,
+};
+
+template <ggml_rms_norm_fuse_op FUSE_OP>
 static void ggml_compute_forward_rms_norm_f32(
         const ggml_compute_params * params,
-        ggml_tensor * dst) {
+        ggml_tensor * dst_rms_norm,
+        ggml_tensor * dst_fused = nullptr) {
 
-    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src0 = dst_rms_norm->src[0];
+    const ggml_tensor * src1 = nullptr;
+    ggml_tensor       * dst  = dst_rms_norm;
+
+    if constexpr (FUSE_OP == GGML_RMS_NORM_FUSE_OP_MUL) {
+        src1 = (dst_fused->src[0] == dst_rms_norm) ? dst_fused->src[1] : dst_fused->src[0];
+        dst  = dst_fused;
+    }
 
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
@@ -3726,11 +3742,10 @@ static void ggml_compute_forward_rms_norm_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    GGML_TENSOR_UNARY_OP_LOCALS
+    GGML_TENSOR_BINARY_OP_LOCALS
 
     float eps;
-    memcpy(&eps, dst->op_params, sizeof(float));
-
+    memcpy(&eps, dst_rms_norm->op_params, sizeof(float));
     GGML_ASSERT(eps >= 0.0f);
 
     // TODO: optimize
@@ -3740,25 +3755,32 @@ static void ggml_compute_forward_rms_norm_f32(
                 const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
 
                 ggml_float sum = 0.0;
+                // worth switching to explicit SIMD?
                 for (int64_t i00 = 0; i00 < ne00; i00++) {
                     sum += (ggml_float)(x[i00] * x[i00]);
                 }
 
-                const float mean = sum/ne00;
-
-                float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
-
-                memcpy(y, x, ne00 * sizeof(float));
-                // for (int i00 = 0; i00 < ne00; i00++) {
-                //     y[i00] = x[i00];
-                // }
-
+                const float mean  = sum/ne00;
                 const float scale = 1.0f/sqrtf(mean + eps);
 
                 // if you hit this, likely you got an inf somewhere earlier
                 assert(scale > 0.0f);
 
-                ggml_vec_scale_f32(ne00, y, scale);
+                float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
+
+                if constexpr (FUSE_OP == GGML_RMS_NORM_FUSE_OP_MUL) {
+                    const int64_t i11 = i01 % ne11;
+                    const int64_t i12 = i02 % ne12;
+                    const int64_t i13 = i03 % ne13;
+                    const float * w = (float *) ((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13);
+
+                    for (int64_t i00 = 0; i00 < ne00; i00++) {
+                        y[i00] = x[i00] * scale * w[i00];
+                    }
+                } else {
+                    memcpy(y, x, ne00 * sizeof(float));
+                    ggml_vec_scale_f32(ne00, y, scale);
+                }
             }
         }
     }
@@ -3773,7 +3795,31 @@ void ggml_compute_forward_rms_norm(
     switch (src0->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_rms_norm_f32(params, dst);
+                ggml_compute_forward_rms_norm_f32<GGML_RMS_NORM_FUSE_OP_NONE>(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// Fused RMS_NORM + MUL: computes dst = rms_norm(src0) * src1 in a single pass.
+// This avoids materializing the intermediate rms_norm result in memory.
+void ggml_compute_forward_rms_norm_mul_fused(
+        const ggml_compute_params * params,
+        ggml_tensor * dst_rms_norm,
+        ggml_tensor * dst_mul) {
+
+    GGML_ASSERT(dst_mul != nullptr);
+    GGML_ASSERT(dst_mul->src[0] == dst_rms_norm || dst_mul->src[1] == dst_rms_norm);
+
+    const ggml_tensor * src0 = dst_rms_norm->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_rms_norm_f32<GGML_RMS_NORM_FUSE_OP_MUL>(params, dst_rms_norm, dst_mul);
             } break;
         default:
             {
