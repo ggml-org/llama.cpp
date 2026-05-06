@@ -2,7 +2,6 @@ package com.arm.aichat.gguf
 
 import android.content.Context
 import android.net.Uri
-import com.arm.aichat.internal.gguf.GgufMetadataReaderImpl
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -42,34 +41,11 @@ interface GgufMetadataReader {
     suspend fun readStructuredMetadata(input: InputStream): GgufMetadata
 
     companion object {
-        private val DEFAULT_SKIP_KEYS = setOf(
+        val DEFAULT_SKIP_KEYS = setOf(
             "tokenizer.chat_template",
             "tokenizer.ggml.scores",
             "tokenizer.ggml.tokens",
             "tokenizer.ggml.token_type"
-        )
-
-        /**
-         * Creates a default GgufMetadataReader instance
-         */
-        fun create(): GgufMetadataReader = GgufMetadataReaderImpl(
-            skipKeys = DEFAULT_SKIP_KEYS,
-            arraySummariseThreshold = 1_000
-        )
-
-        /**
-         * Creates a GgufMetadataReader with custom configuration
-         *
-         * @param skipKeys Keys whose value should be skipped entirely (not kept in the result map)
-         * @param arraySummariseThreshold If ≥0, arrays longer get summarised, not materialised;
-         *                                If -1, never summarise.
-         */
-        fun create(
-            skipKeys: Set<String> = DEFAULT_SKIP_KEYS,
-            arraySummariseThreshold: Int = 1_000
-        ): GgufMetadataReader = GgufMetadataReaderImpl(
-            skipKeys = skipKeys,
-            arraySummariseThreshold = arraySummariseThreshold
         )
     }
 }
