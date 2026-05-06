@@ -170,7 +170,11 @@ export class ChatService {
 						return true;
 					});
 					// If only text remains and it's a single part, simplify to string
-					if (msg.content.length === 1 && msg.content[0].type === ContentPartType.TEXT) {
+					if (
+						msg.content.length === 1 &&
+						msg.content[0].type === ContentPartType.TEXT &&
+						typeof msg.content[0].text === 'string'
+					) {
 						msg.content = msg.content[0].text;
 					}
 				}

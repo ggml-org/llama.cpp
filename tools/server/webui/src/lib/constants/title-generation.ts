@@ -6,25 +6,10 @@ export const TITLE_MIN_LENGTH = 3;
 /** Default fallback title when no meaningful content is available */
 export const TITLE_FALLBACK = 'New Chat';
 
-/** Regex patterns to strip thinking/reasoning tags from LLM output */
-export const TITLE_CLEANUP_REGEXES = {
-	THINK_TAG: /<think[^]*?<\/think>/gi,
-	TALKING_TAG: /<thinking[^]*?<\/thinking>/gi
-} as const;
+/** Default prompt template for LLM based title generation */
+export const TITLE_DEFAULT_PROMPT =
+	'Based on the following interaction, generate a short, concise title (maximum 6-8 words) that captures the main topic. Return ONLY the title text, nothing else. Do not use quotes.\n\nUser: {{USER}}\n\nAssistant: {{ASSISTANT}}\n\nTitle:';
 
 /** Patterns to strip leading title prefixes (e.g., "Title:", "Subject:", "Topic:") and quotes */
 export const TITLE_PREFIX_PATTERN = /^(Title:|Subject:|Topic:)\s*/i;
 export const TITLE_QUOTE_PATTERN = /^["]|["]$/g;
-
-/**
- * Constructs the title generation prompt from the first user and assistant messages.
- */
-export function createTitlePrompt(userContent: string, assistantContent: string): string {
-	return `Based on the following interaction, generate a short, concise title (maximum 6-8 words) that captures the main topic. Return ONLY the title text, nothing else. Do not use quotes.
-
-User: ${userContent}
-
-Assistant: ${assistantContent}
-
-Title:`;
-}

@@ -42,10 +42,9 @@ import {
 	TITLE_TRUNCATION_SUFFIX,
 	TITLE_MIN_LENGTH,
 	TITLE_FALLBACK,
-	TITLE_CLEANUP_REGEXES,
+	TITLE_DEFAULT_PROMPT,
 	TITLE_PREFIX_PATTERN,
-	TITLE_QUOTE_PATTERN,
-	createTitlePrompt
+	TITLE_QUOTE_PATTERN
 } from '$lib/constants';
 import type {
 	ChatMessageTimings,
@@ -596,7 +595,14 @@ class ChatStore {
 			);
 
 			if (config().titleGenerationUseLLM && isNewConversation && firstUserMessage) {
-				await this.generateTitleWithLLM(firstUserMessage, assistantMessage, currentConv.id);
+				// The assistant message object was replaced in the store by updateMessageAtIndex
+				// (spread + new object), so we need to find the updated version by ID
+				const updatedAssistant = conversationsStore.activeMessages.find(
+					(m) => m.id === assistantMessage.id
+				);
+				if (updatedAssistant) {
+					await this.generateTitleWithLLM(firstUserMessage, updatedAssistant, currentConv.id);
+				}
 			}
 		} catch (error) {
 			if (isAbortError(error)) {
@@ -953,9 +959,21 @@ class ChatStore {
 	): Promise<void> {
 		const effectiveModel = isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
 
+		const userContent = firstUserMessage.content;
+		const assistantContent = assistantMessage.content;
+		const configValue = config();
+		const titlePromptTemplate =
+			(typeof configValue.titleGenerationPrompt === 'string' && configValue.titleGenerationPrompt.trim())
+				? configValue.titleGenerationPrompt
+				: TITLE_DEFAULT_PROMPT;
+
+		const titlePrompt = titlePromptTemplate
+			.replace('{{USER}}', String(userContent || ''))
+			.replace('{{ASSISTANT}}', String(assistantContent || ''));
+
 		const titleMessage: ApiChatMessageData = {
 			role: MessageRole.USER,
-			content: createTitlePrompt(firstUserMessage.content, assistantMessage.content)
+			content: titlePrompt
 		};
 
 		const titleResponse = await ChatService.generateTitle(titleMessage, effectiveModel);
@@ -964,10 +982,7 @@ class ChatStore {
 			return;
 		}
 
-		let cleanTitle = titleResponse
-			.replace(TITLE_CLEANUP_REGEXES.THINK_TAG, '')
-			.replace(TITLE_CLEANUP_REGEXES.TALKING_TAG, '')
-			.trim();
+		let cleanTitle = titleResponse.trim();
 		cleanTitle = cleanTitle
 			.replace(TITLE_PREFIX_PATTERN, '')
 			.replace(TITLE_QUOTE_PATTERN, '')

@@ -101,6 +101,11 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 				label: 'Use LLM to generate conversation title',
 				type: SettingsFieldType.CHECKBOX,
 				isExperimental: true
+			},
+			{
+				key: SETTINGS_KEYS.TITLE_GENERATION_PROMPT,
+				type: SettingsFieldType.TEXTAREA,
+				isExperimental: true
 			}
 		]
 	},
