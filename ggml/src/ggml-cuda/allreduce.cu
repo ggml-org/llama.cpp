@@ -39,7 +39,7 @@
 // One int per (slot, rank) pair in pinned host memory.  Each AR call writes a
 // strictly increasing token (= the AR call number) into its own arrival int.
 // The peer spins until its read of the other's arrival int equals the token
-// it expects for this call — a mismatch means the peer hasn't arrived yet.
+// it expects for this call -- a mismatch means the peer hasn't arrived yet.
 // Tokens never repeat over realistic call rates (32-bit int wraps in tens of
 // days at thousands of ARs/sec), so arrival ints don't need to be reset
 // between calls; we initialize once at pipeline init and let the values
@@ -73,17 +73,17 @@ static constexpr size_t GGML_CUDA_AR_ARRIVAL_STRIDE = 64;
 static constexpr int GGML_CUDA_AR_KERNEL_BLOCKS = 8;
 
 // ---------------------------------------------------------------------------
-// Chunked-kernel AllReduce — 2 GPUs, supports float, half, and bfloat16.
+// Chunked-kernel AllReduce -- 2 GPUs, supports float, half, and bfloat16.
 //
 // Both GPUs run this kernel simultaneously on independent streams.  sendbuf
 // and recvbuf live in Tdst (the caller's tensor type); host_mine / host_other
-// carry data in Twire (the on-wire type, possibly narrower than Tdst — e.g.
+// carry data in Twire (the on-wire type, possibly narrower than Tdst -- e.g.
 // Tdst=F32 with Twire=BF16 halves the bytes pushed across PCIe).  When
 // Tdst == Twire the casts below are no-ops.
 //
 // Each GPU runs three phases:
 //
-//   Phase 1 (all threads): cast sendbuf (Tdst) → Twire and store as 16-byte
+//   Phase 1 (all threads): cast sendbuf (Tdst) -> Twire and store as 16-byte
 //                          vectors into host_mine.  __threadfence_system()
 //                          commits these writes to host memory.
 //   Phase 2 (thread 0):    write token to arrival_mine; spin until
@@ -91,7 +91,7 @@ static constexpr int GGML_CUDA_AR_KERNEL_BLOCKS = 8;
 //   Phase 3 (all threads): read 16-byte Twire vectors from host_other, cast
 //                          each element to Tdst, and sum with the local
 //                          sendbuf value (also rounded through Twire so that
-//                          both GPUs truncate identically — this guarantees
+//                          both GPUs truncate identically -- this guarantees
 //                          bit-equivalent results across the two devices).
 //
 // Multi-block: blocks stripe vectors across (gridDim.x * blockDim.x) global
@@ -133,13 +133,13 @@ static __global__ void ggml_cuda_ar_kernel(
             Twire wire[ELEMS_PER_VEC];
             #pragma unroll
             for (int k = 0; k < ELEMS_PER_VEC; ++k) {
-                wire[k] = static_cast<Twire>(sendbuf[off + k]);
+                wire[k] = ggml_cuda_cast<Twire>(sendbuf[off + k]);
             }
             *reinterpret_cast<float4 *>(&host_mine[off]) =
                 *reinterpret_cast<const float4 *>(wire);
         }
         if (bid == 0 && tid < count - tail) {
-            host_mine[tail + tid] = static_cast<Twire>(sendbuf[tail + tid]);
+            host_mine[tail + tid] = ggml_cuda_cast<Twire>(sendbuf[tail + tid]);
         }
     }
 
@@ -149,7 +149,7 @@ static __global__ void ggml_cuda_ar_kernel(
 
     // Phase 2: thread 0 of each block signals on its own arrival slot, then
     // spins for the matching slot from peer.  Per-block tokens mean blocks
-    // proceed independently — no inter-block barrier needed.
+    // proceed independently -- no inter-block barrier needed.
     if (tid == 0) {
         int       * my_slot    = arrival_mine  + bid * ARRIVAL_INTS;
         const int * other_slot = arrival_other + bid * ARRIVAL_INTS;
@@ -177,14 +177,14 @@ static __global__ void ggml_cuda_ar_kernel(
                 *reinterpret_cast<const float4 *>(&host_other[off]);
             #pragma unroll
             for (int k = 0; k < ELEMS_PER_VEC; ++k) {
-                const Twire d_low = static_cast<Twire>(sendbuf[off + k]);
-                recvbuf[off + k] = static_cast<Tdst>(d_low) + static_cast<Tdst>(wire[k]);
+                const Twire d_low = ggml_cuda_cast<Twire>(sendbuf[off + k]);
+                recvbuf[off + k] = ggml_cuda_cast<Tdst>(d_low) + ggml_cuda_cast<Tdst>(wire[k]);
             }
         }
         if (bid == 0 && tid < count - tail) {
-            const Twire d_low = static_cast<Twire>(sendbuf[tail + tid]);
+            const Twire d_low = ggml_cuda_cast<Twire>(sendbuf[tail + tid]);
             recvbuf[tail + tid] =
-                static_cast<Tdst>(d_low) + static_cast<Tdst>(host_other[tail + tid]);
+                ggml_cuda_cast<Tdst>(d_low) + ggml_cuda_cast<Tdst>(host_other[tail + tid]);
         }
     }
 }
@@ -192,8 +192,8 @@ static __global__ void ggml_cuda_ar_kernel(
 // Combined load-convert-add kernel.  The peer's contribution arrives as Tsrc
 // (which may be a lower-precision type than Tdst when the BF16 round-trip is
 // active).  For bit-equivalence between the two GPUs, dst is first rounded
-// through Tsrc's precision via a static_cast — peer already truncated its own
-// value the same way before sending — so both sides perform identical
+// through Tsrc's precision via ggml_cuda_cast -- peer already truncated its
+// own value the same way before sending -- so both sides perform identical
 // arithmetic.  When Tdst == Tsrc the round-trip cast is a no-op.
 template <typename Tdst, typename Tsrc>
 static __global__ void ggml_cuda_ar_add_kernel(
@@ -203,8 +203,8 @@ static __global__ void ggml_cuda_ar_add_kernel(
     const int tid = blockIdx.x * blockDim.x + threadIdx.x;
     const int nt  = gridDim.x * blockDim.x;
     for (int i = tid; i < count; i += nt) {
-        const Tsrc d_low = static_cast<Tsrc>(dst[i]);
-        dst[i] = static_cast<Tdst>(d_low) + static_cast<Tdst>(src[i]);
+        const Tsrc d_low = ggml_cuda_cast<Tsrc>(dst[i]);
+        dst[i] = ggml_cuda_cast<Tdst>(d_low) + ggml_cuda_cast<Tdst>(src[i]);
     }
 }
 
@@ -214,7 +214,7 @@ static __global__ void ggml_cuda_ar_add_kernel(
 
 // Number of slots in the event / arrival ring.  Two slots is sufficient:
 // lockstep guarantees the two GPUs are at most one AR (or chunk) apart, so
-// slot[N%2] is always safe to reuse — peer has already consumed slot[N%2]
+// slot[N%2] is always safe to reuse -- peer has already consumed slot[N%2]
 // from AR N-2 by the time we get to AR N.  acquire_slot's
 // cudaEventSynchronize on ev.ker for both devices makes that consumption
 // explicit before we overwrite host_buf[slot] for the new AR.
@@ -239,7 +239,7 @@ static constexpr size_t GGML_CUDA_AR_COPY_THRESHOLD_DEFAULT = 1024 * 1024; // 1 
 static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MIN = 512 * 1024;       // 512 KB
 static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_HEURISTIC_MAX = 2 * 1024 * 1024;  // 2 MB
 // Absolute floor that an env-var override is allowed to set; this caps the
-// per-slot copy-event array.  256 KB → up to 128 chunks per 32 MB tensor.
+// per-slot copy-event array.  256 KB -> up to 128 chunks per 32 MB tensor.
 static constexpr size_t GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN = 256 * 1024;
 static constexpr int GGML_CUDA_AR_COPY_MAX_CHUNKS =
     static_cast<int>((GGML_CUDA_AR_COPY_MAX_BYTES + GGML_CUDA_AR_COPY_CHUNK_BYTES_MIN - 1) /
@@ -248,13 +248,13 @@ static constexpr int GGML_CUDA_AR_COPY_MAX_CHUNKS =
 struct ggml_cuda_ar_event_slot {
     cudaEvent_t app = nullptr;  // upstream computation complete
     cudaEvent_t cpy[GGML_CUDA_AR_COPY_MAX_CHUNKS] = {};  // copy-engine D2H chunks complete
-    cudaEvent_t h2d = nullptr;  // copy-engine H2Ds complete (handoff AR stream → compute stream)
+    cudaEvent_t h2d = nullptr;  // copy-engine H2Ds complete (handoff AR stream -> compute stream)
     cudaEvent_t ker = nullptr;  // AllReduce kernel complete
 };
 
 // Mapped pinned host allocation: cudaHostAlloc + cudaHostGetDevicePointer
 // in one place, with the host handle preserved for cudaFreeHost.  Used where
-// the CPU never touches the buffer — only the device reads/writes via the
+// the CPU never touches the buffer -- only the device reads/writes via the
 // mapped device pointer.  Required on systems where cudaDevAttrCanUseHost-
 // PointerForRegisteredMem is 0 and the host pointer can't be used as a
 // device pointer.
@@ -319,7 +319,7 @@ struct ggml_cuda_ar_pipeline {
     bool                     dev_tmp_kernel_done_valid;
 
     // Arrival ring: ARRIVAL_STRIDE bytes between adjacent ints.  Mapped pinned
-    // memory; CPU never reads/writes — only the kernel and cudaMemset.
+    // memory; CPU never reads/writes -- only the kernel and cudaMemset.
     // Use ggml_cuda_ar_arrival_ptr() to index.
     ggml_cuda_ar_host_mapping arrival;
 };
@@ -473,7 +473,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
         return nullptr;
     }
 
-    // Per-device pinned staging buffers — POOL_SIZE-deep ring so the chunked-
+    // Per-device pinned staging buffers -- POOL_SIZE-deep ring so the chunked-
     // kernel can write the next slot's data while the peer is still reading
     // the previous slot's. Indexed by (slot * buf_bytes) at the call site.
     p->buf_bytes = GGML_CUDA_AR_MAX_BYTES;
@@ -602,7 +602,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
         // Wait for peer's H2D from our host_large[i] (recorded in the
         // previous AR's stage 2) to complete before we overwrite host_large[i].
         // host_large_read_done[peer] = peer finished reading host_large[i].
-        // No-op on the first AR — no prior record exists.
+        // No-op on the first AR -- no prior record exists.
         if (p->host_large_read_done_valid) {
             const int peer = 1 - i;
             CUDA_CHECK(cudaStreamWaitEvent(p->streams[i], p->host_large_read_done[peer]));
@@ -628,7 +628,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
     // local device scratch (dev_tmp), then performs one device-local add over
     // the assembled peer tensor.  The H2Ds run on the AR stream (copy engine)
     // and the add_kernel runs on the caller's compute stream, so the AR stream
-    // stays pure-copy and avoids an in-stream copy→compute engine switch every
+    // stays pure-copy and avoids an in-stream copy->compute engine switch every
     // AR.  dev_tmp is single-buffered: the AR stream waits cross-stream on the
     // prior AR's add_kernel-done event before overwriting it.
     for (int i = 0; i < 2; ++i) {
@@ -688,7 +688,7 @@ static bool ggml_cuda_ar_allreduce_copy_impl(
 // Outer-level chunker: copy_impl handles up to copy_bytes per call (limited by
 // the host_large / dev_tmp allocation size).  When the full AR exceeds that,
 // slice the tensor into copy_bytes-sized pieces and call copy_impl repeatedly.
-// Each slice goes through its own stage 1 → stage 2 cycle and acquires its own
+// Each slice goes through its own stage 1 -> stage 2 cycle and acquires its own
 // slot, so cross-AR fences and pool wraparound work the same way as for any
 // other sequence of small ARs.
 template <typename Tsrc, typename Tdst>

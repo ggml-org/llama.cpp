@@ -1255,7 +1255,7 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
 #endif // GGML_USE_NCCL
 
 // Run the internal AR pipeline.  Returns false on unsupported / failed input
-// — the caller decides whether to abort (env-forced) or fall back silently.
+// -- the caller decides whether to abort (env-forced) or fall back silently.
 static bool ggml_backend_cuda_comm_allreduce_internal(
         ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
     GGML_ASSERT(comm_ctx->ar_pipeline != nullptr);
@@ -1303,7 +1303,7 @@ static bool ggml_backend_cuda_comm_allreduce_internal(
 }
 
 // ---------------------------------------------------------------------------
-// try_allreduce variants — one per mode.  All assume their required resource
+// try_allreduce variants -- one per mode.  All assume their required resource
 // has already been initialised by comm_init.
 // ---------------------------------------------------------------------------
 
@@ -1332,7 +1332,7 @@ static bool ggml_backend_cuda_comm_try_allreduce_internal_strict(
                "Reset the environment variable to use the platform default.");
 }
 
-// Internal with butterfly fallback.  Used for the Windows default — internal
+// Internal with butterfly fallback.  Used for the Windows default -- internal
 // is preferred but a return-false cleanly hits the meta-backend's butterfly.
 static bool ggml_backend_cuda_comm_try_allreduce_internal_lenient(
         ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
@@ -1357,7 +1357,7 @@ static void ggml_backend_cuda_comm_free(void * comm_ctx_v) {
     delete static_cast<ggml_backend_cuda_comm_context *>(comm_ctx_v);
 }
 
-// Resource initializers — return true on success.
+// Resource initializers -- return true on success.
 
 #ifdef GGML_USE_NCCL
 static bool ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * ctx) {
@@ -1385,7 +1385,7 @@ static bool ggml_backend_cuda_comm_init_internal(ggml_backend_cuda_comm_context 
 
 // Pick the try_allreduce function pointer based on GGML_CUDA_ALLREDUCE / OS,
 // then init the resource that pointer needs (NCCL or internal pipeline).
-// Init failure aborts in every case — internal-lenient's "fall back to
+// Init failure aborts in every case -- internal-lenient's "fall back to
 // butterfly" applies to per-call failures, not init.
 static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_backends) {
     for (size_t i = 0; i < n_backends; i++) {
@@ -1455,7 +1455,7 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
     return ret;
 }
 
-// Top-level dispatch — calls the function pointer chosen by comm_init.
+// Top-level dispatch -- calls the function pointer chosen by comm_init.
 // Returns false to let the meta-backend's butterfly run.
 static bool ggml_backend_cuda_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tensor ** tensors) {
     if (comm_ctx_v == nullptr) {

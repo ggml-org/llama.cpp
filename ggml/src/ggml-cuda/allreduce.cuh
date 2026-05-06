@@ -5,7 +5,7 @@
 
 #include <cstddef>
 
-// Opaque pipeline context — owns all pinned buffers, streams, and events.
+// Opaque pipeline context -- owns all pinned buffers, streams, and events.
 struct ggml_cuda_ar_pipeline;
 
 // Allocate a pipeline for n_devices GPUs.
@@ -26,3 +26,4 @@ bool ggml_cuda_ar_allreduce(
     ggml_cuda_ar_pipeline * pipeline,
     ggml_backend_t        * backends,
     ggml_tensor           ** tensors);
+
