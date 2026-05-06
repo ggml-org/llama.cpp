@@ -1399,6 +1399,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
             "vision_tower.vision_model.embeddings.patch_embedding",
+            "model.vision_tower.embeddings.patch_embedding", # minicpmv4_6
             "model.vision_tower.embeddings.patch_embeddings.projection", # Intern-S1
             "vpm.embeddings.patch_embedding",
             "model.vision_model.embeddings.patch_embedding", # SmolVLM
@@ -1424,6 +1425,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
             "vision_tower.vision_model.embeddings.position_embedding",
+            "model.vision_tower.embeddings.position_embedding", # minicpmv4_6
             "model.vision_tower.embeddings.position_embeddings", # Intern-S1
             "vpm.embeddings.position_embedding",
             "model.vision_model.embeddings.position_embedding", # SmolVLM
@@ -1460,6 +1462,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_ATTN_Q: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj",
+            "model.vision_tower.encoder.layers.{bid}.self_attn.q_proj", # minicpmv4_6
             "model.vision_tower.encoder.layer.{bid}.attention.q_proj", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.q_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.q_proj", # SmolVLM
@@ -1483,6 +1486,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_ATTN_K: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj",
+            "model.vision_tower.encoder.layers.{bid}.self_attn.k_proj", # minicpmv4_6
             "model.vision_tower.encoder.layer.{bid}.attention.k_proj", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.k_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.k_proj", # SmolVLM
@@ -1506,6 +1510,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_ATTN_V: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj",
+            "model.vision_tower.encoder.layers.{bid}.self_attn.v_proj", # minicpmv4_6
             "model.vision_tower.encoder.layer.{bid}.attention.v_proj", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.v_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.v_proj", # SmolVLM
@@ -1522,6 +1527,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1",
+            "model.vision_tower.encoder.layers.{bid}.layer_norm1", # minicpmv4_6
             "vision_tower.vision_model.encoder.layers.{bid}.norm1", # InternVL
             "model.vision_tower.encoder.layer.{bid}.layernorm_before", # Intern-S1
             "vpm.encoder.layers.{bid}.layer_norm1",
@@ -1542,6 +1548,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj",
+            "model.vision_tower.encoder.layers.{bid}.self_attn.out_proj", # minicpmv4_6
             "vision_tower.vision_model.encoder.layers.{bid}.attn.proj", # InternVL
             "model.vision_tower.encoder.layer.{bid}.attention.projection_layer", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
@@ -1564,6 +1571,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2",
+            "model.vision_tower.encoder.layers.{bid}.layer_norm2", # minicpmv4_6
             "vision_tower.vision_model.encoder.layers.{bid}.norm2", # InternVL
             "model.vision_tower.encoder.layer.{bid}.layernorm_after", # Intern-S1
             "vpm.encoder.layers.{bid}.layer_norm2",
@@ -1585,6 +1593,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1",
+            "model.vision_tower.encoder.layers.{bid}.mlp.fc1", # minicpmv4_6
             "model.vision_tower.encoder.layer.{bid}.mlp.fc1", # Intern-S1
             "vpm.encoder.layers.{bid}.mlp.fc1",
             "model.vision_model.encoder.layers.{bid}.mlp.fc1", # SmolVLM, gemma3
@@ -1613,6 +1622,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2",
+            "model.vision_tower.encoder.layers.{bid}.mlp.fc2", # minicpmv4_6
             "model.vision_tower.encoder.layer.{bid}.mlp.fc2", # Intern-S1
             "vpm.encoder.layers.{bid}.mlp.fc2",
             "model.vision_model.encoder.layers.{bid}.mlp.fc2", # SmolVLM, gemma3
@@ -1668,6 +1678,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_POST_NORM: (
             "vision_tower.vision_model.post_layernorm",
+            "model.vision_tower.post_layernorm", # minicpmv4_6
             "model.vision_model.post_layernorm", # SmolVLM
             "vision_model.layernorm_post", # llama4
             "visual.merger.ln_q", # qwen2vl
@@ -1696,6 +1707,7 @@ class TensorNameMap:
             "mlp_AR.pre_norm", # PaddleOCR-VL
             "merger.ln_q",
             "vision_tower.merger.ln_q", # dots.ocr
+            "model.merger.mlp.0.pre_norm", # minicpmv4_6
         ),
 
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
@@ -1769,6 +1781,38 @@ class TensorNameMap:
             "model.visual.deepstack_merger_list.{bid}.linear_fc2", # deepstack in qwen3vl
         ),
 
+        MODEL_TENSOR.V_MERGER_LN1: (
+            "model.vision_tower.vit_merger.layer_norm1", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_ATTN_Q: (
+            "model.vision_tower.vit_merger.self_attn.q_proj", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_ATTN_K: (
+            "model.vision_tower.vit_merger.self_attn.k_proj", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_ATTN_V: (
+            "model.vision_tower.vit_merger.self_attn.v_proj", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_ATTN_O: (
+            "model.vision_tower.vit_merger.self_attn.out_proj", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_DS_LN: (
+            "model.vision_tower.vit_merger.pre_norm", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_DS_UP: (
+            "model.vision_tower.vit_merger.linear_1", # minicpmv4_6
+        ),
+
+        MODEL_TENSOR.V_MERGER_DS_DOWN: (
+            "model.vision_tower.vit_merger.linear_2", # minicpmv4_6
+        ),
+
         MODEL_TENSOR.V_SAM_POS_EMBD: (
             "model.sam_model.pos_embed",
         ),
@@ -1828,11 +1872,13 @@ class TensorNameMap:
         MODEL_TENSOR.V_MM_UP: (
             "model.vision.linear_proj.dense_h_to_4h", # cogvlm
             "visual.merger.up_proj", # glm4v
+            "model.merger.mlp.0.linear_1", # minicpmv4_6
         ),
 
         MODEL_TENSOR.V_MM_DOWN: (
             "model.vision.linear_proj.dense_4h_to_h", # cogvlm
             "visual.merger.down_proj", # glm4v
+            "model.merger.mlp.0.linear_2", # minicpmv4_6
         ),
 
         MODEL_TENSOR.V_MM_GATE: (
