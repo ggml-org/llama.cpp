@@ -1,8 +1,8 @@
 [project]
 name = "gguf"
+version = "0.19.0"
 description = "Read and write ML models in GGUF for GGML"
 keywords = ["ggml", "gguf", "llama.cpp"]
-version = "0.18.0"
 dynamic = ["classifiers"]
 readme = "README.md"
 authors = [{name = "GGML", email = "ggml@ggml.ai"}]
