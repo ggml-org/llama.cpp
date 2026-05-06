@@ -2,7 +2,7 @@
 	import { Settings, Plus } from '@lucide/svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { McpLogo, DropdownMenuSearchable } from '$lib/components/app';
+	import { McpLogo, DropdownMenuSearchable, McpServerIdentity } from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
@@ -77,6 +77,8 @@
 							{@const healthState = mcpStore.getHealthCheckState(server.id)}
 							{@const hasError = healthState.status === HealthCheckStatus.ERROR}
 							{@const isEnabledForChat = isServerEnabledForChat(server.id)}
+							{@const displayName = getServerLabel(server)}
+							{@const faviconUrl = mcpStore.getServerFavicon(server.id)}
 
 							<button
 								type="button"
@@ -85,18 +87,16 @@
 								disabled={hasError}
 							>
 								<div class="flex min-w-0 flex-1 items-center gap-2">
-									{#if mcpStore.getServerFavicon(server.id)}
-										<img
-											src={mcpStore.getServerFavicon(server.id)}
-											alt=""
-											class="h-4 w-4 shrink-0 rounded-sm"
-											onerror={(e) => {
-												(e.currentTarget as HTMLImageElement).style.display = 'none';
-											}}
+									<div class="min-w-0 flex-1">
+										<McpServerIdentity
+											{displayName}
+											{faviconUrl}
+											iconClass="h-4 w-4"
+											iconRounded="rounded-sm"
+											showVersion={false}
+											nameClass="text-sm"
 										/>
-									{/if}
-
-									<span class="truncate text-sm">{getServerLabel(server)}</span>
+									</div>
 
 									{#if hasError}
 										<span
