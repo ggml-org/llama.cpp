@@ -333,6 +333,12 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 node->src[0]->src[0]->src[0]->op == GGML_OP_VIEW) {
                 return 2;
             }
+            // case 3: node op is SOFT_MAX, src 0 not null & op is ADD & the src 0 of ADD is MUL_MAT & the src 0 of MUL_MAT is PERMUTE
+            if (node->src[0]->op == GGML_OP_ADD && node->src[0]->src[0] != nullptr &&
+                node->src[0]->src[0]->op == GGML_OP_MUL_MAT && node->src[0]->src[0]->src[0] != nullptr &&
+                node->src[0]->src[0]->src[0]->op == GGML_OP_PERMUTE) {
+                return 3;
+            }
             break;
         default:
             break;
@@ -347,33 +353,40 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         std::string name = std::string(node->name);
         const int attention_pattern_case = get_attention_pattern_case(node);
         if (attention_pattern_case != -1) {
-            ggml_tensor * cache_k_view = nullptr;
+            ggml_tensor * cache_k_permute = nullptr;
             ggml_tensor * mask = nullptr;
 
             switch (attention_pattern_case) {
             case 0:
-                cache_k_view = node->src[1]->src[0];
+                cache_k_permute = node->src[1];
                 mask = node->src[3];
                 break;
             case 1:
-                cache_k_view = node->src[1]->src[0]->src[0];
+                cache_k_permute = node->src[1]->src[0];
                 mask = node->src[3];
                 break;
             case 2:
-                cache_k_view = node->src[0]->src[0]->src[0];
+                cache_k_permute = node->src[0]->src[0];
                 mask = node->src[1];
+                break;
+            case 3:
+                cache_k_permute = node->src[0]->src[0]->src[0];
                 break;
             default:
                 break;
             }
 
-            assert(cache_k_view != nullptr && mask != nullptr);
+            assert(cache_k_permute != nullptr);
 
-            model_params.head_size = cache_k_view->ne[0];
-            model_params.n_heads_kv = cache_k_view->ne[1];
-
+            model_params.head_size = cache_k_permute->ne[0];
+            model_params.n_heads_kv = cache_k_permute->ne[2];
             compute_params.input_len = node->src[0]->ne[1];
             compute_params.token_len_per_seq = node->ne[2];
+
+            auto * cache_k_view = cache_k_permute->src[0];
+            if (cache_k_view->op != GGML_OP_VIEW) {
+                continue;
+            }
 
             ggml_tensor * cache_k = cache_k_view->src[0];
             int layer = extract_layer_from_name(cache_k->name);
