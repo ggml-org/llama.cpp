@@ -1,5 +1,5 @@
 <script lang="ts">
-	import SettingsChatFooter from './SettingsChatFooter.svelte';
+	import SettingsFooter from '$lib/components/app/settings/SettingsFooter.svelte';
 	import SettingsChatFields from './SettingsChatFields.svelte';
 	import SettingsChatToolsTab from './SettingsChatToolsTab.svelte';
 	import SettingsChatImportExportTab from './SettingsChatImportExportTab.svelte';
@@ -149,7 +149,7 @@
 				</div>
 			</div>
 
-			<SettingsChatFooter onReset={handleReset} onSave={handleSave} />
+			<SettingsFooter onReset={handleReset} onSave={handleSave} />
 		</div>
 	</div>
 </div>
