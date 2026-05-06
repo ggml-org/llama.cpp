@@ -499,14 +499,7 @@ int common_download_file_single(const std::string & url,
     return 304; // Not Modified - fake cached response
 }
 
-struct gguf_split_info {
-    std::string prefix; // tag included
-    std::string tag;
-    int index;
-    int count;
-};
-
-static gguf_split_info get_gguf_split_info(const std::string & path) {
+gguf_split_info get_gguf_split_info(const std::string & path) {
     static const std::regex re_split("^(.+)-([0-9]{5})-of-([0-9]{5})$", std::regex::icase);
     static const std::regex re_tag("[-.]([A-Z0-9_]+)$", std::regex::icase);
     std::smatch m;
@@ -619,7 +612,7 @@ static hf_cache::hf_file find_best_mtp(const hf_cache::hf_files & files,
     return find_best_sibling(files, model, "mtp-");
 }
 
-static bool gguf_filename_is_model(const std::string & filepath) {
+bool gguf_filename_is_model(const std::string & filepath) {
     if (!string_ends_with(filepath, ".gguf")) {
         return false;
     }

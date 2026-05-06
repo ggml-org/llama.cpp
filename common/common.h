@@ -294,7 +294,6 @@ struct common_params_model {
     std::string hf_repo     = ""; // HF repo                                                // NOLINT
     std::string hf_file     = ""; // HF file                                                // NOLINT
     std::string ms_repo     = ""; // ModelScope repo                                        // NOLINT
-    std::string ms_file     = ""; // ModelScope file                                        // NOLINT
     std::string docker_repo = ""; // Docker repo                                            // NOLINT
     std::string name        = ""; // in format <user>/<model>[:<tag>] (tag is optional)     // NOLINT
 };

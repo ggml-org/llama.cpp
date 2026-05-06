@@ -108,3 +108,15 @@ int common_download_file_single(const std::string & url,
 // resolve and download model from Docker registry
 // return local path to downloaded model file
 std::string common_docker_resolve_model(const std::string & docker);
+
+// shared by HF (download.cpp) and ModelScope (ms.cpp)
+bool gguf_filename_is_model(const std::string & filepath);
+
+struct gguf_split_info {
+    std::string prefix; // tag included
+    std::string tag;
+    int index;
+    int count;
+};
+
+gguf_split_info get_gguf_split_info(const std::string & path);

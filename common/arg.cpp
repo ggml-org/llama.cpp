@@ -386,11 +386,10 @@ static handle_model_result common_params_handle_model(struct common_params_model
         // Use the complete original value for model name
         model.name = model.ms_repo;
 
-        auto download_result = ms::download_model_with_mmproj(ms_repo, model.hf_file, offline, ms_tag, bearer_token);
+        auto download_result = ms::download_model(ms_repo, model.hf_file, offline, ms_tag, bearer_token);
 
         if (download_result.model_path.empty()) {
-            LOG_ERR("error: failed to download model from ModelScope\n");
-            exit(1);
+            throw std::runtime_error("failed to download model from ModelScope");
         }
 
         model.path = download_result.model_path;
@@ -399,11 +398,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
         if (!download_result.mmproj_path.empty()) {
             result.found_mmproj = true;
             result.mmproj.path = download_result.mmproj_path;
-        }
-
-        if (!download_result.mtp_path.empty()) {
-            result.found_mtp = true;
-            result.mtp.path  = download_result.mtp_path;
         }
     } else if (!model.url.empty()) {
         if (model.path.empty()) {
