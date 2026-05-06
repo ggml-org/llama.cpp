@@ -27,6 +27,7 @@ import {
 } from '$lib/enums';
 import type {
 	MCPServerConfig,
+	MCPResourceIcon,
 	ToolCallParams,
 	ToolExecutionResult,
 	Implementation,
@@ -469,10 +470,11 @@ export class MCPService {
 			title: impl.title,
 			description: impl.description,
 			websiteUrl: impl.websiteUrl,
-			icons: impl.icons?.map((icon: { src: string; mimeType?: string; sizes?: string }) => ({
+			icons: impl.icons?.map((icon: MCPResourceIcon) => ({
 				src: icon.src,
 				mimeType: icon.mimeType,
-				sizes: icon.sizes
+				sizes: icon.sizes,
+				theme: icon.theme
 			}))
 		};
 	}
@@ -581,7 +583,6 @@ export class MCPService {
 			this.createLog(MCPConnectionPhase.INITIALIZING, 'Sending initialize request...')
 		);
 
-		console.log(`[MCPService][${serverName}] Connecting to server...`);
 		try {
 			await client.connect(transport);
 			// Transport diagnostics are only for the initial handshake, not long-lived traffic.

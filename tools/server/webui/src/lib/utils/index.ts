@@ -39,7 +39,10 @@ export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } fr
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
 // CORS Proxy
-export { buildProxiedUrl, getProxiedUrlString, buildProxiedHeaders } from './cors-proxy';
+export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
+
+// URL utilities
+export { extractRootDomain, sanitizeExternalUrl } from './url';
 
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';
@@ -145,9 +148,6 @@ export { createBase64DataUrl } from './data-url';
 
 // Header utilities
 export { parseHeadersToArray, serializeHeaders } from './headers';
-
-// Favicon utilities
-export { getFaviconUrl } from './favicon';
 
 // Agentic content utilities (structured section derivation)
 export {

@@ -54,14 +54,14 @@
 	});
 </script>
 
-<div in:fade={{ duration: 150 }} class="max-h-full overflow-auto">
+<div in:fade={{ duration: 150 }} class="h-full max-h-[100dvh] overflow-y-auto">
 	<div class="flex items-center gap-2 p-4 md:absolute md:top-8 md:left-8 md:px-0 md:py-2">
 		<McpLogo class="h-5 w-5 md:h-6 md:w-6" />
 
 		<h1 class="text-xl font-semibold md:text-2xl">MCP Servers</h1>
 	</div>
 
-	<div class="sticky top-0 z-10 mt-4 flex items-start justify-end gap-4 px-8 py-4">
+	<div class="sticky top-0 z-10 mt-4 flex items-start gap-4 p-4 md:justify-end md:px-8">
 		<Button variant="outline" size="sm" class="shrink-0" onclick={() => (isAddingServer = true)}>
 			<Plus class="h-4 w-4" />
 
@@ -89,7 +89,6 @@
 					{:else}
 						<McpServerCard
 							{server}
-							faviconUrl={mcpStore.getServerFavicon(server.id)}
 							enabled={conversationsStore.isMcpServerEnabledForChat(server.id)}
 							onToggle={async () => {
 								const wasEnabled = conversationsStore.isMcpServerEnabledForChat(server.id);

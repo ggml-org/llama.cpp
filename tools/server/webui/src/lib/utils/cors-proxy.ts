@@ -33,12 +33,3 @@ export function buildProxiedHeaders(headers: Record<string, string>): Record<str
 
 	return proxiedHeaders;
 }
-
-/**
- * Get a proxied URL string for use in fetch requests.
- * @param targetUrl - The original URL to proxy
- * @returns Proxied URL as string
- */
-export function getProxiedUrlString(targetUrl: string): string {
-	return buildProxiedUrl(targetUrl).href;
-}

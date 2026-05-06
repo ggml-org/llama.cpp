@@ -181,6 +181,25 @@ export { default as McpServerCardDeleteDialog } from './McpServerCard/McpServerC
 export { default as McpServerCardSkeleton } from './McpServerCardSkeleton.svelte';
 
 /**
+ * **McpServerIdentity** - Server identity display (icon, name, version)
+ *
+ * Reusable headless component for displaying server name, favicon/icon, and version badge.
+ * Accepts all data via props with no store dependencies for predictable rendering.
+ *
+ * **Features:**
+ * - Server favicon/icon with fallback
+ * - Truncated display name with max-width
+ * - Optional version badge (v1.2.3)
+ * - Optional external link to server website
+ *
+ * @example
+ * ```svelte
+ * <McpServerIdentity displayName={name} faviconUrl={iconUrl} serverInfo={info} />
+ * ```
+ */
+export { default as McpServerIdentity } from './McpServerIdentity.svelte';
+
+/**
  * **McpServerInfo** - Server instructions display
  *
  * Collapsible panel showing server-provided instructions.

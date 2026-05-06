@@ -32,7 +32,7 @@
 
 {#if isTruncated && showTooltip}
 	<Tooltip.Root>
-		<Tooltip.Trigger class={className}>
+		<Tooltip.Trigger class="{className} min-w-0">
 			<span bind:this={textElement} class="block truncate">
 				{text}
 			</span>
@@ -43,7 +43,7 @@
 		</Tooltip.Content>
 	</Tooltip.Root>
 {:else}
-	<span bind:this={textElement} class="{className} block truncate">
+	<span bind:this={textElement} class="{className} block min-w-0 truncate">
 		{text}
 	</span>
 {/if}

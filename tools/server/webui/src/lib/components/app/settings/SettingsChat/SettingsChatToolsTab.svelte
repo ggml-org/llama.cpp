@@ -2,27 +2,14 @@
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { TruncatedText } from '$lib/components/app';
+	import { TruncatedText, McpServerIdentity } from '$lib/components/app';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { permissionsStore } from '$lib/stores/permissions.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { ToolSource } from '$lib/enums';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	let expandedGroups = new SvelteSet<string>();
 	let groups = $derived(toolsStore.toolGroups);
-
-	function getFavicon(group: { source: ToolSource; label: string }): string | null {
-		if (group.source !== ToolSource.MCP) return null;
-
-		for (const server of mcpStore.getServersSorted()) {
-			if (mcpStore.getServerLabel(server) === group.label) {
-				return mcpStore.getServerFavicon(server.id);
-			}
-		}
-
-		return null;
-	}
 
 	function toggleExpanded(label: string) {
 		if (expandedGroups.has(label)) {
@@ -39,8 +26,6 @@
 	<div class="space-y-2">
 		{#each groups as group (group.label)}
 			{@const isExpanded = expandedGroups.has(group.label)}
-			{@const favicon = getFavicon(group)}
-
 			<Collapsible.Root open={isExpanded} onOpenChange={() => toggleExpanded(group.label)}>
 				<Collapsible.Trigger
 					class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-muted/50"
@@ -51,19 +36,16 @@
 						<ChevronRight class="h-3.5 w-3.5 shrink-0" />
 					{/if}
 
-					<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
-						{#if favicon}
-							<img
-								src={favicon}
-								alt=""
-								class="h-4 w-4 shrink-0 rounded-sm"
-								onerror={(e) => {
-									(e.currentTarget as HTMLImageElement).style.display = 'none';
-								}}
-							/>
-						{/if}
+					{@const faviconUrl = group.serverId ? mcpStore.getServerFavicon(group.serverId) : null}
 
-						<span class="truncate">{group.label}</span>
+					<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
+						<McpServerIdentity
+							iconClass="h-4 w-4"
+							iconRounded="rounded-sm"
+							showVersion={false}
+							displayName={group.label}
+							{faviconUrl}
+						/>
 					</span>
 
 					<span class="ml-auto shrink-0 text-xs text-muted-foreground">
@@ -89,7 +71,7 @@
 								: false}
 
 							<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
-								<TruncatedText text={toolName} class="min-w-0 flex-1 truncate" showTooltip={true} />
+								<TruncatedText text={toolName} class="flex-1" showTooltip={true} />
 
 								<div class="flex w-16 shrink-0 justify-center">
 									<Checkbox

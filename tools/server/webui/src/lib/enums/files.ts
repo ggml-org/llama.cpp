@@ -182,7 +182,9 @@ export enum MimeTypeImage {
 	PNG = 'image/png',
 	GIF = 'image/gif',
 	WEBP = 'image/webp',
-	SVG = 'image/svg+xml'
+	SVG = 'image/svg+xml',
+	ICO = 'image/x-icon',
+	ICO_MICROSOFT = 'image/vnd.microsoft.icon'
 }
 
 export enum MimeTypeText {

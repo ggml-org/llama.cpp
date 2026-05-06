@@ -170,7 +170,7 @@
 			>
 				<Package class="h-3.5 w-3.5" />
 
-				<TruncatedText text={selectedOption?.model || ''} class="min-w-0 font-medium" />
+				<TruncatedText text={selectedOption?.model || ''} class="font-medium" />
 
 				{#if ms.updating}
 					<Loader2 class="h-3 w-3.5 animate-spin" />

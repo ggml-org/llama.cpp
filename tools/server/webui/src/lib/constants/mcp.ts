@@ -13,7 +13,9 @@ export const MCP_ALLOWED_ICON_MIME_TYPES = new Set([
 	MimeTypeImage.JPEG,
 	MimeTypeImage.JPG,
 	MimeTypeImage.SVG,
-	MimeTypeImage.WEBP
+	MimeTypeImage.WEBP,
+	MimeTypeImage.ICO,
+	MimeTypeImage.ICO_MICROSOFT
 ]);
 
 /**
