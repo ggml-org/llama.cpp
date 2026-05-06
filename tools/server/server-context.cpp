@@ -933,6 +933,16 @@ private:
             batch = llama_batch_init(std::max(n_batch, params_base.n_parallel), 0, 1);
         }
 
+        // Models that don't support partial sequence removal (e.g., DeepSeek V4
+        // which has a fixed-size sliding-window + indexer KV state) crash later
+        // in update_slots() when the prompt cache tries to do prefix-matched
+        // reuse and llama_memory_seq_pos_min returns -1. Force the prompt
+        // cache off in that case to avoid a confusing GGML_ABORT.
+        if (params_base.cache_ram_mib != 0 && ctx_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_PART) {
+            SRV_WRN("%s", "prompt cache disabled: model does not support partial sequence removal\n");
+            params_base.cache_ram_mib = 0;
+        }
+
         if (params_base.cache_ram_mib != 0) {
             if (params_base.cache_ram_mib < 0) {
                 SRV_WRN("prompt cache is enabled, size limit: %s\n", "no limit");
