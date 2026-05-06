@@ -3103,33 +3103,25 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 
     bool use_cuda_graph = true;
 
-    // Large prefill graphs (e.g. DeepSeek4 batched prefill at ub>=768)
-    // exceed CUDA graph capture memory budgets even on otherwise capture-
-    // eligible nodes. Detect by examining any operation whose tensor
-    // dimensions scale with the prefill ubatch width. The threshold is a
-    // hardware-specific heuristic (works on dual RTX 3090 + 2080 Ti).
-    int64_t max_dim = 0;
+    // Wide-prefill graphs (e.g. DeepSeek4 batched prefill at ub>=768)
+    // exceed CUDA graph capture memory budgets. The most reliable signal
+    // for "this graph is processing many tokens at once" is MUL_MAT_ID's
+    // ne[2] dimension, which is exactly work_tokens. Regular MUL_MAT
+    // ne[1] is unreliable because some matmuls (e.g. V4's HC_POST
+    // batched mixer) have ne[1] = n_embd regardless of work_tokens.
+    int64_t max_mmid_tokens = 0;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
-        if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE
-            || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
-            continue;
-        }
-        for (int d = 1; d < GGML_MAX_DIMS; d++) {
-            if (node->ne[d] > max_dim) max_dim = node->ne[d];
-        }
-        for (int s = 0; s < GGML_MAX_SRC; s++) {
-            if (node->src[s]) {
-                for (int d = 1; d < GGML_MAX_DIMS; d++) {
-                    if (node->src[s]->ne[d] > max_dim) max_dim = node->src[s]->ne[d];
-                }
+        if (node->op == GGML_OP_MUL_MAT_ID) {
+            if (node->ne[2] > max_mmid_tokens) {
+                max_mmid_tokens = node->ne[2];
             }
         }
     }
-    if (max_dim >= 384) {
+    if (max_mmid_tokens >= 384) {
 #ifndef NDEBUG
-        GGML_LOG_DEBUG("%s: disabling CUDA graphs due to large prefill dim (max = %lld)\n",
-                       __func__, (long long) max_dim);
+        GGML_LOG_DEBUG("%s: disabling CUDA graphs due to wide prefill mmid ne[2]=%lld\n",
+                       __func__, (long long) max_mmid_tokens);
 #endif
         return false;
     }
