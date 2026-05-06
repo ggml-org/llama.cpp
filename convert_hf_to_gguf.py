@@ -5509,10 +5509,13 @@ class _Qwen35MRopeMixin:
     # written even when a particular checkpoint omits the field in `rope_parameters`.
     _QWEN35_DEFAULT_MROPE_SECTION = [11, 11, 10, 0]
 
+    gguf_writer: gguf.GGUFWriter
+    rope_parameters: dict
+
     def set_gguf_parameters(self):
-        super().set_gguf_parameters()  # type: ignore[misc]
-        if "mrope_section" not in self.rope_parameters:  # type: ignore[attr-defined]
-            self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)  # type: ignore[attr-defined]
+        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        if "mrope_section" not in self.rope_parameters:
+            self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
 
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
