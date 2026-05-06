@@ -526,79 +526,12 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq(
     return dm4f.x*sumf_d - dm4f.y*sumf_m;
 }
 
-struct q4_k_q8_1_x4_rhs {
-    int4   q8_lo;
-    int4   q8_hi;
-    float2 ds;
-};
-
-static __device__ __forceinline__ q4_k_q8_1_x4_rhs load_q4_K_q8_1_x4_rhs(
-        const block_q8_1_x4 * __restrict__ yx4,
-        const int & kby, const int subblock) {
-    const int block_offset = kby + subblock;
-    //divide by 4 to find which struct we need
-    const int block_outer  = block_offset >> 2;
-    // Index inside, same as block_offset % 4
-    const int block_inner  = block_offset & 3;
-    const block_q8_1_x4 * by = yx4 + block_outer;
-    const int4 * q8 = (const int4 *) (by->qs + block_inner * 8);
-
-    q4_k_q8_1_x4_rhs rhs;
-    rhs.q8_lo = q8[0];
-    rhs.q8_hi = q8[1];
-
-    // Load scale + offset-correction terms:
-    //   ds.x = Q8 scale (d8)
-    //   ds.y = d8 * sum(q8) precomputed for offset correction
-    rhs.ds = __half22float2(by->ds[block_inner]);
-    return rhs;
-}
-
-struct q4_k_scale_min {
-    uint32_t scale;
-    uint32_t min;
-};
-
-struct q4_k_block_header {
-    half2    dm;
-    uint32_t scale0;
-    uint32_t scale4;
-    uint32_t scale8;
-};
-
-static_assert(sizeof(q4_k_block_header) == 16, "Unexpected q4_k block header size");
-
-static __device__ __forceinline__ q4_k_scale_min load_q4_K_scale_min(
-        const q4_k_block_header & header,
-        const int subblock) {
-    // Lower half of packed scales (for subblocks 0–3)
-    const uint32_t sc_lo = header.scale0;
-    // Lower half of packed mins 
-    const uint32_t mb_lo = header.scale4;
-
-    // Upper half of packed scales and mins (for subblocks 4–7)
-    // Combine:
-    // - low 4 bits from scale8 (shifted down for mins)
-    // - high 2 bits from scale0/4 (shifted down) 
-    // This reconstructs 6-bit scale values that were split across words
-    const uint32_t sc_hi = (header.scale8 & 0x0F0F0F0Fu) | ((header.scale0 & 0xC0C0C0C0u) >> 2);
-    const uint32_t mb_hi = ((header.scale8 & 0xF0F0F0F0u) >> 4) | ((header.scale4 & 0xC0C0C0C0u) >> 2);
-
-    const int shift = 8 * (subblock & 3);
-    const uint32_t sc_word = subblock < 4 ? sc_lo : sc_hi;
-    const uint32_t mb_word = subblock < 4 ? mb_lo : mb_hi;
-
-    q4_k_scale_min scale_min;
-    // shift to correct byte, mask lower 6 bits (0x3F = 6 bits) 0011 1111
-    scale_min.scale = (sc_word >> shift) & 0x3Fu;
-    scale_min.min   = (mb_word >> shift) & 0x3Fu;
-    return scale_min;
-}
-
-static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4_with_packed(
+static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq_x4(
         const uint4 & packed_q4_lo,
         const uint4 & packed_q4_hi,
-        const q4_k_q8_1_x4_rhs * __restrict__ rhs,
+        const int4 * __restrict__ q8_lo,
+        const int4 * __restrict__ q8_hi,
+        const float2 * __restrict__ ds8,
         const uint8_t * __restrict__ sc,
         const uint8_t * __restrict__ m,
         const half2 & dm4) {
@@ -630,20 +563,20 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4_with_packed(
 
         // Accumulate dot product between Q4 values and Q8 values
         int q_sum = 0;
-        q_sum = ggml_cuda_dp4a(v0, rhs[i].q8_lo.x, q_sum);
-        q_sum = ggml_cuda_dp4a(v1, rhs[i].q8_lo.y, q_sum);
-        q_sum = ggml_cuda_dp4a(v2, rhs[i].q8_lo.z, q_sum);
-        q_sum = ggml_cuda_dp4a(v3, rhs[i].q8_lo.w, q_sum);
-        q_sum = ggml_cuda_dp4a(v4, rhs[i].q8_hi.x, q_sum);
-        q_sum = ggml_cuda_dp4a(v5, rhs[i].q8_hi.y, q_sum);
-        q_sum = ggml_cuda_dp4a(v6, rhs[i].q8_hi.z, q_sum);
-        q_sum = ggml_cuda_dp4a(v7, rhs[i].q8_hi.w, q_sum);
+        q_sum = ggml_cuda_dp4a(v0, q8_lo[i].x, q_sum);
+        q_sum = ggml_cuda_dp4a(v1, q8_lo[i].y, q_sum);
+        q_sum = ggml_cuda_dp4a(v2, q8_lo[i].z, q_sum);
+        q_sum = ggml_cuda_dp4a(v3, q8_lo[i].w, q_sum);
+        q_sum = ggml_cuda_dp4a(v4, q8_hi[i].x, q_sum);
+        q_sum = ggml_cuda_dp4a(v5, q8_hi[i].y, q_sum);
+        q_sum = ggml_cuda_dp4a(v6, q8_hi[i].z, q_sum);
+        q_sum = ggml_cuda_dp4a(v7, q8_hi[i].w, q_sum);
 
-        // rhs[i].ds.x = Q8 scale (d8), sc[i] = Q4 scale, q_sum = Σ(q4 * q8)
-        sumf_d += rhs[i].ds.x * (q_sum * sc[i]);
+        // ds8[i].x = Q8 scale (d8), sc[i] = Q4 scale, q_sum = Σ(q4 * q8)
+        sumf_d += ds8[i].x * (q_sum * sc[i]);
 
-        // m * Σ(q8): rhs[i].ds.y = d8 * Σ(q8) (precomputed), m[i] = Q4 min (offset)
-        sumf_m += rhs[i].ds.y *   m[i];
+        // m * Σ(q8): ds8[i].y = d8 * Σ(q8) (precomputed), m[i] = Q4 min (offset)
+        sumf_m += ds8[i].y *   m[i];
     }
 
     const float2 dm4f = __half22float2(dm4);
@@ -1042,11 +975,18 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
     // Select the kbx-th Q4_K weight block.
     const block_q4_K * bq4_K = (const block_q4_K *) vbq + kbx;
 
-    // Packed Q4 values for this 64-element chunk (split into two halves).
+    // Packed Q4 values for this 64-element chunk.
+    // v_lo contains the first 32 Q4 values.
+    // v_hi contains the second 32 Q4 values.    
     uint4 v_lo;
     uint4 v_hi;
-    // Packed Q8_1_x4 RHS data (one entry per Q4 subblock).
-    q4_k_q8_1_x4_rhs u[QR4_K];
+    // For each Q4 subblock, load low and high halves of Q8 data.
+    int4 q8_lo[QR4_K];
+    int4 q8_hi[QR4_K];
+
+    // ds8[i].x = Q8 scale
+    // ds8[i].y = Q8 scale * sum(q8), used for min correction
+    float2 ds8[QR4_K];
     uint8_t sc[QR4_K]; //subblock Q4 scales.
     uint8_t m[QR4_K];  //subblock Q4 mins (offsets).
 
@@ -1060,7 +1000,27 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
     v_lo = ((const uint4 *)(q4 + 0))[0];
     v_hi = ((const uint4 *)(q4 + 4))[0];
 
-    const q4_k_block_header header = ((const q4_k_block_header *) bq4_K)[0];
+    const half2 dm4 = bq4_K->dm;
+
+    // Q4_K stores 8 (scale, min) pairs, each pair is 12 bits → total 96 bits.
+    // These are packed into 3 × 32-bit integers (scale0, scale4, scale8).
+    // scale0/scale4 contain values for subblocks 0–3 and the upper bits for 4–7,
+    const uint32_t scale0 = (uint32_t) get_int_b4(bq4_K->scales, 0);
+    const uint32_t scale4 = (uint32_t) get_int_b4(bq4_K->scales, 1);
+    const uint32_t scale8 = (uint32_t) get_int_b4(bq4_K->scales, 2);
+
+    // scale bytes for subblocks 0-3.
+    const uint32_t sc_lo = scale0;
+    //min/offset bytes for subblocks 0-3.
+    const uint32_t mb_lo = scale4;
+
+    // Reconstruct scale bytes for subblocks 4-7.
+    // Low 4 bits come from scale8.
+    // High 2 bits come from the top 2 bits of scale0.
+    const uint32_t sc_hi = (scale8 & 0x0F0F0F0Fu) | ((scale0 & 0xC0C0C0C0u) >> 2);
+
+    //Similar reconstruction applies for min/offset bytes
+    const uint32_t mb_hi = ((scale8 & 0xF0F0F0F0u) >> 4) | ((scale4 & 0xC0C0C0C0u) >> 2);
 
 #pragma unroll
     // Loop through Q4 blocks (typically 2).
@@ -1069,15 +1029,35 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
         //subblock index inside the Q4_K block.
         const int subblock = subblock0 + i;
 
-        const q4_k_scale_min scale_min = load_q4_K_scale_min(header, subblock);
+        // Select which byte inside the 32-bit scale/min word to read. subblock & 3 gives position 0,1,2,3 within a group of 4.
+        const int shift = 8 * (subblock & 3);
+        // subblocks 0-3 use sc_lo; subblocks 4-7 use sc_hi.
+        const uint32_t sc_word = subblock < 4 ? sc_lo : sc_hi;
+        const uint32_t mb_word = subblock < 4 ? mb_lo : mb_hi;
 
-        sc[i] = (uint8_t) scale_min.scale;
-        m[i]  = (uint8_t) scale_min.min;
+        // Extract the 6-bit Q4 scale and min/offset for this subblock.
+        sc[i] = (uint8_t) ((sc_word >> shift) & 0x3Fu);
+        m[i]  = (uint8_t) ((mb_word >> shift) & 0x3Fu);
 
-        u[i] = load_q4_K_q8_1_x4_rhs(yx4, kby, subblock);
+        // Compute global Q8 subblock index
+        const int block_offset = kby + subblock;
+        // Divide by 4 to choose which block_q8_1_x4 object. (block_q8_1_x4 stores 4 Q8)
+        const int block_outer  = block_offset >> 2;
+        // Modulo 4 to choose which subblock inside that x4 object.
+        const int block_inner  = block_offset & 3;
+        const block_q8_1_x4 * by = yx4 + block_outer;
+        //Q8 values for the selected inner subblock (uses 8 int32 entries = 2 int4 loads).
+        const int4 * q8 = (const int4 *) (by->qs + block_inner * 8);
+
+        // Load first and second half of packed Q8 values
+        q8_lo[i] = q8[0];
+        q8_hi[i] = q8[1];
+
+        // Load Q8 scale/correction values and convert half2 to float2.
+        ds8[i] = __half22float2(by->ds[block_inner]);
     }
 
-    return vec_dot_q4_K_q8_1_x4_with_packed(v_lo, v_hi, u, sc, m, header.dm);
+    return vec_dot_q4_K_q8_1_impl_vmmq_x4(v_lo, v_hi, q8_lo, q8_hi, ds8, sc, m, dm4);
 }
 
 static __device__ __forceinline__ float vec_dot_q5_K_q8_1(
