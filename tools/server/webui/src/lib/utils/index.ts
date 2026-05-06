@@ -42,7 +42,7 @@ export { setConfigValue, getConfigValue, configToParameterRecord } from './confi
 export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
 
 // URL utilities
-export { extractRootDomain } from './url';
+export { extractRootDomain, sanitizeExternalUrl } from './url';
 
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';

@@ -2,6 +2,7 @@
 	import { ExternalLink } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { TruncatedText } from '$lib/components/app/misc';
+	import { sanitizeExternalUrl } from '$lib/utils';
 	import type { MCPServerInfo } from '$lib/types';
 
 	interface Props {
@@ -25,6 +26,10 @@
 		showWebsite = true,
 		nameClass
 	}: Props = $props();
+
+	let safeWebsiteUrl = $derived(
+		serverInfo?.websiteUrl ? sanitizeExternalUrl(serverInfo.websiteUrl) : null
+	);
 </script>
 
 <span class="flex min-w-0 items-center gap-1.5">
@@ -47,9 +52,9 @@
 		</Badge>
 	{/if}
 
-	{#if showWebsite && serverInfo?.websiteUrl}
+	{#if showWebsite && safeWebsiteUrl}
 		<a
-			href={serverInfo.websiteUrl}
+			href={safeWebsiteUrl}
 			target="_blank"
 			rel="noopener noreferrer"
 			class="shrink-0 text-muted-foreground hover:text-foreground"

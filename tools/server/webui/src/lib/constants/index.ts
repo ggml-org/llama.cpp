@@ -39,4 +39,5 @@ export * from './tools';
 export * from './tooltip-config';
 export * from './ui';
 export * from './uri-template';
+export * from './url';
 export * from './viewport';

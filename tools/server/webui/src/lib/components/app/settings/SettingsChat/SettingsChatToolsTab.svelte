@@ -6,23 +6,10 @@
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { permissionsStore } from '$lib/stores/permissions.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { ToolSource } from '$lib/enums';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	let expandedGroups = new SvelteSet<string>();
 	let groups = $derived(toolsStore.toolGroups);
-
-	function getServerIdByLabel(groupLabel: string, source: ToolSource): string | undefined {
-		if (source !== ToolSource.MCP) return undefined;
-
-		for (const server of mcpStore.getServersSorted()) {
-			if (mcpStore.getServerLabel(server) === groupLabel) {
-				return server.id;
-			}
-		}
-
-		return undefined;
-	}
 
 	function toggleExpanded(label: string) {
 		if (expandedGroups.has(label)) {
@@ -49,8 +36,7 @@
 						<ChevronRight class="h-3.5 w-3.5 shrink-0" />
 					{/if}
 
-					{@const serverId = getServerIdByLabel(group.label, group.source)}
-					{@const faviconUrl = serverId ? mcpStore.getServerFavicon(serverId) : null}
+					{@const faviconUrl = group.serverId ? mcpStore.getServerFavicon(group.serverId) : null}
 
 					<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
 						<McpServerIdentity
