@@ -29,7 +29,7 @@ export class ChatService {
 
 	/**
 	 * Sends a streaming chat completion request for generating a chat title.
-	 * Returns the aggregated content string from the stream.
+	 * Delegates to `sendMessage` for fetch, SSE parsing, and error handling.
 	 *
 	 * @param message - The single message to send (a user message containing the title generation prompt)
 	 * @param model - Optional model name to use (required in ROUTER mode)
@@ -42,54 +42,25 @@ export class ChatService {
 		model?: string | null,
 		signal?: AbortSignal
 	): Promise<string> {
+		let titleResponse = '';
 		try {
-			const response = await fetch('./v1/chat/completions', {
-				method: 'POST',
-				headers: getJsonHeaders(),
-				body: JSON.stringify({
-					messages: [message],
+			await ChatService.sendMessage(
+				[message],
+				{
 					model: model || undefined,
 					stream: true,
-					chat_template_kwargs: { enable_thinking: false }
-				}),
-				signal
-			});
-
-			if (!response.ok) {
-				console.error('Title generation failed:', response.status);
-				return '';
-			}
-
-			const reader = response.body?.getReader();
-			if (!reader) return '';
-
-			const decoder = new TextDecoder();
-			let aggregatedContent = '';
-
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-
-					const text = decoder.decode(value, { stream: true });
-					for (const line of text.split('\n').filter((l) => l.startsWith('data: '))) {
-						try {
-							const parsed = JSON.parse(line.slice(6));
-							const content = parsed.choices?.[0]?.delta?.content;
-							if (content) aggregatedContent += content;
-						} catch {
-							// skip malformed chunks
-						}
+					custom: { chat_template_kwargs: { enable_thinking: false } },
+					onChunk: (chunk: string) => {
+						titleResponse += chunk;
 					}
-				}
-			} finally {
-				reader.releaseLock();
-			}
-
-			return aggregatedContent;
+				},
+				undefined,
+				signal
+			);
 		} catch {
 			return '';
 		}
+		return titleResponse;
 	}
 
 	/**
