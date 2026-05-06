@@ -12,6 +12,7 @@
 # ggml-org/ggml-vulkan      : 0cc4m, jeffbolznv
 # ggml-org/ggml-webgpu      : reeselevine
 # ggml-org/ggml-zdnn        : taronaeo
+# ggml-org/ggml-zendnn      : avinashcpandey, Jiten1parmar
 # ggml-org/llama-common     : ggerganov, aldehir, angt, danbev, ngxson, pwilkin
 # ggml-org/llama-mtmd       : ngxson
 # ggml-org/llama-server     : ggerganov, ngxson, allozaur, angt, ServeurpersoCom
@@ -76,6 +77,7 @@
 /ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-webgpu/                  @ggml-org/ggml-webgpu
 /ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn @Andreas-Krebbel @AlekseiNikiforovIBM
+/ggml/src/ggml-zendnn/                  @ggml-org/ggml-zendnn
 /ggml/src/ggml.c                        @ggerganov
 /ggml/src/ggml.cpp                      @ggerganov
 /ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
