@@ -37,7 +37,7 @@ static void print_usage(int, char ** argv) {
             "       -m model.gguf -f some-text.txt [-o imatrix.gguf] [--output-format {gguf,dat}] [--no-ppl] \\\n"
             "       [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \\\n"
             "       [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \\\n"
-            "       [--show-statistics] [--reduce-mem] [...]\n" , argv[0]);
+            "       [--show-statistics] [...]\n" , argv[0]);
     LOG("\n");
 }
 
@@ -691,11 +691,11 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     }
 
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-    if (m_params.reduce_mem && m_params.use_mmap && src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
+    if (m_params.use_mmap && src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
         const size_t page_size = sysconf(_SC_PAGESIZE);
-        uintptr_t addr = (uintptr_t)src0->data;
-        uintptr_t aligned_addr = addr & ~(page_size - 1);
-        size_t size = ggml_nbytes(src0) + (addr - aligned_addr);
+        const uintptr_t addr = (uintptr_t)src0->data;
+        const uintptr_t aligned_addr = addr & ~(page_size - 1);
+        const size_t size = ggml_nbytes(src0) + (addr - aligned_addr);
         madvise((void *)aligned_addr, size, MADV_DONTNEED);
     }
 #endif
