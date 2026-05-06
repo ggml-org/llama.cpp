@@ -2,7 +2,6 @@
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { cn } from '$lib/components/ui/utils';
 	import { KeyboardKey } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import {
@@ -91,7 +90,7 @@
 	}
 </script>
 
-<div class={cn('relative inline-flex flex-col items-end gap-1', className)}>
+<div class={['relative inline-flex flex-col items-end gap-1', className]}>
 	{#if ms.loading && ms.options.length === 0 && ms.isRouter}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
@@ -101,10 +100,10 @@
 	{:else if ms.options.length === 0 && ms.isRouter}
 		{#if currentModel}
 			<span
-				class={cn(
+				class={[
 					'inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground',
 					className
-				)}
+				]}
 				style="max-width: min(calc(100cqw - 10rem), 20rem)"
 			>
 				<Package class="h-3.5 w-3.5" />
@@ -120,18 +119,18 @@
 		{#if ms.isRouter}
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
 				<DropdownMenu.Trigger
-					class={cn(
-						`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
+					class={[
+						`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 						!ms.isCurrentModelInCache
 							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 							: forceForegroundText
 								? 'text-foreground'
 								: ms.isHighlightedCurrentModelActive
 									? 'text-foreground'
-									: 'text-muted-foreground',
-						isOpen ? 'text-foreground' : '',
+									: 'text-foreground',
+						isOpen && 'text-foreground',
 						'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
-					)}
+					]}
 					disabled={disabled || ms.updating}
 				>
 					<Package class="h-3.5 w-3.5" />
@@ -213,9 +212,9 @@
 									onSelect={ms.handleSelect}
 									onInfoClick={ms.handleInfoClick}
 									onMouseEnter={() => (highlightedIndex = flatIndex)}
-									onKeyDown={(e) => {
-										if (e.key === KeyboardKey.ENTER || e.key === KeyboardKey.SPACE) {
-											e.preventDefault();
+									onKeyDown={(event) => {
+										if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
+											event.preventDefault();
 											ms.handleSelect(option.id);
 										}
 									}}
@@ -237,17 +236,17 @@
 			</DropdownMenu.Root>
 		{:else}
 			<button
-				class={cn(
-					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
+				class={[
+					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 					!ms.isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
 							? 'text-foreground'
 							: ms.isHighlightedCurrentModelActive
 								? 'text-foreground'
-								: 'text-muted-foreground',
-					isOpen ? 'text-foreground' : ''
-				)}
+								: 'text-foreground',
+					isOpen && 'text-foreground'
+				]}
 				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
 				onclick={() => ms.handleOpenChange(true)}
 				disabled={disabled || ms.updating}

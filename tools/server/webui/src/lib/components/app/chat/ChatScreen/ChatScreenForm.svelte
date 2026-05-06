@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ChatFormHelperText, ChatForm } from '$lib/components/app';
+	import { ChatForm } from '$lib/components/app';
 	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
@@ -15,7 +15,6 @@
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
 		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
-		showHelperText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 	}
 
@@ -29,12 +28,12 @@
 		onSend,
 		onStop,
 		onSystemPromptAdd,
-		showHelperText = true,
 		uploadedFiles = $bindable([])
 	}: Props = $props();
 
 	let chatFormRef: ChatForm | undefined = $state(undefined);
 	let chatId = $derived(page.params.id as string | undefined);
+	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let message = $derived(initialMessage);
 	let previousIsLoading = $derived(isLoading);
 	let previousInitialMessage = $derived(initialMessage);
@@ -48,18 +47,9 @@
 		getInitialMessage: () => initialMessage
 	});
 
-	$effect(() => {
-		if (initialMessage !== previousInitialMessage) {
-			message = initialMessage;
-			previousInitialMessage = initialMessage;
-		}
-	});
-
-	function handleSystemPromptClick() {
-		onSystemPromptAdd?.({ message, files: uploadedFiles });
+	function handleFilesAdd(files: File[]) {
+		onFileUpload?.(files);
 	}
-
-	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 
 	async function handleSubmit() {
 		if ((!message.trim() && uploadedFiles.length === 0) || disabled || hasLoadingAttachments)
@@ -84,8 +74,8 @@
 		}
 	}
 
-	function handleFilesAdd(files: File[]) {
-		onFileUpload?.(files);
+	function handleSystemPromptClick() {
+		onSystemPromptAdd?.({ message, files: uploadedFiles });
 	}
 
 	function handleUploadedFileRemove(fileId: string) {
@@ -99,6 +89,13 @@
 	afterNavigate((navigation) => {
 		if (navigation?.from != null) {
 			setTimeout(() => chatFormRef?.focus(), 10);
+		}
+	});
+
+	$effect(() => {
+		if (initialMessage !== previousInitialMessage) {
+			message = initialMessage;
+			previousInitialMessage = initialMessage;
 		}
 	});
 
@@ -127,5 +124,3 @@
 		onUploadedFileRemove={handleUploadedFileRemove}
 	/>
 </div>
-
-<ChatFormHelperText show={showHelperText} />

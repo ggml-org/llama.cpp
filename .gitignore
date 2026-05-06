@@ -105,6 +105,8 @@
 __pycache__/
 */poetry.lock
 poetry.toml
+poetry.lock
+uv.lock
 
 # Nix
 

@@ -1,18 +1,17 @@
 <script lang="ts">
 	import { Copy } from '@lucide/svelte';
 	import { copyToClipboard } from '$lib/utils';
+	import ActionIcon from './ActionIcon.svelte';
 
-	interface Props {
-		ariaLabel?: string;
-		canCopy?: boolean;
-		text: string;
-	}
-
-	let { ariaLabel = 'Copy to clipboard', canCopy = true, text }: Props = $props();
+	export let ariaLabel: string = 'Copy to clipboard';
+	export let canCopy: boolean = true;
+	export let text: string;
 </script>
 
-<Copy
-	class="h-3 w-3 flex-shrink-0 cursor-{canCopy ? 'pointer' : 'not-allowed'}"
-	aria-label={ariaLabel}
+<ActionIcon
+	icon={Copy}
+	tooltip={ariaLabel}
+	iconSize="h-4 w-4"
+	disabled={!canCopy}
 	onclick={() => canCopy && copyToClipboard(text)}
 />

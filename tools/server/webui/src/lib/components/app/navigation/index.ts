@@ -71,3 +71,68 @@ export { default as DropdownMenuActions } from './DropdownMenuActions.svelte';
  * Contains navigation shortcuts for new chat, search, MCP, import/export, and settings.
  */
 export { default as DesktopIconStrip } from './DesktopIconStrip.svelte';
+
+/**
+ * **SidebarNavigation** - Sidebar with actions menu and conversation list
+ *
+ * Collapsible sidebar displaying conversation history with search and
+ * management actions. Integrates with ShadCN sidebar component for
+ * consistent styling and mobile responsiveness.
+ *
+ * **Architecture:**
+ * - Uses ShadCN Sidebar.* components for structure
+ * - Fetches conversations from conversationsStore
+ * - Manages search state and filtered results locally
+ * - Handles conversation CRUD operations via conversationsStore
+ *
+ * **Navigation:**
+ * - Click conversation to navigate to `/chat/[id]`
+ * - New chat button navigates to `/` (root)
+ * - Active conversation highlighted based on route params
+ *
+ * **Conversation Management:**
+ * - Right-click or menu button for context menu
+ * - Rename: Opens inline edit dialog
+ * - Delete: Shows confirmation with conversation preview
+ * - Delete All: Removes all conversations with confirmation
+ *
+ * **Features:**
+ * - Search/filter conversations by title
+ * - Conversation list with message previews (first message truncated)
+ * - Active conversation highlighting
+ * - Mobile-responsive collapse/expand via ShadCN sidebar
+ * - New chat button in header
+ * - Settings button opens DialogChatSettings
+ *
+ * **Exported API:**
+ * - `activateSearchMode()` - Focus search input programmatically
+ * - `editActiveConversation()` - Open rename dialog for current conversation
+ *
+ * @example
+ * ```svelte
+ * <SidebarNavigation bind:this={sidebarRef} />
+ * ```
+ */
+export { default as SidebarNavigation } from './SidebarNavigation/SidebarNavigation.svelte';
+
+/**
+ * Action buttons for sidebar header. Contains new chat button, settings button,
+ * and delete all conversations button. Manages dialog states for settings and
+ * delete confirmation.
+ */
+export { default as SidebarNavigationActions } from './SidebarNavigation/SidebarNavigationActions.svelte';
+
+/**
+ * Single conversation item in sidebar. Displays conversation title (truncated),
+ * last message preview, and timestamp. Shows context menu on right-click with
+ * rename and delete options. Highlights when active (matches current route).
+ * Handles click to navigate and keyboard accessibility.
+ */
+export { default as SidebarNavigationConversationItem } from './SidebarNavigation/SidebarNavigationConversationItem.svelte';
+
+/**
+ * Search input for filtering conversations in sidebar. Filters conversation
+ * list by title as user types. Shows clear button when query is not empty.
+ * Integrated into sidebar header with proper styling.
+ */
+export { default as SidebarNavigationSearch } from './SidebarNavigation/SidebarNavigationSearch.svelte';
