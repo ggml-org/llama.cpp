@@ -5583,21 +5583,15 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         self.gguf_writer.add_vision_attention_layernorm_eps(
             self.hparams_vision.get("layer_norm_eps", 1e-6))
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # text tower / lm_head / MTP -> belong to the LM file
-        if name.startswith(("model.language_model.", "lm_head.")) or name.startswith("mtp"):
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
-        # final merger and ViT merger
-        if name.startswith(("model.merger.", "model.vision_tower.vit_merger.")):
-            yield from super().modify_tensors(data_torch, name, bid)
-            return
+        # lm_head / MTP -> belong to the LM file
+        if name.startswith(("lm_head.", "mtp")):
+            return None
 
-        # SigLIP vision body
-        if name.startswith("model.vision_tower."):
-            name = name.replace("model.vision_tower.", "vision_tower.vision_model.")
-            yield from super().modify_tensors(data_torch, name, bid)
-            return
+        return super().filter_tensors(item)
 
 
 @ModelBase.register("GPT2LMHeadModel")
