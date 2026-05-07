@@ -403,6 +403,11 @@ static bool log_mel_spectrogram(
             return false;
         }
         std::reverse_copy(samples + 1, samples + 1 + stage_2_pad, samples_padded.begin());
+
+        // expose the padded buffer to downstream FFT and to out.n_len computation
+        // mirrors the no_padding and center_padding branches above
+        samples   = samples_padded.data();
+        n_samples = samples_padded.size();
     }
 
     // preemphasis
