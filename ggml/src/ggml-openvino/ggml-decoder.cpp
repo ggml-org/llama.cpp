@@ -240,19 +240,16 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         const int mode = node->op_params[2];
         switch (mode) {
        case GGML_ROPE_TYPE_NEOX: {
-            op_case = 0x00010000;
+            op_case = 1;
             break;
         }
        case GGML_ROPE_TYPE_IMROPE: {
-            op_case = 0x00020000;
+            op_case = 2;
             break;
         }
         default:
-            op_case = 0x00000000;
+            op_case = 0;
             break;
-        }
-        if (node->src[0]->op == GGML_OP_VIEW) {
-            op_case = (op_case | 0x00000002);
         }
         break;
     }
