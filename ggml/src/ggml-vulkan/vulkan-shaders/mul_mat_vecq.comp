@@ -62,9 +62,9 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
 #endif
 #endif
 
-        uint ibi = first_row*p.ncols;
+        uint ibi = first_row * p.ncols;
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-            const uint a_block_idx = (ibi + col)/QUANT_K_Q8_1 + a_offset;
+            const uint a_block_idx = (ibi + col) / QUANT_K_Q8_1 + a_offset;
             ibi += p.ncols;
 
             temp[j][n] += mmvq_dot_product(a_block_idx, b_qs_idx);
@@ -95,17 +95,7 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 
     const uint b_qs_idx = tid % (32 / K_PER_ITER);
     uint col = tid * K_PER_ITER;
-    while (num_iters >= 4) {
-        // Manually partially unroll the loop
-        [[unroll]] for (uint k = 0; k < 4; ++k) {
-            iter(temp, first_row, num_rows, col, b_qs_idx);
-            col += col_stride;
-        }
-
-        num_iters -= 4;
-    }
-
-    if (num_iters >= 2) {
+    while (num_iters >= 2) {
         // Manually partially unroll the loop
         iter(temp, first_row, num_rows, col, b_qs_idx);
         col += col_stride;
