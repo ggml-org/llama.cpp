@@ -48,7 +48,6 @@ jobs:
             -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
             -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
             -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
-            -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_OPENSSL=OFF
           cmake --build build --config Release -j $(nproc)
 
