@@ -165,7 +165,7 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         } else if (node->src[0]->src[0]->op == GGML_OP_NONE) {
             // kv cache tensor
             std::string src_name(node->view_src->name);
-            int layer = extract_layer_from_name(src_name);
+            int layer = extract_layer_from_name(src_name).value();
             if (ggml_is_contiguous(node->src[0])) {
                 // -  19: [    64,     8,   256,     1] VIEW            cache_k_l0 (view)             [ 2,   128,  1024, 1048576]
                 //         [   512,  1024,     1,     1]      0: NONE     cache_k_l0                    [ 2,  1024, 1048576, 1048576]
@@ -281,9 +281,11 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
     return op_case;
 }
 
-int extract_layer_from_name(const std::string & name) {
+std::optional<int> extract_layer_from_name(const std::string & name) {
     size_t pos1 = name.find("_l");
-    assert(pos1 != std::string::npos);
+    if (pos1 == std::string::npos) {
+        return std::nullopt;
+    }
     pos1 += 2;
     size_t pos2 = name.find(' ', pos1);
     if (pos2 == std::string::npos) {
@@ -389,7 +391,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             }
 
             ggml_tensor * cache_k = cache_k_view->src[0];
-            int layer = extract_layer_from_name(cache_k->name);
+            int layer = extract_layer_from_name(cache_k->name).value();
 
             std::string mask_name(mask->name);
 

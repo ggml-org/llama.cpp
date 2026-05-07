@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <openvino/core/partial_shape.hpp>
+#include <optional>
 #include <vector>
 
 struct ModelParams {
@@ -306,4 +307,4 @@ private:
 
 void print_tensor_address_map(const ggml_cgraph * cgraph);
 
-int extract_layer_from_name(const std::string & name);
+std::optional<int> extract_layer_from_name(const std::string & name);

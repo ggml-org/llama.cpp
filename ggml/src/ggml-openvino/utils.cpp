@@ -98,9 +98,9 @@ static std::optional<ov::Tensor> try_make_kv_sliced_tensor(std::shared_ptr<GgmlO
     }
 
     int layer;
-    try {
-        layer = extract_layer_from_name(name);
-    } catch (...) {
+    if (auto layer_opt = extract_layer_from_name(name); layer_opt.has_value()) {
+        layer = layer_opt.value();
+    } else {
         return std::nullopt;
     }
 
