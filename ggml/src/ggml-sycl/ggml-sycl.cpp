@@ -100,21 +100,11 @@ static ggml_sycl_device_info ggml_sycl_init() {
 #if defined(GGML_SYCL_USE_VMM)
         info.devices[i].vmm = device.has(sycl::aspect::ext_oneapi_virtual_mem);
         if (info.devices[i].vmm) {
-            // L0's required page size depends on the requested allocation
-            // size (see zeVirtualMemQueryPageSize in ze_api.h), but SYCL's
-            // get_mem_granularity is size-agnostic and returns the minimum
-            // (64 KiB on Battlemage). For multi-MiB physical_mem commits L0
-            // picks 2 MiB pages and rejects non-multiples with
-            // UR_RESULT_ERROR_INVALID_VALUE. Clamp to 2 MiB so the field is
-            // usable for any commit size this pool will request; verified
-            // against zeVirtualMemQueryPageSize on Battlemage, where the
-            // page size is 2 MiB flat from 2 MiB up to 32 GiB.
-            //
-            // The "right" fix is to call zeVirtualMemQueryPageSize directly
-            // via L0 backend interop, but that pulls in <level_zero/ze_api.h>
-            // and a -lze_loader link dependency on this TU. The clamp keeps
-            // the SYCL-only build clean; revisit if a device shows up where
-            // the page size for our commit range isn't 2 MiB.
+            // NB: SYCL's get_mem_granularity returns the _minimum_ granularity,
+            // but the L0 API requires a larger page size for allocs above 2 MiB and
+            // rejects non-multiples with UR_RESULT_ERROR_INVALID_VALUE [sic].
+            // Here we clamp to 2 MiB for simplicity, but other devices may require
+            // calling zeVirtualMemQueryPageSize or yet unexposed public API.
             const size_t physical_page = 2ull << 20; // 2 MiB
             info.devices[i].vmm_granularity = std::max<size_t>(
                 sycl::ext::oneapi::experimental::get_mem_granularity(device, sycl::context(device)),
