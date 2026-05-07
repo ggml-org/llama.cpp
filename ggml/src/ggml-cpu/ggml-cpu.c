@@ -396,6 +396,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
     },
+    [GGML_TYPE_STQ_0] = {
+        .from_float               = quantize_row_stq_0,
+        .vec_dot                  = ggml_vec_dot_stq_0_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_I32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,
     },
@@ -1337,6 +1343,17 @@ UseGgmlGemm1:;
                     from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
                                (ne10_block_end - ne10_block_start) * bs);
+
+#if defined(__aarch64__) || defined(__arm__) || defined(_M_ARM) || defined(_M_ARM64)
+                    // STQ_0 NEON vec_dot wants Q8_K activations in planar
+                    // layout (vld1q reads); deinterleave once here so the
+                    // per-row dot loop amortizes it across all M weight rows.
+                    if (src0->type == GGML_TYPE_STQ_0) {
+                        stq0_repack_q8_K_inplace(
+                            (void *)(wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
+                            (int)(ne10_block_end - ne10_block_start));
+                    }
+#endif
                 }
             }
         }
