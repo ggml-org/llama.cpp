@@ -1981,7 +1981,7 @@ size_t server_prompt_cache::n_tokens() const {
     return res;
 }
 
-server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_dft) {
+server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft) {
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
         const int cur_lcp_len = it->tokens.get_common_prefix(prompt.tokens);
@@ -2006,12 +2006,12 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
     }
 
     std::vector<uint8_t> state_data_main;
-    std::vector<uint8_t> state_data_dft;
+    std::vector<uint8_t> state_data_drft;
 
     // check if we can allocate enough memory for the new state
     try {
         state_data_main.resize(state_size_main);
-        state_data_dft.resize(state_size_dft);
+        state_data_drft.resize(state_size_drft);
     } catch (const std::bad_alloc & e) {
         SRV_ERR("failed to allocate memory for prompt cache state: %s\n", e.what());
 
@@ -2028,7 +2028,7 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
         /*.tokens      =*/ prompt.tokens.clone(),
         /*.data        =*/ {
             /*.main =*/ std::move(state_data_main),
-            /*.dft  =*/ std::move(state_data_dft),
+            /*.drft =*/ std::move(state_data_drft),
         },
         /*.checkpoints =*/ prompt.checkpoints,
     });
@@ -2036,7 +2036,7 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
     return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx, llama_context * ctx_dft, int32_t id_slot) {
+bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_main, llama_context * ctx_drft, int32_t id_slot) {
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
@@ -2073,7 +2073,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             auto & data = it_best->data.main;
 
             const size_t size = data.size();
-            const size_t n = llama_state_seq_set_data_ext(ctx, data.data(), size, id_slot, 0);
+            const size_t n = llama_state_seq_set_data_ext(ctx_main, data.data(), size, id_slot, 0);
             if (n != size) {
                 SRV_WRN("failed to restore state with size %zu\n", size);
 
@@ -2085,13 +2085,13 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         }
 
         {
-            auto & data = it_best->data.dft;
+            auto & data = it_best->data.drft;
 
             if (!data.empty()) {
-                GGML_ASSERT(ctx_dft);
+                GGML_ASSERT(ctx_drft);
 
                 const size_t size = data.size();
-                const size_t n = llama_state_seq_set_data_ext(ctx_dft, data.data(), size, id_slot, 0);
+                const size_t n = llama_state_seq_set_data_ext(ctx_drft, data.data(), size, id_slot, 0);
                 if (n != size) {
                     SRV_WRN("failed to restore state with size %zu\n", size);
 
