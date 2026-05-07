@@ -1403,11 +1403,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     size_t    pool_size = 0;
     size_t    granularity;
 
-    // Owns the physical commits and remembers the (ptr, size) each was mapped
-    // at, so the dtor can unmap each range individually. The spec forbids
-    // single unmap() calls that span multiple contiguous mapped ranges, and
-    // physical_mem is the only handle keeping the commit alive (no
-    // mapping-side refcount, unlike CUDA's cuMemMap).
+    // physical_mem owns the commits (no mapping-side refcount, unlike cuMemMap)
     struct mapping {
         sycl::ext::oneapi::experimental::physical_mem phys;
         void * ptr;
@@ -1428,9 +1424,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
 
         // Per spec, unmap must (a) match the exact (ptr, size) of an earlier
         // physical_mem::map() call and (b) precede destruction of the
-        // physical_mem objects (their dtors won't unmap). The dtor
-        // body runs before member destruction, so unmapping each
-        // range here lets `mappings` destruct safely.
+        // physical_mem objects (their dtors won't unmap).
         for (auto & m : mappings) {
             SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::unmap(
                 m.ptr, m.phys.size(), ctx)));
