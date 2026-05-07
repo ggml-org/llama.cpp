@@ -811,6 +811,26 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_EMBD_IMGNL     = auto() # Deepseek-OCR
     V_ENC_EMBD_VSEP      = auto() # Deepseek-OCR
 
+    # qformer projector (vision) - Granite4 Vision
+    V_QF_PROJ_QUERY      = auto()
+    V_QF_PROJ_NORM       = auto()
+    V_QF_PROJ_LINEAR     = auto()
+    V_QF_SELF_ATTN_Q     = auto()
+    V_QF_SELF_ATTN_K     = auto()
+    V_QF_SELF_ATTN_V     = auto()
+    V_QF_SELF_ATTN_O     = auto()
+    V_QF_SELF_ATTN_NORM  = auto()
+    V_QF_CROSS_ATTN_Q    = auto()
+    V_QF_CROSS_ATTN_K    = auto()
+    V_QF_CROSS_ATTN_V    = auto()
+    V_QF_CROSS_ATTN_O    = auto()
+    V_QF_CROSS_ATTN_NORM = auto()
+    V_QF_FFN_UP          = auto()
+    V_QF_FFN_DOWN        = auto()
+    V_QF_FFN_NORM        = auto()
+    V_IMG_POS            = auto()
+    V_PROJ_NORM          = auto()
+
     # audio (mtmd)
     A_ENC_EMBD_POS        = auto()
     A_ENC_EMBD_NORM       = auto()
@@ -875,7 +895,7 @@ class MODEL_TENSOR(IntEnum):
     A_CTC_OUT              = auto()
     A_CTC_OUT_MID          = auto()
     A_ENC_ATTN_REL_POS_EMB = auto()
-    # qformer projector
+    # audio qformer projector
     A_QF_PROJ_QUERY        = auto()
     A_QF_PROJ_NORM         = auto()
     A_QF_PROJ_LINEAR       = auto()
@@ -1323,8 +1343,27 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_SAM_NECK:                "v.sam.neck.{bid}",
     MODEL_TENSOR.V_SAM_NET_2:               "v.sam.net_2",
     MODEL_TENSOR.V_SAM_NET_3:               "v.sam.net_3",
-    MODEL_TENSOR.V_ENC_EMBD_IMGNL:          "v.image_newline", # Deepseek-OCR
+    MODEL_TENSOR.V_ENC_EMBD_IMGNL:          "v.image_newline", # Deepseek-OCR, Granite4Vision
     MODEL_TENSOR.V_ENC_EMBD_VSEP:           "v.view_seperator", # Deepseek-OCR
+    # Granite4 Vision
+    MODEL_TENSOR.V_IMG_POS:                 "v.proj_img_pos",
+    MODEL_TENSOR.V_PROJ_NORM:               "v.proj_layernorm",
+    MODEL_TENSOR.V_QF_PROJ_QUERY:           "v.proj_query",
+    MODEL_TENSOR.V_QF_PROJ_NORM:            "v.proj_norm",
+    MODEL_TENSOR.V_QF_PROJ_LINEAR:          "v.proj_linear",
+    MODEL_TENSOR.V_QF_SELF_ATTN_Q:          "v.proj_blk.{bid}.self_attn_q",
+    MODEL_TENSOR.V_QF_SELF_ATTN_K:          "v.proj_blk.{bid}.self_attn_k",
+    MODEL_TENSOR.V_QF_SELF_ATTN_V:          "v.proj_blk.{bid}.self_attn_v",
+    MODEL_TENSOR.V_QF_SELF_ATTN_O:          "v.proj_blk.{bid}.self_attn_out",
+    MODEL_TENSOR.V_QF_SELF_ATTN_NORM:       "v.proj_blk.{bid}.self_attn_norm",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_Q:         "v.proj_blk.{bid}.cross_attn_q",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_K:         "v.proj_blk.{bid}.cross_attn_k",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_V:         "v.proj_blk.{bid}.cross_attn_v",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_O:         "v.proj_blk.{bid}.cross_attn_out",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_NORM:      "v.proj_blk.{bid}.cross_attn_norm",
+    MODEL_TENSOR.V_QF_FFN_UP:               "v.proj_blk.{bid}.ffn_up",
+    MODEL_TENSOR.V_QF_FFN_DOWN:             "v.proj_blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_QF_FFN_NORM:             "v.proj_blk.{bid}.ffn_norm",
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
@@ -1503,6 +1542,25 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_SAM_NECK,
         MODEL_TENSOR.V_SAM_NET_2,
         MODEL_TENSOR.V_SAM_NET_3,
+        MODEL_TENSOR.V_IMG_POS,
+        MODEL_TENSOR.V_PROJ_NORM,
+        MODEL_TENSOR.V_QF_PROJ_QUERY,
+        MODEL_TENSOR.V_QF_PROJ_NORM,
+        MODEL_TENSOR.V_QF_PROJ_LINEAR,
+        MODEL_TENSOR.V_QF_SELF_ATTN_Q,
+        MODEL_TENSOR.V_QF_SELF_ATTN_K,
+        MODEL_TENSOR.V_QF_SELF_ATTN_V,
+        MODEL_TENSOR.V_QF_SELF_ATTN_O,
+        MODEL_TENSOR.V_QF_SELF_ATTN_NORM,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_Q,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_K,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_V,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_O,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_NORM,
+        MODEL_TENSOR.V_QF_FFN_UP,
+        MODEL_TENSOR.V_QF_FFN_DOWN,
+        MODEL_TENSOR.V_QF_FFN_NORM,
+        MODEL_TENSOR.V_QF_PROJ_NORM,
         # audio
         MODEL_TENSOR.A_ENC_EMBD_POS,
         MODEL_TENSOR.A_ENC_EMBD_NORM,

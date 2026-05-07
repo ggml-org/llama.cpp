@@ -155,6 +155,10 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_MSFA_NORM: (
             "model.vision_tower.timm_model.msfa.norm", # gemma3n
         ),
+        # TODO: Should the rest of the block mappings be moved here?
+        MODEL_TENSOR.V_ENC_EMBD_IMGNL: (
+            "model.image_newline",  # Granite4Vision
+        ),
         MODEL_TENSOR.A_CTC_OUT: (
             "encoder.out",
         ),
@@ -169,6 +173,28 @@ class TensorNameMap:
         ),
         MODEL_TENSOR.A_QF_PROJ_LINEAR: (
             "projector.linear",
+        ),
+
+        # NOTE: For deepstack versions, projectors are stacked
+        MODEL_TENSOR.V_IMG_POS: (
+            "model.layerwise_projectors.image_positions", # Granite4 Vision
+            "model.spatial_projectors.image_positions",   # Granite4 Vision
+        ),
+        MODEL_TENSOR.V_PROJ_NORM: (
+            "model.layerwise_projectors.norm", # Granite4 Vision
+            "model.spatial_projectors.norm",   # Granite4 Vision
+        ),
+        MODEL_TENSOR.V_QF_PROJ_LINEAR: (
+            "model.layerwise_projectors.out_linear", # Granite4 Vision
+            "model.spatial_projectors.out_linear",   # Granite4 Vision
+        ),
+        MODEL_TENSOR.V_QF_PROJ_QUERY: (
+            "model.layerwise_projectors.query", # Granite4 Vision
+            "model.spatial_projectors.query",   # Granite4 Vision
+        ),
+        MODEL_TENSOR.V_QF_PROJ_NORM: (
+            "model.layerwise_projectors.qformer.layernorm", # Granite4 Vision
+            "model.spatial_projectors.qformer.layernorm",   # Granite4 Vision
         ),
     }
 
@@ -1440,6 +1466,7 @@ class TensorNameMap:
             "vision_model.positional_embedding", # Step3-VL
         ),
 
+        # TODO: I think these should all be moved to mapping_cfg?
         MODEL_TENSOR.V_ENC_EMBD_IMGNL: (
             "model.image_newline",  # Deepseek-OCR
             "vit.perceive.image_newline", # HunyuanOCR
@@ -1916,6 +1943,71 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_STD_SCALE: (
             "model.vision_tower.std_scale", # gemma4
+        ),
+
+        MODEL_TENSOR.V_QF_SELF_ATTN_Q: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.attention.attention.query", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.attention.attention.query",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_SELF_ATTN_K: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.attention.attention.key", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.attention.attention.key",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_SELF_ATTN_V: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.attention.attention.value", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.attention.attention.value",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_SELF_ATTN_O: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.attention.output.dense", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.attention.output.dense",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_SELF_ATTN_NORM: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.attention.output.LayerNorm", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.attention.output.LayerNorm",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_CROSS_ATTN_Q: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.crossattention.attention.query", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.crossattention.attention.query",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_CROSS_ATTN_K: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.crossattention.attention.key", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.crossattention.attention.key",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_CROSS_ATTN_V: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.crossattention.attention.value", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.crossattention.attention.value",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_CROSS_ATTN_O: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.crossattention.output.dense", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.crossattention.output.dense",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_CROSS_ATTN_NORM: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.crossattention.output.LayerNorm", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.crossattention.output.LayerNorm",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_FFN_UP: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.intermediate_query.dense", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.intermediate_query.dense",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_FFN_DOWN: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.output_query.dense", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.output_query.dense",   # Granite4 Vision
+        ),
+
+        MODEL_TENSOR.V_QF_FFN_NORM: (
+            "model.layerwise_projectors.qformer.encoder.layer.{bid}.output_query.LayerNorm", # Granite4 Vision
+            "model.spatial_projectors.qformer.encoder.layer.{bid}.output_query.LayerNorm",   # Granite4 Vision
         ),
 
         # audio (mtmd)
