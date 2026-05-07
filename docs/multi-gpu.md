@@ -86,53 +86,29 @@ llama-cli -m model.gguf -sm tensor -ctk f16 -ctv f16
 - `--flash-attn off` or (`--flash-attn auto` resolving to `off` when it isn't supported) is a hard error.
 - KV cache types must be non-quantized: `f32`, `f16`, or `bf16`. Support for quantized KV cache is not implemented and trying to use it will result in an error.
 - Mark this configuration as experimental in your tooling: validate output quality before deploying.
+- TENSOR mode is not implemented for all architectures. The following will fail with *"LLAMA_SPLIT_MODE_TENSOR not implemented for architecture '...'"*; fall back to `--split-mode layer`:
 
-### 6. With NCCL
+  - **MoE / hybrid:** Grok, MPT, OLMoE, DeepSeek2, GLM-DSA, Nemotron-H, Nemotron-H-MoE, Granite-Hybrid, LFM2-MoE, Minimax-M2, Mistral4, Kimi-Linear, Jamba, Falcon-H1
+  - **State-space / RWKV-style:** Mamba, Mamba2 (and the hybrid Mamba-attention models above)
+  - **Other:** PLAMO2, MiniCPM3, Gemma-3n, OLMo2, BitNet, T5
+
+### 5. With NCCL
 
 There's no runtime flag for NCCL - it's selected at build time (`-DGGML_CUDA_NCCL=ON`, this is the default). Note that NCCL is **not** automatically distributed with CUDA and you may need to install it manually - when in doubt check the CMake log to see whether or not it can find the package. When llama.cpp is compiled with NCCL support it uses it automatically for cross-GPU reductions in `tensor` mode. When NCCL is missing on a multi-GPU build, you'll see this one-time warning and performance will be lower:
 
 ```
 NVIDIA Collective Communications Library (NCCL) is unavailable, multi GPU performance will be suboptimal
 ```
----
 
-## Limitations and gotchas
+### 6. With CUDA peer-to-peer access (`GGML_CUDA_P2P`)
 
-### `--split-mode tensor` (TENSOR, experimental)
+CUDA peer-to-peer (P2P) lets GPUs transfer data directly between each other instead of going through system memory, which generally improves multi-GPU performance. It is **opt-in** at runtime - set the environment variable `GGML_CUDA_P2P` to any value to enable it:
 
-This mode is gated by several hard checks at startup. Hitting any of them is a fatal error.
+```bash
+GGML_CUDA_P2P=1 llama-cli -m model.gguf -sm tensor
+```
 
-1. **Flash attention is required.** `--flash-attn off` will fail with *"SPLIT_MODE_TENSOR requires flash_attn to be enabled"*. Use `-fa on` (or leave it `auto`, which auto-enables for this mode).
-2. **KV cache must not be quantized.** `--cache-type-k` and `--cache-type-v` must be `f32`, `f16`, or `bf16`. Anything else fails with *"simultaneous use of SPLIT_MODE_TENSOR and KV cache quantization not implemented"*.
-3. **`--fit` is not supported.** Set `-fit off` and size things yourself. The auxiliary `--fit-target` / `--fit-ctx` flags do not make fitting work in this mode either.
-4. **At least one non-CPU device required.** `--device none` is rejected with `--split-mode tensor`.
-5. **Architecture must be supported.** TENSOR mode is implemented for most architectures, but a number are explicitly excluded today and will fail with *"LLAMA_SPLIT_MODE_TENSOR not implemented for architecture '...'"*. The current exclusion list includes:
-
-   - **MoE / hybrid:** Grok, MPT, OLMoE, DeepSeek2, GLM-DSA, Nemotron-H, Nemotron-H-MoE, Granite-Hybrid, LFM2-MoE, Minimax-M2, Mistral4, Kimi-Linear, Jamba, Falcon-H1
-   - **State-space / RWKV-style:** Mamba, Mamba2 (and the hybrid Mamba-attention models above)
-   - **Other:** PLAMO2, MiniCPM3, Gemma-3n, OLMo2, BitNet, T5
-
-   The list grows over time - if you hit the error, fall back to `--split-mode layer`.
-6. **CPU devices are skipped.** TENSOR mode wraps the selected GPUs into a single "meta device"; CPU-typed devices are excluded automatically. The selected device list and `--tensor-split` list must also stay within the `GGML_CUDA_MAX_DEVICES` cap of 16.
-
-### Backends
-
-- **CUDA** - fullest support: `none`, `layer`, and `tensor` all work.
-- **HIP / ROCm** - same modes as CUDA, but cross-GPU reduction performance benefits from RCCL (the AMD analog of NCCL); RCCL is opt-in at build time.
-- **SYCL** - supports `none` and `layer`.
-- **Metal, Vulkan, CANN, etc.** - each backend exposes its own set of devices; multi-device support varies. `layer` is the most portable choice across backends.
-
----
-
-## Handling OOM with `--fit off`
-
-`--fit off` (required for `--split-mode tensor`) disables the auto-fitter, so llama.cpp will not shrink anything to make the model fit. If you OOM at startup or during inference, you have to reduce memory pressure yourself. The knobs below are listed roughly from least to most disruptive - try them in order.
-
-1. **Lower `--ctx-size`.** The KV cache is roughly proportional to `n_ctx`. Halving `-c` halves the KV cache. Pick a context size you actually need rather than the model maximum.
-
-2. **For `llama-server`: lower `--parallel`.** `-np N` allocates a slot KV cache for every concurrent sequence; total KV memory ≈ `n_ctx × n_parallel`. The default is often higher than you need.
-
-3. **Reduce `--n-gpu-layers`.** Last performance-preserving knob: offload fewer layers (e.g. `-ngl 30` instead of `all`). The remaining layers run on CPU and inference will be **much slower** - only do this when no other knob suffices.
+P2P requires driver support (usually restricted to workstation/datacenter GPUs) and **may cause crashes or corrupted outputs on some motherboards or BIOS configurations** (e.g. when IOMMU is enabled). If you see instability after enabling it, unset the variable.
 
 ---
 
@@ -144,6 +120,7 @@ This mode is gated by several hard checks at startup. Hitting any of them is a f
 | Startup error *"simultaneous use of SPLIT_MODE_TENSOR and KV cache quantization not implemented"* | Use `-ctk f16 -ctv f16` (or `bf16`/`f32`) with `--split-mode tensor`. |
 | Startup error *"LLAMA_SPLIT_MODE_TENSOR not implemented for architecture 'X'"* | Architecture not on the TENSOR allow-list. Use `--split-mode layer`. |
 | Warning *"NCCL is unavailable, multi GPU performance will be suboptimal"* | llama.cpp wasn't built with NCCL. Either accept the lower performance or install NCCL and rebuild. |
-| CUDA OOM at startup or during prefill in `--split-mode tensor` | Auto-fit is disabled in this mode. See "Handling OOM with `--fit off`" above for the order in which to lower `-c`, `-np`, `-ngl`, etc. |
+| CUDA OOM at startup or during prefill in `--split-mode tensor` | Auto-fit is disabled in this mode, so reduce memory pressure yourself. In order from least to most disruptive: lower `--ctx-size` (`-c`) (KV cache is roughly proportional to `n_ctx`); for `llama-server`, lower `--parallel` (`-np`) (a slot KV cache is allocated per concurrent sequence); as a last resort, reduce `--n-gpu-layers` (`-ngl`) (the remaining layers run on CPU and inference will be much slower). |
 | Performance is worse with multi-GPU than single-GPU | The performance is bottlenecked by GPU interconnect speed. For `--split-mode tensor`, verify that NCCL is being used. Try `--split-mode layer` (less communication than `tensor`). Increase GPU interconnect speed via more PCIe lanes or e.g. NVLink (if available). |
 | GPU not used at all | `--n-gpu-layers` is `0` or too low - try explicitly setting `-ngl all`. Or you are accidentally hiding the GPUs via an environment variable like `CUDA_VISIBLE_DEVICES=-1`. Or your build doesn't include support for the relevant backend. |
+| Crashes or corrupted outputs after setting `GGML_CUDA_P2P=1` | Some motherboards and BIOS settings (e.g. with IOMMU enabled) don't support CUDA peer-to-peer reliably. Unset `GGML_CUDA_P2P`. |
