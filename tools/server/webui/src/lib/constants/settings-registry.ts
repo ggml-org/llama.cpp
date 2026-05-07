@@ -25,6 +25,7 @@ import type {
 } from '$lib/types';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
+import { TITLE_GENERATION } from './title-generation';
 
 export const SETTINGS_SECTION_TITLES = {
 	GENERAL: 'General',
@@ -163,6 +164,23 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
+				label: 'Use LLM to generate conversation title',
+				help: 'Use the LLM to automatically generate conversation titles based on the first message exchange.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				isExperimental: true
+			},
+			{
+				key: SETTINGS_KEYS.TITLE_GENERATION_PROMPT,
+				label: 'LLM title generation prompt',
+				help: 'Optional template for the title generation prompt. Use {{USER}} for the user message and {{ASSISTANT}} for the assistant message.',
+				defaultValue: TITLE_GENERATION.DEFAULT_PROMPT,
+				type: SettingsFieldType.TEXTAREA,
+				section: SETTINGS_SECTION_SLUGS.GENERAL
 			}
 		]
 	},
