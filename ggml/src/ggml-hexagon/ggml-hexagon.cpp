@@ -2254,8 +2254,7 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
         return false;
     }
 
-    if (dst->ne[2] != 1 || dst->ne[3] != 1) {
-        // FA during prompt still needs work
+    if (dst->ne[3] != 1) {
         return false;
     }
 
@@ -2421,8 +2420,8 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
         return false;
     }
 
-    // TODO: add support for non-contigiuos tensors
-    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+    // TODO: add support for non-contiguous elements within a row
+    if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous_rows(dst)) {
         return false;
     }
 

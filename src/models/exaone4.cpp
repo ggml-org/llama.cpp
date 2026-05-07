@@ -1,7 +1,71 @@
 #include "models.h"
 
+void llama_model_exaone4::load_arch_hparams(llama_model_loader & ml) {
+    if (hparams.n_layer == 64) {    // 32B
+        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+        hparams.n_swa = 4096;
+        uint32_t swa_period = 4;
+        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+        hparams.set_swa_pattern(swa_period);
+
+        hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+        hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+        ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+    }
+
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+    switch (hparams.n_layer) {
+        case 30: type = LLM_TYPE_1_2B; break;
+        case 64: type = LLM_TYPE_32B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
+}
+
+void llama_model_exaone4::load_arch_tensors(llama_model_loader &) {
+    LLAMA_LOAD_LOCALS;
+
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+    // output
+    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+    // if output is NULL, init from the input tok embed
+    if (output == NULL) {
+        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+    }
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = layers[i];
+
+        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
+        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+
+        layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+
+        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
+        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+
+        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
+        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+        layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
+    }
+}
+
+std::unique_ptr<llm_graph_context> llama_model_exaone4::build_arch_graph(const llm_graph_params & params) const {
+    if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
+        return std::make_unique<graph<true>>(*this, params);
+    } else {
+        return std::make_unique<graph<false>>(*this, params);
+    }
+}
+
 template <bool iswa>
-llm_build_exaone4<iswa>::llm_build_exaone4(const llama_model & model, const llm_graph_params & params) :
+llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_k();
 
@@ -108,5 +172,5 @@ llm_build_exaone4<iswa>::llm_build_exaone4(const llama_model & model, const llm_
 }
 
 // Explicit template instantiations
-template struct llm_build_exaone4<false>;
-template struct llm_build_exaone4<true>;
+template struct llama_model_exaone4::graph<false>;
+template struct llama_model_exaone4::graph<true>;
