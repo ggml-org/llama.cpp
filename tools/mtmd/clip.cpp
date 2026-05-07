@@ -1205,12 +1205,7 @@ struct clip_model_loader {
             // to form the final visual features.
             // NOTE: gguf conversions should standardize the values of the vision feature layer to
             // be non-negative, since we use -1 to mark values as unset here.
-            std::vector<int> vision_feature_layer;
-            get_arr_int(KEY_FEATURE_LAYER, vision_feature_layer, false);
-            // convert std::vector to std::unordered_set
-            for (auto & layer : vision_feature_layer) {
-                hparams.vision_feature_layer.insert(layer);
-            }
+            get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer, false);
 
             // model-specific params
             switch (model.proj_type) {

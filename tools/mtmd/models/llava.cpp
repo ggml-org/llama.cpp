@@ -60,7 +60,7 @@ ggml_cgraph * clip_graph_llava::build() {
 
         // If this is an embedding feature layer, save the output.
         // NOTE: 0 index here refers to the input to the encoder.
-        if (vision_feature_layer.find(il) != vision_feature_layer.end()) {
+        if (std::find(vision_feature_layer.begin(), vision_feature_layer.end(), il) != vision_feature_layer.end()) {
             embedding_stack.push_back(cur);
         }
 
@@ -135,7 +135,7 @@ ggml_cgraph * clip_graph_llava::build() {
     // process vision feature layers (used by granite)
     {
         // final layer is a vision feature layer
-        if (vision_feature_layer.find(max_feature_layer) != vision_feature_layer.end()) {
+        if (std::find(vision_feature_layer.begin(), vision_feature_layer.end(), max_feature_layer) != vision_feature_layer.end()) {
             embedding_stack.push_back(inpL);
         }
 

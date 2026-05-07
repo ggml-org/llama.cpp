@@ -80,7 +80,7 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
-    std::unordered_set<int32_t> vision_feature_layer;
+    std::vector<int32_t> vision_feature_layer; // Ordered list of vision layers where features are extracted
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
