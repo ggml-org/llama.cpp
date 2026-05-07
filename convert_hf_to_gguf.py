@@ -13068,6 +13068,131 @@ class GraniteSpeechMmprojModel(MmprojModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Granite4VisionForConditionalGeneration")
+class Granite4VisionMmprojModel(MmprojModel):
+    has_vision_encoder = True
+    has_audio_encoder = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        deepstack_map = self.global_config.get("deepstack_layer_map", [])  # [[vis_layer, llm_layer], ...]
+        spatial_layers = self.global_config.get("spatial_target_layers", [])  # [llm_layer, ...]
+        n_text_layers = self.global_config["text_config"]["num_hidden_layers"]
+        n_vision_layers = self.global_config["vision_config"]["num_hidden_layers"]
+
+        # The tensors for the individual per-layer injection projectors are held
+        # separately in safetensors. We merge them here, so this is used to
+        # accumulate the projector tensors in the order that will correspond
+        # with the layer mapping in deepstack_layer_arr.
+        self._projector_tensors = {}
+        self._deepstack_layer_arr = [-1 for _ in range(n_text_layers)] # Populate with -1 sentinels
+
+        # Normalize both deepstack and spatial projector maps to the form:
+        # (vision_layer, llm_layer, <type>, type_index)
+        #
+        # This is then used to populate the following mappings:
+        #
+        # - vision_feature_layers: ordered list of all vision_layer values where
+        #   order corresponds with the order of the stacked projector tensors
+        #   NOTE: Values may appear multiple times for spatial projectors
+        #
+        # - deepstack_layer_arr: per-text-layer array indicating which input
+        #   vision feature should be injected at that layer (-1 if none)
+        #
+        # - tensor_prefix_map: mapping from tensor prefixes to the index of the
+        #   corresponding projector in the stacked tensors
+        normalized_projector_map = []
+        if deepstack_map:
+            for deepstack_idx, (vision_layer, llm_layer) in enumerate(sorted(deepstack_map)):
+                if vision_layer < 0:
+                    vision_layer = n_vision_layers + vision_layer
+                if llm_layer < 0:
+                    llm_layer = n_text_layers + llm_layer
+                normalized_projector_map.append((vision_layer, llm_layer, "layerwise", deepstack_idx))
+        if spatial_layers:
+            spatial_vision_layer = self.global_config.get("spatial_vision_layer", -1)
+            if spatial_vision_layer < 0:
+                spatial_vision_layer = n_vision_layers + spatial_vision_layer
+            for spatial_idx, llm_layer in enumerate(spatial_layers):
+                normalized_projector_map.append((spatial_vision_layer, llm_layer, "spatial", spatial_idx))
+
+        normalized_projector_map = list(sorted(normalized_projector_map))
+        self._n_proj = len(normalized_projector_map)
+
+        self._tensor_prefix_map = {
+            f"model.{proj_type}_projectors.{type_idx}": proj_idx
+            for proj_idx, (_, _, proj_type, type_idx) in enumerate(normalized_projector_map)
+        }
+        self._vision_feature_layers = [vision_layer for vision_layer, _, _, _ in normalized_projector_map]
+        for proj_idx, (_, llm_layer, _, _) in enumerate(normalized_projector_map):
+            self._deepstack_layer_arr[llm_layer] = proj_idx
+
+    def set_gguf_parameters(self):
+        assert self.hparams_vision is not None
+        v = self.hparams_vision
+
+        super().set_gguf_parameters()
+
+        # Set projector type
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE4_VISION)
+
+        # Vision encoder params (SigLIP)
+        self.gguf_writer.add_vision_embedding_length(v["hidden_size"])
+        self.gguf_writer.add_vision_feed_forward_length(v["intermediate_size"])
+        self.gguf_writer.add_vision_block_count(v["num_hidden_layers"])
+        self.gguf_writer.add_vision_head_count(v["num_attention_heads"])
+        self.gguf_writer.add_vision_image_size(v["image_size"])
+        self.gguf_writer.add_vision_patch_size(v["patch_size"])
+
+        # QFormer projector config
+        ds_rate = self.global_config["downsample_rate"]
+        ds_parts = ds_rate.split("/")
+        assert len(ds_parts) == 2, f"Invalid 'downsample_rate' value: {ds_rate}"
+        query_side, window_side = [int(p) for p in ds_parts]
+        self.gguf_writer.add_vision_projector_query_side(query_side)
+        self.gguf_writer.add_vision_projector_window_side(window_side)
+
+        # Set vision feature layers
+        self.gguf_writer.add_vision_feature_layers(self._vision_feature_layers)
+
+        # Write array of deepstack layers (llm_layer -> projector_idx)
+        self.gguf_writer.add_num_deepstack_layers(self._deepstack_layer_arr)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        if name.startswith("language_model."):
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+
+        # Detect projector tensors and bin them
+        projector_idx = None
+        proj_tensor_type = None
+        for prefix, proj_idx in self._tensor_prefix_map.items():
+            if name.startswith(prefix):
+                projector_idx = proj_idx
+                proj_tensor_type = name[len(prefix):].lstrip(".")
+                break
+        if projector_idx is not None:
+            # Add to the stacked tensor mappings
+            tensor_stack = self._projector_tensors.setdefault(
+                proj_tensor_type, [None for _ in range(self._n_proj)]
+            )
+            tensor_stack[projector_idx] = data_torch
+
+            # If we've found all of the stacked projectors for this tensor type,
+            # yield the stacked tensor data
+            if None not in tensor_stack:
+                stacked_data_torch = torch.stack(tensor_stack)
+                stacked_name = name.replace(f".{bid}.", ".")
+                yield from super().modify_tensors(stacked_data_torch, stacked_name, 0)
+                return
+            else:
+                return None
+        yield from super().modify_tensors(data_torch, name, bid)
 @ModelBase.register("Lfm25AudioTokenizer")
 class LFM25AudioTokenizer(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
