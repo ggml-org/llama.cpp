@@ -73,50 +73,16 @@ int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block
   return sycl_down_blk_size;
 }
 
-// Use Level Zero zeMemAllocDevice to avoid sycl::malloc_device triggering
-// DMA-buf/TTM system RAM staging in the xe kernel driver.
-// sycl::malloc_device creates a 1:1 host memory mirror of every VRAM allocation
-// via xe_gem_prime_export, consuming system RAM equal to VRAM allocated.
-// zeMemAllocDevice uses the SVM/P2P path with no host staging.
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-static bool ggml_sycl_queue_supports_level_zero(sycl::queue &q) {
-    const char * env = std::getenv("GGML_SYCL_ENABLE_LEVEL_ZERO");
-    unsigned int enabled = 1;
-    if (env && sscanf(env, " %u", &enabled) != 1) {
-        enabled = 1;
-    }
-
-    return enabled && q.get_device().is_gpu() && q.get_backend() == sycl::backend::ext_oneapi_level_zero;
-}
-#endif
-
-void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-    if (ggml_sycl_queue_supports_level_zero(q)) {
-        void *ptr = nullptr;
-        auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
-        auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
-        ze_device_mem_alloc_desc_t alloc_desc = {ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC, nullptr, 0, 0};
-        ze_result_t r = zeMemAllocDevice(ze_ctx, &alloc_desc, size, 64, ze_dev, &ptr);
-        if (r == ZE_RESULT_SUCCESS && ptr) {
-            return ptr;
-        }
-        return nullptr;
-    }
-#endif
-    return sycl::malloc_device(size, q);
-}
-
 void ggml_sycl_free_device(void *ptr, sycl::queue &q) {
     if (!ptr) return;
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-    if (ggml_sycl_queue_supports_level_zero(q)) {
+    if (g_ggml_sycl_enable_level_zero) {
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
         zeMemFree(ze_ctx, ptr);
         return;
     }
 #endif
-    sycl::free(ptr, q);
+    SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, q)));
 }
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams) {

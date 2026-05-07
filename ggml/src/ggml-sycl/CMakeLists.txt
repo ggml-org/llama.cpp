@@ -105,8 +105,8 @@ endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
+message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO ${GGML_SYCL_SUPPORT_LEVEL_ZERO}")
 if (GGML_SYCL_SUPPORT_LEVEL_ZERO)
-    message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO enabled")
     # Link against Level Zero loader for direct device memory allocation.
     # Avoids sycl::malloc_device triggering DMA-buf/TTM system RAM staging
     # in the xe kernel driver during multi-GPU inference.

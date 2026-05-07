@@ -67,9 +67,7 @@ int g_ggml_sycl_disable_graph = 0;
 int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
 int g_ggml_sycl_enable_level_zero = 0;
-#endif
 int g_ggml_sycl_enable_flash_attention = 1;
 
 
@@ -227,10 +225,13 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
         g_ggml_sycl_enable_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
+#else
+        g_ggml_sycl_enable_level_zero = 0;
+#endif
         if (g_ggml_sycl_enable_level_zero) {
-            // Verify all GPU devices use the Level Zero backend before enabling L0 APIs
-            // Only check GPU devices; CPU devices use OpenCL backend and would
-            // incorrectly disable Level Zero for the GPUs that need it.
+            // Verify all GPU devices use the Level Zero backend before enabling L0 APIs.
+            // Only check GPU devices; CPU devices use OpenCL and would otherwise
+            // disable Level Zero for the GPUs on systems without ONEAPI_DEVICE_SELECTOR set.
             for (unsigned int i = 0; i < dpct::dev_mgr::instance().device_count(); i++) {
                 auto & q = dpct::dev_mgr::instance().get_device(i).default_queue();
                 if (!q.get_device().is_gpu()) {
@@ -243,7 +244,6 @@ static void ggml_check_sycl() try {
                 }
             }
         }
-#endif
 
 #ifdef SYCL_FLASH_ATTN
         g_ggml_sycl_enable_flash_attention = get_sycl_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
@@ -548,6 +548,26 @@ static bool ggml_sycl_is_l0_discrete_gpu(sycl::queue &q) {
     return r == ZE_RESULT_SUCCESS && !(props.flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
 }
 #endif
+
+// Use Level Zero zeMemAllocDevice to avoid sycl::malloc_device triggering
+// DMA-buf/TTM system RAM staging in the xe kernel driver during multi-GPU inference.
+// zeMemAllocDevice uses the SVM/P2P path with no host staging.
+static void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+    if (g_ggml_sycl_enable_level_zero) {
+        void *ptr = nullptr;
+        auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
+        auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
+        ze_device_mem_alloc_desc_t alloc_desc = {ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC, nullptr, 0, 0};
+        ze_result_t r = zeMemAllocDevice(ze_ctx, &alloc_desc, size, 64, ze_dev, &ptr);
+        if (r == ZE_RESULT_SUCCESS && ptr) {
+            return ptr;
+        }
+        return nullptr;
+    }
+#endif
+    return sycl::malloc_device(size, q);
+}
 
 static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
