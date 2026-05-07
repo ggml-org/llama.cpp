@@ -3324,28 +3324,168 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         if (stream_format == "msgpack" || stream_format == "protobuf") {
             const bool use_protobuf = stream_format == "protobuf";
 
-            auto encode_frame_bytes = [use_protobuf](
+            // ── ToolWatcher (opt-in) ───────────────────────────────────────────
+            // When `tool_watcher: true`, scan the outbound token stream for a
+            // (start_id, end_id) pair and surface the captured region as a
+            // structured tool_call on the same frame whose ids come from
+            // immediately after the region. Mirrors sglang PR #24557 / the
+            // libcodec C99 watcher (~ns per token, no detokenize on the hot
+            // path). Markers default to Qwen 2.5+'s `<tool_call>`/`</tool_call>`
+            // and can be overridden per request — the strings must each
+            // resolve to exactly one special token in the loaded model's
+            // vocab. Failure to resolve disables the watcher and surfaces a
+            // warning header; binary streaming still works in plain
+            // passthrough mode.
+            struct codec_watcher_state {
+                codec_tool_watcher_t * w = nullptr;
+                const llama_vocab    * vocab = nullptr;
+                uint32_t               next_call_id = 1;
+                ~codec_watcher_state() {
+                    if (w) codec_tool_watcher_free(w);
+                }
+            };
+            std::shared_ptr<codec_watcher_state> ws;
+
+            const bool want_watcher = json_value(data, "tool_watcher", false);
+            if (want_watcher) {
+                const std::string start_marker =
+                    json_value(data, "tool_watcher_start", std::string("<tool_call>"));
+                const std::string end_marker =
+                    json_value(data, "tool_watcher_end", std::string("</tool_call>"));
+
+                // parse_special=true so the tokenizer treats `<tool_call>` as
+                // the single special token registered in the GGUF vocab,
+                // rather than splitting into <, tool_call, > pieces.
+                std::vector<llama_token> start_ids = common_tokenize(
+                    ctx_server.vocab, start_marker, /*add_special*/ false, /*parse_special*/ true);
+                std::vector<llama_token> end_ids = common_tokenize(
+                    ctx_server.vocab, end_marker,   /*add_special*/ false, /*parse_special*/ true);
+
+                if (start_ids.size() == 1 && end_ids.size() == 1) {
+                    auto state = std::make_shared<codec_watcher_state>();
+                    state->vocab = ctx_server.vocab;
+                    if (codec_tool_watcher_new_with_ids(
+                            (uint32_t) start_ids[0], (uint32_t) end_ids[0], &state->w) == CODEC_OK) {
+                        ws = std::move(state);
+                    } else {
+                        SRV_WRN("Codec ToolWatcher: failed to allocate watcher (markers '%s'/'%s'); "
+                                "falling back to plain Codec streaming.\n",
+                                start_marker.c_str(), end_marker.c_str());
+                    }
+                } else {
+                    SRV_WRN("Codec ToolWatcher: markers '%s'/'%s' do not resolve to single special "
+                            "tokens in this model's vocab (got %zu/%zu tokens). Falling back to "
+                            "plain Codec streaming.\n",
+                            start_marker.c_str(), end_marker.c_str(),
+                            start_ids.size(), end_ids.size());
+                }
+            }
+
+            auto encode_frame_bytes = [use_protobuf, ws](
                     const llama_tokens & tokens, bool done, const std::string & finish_reason) -> std::string {
-                std::vector<uint32_t> ids;
-                ids.reserve(tokens.size());
+                std::vector<uint32_t> raw_ids;
+                raw_ids.reserve(tokens.size());
                 for (auto t : tokens) {
                     // Negative IDs would indicate a server bug; clamp to 0 defensively.
-                    ids.push_back(t < 0 ? 0u : (uint32_t) t);
+                    raw_ids.push_back(t < 0 ? 0u : (uint32_t) t);
                 }
+
+                // Frame buffers. When the watcher is active, `frame_ids` holds
+                // the passthrough subset; when not, it's the full chunk.
+                std::vector<uint32_t> frame_ids;
+                struct pending_call_t { std::string name, args, id; };
+                std::vector<pending_call_t> pending;
+
+                if (ws && ws->w) {
+                    codec_watcher_event_t * events = nullptr;
+                    size_t                  nev    = 0;
+                    if (codec_tool_watcher_feed(ws->w, raw_ids.data(), raw_ids.size(),
+                                                &events, &nev) == CODEC_OK) {
+                        for (size_t i = 0; i < nev; i++) {
+                            if (events[i].kind == CODEC_WATCH_PASSTHROUGH) {
+                                frame_ids.insert(frame_ids.end(),
+                                                 events[i].ids,
+                                                 events[i].ids + events[i].ids_len);
+                            } else { /* CODEC_WATCH_REGION_END */
+                                // Detokenize body locally — llama.cpp owns the
+                                // vocab; no Codec map fetch needed. Tool-call
+                                // bodies are JSON, so render WITHOUT special
+                                // tokens (they were already consumed by the
+                                // watcher).
+                                std::string body;
+                                for (size_t j = 0; j < events[i].ids_len; j++) {
+                                    body += common_token_to_piece(
+                                        ws->vocab,
+                                        (llama_token) events[i].ids[j],
+                                        /*special*/ false);
+                                }
+
+                                // Parse name field if the standard
+                                // {"name":"...","arguments":{...}} shape matches.
+                                // Malformed JSON still produces an event — the
+                                // raw body rides along as arguments_json so the
+                                // orchestrator can return an error to the model.
+                                std::string name;
+                                try {
+                                    auto parsed = json::parse(body);
+                                    if (parsed.is_object() && parsed.contains("name")
+                                            && parsed["name"].is_string()) {
+                                        name = parsed["name"].get<std::string>();
+                                    }
+                                } catch (const std::exception &) { /* keep raw body */ }
+
+                                char id_buf[20];
+                                snprintf(id_buf, sizeof(id_buf), "tc_%08x",
+                                         (unsigned) ws->next_call_id++);
+
+                                pending_call_t pc;
+                                pc.args = std::move(body);
+                                pc.name = std::move(name);
+                                pc.id   = id_buf;
+                                pending.push_back(std::move(pc));
+                            }
+                        }
+                    } else {
+                        // Watcher feed failed (OOM); pass IDs through unmodified
+                        // so the stream stays usable.
+                        frame_ids = raw_ids;
+                    }
+                } else {
+                    frame_ids = raw_ids;
+                }
+
+                // Build the codec_tool_call_t array AFTER `pending` is fully
+                // populated — c_str() pointers must stay stable through the
+                // codec_encode_* call below, which they do as long as
+                // `pending` is no longer mutated.
+                std::vector<codec_tool_call_t> tool_calls;
+                tool_calls.reserve(pending.size());
+                for (auto & pc : pending) {
+                    codec_tool_call_t tc{};
+                    tc.name           = pc.name.empty() ? nullptr : pc.name.c_str();
+                    tc.arguments_json = pc.args.c_str();
+                    tc.id             = pc.id.c_str();
+                    tool_calls.push_back(tc);
+                }
+
                 codec_frame_t frame;
                 codec_frame_init(&frame);
-                frame.ids = ids.data();
-                frame.ids_len = ids.size();
-                frame.done = done;
+                frame.ids     = frame_ids.data();
+                frame.ids_len = frame_ids.size();
+                frame.done    = done;
                 std::string fr = finish_reason;
-                frame.finish_reason = fr.empty() ? nullptr : fr.data();
+                frame.finish_reason   = fr.empty() ? nullptr : fr.data();
+                frame.tool_calls      = tool_calls.empty() ? nullptr : tool_calls.data();
+                frame.tool_calls_len  = tool_calls.size();
 
                 codec_buffer_t buf{nullptr, 0};
                 codec_status_t st = use_protobuf
                         ? codec_encode_protobuf(&frame, &buf)
                         : codec_encode_msgpack(&frame, &buf);
                 // Don't let codec_frame_destroy free the borrowed pointers.
-                frame.ids = nullptr; frame.ids_len = 0; frame.finish_reason = nullptr;
+                frame.ids = nullptr; frame.ids_len = 0;
+                frame.finish_reason = nullptr;
+                frame.tool_calls = nullptr; frame.tool_calls_len = 0;
                 if (st != CODEC_OK) {
                     return std::string();
                 }
