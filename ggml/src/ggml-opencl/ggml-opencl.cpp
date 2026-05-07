@@ -28,6 +28,7 @@
 #include <memory>
 #include <charconv>
 #include <mutex>
+#include <regex>
 
 #undef MIN
 #undef MAX
@@ -395,6 +396,8 @@ struct ggml_backend_opencl_context {
     bool fp16_support;
     bool has_vector_subgroup_broadcast;
     bool disable_fusion;
+
+    std::regex *opfilter = nullptr; // regex of ops to not claim
 
     bool adreno_has_large_buffer;
     bool adreno_use_large_buffer;
@@ -3494,6 +3497,12 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
 
     backend_ctx->disable_fusion = getenv("GGML_OPENCL_DISABLE_FUSION") != nullptr;
 
+    const char * str_opfilter = getenv("GGML_OPENCL_OPFILTER");
+    if (str_opfilter) {
+        backend_ctx->opfilter = new std::regex(str_opfilter, std::regex_constants::icase);
+        GGML_LOG_INFO("ggml_opencl: opfilter regex = \"%s\"\n", str_opfilter);
+    }
+
     dev_ctx->backend_ctx = backend_ctx.release();
     return dev_ctx->backend_ctx;
 }
@@ -4142,6 +4151,11 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
 static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     ggml_backend_opencl_device_context * dev_ctx     = (ggml_backend_opencl_device_context *)dev->context;
     ggml_backend_opencl_context *        backend_ctx = dev_ctx->backend_ctx;
+
+    // reject ops that match the opfilter regex
+    if (backend_ctx->opfilter && std::regex_match(std::string(ggml_op_desc(op)), *backend_ctx->opfilter)) {
+        return false;
+    }
 
     switch (op->op) {
         case GGML_OP_NONE:
