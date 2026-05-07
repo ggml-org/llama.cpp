@@ -622,10 +622,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         for (auto & seq_breaker : params.sampling.dry_sequence_breakers) {
             string_process_escapes(seq_breaker);
         }
-        for (auto & pair : params.speculative.draft.replacements) {
-            string_process_escapes(pair.first);
-            string_process_escapes(pair.second);
-        }
     }
 
     if (!params.kv_overrides.empty()) {
@@ -3553,13 +3549,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.draft.mparams.path = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
-    add_opt(common_arg(
-        {"--spec-draft-replace", "--spec-replace"}, "TARGET", "DRAFT",
-        "translate the string in TARGET into DRAFT if the draft model and main model are not compatible",
-        [](common_params & params, const std::string & tgt, const std::string & dft) {
-            params.speculative.draft.replacements.push_back({ tgt, dft });
-        }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-type"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]",
         string_format("type of speculative decoding to use when no draft model is provided (default: %s)\n",

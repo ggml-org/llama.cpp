@@ -181,14 +181,10 @@ struct common_speculative_state_draft : public common_speculative_state {
     llama_batch  batch;
     llama_tokens prompt_dft;
 
-    bool vocab_cmpt = true; // whether retokenization is needed
-    std::unordered_map<std::string, std::string> vocab_map;
-
     common_speculative_state_draft(
             enum common_speculative_type type,
             llama_context * ctx_tgt,
             llama_context * ctx_dft,
-            const std::vector<std::pair<std::string, std::string>> & replacements,
             bool use_ckpt)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
@@ -225,15 +221,13 @@ struct common_speculative_state_draft : public common_speculative_state {
             smpl = common_sampler_init(llama_get_model(ctx_dft), params);
         }
 
-        vocab_cmpt = common_speculative_are_compatible(llama_get_model(ctx_tgt), llama_get_model(ctx_dft));
-        LOG_DBG("vocab_cmpt = %d\n", vocab_cmpt);
+        const bool vocab_cmpt = common_speculative_are_compatible(llama_get_model(ctx_tgt), llama_get_model(ctx_dft));
+        LOG_DBG("%s: vocab_cmpt = %d\n", __func__, vocab_cmpt);
 
         if (!vocab_cmpt) {
-            LOG_WRN("the target and draft vocabs are not compatible - tokens will be translated between the two\n");
+            LOG_ERR("%s: the target and draft vocabs are not compatible\n", __func__);
 
-            for (const auto & pair : replacements) {
-                vocab_map[pair.first] = pair.second;
-            }
+            throw std::runtime_error("draft model vocab type must match target model to use speculation");
         }
     }
 
@@ -300,33 +294,7 @@ struct common_speculative_state_draft : public common_speculative_state {
 
         const int n_ctx = llama_n_ctx(ctx_dft) - sparams.n_max;
 
-        llama_tokens prompt_cnv;
-        if (!spec->vocab_cmpt) {
-            std::string text;
-
-            text = common_detokenize(ctx_tgt, prompt_tgt, true);
-            text = replace_to_dft(text);
-
-            LOG_DBG("%s: main->draft detokenized string: '%s'\n", __func__, text.c_str());
-
-            prompt_cnv = common_tokenize(ctx_dft, text, false, true);
-
-            // convert id_last to draft vocab. llama_detokenize is called directly to avoid an allocation
-            const auto * model_tgt = llama_get_model(ctx_tgt);
-            const auto * vocab_tgt = llama_model_get_vocab(model_tgt);
-
-            int32_t n_chars = llama_detokenize(vocab_tgt, &id_last, 1, nullptr, 0, false, false);
-            GGML_ASSERT(n_chars < 0 && "failed to detokenize id_last");
-
-            text.resize(-n_chars);
-            llama_detokenize(vocab_tgt, &id_last, 1, text.data(), text.size(), false, false);
-            text = replace_to_dft(text);
-
-            LOG_DBG("main->draft detokenized id_last(%d): '%s'\n", id_last, text.c_str());
-            id_last = common_tokenize(ctx_dft, text, false, true)[0];
-        }
-
-        const llama_tokens & prompt_cur = spec->vocab_cmpt ? prompt_tgt : prompt_cnv;
+        const llama_tokens & prompt_cur = prompt_tgt;
 
         const int i_start = std::max<int>(0, (int) prompt_cur.size() - n_ctx);
 
@@ -505,16 +473,6 @@ struct common_speculative_state_draft : public common_speculative_state {
             prompt_dft.push_back(id);
         }
 
-        if (!spec->vocab_cmpt) {
-            std::string detokenized = common_detokenize(ctx_dft, result, true);
-            detokenized = replace_to_tgt(detokenized);
-            LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
-            result = common_tokenize(ctx_tgt, detokenized, false, true);
-            if (result.size() > (size_t) sparams.n_max) {
-                result.resize(sparams.n_max);
-            }
-        }
-
         if (result.size() < (size_t) sparams.n_min) {
             result.clear();
         }
@@ -531,34 +489,6 @@ struct common_speculative_state_draft : public common_speculative_state {
 
     int32_t n_min(const common_params_speculative & params) const override {
         return params.draft.n_min;
-    }
-
-    std::string replace_to_dft(const std::string & input) const {
-        std::string result = input;
-
-        for (const auto & pair : this->vocab_map) {
-            size_t pos = result.find(pair.first);
-            while (pos != std::string::npos) {
-                result.replace(pos, pair.first.length(), pair.second);
-                pos = result.find(pair.first, pos + pair.second.length());
-            }
-        }
-
-        return result;
-    }
-
-    std::string replace_to_tgt(const std::string & input) const {
-        std::string result = input;
-
-        for (const auto & pair : this->vocab_map) {
-            size_t pos = result.find(pair.second);
-            while (pos != std::string::npos) {
-                result.replace(pos, pair.second.length(), pair.first);
-                pos = result.find(pair.second, pos + pair.first.length());
-            }
-        }
-
-        return result;
     }
 };
 
@@ -1036,7 +966,6 @@ common_speculative * common_speculative_init(
                 impls.push_back(std::make_unique<common_speculative_state_draft>(config.type,
                     /* .ctx_tgt      = */ ctx_tgt,
                     /* .ctx_dft      = */ ctx_dft,
-                    /* .replacements = */ params.draft.replacements,
                     /* .use_ckpt     = */ params.draft.use_ckpt
                 ));
                 break;

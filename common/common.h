@@ -322,7 +322,6 @@ struct common_params_speculative_draft {
 
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
-    std::vector<std::pair<std::string, std::string>> replacements; // main to speculative model replacements
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
 };
 
