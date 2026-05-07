@@ -1389,7 +1389,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
     }
 };
 
-// pool with virtual memory
+// pool with virtual memory management
 #if defined(GGML_SYCL_USE_VMM)
 struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     static const size_t SYCL_POOL_VMM_MAX_SIZE = 1ull << 35; // 32 GB
@@ -1403,10 +1403,16 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     size_t    pool_size = 0;
     size_t    granularity;
 
-    // Owns the physical commits; their dtors release device memory.
-    // (CUDA only needs this vector under HIP; SYCL needs it always
-    // because physical_mem is the only handle to the commit.)
-    std::vector<sycl::ext::oneapi::experimental::physical_mem> mappings;
+    // Owns the physical commits and remembers the (ptr, size) each was mapped
+    // at, so the dtor can unmap each range individually. The spec forbids
+    // single unmap() calls that span multiple contiguous mapped ranges, and
+    // physical_mem is the only handle keeping the commit alive (no
+    // mapping-side refcount, unlike CUDA's cuMemMap).
+    struct mapping {
+        sycl::ext::oneapi::experimental::physical_mem phys;
+        void * ptr;
+    };
+    std::vector<mapping> mappings;
 
     explicit ggml_sycl_pool_vmm(queue_ptr qptr_, int device_) :
         device(device_),
@@ -1416,13 +1422,19 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     }
 
     ~ggml_sycl_pool_vmm() {
-        if (!pool_addr) {
+        if (pool_addr == 0) {
             return;
         }
 
-        // mappings vector dtor releases physical commits.
-        SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::unmap(
-            reinterpret_cast<void *>(pool_addr), pool_size, ctx)));
+        // Per spec, unmap must (a) match the exact (ptr, size) of an earlier
+        // physical_mem::map() call and (b) precede destruction of the
+        // physical_mem objects (their dtors won't unmap). The dtor
+        // body runs before member destruction, so unmapping each
+        // range here lets `mappings` destruct safely.
+        for (auto & m : mappings) {
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::unmap(
+                m.ptr, m.phys.size(), ctx)));
+        }
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::free_virtual_mem(
             pool_addr, SYCL_POOL_VMM_MAX_SIZE, ctx)));
     }
@@ -1450,13 +1462,17 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
                 ));
             }
 
-            // map at the end of the pool
-            const uintptr_t start_ptr = pool_addr + pool_size;
-            phys.map(start_ptr, reserve_size,
-                     sycl::ext::oneapi::experimental::address_access_mode::read_write);
+            // map at the end of the pool; map() returns the same address as
+            // void*, which we stash for the per-range unmap in the dtor
+            void * mapped = phys.map(pool_addr + pool_size, reserve_size,
+                                     sycl::ext::oneapi::experimental::address_access_mode::read_write);
 
-            // keep the physical_mem handle alive as it owns the commit
-            mappings.push_back(std::move(phys));
+            // keep the handle and remember the ptr so
+            // we could unmap this exact range in dtor
+            mappings.push_back({
+                std::move(phys),
+                mapped,
+            });
 
             // add to the pool
             pool_size += reserve_size;
