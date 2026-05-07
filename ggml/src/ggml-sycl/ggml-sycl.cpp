@@ -100,14 +100,15 @@ static ggml_sycl_device_info ggml_sycl_init() {
 #if defined(GGML_SYCL_USE_VMM)
         info.devices[i].vmm = device.has(sycl::aspect::ext_oneapi_virtual_mem);
         if (info.devices[i].vmm) {
-            // NB: SYCL's get_mem_granularity returns the _minimum_ granularity,
+            // NB: SYCL's get_mem_granularity always returns the _minimum_ granularity,
             // but the L0 API requires a larger page size for allocs above 2 MiB and
             // rejects non-multiples with UR_RESULT_ERROR_INVALID_VALUE [sic].
             // Here we clamp it to 2 MiB for simplicity, but other devices may require
             // calling zeVirtualMemQueryPageSize or yet unexposed public API.
             const size_t physical_page = 2ull << 20; // 2 MiB
             info.devices[i].vmm_granularity = std::max<size_t>(
-                sycl::ext::oneapi::experimental::get_mem_granularity(device, sycl::context(device)),
+                sycl::ext::oneapi::experimental::get_mem_granularity(
+                    device, sycl::context(device)),
                 physical_page);
         }
 #else
