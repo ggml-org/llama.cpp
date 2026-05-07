@@ -107,8 +107,6 @@ jobs:
             os: ubuntu-22.04
           - build: 'arm64'
             os: ubuntu-24.04-arm
-          - build: 's390x'
-            os: ubuntu-24.04-s390x
           - build: 'riscv64'
             os: ubuntu-24.04
             cmake_cross: >-
