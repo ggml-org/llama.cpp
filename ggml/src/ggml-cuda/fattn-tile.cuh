@@ -130,7 +130,6 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_nv
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 16, 128, 3,  32, 128)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 32, 256, 2,  64,  64)
 
-    // MiMo-V2.5 (DKQ=192, DV=128): parameters mirror the (256, 256) configs below.
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 128,  2, 128, 3,  64,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 128,  4, 128, 3,  32,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 128,  8, 256, 2,  32,  64)
@@ -206,8 +205,6 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_am
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 32, 256, 2,  64,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 64, 256, 2,  64,  32)
 
-    // MiMo-V2.5 (DKQ=192, DV=128): parameters mirror the (256, 256) configs below.
-    // ncols=64 is dropped — switch_ncols1 only emits cols_per_block=64 when DKQ <= 128 on HIP.
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 128,  2, 256, 2, 128,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 128,  4, 256, 2,  64,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 128,  8, 256, 2,  64,  64)
@@ -285,8 +282,6 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_am
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 32, 256, 3, 128,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 64, 256, 3,  64,  64)
 
-    // MiMo-V2.5 (DKQ=192, DV=128): parameters mirror the (256, 256) configs below.
-    // ncols=64 is dropped — switch_ncols1 only emits cols_per_block=64 when DKQ <= 128 on HIP.
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 128,  2,  64, 8,  32,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 128,  4, 128, 6,  32,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 128,  8, 128, 6,  32,  64)

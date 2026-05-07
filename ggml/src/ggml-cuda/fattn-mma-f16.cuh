@@ -1566,7 +1566,6 @@ static __global__ void flash_attn_ext_f16(
         NO_DEVICE_CODE;
         return;
     }
-    // MiMo-V2.5 (DKQ=192, DV=128) only dispatches with ncols2=8 — see fattn.cu.
     if (DKQ == 192 && ncols2 != 8) {
         NO_DEVICE_CODE;
         return;
