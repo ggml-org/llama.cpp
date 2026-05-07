@@ -283,6 +283,8 @@ int main(int argc, char ** argv) {
 
     common_init();
 
+    ggml_backend_load_all();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MTMD, show_additional_info)) {
         return 1;
     }
@@ -294,8 +296,6 @@ int main(int argc, char ** argv) {
         LOG_ERR("ERR: Missing --mmproj argument\n");
         return 1;
     }
-
-    ggml_backend_load_all();
 
     mtmd_cli_context ctx(params);
     LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
