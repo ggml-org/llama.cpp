@@ -2859,6 +2859,36 @@ private:
                 continue; // continue loop of n_batch
             }
 
+            if (ctx_dft) {
+                SRV_WRN("%s", "processing the batch using the draft context\n");
+
+                // note: for now, to keep things simple, synchronize the target context
+                // TODO: revisit later on
+                llama_synchronize(ctx);
+
+                // the logic here varies depending on the speculative decoding method
+                //  - some draft contexts require emebeddings from the target context, others don't
+                //  - some draft contexts involve an encoder step to transform the target embeddings to draft embeddings
+                // TODO: extract this in a function ?
+                {
+                    // TODO: hook the embeddings from the last target batch here
+                    if (llama_model_has_encoder(model_dft.get())) {
+                        //llama_encode(ctx_dft, ...);
+
+                        GGML_ABORT("not implemented yet\n");
+                    }
+
+                    const int ret = llama_decode(ctx_dft.get(), batch_view);
+
+                    if (ret != 0) {
+                        SRV_ERR("failed to decode draft batch, ret = %d\n", ret);
+
+                        // TODO: handle error
+                        break;
+                    }
+                }
+            }
+
             // move the head of the batch forward with the number of tokens we just processed
             i_next = i + n_tokens;
 
