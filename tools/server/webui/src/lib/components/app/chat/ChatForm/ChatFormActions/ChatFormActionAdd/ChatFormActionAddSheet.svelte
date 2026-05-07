@@ -154,7 +154,10 @@
 					<span class="text-sm">MCP Servers</span>
 				</a>
 
-				<a href={RouterService.settings(SETTINGS_SECTION_SLUGS.TOOLS)} class="flex items-center gap-3 px-3 py-2">
+				<a
+					href={RouterService.settings(SETTINGS_SECTION_SLUGS.TOOLS)}
+					class="flex items-center gap-3 px-3 py-2"
+				>
 					<PencilRuler class="inline h-4 w-4" />
 
 					<span class="text-sm">Tools</span>

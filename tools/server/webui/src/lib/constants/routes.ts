@@ -24,4 +24,3 @@ export const ROUTES = {
 	/** Settings base — for dynamic settings URLs use RouterService. */
 	SETTINGS: '#/settings'
 } as const;
-

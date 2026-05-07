@@ -11,7 +11,6 @@
 	import { DropdownMenuActions } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FORK_TREE_DEPTH_PADDING } from '$lib/constants';
-	import { ROUTES } from '$lib/constants/routes';
 	import { RouterService } from '$lib/services/router.service';
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';

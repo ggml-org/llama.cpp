@@ -9,7 +9,8 @@ import type { Component } from 'svelte';
 export type SettingsConfigValue = string | number | boolean | undefined;
 
 /** Section title type derived from registry section titles. */
-export type SettingsSectionTitle = (typeof SETTINGS_SECTION_TITLES)[keyof typeof SETTINGS_SECTION_TITLES];
+export type SettingsSectionTitle =
+	(typeof SETTINGS_SECTION_TITLES)[keyof typeof SETTINGS_SECTION_TITLES];
 
 /** Per-setting metadata — one entry per setting. */
 export interface SettingsEntry {

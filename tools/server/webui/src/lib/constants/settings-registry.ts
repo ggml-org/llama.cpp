@@ -15,7 +15,14 @@ import {
 	Moon
 } from '@lucide/svelte';
 import type { Component } from 'svelte';
-import type { SettingsConfigValue, SyncableParameter, SettingsEntry, SettingsSectionTitle, SettingsSectionEntry, SettingsSection } from '$lib/types';
+import type {
+	SettingsConfigValue,
+	SyncableParameter,
+	SettingsEntry,
+	SettingsSectionTitle,
+	SettingsSectionEntry,
+	SettingsSection
+} from '$lib/types';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
 
@@ -32,7 +39,11 @@ export const SETTINGS_SECTION_TITLES = {
 
 const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Component }[] = [
 	{ title: SETTINGS_SECTION_TITLES.TOOLS, slug: SETTINGS_SECTION_SLUGS.TOOLS, icon: PencilRuler },
-	{ title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT, slug: SETTINGS_SECTION_SLUGS.IMPORT_EXPORT, icon: Database }
+	{
+		title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
+		slug: SETTINGS_SECTION_SLUGS.IMPORT_EXPORT,
+		icon: Database
+	}
 ];
 
 const COLOR_MODE_OPTIONS: Array<{ value: string; label: string; icon: Component }> = [
@@ -50,8 +61,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.THEME,
 				label: 'Theme',
-				help:
-					'Choose the color theme for the interface. You can choose between System (follows your device settings), Light, or Dark.',
+				help: 'Choose the color theme for the interface. You can choose between System (follows your device settings), Light, or Dark.',
 				defaultValue: ColorMode.SYSTEM,
 				type: SettingsFieldType.SELECT,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
@@ -61,8 +71,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.API_KEY,
 				label: 'API Key',
-				help:
-					'Set the API Key if you are using <code>--api-key</code> option for the server.',
+				help: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
 				defaultValue: '',
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.GENERAL
@@ -79,18 +88,19 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.PASTE_LONG_TEXT_TO_FILE_LEN,
 				label: 'Paste long text to file length',
-				help:
-					'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
+				help: 'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
 				defaultValue: 2500,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				sync: { serverKey: SETTINGS_KEYS.PASTE_LONG_TEXT_TO_FILE_LEN, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.PASTE_LONG_TEXT_TO_FILE_LEN,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SEND_ON_ENTER,
 				label: 'Send message on Enter',
-				help:
-					'Use Enter to send messages and Shift + Enter for new lines. When disabled, use Ctrl/Cmd + Enter.',
+				help: 'Use Enter to send messages and Shift + Enter for new lines. When disabled, use Ctrl/Cmd + Enter.',
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
@@ -99,29 +109,32 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
 				label: 'Copy text attachments as plain text',
-				help:
-					'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
+				help: 'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				sync: { serverKey: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
 				label: 'Enable "Continue" button',
-				help:
-					'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.',
+				help: 'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
 				isExperimental: true,
-				sync: { serverKey: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.PDF_AS_IMAGE,
 				label: 'Parse PDF as image',
-				help:
-					'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
+				help: 'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
@@ -130,22 +143,26 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
 				label: 'Ask for confirmation before changing conversation title',
-				help:
-					'Ask for confirmation before automatically changing conversation title when editing the first message.',
+				help: 'Ask for confirmation before automatically changing conversation title when editing the first message.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				sync: { serverKey: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
 				label: 'Use first non-empty line for conversation title',
-				help:
-					'Use only the first non-empty line of the prompt to generate the conversation title.',
+				help: 'Use only the first non-empty line of the prompt to generate the conversation title.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				sync: { serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			}
 		]
 	},
@@ -157,12 +174,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 				label: 'Show message generation statistics',
-				help:
-					'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
+				help: 'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: { serverKey: SETTINGS_KEYS.SHOW_MESSAGE_STATS, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
@@ -171,17 +190,22 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: { serverKey: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
 				label: 'Show tool call in progress',
-				help:
-					'Automatically expand tool call details while executing and keep them expanded after completion.',
+				help: 'Automatically expand tool call details while executing and keep them expanded after completion.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: { serverKey: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.KEEP_STATS_VISIBLE,
@@ -190,18 +214,23 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: { serverKey: SETTINGS_KEYS.KEEP_STATS_VISIBLE, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.KEEP_STATS_VISIBLE,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
 				label: 'Show microphone on empty input',
-				help:
-					'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				isExperimental: true,
-				sync: { serverKey: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN,
@@ -210,47 +239,58 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: { serverKey: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS,
 				label: 'Use full height code blocks',
-				help:
-					'Always display code blocks at their full natural height, overriding any height limits.',
+				help: 'Always display code blocks at their full natural height, overriding any height limits.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: { serverKey: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
 				label: 'Disable automatic scroll',
-				help:
-					'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
+				help: 'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: { serverKey: SETTINGS_KEYS.DISABLE_AUTO_SCROLL, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.ALWAYS_SHOW_SIDEBAR_ON_DESKTOP,
 				label: 'Always show sidebar on desktop',
-				help:
-					'Always keep the sidebar visible on desktop instead of auto-hiding it.',
+				help: 'Always keep the sidebar visible on desktop instead of auto-hiding it.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: { serverKey: SETTINGS_KEYS.ALWAYS_SHOW_SIDEBAR_ON_DESKTOP, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.ALWAYS_SHOW_SIDEBAR_ON_DESKTOP,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
 				label: 'Show raw model names',
-				help:
-					'Display full raw model identifiers (e.g. "ggml-org/GLM-4.7-Flash-GGUF:Q8_0") instead of parsed names with badges.',
+				help: 'Display full raw model identifiers (e.g. "ggml-org/GLM-4.7-Flash-GGUF:Q8_0") instead of parsed names with badges.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: { serverKey: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
@@ -274,8 +314,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.TEMPERATURE,
 				label: 'Temperature',
-				help:
-					'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
+				help: 'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
@@ -284,8 +323,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.DYNATEMP_RANGE,
 				label: 'Dynamic temperature range',
-				help:
-					'Addon for the temperature sampler. The added value to the range of dynamic temperature, which adjusts probabilities by entropy of tokens.',
+				help: 'Addon for the temperature sampler. The added value to the range of dynamic temperature, which adjusts probabilities by entropy of tokens.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
@@ -294,12 +332,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.DYNATEMP_EXPONENT,
 				label: 'Dynamic temperature exponent',
-				help:
-					'Addon for the temperature sampler. Smoothes out the probability redistribution based on the most probable token.',
+				help: 'Addon for the temperature sampler. Smoothes out the probability redistribution based on the most probable token.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
-				sync: { serverKey: SETTINGS_KEYS.DYNATEMP_EXPONENT, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.DYNATEMP_EXPONENT,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.TOP_K,
@@ -313,8 +353,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.TOP_P,
 				label: 'Top P',
-				help:
-					'Limits tokens to those that together have a cumulative probability of at least p',
+				help: 'Limits tokens to those that together have a cumulative probability of at least p',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
@@ -323,8 +362,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.MIN_P,
 				label: 'Min P',
-				help:
-					'Limits tokens based on the minimum probability for a token to be considered, relative to the probability of the most likely token.',
+				help: 'Limits tokens based on the minimum probability for a token to be considered, relative to the probability of the most likely token.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
@@ -333,8 +371,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.XTC_PROBABILITY,
 				label: 'XTC probability',
-				help:
-					'XTC sampler cuts out top tokens; this parameter controls the chance of cutting tokens at all. 0 disables XTC.',
+				help: 'XTC sampler cuts out top tokens; this parameter controls the chance of cutting tokens at all. 0 disables XTC.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
@@ -343,8 +380,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.XTC_THRESHOLD,
 				label: 'XTC threshold',
-				help:
-					'XTC sampler cuts out top tokens; this parameter controls the token probability that is required to cut that token.',
+				help: 'XTC sampler cuts out top tokens; this parameter controls the token probability that is required to cut that token.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
@@ -353,8 +389,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.TYP_P,
 				label: 'Typical P',
-				help:
-					'Sorts and limits tokens based on the difference between log-probability and entropy.',
+				help: 'Sorts and limits tokens based on the difference between log-probability and entropy.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
@@ -372,8 +407,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.SAMPLERS,
 				label: 'Samplers',
-				help:
-					'The order at which samplers are applied, in simplified way. Default is "top_k;typ_p;top_p;min_p;temperature": top_k->typ_p->top_p->min_p->temperature',
+				help: 'The order at which samplers are applied, in simplified way. Default is "top_k;typ_p;top_p;min_p;temperature": top_k->typ_p->top_p->min_p->temperature',
 				defaultValue: '',
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
@@ -382,12 +416,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.BACKEND_SAMPLING,
 				label: 'Backend sampling',
-				help:
-					'Enable backend-based samplers. When enabled, supported samplers run on the accelerator backend for faster sampling.',
+				help: 'Enable backend-based samplers. When enabled, supported samplers run on the accelerator backend for faster sampling.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
-				sync: { serverKey: SETTINGS_KEYS.BACKEND_SAMPLING, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.BACKEND_SAMPLING,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			}
 		]
 	},
@@ -430,13 +466,15 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.PENALTIES,
-				sync: { serverKey: SETTINGS_KEYS.FREQUENCY_PENALTY, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.FREQUENCY_PENALTY,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.DRY_MULTIPLIER,
 				label: 'DRY multiplier',
-				help:
-					'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets the DRY sampling multiplier.',
+				help: 'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets the DRY sampling multiplier.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.PENALTIES,
@@ -445,8 +483,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.DRY_BASE,
 				label: 'DRY base',
-				help:
-					'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets the DRY sampling base value.',
+				help: 'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets the DRY sampling base value.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.PENALTIES,
@@ -455,22 +492,26 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.DRY_ALLOWED_LENGTH,
 				label: 'DRY allowed length',
-				help:
-					'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets the allowed length for DRY sampling.',
+				help: 'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets the allowed length for DRY sampling.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.PENALTIES,
-				sync: { serverKey: SETTINGS_KEYS.DRY_ALLOWED_LENGTH, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.DRY_ALLOWED_LENGTH,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.DRY_PENALTY_LAST_N,
 				label: 'DRY penalty last N',
-				help:
-					'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets DRY penalty for the last n tokens.',
+				help: 'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets DRY penalty for the last n tokens.',
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.PENALTIES,
-				sync: { serverKey: SETTINGS_KEYS.DRY_PENALTY_LAST_N, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.DRY_PENALTY_LAST_N,
+					paramType: SyncableParameterType.NUMBER
+				}
 			}
 		]
 	},
@@ -482,24 +523,28 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.AGENTIC_MAX_TURNS,
 				label: 'Agentic turns',
-				help:
-					'Maximum number of tool execution cycles before stopping (prevents infinite loops).',
+				help: 'Maximum number of tool execution cycles before stopping (prevents infinite loops).',
 				defaultValue: 10,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.AGENTIC,
 				isPositiveInteger: true,
-				sync: { serverKey: SETTINGS_KEYS.AGENTIC_MAX_TURNS, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.AGENTIC_MAX_TURNS,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
 				label: 'Max lines per tool preview',
-				help:
-					'Number of lines shown in tool output previews (last N lines). Only these previews and the final LLM response persist after the agentic loop completes.',
+				help: 'Number of lines shown in tool output previews (last N lines). Only these previews and the final LLM response persist after the agentic loop completes.',
 				defaultValue: 25,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.AGENTIC,
 				isPositiveInteger: true,
-				sync: { serverKey: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
+					paramType: SyncableParameterType.NUMBER
+				}
 			}
 		]
 	},
@@ -511,8 +556,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.PRE_ENCODE_CONVERSATION,
 				label: 'Pre-fill KV cache after response',
-				help:
-					'After each response, re-submit the conversation to pre-fill the server KV cache. Makes the next turn faster since the prompt is already encoded while you read the response.',
+				help: 'After each response, re-submit the conversation to pre-fill the server KV cache. Makes the next turn faster since the prompt is already encoded while you read the response.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER
@@ -520,8 +564,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
 				label: 'Disable reasoning content parsing',
-				help:
-					'Send reasoning_format=none so the server returns thinking tokens inline instead of extracting them into a separate field.',
+				help: 'Send reasoning_format=none so the server returns thinking tokens inline instead of extracting them into a separate field.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER
@@ -529,22 +572,26 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
 				label: 'Exclude reasoning from context',
-				help:
-					'Strip thinking from previous messages before sending. When off, thinking is sent back via the reasoning_content field so the model sees its own chain-of-thought across turns.',
+				help: 'Strip thinking from previous messages before sending. When off, thinking is sent back via the reasoning_content field so the model sees its own chain-of-thought across turns.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
-				sync: { serverKey: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
 				label: 'Enable raw output toggle',
-				help:
-					'Show toggle button to display messages as plain text instead of Markdown-formatted content',
+				help: 'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
-				sync: { serverKey: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.CUSTOM,
@@ -570,8 +617,7 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 	{
 		key: SETTINGS_KEYS.AUTO_SHOW_SIDEBAR_ON_NEW_CHAT,
 		label: 'Auto show sidebar on new chat',
-		help:
-			'Automatically show sidebar when starting a new chat. Disable to keep the sidebar hidden until you click on it.',
+		help: 'Automatically show sidebar when starting a new chat. Disable to keep the sidebar hidden until you click on it.',
 		defaultValue: true,
 		type: SettingsFieldType.CHECKBOX
 	},
@@ -582,7 +628,7 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		defaultValue: '[]',
 		type: SettingsFieldType.INPUT,
 		sync: { serverKey: SETTINGS_KEYS.MCP_SERVERS, paramType: SyncableParameterType.STRING }
-	},
+	}
 	// {
 	// 	key: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,
 	// 	label: 'Python interpreter enabled',
@@ -602,7 +648,6 @@ function getAllSettings(): SettingsEntry[] {
 	result.push(...NON_UI_SETTINGS);
 	return result;
 }
-
 
 /** Flat config object stored in localStorage. */
 export const SETTING_CONFIG_DEFAULT: Record<string, SettingsConfigValue> = Object.fromEntries(
@@ -659,5 +704,5 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = getAllSettings()
 	}));
 
 export const SETTINGS_FALLBACK_EXIT_ROUTE = ROUTES.START;
-	
-	export { SETTINGS_KEYS } from './settings-keys';
+
+export { SETTINGS_KEYS } from './settings-keys';

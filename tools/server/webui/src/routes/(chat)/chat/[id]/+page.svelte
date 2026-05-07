@@ -5,10 +5,7 @@
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { ROUTES } from '$lib/constants/routes';
 	import { chatStore, isLoading } from '$lib/stores/chat.svelte';
-	import {
-		conversationsStore,
-		activeConversation
-	} from '$lib/stores/conversations.svelte';
+	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 
 	let chatId = $derived(page.params.id);

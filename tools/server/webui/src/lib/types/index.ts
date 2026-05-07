@@ -84,7 +84,7 @@ export type {
 	SettingsEntry,
 	SettingsSectionTitle,
 	SettingsSectionEntry,
-	SettingsSection,
+	SettingsSection
 } from './settings';
 
 // Common types

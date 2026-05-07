@@ -1063,8 +1063,8 @@ class TextModel(ModelBase):
         name, gen = item
 
         # Skip multimodal tensors
-        if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.")) \
-                or "visual." in name or "audio." in name or "talker." in name \
+        if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
+                or "visual." in name or "vision." in name or "audio." in name or "talker." in name \
                 or "vision_" in name or "audio_" in name or "sam_model" in name \
                 or "token2wav." in name or "code2wav." in name \
                 or "projector." in name or "pre_mm_projector_norm" in name \
@@ -1360,6 +1360,9 @@ class TextModel(ModelBase):
         if chkhsh == "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c":
             # ref: https://huggingface.co/Qwen/Qwen3-Embedding-0.6B
             res = "qwen2"
+        if chkhsh == "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f":
+            # ref: https://huggingface.co/openbmb/MiniCPM-V-4_6
+            res = "qwen35"
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
@@ -5499,14 +5502,99 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+class _Qwen35MRopeMixin:
+    # Qwen3.5 always applies interleaved MRoPE (see Qwen3_5RotaryEmbedding in transformers);
+    # the upstream default mrope_section is [11, 11, 10] and llama.cpp's QWEN35 / QWEN35MOE
+    # loaders treat qwen35.rope.dimension_sections as required, so make sure it is always
+    # written even when a particular checkpoint omits the field in `rope_parameters`.
+    _QWEN35_DEFAULT_MROPE_SECTION = [11, 11, 10, 0]
+
+    gguf_writer: gguf.GGUFWriter
+    rope_parameters: dict
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        if "mrope_section" not in self.rope_parameters:
+            self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
+
+
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
-class Qwen3_5TextModel(_LinearAttentionVReorderBase):
+class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
-class Qwen3_5MoeTextModel(_LinearAttentionVReorderBase):
+class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
+
+
+# MiniCPM-V 4.6: text tower is Qwen3.5 (linear+full hybrid attention) wrapped under
+# `model.language_model.*`; vision tower is SigLIP + a window-attention ViT merger
+# + a final DownsampleMLP merger. The same HF arch is registered twice below: once as
+# the LM (text mode) and once as the mmproj (vision mode), mirroring the Qwen3-VL setup.
+
+@ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
+class MiniCPMV4_6TextModel(Qwen3_5TextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.startswith("model.merger."):
+            return None
+        # MTP tensors are not used at inference yet; align with Qwen3Next behaviour
+        if name.startswith("mtp"):
+            return None
+
+        return super().filter_tensors(item)
+
+
+@ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
+class MiniCPMV4_6VisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.hparams_vision is not None:
+            # In MiniCPM-V 4.6 `vision_config.image_size` (980) describes the SigLIP
+            # positional embedding bucket grid (70 x 70), while the per-slice processing
+            # resolution is the preprocessor's `scale_resolution` (typically 448).
+            # The CLIP loader in tools/mtmd/clip.cpp consumes `clip.vision.image_size`
+            # as the slice size and warmup resolution, so report `scale_resolution` there
+            # to match the upstream MiniCPMV4_6ImageProcessorPil slicing rules.
+            scale_resolution = self.preprocessor_config.get("scale_resolution")
+            if scale_resolution is not None:
+                self.hparams_vision["image_size"] = int(scale_resolution)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+
+        # projector type string is consumed by clip_projector_type_from_string() in clip.cpp
+        # (mapped to PROJECTOR_TYPE_MINICPMV4_6).
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MINICPMV4_6)
+
+        # ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension; used for slice alignment
+        self.gguf_writer.add_vision_projector_scale_factor(4)
+
+        # borrow wa_layer_indexes for vit_merger insertion point
+        insert_layer_id = int(self.global_config.get(
+            "insert_layer_id", self.hparams_vision.get("insert_layer_id", 6)))
+        self.gguf_writer.add_vision_wa_layer_indexes([insert_layer_id])
+
+        # SigLIP vision body uses gelu_pytorch_tanh, which matches ggml_gelu (tanh approx).
+        self.gguf_writer.add_vision_use_gelu(True)
+        self.gguf_writer.add_vision_attention_layernorm_eps(
+            self.hparams_vision.get("layer_norm_eps", 1e-6))
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # lm_head / MTP -> belong to the LM file
+        if name.startswith(("lm_head.", "mtp")):
+            return None
+
+        return super().filter_tensors(item)
 
 
 @ModelBase.register("GPT2LMHeadModel")
@@ -9405,9 +9493,125 @@ class MiniMaxM2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("MiMoV2FlashForCausalLM")
+@ModelBase.register("MiMoV2FlashForCausalLM", "MiMoV2ForCausalLM")
 class MimoV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MIMO2
+
+    # MiMo V2-Flash, V2.5 and V2.5-Pro all ship 3 trained MTP layers under model.mtp.layers.{0,1,2}.
+    # The HF config does not expose the count, so it's hardcoded to match the count found in the safetensors.
+    _n_nextn = 3
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.block_count = self.hparams["num_hidden_layers"] + self._n_nextn
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    @staticmethod
+    def _tp_aware_qkv_dequant(weight: Tensor, scale_inv: Tensor,
+                              n_q: int, n_kv: int, hd: int, vhd: int,
+                              bs: int = 128) -> Tensor:
+        # MiMo-V2.5 (TP=4) and V2.5-Pro (TP=8) ship qkv_proj sharded across TP
+        # ranks; per rank, rows are stacked as [Q_per | K_per | V_per].
+        # weight_scale_inv has ceil(rows_per_rank/bs) block-rows per rank (last
+        # may extend past rows_per_rank with phantom rows not in the weight).
+        # Naive repeat_interleave aligns rank 0 only and mis-applies scales to
+        # later ranks once rows_per_rank isn't a multiple of bs.
+        # Re-group the per-rank [Q_per|K_per|V_per] rows into a single fused
+        # [Q | K | V] tensor matching the un-sharded original layout.
+        q_size = n_q * hd
+        k_size = n_kv * hd
+        v_size = n_kv * vhd
+        total_rows = q_size + k_size + v_size
+        if weight.shape[0] != total_rows:
+            raise ValueError(f"qkv_proj weight rows {weight.shape[0]} != q+k+v {total_rows}")
+
+        # detect TP from scale_inv block count, descending order so larger matches first
+        tp = None
+        for cand in (8, 4):
+            if total_rows % cand != 0:
+                continue
+            rpr = total_rows // cand
+            bpr = (rpr + bs - 1) // bs
+            if scale_inv.shape[0] == cand * bpr:
+                tp = cand
+                break
+        if tp is None:
+            raise ValueError(
+                f"qkv_proj: cannot detect TP - scale_inv rows {scale_inv.shape[0]}, "
+                f"q+k+v {total_rows}")
+
+        q_per = q_size // tp
+        k_per = k_size // tp
+        v_per = v_size // tp
+        rows_per_rank = q_per + k_per + v_per
+        blocks_per_rank = (rows_per_rank + bs - 1) // bs
+
+        scale_inv = scale_inv.float()
+        # per-row scale-row index: rank * blocks_per_rank + (rr_in_rank // bs)
+        row_idx = torch.arange(total_rows)
+        rr = row_idx % rows_per_rank
+        rank = row_idx // rows_per_rank
+        scale_row_idx = rank * blocks_per_rank + (rr // bs)
+        # gather: (total_rows, n_col_blocks)
+        scale_per_row_block = scale_inv[scale_row_idx]
+        # expand col-blocks -> cols: each block-col covers `bs` weight cols
+        scale_full = scale_per_row_block.repeat_interleave(bs, dim=1)
+        # crop to weight col count (in case last col-block isn't full)
+        scale_full = scale_full[:, : weight.shape[1]]
+        dequant = weight.float() * scale_full
+
+        if tp == 1:
+            return dequant
+
+        # Re-group per-rank [Q_per|K_per|V_per] rows into unified [Q | K | V]
+        qs, ks, vs = [], [], []
+        for r in range(tp):
+            base = r * rows_per_rank
+            qs.append(dequant[base : base + q_per])
+            ks.append(dequant[base + q_per : base + q_per + k_per])
+            vs.append(dequant[base + q_per + k_per : base + rows_per_rank])
+        return torch.cat(qs + ks + vs, dim=0)
+
+    def dequant_model(self):
+        # Capture raw FP8 (weight, scale_inv) lambdas for qkv_proj BEFORE super
+        # rewrites them with the existing dequant. Replace super's lambda after
+        # it runs so scale_inv removal still happens via the standard path.
+        qkv_overrides: dict[str, tuple[Callable, Callable, int]] = {}
+        qc = self.hparams.get("quantization_config")
+        if isinstance(qc, dict) and qc.get("quant_method") == "fp8":
+            pat = re.compile(r"^model\.layers\.(\d+)\.self_attn\.qkv_proj\.weight_scale_inv$")
+            for name in list(self.model_tensors.keys()):
+                m = pat.match(name)
+                if not m:
+                    continue
+                weight_name = name.removesuffix("_scale_inv")
+                if weight_name not in self.model_tensors:
+                    continue
+                qkv_overrides[weight_name] = (
+                    self.model_tensors[weight_name],
+                    self.model_tensors[name],
+                    int(m.group(1)),
+                )
+
+        super().dequant_model()
+
+        if not qkv_overrides:
+            return
+
+        n_q = self.hparams["num_attention_heads"]
+        hd = self.hparams["head_dim"]
+        vhd = self.hparams["v_head_dim"]
+        hybrid = self.hparams["hybrid_layer_pattern"]
+        n_layer_text = self.hparams["num_hidden_layers"]
+        for weight_name, (w_fn, s_fn, bid) in qkv_overrides.items():
+            # MTP layers (bid >= n_layer_text) use SWA-style attention dims
+            is_swa = True if bid >= n_layer_text else hybrid[bid] == 1
+            n_kv = self.hparams["swa_num_key_value_heads" if is_swa else "num_key_value_heads"]
+            self.model_tensors[weight_name] = (
+                lambda w_fn=w_fn, s_fn=s_fn, n_q=n_q, n_kv=n_kv, hd=hd, vhd=vhd:
+                    MimoV2Model._tp_aware_qkv_dequant(w_fn(), s_fn(), n_q, n_kv, hd, vhd)
+            )
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -9419,11 +9623,14 @@ class MimoV2Model(TextModel):
 
         n_head_kv = self.hparams["num_key_value_heads"]
         n_head_kv_swa = self.hparams["swa_num_key_value_heads"]
-        n_head_kv_arr = [n_head_kv_swa if use_swa == 1 else n_head_kv for use_swa in self.hparams["hybrid_layer_pattern"]]
+        # Extend the per-layer pattern with SWA entries for the MTP blocks so the
+        # runtime arrays (sized to extended block_count) are fully populated.
+        hybrid = list(self.hparams["hybrid_layer_pattern"]) + [1] * self._n_nextn
+        n_head_kv_arr = [n_head_kv_swa if use_swa == 1 else n_head_kv for use_swa in hybrid]
         self.gguf_writer.add_head_count_kv(n_head_kv_arr)
 
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
-        self.gguf_writer.add_sliding_window_pattern(self.hparams["hybrid_layer_pattern"])
+        self.gguf_writer.add_sliding_window_pattern(hybrid)
         self.gguf_writer.add_value_length(self.hparams["v_head_dim"])
         self.gguf_writer.add_expert_count(self.hparams["n_routed_experts"])
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
@@ -9432,6 +9639,12 @@ class MimoV2Model(TextModel):
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("layernorm_epsilon", 1e-5))
+
+        v_scale = self.hparams.get("attention_value_scale")
+        if v_scale is not None:
+            self.gguf_writer.add_attn_value_scale(float(v_scale))
+
+        self.gguf_writer.add_nextn_predict_layers(self._n_nextn)
 
     _experts: list[dict[str, Tensor]] | None = None
 
@@ -9442,13 +9655,21 @@ class MimoV2Model(TextModel):
         if "attention_sink" in name and not name.endswith(".weight"):
             name += ".weight"
 
-        # TODO: mimo v2 does not indicate the number of next-token-prediction layers, therefore we cannot do the same way as GLM4_MOE
-        if "model.mtp." in name:
-            return None
-
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch, name, bid):
+        # Remap MTP/NextN tensors to additional layer slots so the standard tensor map handles them.
+        # HF: model.mtp.layers.{i}.foo  ->  model.layers.{n_layer_text + i}.foo
+        m = re.match(r"^model\.mtp\.layers\.(\d+)\.(.*)$", name)
+        if m is not None:
+            mtp_idx = int(m.group(1))
+            assert mtp_idx < self._n_nextn, f"MTP layer index {mtp_idx} >= _n_nextn ({self._n_nextn})"
+            rest = m.group(2)
+            n_layer_text = self.hparams["num_hidden_layers"]
+            new_bid = n_layer_text + mtp_idx
+            name = f"model.layers.{new_bid}.{rest}"
+            bid = new_bid
+
         # process the experts separately
         if name.find("mlp.experts") != -1:
             n_experts = self.hparams["n_routed_experts"]
@@ -10695,7 +10916,7 @@ class ExaoneMoEModel(Exaone4Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("GraniteForCausalLM")
+@ModelBase.register("GraniteForCausalLM", "GraniteSpeechForConditionalGeneration")
 class GraniteModel(LlamaModel):
     """Conversion for IBM's GraniteForCausalLM"""
     model_arch = gguf.MODEL_ARCH.GRANITE
@@ -10727,6 +10948,13 @@ class GraniteModel(LlamaModel):
         if logits_scale := self.hparams.get("logits_scaling"):
             self.gguf_writer.add_logit_scale(logits_scale)
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.startswith("encoder."):
+            return None
+        return super().filter_tensors(item)
 
 
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
@@ -12579,6 +12807,89 @@ class LFM2AudioModel(ConformerAudioModel):
             return None
 
         return super().filter_tensors(item)
+
+
+@ModelBase.register("GraniteSpeechForConditionalGeneration")
+class GraniteSpeechMmprojModel(MmprojModel):
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    _batch_norm_tensors: list[dict[str, Tensor]] | None = None
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return self.global_config.get("encoder_config")
+
+    def set_gguf_parameters(self):
+        assert self.hparams_audio is not None
+        a = self.hparams_audio
+        a["hidden_size"] = a["hidden_dim"]
+        a["intermediate_size"] = a["hidden_dim"] * a["feedforward_mult"]
+        a["num_attention_heads"] = a["num_heads"]
+        a["num_hidden_layers"] = a["num_layers"]
+
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE_SPEECH)
+        self.gguf_writer.add_audio_num_mel_bins(a["input_dim"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+        self.gguf_writer.add_audio_chunk_size(a["context_size"])
+        self.gguf_writer.add_audio_conv_kernel_size(a["conv_kernel_size"])
+        self.gguf_writer.add_audio_max_pos_emb(a["max_pos_emb"])
+
+        p = self.global_config
+        self.gguf_writer.add_audio_projector_window_size(p["window_size"])
+        self.gguf_writer.add_audio_projector_downsample_rate(p["downsample_rate"])
+        self.gguf_writer.add_audio_projector_head_count(p["projector_config"]["num_attention_heads"])
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if "encoder" in name or "projector" in name:
+            if ".conv" in name and ".weight" in name:
+                return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if "attention_dists" in name or "num_batches_tracked" in name:
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # fold running_mean, running_var and eps into weight and bias for batch_norm
+        if "batch_norm" in name and "encoder.layers." in name:
+            if self._batch_norm_tensors is None:
+                self._batch_norm_tensors = [{} for _ in range(self.block_count)]
+            assert bid is not None
+            self._batch_norm_tensors[bid][name] = data_torch
+            if len(self._batch_norm_tensors[bid]) < 4:
+                return
+            prefix = f"encoder.layers.{bid}.conv.batch_norm"
+            weight = self._batch_norm_tensors[bid][f"{prefix}.weight"]
+            bias = self._batch_norm_tensors[bid][f"{prefix}.bias"]
+            running_mean = self._batch_norm_tensors[bid][f"{prefix}.running_mean"]
+            running_var = self._batch_norm_tensors[bid][f"{prefix}.running_var"]
+            eps = 1e-5
+            a = weight / torch.sqrt(running_var + eps)
+            b = bias - running_mean * a
+            yield from super().modify_tensors(a, f"encoder.layers.{bid}.conv.batch_norm.weight", bid)
+            yield from super().modify_tensors(b, f"encoder.layers.{bid}.conv.batch_norm.bias", bid)
+            return
+
+        if ".attn.to_kv.weight" in name:
+            k_weight, v_weight = data_torch.chunk(2, dim=0)
+            yield from super().modify_tensors(k_weight, name.replace("to_kv", "to_k"), bid)
+            yield from super().modify_tensors(v_weight, name.replace("to_kv", "to_v"), bid)
+            return
+
+        if ("up_conv" in name or "down_conv" in name) and name.endswith(".weight"):
+            if data_torch.ndim == 3 and data_torch.shape[2] == 1:
+                data_torch = data_torch.squeeze(2)
+
+        if "depth_conv" in name and name.endswith(".weight"):
+            if data_torch.ndim == 3 and data_torch.shape[1] == 1:
+                data_torch = data_torch.squeeze(1)
+
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Lfm25AudioTokenizer")

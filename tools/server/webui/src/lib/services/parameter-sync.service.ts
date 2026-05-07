@@ -1,6 +1,6 @@
 import { normalizeFloatingPoint } from '$lib/utils';
 import { SETTINGS_KEYS, SYNCABLE_PARAMETERS } from '$lib/constants';
-import type { SyncableParameter, ParameterRecord, ParameterInfo, ParameterValue } from '$lib/types';
+import type { ParameterRecord, ParameterInfo, ParameterValue } from '$lib/types';
 import { SyncableParameterType, ParameterSource } from '$lib/enums';
 
 export class ParameterSyncService {

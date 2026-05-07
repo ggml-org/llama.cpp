@@ -32,7 +32,10 @@
 			if (currentModelName) {
 				const currentModelProps = modelsStore.getModelProps(currentModelName);
 
-				return (currentModelProps?.default_generation_settings?.params ?? {}) as Record<string, unknown>;
+				return (currentModelProps?.default_generation_settings?.params ?? {}) as Record<
+					string,
+					unknown
+				>;
 			}
 		}
 		return (serverStore.defaultParams ?? {}) as Record<string, unknown>;

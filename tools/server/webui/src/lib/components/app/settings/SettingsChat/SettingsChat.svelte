@@ -51,7 +51,8 @@
 		if (isRouterMode() && currentSection.fields && !fetchInitiated) {
 			fetchInitiated = true;
 
-			void modelsStore.fetch()
+			void modelsStore
+				.fetch()
 				.then(() => modelsStore.fetchRouterModels())
 				.then(() => modelsStore.fetchModalitiesForLoadedModels())
 				.then(() => modelsStore.ensureFirstModelSelected());
@@ -127,13 +128,15 @@
 		<SettingsChatDesktopSidebar
 			sections={SETTINGS_CHAT_SECTIONS}
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
-			getHref={getSectionHref ?? ((section: SettingsSection) => RouterService.settings(section.slug))}
+			getHref={getSectionHref ??
+				((section: SettingsSection) => RouterService.settings(section.slug))}
 		/>
 
 		<SettingsChatMobileHeader
 			sections={SETTINGS_CHAT_SECTIONS}
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
-			getHref={getSectionHref ?? ((section: SettingsSection) => RouterService.settings(section.slug))}
+			getHref={getSectionHref ??
+				((section: SettingsSection) => RouterService.settings(section.slug))}
 			bind:this={mobileHeader}
 		/>
 
