@@ -35,7 +35,7 @@ OutputVector translate_rope(const NodeContext & context) {
 
     ov::Output<Node> res;
 
-    auto data_node = process_view_input_new(context, 0).get_node_shared_ptr();
+    auto data_node = context.get_input(0).get_node_shared_ptr();
     auto output_shape = context.get_output_shape().to_shape();
     int32_t * op_params = context.get_output_op_params();
     const int mode = (op_case & 0xFFFF0000) >> 16;
@@ -63,8 +63,7 @@ OutputVector translate_rope(const NodeContext & context) {
 
     if (op_case == 2) {
         // The input comes from a VIEW
-        int slice_len = output_shape[2] * output_shape[3];
-        data_node = process_view_input(context, 0, slice_len).get_node_shared_ptr();
+        data_node = process_view_input_new(context, 0).get_node_shared_ptr();
         if (context.is_stateful()) {
             auto data_shape = ov::op::v0::Constant::create(
                 ov::element::i64, {3}, std::vector<int64_t>{-1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
