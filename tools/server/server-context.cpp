@@ -716,17 +716,17 @@ private:
     void destroy() {
         llama_init.reset();
 
-        ctx = nullptr;
-        model = nullptr;
-
-        mtmd_free(mctx);
-        mctx = nullptr;
-
         for (server_slot & slot : slots) {
             if (slot.can_speculate()) {
                 slot.spec.reset();
             }
         }
+
+        ctx = nullptr;
+        model = nullptr;
+
+        mtmd_free(mctx);
+        mctx = nullptr;
 
         llama_batch_free(batch);
     }
