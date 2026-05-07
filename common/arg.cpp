@@ -248,6 +248,8 @@ std::vector<std::string> common_arg::get_env() const {
 
 // Helper function to parse tensor buffer override strings
 static void parse_tensor_buffer_overrides(const std::string & value, std::vector<llama_model_tensor_buft_override> & overrides) {
+    ggml_backend_load_all();
+
     std::map<std::string, ggml_backend_buffer_type_t> buft_list;
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
         auto * dev = ggml_backend_dev_get(i);
@@ -423,6 +425,10 @@ static bool parse_bool_value(const std::string & value) {
     } else {
         throw std::invalid_argument("invalid boolean value");
     }
+}
+
+[[noreturn]] static void arg_removed(const std::string & msg) {
+    throw std::invalid_argument("the argument has been removed. " + msg);
 }
 
 //
@@ -803,6 +809,7 @@ static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & val
     if (dev_names.size() == 1 && dev_names[0] == "none") {
         devices.push_back(nullptr);
     } else {
+        ggml_backend_load_all();
         for (const auto & device : dev_names) {
             auto * dev = ggml_backend_dev_by_name(device.c_str());
             if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
@@ -820,6 +827,7 @@ static void add_rpc_devices(const std::string & servers) {
     if (rpc_servers.empty()) {
         throw std::invalid_argument("no RPC servers specified");
     }
+    ggml_backend_load_all();
     ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
     if (!rpc_reg) {
         throw std::invalid_argument("failed to find RPC backend");
@@ -1015,9 +1023,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     }
 
     params.use_color = tty_can_use_colors();
-
-    // load dynamic backends
-    ggml_backend_load_all();
 
     common_params_context ctx_arg(params);
     ctx_arg.print_usage = print_usage;
@@ -2275,6 +2280,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {
+            ggml_backend_load_all();
             std::vector<ggml_backend_dev_t> devices;
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 auto * dev = ggml_backend_dev_get(i);
@@ -3715,35 +3721,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--draft", "--draft-n", "--draft-max"}, "N",
         "the argument has been removed. use --spec-draft-n-max or --spec-ngram-mod-n-max",
         [](common_params & /*params*/, int /*value*/) {
-            throw std::invalid_argument("the argument has been removed. use --spec-draft-n-max or --spec-ngram-mod-n-max");
+            arg_removed("use --spec-draft-n-max or --spec-ngram-mod-n-max");
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DRAFT_MAX"));
     add_opt(common_arg(
         {"--draft-min", "--draft-n-min"}, "N",
         "the argument has been removed. use --spec-draft-n-min or --spec-ngram-mod-n-min",
         [](common_params & /*params*/, int /*value*/) {
-            throw std::invalid_argument("the argument has been removed. use --spec-draft-n-min or --spec-ngram-mod-n-min");
+            arg_removed("use --spec-draft-n-min or --spec-ngram-mod-n-min");
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DRAFT_MIN"));
     add_opt(common_arg(
         {"--spec-ngram-size-n"}, "N",
         "the argument has been removed. use the respective --spec-ngram-*-size-n or --spec-ngram-mod-n-match",
         [](common_params & /*params*/, int /*value*/) {
-            throw std::invalid_argument("the argument has been removed. use the respective --spec-ngram-*-size-n");
+            arg_removed("use the respective --spec-ngram-*-size-n");
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--spec-ngram-size-m"}, "N",
         "the argument has been removed. use the respective --spec-ngram-*-size-m",
         [](common_params & /*params*/, int /*value*/) {
-            throw std::invalid_argument("the argument has been removed. use the respective --spec-ngram-*-size-m");
+            arg_removed("use the respective --spec-ngram-*-size-m");
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--spec-ngram-min-hits"}, "N",
         "the argument has been removed. use the respective --spec-ngram-*-min-hits",
         [](common_params & /*params*/, int /*value*/) {
-            throw std::invalid_argument("the argument has been removed. use the respective --spec-ngram-*-min-hits");
+            arg_removed("use the respective --spec-ngram-*-min-hits");
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
 
