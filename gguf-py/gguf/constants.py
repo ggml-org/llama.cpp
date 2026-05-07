@@ -4322,6 +4322,7 @@ class VisionProjectorType:
     MINICPMV4_6    = "minicpmv4_6"
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"
+    GRANITE4_VISION = "granite4_vision"
 
 
 # Items here are (block size, type size)
