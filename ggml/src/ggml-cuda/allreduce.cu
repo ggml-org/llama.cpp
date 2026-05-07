@@ -83,12 +83,13 @@ static constexpr int GGML_CUDA_AR_KERNEL_BLOCKS = 8;
 //
 // Each GPU runs three phases:
 //
-//   Phase 1 (all threads): cast sendbuf (T_dst) -> T_wire and store as 16-byte
-//                          vectors into host_mine.  __threadfence_system()
-//                          commits these writes to host memory.
+//   Phase 1 (all threads): cast sendbuf (T_dst) -> T_wire and store as
+//                          single-instruction-width vectors into host_mine.
+//                          __threadfence_system() commits these writes to host
+//                          memory.
 //   Phase 2 (thread 0):    write token to arrival_mine; spin until
 //                          arrival_other == token.
-//   Phase 3 (all threads): read 16-byte T_wire vectors from host_other, cast
+//   Phase 3 (all threads): read T_wire vectors from host_other, cast
 //                          each element to T_dst, and sum with the local
 //                          sendbuf value (also rounded through T_wire so that
 //                          both GPUs truncate identically -- this guarantees
@@ -112,10 +113,10 @@ static __global__ void ggml_cuda_ar_kernel(
         int *                       arrival_other,
         int                         token) {
 
-    // 16-byte vector unit for the wire type.  Each phase-1 iter writes one
-    // vector to host memory; each phase-3 iter reads one and produces
-    // ELEMS_PER_VEC sums.
-    constexpr int ELEMS_PER_VEC = 16 / sizeof(T_wire);
+    // Vector unit for the wire type, sized to the arch's widest single-instruction
+    // copy (16 B on Volta+).  Each phase-1 iter writes one vector to host memory;
+    // each phase-3 iter reads one and produces ELEMS_PER_VEC sums.
+    constexpr int ELEMS_PER_VEC = ggml_cuda_get_max_cpy_bytes() / sizeof(T_wire);
     constexpr int ARRIVAL_INTS  = (int)(GGML_CUDA_AR_ARRIVAL_STRIDE / sizeof(int));
 
     const int tid       = threadIdx.x;
@@ -126,7 +127,7 @@ static __global__ void ggml_cuda_ar_kernel(
     const int count_vec = count / ELEMS_PER_VEC;
     const int tail      = count_vec * ELEMS_PER_VEC;
 
-    // Phase 1: cast sendbuf (T_dst) -> host_mine (T_wire) and store as 16-byte vectors.
+    // Phase 1: cast sendbuf (T_dst) -> host_mine (T_wire) and store as vectors.
     {
         for (int i = gtid; i < count_vec; i += gnt) {
             const int off = i * ELEMS_PER_VEC;
