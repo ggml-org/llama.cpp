@@ -381,8 +381,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             }
             break;
         case 192:
-            // MiMo-V2.5: asymmetric DKQ=192, DV=128. Both MMA_F16 (Turing+)
-            // and the tile path have 192/128 instances; WMMA does not.
             if (V->ne[0] != 128) {
                 return BEST_FATTN_KERNEL_NONE;
             }
