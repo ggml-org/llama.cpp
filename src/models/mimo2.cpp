@@ -147,7 +147,7 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
                     Qcur, Kcur, Vcur, nullptr, sinks, nullptr, 1.0f/sqrtf(float(n_embd_head_k)), il);
             cb(cur, "attn_out", il);
 
-            if (v_scale != 1.0f) {
+            if (v_scale) {
                 cur = ggml_scale(ctx0, cur, v_scale);
                 cb(cur, "attn_out_scaled", il);
             }
