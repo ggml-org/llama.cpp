@@ -94,6 +94,15 @@ struct common_chat_msg {
                tool_name.empty() && tool_call_id.empty();
     }
 
+    bool contains_media() const {
+        for (const auto & part : content_parts) {
+            if (part.type == "media_marker") {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void set_tool_call_ids(std::vector<std::string> &           ids_cache,
                            const std::function<std::string()> & gen_tool_call_id) {
         for (auto i = 0u; i < tool_calls.size(); i++) {

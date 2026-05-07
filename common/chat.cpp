@@ -80,7 +80,7 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     if (!content.empty()) {
         jmsg["content"] = content;
     } else if (!content_parts.empty()) {
-        if (concat_typed_text) {
+        if (concat_typed_text || contains_media()) {
             std::string text;
             bool last_was_media_marker = false;
             // join parts with newline, do not add newline before or after media markers
