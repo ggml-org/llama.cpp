@@ -1403,10 +1403,10 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     size_t    pool_size = 0;
     size_t    granularity;
 
-    // physical_mem owns the commits (no mapping-side refcount, unlike cuMemMap)
+    // physical_mem owns the commits (unlike cuMemMap)
     struct mapping {
         sycl::ext::oneapi::experimental::physical_mem phys;
-        void * ptr;
+        void * map_ptr;
     };
     std::vector<mapping> mappings;
 
@@ -1427,7 +1427,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
         // physical_mem objects (their dtors won't unmap).
         for (auto & m : mappings) {
             SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::unmap(
-                m.ptr, m.phys.size(), ctx)));
+                m.map_ptr, m.phys.size(), ctx)));
         }
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::free_virtual_mem(
             pool_addr, SYCL_POOL_VMM_MAX_SIZE, ctx)));
@@ -1456,16 +1456,14 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
                 ));
             }
 
-            // map at the end of the pool; map() returns the same address as
-            // void*, which we stash for the per-range unmap in the dtor
-            void * mapped = phys.map(pool_addr + pool_size, reserve_size,
+            // map at the end of the pool
+            void * map_ptr = phys.map(pool_addr + pool_size, reserve_size,
                                      sycl::ext::oneapi::experimental::address_access_mode::read_write);
 
-            // keep the handle and remember the ptr so
-            // we could unmap this exact range in dtor
+            // stash these so we could unmap this exact range in dtor
             mappings.push_back({
                 std::move(phys),
-                mapped,
+                map_ptr,
             });
 
             // add to the pool
