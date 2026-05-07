@@ -188,6 +188,24 @@ class LoraTorchTensor:
     def swapaxes(self, axis0: int, axis1: int) -> LoraTorchTensor:
         return self.transpose(axis0, axis1)
 
+    def split(self, split_size: int | Sequence[int], dim: int = 0) -> tuple[LoraTorchTensor, ...]:
+        shape = self.shape
+        ndim = len(shape)
+        if dim < 0:
+            dim += ndim
+        if dim == ndim - 1:
+            A_chunks = self._lora_A.split(split_size, dim=-1)
+            return tuple(LoraTorchTensor(a, self._lora_B) for a in A_chunks)
+        elif dim == ndim - 2:
+            B_chunks = self._lora_B.split(split_size, dim=-2)
+            return tuple(LoraTorchTensor(self._lora_A, b) for b in B_chunks)
+        else:
+            B_chunks = self._lora_B.split(split_size, dim=dim)
+            if self._lora_A.shape[dim] == 1:
+                return tuple(LoraTorchTensor(self._lora_A, b) for b in B_chunks)
+            A_chunks = self._lora_A.split(split_size, dim=dim)
+            return tuple(LoraTorchTensor(a, b) for a, b in zip(A_chunks, B_chunks))
+
     def to(self, *args, **kwargs):
         return LoraTorchTensor(self._lora_A.to(*args, **kwargs), self._lora_B.to(*args, **kwargs))
 
@@ -230,6 +248,9 @@ class LoraTorchTensor:
                 )
             else:
                 raise NotImplementedError
+        elif func is torch.split:
+            assert len(args) >= 2
+            return args[0].split(args[1], **kwargs)
         else:
             raise NotImplementedError
 
