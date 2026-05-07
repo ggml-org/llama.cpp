@@ -829,21 +829,27 @@ bool ggml_cuda_ar_allreduce(
             switch (kernel_type) {
                 case GGML_TYPE_F32: {
                     float * buf[GGML_CUDA_MAX_DEVICES];
-                    for (int i = 0; i < n; ++i) buf[i] = static_cast<float *>(tensors[i]->data);
+                    for (int i = 0; i < n; ++i) {
+                        buf[i] = static_cast<float *>(tensors[i]->data);
+                    }
                     ok = ggml_cuda_ar_allreduce_copy_outer<float, float>(
                         p, backends, buf, buf, inner_compute, ne);
                     break;
                 }
                 case GGML_TYPE_BF16: {
                     nv_bfloat16 * buf[GGML_CUDA_MAX_DEVICES];
-                    for (int i = 0; i < n; ++i) buf[i] = static_cast<nv_bfloat16 *>(tensors[i]->data);
+                    for (int i = 0; i < n; ++i) {
+                        buf[i] = static_cast<nv_bfloat16 *>(tensors[i]->data);
+                    }
                     ok = ggml_cuda_ar_allreduce_copy_outer<nv_bfloat16, nv_bfloat16>(
                         p, backends, buf, buf, inner_compute, ne);
                     break;
                 }
                 case GGML_TYPE_F16: {
                     half * buf[GGML_CUDA_MAX_DEVICES];
-                    for (int i = 0; i < n; ++i) buf[i] = static_cast<half *>(tensors[i]->data);
+                    for (int i = 0; i < n; ++i) {
+                        buf[i] = static_cast<half *>(tensors[i]->data);
+                    }
                     ok = ggml_cuda_ar_allreduce_copy_outer<half, half>(
                         p, backends, buf, buf, inner_compute, ne);
                     break;
