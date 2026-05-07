@@ -17,7 +17,7 @@
 //
 // Two reduction strategies are selected per call by tensor size:
 //
-//   * Chunked-kernel path (small reductions): a single CUDA kernel both
+//   * Chunked kernel path (small reductions): a single CUDA kernel both
 //     stages data through pinned host memory and performs the local sum.
 //     Cross-GPU synchronization happens *inside the kernel* (busy-wait on
 //     a host-memory flag), which keeps launch overhead low for the
@@ -67,13 +67,13 @@ static __device__ __forceinline__ int ggml_cuda_ar_signal_get(const int * p) {
 // false-sharing stalls on the polling GPU.
 static constexpr size_t GGML_CUDA_AR_ARRIVAL_STRIDE = 64;
 
-// Number of blocks the chunked-kernel launches with.  Each block stripes a
+// Number of blocks the chunked kernel launches with.  Each block stripes a
 // disjoint slice of the data and synchronizes through its own arrival-token
 // slot so multiple SMs can pump PCIe stores in parallel.
 static constexpr int GGML_CUDA_AR_KERNEL_BLOCKS = 8;
 
 // ---------------------------------------------------------------------------
-// Chunked-kernel AllReduce -- 2 GPUs, supports float, half, and bfloat16.
+// Chunked kernel AllReduce -- 2 GPUs, supports float, half, and bfloat16.
 //
 // Both GPUs run this kernel simultaneously on independent streams.  sendbuf
 // and recvbuf live in T_dst (the caller's tensor type); host_mine / host_other
@@ -218,7 +218,7 @@ static __global__ void ggml_cuda_ar_add_kernel(
 // explicit before we overwrite host_buf[slot] for the new AR.
 static constexpr int GGML_CUDA_AR_POOL_SIZE = 2;
 
-// Maximum chunk size (bytes per GPU) handled by one chunked-kernel launch.
+// Maximum chunk size (bytes per GPU) handled by one chunked kernel launch.
 // Larger tensors are reduced by issuing multiple chunked launches.
 static constexpr size_t GGML_CUDA_AR_MAX_BYTES = 1024 * 1024; // 1 MB
 
@@ -296,7 +296,7 @@ struct ggml_cuda_ar_pipeline {
     uint64_t call_count;
 
     // Per-device resources.
-    ggml_cuda_ar_host_mapping host_buf[GGML_CUDA_MAX_DEVICES];   // pinned staging (chunked-kernel)
+    ggml_cuda_ar_host_mapping host_buf[GGML_CUDA_MAX_DEVICES];   // pinned staging (chunked kernel)
     ggml_cuda_ar_host_mapping host_large[GGML_CUDA_MAX_DEVICES]; // pinned staging (copy-engine)
     char *                    dev_tmp[GGML_CUDA_MAX_DEVICES];    // device scratch for copy-engine path
     cudaStream_t             streams[GGML_CUDA_MAX_DEVICES];   // non-blocking
@@ -506,7 +506,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     }
 
     GGML_LOG_INFO("%s: initialized AllReduce pipeline: %d GPUs, "
-                  "%zu KB chunked-kernel staging + %zu MB copy-engine staging per GPU\n",
+                  "%zu KB chunked kernel staging + %zu MB copy-engine staging per GPU\n",
                   __func__, n_devices, p->buf_bytes >> 10, p->copy_bytes >> 20);
 
     return p;
@@ -754,7 +754,7 @@ bool ggml_cuda_ar_allreduce(
         compute_flag[i] = (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
     }
 
-    // Decide between copy-engine and chunked-kernel paths based on the working
+    // Decide between copy-engine and chunked kernel paths based on the working
     // type's actual byte count.  No upper bound: copy_outer slices reductions
     // larger than copy_bytes into copy_bytes-sized pieces.
     const bool use_copy_engine =
@@ -762,7 +762,7 @@ bool ggml_cuda_ar_allreduce(
         nbytes >= p->copy_threshold;
 
     // BF16 inactive-shard zeroing: when use_bf16 is on, the combined kernel
-    // (chunked-kernel path) and the combined add kernel (copy_engine path)
+    // (chunked kernel path) and the combined add kernel (copy_engine path)
     // both accumulate into the F32 tensor data directly, so an inactive
     // shard's accumulator must start at zero.
     if (use_bf16) {
@@ -777,7 +777,7 @@ bool ggml_cuda_ar_allreduce(
     }
 
     // Pre-convert F32 -> BF16 into bf16_tmp ONLY for the copy_engine + use_bf16
-    // path; the chunked-kernel path's combined kernel does the conversion
+    // path; the chunked kernel path's combined kernel does the conversion
     // inline as it writes to host_buf.
     ggml_cuda_pool_alloc<nv_bfloat16> bf16_tmp[GGML_CUDA_MAX_DEVICES];
     void * copy_src_ptr[GGML_CUDA_MAX_DEVICES] = {};
@@ -864,7 +864,7 @@ bool ggml_cuda_ar_allreduce(
         const size_t max_chunk_elems = p->buf_bytes / type_size;
         const size_t input_type_size = ggml_type_size(input_type);
 
-        // Chunked-kernel path runs entirely on the caller's compute stream:
+        // Chunked kernel path runs entirely on the caller's compute stream:
         // since AR is a barrier here, same-stream ordering subsumes any
         // cross-stream event handshake that the copy-engine path needs, and
         // skips the cross-stream scheduling overhead that was hurting the
