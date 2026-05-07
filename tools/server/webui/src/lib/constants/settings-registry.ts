@@ -615,13 +615,6 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		sync: { serverKey: SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, paramType: SyncableParameterType.BOOLEAN }
 	},
 	{
-		key: SETTINGS_KEYS.AUTO_SHOW_SIDEBAR_ON_NEW_CHAT,
-		label: 'Auto show sidebar on new chat',
-		help: 'Automatically show sidebar when starting a new chat. Disable to keep the sidebar hidden until you click on it.',
-		defaultValue: true,
-		type: SettingsFieldType.CHECKBOX
-	},
-	{
 		key: SETTINGS_KEYS.MCP_SERVERS,
 		label: 'MCP servers',
 		help: 'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',

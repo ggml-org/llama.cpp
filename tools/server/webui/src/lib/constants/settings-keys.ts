@@ -27,7 +27,6 @@ export const SETTINGS_KEYS = {
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
-	AUTO_SHOW_SIDEBAR_ON_NEW_CHAT: 'autoShowSidebarOnNewChat',
 	// Sampling
 	TEMPERATURE: 'temperature',
 	DYNATEMP_RANGE: 'dynatemp_range',
