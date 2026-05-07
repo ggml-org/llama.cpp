@@ -1063,7 +1063,7 @@ class TextModel(ModelBase):
         name, gen = item
 
         # Skip multimodal tensors
-        if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.")) \
+        if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
                 or "visual." in name or "vision." in name or "audio." in name or "talker." in name \
                 or "vision_" in name or "audio_" in name or "sam_model" in name \
                 or "token2wav." in name or "code2wav." in name \
@@ -9640,10 +9640,6 @@ class MimoV2Model(TextModel):
 
         # TODO: mimo v2 does not indicate the number of next-token-prediction layers, therefore we cannot do the same way as GLM4_MOE
         if "model.mtp." in name:
-            return None
-
-        # MiMo-V2.5 (non-Pro) ships audio/visual modules we don't run in llama.cpp
-        if name.startswith(("audio_encoder.", "visual.", "speech_embeddings.")):
             return None
 
         return super().filter_tensors((name, gen))
