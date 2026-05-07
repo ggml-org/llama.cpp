@@ -13684,6 +13684,27 @@ class DotsOCRVisionModel(MmprojModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Sarashina2VisionForCausalLM")
+class Sarashina2VLTextModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.LLAMA
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.startswith("llm."):
+            name = name.replace("llm.", "", 1)
+        elif name.startswith("norm."):
+            return None
+        return super().filter_tensors((name, gen))
+
+
+@ModelBase.register("Sarashina2VisionForCausalLM")
+class Sarashina2VLVisionModel(Qwen2VLVisionModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.global_config['model_type'] = "qwen2_vl"
+
+
 ###### CONVERSION LOGIC ######
 
 
@@ -13940,7 +13961,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
     # For text conversion we route to a dedicated text-only class.
     # TODO: refactor this later to avoid adding exception here
-    if model_type == ModelType.TEXT and arch == "StepVLForConditionalGeneration":
+    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead
