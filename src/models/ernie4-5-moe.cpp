@@ -1,6 +1,10 @@
 #include "models.h"
 
-llm_build_ernie4_5_moe::llm_build_ernie4_5_moe(const llama_model & model, const llm_graph_params & params) :
+std::unique_ptr<llm_graph_context> llama_model_ernie4_5_moe::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(*this, params);
+}
+
+llama_model_ernie4_5_moe::graph::graph(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 

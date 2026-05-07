@@ -51,8 +51,10 @@
 	<textarea
 		bind:this={textareaElement}
 		bind:value
-		class="text-md min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
-		class:cursor-not-allowed={disabled}
+		class={[
+			'text-md min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0',
+			disabled && 'cursor-not-allowed'
+		]}
 		style="max-height: var(--max-message-height);"
 		{disabled}
 		onkeydown={onKeydown}

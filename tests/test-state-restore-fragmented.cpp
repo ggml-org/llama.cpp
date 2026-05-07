@@ -29,6 +29,9 @@ int main(int argc, char ** argv) {
     }
 
     // init
+
+    ggml_backend_load_all();
+
     common_init_result_ptr llama_init = common_init_from_params(params);
 
     llama_model * model = llama_init->model();
