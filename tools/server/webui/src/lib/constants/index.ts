@@ -35,6 +35,7 @@ export * from './settings-keys';
 export * from './settings-sections';
 export * from './supported-file-types';
 export * from './table-html-restorer';
+export * from './title-generation';
 export * from './tools';
 export * from './tooltip-config';
 export * from './ui';

@@ -36,7 +36,8 @@ import {
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
-	SYSTEM_MESSAGE_PLACEHOLDER
+	SYSTEM_MESSAGE_PLACEHOLDER,
+	TITLE
 } from '$lib/constants';
 import type {
 	ChatMessageTimings,
@@ -44,7 +45,12 @@ import type {
 	ChatStreamCallbacks,
 	ErrorDialogState
 } from '$lib/types/chat';
-import type { ApiProcessingState, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
+import type {
+	ApiChatMessageData,
+	ApiProcessingState,
+	DatabaseMessage,
+	DatabaseMessageExtra
+} from '$lib/types';
 import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 
 interface ConversationStateEntry {
@@ -572,7 +578,11 @@ class ChatStore {
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
-				assistantMessage
+				assistantMessage,
+				undefined,
+				undefined,
+				undefined,
+				config().titleGenerationUseLLM && isNewConversation ? content : undefined
 			);
 		} catch (error) {
 			if (isAbortError(error)) {
@@ -601,7 +611,8 @@ class ChatStore {
 		assistantMessage: DatabaseMessage,
 		onComplete?: (content: string) => Promise<void>,
 		onError?: (error: Error) => void,
-		modelOverride?: string | null
+		modelOverride?: string | null,
+		firstUserMessageContent?: string
 	): Promise<void> {
 		let effectiveModel = modelOverride;
 
@@ -894,6 +905,12 @@ class ChatStore {
 					if (onComplete) await onComplete(content);
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 
+					// Generate LLM based title for new conversations (avoids stale reference
+					// issue when user switches conversations while streaming)
+					if (firstUserMessageContent) {
+						await this.generateTitleWithLLM(firstUserMessageContent, streamedContent, convId);
+					}
+
 					// Check if there's a pending message queued during streaming
 					const pending = this.consumePendingMessage(convId);
 					if (pending) {
@@ -921,6 +938,49 @@ class ChatStore {
 		this.setProcessingState(convId, null);
 		this.clearPendingMessage(convId);
 	}
+
+	private async generateTitleWithLLM(
+		userContent: string,
+		assistantContent: string,
+		convId: string
+	): Promise<void> {
+		const effectiveModel = isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
+		const configValue = config();
+		const titlePromptTemplate =
+			typeof configValue.titleGenerationPrompt === 'string' &&
+			configValue.titleGenerationPrompt.trim()
+				? configValue.titleGenerationPrompt
+				: TITLE.DEFAULT_PROMPT;
+
+		const titlePrompt = titlePromptTemplate
+			.replace('{{USER}}', String(userContent || ''))
+			.replace('{{ASSISTANT}}', String(assistantContent || ''));
+
+		const titleMessage: ApiChatMessageData = {
+			role: MessageRole.USER,
+			content: titlePrompt
+		};
+
+		const titleResponse = await ChatService.generateTitle(titleMessage, effectiveModel);
+
+		if (!titleResponse) {
+			return;
+		}
+
+		let cleanTitle = titleResponse.trim();
+		cleanTitle = cleanTitle
+			.replace(TITLE.PREFIX_PATTERN, '')
+			.replace(TITLE.QUOTE_PATTERN, '')
+			.trim();
+		if (!cleanTitle || cleanTitle.length < TITLE.MIN_LENGTH) {
+			const firstLine = userContent.split('\n').find((l) => l.trim().length > 0);
+			cleanTitle = firstLine ? firstLine.trim() : TITLE.FALLBACK;
+		}
+		if (cleanTitle && cleanTitle.length >= TITLE.MIN_LENGTH) {
+			await conversationsStore.updateConversationName(convId, cleanTitle);
+		}
+	}
+
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
 		const conversationId = convId || conversationsStore.activeConversation?.id;
 		if (!conversationId) return;
