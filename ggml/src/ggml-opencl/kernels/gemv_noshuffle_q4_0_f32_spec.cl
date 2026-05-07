@@ -191,7 +191,7 @@
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
-__kernel void kernel_gemv_noshuffle(
+__kernel void kernel_gemv_noshuffle_q4_0_f32(
         __read_only  image1d_buffer_t src0_q,  // quantized A
         global half2  * src0_d,  // A scales
         __read_only  image1d_buffer_t src1,    // B
@@ -232,21 +232,21 @@ __kernel void kernel_gemv_noshuffle(
         regA.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
         regA.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
         regA.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
-#ifdef VECTOR_SUB_GROUP_BROADCAT
+#ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_sgbroadcast_8_hi(totalSum, as_ushort8(regA), regS, regB);
 #else
         dequantizeBlockAccum_ns_sgbroadcast_1_hi(totalSum, as_ushort8(regA), regS, regB);
-#endif // VECTOR_SUB_GROUP_BROADCAT
+#endif // VECTOR_SUB_GROUP_BROADCAST
 
         regA.s0 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
         regA.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
         regA.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
         regA.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
-#ifdef VECTOR_SUB_GROUP_BROADCAT
+#ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_sgbroadcast_8_lo(totalSum, as_ushort8(regA), regS, regB);
 #else
         dequantizeBlockAccum_ns_sgbroadcast_1_lo(totalSum, as_ushort8(regA), regS, regB);
-#endif // VECTOR_SUB_GROUP_BROADCAT
+#endif // VECTOR_SUB_GROUP_BROADCAST
     }
 
     // reduction in local memory, assumes #wave=4

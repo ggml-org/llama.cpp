@@ -17,7 +17,7 @@
 REQD_SUBGROUP_SIZE_128
 #endif
 
-kernel void kernel_mul_mat_Ab_Bi_8x4(
+kernel void kernel_gemm_noshuffle_q4_0_f32(
         global const ushort * src0_q,       // quantized A
         global const half  * src0_d,        // A scales
         __read_only image1d_buffer_t src1,  // B (1d image)

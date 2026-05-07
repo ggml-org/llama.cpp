@@ -29,7 +29,11 @@
 		}
 	}}
 >
-	<Popover.Trigger class="pointer-events-none absolute inset-0 opacity-0">
+	<Popover.Trigger
+		class="pointer-events-none absolute inset-0 opacity-0"
+		tabindex={-1}
+		aria-hidden="true"
+	>
 		<span class="sr-only">{srLabel}</span>
 	</Popover.Trigger>
 
