@@ -718,7 +718,7 @@ class ModelBase:
             self.model_tensors.pop(name, None)
 
         # Remove any remaining unused auxiliary tensors
-        for name in self.model_tensors.keys():
+        for name in list(self.model_tensors.keys()):
             if name.endswith((".k_scale", ".v_scale")):
                 del self.model_tensors[name]
 
