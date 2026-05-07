@@ -136,10 +136,11 @@ class TestSplitCatRoundtrip:
     def test_2d_dim0(self):
         lora = _make_lora((), 8, 4, 16)
         chunks = lora.split(4, dim=-2)
-        reassembled = torch.cat(list(chunks), dim=0)
+        reassembled = torch.cat(list(chunks), dim=0)  # ty: ignore[no-matching-overload]
+        assert isinstance(reassembled, LoraTorchTensor)
         assert reassembled.shape == lora.shape
         orig_A, orig_B = lora.get_lora_A_B()
-        new_A, new_B = reassembled.get_lora_A_B()
+        new_A, new_B = reassembled.get_lora_A_B()  # ty: ignore[unresolved-attribute]
         assert torch.equal(orig_A, new_A)
         assert torch.equal(orig_B, new_B)
 
@@ -148,9 +149,10 @@ class TestSplitCatRoundtrip:
         B = torch.randn(6, 8, 4)
         lora = LoraTorchTensor(A, B)
         chunks = lora.split(2, dim=0)
-        reassembled = torch.cat(list(chunks), dim=0)
+        reassembled = torch.cat(list(chunks), dim=0)  # ty: ignore[no-matching-overload]
+        assert isinstance(reassembled, LoraTorchTensor)
         assert reassembled.shape == lora.shape
         orig_A, orig_B = lora.get_lora_A_B()
-        new_A, new_B = reassembled.get_lora_A_B()
+        new_A, new_B = reassembled.get_lora_A_B()  # ty: ignore[unresolved-attribute]
         assert torch.equal(orig_A, new_A)
         assert torch.equal(orig_B, new_B)
