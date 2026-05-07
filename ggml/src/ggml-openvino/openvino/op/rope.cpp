@@ -38,8 +38,7 @@ OutputVector translate_rope(const NodeContext & context) {
     auto data_node = context.get_input(0).get_node_shared_ptr();
     auto output_shape = context.get_output_shape().to_shape();
     int32_t * op_params = context.get_output_op_params();
-    const int mode = (op_case & 0xFFFF0000) >> 16;
-    op_case = (op_case & 0x0000FFFF);
+    const int mode = op_case;
 
     constexpr int TYPE_NORMAL = 0;
     constexpr int TYPE_NEOX = 1;
@@ -61,8 +60,7 @@ OutputVector translate_rope(const NodeContext & context) {
         cos_theta_node = sin_cos.second;
     }
 
-    if (op_case == 2) {
-        // The input comes from a VIEW
+    if (context.get_view_input_size(0) > 0) {
         data_node = process_view_input_new(context, 0).get_node_shared_ptr();
         if (context.is_stateful()) {
             auto data_shape = ov::op::v0::Constant::create(
