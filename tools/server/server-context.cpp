@@ -806,7 +806,8 @@ private:
             auto cparams = common_context_params_to_llama(params_dft);
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
-            params_base.speculative.draft.ctx = ctx_dft.get();
+            params_base.speculative.draft.ctx_tgt = ctx;
+            params_base.speculative.draft.ctx_dft = ctx_dft.get();
             params_base.speculative.draft.use_ckpt = common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
         }
 
@@ -911,7 +912,7 @@ private:
             // try speculative decoding
             if (ctx_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
                 try {
-                    slot.spec.reset(common_speculative_init(params_base.speculative, slot.ctx));
+                    slot.spec.reset(common_speculative_init(params_base.speculative));
                 } catch (const std::exception & e) {
                     SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
                 }

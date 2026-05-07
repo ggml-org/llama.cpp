@@ -282,7 +282,6 @@ struct common_speculative_state_draft : public common_speculative_state {
         auto * spec = this;
 
         auto & batch      = spec->batch;
-        auto & ctx_tgt    = spec->ctx_tgt;
         auto & ctx_dft    = spec->ctx_dft;
         auto & smpl       = spec->smpl;
         auto & prompt_dft = spec->prompt_dft;
@@ -897,11 +896,7 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 
 // initialization of the speculative decoding system
 //
-common_speculative * common_speculative_init(
-        common_params_speculative & params,
-        llama_context             * ctx_tgt) {
-    llama_context * ctx_dft = params.draft.ctx;
-
+common_speculative * common_speculative_init(common_params_speculative & params) {
     // Compute the implementations to use based on the config and their order of preference
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
@@ -964,8 +959,8 @@ common_speculative * common_speculative_init(
                 break;
             case COMMON_SPECULATIVE_TYPE_DRAFT: {
                 impls.push_back(std::make_unique<common_speculative_state_draft>(config.type,
-                    /* .ctx_tgt      = */ ctx_tgt,
-                    /* .ctx_dft      = */ ctx_dft,
+                    /* .ctx_tgt      = */ params.draft.ctx_tgt,
+                    /* .ctx_dft      = */ params.draft.ctx_dft,
                     /* .use_ckpt     = */ params.draft.use_ckpt
                 ));
                 break;

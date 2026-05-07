@@ -307,8 +307,8 @@ struct common_params_speculative_draft {
 
     common_params_model mparams;
 
-    // the draft context
-    llama_context * ctx = nullptr;
+    llama_context * ctx_tgt = nullptr;
+    llama_context * ctx_dft = nullptr;
 
     bool use_ckpt = false;
 
