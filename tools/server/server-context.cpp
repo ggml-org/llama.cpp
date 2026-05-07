@@ -2943,9 +2943,12 @@ private:
             // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
             //       for methods that require the target embeddings, I think we have to re-evaluate the draft tokens?
             if (ctx_drft) {
-                // note: for now, to keep things simple, synchronize the target context
-                // TODO: revisit later on
-                llama_synchronize(ctx_main);
+                // TODO: update as needed for MTP, Eagle3, etc.
+                const bool need_tgt_embd = false;
+
+                if (need_tgt_embd) {
+                    llama_synchronize(ctx_main);
+                }
 
                 // the logic here varies depending on the speculative decoding method
                 //  - some draft contexts require emebeddings from the target context, others don't
