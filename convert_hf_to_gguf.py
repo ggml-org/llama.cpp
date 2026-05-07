@@ -9528,7 +9528,7 @@ class MimoV2Model(TextModel):
                 break
         if tp is None:
             raise ValueError(
-                f"qkv_proj: cannot detect TP — scale_inv rows {scale_inv.shape[0]}, "
+                f"qkv_proj: cannot detect TP - scale_inv rows {scale_inv.shape[0]}, "
                 f"q+k+v {total_rows}")
 
         q_per = q_size // tp
