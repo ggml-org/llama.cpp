@@ -103,6 +103,8 @@ class SettingsStore {
 		try {
 			this.loadConfig();
 			this.migrateLegacyTheme();
+			// Apply the persisted theme from config on initial load
+			setMode(this.config[SETTINGS_KEYS.THEME] as ColorMode);
 			this.isInitialized = true;
 		} catch (error) {
 			console.error('Failed to initialize settings store:', error);
@@ -467,13 +469,38 @@ class SettingsStore {
 
 	/**
 	 * Export all settings as a versioned JSON-compatible object.
-	 * The export captures the full config (including theme) and user overrides.
+	 * The export captures the full config (excluding sensitive values like API key)
+	 * and user overrides. Sensitive fields are filtered out for security by default.
+	 * @param includeSensitiveData - If true, include sensitive fields (apiKey, MCP server headers) in export
 	 */
-	exportSettings(): SettingsExportType {
+	exportSettings(includeSensitiveData: boolean = false): SettingsExportType {
+		// Build config excluding sensitive data unless user opts in
+		const configToExport: Record<string, string | number | boolean | undefined> =
+			includeSensitiveData
+				? { ...this.config }
+				: Object.fromEntries(Object.entries(this.config).filter(([key]) => key !== 'apiKey'));
+
+		// Handle MCP servers: exclude custom headers unless user opts in
+		if ('mcpServers' in configToExport && !includeSensitiveData) {
+			try {
+				const mcpServers = JSON.parse(configToExport.mcpServers as string) as Array<
+					Record<string, unknown>
+				>;
+				const safeServers = mcpServers.map((server) => {
+					delete server.headers;
+					return server;
+				});
+				configToExport.mcpServers = JSON.stringify(safeServers);
+			} catch {
+				// If parsing fails, just exclude the entire mcpServers field
+				delete (configToExport as Record<string, unknown>).mcpServers;
+			}
+		}
+
 		return {
 			version: 1,
 			timestamp: Date.now(),
-			config: { ...this.config },
+			config: configToExport,
 			userOverrides: Array.from(this.userOverrides)
 		};
 	}

@@ -1,6 +1,10 @@
 <script lang="ts">
 	import { Download, Upload, Trash2 } from '@lucide/svelte';
-	import { DialogConversationSelection, DialogConfirmation } from '$lib/components/app';
+	import {
+		DialogConversationSelection,
+		DialogConfirmation,
+		DialogExportSettings
+	} from '$lib/components/app';
 	import { createMessageCountMap } from '$lib/utils';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
@@ -29,10 +33,19 @@
 	// Settings import/export state
 	let showSettingsExportSummary = $state(false);
 	let showSettingsImportSummary = $state(false);
+	let showSettingsExportDialog = $state(false);
+	let includeSensitiveData = $state(false);
 
 	function handleSettingsExport() {
+		showSettingsExportDialog = true;
+		includeSensitiveData = false;
+	}
+
+	function handleSettingsExportConfirm() {
+		showSettingsExportDialog = false;
+
 		try {
-			const data = settingsStore.exportSettings();
+			const data = settingsStore.exportSettings(includeSensitiveData);
 			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');
@@ -50,6 +63,10 @@
 			console.error('Failed to export settings:', err);
 			toast.error('Failed to export settings');
 		}
+	}
+
+	function handleSettingsExportCancel() {
+		showSettingsExportDialog = false;
 	}
 
 	function handleSettingsImport() {
@@ -289,6 +306,13 @@
 		/>
 	</SettingsGroup>
 </div>
+
+<DialogExportSettings
+	bind:open={showSettingsExportDialog}
+	bind:includeSensitiveData
+	onConfirm={handleSettingsExportConfirm}
+	onCancel={handleSettingsExportCancel}
+/>
 
 <DialogConversationSelection
 	conversations={availableConversations}
