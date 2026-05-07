@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <map>
 #include <openvino/core/node.hpp>
+#include <openvino/core/partial_shape.hpp>
+#include <openvino/core/shape.hpp>
 #include <openvino/frontend/decoder.hpp>
 #include <string>
 
@@ -17,6 +19,28 @@ public:
     virtual PartialShape get_input_shape(int node_idx, const std::string& name) const = 0;
 
     virtual std::vector<size_t> get_input_stride(int node_idx, const std::string& name) const = 0;
+
+    virtual size_t get_view_input_size(int node_idx, const std::string& name) const = 0;
+
+    virtual size_t get_view_input_offset(int node_idx, const std::string& name, size_t view_index) const = 0;
+
+    virtual size_t get_view_input_src_offset(int node_idx, const std::string& name, size_t view_index) const = 0;
+
+    virtual std::vector<size_t> get_view_input_stride(int node_idx, const std::string& name, size_t view_index) const = 0;
+
+    virtual std::vector<size_t> get_view_input_src_stride(int node_idx, const std::string& name, size_t view_index) const = 0;
+
+    virtual Shape get_view_input_ggml_shape(int node_idx, const std::string& name, size_t view_index) const = 0;
+
+    virtual Shape get_view_input_src_ggml_shape(int node_idx, const std::string& name, size_t view_index) const = 0;
+
+    virtual PartialShape get_view_input_ov_shape(int node_idx, const std::string& name, size_t view_index) const = 0;
+
+    virtual PartialShape get_view_input_src_ov_shape(int node_idx, const std::string& name, size_t view_index) const = 0;
+
+    virtual std::string get_view_input_name(int node_idx, const std::string& name, size_t view_index) const = 0;
+
+    virtual std::string get_view_input_src_name(int node_idx, const std::string& name, size_t view_index) const = 0;
 
     virtual element::Type get_input_type(int node_idx, const std::string& name) const = 0;
 

@@ -20,7 +20,7 @@ namespace op {
 OutputVector translate_norm(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
-    auto input_node = context.get_input(0);
+    auto input_node = process_view_input_new(context, 0);
 
     // Step 1: Calculate mean along the last dimension
     // mean = reduce_mean(input, axis=-1, keepdims=true)

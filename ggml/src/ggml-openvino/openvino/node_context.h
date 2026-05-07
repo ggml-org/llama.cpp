@@ -59,6 +59,50 @@ public:
         return m_decoder->get_input_op_params(m_node_idx, m_input_names[index]);
     }
 
+    size_t get_view_input_size(size_t index) const {
+        return m_decoder->get_view_input_size(m_node_idx, m_input_names[index]);
+    }
+
+    size_t get_view_input_offset(size_t index, size_t view_index) const {
+        return m_decoder->get_view_input_offset(m_node_idx, m_input_names[index], view_index);
+    }
+
+    size_t get_view_input_src_offset(size_t index, size_t view_index) const {
+        return m_decoder->get_view_input_src_offset(m_node_idx, m_input_names[index], view_index);
+    }
+
+    std::vector<size_t> get_view_input_stride(size_t index, size_t view_index) const {
+        return m_decoder->get_view_input_stride(m_node_idx, m_input_names[index], view_index);
+    }
+
+    std::vector<size_t> get_view_input_src_stride(size_t index, size_t view_index) const {
+        return m_decoder->get_view_input_src_stride(m_node_idx, m_input_names[index], view_index);
+    }
+
+    ov::Shape get_view_input_ggml_shape(size_t index, size_t view_index) const {
+        return m_decoder->get_view_input_ggml_shape(m_node_idx, m_input_names[index], view_index);
+    }
+
+    ov::Shape get_view_input_src_ggml_shape(size_t index, size_t view_index) const {
+        return m_decoder->get_view_input_src_ggml_shape(m_node_idx, m_input_names[index], view_index);
+    }
+
+    ov::PartialShape get_view_input_ov_shape(size_t index, size_t view_index) const {
+        return m_decoder->get_view_input_ov_shape(m_node_idx, m_input_names[index], view_index);
+    }
+
+    ov::PartialShape get_view_input_src_ov_shape(size_t index, size_t view_index) const {
+        return m_decoder->get_view_input_src_ov_shape(m_node_idx, m_input_names[index], view_index);
+    }
+
+    std::string get_view_input_name(size_t index, size_t view_index) const {
+        return m_decoder->get_view_input_name(m_node_idx, m_input_names[index], view_index);
+    }
+
+    std::string get_view_input_src_name(size_t index, size_t view_index) const {
+        return m_decoder->get_view_input_src_name(m_node_idx, m_input_names[index], view_index);
+    }
+
     int32_t get_op_dynamic_dim() const {
         return m_decoder->get_op_dynamic_dim(m_node_idx);
     }
@@ -76,6 +120,16 @@ public:
     }
 
     Output<Node> get_input(int idx) const override {
+        // Check if this input is a VIEW
+        size_t view_input_size = m_decoder->get_view_input_size(m_node_idx, m_input_names[idx]);
+        if (view_input_size > 0) {
+            // This is a VIEW input, get the base tensor name (last element in the chain)
+            std::string base_name = m_decoder->get_view_input_src_name(m_node_idx, m_input_names[idx], view_input_size - 1);
+            if (!base_name.empty()) {
+                return m_tensor_map->at(base_name);
+            }
+        }
+        // Not a VIEW or failed to get base name, use the original logic
         return m_tensor_map->at(m_input_names[idx]);
     }
 

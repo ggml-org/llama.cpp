@@ -132,6 +132,29 @@ void GgmlOvDecoder::set_input_output() {
             }
             current_node_info.node_inputs[src_name] = src;
             current_node_info.node_inputs_names.push_back(src_name);
+
+            if (src->op == GGML_OP_VIEW) {
+                // Traverse upward through nested VIEW operations
+                std::remove_reference_t<decltype(current_node_info.node_inputs_views[src_name])> view_chain;
+                auto current = src;
+
+                while (current != nullptr) {
+                    auto current_name = std::string(current->name);
+                    if (current->flags & GGML_TENSOR_FLAG_INPUT) {
+                        current_name = get_graph_input_ov_name(current, node);
+                    }
+                    view_chain.emplace_back(current_name, current);
+                    // If current src is also a VIEW, continue traversing
+                    if (current->src[0] != nullptr && current->src[0]->op == GGML_OP_VIEW) {
+                        current = current->src[0];
+                    } else {
+                        break;
+                    }
+                }
+
+                // Assign all collected view inputs to node_inputs_views
+                current_node_info.node_inputs_views[src_name] = view_chain;
+            }
         }
 
         m_node_info_list.push_back(current_node_info);
@@ -235,7 +258,7 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             if (ggml_nelements(node) != ggml_nelements(src)) {
                 throw std::runtime_error("Unsupported VIEW case");
             }
-            op_case = 2;
+            op_case = 0;
             if (m_model_is_splitted && m_model_inputs.find(std::string(src->name)) != m_model_inputs.end()) {
                 op_case = 0;
             }
@@ -253,7 +276,7 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                     node->nb[0] == src->nb[0] &&
                     node->nb[1] == src->nb[2] &&
                     src->ne[1] > 1) {
-                    op_case = 4;
+                    op_case = 0;
                     break;
                 }
 
@@ -269,7 +292,7 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                     }
                 }
                 if (diff_count >= 1) {
-                    op_case = 3;
+                    op_case = 0;
                 }
             }
         }
@@ -633,6 +656,12 @@ void GgmlOvDecoder::compute_model_inputs() {
                     m_model_params.kv_names.push_back(src_name);
                 }
             }
+            // Resolve nested VIEW nodes by following src[0] until the first non-VIEW tensor.
+            while (src->op == GGML_OP_VIEW && src->src[0] != nullptr) {
+                src = src->src[0];
+                src_name = std::string(src->name);
+            }
+            m_inputs[src_name] = src;
             ov::PartialShape param_shape = get_graph_input_shape(node, src, m_node_dynamic_dims[src]);
             auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), param_shape);
             param_node->set_friendly_name(src_name);
@@ -648,7 +677,7 @@ void GgmlOvDecoder::compute_model_outputs() {
     for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
         auto * cur_node = m_cgraph->nodes[node_n];
         // if the node op is NONE means this node is not used at all, we can skip it directly without adding to model outputs.
-        if (cur_node->op == GGML_OP_NONE) {
+        if (cur_node->op == GGML_OP_NONE || cur_node->op == GGML_OP_VIEW || cur_node->op == GGML_OP_RESHAPE) {
             continue;
         }
         auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
@@ -991,6 +1020,151 @@ ov::PartialShape GgmlOvDecoder::get_input_shape(int node_idx, const std::string 
 
 std::vector<size_t> GgmlOvDecoder::get_input_stride(int node_idx, const std::string & name) const {
     return get_stride(m_node_info_list[node_idx].node_inputs.at(name));
+}
+
+size_t GgmlOvDecoder::get_view_input_size(int node_idx, const std::string & name) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        return it->second.size();
+    }
+    return 0;
+}
+
+size_t GgmlOvDecoder::get_view_input_offset(int node_idx, const std::string & name, size_t view_index) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        if (view_index < it->second.size()) {
+            return it->second[view_index].second->view_offs;
+        }
+    }
+    return 0;
+}
+
+size_t GgmlOvDecoder::get_view_input_src_offset(int node_idx, const std::string & name, size_t view_index) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        if (view_index < it->second.size()) {
+            auto * view_tensor = it->second[view_index].second;
+            if (view_tensor && view_tensor->src[0]) {
+                return view_tensor->src[0]->view_offs;
+            }
+        }
+    }
+    return 0;
+}
+
+std::vector<size_t> GgmlOvDecoder::get_view_input_stride(int node_idx, const std::string & name, size_t view_index) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        if (view_index < it->second.size()) {
+            return get_stride(it->second[view_index].second);
+        }
+    }
+    return {};
+}
+
+std::vector<size_t> GgmlOvDecoder::get_view_input_src_stride(int node_idx, const std::string & name, size_t view_index) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        if (view_index < it->second.size()) {
+            auto * view_tensor = it->second[view_index].second;
+            if (view_tensor && view_tensor->src[0]) {
+                return get_stride(view_tensor->src[0]);
+            }
+        }
+    }
+    return {};
+}
+
+ov::Shape GgmlOvDecoder::get_view_input_ggml_shape(int node_idx, const std::string & name, size_t view_index) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        if (view_index < it->second.size()) {
+            return get_shape(it->second[view_index].second);
+        }
+    }
+    return {};
+}
+
+ov::Shape GgmlOvDecoder::get_view_input_src_ggml_shape(int node_idx, const std::string & name, size_t view_index) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        if (view_index < it->second.size()) {
+            auto * view_tensor = it->second[view_index].second;
+            if (view_tensor && view_tensor->src[0]) {
+                return get_shape(view_tensor->src[0]);
+            }
+        }
+    }
+    return {};
+}
+
+ov::PartialShape GgmlOvDecoder::get_view_input_ov_shape(int node_idx, const std::string & name, size_t view_index) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        if (view_index < it->second.size()) {
+            auto * tensor = it->second[view_index].second;
+            ov::PartialShape shape = ov::PartialShape{get_shape(tensor)};
+
+            // Check if this tensor has a dynamic dimension
+            auto dynamic_it = m_node_dynamic_dims.find(tensor);
+            if (dynamic_it != m_node_dynamic_dims.end() && dynamic_it->second != -1) {
+                int dynamic_dim_index = dynamic_it->second;
+                // GGML uses reverse indexing, so convert to OpenVINO indexing
+                shape[3 - dynamic_dim_index] = -1;
+            }
+
+            return shape;
+        }
+    }
+    return {};
+}
+
+ov::PartialShape GgmlOvDecoder::get_view_input_src_ov_shape(int node_idx, const std::string & name, size_t view_index) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        if (view_index < it->second.size()) {
+            auto * view_tensor = it->second[view_index].second;
+            if (view_tensor && view_tensor->src[0]) {
+                auto * src_tensor = view_tensor->src[0];
+                ov::PartialShape shape = ov::PartialShape{get_shape(src_tensor)};
+
+                // Check if this tensor has a dynamic dimension
+                auto dynamic_it = m_node_dynamic_dims.find(src_tensor);
+                if (dynamic_it != m_node_dynamic_dims.end() && dynamic_it->second != -1) {
+                    int dynamic_dim_index = dynamic_it->second;
+                    // GGML uses reverse indexing, so convert to OpenVINO indexing
+                    shape[3 - dynamic_dim_index] = -1;
+                }
+
+                return shape;
+            }
+        }
+    }
+    return {};
+}
+
+std::string GgmlOvDecoder::get_view_input_name(int node_idx, const std::string & name, size_t view_index) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        if (view_index < it->second.size()) {
+            return it->second[view_index].second->name;
+        }
+    }
+    return "";
+}
+
+std::string GgmlOvDecoder::get_view_input_src_name(int node_idx, const std::string & name, size_t view_index) const {
+    auto it = m_node_info_list[node_idx].node_inputs_views.find(name);
+    if (it != m_node_info_list[node_idx].node_inputs_views.end()) {
+        if (view_index < it->second.size()) {
+            auto * view_tensor = it->second[view_index].second;
+            if (view_tensor && view_tensor->src[0]) {
+                return view_tensor->src[0]->name;
+            }
+        }
+    }
+    return "";
 }
 
 ov::element::Type GgmlOvDecoder::get_input_type(int node_idx, const std::string & name) const {

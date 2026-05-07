@@ -57,6 +57,7 @@ public:
         std::string node_name;
         std::string node_op_type;
         std::map<std::string, ggml_tensor *> node_inputs;
+        std::map<std::string, std::vector<std::pair<std::string, ggml_tensor *>>> node_inputs_views;
         std::vector<std::string> node_inputs_names;
         ggml_tensor * node_output;
         std::string node_output_name;
@@ -85,6 +86,28 @@ public:
     virtual ov::PartialShape get_input_shape(int node_idx, const std::string & name) const override;
 
     virtual std::vector<size_t> get_input_stride(int node_idx, const std::string & name) const override;
+
+    virtual size_t get_view_input_size(int node_idx, const std::string & name) const override;
+
+    virtual size_t get_view_input_offset(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual size_t get_view_input_src_offset(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual std::vector<size_t> get_view_input_stride(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual std::vector<size_t> get_view_input_src_stride(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual ov::Shape get_view_input_ggml_shape(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual ov::Shape get_view_input_src_ggml_shape(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual ov::PartialShape get_view_input_ov_shape(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual ov::PartialShape get_view_input_src_ov_shape(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual std::string get_view_input_name(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual std::string get_view_input_src_name(int node_idx, const std::string & name, size_t view_index) const override;
 
     virtual ov::element::Type get_input_type(int node_idx, const std::string & name) const override;
 

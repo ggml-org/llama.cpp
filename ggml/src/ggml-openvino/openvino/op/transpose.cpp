@@ -41,8 +41,10 @@ OutputVector translate_transpose(const NodeContext & context) {
         permute_order[output_dim] = input_dim;
     }
 
+    auto input = process_view_input_new(context, 0);
+
     auto res = std::make_shared<ov::op::v1::Transpose>(
-        context.get_input(0), ov::op::v0::Constant::create(ov::element::i64, {4}, permute_order));
+        input, ov::op::v0::Constant::create(ov::element::i64, {4}, permute_order));
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

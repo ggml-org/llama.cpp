@@ -28,7 +28,7 @@ namespace op {
 OutputVector translate_set_rows(const NodeContext & context) {
     num_inputs_check(context, 3, 3);
 
-    auto data = context.get_input(0);
+    auto data = process_view_input_new(context, 0);
     auto indices = context.get_input(1);
     auto dst = context.get_input(2);
 

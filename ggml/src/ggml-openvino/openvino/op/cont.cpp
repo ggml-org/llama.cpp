@@ -25,9 +25,11 @@ OutputVector translate_cont(const NodeContext & context) {
         dst_shape[3 - context.get_op_dynamic_dim()] = -1;
     }
 
+    auto input = process_view_input_new(context, 0);
+
     ov::Output<Node> res;
     res = std::make_shared<ov::op::v1::Reshape>(
-        context.get_input(0), ov::op::v0::Constant::create(ov::element::i64, {dst_shape.size()}, dst_shape), false);
+        input, ov::op::v0::Constant::create(ov::element::i64, {dst_shape.size()}, dst_shape), false);
 
     return rename_outputs_with_suffix({res}, context.get_name());
 }

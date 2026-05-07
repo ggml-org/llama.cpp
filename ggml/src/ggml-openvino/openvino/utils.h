@@ -72,11 +72,15 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t* rope_params,
 
 ov::Output<ov::Node> process_view_input(const NodeContext& context, int input_index, int slice_len = 0);
 
+ov::Output<ov::Node> process_view_input_new(const NodeContext& context, int input_index);
+
 namespace op {
 template <typename T>
 OutputVector translate_1to1_match_2_inputs(const NodeContext& context) {
     num_inputs_check(context, 2, 2);
-    auto res = std::make_shared<T>(context.get_input(0), context.get_input(1));
+    auto input_0 = process_view_input_new(context, 0);
+    auto input_1 = process_view_input_new(context, 1);
+    auto res = std::make_shared<T>(input_0, input_1);
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

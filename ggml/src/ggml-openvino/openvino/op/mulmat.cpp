@@ -30,8 +30,15 @@ OutputVector translate_mulmat(const NodeContext & context) {
     int op_case = context.get_op_case();
 
     ov::Output<Node> res;
-    ov::Output<ov::Node> B = context.get_input(0);
-    ov::Output<ov::Node> A = context.get_input(1);
+    ov::Output<ov::Node> B;
+    ov::Output<ov::Node> A;
+    if (op_case == 3) {
+        B = context.get_input(0);
+        A = context.get_input(1);
+    } else {
+        B = process_view_input_new(context, 0);
+        A = process_view_input_new(context, 1);
+    }
 
     bool transpose_b = true;
     if (op_case == 3) {
