@@ -804,6 +804,11 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         if (op->ne[3] != 1) {
             return true;
         }
+        if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K)) {
+            // ERR = 0.000000306 > 0.000000100   GET_ROWS(type=q4_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
+            // ERR = 0.000000197 > 0.000000100   GET_ROWS(type=q5_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
+            return true;
+        }
         break;
     }
     case GGML_OP_ADD:
@@ -926,31 +931,48 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         }
         break;
     }
-    default:
-        break;
-    }
-    if (op->op == GGML_OP_GET_ROWS) {
-        if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K)) {
-            // ERR = 0.000000306 > 0.000000100   GET_ROWS(type=q4_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
-            // ERR = 0.000000197 > 0.000000100   GET_ROWS(type=q5_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
+    case GGML_OP_GATED_DELTA_NET: {
+        if (op->src[0]->op == GGML_OP_PERMUTE) {
             return true;
         }
+        break;
+    }
+    default:
+        break;
     }
     return false;
 }
 
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    // return true;
     GGML_ASSERT(dev->reg != nullptr);
 
     static std::set<ggml_type> supported_types{GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,
                                                GGML_TYPE_I32,  GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K,
                                                GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K};
 
-    static const std::set<ggml_op> supported_ops{GGML_OP_NONE, GGML_OP_ADD, GGML_OP_MUL, GGML_OP_MUL_MAT, GGML_OP_VIEW,
-                                                 GGML_OP_CONT, GGML_OP_RESHAPE, GGML_OP_PERMUTE, GGML_OP_TRANSPOSE,
-                                                 GGML_OP_GET_ROWS, GGML_OP_ROPE, GGML_OP_RMS_NORM, GGML_OP_SCALE, GGML_OP_NORM,
+    static const std::set<ggml_op> supported_ops{GGML_OP_NONE,
+                                                 GGML_OP_ADD,
+                                                 GGML_OP_MUL,
+                                                 GGML_OP_MUL_MAT,
+                                                 GGML_OP_VIEW,
+                                                 GGML_OP_CONT,
+                                                 GGML_OP_RESHAPE,
+                                                 GGML_OP_PERMUTE,
+                                                 GGML_OP_TRANSPOSE,
+                                                 GGML_OP_GET_ROWS,
+                                                 GGML_OP_ROPE,
+                                                 GGML_OP_RMS_NORM,
+                                                 GGML_OP_SCALE,
+                                                 GGML_OP_NORM,
                                                  GGML_OP_SOFT_MAX,
-                                                 GGML_OP_SET_ROWS, GGML_OP_FLASH_ATTN_EXT, GGML_OP_CPY, GGML_OP_L2_NORM, GGML_OP_PAD};
+                                                 GGML_OP_SET_ROWS,
+                                                 GGML_OP_FLASH_ATTN_EXT,
+                                                 GGML_OP_CPY,
+                                                 GGML_OP_L2_NORM,
+                                                 GGML_OP_PAD,
+                                                 GGML_OP_SSM_CONV,
+                                                 GGML_OP_GATED_DELTA_NET};
     static const std::set<ggml_unary_op> supported_unary_ops{
         GGML_UNARY_OP_GELU,
         GGML_UNARY_OP_SILU,
