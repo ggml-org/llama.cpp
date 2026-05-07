@@ -238,10 +238,6 @@ struct common_speculative_state_draft : public common_speculative_state {
     }
 
     ~common_speculative_state_draft() override {
-        llama_perf_context_print(ctx_dft);
-
-        llama_free(ctx_dft);
-
         common_sampler_free(smpl);
 
         llama_batch_free(batch);
@@ -974,14 +970,7 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 common_speculative * common_speculative_init(
         common_params_speculative & params,
         llama_context             * ctx_tgt) {
-    llama_context * ctx_dft = nullptr;
-    if (params.draft.model) {
-        ctx_dft = llama_init_from_model(params.draft.model, params.draft.cparams);
-        if (ctx_dft == nullptr) {
-            LOG_ERR("%s", "failed to create draft context\n");
-            return nullptr;
-        }
-    }
+    llama_context * ctx_dft = params.draft.ctx;
 
     // Compute the implementations to use based on the config and their order of preference
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
@@ -1044,13 +1033,11 @@ common_speculative * common_speculative_init(
             case COMMON_SPECULATIVE_TYPE_NONE:
                 break;
             case COMMON_SPECULATIVE_TYPE_DRAFT: {
-                const bool use_ckpt = common_context_can_seq_rm(ctx_dft) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
-
                 impls.push_back(std::make_unique<common_speculative_state_draft>(config.type,
                     /* .ctx_tgt      = */ ctx_tgt,
                     /* .ctx_dft      = */ ctx_dft,
                     /* .replacements = */ params.draft.replacements,
-                    /* .use_ckpt     = */ use_ckpt
+                    /* .use_ckpt     = */ params.draft.use_ckpt
                 ));
                 break;
             }

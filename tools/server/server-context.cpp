@@ -674,6 +674,7 @@ private:
     llama_batch batch {};
 
     llama_model_ptr model_dft;
+    llama_context_ptr ctx_dft;
 
     bool add_bos_token = true;
 
@@ -781,9 +782,6 @@ private:
 
             auto params_dft = params_base;
 
-            params_dft.n_parallel   = 1;
-            params_dft.n_ctx        = params_spec.n_ctx == 0 ? llama_n_ctx_seq(ctx) : params_spec.n_ctx;
-            params_dft.n_batch      = llama_n_ctx_seq(ctx);
             params_dft.devices      = params_spec.devices;
             params_dft.model        = params_spec.mparams;
             params_dft.n_gpu_layers = params_spec.n_gpu_layers;
@@ -805,8 +803,11 @@ private:
                 return false;
             }
 
-            params_base.speculative.draft.model = model_dft.get();
-            params_base.speculative.draft.cparams = common_context_params_to_llama(params_dft);
+            auto cparams = common_context_params_to_llama(params_dft);
+            ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+
+            params_base.speculative.draft.ctx = ctx_dft.get();
+            params_base.speculative.draft.use_ckpt = common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
         }
 
         std::string & mmproj_path = params_base.mmproj.path;
