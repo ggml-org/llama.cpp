@@ -56,6 +56,11 @@ struct clip_graph_minicpmv : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_minicpmv4_6 : clip_graph {
+    clip_graph_minicpmv4_6(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_internvl : clip_graph {
     clip_graph_internvl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
