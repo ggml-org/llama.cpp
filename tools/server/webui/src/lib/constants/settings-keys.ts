@@ -16,6 +16,8 @@ export const SETTINGS_KEYS = {
 	PDF_AS_IMAGE: 'pdfAsImage',
 	ASK_FOR_TITLE_CONFIRMATION: 'askForTitleConfirmation',
 	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
+	TITLE_GENERATION_USE_LLM: 'titleGenerationUseLLM',
+	TITLE_GENERATION_PROMPT: 'titleGenerationPrompt',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',

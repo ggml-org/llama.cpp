@@ -14,6 +14,7 @@
 	import { RouterService } from '$lib/services/router.service';
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { TruncatedText } from '$lib/components/app';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -149,9 +150,7 @@
 			</Tooltip.Root>
 		{/if}
 
-		<span class="truncate text-sm font-medium">
-			{conversation.name}
-		</span>
+		<TruncatedText text={conversation.name} class="text-sm font-medium" showTooltip={false} />
 	</div>
 
 	{#if renderActionsDropdown}
