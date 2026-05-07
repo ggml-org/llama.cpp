@@ -1,0 +1,90 @@
+name: Release riscv64 (cross-compile demo)
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create a GitHub release'
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  ubuntu-riscv64-cross:
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14-riscv64-linux-gnu g++-14-riscv64-linux-gnu
+
+      - name: Determine tag name
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+          SAFE_NAME=$(echo "$REF_NAME" | tr '/' '-')
+          echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
+
+      - name: Build (cross-compile riscv64)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DLLAMA_OPENSSL=OFF
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Verify binaries
+        run: |
+          file ./build/bin/llama-cli
+          file ./build/bin/llama-server
+          ls -lh ./build/bin/llama-cli ./build/bin/llama-server
+
+      - name: Pack artifacts
+        env:
+          TAG_NAME: ${{ steps.tag.outputs.name }}
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf "llama-${TAG_NAME}-bin-ubuntu-riscv64.tar.gz" \
+            --transform "s,./,llama-${TAG_NAME}/," -C ./build/bin .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-bin-ubuntu-riscv64.tar.gz
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-riscv64.tar.gz
+
+      - name: Create release
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          draft: false
+          prerelease: true
+          files: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-riscv64.tar.gz
+          body: |
+            Fork demo release — riscv64 cross-compiled binary from branch `ci/add-riscv64-release`.
+
+            Built with `gcc-14-riscv64-linux-gnu` on `ubuntu-24.04` using CMake cross-compilation.
+            This demonstrates the approach proposed in ggml-org/llama.cpp#20991.
+
+            **Not for production use** — fork pre-release for CI validation only.
