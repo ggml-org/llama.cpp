@@ -370,10 +370,6 @@ struct common_params_speculative {
     bool has_dft() const {
         return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
     }
-
-    bool has_mtp() const {
-        return type == COMMON_SPECULATIVE_TYPE_MTP && mtp.model != nullptr;
-    }
 };
 
 struct common_params_vocoder {

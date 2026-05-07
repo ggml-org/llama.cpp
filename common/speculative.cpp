@@ -1152,7 +1152,7 @@ common_speculative * common_speculative_init(
     }
 
     llama_context * ctx_mtp = nullptr;
-    if (params.has_mtp()) {
+    if (params.type == COMMON_SPECULATIVE_TYPE_MTP) {
         ctx_mtp = llama_init_from_model(params.mtp.model, params.mtp.cparams);
         if (ctx_mtp == nullptr) {
             LOG_ERR("%s", "failed to create MTP context\n");
