@@ -10,6 +10,7 @@
 		activeMessages
 	} from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import { APP_NAME } from '$lib/constants/ui';
 
 	let chatId = $derived(page.params.id);
 	let currentChatId: string | undefined = undefined;
@@ -166,7 +167,7 @@
 </script>
 
 <svelte:head>
-	<title>{activeConversation()?.name || 'Chat'} - llama.cpp</title>
+	<title>{activeConversation()?.name || 'Chat'} - {APP_NAME}</title>
 </svelte:head>
 
 <DialogModelNotAvailable
