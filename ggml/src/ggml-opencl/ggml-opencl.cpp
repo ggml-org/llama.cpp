@@ -5015,7 +5015,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         tensor->extra = extra;
 
         // transpose the weights and scales
-    #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         // Only do transpose for large, non batched matrix
         // TODO: use preallocated images instead of sub-buffer then image
         if (use_adreno_kernels(backend_ctx, tensor)) {
@@ -5029,10 +5029,8 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             // Transpose d as ushort
             transpose_2d_as_16b(backend_ctx, extra->d, extra->d, size_d, K/32, M);
         }
-    #endif // GGML_OPENCL_USE_ADRENO_KERNELS
-
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
         return;
-
     }
     if (tensor->type == GGML_TYPE_Q4_1) {
         ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
