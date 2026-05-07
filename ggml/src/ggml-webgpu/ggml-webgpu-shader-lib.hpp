@@ -91,6 +91,7 @@ struct ggml_webgpu_shader_lib_context {
     uint32_t sg_mat_m                 = 0;
     uint32_t sg_mat_n                 = 0;
     uint32_t sg_mat_k                 = 0;
+    uint32_t min_subgroup_size        = 0;
     uint32_t max_subgroup_size        = 0;
 };
 
@@ -542,12 +543,23 @@ struct ggml_webgpu_flash_attn_pipeline_key {
     bool      has_sinks;
     bool      uses_logit_softcap;
     uint32_t  path;
+    uint32_t  q_tile;
+    uint32_t  kv_tile;
+    uint32_t  wg_size;
+    uint32_t  min_subgroup_size;
+    uint32_t  max_subgroup_size;
+    uint32_t  sg_mat_m;
+    uint32_t  sg_mat_n;
+    uint32_t  sg_mat_k;
 
     bool operator==(const ggml_webgpu_flash_attn_pipeline_key & other) const {
         return q_type == other.q_type && kv_type == other.kv_type && dst_type == other.dst_type &&
                head_dim_qk == other.head_dim_qk && head_dim_v == other.head_dim_v && kv_direct == other.kv_direct &&
                kv_overlap == other.kv_overlap && has_mask == other.has_mask && has_sinks == other.has_sinks &&
-               uses_logit_softcap == other.uses_logit_softcap && path == other.path;
+               uses_logit_softcap == other.uses_logit_softcap && path == other.path && q_tile == other.q_tile &&
+               kv_tile == other.kv_tile && wg_size == other.wg_size && min_subgroup_size == other.min_subgroup_size &&
+               max_subgroup_size == other.max_subgroup_size && sg_mat_m == other.sg_mat_m &&
+               sg_mat_n == other.sg_mat_n && sg_mat_k == other.sg_mat_k;
     }
 };
 
@@ -565,6 +577,14 @@ struct ggml_webgpu_flash_attn_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.has_sinks);
         ggml_webgpu_hash_combine(seed, key.uses_logit_softcap);
         ggml_webgpu_hash_combine(seed, key.path);
+        ggml_webgpu_hash_combine(seed, key.q_tile);
+        ggml_webgpu_hash_combine(seed, key.kv_tile);
+        ggml_webgpu_hash_combine(seed, key.wg_size);
+        ggml_webgpu_hash_combine(seed, key.min_subgroup_size);
+        ggml_webgpu_hash_combine(seed, key.max_subgroup_size);
+        ggml_webgpu_hash_combine(seed, key.sg_mat_m);
+        ggml_webgpu_hash_combine(seed, key.sg_mat_n);
+        ggml_webgpu_hash_combine(seed, key.sg_mat_k);
         return seed;
     }
 };
@@ -580,6 +600,20 @@ struct ggml_webgpu_flash_attn_decisions {
 
 inline constexpr uint32_t GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH = 4u;
 inline constexpr uint32_t GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE       = 4u;
+
+inline uint32_t ggml_webgpu_effective_min_subgroup_size(const ggml_webgpu_shader_lib_context & context) {
+    if (context.min_subgroup_size > 0) {
+        return context.min_subgroup_size;
+    }
+    return std::max(1u, context.max_subgroup_size);
+}
+
+inline uint32_t ggml_webgpu_effective_max_subgroup_size(const ggml_webgpu_shader_lib_context & context) {
+    if (context.max_subgroup_size > 0) {
+        return context.max_subgroup_size;
+    }
+    return std::max(1u, context.min_subgroup_size);
+}
 
 inline uint32_t ggml_webgpu_flash_attn_pick_vec_ne(const ggml_webgpu_flash_attn_pipeline_key & key) {
     if (key.path != GGML_WEBGPU_FLASH_ATTN_PATH_VEC || key.kv_type != GGML_TYPE_F16 ||
@@ -600,14 +634,14 @@ inline uint32_t ggml_webgpu_flash_attn_pick_vec_ne(const ggml_webgpu_flash_attn_
 }
 
 inline ggml_webgpu_flash_attn_pipeline_key ggml_webgpu_flash_attn_make_pipeline_key(
-    const ggml_webgpu_shader_lib_context & context,
-    uint32_t                               path) {
+    const ggml_webgpu_shader_lib_context &   context,
+    const ggml_webgpu_flash_attn_decisions & decisions) {
     const bool has_mask  = context.src3 != nullptr;
     const bool has_sinks = context.src4 != nullptr;
     bool       kv_direct = false;
-    if (path != GGML_WEBGPU_FLASH_ATTN_PATH_TILE) {
+    if (decisions.path != GGML_WEBGPU_FLASH_ATTN_PATH_TILE) {
         uint32_t kv_direct_align = GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH;
-        if (path == GGML_WEBGPU_FLASH_ATTN_PATH_SUBGROUP_MATRIX) {
+        if (decisions.path == GGML_WEBGPU_FLASH_ATTN_PATH_SUBGROUP_MATRIX) {
             kv_direct_align = context.sg_mat_k;
         }
         kv_direct = (context.src1->type == GGML_TYPE_F16) &&
@@ -626,7 +660,15 @@ inline ggml_webgpu_flash_attn_pipeline_key ggml_webgpu_flash_attn_make_pipeline_
     key.has_mask                            = has_mask;
     key.has_sinks                           = has_sinks;
     key.uses_logit_softcap                  = ggml_get_op_params_f32(context.dst, 2) != 0.0f;
-    key.path                                = path;
+    key.q_tile                              = decisions.q_tile;
+    key.kv_tile                             = decisions.kv_tile;
+    key.wg_size                             = decisions.wg_size;
+    key.min_subgroup_size                   = ggml_webgpu_effective_min_subgroup_size(context);
+    key.max_subgroup_size                   = ggml_webgpu_effective_max_subgroup_size(context);
+    key.sg_mat_m                            = context.sg_mat_m;
+    key.sg_mat_n                            = context.sg_mat_n;
+    key.sg_mat_k                            = context.sg_mat_k;
+    key.path                                = decisions.path;
     return key;
 }
 
@@ -738,6 +780,8 @@ inline ggml_webgpu_flash_attn_decisions ggml_webgpu_flash_attn_get_decisions(
     const auto *                     V         = context.src2;
     GGML_ASSERT(K != nullptr);
     GGML_ASSERT(V != nullptr);
+    const uint32_t min_subgroup_size = ggml_webgpu_effective_min_subgroup_size(context);
+    const uint32_t max_subgroup_size = ggml_webgpu_effective_max_subgroup_size(context);
 
     const auto flash_attn_tensor_offset = [](const ggml_tensor * tensor) -> size_t {
         constexpr uintptr_t ptr_base_addr = 0x1000u;
@@ -758,16 +802,15 @@ inline ggml_webgpu_flash_attn_decisions ggml_webgpu_flash_attn_get_decisions(
                          kv_vec_type_supported && (K->type != GGML_TYPE_F16 || f16_vec4_aligned) &&
                          (context.src2->type == K->type);
     const bool tile_can_dispatch_all_q_rows =
-        context.max_subgroup_size > 0 &&
-        context.max_wg_size >= GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE * context.max_subgroup_size;
+        max_subgroup_size > 0 && context.max_wg_size >= GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE * max_subgroup_size;
     const bool use_tile = context.supports_subgroups && !context.supports_subgroup_matrix && K->type == GGML_TYPE_F16 &&
                           V->type == GGML_TYPE_F16 && f16_vec4_aligned &&
                           (context.src0->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0) &&
                           (context.src2->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0) &&
-                          tile_can_dispatch_all_q_rows && !use_vec;
+                          tile_can_dispatch_all_q_rows;
 
-    decisions.path = use_vec                          ? GGML_WEBGPU_FLASH_ATTN_PATH_VEC :
-                     use_tile                         ? GGML_WEBGPU_FLASH_ATTN_PATH_TILE :
+    decisions.path = use_tile                         ? GGML_WEBGPU_FLASH_ATTN_PATH_TILE :
+                     use_vec                          ? GGML_WEBGPU_FLASH_ATTN_PATH_VEC :
                      context.supports_subgroup_matrix ? GGML_WEBGPU_FLASH_ATTN_PATH_SUBGROUP_MATRIX :
                                                         GGML_WEBGPU_FLASH_ATTN_PATH_NONE;
 
@@ -775,7 +818,7 @@ inline ggml_webgpu_flash_attn_decisions ggml_webgpu_flash_attn_get_decisions(
         return decisions;
     }
 
-    const ggml_webgpu_flash_attn_pipeline_key key = ggml_webgpu_flash_attn_make_pipeline_key(context, decisions.path);
+    const ggml_webgpu_flash_attn_pipeline_key key = ggml_webgpu_flash_attn_make_pipeline_key(context, decisions);
     decisions.kv_direct                           = key.kv_direct;
     const uint32_t max_kv_tile                    = ggml_webgpu_flash_attn_max_kv_tile(context, key);
     // invalidate if even the smallest kv_tile doesn't fit in shared memory
@@ -788,7 +831,7 @@ inline ggml_webgpu_flash_attn_decisions ggml_webgpu_flash_attn_get_decisions(
         decisions.q_tile  = 1u;
         decisions.kv_tile = std::max(8u, std::min(32u, max_kv_tile));
         decisions.kv_tile = (decisions.kv_tile / 8u) * 8u;
-        decisions.wg_size = std::max(1u, std::min<uint32_t>(32u, context.max_subgroup_size));
+        decisions.wg_size = std::max(1u, std::min<uint32_t>(32u, max_subgroup_size));
         if (decisions.kv_direct) {
             decisions.kv_tile = std::min(decisions.kv_tile, GGML_WEBGPU_KV_SEQ_PAD);
             while (GGML_WEBGPU_KV_SEQ_PAD % decisions.kv_tile != 0) {
@@ -803,12 +846,11 @@ inline ggml_webgpu_flash_attn_decisions ggml_webgpu_flash_attn_get_decisions(
     decisions.kv_tile = decisions.path == GGML_WEBGPU_FLASH_ATTN_PATH_TILE ?
                             std::min(64u, max_kv_tile) :
                             std::min(max_kv_tile, context.sg_mat_n * GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES);
-    decisions.wg_size =
-        decisions.path == GGML_WEBGPU_FLASH_ATTN_PATH_TILE ?
-            std::min(std::max(1u, context.max_wg_size),
-                     std::max(GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE,
-                              GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE * std::max(1u, context.max_subgroup_size))) :
-            std::max(context.max_subgroup_size, GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE);
+    decisions.wg_size = decisions.path == GGML_WEBGPU_FLASH_ATTN_PATH_TILE ?
+                            std::min(std::max(1u, context.max_wg_size),
+                                     std::max(GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE,
+                                              GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE * max_subgroup_size)) :
+                            std::max(max_subgroup_size, GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE);
 
     if (decisions.kv_tile == 0) {
         return decisions;
@@ -817,9 +859,8 @@ inline ggml_webgpu_flash_attn_decisions ggml_webgpu_flash_attn_get_decisions(
     if (decisions.kv_direct) {
         GGML_ASSERT(decisions.kv_tile <= GGML_WEBGPU_KV_SEQ_PAD);
         while (GGML_WEBGPU_KV_SEQ_PAD % decisions.kv_tile != 0) {
-            decisions.kv_tile -= decisions.path == GGML_WEBGPU_FLASH_ATTN_PATH_TILE ?
-                                     std::max(1u, context.max_subgroup_size) :
-                                     context.sg_mat_n;
+            decisions.kv_tile -=
+                decisions.path == GGML_WEBGPU_FLASH_ATTN_PATH_TILE ? min_subgroup_size : context.sg_mat_n;
         }
     }
     return decisions;
@@ -2585,7 +2626,7 @@ class ggml_webgpu_shader_lib {
         const ggml_webgpu_flash_attn_decisions decisions =
             ggml_webgpu_flash_attn_get_decisions(context, storage_offset_alignment);
         GGML_ASSERT(decisions.path != GGML_WEBGPU_FLASH_ATTN_PATH_NONE);
-        ggml_webgpu_flash_attn_pipeline_key key = ggml_webgpu_flash_attn_make_pipeline_key(context, decisions.path);
+        ggml_webgpu_flash_attn_pipeline_key key = ggml_webgpu_flash_attn_make_pipeline_key(context, decisions);
         auto                                it  = flash_attn_pipelines.find(key);
         if (it != flash_attn_pipelines.end()) {
             return it->second;
@@ -2676,9 +2717,10 @@ class ggml_webgpu_shader_lib {
             shader_src = wgsl_flash_attn_vec_split;
         } else if (key.path == GGML_WEBGPU_FLASH_ATTN_PATH_TILE) {
             shader_src = wgsl_flash_attn_tile;
-            defines.push_back("MAX_SUBGROUP_SIZE=" + std::to_string(context.max_subgroup_size));
+            defines.push_back("MIN_SUBGROUP_SIZE=" + std::to_string(key.min_subgroup_size) + "u");
+            defines.push_back("MAX_SUBGROUP_SIZE=" + std::to_string(key.max_subgroup_size) + "u");
             defines.push_back("KV_STAGE_STRIDE=" + std::to_string(std::max(key.head_dim_qk, key.head_dim_v)));
-            variant += "_tile";
+            variant += "_tile_sg" + std::to_string(key.min_subgroup_size) + "_" + std::to_string(key.max_subgroup_size);
         } else {
             defines.push_back(std::string("SG_MAT_M=") + std::to_string(context.sg_mat_m));
             defines.push_back(std::string("SG_MAT_N=") + std::to_string(context.sg_mat_n));

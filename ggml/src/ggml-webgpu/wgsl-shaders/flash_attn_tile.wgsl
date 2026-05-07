@@ -25,6 +25,9 @@ enable subgroups;
 #define Q_TILE 4
 #define KV_TILE 64
 #define WG_SIZE 128
+#ifndef MIN_SUBGROUP_SIZE
+#define MIN_SUBGROUP_SIZE MAX_SUBGROUP_SIZE
+#endif
 
 struct Params {
     offset_q: u32,
@@ -116,8 +119,8 @@ struct Params {
 const FLOAT_MIN: f32 = -1.0e9;
 const Q_CHUNKS: u32 = HEAD_DIM_QK / 4u;
 const V_CHUNKS: u32 = HEAD_DIM_V / 4u;
-const SCORE_REGS_PER_LANE: u32 = (KV_TILE + MAX_SUBGROUP_SIZE - 1u) / MAX_SUBGROUP_SIZE;
-const OUT_REGS_PER_LANE: u32 = (V_CHUNKS + MAX_SUBGROUP_SIZE - 1u) / MAX_SUBGROUP_SIZE;
+const SCORE_REGS_PER_LANE: u32 = (KV_TILE + MIN_SUBGROUP_SIZE - 1u) / MIN_SUBGROUP_SIZE;
+const OUT_REGS_PER_LANE: u32 = (V_CHUNKS + MIN_SUBGROUP_SIZE - 1u) / MIN_SUBGROUP_SIZE;
 
 var<workgroup> q_shmem: array<f32, Q_TILE * HEAD_DIM_QK>;
 var<workgroup> kv_shmem: array<f32, KV_TILE * KV_STAGE_STRIDE>;
