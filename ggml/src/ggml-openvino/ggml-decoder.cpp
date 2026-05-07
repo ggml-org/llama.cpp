@@ -251,9 +251,6 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             op_case = 0x00000000;
             break;
         }
-        if (node->src[0]->op == GGML_OP_VIEW) {
-            op_case = (op_case | 0x00000002);
-        }
         break;
     }
     case GGML_OP_VIEW: {

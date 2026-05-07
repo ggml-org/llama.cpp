@@ -281,7 +281,7 @@ public:
     }
 
     inline static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE;
+        return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE && op->src[1]->op == GGML_OP_NONE;
     }
 
     std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) {
