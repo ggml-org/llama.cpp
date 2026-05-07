@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import torch
-import pytest
+
+# Necessary to load the local convert_lora_to_gguf module
+if "NO_LOCAL_GGUF" not in os.environ and (Path(__file__).parent.parent / 'convert_lora_to_gguf.py').exists():
+    sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from convert_lora_to_gguf import LoraTorchTensor
 
