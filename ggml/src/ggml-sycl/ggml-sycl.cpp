@@ -103,7 +103,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
             // NB: SYCL's get_mem_granularity returns the _minimum_ granularity,
             // but the L0 API requires a larger page size for allocs above 2 MiB and
             // rejects non-multiples with UR_RESULT_ERROR_INVALID_VALUE [sic].
-            // Here we clamp to 2 MiB for simplicity, but other devices may require
+            // Here we clamp it to 2 MiB for simplicity, but other devices may require
             // calling zeVirtualMemQueryPageSize or yet unexposed public API.
             const size_t physical_page = 2ull << 20; // 2 MiB
             info.devices[i].vmm_granularity = std::max<size_t>(
