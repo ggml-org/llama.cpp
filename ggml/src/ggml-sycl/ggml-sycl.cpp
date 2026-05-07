@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <float.h>
 #include <limits>
+#include <optional>
 #include <stdint.h>
 #include <stdio.h>
 #include <vector>
@@ -1446,23 +1447,25 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
             GGML_ASSERT(pool_size + reserve_size <= SYCL_POOL_VMM_MAX_SIZE);
 
             // allocate more physical memory
-            sycl::ext::oneapi::experimental::physical_mem phys(dev, ctx, reserve_size);
+            std::optional<sycl::ext::oneapi::experimental::physical_mem> phys;
+            SYCL_CHECK(CHECK_TRY_ERROR(phys.emplace(dev, ctx, reserve_size)));
 
             // reserve virtual address space (if not already reserved)
             if (pool_addr == 0) {
                 SYCL_CHECK(CHECK_TRY_ERROR(
                     pool_addr = sycl::ext::oneapi::experimental::reserve_virtual_mem(
-                        SYCL_POOL_VMM_MAX_SIZE, ctx)
-                ));
+                        SYCL_POOL_VMM_MAX_SIZE, ctx)));
             }
 
             // map at the end of the pool
-            void * map_ptr = phys.map(pool_addr + pool_size, reserve_size,
-                                     sycl::ext::oneapi::experimental::address_access_mode::read_write);
+            void * map_ptr = nullptr;
+            SYCL_CHECK(CHECK_TRY_ERROR(
+                map_ptr = phys->map(pool_addr + pool_size, reserve_size,
+                                    sycl::ext::oneapi::experimental::address_access_mode::read_write)));
 
             // stash these so we could unmap this exact range in dtor
             mappings.push_back({
-                std::move(phys),
+                std::move(*phys),
                 map_ptr,
             });
 
