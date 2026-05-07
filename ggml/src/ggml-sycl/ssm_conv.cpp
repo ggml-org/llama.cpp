@@ -63,7 +63,7 @@ static void kernel_ssm_conv(
     });
 }
 
-void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+inline void ggml_sycl_op_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_tensor * src0 = dst->src[0];
     ggml_tensor * src1 = dst->src[1];
 
@@ -124,4 +124,9 @@ void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         std::fprintf(stderr, "[SYCL-SSM_CONV] ERROR: %s\n", e.what());
         throw;
     }
+}
+
+void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    ggml_sycl_op_ssm_conv(ctx, dst);
 }
