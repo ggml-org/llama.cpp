@@ -1754,6 +1754,55 @@ struct ggml_vk_garbage_collector {
     std::vector<vk_context> contexts;
 };
 
+// --- Vulkan graph caching (command buffer reuse) ---
+
+struct vk_graph_node_properties {
+    ggml_tensor node;
+    void * src_data_ptrs[GGML_MAX_SRC];
+    int64_t src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+    size_t src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+};
+
+struct vk_cached_submission {
+    vk_command_buffer * cmd_buffer;
+    bool signal_almost_ready_fence;
+};
+
+struct vk_cached_graph {
+    uint64_t uid = 0;
+    bool warmup_complete = false;
+    bool disabled = false;
+    int64_t last_used_time = 0;
+
+    std::vector<vk_graph_node_properties> node_props;
+
+    vk_command_pool cached_cmd_pool;
+    std::vector<vk::DescriptorPool> cached_descriptor_pools;
+    std::vector<vk::DescriptorSet> cached_descriptor_sets;
+
+    vk_buffer prealloc_x_at_capture, prealloc_y_at_capture;
+    vk_buffer prealloc_split_k_at_capture;
+
+    std::vector<vk_cached_submission> submissions;
+
+    bool uses_transfer_queue = false;
+
+    void destroy(vk::Device & dev) {
+        cached_cmd_pool.destroy(dev);
+        for (auto & pool : cached_descriptor_pools) {
+            dev.destroyDescriptorPool(pool);
+        }
+        cached_descriptor_pools.clear();
+        cached_descriptor_sets.clear();
+        submissions.clear();
+        prealloc_x_at_capture = nullptr;
+        prealloc_y_at_capture = nullptr;
+        prealloc_split_k_at_capture = nullptr;
+        warmup_complete = false;
+        uid = 0;
+    }
+};
+
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx);
 static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested = nullptr);
 static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx);
@@ -2021,6 +2070,40 @@ struct ggml_backend_vk_context {
     vk_command_pool compute_cmd_pool;
     vk_command_pool transfer_cmd_pool;
 
+    // --- Vulkan graph caching ---
+    std::unordered_map<const void *, std::unique_ptr<vk_cached_graph>> vk_graphs;
+    int64_t last_graph_eviction_sweep = 0;
+    vk_cached_graph * active_capture_graph = nullptr;
+
+    // Timing for graph compute debug logging
+    int64_t graph_compute_t_start = 0;
+    int64_t graph_compute_cpu_us = 0;
+    int n_graph_nodes = 0;
+    const char * graph_compute_phase = nullptr;
+
+    static const bool disable_vk_graphs_due_to_env;
+
+    vk_cached_graph * vk_graph(const void * first_node_ptr) {
+        const int64_t time_now = ggml_time_us();
+        if (time_now - last_graph_eviction_sweep >= 5'000'000) {
+            last_graph_eviction_sweep = time_now;
+            for (auto it = vk_graphs.begin(); it != vk_graphs.end(); ) {
+                if (time_now - it->second->last_used_time >= 10'000'000) {
+                    it->second->destroy(device->device);
+                    it = vk_graphs.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        auto it = vk_graphs.find(first_node_ptr);
+        if (it == vk_graphs.end()) {
+            it = vk_graphs.emplace(first_node_ptr, std::make_unique<vk_cached_graph>()).first;
+        }
+        it->second->last_used_time = time_now;
+        return it->second.get();
+    }
+
     // number of additional consecutive nodes that are being fused with the
     // node currently being processed
     int num_additional_fused_ops {};
@@ -2041,6 +2124,9 @@ struct ggml_backend_vk_context {
     int32_t num_queries {};
     int32_t query_idx {};
 };
+
+const bool ggml_backend_vk_context::disable_vk_graphs_due_to_env = (getenv("GGML_VK_DISABLE_GRAPHS") != nullptr);
+static const bool vk_graph_log_enabled = (getenv("GGML_VK_GRAPH_LOG") != nullptr);
 
 static void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
 
@@ -2596,7 +2682,14 @@ static void ggml_pipeline_request_descriptor_sets(ggml_backend_vk_context *ctx, 
 
 static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx) {
 
-    if (ctx->descriptor_sets.size() >= ctx->pipeline_descriptor_set_requirements) {
+    auto & pools = ctx->active_capture_graph
+        ? ctx->active_capture_graph->cached_descriptor_pools
+        : ctx->descriptor_pools;
+    auto & sets = ctx->active_capture_graph
+        ? ctx->active_capture_graph->cached_descriptor_sets
+        : ctx->descriptor_sets;
+
+    if (sets.size() >= ctx->pipeline_descriptor_set_requirements) {
         // Enough descriptors are available
         return;
     }
@@ -2604,29 +2697,29 @@ static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx
     vk_device& device = ctx->device;
 
     // Grow by 50% to avoid frequent allocations
-    uint32_t needed = std::max(3 * ctx->descriptor_sets.size() / 2, size_t{ctx->pipeline_descriptor_set_requirements});
-    uint32_t to_alloc = needed - ctx->descriptor_sets.size();
-    uint32_t pool_remaining = VK_DEVICE_DESCRIPTOR_POOL_SIZE - ctx->descriptor_sets.size() % VK_DEVICE_DESCRIPTOR_POOL_SIZE;
-    uint32_t pool_idx = ctx->descriptor_sets.size() / VK_DEVICE_DESCRIPTOR_POOL_SIZE;
+    uint32_t needed = std::max(3 * sets.size() / 2, size_t{ctx->pipeline_descriptor_set_requirements});
+    uint32_t to_alloc = needed - sets.size();
+    uint32_t pool_remaining = VK_DEVICE_DESCRIPTOR_POOL_SIZE - sets.size() % VK_DEVICE_DESCRIPTOR_POOL_SIZE;
+    uint32_t pool_idx = sets.size() / VK_DEVICE_DESCRIPTOR_POOL_SIZE;
 
     while (to_alloc > 0) {
         const uint32_t alloc_count = std::min(pool_remaining, to_alloc);
         to_alloc -= alloc_count;
         pool_remaining = VK_DEVICE_DESCRIPTOR_POOL_SIZE;
 
-        if (pool_idx >= ctx->descriptor_pools.size()) {
+        if (pool_idx >= pools.size()) {
             vk::DescriptorPoolSize descriptor_pool_size(vk::DescriptorType::eStorageBuffer, MAX_PARAMETER_COUNT * VK_DEVICE_DESCRIPTOR_POOL_SIZE);
             vk::DescriptorPoolCreateInfo descriptor_pool_create_info({}, VK_DEVICE_DESCRIPTOR_POOL_SIZE, descriptor_pool_size);
-            ctx->descriptor_pools.push_back(device->device.createDescriptorPool(descriptor_pool_create_info));
+            pools.push_back(device->device.createDescriptorPool(descriptor_pool_create_info));
         }
 
         std::vector<vk::DescriptorSetLayout> layouts(alloc_count);
         for (uint32_t i = 0; i < alloc_count; i++) {
             layouts[i] = device->dsl;
         }
-        vk::DescriptorSetAllocateInfo descriptor_set_alloc_info(ctx->descriptor_pools[pool_idx], alloc_count, layouts.data());
-        std::vector<vk::DescriptorSet> sets = device->device.allocateDescriptorSets(descriptor_set_alloc_info);
-        ctx->descriptor_sets.insert(ctx->descriptor_sets.end(), sets.begin(), sets.end());
+        vk::DescriptorSetAllocateInfo descriptor_set_alloc_info(pools[pool_idx], alloc_count, layouts.data());
+        std::vector<vk::DescriptorSet> new_sets = device->device.allocateDescriptorSets(descriptor_set_alloc_info);
+        sets.insert(sets.end(), new_sets.begin(), new_sets.end());
 
         pool_idx++;
     }
@@ -7319,12 +7412,15 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
     GGML_ASSERT(wg0 <= ctx->device->properties.limits.maxComputeWorkGroupCount[0] &&
                 wg1 <= ctx->device->properties.limits.maxComputeWorkGroupCount[1] &&
                 wg2 <= ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
-    GGML_ASSERT(ctx->descriptor_set_idx < ctx->descriptor_sets.size());
+    auto & ds_vec = ctx->active_capture_graph
+        ? ctx->active_capture_graph->cached_descriptor_sets
+        : ctx->descriptor_sets;
+    GGML_ASSERT(ctx->descriptor_set_idx < ds_vec.size());
     GGML_ASSERT(descriptor_buffer_infos.size() <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(pipeline->parameter_count == descriptor_buffer_infos.size());
     GGML_ASSERT(pipeline->push_constant_size == push_constant_size(push_constants));
 
-    vk::DescriptorSet& descriptor_set = ctx->descriptor_sets[ctx->descriptor_set_idx++];
+    vk::DescriptorSet& descriptor_set = ds_vec[ctx->descriptor_set_idx++];
     vk::WriteDescriptorSet write_descriptor_set{ descriptor_set, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
     ctx->device->device.updateDescriptorSets({ write_descriptor_set }, {});
 
@@ -7348,13 +7444,13 @@ static void ggml_vk_ctx_end(vk_context& ctx) {
     ctx->s = nullptr;
 }
 
-static void ggml_vk_ctx_begin(vk_device& device, vk_context& subctx) {
+static void ggml_vk_ctx_begin(vk_device& device, vk_context& subctx, bool one_time = true) {
     VK_LOG_DEBUG("ggml_vk_ctx_begin(" << device->name << ")");
     if (subctx->s != nullptr) {
         ggml_vk_ctx_end(subctx);
     }
 
-    subctx->seqs.push_back({ ggml_vk_begin_submission(device, *subctx->p) });
+    subctx->seqs.push_back({ ggml_vk_begin_submission(device, *subctx->p, one_time) });
     subctx->s = subctx->seqs[subctx->seqs.size() - 1].data();
 }
 
@@ -7363,10 +7459,14 @@ static vk_context ggml_vk_get_compute_ctx(ggml_backend_vk_context * ctx) {
     if (!ctx->compute_ctx.expired()) {
         result = ctx->compute_ctx.lock();
     } else {
-        result = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+        vk_command_pool & pool = ctx->active_capture_graph
+            ? ctx->active_capture_graph->cached_cmd_pool
+            : ctx->compute_cmd_pool;
+        bool one_time = (ctx->active_capture_graph == nullptr);
+        result = ggml_vk_create_context(ctx, pool);
 
         ctx->compute_ctx = result;
-        ggml_vk_ctx_begin(ctx->device, result);
+        ggml_vk_ctx_begin(ctx->device, result, one_time);
     }
 
     if (ctx->device->async_use_transfer_queue && ctx->transfer_semaphore_last_submitted < ctx->transfer_semaphore.value) {
@@ -14471,6 +14571,25 @@ static void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
             memset(mset.dst, mset.val, mset.n);
         }
 
+        // During capture, save submissions and detect staging copies
+        if (ctx->active_capture_graph) {
+            bool has_staging = !subctx->in_memcpys.empty() || !subctx->out_memcpys.empty() || !subctx->memsets.empty();
+            if (has_staging) {
+                ctx->active_capture_graph->disabled = true;
+            } else {
+                bool signal_ar = (almost_ready && !ctx->almost_ready_fence_pending);
+                for (auto & seq : subctx->seqs) {
+                    for (auto & submission : seq) {
+                        ctx->active_capture_graph->submissions.push_back({
+                            submission.buffer,
+                            signal_ar,
+                        });
+                        signal_ar = false;
+                    }
+                }
+            }
+        }
+
         if (almost_ready && !ctx->almost_ready_fence_pending) {
             ggml_vk_submit(subctx, ctx->almost_ready_fence);
             ctx->almost_ready_fence_pending = true;
@@ -14566,6 +14685,11 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
 
     ctx->device->device.destroyFence(ctx->fence);
     ctx->device->device.destroyFence(ctx->almost_ready_fence);
+
+    for (auto & [key, graph] : ctx->vk_graphs) {
+        graph->destroy(ctx->device->device);
+    }
+    ctx->vk_graphs.clear();
 
     for (auto& pool : ctx->descriptor_pools) {
         ctx->device->device.destroyDescriptorPool(pool);
@@ -15138,7 +15262,13 @@ static void ggml_backend_vk_synchronize(ggml_backend_t backend) {
     VK_LOG_DEBUG("ggml_backend_vk_synchronize()");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
+    const int64_t t_sync_start = vk_graph_log_enabled ? ggml_time_us() : 0;
     ggml_vk_synchronize(ctx);
+    if (vk_graph_log_enabled && ctx->graph_compute_phase) {
+        const int64_t t_sync = ggml_time_us() - t_sync_start;
+        std::cerr << "ggml_vulkan: graph (" << ctx->n_graph_nodes << " nodes) — " << ctx->graph_compute_phase << " | cpu " << ctx->graph_compute_cpu_us << " us, sync " << t_sync << " us, total " << (ggml_time_us() - ctx->graph_compute_t_start) << " us" << std::endl;
+    }
+    ctx->graph_compute_phase = nullptr;
 
     ggml_vk_graph_cleanup(ctx);
 }
@@ -15670,9 +15800,205 @@ static int32_t find_first_set(uint32_t x) {
     return ret;
 }
 
+// --- Vulkan graph caching helpers ---
+
+static const void * ggml_vk_graph_get_key(ggml_cgraph * cgraph) {
+    return cgraph->nodes[0];
+}
+
+static bool ggml_vk_graph_update_required(ggml_cgraph * cgraph, vk_cached_graph * graph) {
+    // UID fast path
+    if (cgraph->uid != 0 && cgraph->uid == graph->uid) {
+        GGML_ASSERT((int)graph->node_props.size() == cgraph->n_nodes);
+        return false;
+    }
+    graph->uid = cgraph->uid;
+
+    bool changed = false;
+
+    if ((int)graph->node_props.size() != cgraph->n_nodes) {
+        changed = true;
+        graph->node_props.resize(cgraph->n_nodes);
+    }
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        vk_graph_node_properties prop = {};
+        memcpy(&prop.node, cgraph->nodes[i], sizeof(ggml_tensor));
+        for (int j = 0; j < GGML_MAX_SRC; ++j) {
+            if (cgraph->nodes[i]->src[j]) {
+                prop.src_data_ptrs[j] = cgraph->nodes[i]->src[j]->data;
+                memcpy(prop.src_ne[j], cgraph->nodes[i]->src[j]->ne, sizeof(prop.src_ne[j]));
+                memcpy(prop.src_nb[j], cgraph->nodes[i]->src[j]->nb, sizeof(prop.src_nb[j]));
+            }
+        }
+        if (changed || memcmp(&graph->node_props[i], &prop, sizeof(prop)) != 0) {
+            graph->node_props[i] = prop;
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+static bool ggml_vk_graph_replay(ggml_backend_vk_context * ctx, vk_cached_graph * cached) {
+    VK_LOG_DEBUG("ggml_vk_graph_replay()");
+
+    // Validate prealloc buffer handles haven't changed since capture
+    if (cached->prealloc_x_at_capture  != ctx->prealloc_x ||
+        cached->prealloc_y_at_capture  != ctx->prealloc_y ||
+        cached->prealloc_split_k_at_capture != ctx->prealloc_split_k) {
+        cached->warmup_complete = false;
+        cached->submissions.clear();
+        return false;
+    }
+
+    ggml_vk_submit_transfer_ctx(ctx);
+
+    // Handle add_rms_partials memset if needed
+    if (ctx->prealloc_size_add_rms_partials && ctx->prealloc_add_rms_partials) {
+        ggml_vk_preallocate_buffers(ctx, nullptr);
+        vk_context memset_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+        ggml_vk_ctx_begin(ctx->device, memset_ctx);
+        ggml_vk_buffer_memset_async(memset_ctx, ctx->prealloc_add_rms_partials, 0, 0, ctx->prealloc_size_add_rms_partials);
+        ggml_vk_sync_buffers(ctx, memset_ctx);
+        ggml_vk_ctx_end(memset_ctx);
+        ggml_vk_submit(memset_ctx, {});
+        ctx->submit_pending = true;
+    }
+
+    for (size_t i = 0; i < cached->submissions.size(); i++) {
+        auto & sub = cached->submissions[i];
+
+        std::vector<vk::Semaphore> wait_sems;
+        std::vector<uint64_t> wait_vals;
+        std::vector<vk::PipelineStageFlags> wait_stages;
+
+        // First submission may need to wait on transfer semaphore
+        if (i == 0 && ctx->device->async_use_transfer_queue &&
+            ctx->transfer_semaphore_last_submitted < ctx->transfer_semaphore.value) {
+            wait_sems.push_back(ctx->transfer_semaphore.s);
+            wait_vals.push_back(ctx->transfer_semaphore.value);
+            wait_stages.push_back(ctx->device->compute_queue.stage_flags);
+            ctx->transfer_semaphore_last_submitted = ctx->transfer_semaphore.value;
+        }
+
+        vk::Fence fence = {};
+        if (sub.signal_almost_ready_fence && !ctx->almost_ready_fence_pending) {
+            fence = ctx->almost_ready_fence;
+            ctx->almost_ready_fence_pending = true;
+        }
+
+        vk::TimelineSemaphoreSubmitInfo tl_info{
+            (uint32_t)wait_vals.size(), wait_vals.data(),
+            0, nullptr,
+        };
+        tl_info.sType = vk::StructureType::eTimelineSemaphoreSubmitInfo;
+        tl_info.pNext = nullptr;
+
+        vk::SubmitInfo si{
+            (uint32_t)wait_sems.size(), wait_sems.data(), wait_stages.data(),
+            1, &sub.cmd_buffer->buf,
+            0, nullptr,
+        };
+        si.setPNext(&tl_info);
+
+        {
+            std::lock_guard<std::mutex> guard(queue_mutex);
+            ctx->device->compute_queue.queue.submit({ si }, fence);
+        }
+        ctx->submit_pending = true;
+    }
+
+    return true;
+}
+
 static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+
+    // --- Vulkan graph caching ---
+    bool use_vk_graph = false;
+    bool vk_graph_capture = false;
+    vk_cached_graph * cached = nullptr;
+    const int64_t t_start = vk_graph_log_enabled ? ggml_time_us() : 0;
+
+    if (cgraph->n_nodes > 0 && !ctx->disable_vk_graphs_due_to_env
+#ifdef GGML_VULKAN_CHECK_RESULTS
+        && false
+#endif
+        && !vk_perf_logger_enabled) {
+
+        const void * graph_key = ggml_vk_graph_get_key(cgraph);
+        cached = ctx->vk_graph(graph_key);
+
+        if (!cached->disabled) {
+            bool properties_changed = ggml_vk_graph_update_required(cgraph, cached);
+
+            if (!cached->warmup_complete) {
+                if (!properties_changed) {
+                    // Properties stable for the second time — capture
+                    cached->warmup_complete = true;
+                    use_vk_graph = true;
+                    vk_graph_capture = true;
+                } else {
+                    if (vk_graph_log_enabled) { std::cerr << "ggml_vulkan: graph " << graph_key << " (" << cgraph->n_nodes << " nodes) — warmup" << std::endl; }
+                }
+            } else {
+                if (properties_changed) {
+                    // Graph changed — reset warmup
+                    cached->destroy(ctx->device->device);
+                    if (vk_graph_log_enabled) { std::cerr << "ggml_vulkan: graph " << graph_key << " (" << cgraph->n_nodes << " nodes) — invalidated" << std::endl; }
+                } else if (!cached->submissions.empty()) {
+                    // Replay cached graph
+                    use_vk_graph = true;
+                    vk_graph_capture = false;
+                }
+            }
+        }
+    }
+
+    // --- REPLAY PATH ---
+    if (use_vk_graph && !vk_graph_capture && cached) {
+        ctx->prealloc_size_add_rms_partials_offset = 0;
+        ctx->do_add_rms_partials = false;
+        ctx->do_add_rms_partials_offset_calculation = false;
+
+        if (ggml_vk_graph_replay(ctx, cached)) {
+            if (vk_graph_log_enabled) {
+                ctx->graph_compute_cpu_us = ggml_time_us() - t_start;
+                ctx->graph_compute_t_start = t_start;
+                ctx->n_graph_nodes = cgraph->n_nodes;
+                ctx->graph_compute_phase = "replayed";
+            }
+
+            if (!ctx->device->support_async) {
+                const int64_t t_sync_start = vk_graph_log_enabled ? ggml_time_us() : 0;
+                ggml_vk_synchronize(ctx);
+                ggml_vk_graph_cleanup(ctx);
+                if (vk_graph_log_enabled) {
+                    const int64_t t_sync = ggml_time_us() - t_sync_start;
+                    std::cerr << "ggml_vulkan: graph (" << cgraph->n_nodes << " nodes, " << cached->submissions.size() << " submissions) — replayed | cpu " << ctx->graph_compute_cpu_us << " us, sync " << t_sync << " us, total " << (ggml_time_us() - t_start) << " us" << std::endl;
+                    ctx->graph_compute_phase = nullptr;
+                }
+            }
+
+            if (vk_instance.debug_utils_support) {
+                vk_instance.pfn_vkQueueEndDebugUtilsLabelEXT(ctx->device->compute_queue.queue);
+            }
+            return GGML_STATUS_SUCCESS;
+        }
+        // Replay failed (prealloc buffer changed) — fall through to normal recording
+        if (vk_graph_log_enabled) { std::cerr << "ggml_vulkan: graph " << cgraph->nodes[0] << " (" << cgraph->n_nodes << " nodes) — replay failed (prealloc changed)" << std::endl; }
+        use_vk_graph = false;
+    }
+
+    // --- CAPTURE SETUP ---
+    if (use_vk_graph && vk_graph_capture && cached) {
+        cached->submissions.clear();
+        cached->cached_cmd_pool.init(ctx->device, &ctx->device->compute_queue);
+        cached->uses_transfer_queue = ctx->device->async_use_transfer_queue;
+        ctx->active_capture_graph = cached;
+    }
 
     if (vk_instance.debug_utils_support) {
         vk::DebugUtilsLabelEXT dul = {};
@@ -16064,8 +16390,40 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->perf_logger->print_timings();
     }
 
+    // --- CAPTURE FINALIZATION ---
+    if (ctx->active_capture_graph) {
+        vk_cached_graph * cap = ctx->active_capture_graph;
+        ctx->active_capture_graph = nullptr;
+
+        if (cap->disabled) {
+            cap->destroy(ctx->device->device);
+            if (vk_graph_log_enabled) { std::cerr << "ggml_vulkan: graph (" << cgraph->n_nodes << " nodes) — capture disabled (staging copies)" << std::endl; }
+        } else {
+            cap->prealloc_x_at_capture = ctx->prealloc_x;
+            cap->prealloc_y_at_capture = ctx->prealloc_y;
+            cap->prealloc_split_k_at_capture = ctx->prealloc_split_k;
+            if (vk_graph_log_enabled) {
+                ctx->graph_compute_cpu_us = ggml_time_us() - t_start;
+                ctx->graph_compute_t_start = t_start;
+                ctx->n_graph_nodes = cgraph->n_nodes;
+                ctx->graph_compute_phase = "captured";
+            }
+        }
+    } else if (vk_graph_log_enabled && cgraph->n_nodes > 0) {
+        ctx->graph_compute_cpu_us = ggml_time_us() - t_start;
+        ctx->graph_compute_t_start = t_start;
+        ctx->n_graph_nodes = cgraph->n_nodes;
+        ctx->graph_compute_phase = "recorded";
+    }
+
     if (!ctx->device->support_async) {
+        const int64_t t_sync_start = vk_graph_log_enabled ? ggml_time_us() : 0;
         ggml_vk_synchronize(ctx);
+        if (vk_graph_log_enabled && ctx->graph_compute_phase) {
+            const int64_t t_sync = ggml_time_us() - t_sync_start;
+            std::cerr << "ggml_vulkan: graph (" << ctx->n_graph_nodes << " nodes) — " << ctx->graph_compute_phase << " | cpu " << ctx->graph_compute_cpu_us << " us, sync " << t_sync << " us, total " << (ggml_time_us() - t_start) << " us" << std::endl;
+        }
+        ctx->graph_compute_phase = nullptr;
     }
 
     return GGML_STATUS_SUCCESS;
