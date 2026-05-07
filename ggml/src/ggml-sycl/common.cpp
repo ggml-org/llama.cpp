@@ -16,9 +16,6 @@
 #include <level_zero/ze_api.h>
 #endif
 
-#include <cstdio>
-#include <cstdlib>
-
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 
