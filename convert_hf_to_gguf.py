@@ -9497,6 +9497,16 @@ class MiniMaxM2Model(TextModel):
 class MimoV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MIMO2
 
+    # MiMo V2-Flash, V2.5 and V2.5-Pro all ship 3 trained MTP layers under model.mtp.layers.{0,1,2}.
+    # The HF config does not expose the count, so it's hardcoded to match the count found in the safetensors.
+    _n_nextn = 3
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.block_count = self.hparams["num_hidden_layers"] + self._n_nextn
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
     @staticmethod
     def _tp_aware_qkv_dequant(weight: Tensor, scale_inv: Tensor,
                               n_q: int, n_kv: int, hd: int, vhd: int,
@@ -9593,8 +9603,10 @@ class MimoV2Model(TextModel):
         hd = self.hparams["head_dim"]
         vhd = self.hparams["v_head_dim"]
         hybrid = self.hparams["hybrid_layer_pattern"]
+        n_layer_text = self.hparams["num_hidden_layers"]
         for weight_name, (w_fn, s_fn, bid) in qkv_overrides.items():
-            is_swa = hybrid[bid] == 1
+            # MTP layers (bid >= n_layer_text) use SWA-style attention dims
+            is_swa = True if bid >= n_layer_text else hybrid[bid] == 1
             n_kv = self.hparams["swa_num_key_value_heads" if is_swa else "num_key_value_heads"]
             self.model_tensors[weight_name] = (
                 lambda w_fn=w_fn, s_fn=s_fn, n_q=n_q, n_kv=n_kv, hd=hd, vhd=vhd:
@@ -9611,11 +9623,14 @@ class MimoV2Model(TextModel):
 
         n_head_kv = self.hparams["num_key_value_heads"]
         n_head_kv_swa = self.hparams["swa_num_key_value_heads"]
-        n_head_kv_arr = [n_head_kv_swa if use_swa == 1 else n_head_kv for use_swa in self.hparams["hybrid_layer_pattern"]]
+        # Extend the per-layer pattern with SWA entries for the MTP blocks so the
+        # runtime arrays (sized to extended block_count) are fully populated.
+        hybrid = list(self.hparams["hybrid_layer_pattern"]) + [1] * self._n_nextn
+        n_head_kv_arr = [n_head_kv_swa if use_swa == 1 else n_head_kv for use_swa in hybrid]
         self.gguf_writer.add_head_count_kv(n_head_kv_arr)
 
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
-        self.gguf_writer.add_sliding_window_pattern(self.hparams["hybrid_layer_pattern"])
+        self.gguf_writer.add_sliding_window_pattern(hybrid)
         self.gguf_writer.add_value_length(self.hparams["v_head_dim"])
         self.gguf_writer.add_expert_count(self.hparams["n_routed_experts"])
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
@@ -9629,6 +9644,8 @@ class MimoV2Model(TextModel):
         if v_scale is not None:
             self.gguf_writer.add_attn_value_scale(float(v_scale))
 
+        self.gguf_writer.add_nextn_predict_layers(self._n_nextn)
+
     _experts: list[dict[str, Tensor]] | None = None
 
     @classmethod
@@ -9638,13 +9655,21 @@ class MimoV2Model(TextModel):
         if "attention_sink" in name and not name.endswith(".weight"):
             name += ".weight"
 
-        # TODO: mimo v2 does not indicate the number of next-token-prediction layers, therefore we cannot do the same way as GLM4_MOE
-        if "model.mtp." in name:
-            return None
-
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch, name, bid):
+        # Remap MTP/NextN tensors to additional layer slots so the standard tensor map handles them.
+        # HF: model.mtp.layers.{i}.foo  ->  model.layers.{n_layer_text + i}.foo
+        m = re.match(r"^model\.mtp\.layers\.(\d+)\.(.*)$", name)
+        if m is not None:
+            mtp_idx = int(m.group(1))
+            assert mtp_idx < self._n_nextn, f"MTP layer index {mtp_idx} >= _n_nextn ({self._n_nextn})"
+            rest = m.group(2)
+            n_layer_text = self.hparams["num_hidden_layers"]
+            new_bid = n_layer_text + mtp_idx
+            name = f"model.layers.{new_bid}.{rest}"
+            bid = new_bid
+
         # process the experts separately
         if name.find("mlp.experts") != -1:
             n_experts = self.hparams["n_routed_experts"]
