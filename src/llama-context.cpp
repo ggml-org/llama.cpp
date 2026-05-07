@@ -2656,13 +2656,8 @@ size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * sr
             throw std::runtime_error("wrong sequence state magic");
         }
 
-        const bool need_seq_match = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-
         llama_seq_id seq_id_read;
         io->read(&seq_id_read, sizeof(seq_id_read));
-        if (need_seq_match && seq_id != seq_id_read) {
-            throw std::runtime_error("wrong sequence id");
-        }
 
         return state_seq_read_data(*io, seq_id, flags);
     } catch (const std::exception & err) {
