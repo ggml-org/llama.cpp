@@ -112,6 +112,12 @@ void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, 
     quantize_row_tq2_0_ref(x, y, k);
 }
 
+void quantize_row_stq_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_K == 0);
+    block_stq_0 * GGML_RESTRICT y = vy;
+    quantize_row_stq_0_ref(x, y, k);
+}
+
 //===================================== Q8_K ==============================================
 
 void quantize_row_q8_K_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
@@ -506,6 +512,38 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
 
         sumf += (float) sumi * d;
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_stq_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_stq_0 * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; ++i) {
+        int32_t sumi = 0;
+
+        for (int g = 0; g < QK_K/4; ++g) {
+            const uint8_t code = (x[i].qs[g/2] >> (4 * (g & 1))) & 0x0F;
+            const uint8_t sign = (x[i].sign[g/8] >> (g % 8)) & 0x01;
+            const uint8_t qpack = stq_0_codebook[((uint32_t) sign << 4) | code];
+
+            for (int p = 0; p < 4; ++p) {
+                const int q = (qpack >> (2*p)) & 0x3;
+                sumi += (q - 1) * y[i].qs[g*4 + p];
+            }
+        }
+
+        sumf += (float) sumi * (GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d);
     }
 
     *s = sumf;

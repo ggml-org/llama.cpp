@@ -2339,6 +2339,57 @@ void quantize_row_tq2_0_ref(const float * GGML_RESTRICT x, block_tq2_0 * GGML_RE
     }
 }
 
+void quantize_row_stq_0_ref(const float * GGML_RESTRICT x, block_stq_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        memset(y[i].qs,   0, sizeof(y[i].qs));
+        memset(y[i].sign, 0, sizeof(y[i].sign));
+
+        float amax = 0.0f;
+        for (int j = 0; j < QK_K; ++j) {
+            const float a = fabsf(x[j]);
+            if (a > amax) amax = a;
+        }
+        y[i].d = GGML_FP32_TO_FP16(amax);
+
+        // STQ_0 forces exactly one zero per group of 4. Pick the smallest-|x|
+        // lane as that zero; project the other 3 onto {-d, +d} via sign.
+        for (int g = 0; g < QK_K/4; ++g) {
+            const float * xv = x + g*4;
+
+            int   zero_pos = 0;
+            float min_abs  = fabsf(xv[0]);
+            for (int p = 1; p < 4; ++p) {
+                const float a = fabsf(xv[p]);
+                if (a < min_abs) { min_abs = a; zero_pos = p; }
+            }
+
+            // Per-lane bits: -1 -> 0b00, 0 -> 0b01, +1 -> 0b10
+            uint8_t qpack = 0;
+            for (int p = 0; p < 4; ++p) {
+                uint8_t lane;
+                if (p == zero_pos) {
+                    lane = 0x1;
+                } else {
+                    lane = (xv[p] < 0.0f) ? 0x0 : 0x2;
+                }
+                qpack |= (uint8_t)(lane << (2*p));
+            }
+
+            const uint8_t code = stq_0_qpack_to_slot[qpack];
+            const uint8_t sign = stq_0_qpack_to_sign[qpack];
+            assert(code != 0xFF);
+
+            y[i].qs  [g/2] |= (uint8_t)((code & 0x0F) << (4 * (g & 1)));
+            y[i].sign[g/8] |= (uint8_t)(sign << (g % 8));
+        }
+
+        x += QK_K;
+    }
+}
+
 size_t quantize_tq1_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     (void)quant_weights; // not used
     const size_t row_size = ggml_row_size(GGML_TYPE_TQ1_0, n_per_row);
@@ -2350,6 +2401,13 @@ size_t quantize_tq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     (void)quant_weights; // not used
     const size_t row_size = ggml_row_size(GGML_TYPE_TQ2_0, n_per_row);
     quantize_row_tq2_0_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * row_size;
+}
+
+size_t quantize_stq_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights; // not used
+    const size_t row_size = ggml_row_size(GGML_TYPE_STQ_0, n_per_row);
+    quantize_row_stq_0_ref(src, dst, (int64_t)nrow*n_per_row);
     return nrow * row_size;
 }
 
@@ -2406,6 +2464,26 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
                     int8_t q = (x[i].qs[j + m] >> (l*2)) & 3;
                     *y++ = (float) (q - 1) * d;
                 }
+            }
+        }
+    }
+}
+
+void dequantize_row_stq_0(const block_stq_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+
+        for (int g = 0; g < QK_K/4; ++g) {
+            const uint8_t code = (x[i].qs[g/2] >> (4 * (g & 1))) & 0x0F;
+            const uint8_t sign = (x[i].sign[g/8] >> (g % 8)) & 0x01;
+            const uint8_t qpack = stq_0_codebook[((uint32_t) sign << 4) | code];
+
+            for (int p = 0; p < 4; ++p) {
+                const int q = (qpack >> (2*p)) & 0x3;
+                *y++ = (float) (q - 1) * d;
             }
         }
     }
@@ -5527,6 +5605,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_TQ2_0:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_tq2_0, data, nb);
+            } break;
+        case GGML_TYPE_STQ_0:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_stq_0, data, nb);
             } break;
         case GGML_TYPE_IQ1_S:
             {
