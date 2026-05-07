@@ -321,6 +321,7 @@ class Keys:
         WA_PATTERN_MODE       = "clip.vision.wa_pattern_mode"  # used by mimovl, per-layer -1/0/1
         IS_DEEPSTACK_LAYERS   = "clip.vision.is_deepstack_layers"
         WINDOW_SIZE           = "clip.vision.window_size"
+        FEATURE_LAYERS        = "clip.vision.feature_layer" # Granite4 Vision
 
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"

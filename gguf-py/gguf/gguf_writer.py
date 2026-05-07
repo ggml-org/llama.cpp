@@ -1231,6 +1231,9 @@ class GGUFWriter:
     def add_vision_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
 
+    def add_vision_feature_layers(self, layers: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.FEATURE_LAYERS, layers)
+
     def add_vision_sam_layers_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SAM.BLOCK_COUNT, value)
 
