@@ -9545,7 +9545,7 @@ class MimoV2Model(TextModel):
         scale_row_idx = rank * blocks_per_rank + (rr // bs)
         # gather: (total_rows, n_col_blocks)
         scale_per_row_block = scale_inv[scale_row_idx]
-        # expand col-blocks → cols: each block-col covers `bs` weight cols
+        # expand col-blocks -> cols: each block-col covers `bs` weight cols
         scale_full = scale_per_row_block.repeat_interleave(bs, dim=1)
         # crop to weight col count (in case last col-block isn't full)
         scale_full = scale_full[:, : weight.shape[1]]
