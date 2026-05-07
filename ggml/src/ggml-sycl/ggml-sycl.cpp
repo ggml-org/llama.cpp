@@ -33,8 +33,7 @@
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
 #    include <sycl/ext/oneapi/experimental/async_alloc/async_alloc.hpp>
 #endif
-#if __has_include(<sycl/ext/oneapi/virtual_mem/virtual_mem.hpp>) && \
-    __has_include(<sycl/ext/oneapi/virtual_mem/physical_mem.hpp>)
+#if SYCL_EXT_ONEAPI_VIRTUAL_MEM
 #    include <sycl/ext/oneapi/virtual_mem/physical_mem.hpp>
 #    include <sycl/ext/oneapi/virtual_mem/virtual_mem.hpp>
 #    define GGML_SYCL_USE_VMM
@@ -97,7 +96,9 @@ static ggml_sycl_device_info ggml_sycl_init() {
         SYCL_CHECK(CHECK_TRY_ERROR(dpct::get_device_info(
             prop, device)));
 
-#if defined(GGML_SYCL_USE_VMM)
+#if !defined(GGML_SYCL_USE_VMM)
+        info.devices[i].vmm = 0;
+#else
         info.devices[i].vmm = device.has(sycl::aspect::ext_oneapi_virtual_mem);
         if (info.devices[i].vmm) {
             // NB: SYCL's get_mem_granularity always returns the _minimum_ granularity,
@@ -111,8 +112,6 @@ static ggml_sycl_device_info ggml_sycl_init() {
                     device, sycl::context(device)),
                 physical_page);
         }
-#else
-        info.devices[i].vmm = false;
 #endif
 
         info.default_tensor_split[i] = total_vram;
