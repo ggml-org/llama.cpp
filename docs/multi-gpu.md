@@ -45,7 +45,7 @@ Set with `--split-mode` / `-sm`.
 | `-ctv` | `--cache-type-v` | same as `-ctk` | `f16` | KV cache type for V. |
 | `-fit` | `--fit` | `on` \| `off` | `on` | Auto-fit unset args to device memory. **Not supported with `tensor`. You may need to manually set the `--ctx-size` to make the model fit.**  |
 
-As for any CUDA prgoram, the environment variable `CUDA_VISIBLE_DEVICES` can be used to control which GPUs to use for the CUDA backend: if you set it, llama.cpp only sees the specified GPUs. Use `--device` for selecting GPUs from among those visible to llama.cpp, this works for any backend.
+As for any CUDA program, the environment variable `CUDA_VISIBLE_DEVICES` can be used to control which GPUs to use for the CUDA backend: if you set it, llama.cpp only sees the specified GPUs. Use `--device` for selecting GPUs from among those visible to llama.cpp, this works for any backend.
 
 ---
 
@@ -77,7 +77,7 @@ llama-cli -m model.gguf -dev CUDA1
 
 Use only the device listed as `CUDA1` when calling with `--list-devices`.
 
-### 4. Tensor parallelism - TENSOR mode (experimental)
+### 4. Tensor parallelism (experimental)
 
 ```bash
 llama-cli -m model.gguf -sm tensor -ctk f16 -ctv f16
@@ -86,7 +86,7 @@ llama-cli -m model.gguf -sm tensor -ctk f16 -ctv f16
 - `--flash-attn off` or (`--flash-attn auto` resolving to `off` when it isn't supported) is a hard error.
 - KV cache types must be non-quantized: `f32`, `f16`, or `bf16`. Support for quantized KV cache is not implemented and trying to use it will result in an error.
 - Mark this configuration as experimental in your tooling: validate output quality before deploying.
-- TENSOR mode is not implemented for all architectures. The following will fail with *"LLAMA_SPLIT_MODE_TENSOR not implemented for architecture '...'"*; fall back to `--split-mode layer`:
+- `--split-mode tensor`is not implemented for all architectures. The following will fail with *"LLAMA_SPLIT_MODE_TENSOR not implemented for architecture '...'"*:
 
   - **MoE / hybrid:** Grok, MPT, OLMoE, DeepSeek2, GLM-DSA, Nemotron-H, Nemotron-H-MoE, Granite-Hybrid, LFM2-MoE, Minimax-M2, Mistral4, Kimi-Linear, Jamba, Falcon-H1
   - **State-space / RWKV-style:** Mamba, Mamba2 (and the hybrid Mamba-attention models above)
@@ -100,6 +100,7 @@ There's no runtime flag for NCCL - it's selected at build time (`-DGGML_CUDA_NCC
 NVIDIA Collective Communications Library (NCCL) is unavailable, multi GPU performance will be suboptimal
 ```
 
+When using the "ROCm" backend (which is the ggml CUDA code translated for AMD via HIP), the AMD equivalent RCCL can be used by compiling with `-DGGML_HIP_RCCL=ON`. Note that RCCL is by default *disabled* because (unlike NCCL) it was not universally beneficial during testing.
 ### 6. With CUDA peer-to-peer access (`GGML_CUDA_P2P`)
 
 CUDA peer-to-peer (P2P) lets GPUs transfer data directly between each other instead of going through system memory, which generally improves multi-GPU performance. It is **opt-in** at runtime - set the environment variable `GGML_CUDA_P2P` to any value to enable it:
