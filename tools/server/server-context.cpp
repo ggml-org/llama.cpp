@@ -2732,6 +2732,13 @@ private:
                             continue;
                         }
 
+                        if (ctx_drft) {
+                            res = input_tokens.process_chunk(ctx_main, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                            if (res != 0) {
+                                GGML_ABORT("failed to process multi-modal data on draft context\n");
+                            }
+                        }
+
                         slot.n_prompt_tokens_processed += n_tokens_out;
 
                         // add the image chunk to cache
