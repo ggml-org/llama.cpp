@@ -3507,7 +3507,11 @@ class BitnetModel(TextModel):
     def weight_quant(self, weight: Tensor) -> Tensor:
         dtype = weight.dtype
         weight = weight.float()
-        scale = weight.abs().mean().clamp(min=1e-5)
+        # Mathematical Optimization: L1 Norm Replacement for Absolute Mean
+        # Evaluating weight.abs() allocates a full-sized multi-megabyte tensor, incurring an O(N) memory
+        # allocation tax. By computing the equivalent L1 norm via weight.norm(p=1, dim=-1).mean() / weight.shape[-1],
+        # we evaluate the result natively in C without the intermediate allocation, cutting time significantly.
+        scale = weight.norm(p=1, dim=-1).mean().div_(weight.shape[-1]).clamp_(min=1e-5)
         iscale = 1 / scale
         # TODO: multiply by the scale directly instead of inverting it twice
         # (this is also unnecessarily doubly inverted upstream)
