@@ -95,7 +95,7 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
             ggml_tensor * Vcur;
 
             if (model.layers[il].wqkv) {
-                // Fused qkv_proj — Q/K share head_dim_k, V uses head_dim_v
+                // Fused qkv_proj - Q/K share head_dim_k, V uses head_dim_v
                 ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
                 cb(qkv, "wqkv", il);
 
