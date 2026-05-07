@@ -73,16 +73,7 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     k = tile_kv(q_shape[1], k_shape[1], q_shape[3], k);
     v = tile_kv(q_shape[1], k_shape[1], q_shape[3], v);
 
-    ov::Output<ov::Node> sdpa_q = q;
-    int64_t factor = q_shape[1] / k_shape[1];
-    if (factor > 1 && (int64_t) k_shape[1] > 1) {
-        auto q_target_shape = ov::op::v0::Constant::create(
-            ov::element::i64, {4},
-            {(int64_t) 1, (int64_t) q_shape[1], (int64_t) -1, (int64_t) q_shape[3]});
-        sdpa_q = std::make_shared<ov::op::v1::Reshape>(q, q_target_shape, false);
-    }
-
-    auto sdpa = std::make_shared<ov::op::v13::ScaledDotProductAttention>(sdpa_q, k, v, mask, scale_node, false);
+    auto sdpa = std::make_shared<ov::op::v13::ScaledDotProductAttention>(q, k, v, mask, scale_node, false);
     res = std::make_shared<ov::op::v1::Transpose>(sdpa,
                                                   ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
     res = std::make_shared<ov::op::v0::Convert>(res, ov::element::f32);
