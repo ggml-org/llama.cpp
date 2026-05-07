@@ -37,14 +37,7 @@ import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
-	TITLE_MAX_LENGTH,
-	TITLE_TRUNCATE_AT,
-	TITLE_TRUNCATION_SUFFIX,
-	TITLE_MIN_LENGTH,
-	TITLE_FALLBACK,
-	TITLE_DEFAULT_PROMPT,
-	TITLE_PREFIX_PATTERN,
-	TITLE_QUOTE_PATTERN
+	TITLE
 } from '$lib/constants';
 import type {
 	ChatMessageTimings,
@@ -583,27 +576,14 @@ class ChatStore {
 				);
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
 			conversationsStore.addMessageToActive(assistantMessage);
-			let firstUserMessage: DatabaseMessage | undefined;
-			if (config().titleGenerationUseLLM && isNewConversation) {
-				firstUserMessage = conversationsStore.activeMessages.find(
-					(m) => m.role === MessageRole.USER
-				);
-			}
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
-				assistantMessage
+				assistantMessage,
+				undefined,
+				undefined,
+				undefined,
+				config().titleGenerationUseLLM && isNewConversation ? content : undefined
 			);
-
-			if (config().titleGenerationUseLLM && isNewConversation && firstUserMessage) {
-				// The assistant message object was replaced in the store by updateMessageAtIndex
-				// (spread + new object), so we need to find the updated version by ID
-				const updatedAssistant = conversationsStore.activeMessages.find(
-					(m) => m.id === assistantMessage.id
-				);
-				if (updatedAssistant) {
-					await this.generateTitleWithLLM(firstUserMessage, updatedAssistant, currentConv.id);
-				}
-			}
 		} catch (error) {
 			if (isAbortError(error)) {
 				this.setChatLoading(currentConv.id, false);
@@ -631,7 +611,8 @@ class ChatStore {
 		assistantMessage: DatabaseMessage,
 		onComplete?: (content: string) => Promise<void>,
 		onError?: (error: Error) => void,
-		modelOverride?: string | null
+		modelOverride?: string | null,
+		firstUserMessageContent?: string
 	): Promise<void> {
 		let effectiveModel = modelOverride;
 
@@ -924,6 +905,12 @@ class ChatStore {
 					if (onComplete) await onComplete(content);
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 
+					// Generate LLM based title for new conversations (avoids stale reference
+					// issue when user switches conversations while streaming)
+					if (firstUserMessageContent) {
+						await this.generateTitleWithLLM(firstUserMessageContent, streamedContent, convId);
+					}
+
 					// Check if there's a pending message queued during streaming
 					const pending = this.consumePendingMessage(convId);
 					if (pending) {
@@ -953,19 +940,17 @@ class ChatStore {
 	}
 
 	private async generateTitleWithLLM(
-		firstUserMessage: DatabaseMessage,
-		assistantMessage: DatabaseMessage,
+		userContent: string,
+		assistantContent: string,
 		convId: string
 	): Promise<void> {
 		const effectiveModel = isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
-
-		const userContent = firstUserMessage.content;
-		const assistantContent = assistantMessage.content;
 		const configValue = config();
 		const titlePromptTemplate =
-			(typeof configValue.titleGenerationPrompt === 'string' && configValue.titleGenerationPrompt.trim())
+			typeof configValue.titleGenerationPrompt === 'string' &&
+			configValue.titleGenerationPrompt.trim()
 				? configValue.titleGenerationPrompt
-				: TITLE_DEFAULT_PROMPT;
+				: TITLE.DEFAULT_PROMPT;
 
 		const titlePrompt = titlePromptTemplate
 			.replace('{{USER}}', String(userContent || ''))
@@ -984,17 +969,14 @@ class ChatStore {
 
 		let cleanTitle = titleResponse.trim();
 		cleanTitle = cleanTitle
-			.replace(TITLE_PREFIX_PATTERN, '')
-			.replace(TITLE_QUOTE_PATTERN, '')
+			.replace(TITLE.PREFIX_PATTERN, '')
+			.replace(TITLE.QUOTE_PATTERN, '')
 			.trim();
-		if (cleanTitle.length > TITLE_MAX_LENGTH) {
-			cleanTitle = cleanTitle.substring(0, TITLE_TRUNCATE_AT) + TITLE_TRUNCATION_SUFFIX;
+		if (!cleanTitle || cleanTitle.length < TITLE.MIN_LENGTH) {
+			const firstLine = userContent.split('\n').find((l) => l.trim().length > 0);
+			cleanTitle = firstLine ? firstLine.trim() : TITLE.FALLBACK;
 		}
-		if (!cleanTitle || cleanTitle.length < TITLE_MIN_LENGTH) {
-			const firstLine = firstUserMessage.content.split('\n').find((l) => l.trim().length > 0);
-			cleanTitle = firstLine ? firstLine.trim().substring(0, TITLE_MAX_LENGTH) : TITLE_FALLBACK;
-		}
-		if (cleanTitle && cleanTitle.length >= TITLE_MIN_LENGTH) {
+		if (cleanTitle && cleanTitle.length >= TITLE.MIN_LENGTH) {
 			await conversationsStore.updateConversationName(convId, cleanTitle);
 		}
 	}

@@ -1,6 +1,6 @@
 import { ColorMode } from '$lib/enums/ui';
 import { Monitor, Moon, Sun } from '@lucide/svelte';
-import { TITLE_DEFAULT_PROMPT } from './title-generation';
+import { TITLE } from './title-generation';
 
 export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | undefined> = {
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value.
@@ -18,7 +18,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	askForTitleConfirmation: false,
 	titleGenerationUseFirstLine: false,
 	titleGenerationUseLLM: false,
-	titleGenerationPrompt: TITLE_DEFAULT_PROMPT,
+	titleGenerationPrompt: TITLE.DEFAULT_PROMPT,
 	pasteLongTextToFileLen: 2500,
 	copyTextAttachmentsAsPlainText: false,
 	pdfAsImage: false,
