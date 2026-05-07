@@ -71,12 +71,18 @@ bool llama_supports_mlock(void) {
 }
 
 bool llama_supports_gpu_offload(void) {
+    if (!ggml_backend_reg_count()) {
+        ggml_backend_load_all();
+    }
     return ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU) != nullptr ||
            ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU) != nullptr ||
            llama_supports_rpc();
 }
 
 bool llama_supports_rpc(void) {
+    if (!ggml_backend_reg_count()) {
+        ggml_backend_load_all();
+    }
     return ggml_backend_reg_by_name("RPC") != nullptr;
 }
 
