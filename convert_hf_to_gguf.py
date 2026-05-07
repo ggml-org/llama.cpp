@@ -1063,7 +1063,7 @@ class TextModel(ModelBase):
         name, gen = item
 
         # Skip multimodal tensors
-        if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.")) \
+        if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
                 or "visual." in name or "vision." in name or "audio." in name or "talker." in name \
                 or "vision_" in name or "audio_" in name or "sam_model" in name \
                 or "token2wav." in name or "code2wav." in name \
@@ -9493,9 +9493,125 @@ class MiniMaxM2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("MiMoV2FlashForCausalLM")
+@ModelBase.register("MiMoV2FlashForCausalLM", "MiMoV2ForCausalLM")
 class MimoV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MIMO2
+
+    # MiMo V2-Flash, V2.5 and V2.5-Pro all ship 3 trained MTP layers under model.mtp.layers.{0,1,2}.
+    # The HF config does not expose the count, so it's hardcoded to match the count found in the safetensors.
+    _n_nextn = 3
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.block_count = self.hparams["num_hidden_layers"] + self._n_nextn
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    @staticmethod
+    def _tp_aware_qkv_dequant(weight: Tensor, scale_inv: Tensor,
+                              n_q: int, n_kv: int, hd: int, vhd: int,
+                              bs: int = 128) -> Tensor:
+        # MiMo-V2.5 (TP=4) and V2.5-Pro (TP=8) ship qkv_proj sharded across TP
+        # ranks; per rank, rows are stacked as [Q_per | K_per | V_per].
+        # weight_scale_inv has ceil(rows_per_rank/bs) block-rows per rank (last
+        # may extend past rows_per_rank with phantom rows not in the weight).
+        # Naive repeat_interleave aligns rank 0 only and mis-applies scales to
+        # later ranks once rows_per_rank isn't a multiple of bs.
+        # Re-group the per-rank [Q_per|K_per|V_per] rows into a single fused
+        # [Q | K | V] tensor matching the un-sharded original layout.
+        q_size = n_q * hd
+        k_size = n_kv * hd
+        v_size = n_kv * vhd
+        total_rows = q_size + k_size + v_size
+        if weight.shape[0] != total_rows:
+            raise ValueError(f"qkv_proj weight rows {weight.shape[0]} != q+k+v {total_rows}")
+
+        # detect TP from scale_inv block count, descending order so larger matches first
+        tp = None
+        for cand in (8, 4):
+            if total_rows % cand != 0:
+                continue
+            rpr = total_rows // cand
+            bpr = (rpr + bs - 1) // bs
+            if scale_inv.shape[0] == cand * bpr:
+                tp = cand
+                break
+        if tp is None:
+            raise ValueError(
+                f"qkv_proj: cannot detect TP - scale_inv rows {scale_inv.shape[0]}, "
+                f"q+k+v {total_rows}")
+
+        q_per = q_size // tp
+        k_per = k_size // tp
+        v_per = v_size // tp
+        rows_per_rank = q_per + k_per + v_per
+        blocks_per_rank = (rows_per_rank + bs - 1) // bs
+
+        scale_inv = scale_inv.float()
+        # per-row scale-row index: rank * blocks_per_rank + (rr_in_rank // bs)
+        row_idx = torch.arange(total_rows)
+        rr = row_idx % rows_per_rank
+        rank = row_idx // rows_per_rank
+        scale_row_idx = rank * blocks_per_rank + (rr // bs)
+        # gather: (total_rows, n_col_blocks)
+        scale_per_row_block = scale_inv[scale_row_idx]
+        # expand col-blocks -> cols: each block-col covers `bs` weight cols
+        scale_full = scale_per_row_block.repeat_interleave(bs, dim=1)
+        # crop to weight col count (in case last col-block isn't full)
+        scale_full = scale_full[:, : weight.shape[1]]
+        dequant = weight.float() * scale_full
+
+        if tp == 1:
+            return dequant
+
+        # Re-group per-rank [Q_per|K_per|V_per] rows into unified [Q | K | V]
+        qs, ks, vs = [], [], []
+        for r in range(tp):
+            base = r * rows_per_rank
+            qs.append(dequant[base : base + q_per])
+            ks.append(dequant[base + q_per : base + q_per + k_per])
+            vs.append(dequant[base + q_per + k_per : base + rows_per_rank])
+        return torch.cat(qs + ks + vs, dim=0)
+
+    def dequant_model(self):
+        # Capture raw FP8 (weight, scale_inv) lambdas for qkv_proj BEFORE super
+        # rewrites them with the existing dequant. Replace super's lambda after
+        # it runs so scale_inv removal still happens via the standard path.
+        qkv_overrides: dict[str, tuple[Callable, Callable, int]] = {}
+        qc = self.hparams.get("quantization_config")
+        if isinstance(qc, dict) and qc.get("quant_method") == "fp8":
+            pat = re.compile(r"^model\.layers\.(\d+)\.self_attn\.qkv_proj\.weight_scale_inv$")
+            for name in list(self.model_tensors.keys()):
+                m = pat.match(name)
+                if not m:
+                    continue
+                weight_name = name.removesuffix("_scale_inv")
+                if weight_name not in self.model_tensors:
+                    continue
+                qkv_overrides[weight_name] = (
+                    self.model_tensors[weight_name],
+                    self.model_tensors[name],
+                    int(m.group(1)),
+                )
+
+        super().dequant_model()
+
+        if not qkv_overrides:
+            return
+
+        n_q = self.hparams["num_attention_heads"]
+        hd = self.hparams["head_dim"]
+        vhd = self.hparams["v_head_dim"]
+        hybrid = self.hparams["hybrid_layer_pattern"]
+        n_layer_text = self.hparams["num_hidden_layers"]
+        for weight_name, (w_fn, s_fn, bid) in qkv_overrides.items():
+            # MTP layers (bid >= n_layer_text) use SWA-style attention dims
+            is_swa = True if bid >= n_layer_text else hybrid[bid] == 1
+            n_kv = self.hparams["swa_num_key_value_heads" if is_swa else "num_key_value_heads"]
+            self.model_tensors[weight_name] = (
+                lambda w_fn=w_fn, s_fn=s_fn, n_q=n_q, n_kv=n_kv, hd=hd, vhd=vhd:
+                    MimoV2Model._tp_aware_qkv_dequant(w_fn(), s_fn(), n_q, n_kv, hd, vhd)
+            )
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -9507,11 +9623,14 @@ class MimoV2Model(TextModel):
 
         n_head_kv = self.hparams["num_key_value_heads"]
         n_head_kv_swa = self.hparams["swa_num_key_value_heads"]
-        n_head_kv_arr = [n_head_kv_swa if use_swa == 1 else n_head_kv for use_swa in self.hparams["hybrid_layer_pattern"]]
+        # Extend the per-layer pattern with SWA entries for the MTP blocks so the
+        # runtime arrays (sized to extended block_count) are fully populated.
+        hybrid = list(self.hparams["hybrid_layer_pattern"]) + [1] * self._n_nextn
+        n_head_kv_arr = [n_head_kv_swa if use_swa == 1 else n_head_kv for use_swa in hybrid]
         self.gguf_writer.add_head_count_kv(n_head_kv_arr)
 
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
-        self.gguf_writer.add_sliding_window_pattern(self.hparams["hybrid_layer_pattern"])
+        self.gguf_writer.add_sliding_window_pattern(hybrid)
         self.gguf_writer.add_value_length(self.hparams["v_head_dim"])
         self.gguf_writer.add_expert_count(self.hparams["n_routed_experts"])
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
@@ -9520,6 +9639,12 @@ class MimoV2Model(TextModel):
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("layernorm_epsilon", 1e-5))
+
+        v_scale = self.hparams.get("attention_value_scale")
+        if v_scale is not None:
+            self.gguf_writer.add_attn_value_scale(float(v_scale))
+
+        self.gguf_writer.add_nextn_predict_layers(self._n_nextn)
 
     _experts: list[dict[str, Tensor]] | None = None
 
@@ -9530,13 +9655,21 @@ class MimoV2Model(TextModel):
         if "attention_sink" in name and not name.endswith(".weight"):
             name += ".weight"
 
-        # TODO: mimo v2 does not indicate the number of next-token-prediction layers, therefore we cannot do the same way as GLM4_MOE
-        if "model.mtp." in name:
-            return None
-
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch, name, bid):
+        # Remap MTP/NextN tensors to additional layer slots so the standard tensor map handles them.
+        # HF: model.mtp.layers.{i}.foo  ->  model.layers.{n_layer_text + i}.foo
+        m = re.match(r"^model\.mtp\.layers\.(\d+)\.(.*)$", name)
+        if m is not None:
+            mtp_idx = int(m.group(1))
+            assert mtp_idx < self._n_nextn, f"MTP layer index {mtp_idx} >= _n_nextn ({self._n_nextn})"
+            rest = m.group(2)
+            n_layer_text = self.hparams["num_hidden_layers"]
+            new_bid = n_layer_text + mtp_idx
+            name = f"model.layers.{new_bid}.{rest}"
+            bid = new_bid
+
         # process the experts separately
         if name.find("mlp.experts") != -1:
             n_experts = self.hparams["n_routed_experts"]
