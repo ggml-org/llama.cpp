@@ -859,8 +859,8 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_CPY: {
-        if (op->src[1] != op) {
-            // GGML_LOG_WARN("OpenVINO backend only supports CPY that is a cast\n");
+        if (!ggml_is_contiguous(op->src[0]) || !ggml_is_contiguous(op->src[1]) || op->src[0]->type != op->src[1]->type) {
+            // GGML_LOG_WARN("OpenVINO backend does not support CPY with non-contiguous data or mismatched types\n");
             return true;
         }
         break;
