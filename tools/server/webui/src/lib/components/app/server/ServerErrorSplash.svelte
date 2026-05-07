@@ -8,6 +8,7 @@
 	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { SETTINGS_KEYS } from '$lib/constants';
+	import { ROUTES } from '$lib/constants/routes';
 	import { fade, fly, scale } from 'svelte/transition';
 	import { KeyboardKey } from '$lib/enums';
 
@@ -80,7 +81,7 @@
 
 				// Show success state briefly, then navigate to home
 				setTimeout(() => {
-					goto(`#/`);
+					goto(ROUTES.START);
 				}, 1000);
 			} else {
 				// API key is invalid - User Story A

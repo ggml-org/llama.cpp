@@ -141,7 +141,7 @@
 						await handleUrlParams();
 					}
 				} else {
-					await goto('#/');
+					await goto(ROUTES.START);
 				}
 			})();
 		}
