@@ -5434,6 +5434,9 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
                 char pci_bus_id[32] = {};
                 CUDA_CHECK(cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), i));
                 dev_ctx->pci_bus_id = pci_bus_id;
+                for (char & c : dev_ctx->pci_bus_id) {
+                    c = std::tolower(c);
+                }
                 dev_ctx->op_offload_min_batch_size = min_batch_size;
 
                 ggml_backend_dev_t dev = new ggml_backend_device {
