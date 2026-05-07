@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
-	import { BadgeModality, ActionIconCopyToClipboard } from '$lib/components/app';
+	import { BadgesModality, ActionIconCopyToClipboard } from '$lib/components/app';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
 	import { formatFileSize, formatParameters, formatNumber } from '$lib/utils';
@@ -229,7 +229,7 @@
 
 									<Table.Cell>
 										<div class="flex flex-wrap gap-1">
-											<BadgeModality {modalities} />
+											<BadgesModality {modalities} />
 										</div>
 									</Table.Cell>
 								</Table.Row>

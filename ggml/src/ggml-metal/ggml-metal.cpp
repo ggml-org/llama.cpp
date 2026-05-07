@@ -17,6 +17,9 @@
 // note: can be overridden with GGML_METAL_DEVICES env to simulate virtual devices
 static int g_devices = 1;
 
+// forward declaration
+static bool ggml_backend_buffer_is_metal(ggml_backend_buffer_t buffer);
+
 ////////////////////////////////////////////////////////////////////////////////
 // backend interface
 ////////////////////////////////////////////////////////////////////////////////
@@ -68,11 +71,11 @@ static bool ggml_backend_metal_buffer_shared_cpy_tensor(ggml_backend_buffer_t bu
 
     GGML_ASSERT(ggml_metal_buffer_is_shared(ctx));
 
-    GGML_UNUSED(buffer);
-    GGML_UNUSED(src);
-    GGML_UNUSED(dst);
+    if (!ggml_backend_buffer_is_metal(src->buffer)) {
+        return false;
+    }
 
-    return false;
+    return ggml_metal_buffer_cpy_tensor(ctx, src, dst);
 }
 
 static void ggml_backend_metal_buffer_shared_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -144,11 +147,11 @@ static bool ggml_backend_metal_buffer_private_cpy_tensor(ggml_backend_buffer_t b
 
     GGML_ASSERT(!ggml_metal_buffer_is_shared(ctx));
 
-    GGML_UNUSED(buffer);
-    GGML_UNUSED(src);
-    GGML_UNUSED(dst);
+    if (!ggml_backend_buffer_is_metal(src->buffer)) {
+        return false;
+    }
 
-    return false;
+    return ggml_metal_buffer_cpy_tensor(ctx, src, dst);
 }
 
 static void ggml_backend_metal_buffer_private_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -166,8 +169,8 @@ static ggml_backend_buffer_i ggml_backend_metal_buffer_private_i = {
     /* .memset_tensor           = */ ggml_backend_metal_buffer_private_memset_tensor,
     /* .set_tensor              = */ ggml_backend_metal_buffer_private_set_tensor,
     /* .get_tensor              = */ ggml_backend_metal_buffer_private_get_tensor,
-    /* .get_tensor_2d_async     = */ NULL,
-    /* .set_tensor_2d_async     = */ NULL,
+    /* .set_tensor_2d           = */ NULL,
+    /* .get_tensor_2d           = */ NULL,
     /* .cpy_tensor              = */ ggml_backend_metal_buffer_private_cpy_tensor,
     /* .clear                   = */ ggml_backend_metal_buffer_private_clear,
     /* .reset                   = */ NULL,
@@ -567,8 +570,8 @@ static ggml_backend_i ggml_backend_metal_i = {
     /* .free                    = */ ggml_backend_metal_free,
     /* .set_tensor_async        = */ ggml_backend_metal_set_tensor_async,
     /* .get_tensor_async        = */ ggml_backend_metal_get_tensor_async,
-    /* .get_tensor_2d_async     = */ NULL,
     /* .set_tensor_2d_async     = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ ggml_backend_metal_cpy_tensor_async, // only needed for multi-GPU setups
     /* .synchronize             = */ ggml_backend_metal_synchronize,
     /* .graph_plan_create       = */ NULL,
@@ -918,6 +921,10 @@ ggml_backend_reg_t ggml_backend_metal_reg(void) {
         static std::vector<ggml_backend_device_ptr> devs;
 
         if (!initialized) {
+            // workaround macOS limitation (kIOGPUCommandBufferCallbackErrorImpactingInteractivity) until proper fix becomes possible
+            // ref: https://github.com/ggml-org/llama.cpp/issues/20141#issuecomment-4272947703
+            setenv("AGX_RELAX_CDM_CTXSTORE_TIMEOUT", "1", true);
+
             static ggml_backend_metal_reg_ptr reg_ctx(ggml_backend_metal_reg_init());
 
             for (int i = 0; i < g_devices; ++i) {

@@ -77,6 +77,12 @@ static inline int32_t hvx_vec_get_i32(HVX_Vector v) {
     return x;
 }
 
+static inline _Float16 hvx_vec_get_f16(HVX_Vector v) {
+    _Float16 __attribute__((aligned(128))) x;
+    hvx_vec_store_a(&x, 2, v);
+    return x;
+}
+
 static inline HVX_Vector hvx_vec_abs_f16(HVX_Vector v) {
     // abs by clearing the fp16 sign bit
     HVX_Vector mask = Q6_Vh_vsplat_R(0x7fff);
@@ -256,6 +262,18 @@ static inline HVX_Vector hvx_vec_mul_f16_f16(HVX_Vector a, HVX_Vector b)
     return Q6_Vhf_equals_Wqf32(Q6_Wqf32_vmpy_VhfVhf(a, b));
 }
 
+static inline HVX_Vector hvx_vec_add_f32_f32(HVX_Vector a, HVX_Vector b) {
+    return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(a, b));
+}
+
+static inline HVX_Vector hvx_vec_sub_f32_f32(HVX_Vector a, HVX_Vector b) {
+    return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(a, b));
+}
+
+static inline HVX_Vector hvx_vec_mul_f32_f32(HVX_Vector a, HVX_Vector b) {
+    return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(a, b));
+}
+
 #else
 
 static inline HVX_Vector hvx_vec_add_f16_f16(HVX_Vector a, HVX_Vector b)
@@ -271,6 +289,18 @@ static inline HVX_Vector hvx_vec_sub_f16_f16(HVX_Vector a, HVX_Vector b)
 static inline HVX_Vector hvx_vec_mul_f16_f16(HVX_Vector a, HVX_Vector b)
 {
     return Q6_Vhf_vmpy_VhfVhf(a, b);
+}
+
+static inline HVX_Vector hvx_vec_add_f32_f32(HVX_Vector a, HVX_Vector b) {
+    return Q6_Vsf_vadd_VsfVsf(a, b);
+}
+
+static inline HVX_Vector hvx_vec_sub_f32_f32(HVX_Vector a, HVX_Vector b) {
+    return Q6_Vsf_vsub_VsfVsf(a, b);
+}
+
+static inline HVX_Vector hvx_vec_mul_f32_f32(HVX_Vector a, HVX_Vector b) {
+    return Q6_Vsf_vmpy_VsfVsf(a, b);
 }
 
 #endif // __HVX_ARCH__ < 79

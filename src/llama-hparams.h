@@ -116,6 +116,7 @@ struct llama_hparams {
     float    rope_freq_base_train_swa  = 10000.0f;
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa = 1.0f;
+    float    rope_scaling_alpha        = 0.0f;  // NTK-aware alpha for XDRoPE
 
     uint32_t n_ctx_orig_yarn;
     float    rope_yarn_log_mul = 0.0f;
@@ -164,6 +165,8 @@ struct llama_hparams {
     // grok-2
     float    f_attn_out_scale = 0.0f;
     uint32_t attn_temp_length = 0;
+
+    float    f_attn_value_scale = 0.0f;
 
     bool causal_attn   = true;
     bool use_alibi     = false;

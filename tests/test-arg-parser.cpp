@@ -40,8 +40,12 @@ int main(void) {
                     }
                 }
 
+                // exclude spec args from this check
+                // ref: https://github.com/ggml-org/llama.cpp/pull/22397
+                const bool skip = opt.is_spec;
+
                 // ensure shorter argument precedes longer argument
-                if (opt.args.size() > 1) {
+                if (!skip && opt.args.size() > 1) {
                     const std::string first(opt.args.front());
                     const std::string last(opt.args.back());
 
@@ -124,9 +128,9 @@ int main(void) {
     assert(params.n_batch == 9090);
 
     // --draft cannot be used outside llama-speculative
-    argv = {"binary_name", "--draft", "123"};
+    argv = {"binary_name", "--spec-draft-n-max", "123"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
-    assert(params.speculative.n_max == 123);
+    assert(params.speculative.draft.n_max == 123);
 
     // multi-value args (CSV)
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};

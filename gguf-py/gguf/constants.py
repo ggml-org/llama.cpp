@@ -175,6 +175,7 @@ class Keys:
         SLIDING_WINDOW               = "{arch}.attention.sliding_window"
         SCALE                        = "{arch}.attention.scale"
         OUTPUT_SCALE                 = "{arch}.attention.output_scale"
+        VALUE_SCALE                  = "{arch}.attention.value_scale"
         TEMPERATURE_LENGTH           = "{arch}.attention.temperature_length"
         KEY_LENGTH_MLA               = "{arch}.attention.key_length_mla"
         VALUE_LENGTH_MLA             = "{arch}.attention.value_length_mla"
@@ -197,6 +198,7 @@ class Keys:
         FREQ_BASE_SWA             = "{arch}.rope.freq_base_swa"
         SCALING_TYPE              = "{arch}.rope.scaling.type"
         SCALING_FACTOR            = "{arch}.rope.scaling.factor"
+        SCALING_ALPHA             = "{arch}.rope.scaling.alpha"
         SCALING_ATTN_FACTOR       = "{arch}.rope.scaling.attn_factor"
         SCALING_ORIG_CTX_LEN      = "{arch}.rope.scaling.original_context_length"
         SCALING_FINETUNED         = "{arch}.rope.scaling.finetuned"
@@ -338,6 +340,9 @@ class Keys:
         FEED_FORWARD_LENGTH = "clip.audio.feed_forward_length"
         PROJECTION_DIM      = "clip.audio.projection_dim"
         BLOCK_COUNT         = "clip.audio.block_count"
+        CHUNK_SIZE          = "clip.audio.chunk_size"
+        CONV_KERNEL_SIZE    = "clip.audio.conv_kernel_size"
+        MAX_POS_EMB         = "clip.audio.max_pos_emb"
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
@@ -345,6 +350,9 @@ class Keys:
 
         class Projector:
             STACK_FACTOR    = "clip.audio.projector.stack_factor"
+            WINDOW_SIZE     = "clip.audio.projector.window_size"
+            DOWNSAMPLE_RATE = "clip.audio.projector.downsample_rate"
+            HEAD_COUNT      = "clip.audio.projector.head_count"
 
     class Diffusion:
         SHIFT_LOGITS        = "diffusion.shift_logits"
@@ -471,6 +479,7 @@ class MODEL_ARCH(IntEnum):
     ERNIE4_5_MOE     = auto()
     HUNYUAN_MOE      = auto()
     HUNYUAN_DENSE    = auto()
+    HUNYUAN_VL       = auto()
     SMOLLM3          = auto()
     GPT_OSS          = auto()
     LFM2             = auto()
@@ -765,6 +774,14 @@ class MODEL_TENSOR(IntEnum):
     V_DS_NORM            = auto() # qwen3vl
     V_DS_FC1             = auto() # qwen3vl
     V_DS_FC2             = auto() # qwen3vl
+    V_MERGER_LN1         = auto() # minicpmv4_6
+    V_MERGER_ATTN_Q      = auto() # minicpmv4_6
+    V_MERGER_ATTN_K      = auto() # minicpmv4_6
+    V_MERGER_ATTN_V      = auto() # minicpmv4_6
+    V_MERGER_ATTN_O      = auto() # minicpmv4_6
+    V_MERGER_DS_LN       = auto() # minicpmv4_6
+    V_MERGER_DS_UP       = auto() # minicpmv4_6
+    V_MERGER_DS_DOWN     = auto() # minicpmv4_6
     V_MM_POST_FC_NORM    = auto() # cogvlm
     V_MM_UP              = auto() # cogvlm
     V_MM_DOWN            = auto() # cogvlm
@@ -852,6 +869,26 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_CONV_NORM        = auto() # SSM conv
     A_ENC_CONV_PW1         = auto()
     A_ENC_CONV_PW2         = auto()
+    A_CTC_OUT              = auto()
+    A_CTC_OUT_MID          = auto()
+    A_ENC_ATTN_REL_POS_EMB = auto()
+    # qformer projector
+    A_QF_PROJ_QUERY        = auto()
+    A_QF_PROJ_NORM         = auto()
+    A_QF_PROJ_LINEAR       = auto()
+    A_QF_SELF_ATTN_Q       = auto()
+    A_QF_SELF_ATTN_K       = auto()
+    A_QF_SELF_ATTN_V       = auto()
+    A_QF_SELF_ATTN_O       = auto()
+    A_QF_SELF_ATTN_NORM    = auto()
+    A_QF_CROSS_ATTN_Q      = auto()
+    A_QF_CROSS_ATTN_K      = auto()
+    A_QF_CROSS_ATTN_V      = auto()
+    A_QF_CROSS_ATTN_O      = auto()
+    A_QF_CROSS_ATTN_NORM   = auto()
+    A_QF_FFN_UP            = auto()
+    A_QF_FFN_DOWN          = auto()
+    A_QF_FFN_NORM          = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -957,6 +994,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.FALCON_H1:        "falcon-h1",
     MODEL_ARCH.HUNYUAN_MOE:      "hunyuan-moe",
     MODEL_ARCH.HUNYUAN_DENSE:    "hunyuan-dense",
+    MODEL_ARCH.HUNYUAN_VL:       "hunyuan_vl",
     MODEL_ARCH.SMOLLM3:          "smollm3",
     MODEL_ARCH.GPT_OSS:          "gpt-oss",
     MODEL_ARCH.LFM2:             "lfm2",
@@ -1248,6 +1286,14 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_DS_NORM:                 "v.deepstack.{bid}.norm",
     MODEL_TENSOR.V_DS_FC1:                  "v.deepstack.{bid}.fc1",
     MODEL_TENSOR.V_DS_FC2:                  "v.deepstack.{bid}.fc2",
+    MODEL_TENSOR.V_MERGER_LN1:              "v.vit_merger.ln1",
+    MODEL_TENSOR.V_MERGER_ATTN_Q:           "v.vit_merger.attn_q",
+    MODEL_TENSOR.V_MERGER_ATTN_K:           "v.vit_merger.attn_k",
+    MODEL_TENSOR.V_MERGER_ATTN_V:           "v.vit_merger.attn_v",
+    MODEL_TENSOR.V_MERGER_ATTN_O:           "v.vit_merger.attn_out",
+    MODEL_TENSOR.V_MERGER_DS_LN:            "v.vit_merger.ds_ln",
+    MODEL_TENSOR.V_MERGER_DS_UP:            "v.vit_merger.ds_ffn_up",
+    MODEL_TENSOR.V_MERGER_DS_DOWN:          "v.vit_merger.ds_ffn_down",
     MODEL_TENSOR.V_MM_POST_FC_NORM:         "mm.post_fc_norm", # cogvlm
     MODEL_TENSOR.V_MM_UP:                   "mm.up",
     MODEL_TENSOR.V_MM_DOWN:                 "mm.down",
@@ -1330,6 +1376,26 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_ENC_CONV_NORM:           "a.blk.{bid}.conv_norm",
     MODEL_TENSOR.A_ENC_CONV_PW1:            "a.blk.{bid}.conv_pw1",
     MODEL_TENSOR.A_ENC_CONV_PW2:            "a.blk.{bid}.conv_pw2",
+    MODEL_TENSOR.A_CTC_OUT:                 "a.enc_ctc_out",
+    MODEL_TENSOR.A_CTC_OUT_MID:             "a.enc_ctc_out_mid",
+    MODEL_TENSOR.A_ENC_ATTN_REL_POS_EMB:    "a.blk.{bid}.attn_rel_pos_emb",
+    # qformer projector
+    MODEL_TENSOR.A_QF_PROJ_QUERY:           "a.proj_query",
+    MODEL_TENSOR.A_QF_PROJ_NORM:            "a.proj_norm",
+    MODEL_TENSOR.A_QF_PROJ_LINEAR:          "a.proj_linear",
+    MODEL_TENSOR.A_QF_SELF_ATTN_Q:          "a.proj_blk.{bid}.self_attn_q",
+    MODEL_TENSOR.A_QF_SELF_ATTN_K:          "a.proj_blk.{bid}.self_attn_k",
+    MODEL_TENSOR.A_QF_SELF_ATTN_V:          "a.proj_blk.{bid}.self_attn_v",
+    MODEL_TENSOR.A_QF_SELF_ATTN_O:          "a.proj_blk.{bid}.self_attn_out",
+    MODEL_TENSOR.A_QF_SELF_ATTN_NORM:       "a.proj_blk.{bid}.self_attn_norm",
+    MODEL_TENSOR.A_QF_CROSS_ATTN_Q:         "a.proj_blk.{bid}.cross_attn_q",
+    MODEL_TENSOR.A_QF_CROSS_ATTN_K:         "a.proj_blk.{bid}.cross_attn_k",
+    MODEL_TENSOR.A_QF_CROSS_ATTN_V:         "a.proj_blk.{bid}.cross_attn_v",
+    MODEL_TENSOR.A_QF_CROSS_ATTN_O:         "a.proj_blk.{bid}.cross_attn_out",
+    MODEL_TENSOR.A_QF_CROSS_ATTN_NORM:      "a.proj_blk.{bid}.cross_attn_norm",
+    MODEL_TENSOR.A_QF_FFN_UP:               "a.proj_blk.{bid}.ffn_up",
+    MODEL_TENSOR.A_QF_FFN_DOWN:             "a.proj_blk.{bid}.ffn_down",
+    MODEL_TENSOR.A_QF_FFN_NORM:             "a.proj_blk.{bid}.ffn_norm",
     # NextN/MTP
     MODEL_TENSOR.NEXTN_EH_PROJ:             "blk.{bid}.nextn.eh_proj",
     MODEL_TENSOR.NEXTN_EMBED_TOKENS:        "blk.{bid}.nextn.embed_tokens",
@@ -1400,6 +1466,14 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_DS_NORM,
         MODEL_TENSOR.V_DS_FC1,
         MODEL_TENSOR.V_DS_FC2,
+        MODEL_TENSOR.V_MERGER_LN1,
+        MODEL_TENSOR.V_MERGER_ATTN_Q,
+        MODEL_TENSOR.V_MERGER_ATTN_K,
+        MODEL_TENSOR.V_MERGER_ATTN_V,
+        MODEL_TENSOR.V_MERGER_ATTN_O,
+        MODEL_TENSOR.V_MERGER_DS_LN,
+        MODEL_TENSOR.V_MERGER_DS_UP,
+        MODEL_TENSOR.V_MERGER_DS_DOWN,
         MODEL_TENSOR.V_MM_POST_FC_NORM,
         MODEL_TENSOR.V_MM_UP,
         MODEL_TENSOR.V_MM_DOWN,
@@ -1477,6 +1551,26 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_MM_HARD_EMB_NORM,
         MODEL_TENSOR.A_PER_DIM_K_SCALE,
         MODEL_TENSOR.A_PER_DIM_SCALE,
+        MODEL_TENSOR.A_CTC_OUT,
+        MODEL_TENSOR.A_CTC_OUT_MID,
+        MODEL_TENSOR.A_ENC_ATTN_REL_POS_EMB,
+        # qformer projector
+        MODEL_TENSOR.A_QF_PROJ_QUERY,
+        MODEL_TENSOR.A_QF_PROJ_NORM,
+        MODEL_TENSOR.A_QF_PROJ_LINEAR,
+        MODEL_TENSOR.A_QF_SELF_ATTN_Q,
+        MODEL_TENSOR.A_QF_SELF_ATTN_K,
+        MODEL_TENSOR.A_QF_SELF_ATTN_V,
+        MODEL_TENSOR.A_QF_SELF_ATTN_O,
+        MODEL_TENSOR.A_QF_SELF_ATTN_NORM,
+        MODEL_TENSOR.A_QF_CROSS_ATTN_Q,
+        MODEL_TENSOR.A_QF_CROSS_ATTN_K,
+        MODEL_TENSOR.A_QF_CROSS_ATTN_V,
+        MODEL_TENSOR.A_QF_CROSS_ATTN_O,
+        MODEL_TENSOR.A_QF_CROSS_ATTN_NORM,
+        MODEL_TENSOR.A_QF_FFN_UP,
+        MODEL_TENSOR.A_QF_FFN_DOWN,
+        MODEL_TENSOR.A_QF_FFN_NORM,
     ],
     MODEL_ARCH.LLAMA: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -3489,6 +3583,22 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.HUNYUAN_VL: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
     MODEL_ARCH.SMOLLM3: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -3759,6 +3869,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_V,
@@ -3773,6 +3884,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.LAYER_OUT_NORM,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
     ],
     MODEL_ARCH.STEP35: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -4138,6 +4253,9 @@ class VisionProjectorType:
     YOUTUVL = "youtuvl"
     NEMOTRON_V2_VL = "nemotron_v2_vl"
     HUNYUANOCR     = "hunyuanocr"
+    HUNYUANVL      = "hunyuanvl"
+    MINICPMV4_6    = "minicpmv4_6"
+    GRANITE_SPEECH = "granite_speech"  # audio
 
 
 # Items here are (block size, type size)

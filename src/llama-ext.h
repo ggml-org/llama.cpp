@@ -1,8 +1,12 @@
 #pragma once
 
+// this is a staging header for new llama.cpp API
+// breaking changes and C++ are allowed. everything here should be considered WIP
+
 #include "llama.h"
 
 #include <cstdint>
+#include <map>
 
 // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
 LLAMA_API struct ggml_cgraph * llama_graph_reserve(
@@ -14,7 +18,6 @@ LLAMA_API struct ggml_cgraph * llama_graph_reserve(
 // Get the default ggml_type for a given ftype.
 LLAMA_API ggml_type llama_ftype_get_default_type(llama_ftype ftype);
 
-// Quantization state.
 struct quantize_state_impl;
 
 LLAMA_API quantize_state_impl * llama_quant_init(
@@ -54,3 +57,34 @@ LLAMA_API void llama_quant_compute_types(
         ggml_tensor ** tensors,
         ggml_type * result_types,
         size_t n_tensors);
+
+//
+// device memory querying
+//
+
+// "memory" as in physical memory for a buffer type, in bytes
+struct llama_memory_breakdown_data {
+    size_t model   = 0; // memory allocated for the model
+    size_t context = 0; // memory allocated for the context
+    size_t compute = 0; // memory allocated for temporary compute buffers
+
+    size_t total() const {
+        return model + context + compute;
+    }
+};
+
+struct llama_device_memory_data {
+    int64_t total;
+    int64_t free;
+    llama_memory_breakdown_data mb;
+};
+
+// TODO: convert to C-style data structure
+using llama_memory_breakdown = std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data>;
+
+LLAMA_API int32_t llama_model_n_expert (const struct llama_model * model);
+LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
+
+LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i);
+
+LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
