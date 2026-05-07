@@ -162,7 +162,7 @@ int main(int argc, char ** argv) {
     // init the speculator
     const auto & params_spec = params.speculative;
 
-    struct common_speculative * spec = common_speculative_init(params.speculative);
+    struct common_speculative * spec = common_speculative_init(params.speculative, 0);
 
     common_speculative_begin(spec, prompt_tgt);
 

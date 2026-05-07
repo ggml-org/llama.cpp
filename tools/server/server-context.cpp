@@ -912,7 +912,7 @@ private:
             // try speculative decoding
             if (ctx_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
                 try {
-                    slot.spec.reset(common_speculative_init(params_base.speculative));
+                    slot.spec.reset(common_speculative_init(params_base.speculative, slot.id));
                 } catch (const std::exception & e) {
                     SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
                 }
