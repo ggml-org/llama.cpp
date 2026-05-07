@@ -372,7 +372,7 @@ struct server_slot {
             // generate draft tokens in speculative decoding mode
             // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
             //       perform the speculative drafting for all sequences at the same time in a single batch
-            const llama_tokens & tokens = prompt.tokens.get_text_tokens();
+            const llama_tokens & tokens_text = prompt.tokens.get_text_tokens();
 
             const auto & params_spec = task->params.speculative;
 
@@ -396,7 +396,7 @@ struct server_slot {
                 }
 
                 // generate a new draft
-                spec_draft = common_speculative_draft(spec.get(), params_spec, tokens, sampled);
+                spec_draft = common_speculative_draft(spec.get(), params_spec, tokens_text, prompt.tokens.size(), sampled);
                 n_draft_total += spec_draft.size();
 
                 if (spec_draft.size() > (size_t) n_draft_max) {

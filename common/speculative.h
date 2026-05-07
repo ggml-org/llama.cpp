@@ -26,6 +26,7 @@ llama_tokens common_speculative_draft(
                      common_speculative * spec,
         const common_params_speculative & params,
                      const llama_tokens & prompt,
+                              llama_pos   n_past,
                             llama_token   id_last);
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model

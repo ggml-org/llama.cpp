@@ -187,7 +187,7 @@ int main(int argc, char ** argv) {
         //
         if (draft.empty()) {
             // generate a new draft
-            draft = common_speculative_draft(spec, params_spec, prompt_tgt, id_last);
+            draft = common_speculative_draft(spec, params_spec, prompt_tgt, prompt_tgt.size(), id_last);
 
             // save the original draft size
             n_draft = draft.size();
