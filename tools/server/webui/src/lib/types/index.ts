@@ -80,7 +80,11 @@ export type {
 	ParameterValue,
 	ParameterRecord,
 	ParameterInfo,
-	SyncableParameter
+	SyncableParameter,
+	SettingsEntry,
+	SettingsSectionTitle,
+	SettingsSectionEntry,
+	SettingsSection,
 } from './settings';
 
 // Common types

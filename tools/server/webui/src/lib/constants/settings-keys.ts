@@ -52,18 +52,16 @@ export const SETTINGS_KEYS = {
 	DRY_PENALTY_LAST_N: 'dry_penalty_last_n',
 	// MCP
 	MCP_SERVERS: 'mcpServers',
-	MCP_SERVER_USAGE_STATS: 'mcpServerUsageStats',
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
 	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
 	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
 	// Performance
 	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
-	// Experimental
-	PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
+	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	CUSTOM: 'custom'
 } as const;
