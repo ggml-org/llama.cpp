@@ -664,9 +664,12 @@ jobs:
           cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_win_proxy_loader.dll" ./build/bin
           ZE_LOADER_DLL=$(find "${{ env.ONEAPI_ROOT }}" "$LEVEL_ZERO_V1_SDK_PATH" -iname ze_loader.dll -print -quit 2>/dev/null || true)
-          test -n "$ZE_LOADER_DLL"
-          echo "Using Level Zero loader: $ZE_LOADER_DLL"
-          cp "$ZE_LOADER_DLL" ./build/bin
+          if [ -n "$ZE_LOADER_DLL" ]; then
+            echo "Using Level Zero loader: $ZE_LOADER_DLL"
+            cp "$ZE_LOADER_DLL" ./build/bin
+          else
+            echo "Level Zero loader DLL not found in oneAPI or SDK; relying on system driver/runtime"
+          fi
 
           cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl8.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/svml_dispmd.dll" ./build/bin
