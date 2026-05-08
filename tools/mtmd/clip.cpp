@@ -874,6 +874,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_minicpmv>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_MINICPMV4_6:
+            {
+                builder = std::make_unique<clip_graph_minicpmv4_6>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_INTERNVL:
             {
                 builder = std::make_unique<clip_graph_internvl>(ctx, img);
@@ -912,6 +916,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
                 builder = std::make_unique<clip_graph_cogvlm>(ctx, img);
             } break;
         case PROJECTOR_TYPE_HUNYUANOCR:
+        case PROJECTOR_TYPE_HUNYUANVL:
             {
                 builder = std::make_unique<clip_graph_hunyuanocr>(ctx, img);
             } break;
@@ -935,6 +940,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_gemma4a>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_GRANITE_SPEECH:
+            {
+                builder = std::make_unique<clip_graph_granite_speech>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_GLM4V:
             {
                 builder = std::make_unique<clip_graph_glm4v>(ctx, img);
@@ -946,6 +955,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_YOUTUVL:
             {
                 builder = std::make_unique<clip_graph_youtuvl>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_YASA2:
+            {
+                builder = std::make_unique<clip_graph_yasa2>(ctx, img);
             } break;
         default:
             GGML_ABORT("missing cgraph builder");
@@ -1222,6 +1235,20 @@ struct clip_model_loader {
                             hparams.minicpmv_version = 2; // default to 2 if not set
                         }
                     } break;
+                case PROJECTOR_TYPE_MINICPMV4_6:
+                    {
+                        // MiniCPM-V 4.6 unified merger projector
+                        // ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension
+                        hparams.n_merge = 4;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+
+                        // borrow wa_layer_indexes for vit_merger insertion point
+                        std::vector<int> wa_layer_indexes_vec;
+                        get_arr_int(KEY_WIN_ATTN_LAYER_INDEXES, wa_layer_indexes_vec, false);
+                        if (!wa_layer_indexes_vec.empty()) {
+                            hparams.insert_layer_id = wa_layer_indexes_vec[0];
+                        }
+                    } break;
                 case PROJECTOR_TYPE_INTERNVL:
                     {
                         // use default llava-uhd preprocessing params
@@ -1389,6 +1416,16 @@ struct clip_model_loader {
                         hparams.set_limit_image_tokens(1, 62500);
                         hparams.set_warmup_n_tokens(16*16); // avoid OOM on warmup
                     } break;
+                case PROJECTOR_TYPE_YASA2:
+                    {
+                        hparams.ffn_op = FFN_GELU_ERF;
+                        log_ffn_op = "gelu_erf";
+                        hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+
+                        // reka model performs better when using resize_bicubic, which stretches
+                        // the image to fit fixed square size
+                        hparams.image_resize_pad = false;
+                    } break;
                 case PROJECTOR_TYPE_GLM4V:
                     {
                         hparams.rope_theta = 10000.0f;
@@ -1459,6 +1496,16 @@ struct clip_model_loader {
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
                         hparams.set_warmup_n_tokens(28*28);
                     } break;
+                case PROJECTOR_TYPE_HUNYUANVL:
+                    {
+                        hparams.n_merge = 2;
+                        hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
+                        hparams.image_resize_pad = false;
+                        hparams.ffn_op = FFN_GELU;
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        hparams.set_limit_image_tokens(256, 16384);
+                        hparams.set_warmup_n_tokens(32*32);
+                    } break;
                 case PROJECTOR_TYPE_LFM2A:
                     {
                         // audio preprocessing params
@@ -1477,6 +1524,20 @@ struct clip_model_loader {
                         hparams.audio_n_fft            = 512;
                         hparams.audio_window_len       = 320;  // 20ms frame (NOT 25ms/400)
                         hparams.audio_hop_len          = 160;
+                    } break;
+                case PROJECTOR_TYPE_GRANITE_SPEECH:
+                    {
+                        hparams.audio_chunk_len        = 0;
+                        hparams.audio_sample_rate      = 16000;
+                        hparams.audio_n_fft            = 512;
+                        hparams.audio_window_len       = 400;
+                        hparams.audio_hop_len          = 160;
+                        get_u32(KEY_A_CHUNK_SIZE,           hparams.audio_chunk_size);
+                        get_u32(KEY_A_CONV_KERNEL_SIZE,     hparams.audio_conv_kernel_size);
+                        get_u32(KEY_A_MAX_POS_EMB,          hparams.audio_max_pos_emb);
+                        get_u32(KEY_A_PROJ_WINDOW_SIZE,     hparams.audio_proj_window_size);
+                        get_u32(KEY_A_PROJ_DOWNSAMPLE_RATE, hparams.audio_proj_downsample_rate);
+                        get_u32(KEY_A_PROJ_HEAD_COUNT,      hparams.audio_proj_head_count);
                     } break;
                 case PROJECTOR_TYPE_JANUS_PRO:
                     {
@@ -1629,13 +1690,13 @@ struct clip_model_loader {
 
         model.position_embeddings = get_tensor(string_format(TN_POS_EMBD, prefix), false);
 
-        if (model.proj_type == PROJECTOR_TYPE_GEMMA3NV) {
-            hparams.n_layer = 0; // gemma3n does not use normal layer structure
-        }
+        const bool has_standard_layers = (
+            model.proj_type != PROJECTOR_TYPE_GEMMA3NV);
 
         // layers
-        model.layers.resize(hparams.n_layer);
-        for (int il = 0; il < hparams.n_layer; ++il) {
+        const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
+        model.layers.resize(n_layers_to_load);
+        for (int il = 0; il < n_layers_to_load; ++il) {
             auto & layer = model.layers[il];
             layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"), false);
             layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"), false);
@@ -1694,6 +1755,7 @@ struct clip_model_loader {
                     || model.proj_type == PROJECTOR_TYPE_GEMMA3
                     || model.proj_type == PROJECTOR_TYPE_IDEFICS3
                     || model.proj_type == PROJECTOR_TYPE_MINICPMV
+                    || model.proj_type == PROJECTOR_TYPE_MINICPMV4_6
                 ) && layer.ff_up_w && layer.ff_down_w && layer.ff_down_w->ne[0] == hparams.n_embd;
             if (is_ffn_swapped) {
                 // swap up and down weights
@@ -1795,6 +1857,34 @@ struct clip_model_loader {
                     model.mm_model_ln_post_w = get_tensor(string_format(TN_MINICPMV_LN, "post", "weight"));
                     model.mm_model_ln_post_b = get_tensor(string_format(TN_MINICPMV_LN, "post", "bias"));
                 } break;
+            case PROJECTOR_TYPE_MINICPMV4_6:
+                {
+                    // ViT merger: window self-attention
+                    model.vit_merger_ln1_w     = get_tensor(string_format(TN_VIT_MERGER_LN1, "weight"));
+                    model.vit_merger_ln1_b     = get_tensor(string_format(TN_VIT_MERGER_LN1, "bias"));
+                    model.vit_merger_attn_q_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "weight"));
+                    model.vit_merger_attn_q_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "bias"), false);
+                    model.vit_merger_attn_k_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_K, "weight"));
+                    model.vit_merger_attn_k_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_K, "bias"), false);
+                    model.vit_merger_attn_v_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_V, "weight"));
+                    model.vit_merger_attn_v_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_V, "bias"), false);
+                    model.vit_merger_attn_o_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_O, "weight"));
+                    model.vit_merger_attn_o_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_O, "bias"), false);
+                    // ViT merger: MLP downsample
+                    model.vit_merger_ds_ln_w   = get_tensor(string_format(TN_VIT_MERGER_DS_LN, "weight"));
+                    model.vit_merger_ds_ln_b   = get_tensor(string_format(TN_VIT_MERGER_DS_LN, "bias"));
+                    model.vit_merger_ds_up_w   = get_tensor(string_format(TN_VIT_MERGER_DS_UP, "weight"));
+                    model.vit_merger_ds_up_b   = get_tensor(string_format(TN_VIT_MERGER_DS_UP, "bias"), false);
+                    model.vit_merger_ds_down_w = get_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "weight"));
+                    model.vit_merger_ds_down_b = get_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "bias"), false);
+                    // Final Merger (DownsampleMLP)
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B, false);
+                    model.mm_ffn_up_w     = get_tensor(string_format(TN_MM_UP,   "weight"));
+                    model.mm_ffn_up_b     = get_tensor(string_format(TN_MM_UP,   "bias"), false);
+                    model.mm_ffn_down_w   = get_tensor(string_format(TN_MM_DOWN, "weight"));
+                    model.mm_ffn_down_b   = get_tensor(string_format(TN_MM_DOWN, "bias"), false);
+                } break;
             case PROJECTOR_TYPE_GLM_EDGE:
                 {
                     model.mm_model_adapter_conv_w = get_tensor(string_format(TN_GLM_ADAPER_CONV, "weight"));
@@ -1838,6 +1928,55 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));  // merger.mlp.2
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_YASA2:
+                {
+                    // reuse tensors already loaded by the common section
+                    // (TN_PATCH_EMBD and TN_PATCH_BIAS have the same tensor names)
+                    GGML_ASSERT(model.patch_embeddings_0 && "yasa2 requires v.patch_embd.weight");
+                    model.yasa_patch_w = model.patch_embeddings_0;
+                    model.yasa_patch_b = model.patch_bias;
+                    model.yasa_patch_ln_w = get_tensor(TN_YASA_PATCH_LN_W, false);
+                    model.yasa_patch_ln_b = get_tensor(TN_YASA_PATCH_LN_B, false);
+                    model.yasa_backbone_ln_w = get_tensor(TN_YASA_BACKBONE_LN_W, false);
+                    model.yasa_backbone_ln_b = get_tensor(TN_YASA_BACKBONE_LN_B, false);
+                    model.yasa_vision_pos_embed = get_tensor(TN_YASA_POS_EMBD, false);
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"), false);
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
+
+                    model.yasa_stages.clear();
+                    for (int s = 0; ; ++s) {
+                        yasa2_stage stage;
+                        stage.down_ln_w   = get_tensor(string_format(TN_YASA_STAGE_DOWN_LN, s, "weight"), false);
+                        stage.down_ln_b   = get_tensor(string_format(TN_YASA_STAGE_DOWN_LN, s, "bias"), false);
+                        stage.down_conv_w = get_tensor(string_format(TN_YASA_STAGE_DOWN_CONV, s, "weight"), false);
+                        stage.down_conv_b = get_tensor(string_format(TN_YASA_STAGE_DOWN_CONV, s, "bias"), false);
+
+                        for (int bi = 0; ; ++bi) {
+                            yasa2_block blk;
+                            blk.dw_w = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "dw", "weight"), false);
+                            if (!blk.dw_w) {
+                                break;
+                            }
+                            blk.dw_b  = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "dw", "bias"), false);
+                            blk.ln_w  = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "ln", "weight"), false);
+                            blk.ln_b  = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "ln", "bias"), false);
+                            blk.pw1_w = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "pw1", "weight"), false);
+                            blk.pw1_b = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "pw1", "bias"), false);
+                            blk.grn_w = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "grn", "weight"), false);
+                            blk.grn_b = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "grn", "bias"), false);
+                            blk.pw2_w = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "pw2", "weight"), false);
+                            blk.pw2_b = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "pw2", "bias"), false);
+                            stage.blocks.push_back(blk);
+                        }
+
+                        if (!stage.down_conv_w && stage.blocks.empty()) {
+                            break;
+                        }
+                        model.yasa_stages.push_back(std::move(stage));
+                    }
                 } break;
             case PROJECTOR_TYPE_GLM4V:
                 {
@@ -2159,6 +2298,7 @@ struct clip_model_loader {
                     model.mm_eoi            = get_tensor(TN_TOK_EOI);
                 } break;
             case PROJECTOR_TYPE_HUNYUANOCR:
+            case PROJECTOR_TYPE_HUNYUANVL:
                 {
                     // proj.0 -> mm.0 (conv1), proj.2 -> mm.2 (conv2), mlp -> mm.model.fc (linear)
                     model.mm_0_w            = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
@@ -2338,6 +2478,83 @@ struct clip_model_loader {
                         layer.conv_pw1_b   = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "bias"));
                         layer.conv_pw2_w   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
                         layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
+                    }
+                } break;
+            case PROJECTOR_TYPE_GRANITE_SPEECH:
+                {
+                    model.inp_proj_w     = get_tensor(string_format(TN_INP_PROJ,    "weight"));
+                    model.inp_proj_b     = get_tensor(string_format(TN_INP_PROJ,    "bias"));
+                    model.ctc_out_w      = get_tensor(string_format(TN_CTC_OUT,     "weight"));
+                    model.ctc_out_b      = get_tensor(string_format(TN_CTC_OUT,     "bias"));
+                    model.ctc_out_mid_w  = get_tensor(string_format(TN_CTC_OUT_MID, "weight"));
+                    model.ctc_out_mid_b  = get_tensor(string_format(TN_CTC_OUT_MID, "bias"));
+
+                    // per-layer tensors not loaded by the generic loop above
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        auto & layer = model.layers[il];
+
+                        layer.attn_rel_pos_emb = get_tensor(string_format(TN_ATTN_REL_POS_EMB, prefix, il));
+
+                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "weight"));
+                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "bias"));
+
+                        layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "weight"));
+                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "bias"));
+                        layer.ff_up_1_w   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "weight"));
+                        layer.ff_up_1_b   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "bias"));
+                        layer.ff_down_1_w = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "weight"));
+                        layer.ff_down_1_b = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "bias"));
+
+                        layer.norm_conv_w = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"));
+                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"));
+                        layer.conv_norm_w = get_tensor(string_format(TN_CONV_NORM, prefix, il, "weight"));
+                        layer.conv_norm_b = get_tensor(string_format(TN_CONV_NORM, prefix, il, "bias"));
+                        layer.conv_dw_w   = get_tensor(string_format(TN_CONV_DW,   prefix, il, "weight"));
+                        layer.conv_pw1_w  = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "weight"));
+                        layer.conv_pw1_b  = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "bias"));
+                        layer.conv_pw2_w  = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
+                        layer.conv_pw2_b  = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
+                    }
+
+                    model.qf_proj_query    = get_tensor(TN_QF_PROJ_QUERY);
+                    model.qf_proj_norm_w   = get_tensor(string_format(TN_QF_PROJ_NORM, "weight"));
+                    model.qf_proj_norm_b   = get_tensor(string_format(TN_QF_PROJ_NORM, "bias"));
+                    model.qf_proj_linear_w = get_tensor(string_format(TN_QF_PROJ_LINEAR, "weight"));
+                    model.qf_proj_linear_b = get_tensor(string_format(TN_QF_PROJ_LINEAR, "bias"));
+
+                    const int n_proj_layers = 2;
+                    model.qf_proj_layers.resize(n_proj_layers);
+                    for (int il = 0; il < n_proj_layers; ++il) {
+                        auto & pl = model.qf_proj_layers[il];
+
+                        pl.q_w    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, il, "weight"));
+                        pl.q_b    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, il, "bias"));
+                        pl.k_w    = get_tensor(string_format(TN_QF_SELF_ATTN_K, il, "weight"));
+                        pl.k_b    = get_tensor(string_format(TN_QF_SELF_ATTN_K, il, "bias"));
+                        pl.v_w    = get_tensor(string_format(TN_QF_SELF_ATTN_V, il, "weight"));
+                        pl.v_b    = get_tensor(string_format(TN_QF_SELF_ATTN_V, il, "bias"));
+                        pl.o_w    = get_tensor(string_format(TN_QF_SELF_ATTN_O, il, "weight"));
+                        pl.o_b    = get_tensor(string_format(TN_QF_SELF_ATTN_O, il, "bias"));
+                        pl.ln_1_w = get_tensor(string_format(TN_QF_SELF_ATTN_N, il, "weight"));
+                        pl.ln_1_b = get_tensor(string_format(TN_QF_SELF_ATTN_N, il, "bias"));
+
+                        pl.cross_attn_q_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_Q, il, "weight"));
+                        pl.cross_attn_q_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_Q, il, "bias"));
+                        pl.cross_attn_k_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_K, il, "weight"));
+                        pl.cross_attn_k_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_K, il, "bias"));
+                        pl.cross_attn_v_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_V, il, "weight"));
+                        pl.cross_attn_v_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_V, il, "bias"));
+                        pl.cross_attn_o_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_O, il, "weight"));
+                        pl.cross_attn_o_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_O, il, "bias"));
+                        pl.cross_attn_norm_w = get_tensor(string_format(TN_QF_CROSS_ATTN_N, il, "weight"));
+                        pl.cross_attn_norm_b = get_tensor(string_format(TN_QF_CROSS_ATTN_N, il, "bias"));
+
+                        pl.ff_up_w   = get_tensor(string_format(TN_QF_FFN_UP,   il, "weight"));
+                        pl.ff_up_b   = get_tensor(string_format(TN_QF_FFN_UP,   il, "bias"));
+                        pl.ff_down_w = get_tensor(string_format(TN_QF_FFN_DOWN, il, "weight"));
+                        pl.ff_down_b = get_tensor(string_format(TN_QF_FFN_DOWN, il, "bias"));
+                        pl.ln_2_w    = get_tensor(string_format(TN_QF_FFN_NORM, il, "weight"));
+                        pl.ln_2_b    = get_tensor(string_format(TN_QF_FFN_NORM, il, "bias"));
                     }
                 } break;
             default:
@@ -2797,6 +3014,7 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANOCR:
+        case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
             return (img->nx / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
@@ -2816,6 +3034,7 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_PADDLEOCR:
+        case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
             return (img->ny / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
@@ -2842,6 +3061,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_PHI4:
             {
                 // do nothing
+            } break;
+        case PROJECTOR_TYPE_YASA2:
+            {
+                n_patches = 64; // adaptive average pooling to 8x8 tokens
             } break;
         case PROJECTOR_TYPE_LDP:
         case PROJECTOR_TYPE_LDPV2:
@@ -2878,6 +3101,11 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                         GGML_ABORT("Unknown minicpmv version");
                     }
                 }
+            } break;
+        case PROJECTOR_TYPE_MINICPMV4_6:
+            {
+                // ViT merger 4x + final merger 4x = 16x total spatial downsample
+                n_patches = n_patches / 16;
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
@@ -3003,6 +3231,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             n_patches = h * (h + 1) + 1;
         } break;
         case PROJECTOR_TYPE_HUNYUANOCR:
+        case PROJECTOR_TYPE_HUNYUANVL:
             {
                 int merge = ctx->model.hparams.n_merge;
                 int ow = (img->nx / patch_size) / merge;
@@ -3022,6 +3251,12 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                     n = (n - 1) / 2 + 1;
                 }
                 n_patches = n;
+            } break;
+        case PROJECTOR_TYPE_GRANITE_SPEECH:
+            {
+                const int ws = ctx->model.hparams.audio_proj_window_size;
+                const int ds = ctx->model.hparams.audio_proj_downsample_rate;
+                n_patches = ((img->nx + ws - 1) / ws) * (ws / ds);
             } break;
         default:
             GGML_ABORT("unsupported projector type");
@@ -3193,6 +3428,92 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                     omega[i] = 1.0f / std::pow(base_freq, static_cast<float>(i) / (n_embd_proj / 4));
                 }
                 set_input_f32("omega", omega);
+            } break;
+        case PROJECTOR_TYPE_MINICPMV4_6:
+            {
+                // SigLIP position buckets (same as resampler path)
+                std::vector<int32_t> positions(pos_h * pos_w);
+                int bucket_coords_h[1024];
+                int bucket_coords_w[1024];
+                for (int i = 0; i < pos_h; i++){
+                    bucket_coords_h[i] = std::floor(70.0*i/pos_h);
+                }
+                for (int i = 0; i < pos_w; i++){
+                    bucket_coords_w[i] = std::floor(70.0*i/pos_w);
+                }
+                for (int i = 0, id = 0; i < pos_h; i++){
+                    for (int j = 0; j < pos_w; j++){
+                        positions[id++] = bucket_coords_h[i]*70 + bucket_coords_w[j];
+                    }
+                }
+                set_input_i32("positions", positions);
+
+                const int half_h = pos_h / 2;
+                const int half_w = pos_w / 2;
+
+                // window reorder indices for 2x2 windows
+                std::vector<int32_t> window_idx(n_pos);
+                std::vector<int32_t> inv_window_idx(n_pos);
+                {
+                    int k = 0;
+                    for (int wi = 0; wi < half_h; wi++) {
+                        for (int wj = 0; wj < half_w; wj++) {
+                            window_idx[k++] = (2*wi    ) * pos_w + (2*wj    );
+                            window_idx[k++] = (2*wi    ) * pos_w + (2*wj + 1);
+                            window_idx[k++] = (2*wi + 1) * pos_w + (2*wj    );
+                            window_idx[k++] = (2*wi + 1) * pos_w + (2*wj + 1);
+                        }
+                    }
+                    for (int i = 0; i < n_pos; i++) {
+                        inv_window_idx[window_idx[i]] = i;
+                    }
+                }
+                set_input_i32("vit_merger_window_idx",     window_idx);
+                set_input_i32("vit_merger_inv_window_idx", inv_window_idx);
+
+                // block-diagonal attention mask: tokens in the same 4-token
+                // window attend to each other (mask = 0), all other positions
+                // are masked out (-inf). matches the window-major reorder above.
+                std::vector<float> window_mask_data(n_pos * n_pos, std::numeric_limits<float>::lowest());
+                for (int wi = 0; wi < n_pos / 4; wi++) {
+                    for (int i = 0; i < 4; i++) {
+                        for (int j = 0; j < 4; j++) {
+                            window_mask_data[(wi*4 + i) * n_pos + (wi*4 + j)] = 0.0f;
+                        }
+                    }
+                }
+                set_input_f32("vit_merger_window_mask", window_mask_data);
+
+                // ViT merger 2x2 downsample indices
+                auto make_ds_idx = [](int off_r, int off_c, int ds_h, int ds_w, int stride_w) {
+                    std::vector<int32_t> idx(ds_h * ds_w);
+                    for (int i = 0; i < ds_h; i++) {
+                        for (int j = 0; j < ds_w; j++) {
+                            idx[i * ds_w + j] = (2*i + off_r) * stride_w + (2*j + off_c);
+                        }
+                    }
+                    return idx;
+                };
+                auto vit_merger_ds_0 = make_ds_idx(0, 0, half_h, half_w, pos_w);
+                auto vit_merger_ds_1 = make_ds_idx(0, 1, half_h, half_w, pos_w);
+                auto vit_merger_ds_2 = make_ds_idx(1, 0, half_h, half_w, pos_w);
+                auto vit_merger_ds_3 = make_ds_idx(1, 1, half_h, half_w, pos_w);
+                set_input_i32("vit_merger_ds_idx_0", vit_merger_ds_0);
+                set_input_i32("vit_merger_ds_idx_1", vit_merger_ds_1);
+                set_input_i32("vit_merger_ds_idx_2", vit_merger_ds_2);
+                set_input_i32("vit_merger_ds_idx_3", vit_merger_ds_3);
+
+                // final merger 2x2 downsample indices (operates on half_h x half_w grid)
+                const int qh = half_h / 2;
+                const int qw = half_w / 2;
+                auto m_ds_0 = make_ds_idx(0, 0, qh, qw, half_w);
+                auto m_ds_1 = make_ds_idx(0, 1, qh, qw, half_w);
+                auto m_ds_2 = make_ds_idx(1, 0, qh, qw, half_w);
+                auto m_ds_3 = make_ds_idx(1, 1, qh, qw, half_w);
+                set_input_i32("merger_ds_idx_0", m_ds_0);
+                set_input_i32("merger_ds_idx_1", m_ds_1);
+                set_input_i32("merger_ds_idx_2", m_ds_2);
+                set_input_i32("merger_ds_idx_3", m_ds_3);
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
@@ -3463,8 +3784,73 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_COGVLM:
         case PROJECTOR_TYPE_HUNYUANOCR:
+        case PROJECTOR_TYPE_YASA2:
             {
                 // do nothing
+            } break;
+        case PROJECTOR_TYPE_HUNYUANVL:
+            {
+                // Compute the HunyuanVL 2D position embedding on CPU (with the
+                // custom sf=(target+0.1)/n_grid bilinear sampling that the
+                // reference implementation uses) and upload it to the graph
+                // input declared in clip_graph_hunyuanocr::build().
+                GGML_ASSERT(model.position_embeddings != nullptr);
+                ggml_tensor * src_t   = model.position_embeddings;
+                const int64_t n_embd  = src_t->ne[0];
+                const int64_t n_pos   = src_t->ne[1];            // = n_grid * n_grid
+                const int     n_grid  = (int)std::lround(std::sqrt((double)n_pos));
+                GGML_ASSERT((int64_t)n_grid * n_grid == n_pos);
+                const int     out_w   = pos_w;                    // pw
+                const int     out_h   = pos_h;                    // ph
+
+                // Pull weight to host.
+                std::vector<float> src(n_embd * n_pos);
+                ggml_backend_tensor_get(src_t, src.data(), 0, ggml_nbytes(src_t));
+
+                // Output layout matches ggml_new_tensor_2d(F32, n_embd, out_h*out_w):
+                //   ne[0] = n_embd (fastest), ne[1] = out_h*out_w
+                //   dst[(y*out_w + x) * n_embd + c]
+                std::vector<float> dst((size_t)n_embd * out_h * out_w);
+
+                const float sx = (float)(out_w + 0.1f) / (float)n_grid;
+                const float sy = (float)(out_h + 0.1f) / (float)n_grid;
+
+                for (int y = 0; y < out_h; ++y) {
+                    // Match ggml_compute_forward_upscale_f32 pixel-center
+                    // convention (align_corners=False): src_y = (y+0.5)/sy - 0.5.
+                    const float fy = ((float)y + 0.5f) / sy - 0.5f;
+                    int y0 = (int)std::floor(fy);
+                    int y1 = y0 + 1;
+                    y0 = std::clamp(y0, 0, n_grid - 1);
+                    y1 = std::clamp(y1, 0, n_grid - 1);
+                    float wy1 = std::clamp(fy - (float)y0, 0.0f, 1.0f);
+                    const float wy0 = 1.0f - wy1;
+                    for (int x = 0; x < out_w; ++x) {
+                        const float fx = ((float)x + 0.5f) / sx - 0.5f;
+                        int x0 = (int)std::floor(fx);
+                        int x1 = x0 + 1;
+                        x0 = std::clamp(x0, 0, n_grid - 1);
+                        x1 = std::clamp(x1, 0, n_grid - 1);
+                        float wx1 = std::clamp(fx - (float)x0, 0.0f, 1.0f);
+                        const float wx0 = 1.0f - wx1;
+
+                        const float w00 = wy0 * wx0;
+                        const float w01 = wy0 * wx1;
+                        const float w10 = wy1 * wx0;
+                        const float w11 = wy1 * wx1;
+
+                        const float * s00 = &src[((size_t)y0 * n_grid + x0) * n_embd];
+                        const float * s01 = &src[((size_t)y0 * n_grid + x1) * n_embd];
+                        const float * s10 = &src[((size_t)y1 * n_grid + x0) * n_embd];
+                        const float * s11 = &src[((size_t)y1 * n_grid + x1) * n_embd];
+                        float * d         = &dst[((size_t)y * out_w + x) * n_embd];
+                        for (int c = 0; c < n_embd; ++c) {
+                            d[c] = w00 * s00[c] + w01 * s01[c] + w10 * s10[c] + w11 * s11[c];
+                        }
+                    }
+                }
+
+                set_input_f32("hunyuanvl_pos_embd", dst);
             } break;
         case PROJECTOR_TYPE_LLAMA4:
             {
@@ -3553,6 +3939,39 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                     }
                 }
                 set_input_f32("pos_emb", pos_emb);
+            } break;
+        case PROJECTOR_TYPE_GRANITE_SPEECH:
+            {
+                const int context_size = ctx->model.hparams.audio_chunk_size;
+                const int max_pos_emb  = ctx->model.hparams.audio_max_pos_emb;
+
+                std::vector<int32_t> dists(context_size * context_size);
+                for (int i = 0; i < context_size; i++) {
+                    for (int j = 0; j < context_size; j++) {
+                        int d = i - j;
+                        if (d < -context_size) d = -context_size;
+                        if (d >  context_size) d =  context_size;
+                        dists[i * context_size + j] = d + max_pos_emb;
+                    }
+                }
+                set_input_i32("attn_dists", dists);
+
+                const int n_frames   = image_size_width;
+                const int remainder  = n_frames % context_size;
+                if (remainder > 0) {
+                    const int num_blocks = (n_frames + context_size - 1) / context_size;
+                    std::vector<float> mask(context_size * context_size * num_blocks, 0.0f);
+                    const float neg_inf = -INFINITY;
+                    const int last_block_offset = (num_blocks - 1) * context_size * context_size;
+                    for (int q = 0; q < context_size; q++) {
+                        for (int k = 0; k < context_size; k++) {
+                            if (q >= remainder || k >= remainder) {
+                                mask[last_block_offset + q * context_size + k] = neg_inf;
+                            }
+                        }
+                    }
+                    set_input_f32("attn_mask", mask);
+                }
             } break;
         default:
             GGML_ABORT("Unknown projector type");
@@ -3650,6 +4069,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:
             return ctx->model.mm_model_proj->ne[0];
+        case PROJECTOR_TYPE_MINICPMV4_6:
+            return ctx->model.mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_GLM_EDGE:
             return ctx->model.mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:
@@ -3689,8 +4110,10 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_KIMIK25:
+        case PROJECTOR_TYPE_YASA2:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_HUNYUANOCR:
+        case PROJECTOR_TYPE_HUNYUANVL:
             return ctx->model.mm_model_proj->ne[1];
         case PROJECTOR_TYPE_COGVLM:
             return ctx->model.mm_4h_to_h_w->ne[1];
@@ -3700,6 +4123,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GEMMA4A:
             return ctx->model.hparams.projection_dim;
+        case PROJECTOR_TYPE_GRANITE_SPEECH:
+            return ctx->model.qf_proj_linear_w->ne[1];
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
         default:
@@ -3711,6 +4136,9 @@ int clip_is_minicpmv(const struct clip_ctx * ctx) {
     // TODO: remove this function
     if (ctx->proj_type() == PROJECTOR_TYPE_MINICPMV) {
         return ctx->model.hparams.minicpmv_version;
+    }
+    if (ctx->proj_type() == PROJECTOR_TYPE_MINICPMV4_6) {
+        return 46;
     }
     return 0;
 }

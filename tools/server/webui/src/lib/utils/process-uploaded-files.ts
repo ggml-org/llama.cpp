@@ -1,6 +1,7 @@
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { FileTypeCategory } from '$lib/enums';
+import { SETTINGS_KEYS } from '$lib/constants';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { toast } from 'svelte-sonner';
@@ -104,7 +105,7 @@ export async function processFilesToChatUploaded(
 						action: {
 							label: 'Enable PDF as Images',
 							onClick: () => {
-								settingsStore.updateConfig('pdfAsImage', true);
+								settingsStore.updateConfig(SETTINGS_KEYS.PDF_AS_IMAGE, true);
 								toast.success('PDF parsing as images enabled!', {
 									duration: 3000
 								});

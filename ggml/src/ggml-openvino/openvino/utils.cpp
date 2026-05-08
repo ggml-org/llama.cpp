@@ -2,6 +2,7 @@
 
 #include "ggml-impl.h"
 
+#include <cmath>
 #include <cstddef>
 #include <ctime>
 #include <memory>
@@ -13,6 +14,7 @@
 #include <openvino/op/gather.hpp>
 #include <openvino/op/maximum.hpp>
 #include <openvino/op/multiply.hpp>
+#include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/sin.hpp>
 #include <openvino/op/squeeze.hpp>
@@ -87,8 +89,11 @@ ov::Output<ov::Node> rope_yarn_ramp_mix(int n_dims, const float corr_dims[2], fl
     auto ramp_y =
         std::make_shared<ov::op::v1::Divide>(std::make_shared<ov::op::v1::Subtract>(dim_ids, corr_low), denom);
     auto ramp_clamped = std::make_shared<ov::op::v0::Clamp>(ramp_y, 0.0f, 1.0f);
+    // rope_yarn_ramp returns (1 - clamp(y)), so invert before scaling
+    auto one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {1.0f});
+    auto ramp_inverted = std::make_shared<ov::op::v1::Subtract>(one, ramp_clamped);
     auto ext_factor_node = ov::op::v0::Constant::create(ov::element::f32, Shape{}, {ext_factor});
-    auto ramp_mix = std::make_shared<ov::op::v1::Multiply>(ramp_clamped, ext_factor_node);
+    auto ramp_mix = std::make_shared<ov::op::v1::Multiply>(ramp_inverted, ext_factor_node);
     return ramp_mix;
 }
 
@@ -115,6 +120,7 @@ void ggml_rope_yarn_corr_dims(int n_dims,
 std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params,
                                                            std::shared_ptr<ov::Node> inp_pos,
                                                            std::shared_ptr<ov::Node> rope_freqs_weight,
+                                                           bool imrope,
                                                            bool stateful) {
     if (stateful) {
         inp_pos = std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
@@ -122,6 +128,13 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
         auto pos_perm =
             std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{3}, std::vector<int64_t>{2, 1, 0});
         inp_pos = std::make_shared<ov::op::v1::Transpose>(inp_pos, pos_perm);
+    } else if (imrope) {
+        inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
+        auto pos_shape = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{5}, {0, 0, 0, 4, -1});
+        inp_pos = std::make_shared<ov::op::v1::Reshape>(inp_pos, pos_shape, true);
+        auto pos_transpose_shape =
+            std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{5}, std::vector<int64_t>{0, 1, 2, 4, 3});
+        inp_pos = std::make_shared<ov::op::v1::Transpose>(inp_pos, pos_transpose_shape);
     } else {
         inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
         auto pos_perm =
@@ -136,6 +149,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
     float beta_fast;
     float beta_slow;
     const int n_dims = rope_params[1];
+    const size_t n_dims_half = n_dims >> 1;
     const int n_ctx_orig = rope_params[4];
     memcpy(&freq_base, rope_params + 5, sizeof(float));
     memcpy(&freq_scale, rope_params + 6, sizeof(float));
@@ -146,57 +160,74 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
 
-    float corr_dims[2];
-    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
-
-    std::vector<float> factor(n_dims / 2);
-    factor[0] = 1.0f;
-    for (size_t i = 1; i < factor.size(); i++) {
-        factor[i] = theta_scale * factor[i - 1];
-    }
+    std::vector<float> factor(n_dims_half);
 
     Output<Node> freq_factors;
-    if (stateful) {
-        freq_factors =
-            std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, factor.size()}, factor);
-    } else {
-        freq_factors =
-            std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, 1, factor.size()}, factor);
-    }
-    if (rope_freqs_weight) {
-        freq_factors = std::make_shared<ov::op::v1::Divide>(freq_factors, rope_freqs_weight);
-    }
-
-    auto theta_extrap = std::make_shared<ov::op::v1::Multiply>(freq_factors, inp_pos);
-    auto theta_interp = std::make_shared<ov::op::v1::Multiply>(
-        theta_extrap, ov::op::v0::Constant::create(ov::element::f32, {1}, {freq_scale}));
 
     Output<Node> theta;
     float mscale = attn_factor;
-    if (ext_factor == 0.0f) {
-        theta = theta_interp;
-    } else {
-        auto ramp_mix = rope_yarn_ramp_mix(n_dims, corr_dims, ext_factor);
-        Output<Node> one;
-        if (stateful) {
-            one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1}, {1.0f});
-        } else {
-            one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {1.0f});
+    if (imrope) {
+        std::vector<int64_t> gather_indices(n_dims_half);
+        for (size_t j = 0; j < n_dims_half; j++) {
+            gather_indices[j] = j % 3;
+            factor[j] = std::pow(theta_scale, j);
         }
-        auto one_minus_ramp = std::make_shared<ov::op::v1::Subtract>(one, ramp_mix);
+        auto gather_indices_const =
+            std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{n_dims_half}, gather_indices);
+        auto gather_axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {4});
+        inp_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, gather_indices_const, gather_axis);
+        auto factor_const = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{n_dims_half}, factor);
+        theta = std::make_shared<ov::op::v1::Multiply>(inp_pos, factor_const);
+    } else {
+        float corr_dims[2];
+        ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+        factor[0] = 1.0f;
+        for (size_t i = 1; i < factor.size(); i++) {
+            factor[i] = theta_scale * factor[i - 1];
+        }
+        if (stateful) {
+            freq_factors =
+                std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, factor.size()}, factor);
+        } else {
+            freq_factors =
+                std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, 1, factor.size()}, factor);
+        }
+        if (rope_freqs_weight) {
+            freq_factors = std::make_shared<ov::op::v1::Divide>(freq_factors, rope_freqs_weight);
+        }
 
-        theta = std::make_shared<ov::op::v1::Add>(std::make_shared<ov::op::v1::Multiply>(theta_interp, one_minus_ramp),
-                                                  std::make_shared<ov::op::v1::Multiply>(theta_extrap, ramp_mix));
-        mscale *= (1.0f + 0.1f * std::log(1.0f / freq_scale));
+        auto theta_extrap = std::make_shared<ov::op::v1::Multiply>(freq_factors, inp_pos);
+        auto theta_interp = std::make_shared<ov::op::v1::Multiply>(
+            theta_extrap, ov::op::v0::Constant::create(ov::element::f32, {1}, {freq_scale}));
+
+        if (ext_factor == 0.0f) {
+            theta = theta_interp;
+        } else {
+            auto ramp_mix = rope_yarn_ramp_mix(n_dims, corr_dims, ext_factor);
+            Output<Node> one;
+            if (stateful) {
+                one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1}, {1.0f});
+            } else {
+                one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {1.0f});
+            }
+            auto one_minus_ramp = std::make_shared<ov::op::v1::Subtract>(one, ramp_mix);
+
+            theta = std::make_shared<ov::op::v1::Add>(std::make_shared<ov::op::v1::Multiply>(theta_interp, one_minus_ramp),
+                                                      std::make_shared<ov::op::v1::Multiply>(theta_extrap, ramp_mix));
+            mscale *= (1.0f + 0.1f * std::log(1.0f / freq_scale));
+        }
     }
 
     Output<Node> cos_theta = std::make_shared<ov::op::v0::Cos>(theta);
     Output<Node> sin_theta = std::make_shared<ov::op::v0::Sin>(theta);
 
-    auto mscale_node = ov::op::v0::Constant::create(ov::element::f32, Shape{}, {mscale});
+    if (!imrope) {
+        auto mscale_node = ov::op::v0::Constant::create(ov::element::f32, Shape{}, {mscale});
 
-    cos_theta = std::make_shared<ov::op::v1::Multiply>(cos_theta, mscale_node);
-    sin_theta = std::make_shared<ov::op::v1::Multiply>(sin_theta, mscale_node);
+        cos_theta = std::make_shared<ov::op::v1::Multiply>(cos_theta, mscale_node);
+        sin_theta = std::make_shared<ov::op::v1::Multiply>(sin_theta, mscale_node);
+    }
+
     return std::make_pair(sin_theta, cos_theta);
 }
 
