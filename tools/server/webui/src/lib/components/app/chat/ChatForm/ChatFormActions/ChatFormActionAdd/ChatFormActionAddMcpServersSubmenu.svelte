@@ -8,6 +8,7 @@
 	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { goto } from '$app/navigation';
+	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
 		onMcpSettingsClick?: () => void;
@@ -52,7 +53,7 @@
 	function handleMcpSettingsClick() {
 		onMcpSettingsClick?.();
 
-		goto(`${hasMcpServers ? '' : '?add'}#/settings/mcp`);
+		goto(`${hasMcpServers ? '' : '?add'}${ROUTES.MCP_SERVERS}`);
 	}
 </script>
 

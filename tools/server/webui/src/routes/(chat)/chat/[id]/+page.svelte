@@ -3,13 +3,10 @@
 	import { page } from '$app/state';
 	import { afterNavigate } from '$app/navigation';
 	import { DialogModelNotAvailable } from '$lib/components/app';
+	import { ROUTES } from '$lib/constants/routes';
 	import { chatStore, isLoading } from '$lib/stores/chat.svelte';
-	import {
-		conversationsStore,
-		activeConversation,
-		activeMessages
-	} from '$lib/stores/conversations.svelte';
-	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
+	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 
 	let chatId = $derived(page.params.id);
 	let currentChatId: string | undefined = undefined;
@@ -73,47 +70,9 @@
 		urlParamsProcessed = true;
 	}
 
-	async function selectModelFromLastAssistantResponse() {
-		const messages = activeMessages();
-		if (messages.length === 0) return;
-
-		let lastMessageWithModel: DatabaseMessage | undefined;
-
-		for (let i = messages.length - 1; i >= 0; i--) {
-			if (messages[i].model) {
-				lastMessageWithModel = messages[i];
-				break;
-			}
-		}
-
-		if (!lastMessageWithModel) return;
-
-		const currentModelId = selectedModelId();
-		const currentModelName = modelOptions().find((m) => m.id === currentModelId)?.model;
-
-		if (currentModelName === lastMessageWithModel.model) {
-			return;
-		}
-
-		const matchingModel = modelOptions().find(
-			(option) => option.model === lastMessageWithModel.model
-		);
-
-		if (matchingModel && modelsStore.isModelLoaded(matchingModel.model)) {
-			try {
-				await modelsStore.selectModelById(matchingModel.id);
-				console.log(
-					`Automatically selected model: ${lastMessageWithModel.model} from last message`
-				);
-			} catch (error) {
-				console.warn('Failed to automatically select model from last message:', error);
-			}
-		}
-	}
-
 	afterNavigate(() => {
 		setTimeout(() => {
-			selectModelFromLastAssistantResponse();
+			void modelsStore.selectModelFromLastAssistantResponse();
 		}, 100);
 	});
 
@@ -141,7 +100,7 @@
 						await handleUrlParams();
 					}
 				} else {
-					await goto('#/');
+					await goto(ROUTES.START);
 				}
 			})();
 		}

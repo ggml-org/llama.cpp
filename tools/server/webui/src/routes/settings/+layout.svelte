@@ -4,6 +4,7 @@
 	import { browser } from '$app/environment';
 	import { page } from '$app/state';
 	import { ActionIcon } from '$lib/components/app';
+	import { SETTINGS_FALLBACK_EXIT_ROUTE } from '$lib/constants';
 
 	let { children } = $props();
 
@@ -21,7 +22,7 @@
 		if (browser && window.history.length > 1 && !prevIsSettings) {
 			history.back();
 		} else {
-			goto('#/');
+			goto(SETTINGS_FALLBACK_EXIT_ROUTE);
 		}
 	}
 </script>

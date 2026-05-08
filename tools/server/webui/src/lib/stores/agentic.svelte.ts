@@ -413,8 +413,6 @@ class AgenticStore {
 
 		const tools = toolsStore.getEnabledToolsForLLM();
 		if (tools.length === 0) {
-			console.log('[AgenticStore] No tools available, falling back to standard chat');
-
 			return { handled: false };
 		}
 

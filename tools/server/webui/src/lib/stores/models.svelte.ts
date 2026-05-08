@@ -10,6 +10,7 @@ import {
 	MODEL_PROPS_CACHE_MAX_ENTRIES,
 	FAVORITE_MODELS_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 
 /**
  * modelsStore - Reactive store for model management in both MODEL and ROUTER modes
@@ -422,6 +423,103 @@ class ModelsStore {
 		} catch (error) {
 			console.warn('Failed to fetch modalities for loaded models:', error);
 		}
+	}
+
+	/**
+	 * Gets the model name from the last assistant message in the active conversation.
+	 * Iterates backward through messages to find the most recent message with a model.
+	 * Used by both the chat page and settings page to maintain model consistency.
+	 * @returns The model name or null if not found
+	 */
+	getModelFromLastAssistantResponse(): string | null {
+		const messages = conversationsStore.activeMessages;
+		if (!messages || messages.length === 0) return null;
+
+		// Iterate backward to find the last message with a model
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].model) {
+				return messages[i].model;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Auto-selects the model from the last assistant response if available and loaded.
+	 * Returns true if a model was selected, false otherwise.
+	 * This is used by the chat page to maintain model consistency across page navigation.
+	 */
+	async selectModelFromLastAssistantResponse(): Promise<boolean> {
+		const lastModel = this.getModelFromLastAssistantResponse();
+		if (!lastModel) return false;
+
+		// Skip if already selected
+		if (this.selectedModelName === lastModel) return false;
+
+		const matchingModel = this.models.find((option) => option.model === lastModel);
+		if (!matchingModel) return false;
+
+		if (!this.isModelLoaded(lastModel)) {
+			console.log('[modelsStore] last assistant model not loaded:', lastModel);
+			return false;
+		}
+
+		try {
+			await this.selectModelById(matchingModel.id);
+			console.log(`[modelsStore] Automatically selected model: ${lastModel} from last message`);
+			return true;
+		} catch (error) {
+			console.warn('[modelsStore] Failed to automatically select model from last message:', error);
+			return false;
+		}
+	}
+
+	/**
+	 * Auto-selects the first available model if none is selected, and fetches its props.
+	 * Prioritizes:
+	 * 1. Model from active conversation's last assistant response (if loaded)
+	 * 2. Model from active conversation's last assistant response (if not loaded)
+	 * 3. First loaded model (not from active conversation)
+	 * 4. First available model
+	 * This is used to ensure default values are populated in settings pages.
+	 */
+	async ensureFirstModelSelected(): Promise<void> {
+		if (this.selectedModelName) return;
+
+		// Filter models that are visible in webui
+		const availableModels = this.models.filter((option) => {
+			const modelProps = this.getModelProps(option.model);
+			return modelProps?.webui !== false;
+		});
+
+		if (availableModels.length === 0) return;
+
+		// Try to select model from last assistant response first
+		const lastModel = this.getModelFromLastAssistantResponse();
+		if (lastModel) {
+			const lastModelOption = availableModels.find((m) => m.model === lastModel);
+			if (lastModelOption) {
+				await this.selectModelById(lastModelOption.id);
+				if (this.isModelLoaded(lastModel)) {
+					await this.fetchModelProps(lastModel);
+				}
+				return;
+			}
+		}
+
+		// Try to find a loaded model first
+		const loadedModel = availableModels.find((m) => this.isModelLoaded(m.model));
+		if (loadedModel) {
+			await this.selectModelById(loadedModel.id);
+			await this.fetchModelProps(loadedModel.model);
+			return;
+		}
+
+		// Fall back to the first available model
+		const firstModel = availableModels[0];
+		await this.selectModelById(firstModel.id);
+		// Don't fetch props for unloaded models (will fail in ROUTER mode)
 	}
 
 	/**
