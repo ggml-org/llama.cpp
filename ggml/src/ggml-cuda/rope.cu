@@ -134,7 +134,7 @@ static __global__ void rope_neox(const T *            x,
                                  const float *        freq_factors,
                                  const int64_t *      row_indices,
                                  const int            set_rows_stride) {
-    GGML_CUDA_PDL_LC(); // ROPE_NEOX try 1; on maxq
+    GGML_CUDA_PDL_LC();
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne00) {

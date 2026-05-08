@@ -97,7 +97,7 @@ static __global__ void rms_norm_f32(const float * x,
                                     const uint3   add_nrows_packed     = make_uint3(0, 0, 0),
                                     const uint3   add_nchannels_packed = make_uint3(0, 0, 0),
                                     const uint3   add_nsamples_packed  = make_uint3(0, 0, 0)) {
-    GGML_CUDA_PDL_LC(); // RMS_NORM try 1; on maxq
+    GGML_CUDA_PDL_LC();
     const int nrows     = gridDim.x;
     const int nchannels = gridDim.y;
 
@@ -267,7 +267,7 @@ static __global__ void l2_norm_f32(
     // sum up partial sums
     extern __shared__ float s_sum[];
     tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);
-    GGML_CUDA_PDL_LC(); // L2_NORM try 4; on maxq
+    GGML_CUDA_PDL_LC();
 
     // from https://pytorch.org/docs/stable/generated/torch.nn.functional.normalize.html
     const float scale = rsqrtf(fmaxf(tmp, eps * eps));

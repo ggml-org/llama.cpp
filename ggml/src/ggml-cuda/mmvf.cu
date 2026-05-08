@@ -299,7 +299,7 @@ static __global__ void mul_mat_vec_f(
         static_assert(std::is_same_v<T, void>, "unsupported type");
     }
 
-    GGML_CUDA_PDL_LC(); // MMVF try 2; on maxq
+    GGML_CUDA_PDL_LC();
 #pragma unroll
     for (int j = 0; j < ncols_dst; ++j) {
         sumf[j] = warp_reduce_sum<warp_size>(sumf[j]);

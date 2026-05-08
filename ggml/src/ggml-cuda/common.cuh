@@ -113,7 +113,7 @@
 #   define GGML_CUDA_PDL_SYNC() cudaGridDependencySynchronize()
 #   define GGML_CUDA_PDL_LC()   cudaTriggerProgrammaticLaunchCompletion()
 #else
-#   define GGML_CUDA_PDL_SYNC()  // no-op when PDL disabled on HIP/MUSA/pre-Hopper
+#   define GGML_CUDA_PDL_SYNC()  // no-ops when PDL disabled on HIP/MUSA/pre-Hopper
 #   define GGML_CUDA_PDL_LC()
 #endif
 

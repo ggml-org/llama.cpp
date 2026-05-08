@@ -869,7 +869,7 @@ static __global__ void flash_attn_combine_results(
         const float2 * __restrict__ VKQ_meta,
         float * __restrict__ dst,
         const int parallel_blocks) {
-    GGML_CUDA_PDL_LC(); // FATTN_COMBINE_RESULTS try 1; on maxq
+    GGML_CUDA_PDL_LC();
     // Dimension 0: threadIdx.x
     // Dimension 1: blockIdx.x
     // Dimension 2: blockIdx.y
