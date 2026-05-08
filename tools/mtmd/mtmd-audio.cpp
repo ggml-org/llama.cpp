@@ -963,9 +963,7 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
 
     // Parakeet uses centered constant padding
     const size_t pad = (size_t)(frame_size / 2);
-    std::vector<float> samples_padded(n_samples_in + 2 * pad);
-    std::fill(samples_padded.begin(), samples_padded.begin() + pad, 0.0f);
-    std::fill(samples_padded.begin() + pad + n_samples_in, samples_padded.end(), 0.0f);
+    std::vector<float> samples_padded(n_samples_in + 2 * pad, 0.0f);
     std::copy(samples_preprocessed.begin(), samples_preprocessed.end(), samples_padded.begin() + pad);
 
     mtmd_audio_mel out_full;
