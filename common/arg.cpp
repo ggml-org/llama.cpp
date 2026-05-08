@@ -3061,6 +3061,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_AUTOLOAD"));
     add_opt(common_arg(
+        {"--models-idle-timeout"}, "N",
+        string_format("for router server, idle timeout in seconds before a model is unloaded (default: %d, 0 = disabled)", params.models_idle_timeout),
+        [](common_params & params, int value) {
+            params.models_idle_timeout = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_IDLE_TIMEOUT"));
+    add_opt(common_arg(
         {"--jinja"},
         {"--no-jinja"},
         string_format("whether to use jinja template engine for chat (default: %s)", params.use_jinja ? "enabled" : "disabled"),

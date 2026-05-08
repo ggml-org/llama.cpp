@@ -309,7 +309,9 @@ common_preset_context::common_preset_context(llama_example ex, bool only_remote_
 
 common_presets common_preset_context::load_from_ini(const std::string & path, common_preset & global) const {
     common_presets out;
+    LOG_DBG("load_from_ini: path='%s', key_to_opt has %zu entries\n", path.c_str(), key_to_opt.size());
     auto ini_data = parse_ini_from_file(path);
+    LOG_DBG("load_from_ini: parse_ini_from_file returned %zu sections\n", ini_data.size());
 
     for (auto section : ini_data) {
         common_preset preset;
@@ -318,15 +320,16 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
         } else {
             preset.name = section.first;
         }
-        LOG_DBG("loading preset: %s\n", preset.name.c_str());
+        LOG_DBG("load_from_ini: processing section '%s' -> preset='%s', %zu keys\n", section.first.c_str(), preset.name.c_str(), section.second.size());
         for (const auto & [key, value] : section.second) {
             if (key == "version") {
                 // skip version key (reserved for future use)
+                LOG_DBG("  key='%s' = (version, skip)\n", key.c_str());
                 continue;
             }
 
-            LOG_DBG("option: %s = %s\n", key.c_str(), value.c_str());
             if (filter_allowed_keys && allowed_keys.find(key) == allowed_keys.end()) {
+                LOG_DBG("  key='%s' = (not in allowed_keys)\n", key.c_str());
                 throw std::runtime_error(string_format(
                     "option '%s' is not allowed in remote presets",
                     key.c_str()
@@ -339,8 +342,9 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
                 } else {
                     preset.options[opt] = value;
                 }
-                LOG_DBG("accepted option: %s = %s\n", key.c_str(), preset.options[opt].c_str());
+                LOG_DBG("  key='%s' val='%s' -> ACCEPTED\n", key.c_str(), value.c_str());
             } else {
+                LOG_DBG("  key='%s' val='%s' -> NOT RECOGNIZED\n", key.c_str(), value.c_str());
                 throw std::runtime_error(string_format(
                     "option '%s' not recognized in preset '%s'",
                     key.c_str(), preset.name.c_str()
@@ -351,8 +355,10 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
         if (preset.name == "*") {
             // handle global preset
             global = preset;
+            LOG_DBG("load_from_ini: global preset loaded\n");
         } else {
             out[preset.name] = preset;
+            LOG_DBG("load_from_ini: added preset '%s' with %zu options\n", preset.name.c_str(), preset.options.size());
         }
     }
 

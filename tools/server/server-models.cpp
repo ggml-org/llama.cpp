@@ -182,7 +182,58 @@ server_models::server_models(
         LOG_WRN("failed to get server executable path: %s\n", e.what());
         LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
+    idle_timeout = params.models_idle_timeout;
+
     load_models();
+    idle_thread_start();
+}
+
+server_models::~server_models() {
+    idle_thread_stop();
+}
+
+void server_models::idle_loop() {
+    while (!this->idle_stopped.load()) {
+        {
+            std::unique_lock<std::mutex> lk(this->mutex);
+
+            for (auto & [name, inst] : this->mapping) {
+                auto & meta = inst.meta;
+                if (!meta.is_running()) {
+                    continue;
+                }
+                int64_t idle_start = meta.idle_start;
+                if (idle_start <= 0) {
+                    continue;
+                }
+                int64_t now = ggml_time_ms();
+                int64_t elapsed_ms = now - idle_start;
+                int64_t elapsed_s = elapsed_ms / 1000;
+                if (elapsed_s >= this->idle_timeout) {
+                    lk.unlock();
+                    SRV_INF("model %s idle for %d seconds, unloading\n", name.c_str(), this->idle_timeout);
+                    this->unload(name);
+                    continue;
+                }
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+
+void server_models::idle_thread_start() {
+    if (this->idle_timeout > 0 && !this->idle_thread.joinable()) {
+        this->idle_stopped = false;
+        this->idle_thread = std::thread(&server_models::idle_loop, this);
+    }
+}
+
+ void server_models::idle_thread_stop() {
+    if (this->idle_thread.joinable()) {
+        this->idle_stopped = true;
+        this->idle_thread.join();
+    }
 }
 
 void server_models::add_model(server_model_meta && meta) {
@@ -310,6 +361,7 @@ void server_models::load_models() {
 
     // convert presets to server_model_meta and add to mapping
     for (const auto & preset : final_presets) {
+        SRV_INF("Adding model '%s'\n", preset.first.c_str());
         server_model_meta meta{
             /* preset       */ preset.second,
             /* name         */ preset.first,
@@ -318,18 +370,31 @@ void server_models::load_models() {
             /* port         */ 0,
             /* status       */ SERVER_MODEL_STATUS_UNLOADED,
             /* last_used    */ 0,
-            /* args         */ std::vector<std::string>(),
+            /* idle_start   */ 0,
+            /* args         */ {},
             /* exit_code    */ 0,
             /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
         };
         add_model(std::move(meta));
-    }
+   }
 
     // log available models
     {
         std::unordered_set<std::string> custom_names;
         for (const auto & [name, preset] : custom_presets) {
             custom_names.insert(name);
+        }
+        LOG_DBG("load_models: custom_names has %zu entries: ", custom_names.size());
+        for (const auto & n : custom_names) {
+            LOG_DBG("'%s' ", n.c_str());
+        }
+        LOG_DBG("\n");
+        LOG_DBG("load_models: final_presets has %zu total presets, mapping has %zu models\n", final_presets.size(), mapping.size());
+        for (const auto & [name, preset] : final_presets) {
+            LOG_DBG("load_models: final_presets has '%s' with %zu options\n", name.c_str(), preset.options.size());
+        }
+        for (const auto & [name, preset] : final_presets) {
+            LOG_DBG("load_models: add_model(%s) preset has %zu options\n", name.c_str(), preset.options.size());
         }
         auto join_set = [](const std::set<std::string> & s) {
             std::string result;
@@ -579,12 +644,17 @@ server_http_res_ptr server_models::proxy_request_priority(const server_http_req 
         if (update_last_used) {
             std::unique_lock<std::mutex> lk(mutex);
             mapping[target_name].meta.last_used = ggml_time_ms();
+            mapping[target_name].meta.idle_start = 0;
         }
         SRV_INF("proxying request to model %s on port %d (priority %d)\n", target_name.c_str(), target_meta->port, target_priority);
         std::string proxy_path = req.path;
         if (!req.query_string.empty()) {
             proxy_path += '?' + req.query_string;
         }
+        auto idle_callback = [this, target_name](const std::string & data) {
+            std::lock_guard<std::mutex> lk(mutex);
+            mapping[target_name].meta.idle_start = ggml_time_ms();
+        };
         auto proxy = std::make_unique<server_http_proxy>(
                 method,
                 "http",
@@ -596,7 +666,8 @@ server_http_res_ptr server_models::proxy_request_priority(const server_http_req 
                 req.files,
                 req.should_stop,
                 base_params.timeout_read,
-                base_params.timeout_write
+                base_params.timeout_write,
+                idle_callback
         );
         return proxy;
     }
@@ -889,6 +960,11 @@ void server_models::update_status(const std::string & name, server_model_status 
         auto & meta = it->second.meta;
         meta.status    = status;
         meta.exit_code = exit_code;
+        if (status == SERVER_MODEL_STATUS_LOADED) {
+            meta.idle_start = ggml_time_ms();
+        } else if (status == SERVER_MODEL_STATUS_UNLOADED || status == SERVER_MODEL_STATUS_LOADING) {
+            meta.idle_start = 0;
+        }
     }
     cv.notify_all();
 }
@@ -987,12 +1063,15 @@ static void res_err(std::unique_ptr<server_http_res> & res, const json & error_d
 }
 
 static bool router_validate_model(std::string & name, server_models & models, bool models_autoload, std::unique_ptr<server_http_res> & res) {
+    SRV_INF("router_validate_model: name='%s' autoload=%s\n", name.c_str(), models_autoload ? "true" : "false");
+    // try to find it
     if (name.empty()) {
         res_err(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
     auto meta = models.get_meta(name);
     if (!meta.has_value()) {
+        SRV_INF("  -> model '%s' not found in mapping or aliases\n", name.c_str());
         res_err(res, format_error_response(string_format("model '%s' not found", name.c_str()), ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
@@ -1047,6 +1126,7 @@ void server_models_routes::init_routes() {
     this->proxy_get = [this](const server_http_req & req) {
         std::string method = "GET";
         std::string name = req.get_param("model");
+        SRV_INF("proxy_get: model=%s\n", name.c_str());
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
@@ -1059,11 +1139,14 @@ void server_models_routes::init_routes() {
         std::string method = "POST";
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
+        SRV_INF("proxy_post: model=%s autoload=%s body_len=%zu\n", name.c_str(),
+              is_autoload(params, req) ? "true" : "false", req.body.size());
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
             return error_res;
         }
+        SRV_INF("  -> proxying to model %s\n", name.c_str());
         return models.proxy_request(req, method, name, true); // update last usage for POST request only
     };
 
@@ -1305,7 +1388,8 @@ server_http_proxy::server_http_proxy(
         const std::map<std::string, uploaded_file> & files,
         const std::function<bool()> should_stop,
         int32_t timeout_read,
-        int32_t timeout_write
+        int32_t timeout_write,
+        std::function<void(const std::string &)> on_chunk
         ) {
     // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::ClientImpl>(host, port);
@@ -1358,10 +1442,14 @@ server_http_proxy::server_http_proxy(
         }
         return pipe->write(std::move(msg)); // send headers first
     };
-    httplib::ContentReceiverWithProgress content_receiver = [pipe](const char * data, size_t data_length, size_t, size_t) {
+    httplib::ContentReceiverWithProgress content_receiver = [pipe, on_chunk](const char * data, size_t data_length, size_t, size_t) {
         // send data chunks
         // returns false if pipe is closed / broken (signal to stop receiving)
-        return pipe->write({{}, 0, std::string(data, data_length), ""});
+        std::string chunk(data, data_length);
+        if (on_chunk) {
+            on_chunk(chunk);
+        }
+        return pipe->write({{}, 0, std::move(chunk), ""});
     };
 
     // when files are present, the body was converted from multipart form data to JSON
