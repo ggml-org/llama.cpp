@@ -70,20 +70,20 @@ static void test_reasoning_budget(
         llama_sampler_apply(sampler, &cur_p);
 
         // Check if forcing is active (all logits except one should be -INFINITY)
-        size_t not_neg_inf = 0;
-        llama_token not_neg_inf_token = -1;
+        size_t finite_count = 0;
+        llama_token finite_token = -1;
         for (size_t j = 0; j < cur.size(); j++) {
-            if (std::isfinite(cur[j].logit) || cur[j].logit > 0) { // +INFINITY
-                not_neg_inf++;
-                not_neg_inf_token = cur[j].id;
+            if (std::isfinite(cur[j].logit)) {
+                finite_count++;
+                finite_token = cur[j].id;
             }
         }
 
         llama_sampler_accept(sampler, sequence[i]);
 
-        fprintf(stderr, "    i=%zu: token=%d, not_neg_inf_count=%zu, not_neg_inf_token=%d\n", i, (int)sequence[i], not_neg_inf, (int)not_neg_inf_token);
+        fprintf(stderr, "    i=%zu: token=%d, finite_count=%zu, finite_token=%d\n", i, (int)sequence[i], finite_count, (int)finite_token);
 
-        if (not_neg_inf == 1) {
+        if (finite_count == 1) {
             if (actual_force_start == SIZE_MAX) {
                 actual_force_start = i;
             }

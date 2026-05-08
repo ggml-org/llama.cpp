@@ -158,8 +158,6 @@ static void common_reasoning_budget_apply(struct llama_sampler * smpl, llama_tok
     for (size_t i = 0; i < cur_p->size; i++) {
         if (cur_p->data[i].id != forced) {
             cur_p->data[i].logit = -INFINITY;
-        } else {
-            cur_p->data[i].logit = +INFINITY; // force the token
         }
     }
 }
