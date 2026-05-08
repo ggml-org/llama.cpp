@@ -3460,14 +3460,11 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "_BLK_LPST%=:                             \n\t"
                 "flh            fa1, 64(t2)               \n\t"  // a_scale_avg_row[0]
                 "vsetvli        t0, x0, e32, m1           \n\t"
-                "vxor.vv        v26, v30, v30             \n\t"
-                "vxor.vv        v27, v31, v31             \n\t"
-                "_KsubBLK_LPST%=:                         \n\t"
-                "vsetvli        t0, x0, e32, m1           \n\t"
                 "vxor.vv        v18, v30, v30             \n\t"
                 "vxor.vv        v19, v31, v31             \n\t"
                 "vxor.vv        v20, v30, v30             \n\t"
                 "vxor.vv        v21, v31, v31             \n\t"
+                "_KsubBLK_LPST%=:                         \n\t"
                 // load first subblock scales for 4 rows
                 "flh            fa0,   0(t6)              \n\t"  // ascale_fp16
 
@@ -3478,13 +3475,13 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 // load Bzp[32] for the current ksi from the dedicated zp area
                 "vsetvli        t0, x0, e8, mf4           \n\t"
                 "vle8.v         v8, (s6)                  \n\t"
+
+                "fmul.h         fa2, fa0, %[HP16]         \n\t"
                 "vfwcvt.f.xu.v  v10, v8                   \n\t"  // uint8 -> fp16
 
                 "vsetvli        t0, x0, e16, mf2          \n\t"
                 "vfmul.vf       v16, v12, fa0             \n\t"  // row0: Bscale * Ascale
-
-                "vsetvli        t0, x0, e16, m1           \n\t"
-                "vpack.vv       v14, v16, v16, 3          \n\t"
+                "vfmul.vf       v17, v12, fa2             \n\t"
 
                 // load a_sum[row][ksi] from the trailer; t2 points to row0[ksi]
                 "flh            ft1, 0(t2)                \n\t"
@@ -3504,12 +3501,11 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "addi           t3, s5, 64                \n\t"
                 "vl4r.v         v4, (t3)                  \n\t"  //B
 
+                "vsetvli        t0, x0, e8, m1            \n\t"
                 "vsrl.vi        v1, v0, 4                 \n\t"
                 "vnpack4.vv     v12, v0, v1, 3            \n\t"
+                "vpack.vv       v0, v17, v16, 3           \n\t"
                 "vupack.vv      v2, v12, v12, 2           \n\t"
-                "vsetvli        t0, x0, e16, m1           \n\t"
-                "vfmv.v.f       v0, %[HP16]               \n\t"
-                "vfmv.v.f       v1, %[HP1]                \n\t"
 
                 "vsetvli        t0, x0, e16, mf2          \n\t"  // mf2 -> mf2
                 "vfmul.vv       v10, v10, v16             \n\t"  // zp * ascale * bscale; fp16*fp16
@@ -3528,29 +3524,25 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
 
                 "vsetvli        t0, x0, e32, m1           \n\t"
                 "vmadotsu.hp    v18, v3, v4, v0, 0, i4    \n\t"  //lo4;n0n7
-                "vmadotsu.hp    v19, v3, v5, v0, 0, i4    \n\t"  //lo4;n8n15
-                "vmadotsu.hp    v20, v3, v6, v0, 0, i4    \n\t"  //lo4;n16n23
-                "vmadotsu.hp    v21, v3, v7, v0, 0, i4    \n\t"  //lo4;n24n31
-                "vmadotu.hp     v18, v2, v4, v1, 0, i4    \n\t"  //hi4;n0n7
-                "vmadotu.hp     v19, v2, v5, v1, 0, i4    \n\t"  //hi4;n8n15
-                "vmadotu.hp     v20, v2, v6, v1, 0, i4    \n\t"  //hi4;n16n23
-                "vmadotu.hp     v21, v2, v7, v1, 0, i4    \n\t"  //hi4;n24n31
-
-                "vsetvli        t0, x0, e16, m1           \n\t"
-                "vpack.vv       v8, v18, v19, 1           \n\t"  // 128(16*8)->256(16*16)
-                "vpack.vv       v12, v20, v21, 1          \n\t"
-                "vpack.vv       v20, v8, v12, 2           \n\t"  // 256(16*16)->512(16*32)
+                "vmadotsu.hp    v19, v3, v5, v0, 1, i4    \n\t"  //lo4;n8n15
+                "vmadotsu.hp    v20, v3, v6, v0, 2, i4    \n\t"  //lo4;n16n23
+                "vmadotsu.hp    v21, v3, v7, v0, 3, i4    \n\t"  //lo4;n24n31
+                "vmadotu.hp     v18, v2, v4, v0, 4, i4    \n\t"  //hi4;n0n7
+                "vmadotu.hp     v19, v2, v5, v0, 5, i4    \n\t"  //hi4;n8n15
+                "vmadotu.hp     v20, v2, v6, v0, 6, i4    \n\t"  //hi4;n16n23
+                "vmadotu.hp     v21, v2, v7, v0, 7, i4    \n\t"  //hi4;n24n31
 
                 "addi           t4, t4, -1                \n\t"
-                "vsetvli        t0, x0, e16, m1           \n\t"
-                "vfmacc.vv      v26, v20, v14             \n\t"  // row0/1 accum += dot * packed scale
-                "vfmacc.vv      v27, v21, v14             \n\t"
-
                 "addi           t6, t6, 8+128             \n\t"  // next A K32 subblock
                 "addi           t2, t2, 2                 \n\t"  // next ksi entry in each a_sum row
                 "addi           s5, s5, 64+512            \n\t"  // next B (scale + qs) K32 block
                 "addi           s6, s6, 32                \n\t"  // next zp[32]
                 "bgtz           t4, _KsubBLK_LPST%=       \n\t"
+
+                "vsetvli        t0, x0, e16, m1           \n\t"
+                "vpack.vv       v8, v18, v19, 1           \n\t"  // 128(16*8)->256(16*16)
+                "vpack.vv       v12, v20, v21, 1          \n\t"
+                "vpack.vv       v26, v8, v12, 2           \n\t"  // 256(16*16)->512(16*32)
 
                 "vsetvli        t0, x0, e16, m1           \n\t"
                 "vfwmacc.vf     v28, fa1, v26             \n\t"  // row0/1 accum += dot * packed scale
@@ -3578,7 +3570,8 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                   [HP1] "f"(hp_scale_1), [HP0125] "f"(hp_scale_0125)
                 : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "s5", "s6", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
                   "v8", "v10", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v24",
-                  "v25", "v26", "v27", "v28", "v29", "v30", "v31", "fa0", "fa1", "ft1", "ft2", "ft3", "ft4", "memory");
+                  "v25", "v26", "v27", "v28", "v29", "v30", "v31", "fa0", "fa1", "fa2", "ft1", "ft2", "ft3", "ft4",
+                  "memory");
         }
         return;
     } else {
@@ -3642,14 +3635,11 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "_BLK_LPST%=:                             \n\t"
                 "flh            fa1, 64(t2)               \n\t"  // a_scale_avg_row[0]
                 "vsetvli        t0, x0, e32, m1           \n\t"
-                "vxor.vv        v26, v30, v30             \n\t"
-                "vxor.vv        v27, v31, v31             \n\t"
-                "_KsubBLK_LPST%=:                         \n\t"
-                "vsetvli        t0, x0, e32, m1           \n\t"
                 "vxor.vv        v18, v30, v30             \n\t"
                 "vxor.vv        v19, v31, v31             \n\t"
                 "vxor.vv        v20, v30, v30             \n\t"
                 "vxor.vv        v21, v31, v31             \n\t"
+                "_KsubBLK_LPST%=:                         \n\t"
                 // load first subblock scales for 4 rows
                 "flh            fa0,   0(t6)              \n\t"  // ascale_fp16
 
@@ -3657,16 +3647,11 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "vsetvli        t0, x0, e16, mf2          \n\t"
                 "vle16.v        v12, (s5)                 \n\t"
 
-                // load Bzp[32] for the current ksi from the dedicated zp area
-                "vsetvli        t0, x0, e8, mf4           \n\t"
-                "vmv.v.i        v8, 1                     \n\t"
-                "vfwcvt.f.xu.v  v10, v8                   \n\t"  // uint8 -> fp16
+                "fmul.h         fa2, fa0, %[HP16]         \n\t"
 
                 "vsetvli        t0, x0, e16, mf2          \n\t"
                 "vfmul.vf       v16, v12, fa0             \n\t"  // row0: Bscale * Ascale
-
-                "vsetvli        t0, x0, e16, m1           \n\t"
-                "vpack.vv       v14, v16, v16, 3          \n\t"
+                "vfmul.vf       v17, v12, fa2             \n\t"
 
                 // load a_sum[row][ksi] from the trailer; t2 points to row0[ksi]
                 "flh            ft1, 0(t2)                \n\t"
@@ -3681,21 +3666,17 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "addi           t3, s5, 64                \n\t"
                 "vl4r.v         v4, (t3)                  \n\t"  //B
 
+                "vsetvli        t0, x0, e8, m1            \n\t"
                 "vsrl.vi        v1, v0, 4                 \n\t"
                 "vnpack4.vv     v12, v0, v1, 3            \n\t"
+                "vpack.vv       v0, v17, v16, 3           \n\t"
                 "vupack.vv      v2, v12, v12, 2           \n\t"
-                "vsetvli        t0, x0, e16, m1           \n\t"
-                "vfmv.v.f       v0, %[HP16]               \n\t"
-                "vfmv.v.f       v1, %[HP1]                \n\t"
-
-                "vsetvli        t0, x0, e16, mf2          \n\t"  // mf2 -> mf2
-                "vfmul.vv       v10, v10, v16             \n\t"  // zp * ascale * bscale; fp16*fp16
 
                 "vsetvli        t0, x0, e16, mf2          \n\t"  // mf2 -> m1
-                "vfmul.vf       v12, v10, ft1             \n\t"  // zp(1:n)* abscale * asum_m0; fp16*fp16
-                "vfmul.vf       v13, v10, ft2             \n\t"  // zp(1:n)* abscale * asum_m1; fp16*fp16
-                "vfmul.vf       v24, v10, ft3             \n\t"  // zp(1:n)* abscale * asum_m2; fp16*fp16
-                "vfmul.vf       v25, v10, ft4             \n\t"  // zp(1:n)* abscale * asum_m3; fp16*fp16
+                "vfmul.vf       v12, v16, ft1             \n\t"  // zp(1:n)* abscale * asum_m0; fp16*fp16
+                "vfmul.vf       v13, v16, ft2             \n\t"  // zp(1:n)* abscale * asum_m1; fp16*fp16
+                "vfmul.vf       v24, v16, ft3             \n\t"  // zp(1:n)* abscale * asum_m2; fp16*fp16
+                "vfmul.vf       v25, v16, ft4             \n\t"  // zp(1:n)* abscale * asum_m3; fp16*fp16
 
                 "vsetvli        t0, x0, e16, mf2          \n\t"
                 "vfwmacc.vf     v28, fa1, v12             \n\t"
@@ -3705,28 +3686,25 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
 
                 "vsetvli        t0, x0, e32, m1           \n\t"
                 "vmadotsu.hp    v18, v3, v4, v0, 0, i4    \n\t"  //lo4;n0n7
-                "vmadotsu.hp    v19, v3, v5, v0, 0, i4    \n\t"  //lo4;n8n15
-                "vmadotsu.hp    v20, v3, v6, v0, 0, i4    \n\t"  //lo4;n16n23
-                "vmadotsu.hp    v21, v3, v7, v0, 0, i4    \n\t"  //lo4;n24n31
-                "vmadotu.hp     v18, v2, v4, v1, 0, i4    \n\t"  //hi4;n0n7
-                "vmadotu.hp     v19, v2, v5, v1, 0, i4    \n\t"  //hi4;n8n15
-                "vmadotu.hp     v20, v2, v6, v1, 0, i4    \n\t"  //hi4;n16n23
-                "vmadotu.hp     v21, v2, v7, v1, 0, i4    \n\t"  //hi4;n24n31
-
-                "vsetvli        t0, x0, e16, m1           \n\t"  //N32in1register
-                "vpack.vv       v8, v18, v19, 1           \n\t"  // 128(16*8)->256(16*16)
-                "vpack.vv       v12, v20, v21, 1          \n\t"
-                "vpack.vv       v20, v8, v12, 2           \n\t"  // 256(16*16)->512(16*32)
+                "vmadotsu.hp    v19, v3, v5, v0, 1, i4    \n\t"  //lo4;n8n15
+                "vmadotsu.hp    v20, v3, v6, v0, 2, i4    \n\t"  //lo4;n16n23
+                "vmadotsu.hp    v21, v3, v7, v0, 3, i4    \n\t"  //lo4;n24n31
+                "vmadotu.hp     v18, v2, v4, v0, 4, i4    \n\t"  //hi4;n0n7
+                "vmadotu.hp     v19, v2, v5, v0, 5, i4    \n\t"  //hi4;n8n15
+                "vmadotu.hp     v20, v2, v6, v0, 6, i4    \n\t"  //hi4;n16n23
+                "vmadotu.hp     v21, v2, v7, v0, 7, i4    \n\t"  //hi4;n24n31
 
                 "addi           t4, t4, -1                \n\t"
-                "vsetvli        t0, x0, e16, m1           \n\t"
-                "vfmacc.vv      v26, v20, v14             \n\t"  // row0/1 accum += dot * packed scale
-                "vfmacc.vv      v27, v21, v14             \n\t"
 
                 "addi           t6, t6, 8+128             \n\t"  // next A K32 subblock
                 "addi           t2, t2, 2                 \n\t"  // next ksi entry in each a_sum row
                 "addi           s5, s5, 64+512            \n\t"  // next B (scale + qs) K32 block
                 "bgtz           t4, _KsubBLK_LPST%=       \n\t"
+
+                "vsetvli        t0, x0, e16, m1           \n\t"  //N32in1register
+                "vpack.vv       v8, v18, v19, 1           \n\t"  // 128(16*8)->256(16*16)
+                "vpack.vv       v12, v20, v21, 1          \n\t"
+                "vpack.vv       v26, v8, v12, 2           \n\t"  // 256(16*16)->512(16*32)
 
                 "vsetvli        t0, x0, e16, m1           \n\t"
                 "vfwmacc.vf     v28, fa1, v26             \n\t"  // row0/1 accum += dot * packed scale
@@ -3752,7 +3730,7 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 : [DST] "r"(dst_c), [LDC] "r"(ldc * 4), [BK] "r"(k_blks), [HP16] "f"(hp_scale_16), [HP1] "f"(hp_scale_1)
                 : "t0", "t2", "t3", "t4", "t5", "t6", "s5", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v10",
                   "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v24", "v25", "v26",
-                  "v27", "v28", "v29", "v30", "v31", "fa0", "fa1", "ft1", "ft2", "ft3", "ft4", "memory");
+                  "v27", "v28", "v29", "v30", "v31", "fa0", "fa1", "fa2", "ft1", "ft2", "ft3", "ft4", "memory");
         }
         return;
     }
