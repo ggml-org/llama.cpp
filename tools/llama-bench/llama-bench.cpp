@@ -355,6 +355,7 @@ struct cmd_params {
     bool                             verbose;
     bool                             progress;
     bool                             no_warmup;
+    bool                             continue_after_failure;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
 };
@@ -399,6 +400,7 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* progress             */ false,
     /* no_warmup            */ false,
+    /* continue_after_failure */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -418,6 +420,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                               verbose output\n");
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
+    printf("  --continue-after-failure                    on instance failure, emit a row of NA values and continue\n");
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
     printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 4096)\n");
     if (llama_supports_rpc()) {
@@ -513,6 +516,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
+    params.continue_after_failure = cmd_params_defaults.continue_after_failure;
 
     if (const char * env = getenv("HF_TOKEN")) {
         params.hf_token = env;
@@ -970,6 +974,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "--continue-after-failure") {
+                params.continue_after_failure = true;
             } else if (arg == "-fitt" || arg == "--fit-target") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1416,6 +1422,7 @@ struct test {
     int                      n_depth;
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
+    bool                     failed = false;
 
     test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) :
         cpu_info(get_cpu_info()),
@@ -1423,10 +1430,16 @@ struct test {
 
         model_filename = inst.model;
         char buf[128];
-        llama_model_desc(lmodel, buf, sizeof(buf));
-        model_type     = buf;
-        model_size     = llama_model_size(lmodel);
-        model_n_params = llama_model_n_params(lmodel);
+        if (lmodel != nullptr) {
+            llama_model_desc(lmodel, buf, sizeof(buf));
+            model_type     = buf;
+            model_size     = llama_model_size(lmodel);
+            model_n_params = llama_model_n_params(lmodel);
+        } else {
+            model_type     = "(failed to load)";
+            model_size     = 0;
+            model_n_params = 0;
+        }
         n_batch        = inst.n_batch;
         n_ubatch       = inst.n_ubatch;
         n_threads      = inst.n_threads;
@@ -1613,6 +1626,11 @@ struct test {
                                             std::to_string(stdev_ns()),
                                             std::to_string(avg_ts()),
                                             std::to_string(stdev_ts()) };
+        if (failed) {
+            for (size_t i = values.size() - 4; i < values.size(); i++) {
+                values[i] = "NA";
+            }
+        }
         return values;
     }
 
@@ -1692,7 +1710,7 @@ static std::string format_json_value(const std::string & field, const std::strin
         case test::BOOL:
             return value == "0" ? "false" : "true";
         default:
-            return value;
+            return value == "NA" ? "null" : value;
     }
 }
 
@@ -1993,8 +2011,12 @@ struct markdown_printer : public printer {
                 }
                 value = buf;
             } else if (field == "t/s") {
-                snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_ts(), t.stdev_ts());
-                value = buf;
+                if (t.failed) {
+                    value = "NA";
+                } else {
+                    snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_ts(), t.stdev_ts());
+                    value = buf;
+                }
             } else if (vmap.find(field) != vmap.end()) {
                 value = vmap.at(field);
             } else {
@@ -2049,8 +2071,14 @@ struct sql_printer : public printer {
         fprintf(fout, "INSERT INTO llama_bench (%s) ", join(test::get_fields(), ", ").c_str());
         fprintf(fout, "VALUES (");
         std::vector<std::string> values = t.get_values();
+        std::vector<std::string> fields = test::get_fields();
         for (size_t i = 0; i < values.size(); i++) {
-            fprintf(fout, "'%s'%s", values.at(i).c_str(), i < values.size() - 1 ? ", " : "");
+            const char * sep = i < values.size() - 1 ? ", " : "";
+            if (values.at(i) == "NA" && test::get_field_type(fields.at(i)) != test::STRING) {
+                fprintf(fout, "NULL%s", sep);
+            } else {
+                fprintf(fout, "'%s'%s", values.at(i).c_str(), sep);
+            }
         }
         fprintf(fout, ");\n");
     }
@@ -2202,6 +2230,19 @@ int main(int argc, char ** argv) {
     // ref: https://github.com/ggml-org/llama.cpp/pull/16944#issuecomment-3478151721
     ctx_state cstate;
 
+    auto emit_na_row = [&](const cmd_params_instance & inst, const llama_model * lmodel_for_meta) {
+        test t(inst, lmodel_for_meta, nullptr);
+        t.failed = true;
+        if (p) {
+            p->print_test(t);
+            fflush(p->fout);
+        }
+        if (p_err) {
+            p_err->print_test(t);
+            fflush(p_err->fout);
+        }
+    };
+
     int  params_idx   = 0;
     auto params_count = params_instances.size();
     for (const auto & inst : params_instances) {
@@ -2254,6 +2295,11 @@ int main(int argc, char ** argv) {
             lmodel = llama_model_load_from_file(inst.model.c_str(), mparams);
             if (lmodel == NULL) {
                 fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
+                if (params.continue_after_failure) {
+                    emit_na_row(inst, nullptr);
+                    prev_inst = nullptr;
+                    continue;
+                }
                 return 1;
             }
             prev_inst = &inst;
@@ -2262,6 +2308,13 @@ int main(int argc, char ** argv) {
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
+            if (params.continue_after_failure) {
+                emit_na_row(inst, lmodel);
+                llama_model_free(lmodel);
+                lmodel = nullptr;
+                prev_inst = nullptr;
+                continue;
+            }
             llama_model_free(lmodel);
             return 1;
         }
@@ -2278,6 +2331,14 @@ int main(int argc, char ** argv) {
         struct ggml_threadpool_params tpp = ggml_threadpool_params_default(t.n_threads);
         if (!parse_cpu_mask(t.cpu_mask, tpp.cpumask)) {
             fprintf(stderr, "%s: failed to parse cpu-mask: %s\n", __func__, t.cpu_mask.c_str());
+            if (params.continue_after_failure) {
+                emit_na_row(inst, lmodel);
+                llama_free(ctx);
+                llama_model_free(lmodel);
+                lmodel = nullptr;
+                prev_inst = nullptr;
+                continue;
+            }
             llama_free(ctx);
             llama_model_free(lmodel);
             exit(1);
@@ -2289,6 +2350,14 @@ int main(int argc, char ** argv) {
         struct ggml_threadpool * threadpool = ggml_threadpool_new_fn(&tpp);
         if (!threadpool) {
             fprintf(stderr, "%s: threadpool create failed : n_threads %d\n", __func__, tpp.n_threads);
+            if (params.continue_after_failure) {
+                emit_na_row(inst, lmodel);
+                llama_free(ctx);
+                llama_model_free(lmodel);
+                lmodel = nullptr;
+                prev_inst = nullptr;
+                continue;
+            }
             llama_free(ctx);
             llama_model_free(lmodel);
             exit(1);
@@ -2306,6 +2375,15 @@ int main(int argc, char ** argv) {
                 bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
+                    if (params.continue_after_failure) {
+                        emit_na_row(inst, lmodel);
+                        ggml_threadpool_free_fn(threadpool);
+                        llama_free(ctx);
+                        llama_model_free(lmodel);
+                        lmodel = nullptr;
+                        prev_inst = nullptr;
+                        continue;
+                    }
                     llama_free(ctx);
                     llama_model_free(lmodel);
                     exit(1);
@@ -2318,12 +2396,23 @@ int main(int argc, char ** argv) {
                 bool res = test_gen(ctx, 1, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
+                    if (params.continue_after_failure) {
+                        emit_na_row(inst, lmodel);
+                        ggml_threadpool_free_fn(threadpool);
+                        llama_free(ctx);
+                        llama_model_free(lmodel);
+                        lmodel = nullptr;
+                        prev_inst = nullptr;
+                        continue;
+                    }
                     llama_free(ctx);
                     llama_model_free(lmodel);
                     exit(1);
                 }
             }
         }
+
+        bool instance_failed = false;
 
         for (int i = 0; i < params.reps; i++) {
             llama_memory_clear(llama_get_memory(ctx), false);
@@ -2348,6 +2437,10 @@ int main(int argc, char ** argv) {
                     bool res = test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads);
                     if (!res) {
                         fprintf(stderr, "%s: error: failed to run depth\n", __func__);
+                        if (params.continue_after_failure) {
+                            instance_failed = true;
+                            break;
+                        }
                         llama_free(ctx);
                         llama_model_free(lmodel);
                         exit(1);
@@ -2375,6 +2468,10 @@ int main(int argc, char ** argv) {
                 bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
+                    if (params.continue_after_failure) {
+                        instance_failed = true;
+                        break;
+                    }
                     llama_free(ctx);
                     llama_model_free(lmodel);
                     exit(1);
@@ -2388,6 +2485,10 @@ int main(int argc, char ** argv) {
                 bool res = test_gen(ctx, t.n_gen, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen\n", __func__);
+                    if (params.continue_after_failure) {
+                        instance_failed = true;
+                        break;
+                    }
                     llama_free(ctx);
                     llama_model_free(lmodel);
                     exit(1);
@@ -2396,6 +2497,16 @@ int main(int argc, char ** argv) {
 
             uint64_t t_ns = get_time_ns() - t_start;
             t.samples_ns.push_back(t_ns);
+        }
+
+        if (instance_failed) {
+            emit_na_row(inst, lmodel);
+            ggml_threadpool_free_fn(threadpool);
+            llama_free(ctx);
+            llama_model_free(lmodel);
+            lmodel = nullptr;
+            prev_inst = nullptr;
+            continue;
         }
 
         if (p) {
