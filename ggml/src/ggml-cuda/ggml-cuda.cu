@@ -39,6 +39,7 @@
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/roll.cuh"
 #include "ggml-cuda/scale.cuh"
+#include "ggml-cuda/snake.cuh"
 #include "ggml-cuda/softcap.cuh"
 #include "ggml-cuda/softmax.cuh"
 #include "ggml-cuda/ssm-conv.cuh"
@@ -3757,6 +3758,35 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 2;
     }
 
+    // Snake activation: y = x + sin(a*x)^2 * inv_b
+    // Naive 5-op decomposition emitted by frontends: mul -> sin -> sqr -> mul -> add
+    if (ggml_can_fuse_subgraph(cgraph, i,
+            { GGML_OP_MUL, GGML_OP_SIN, GGML_OP_SQR, GGML_OP_MUL, GGML_OP_ADD },
+            { i + 4 })) {
+        const ggml_tensor * mul0 = cgraph->nodes[i];
+        const ggml_tensor * sqr  = cgraph->nodes[i + 2];
+        const ggml_tensor * mul1 = cgraph->nodes[i + 3];
+        ggml_tensor *       add  = cgraph->nodes[i + 4];
+
+        // x carries the full activation shape, a is the broadcast operand
+        const ggml_tensor * x = ggml_are_same_shape(mul0, mul0->src[0]) ? mul0->src[0] : mul0->src[1];
+        const ggml_tensor * a = (x == mul0->src[0]) ? mul0->src[1] : mul0->src[0];
+
+        // mul1 reads sqr and inv_b in either operand order
+        const ggml_tensor * inv_b = (mul1->src[0] == sqr) ? mul1->src[1] : mul1->src[0];
+
+        // closure check: the trailing add must read the same x as the leading mul
+        const ggml_tensor * x_in_add = (add->src[0] == mul1) ? add->src[1] : add->src[0];
+
+        const bool type_ok  = (x->type == GGML_TYPE_F32 || x->type == GGML_TYPE_F16 || x->type == GGML_TYPE_BF16);
+        const bool shape_ok = ggml_are_same_shape(a, inv_b) && a->ne[0] == 1 && a->ne[1] == x->ne[1];
+
+        if (type_ok && shape_ok && x_in_add == x && add->type == x->type) {
+            ggml_cuda_op_snake_fused(*cuda_ctx, x, a, inv_b, add);
+            return 4;
+        }
+    }
+
     // multi-(add or mul)
     if (node->op == GGML_OP_ADD || node->op == GGML_OP_MUL) {
         int     n_fuse = 0;
@@ -5434,6 +5464,9 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
                 char pci_bus_id[32] = {};
                 CUDA_CHECK(cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), i));
                 dev_ctx->pci_bus_id = pci_bus_id;
+                for (char & c : dev_ctx->pci_bus_id) {
+                    c = std::tolower(c);
+                }
                 dev_ctx->op_offload_min_batch_size = min_batch_size;
 
                 ggml_backend_dev_t dev = new ggml_backend_device {

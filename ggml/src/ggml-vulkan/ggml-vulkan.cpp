@@ -2149,11 +2149,11 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 
     // Patch SPIR-V to enable RTE rounding for FP16, avoiding the need for
     // separate shader variants compiled with -DRTE16.
-    std::vector<uint32_t> spv;
+    std::vector<uint32_t> spirv;
     if (device->float_controls_rte_fp16) {
         const uint32_t* spv_words = reinterpret_cast<const uint32_t *>(spv_data);
         size_t word_count = spv_size / sizeof(uint32_t);
-        spv.assign(spv_words, spv_words + word_count);
+        spirv.assign(spv_words, spv_words + word_count);
 
         // Find insertion points respecting SPIR-V layout order:
         //   Header(5) -> OpCapability -> OpExtension -> ... -> OpEntryPoint -> OpExecutionMode -> ...
@@ -2163,9 +2163,9 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         size_t exec_insert_pos = pos;
         uint32_t entry_point_id = 0;
 
-        while (pos < spv.size()) {
-            uint32_t opcode = spv[pos] & spv::OpCodeMask;
-            uint32_t len    = spv[pos] >> spv::WordCountShift;
+        while (pos < spirv.size()) {
+            uint32_t opcode = spirv[pos] & spv::OpCodeMask;
+            uint32_t len    = spirv[pos] >> spv::WordCountShift;
             if (len == 0) break;
 
             if (opcode == spv::OpCapability) {
@@ -2174,7 +2174,7 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
             } else if (opcode == spv::OpExtension) {
                 ext_insert_pos = pos + len;
             } else if (opcode == spv::OpEntryPoint) {
-                entry_point_id = spv[pos + 2];
+                entry_point_id = spirv[pos + 2];
                 exec_insert_pos = pos + len;
             } else if (opcode == spv::OpExecutionMode || opcode == spv::OpExecutionModeId) {
                 exec_insert_pos = pos + len;
@@ -2189,7 +2189,7 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 
         // OpExecutionMode %entrypoint RoundingModeRTE 16
         uint32_t exec_mode[] = { (4u << spv::WordCountShift) | spv::OpExecutionMode, entry_point_id, spv::ExecutionModeRoundingModeRTE, 16 };
-        spv.insert(spv.begin() + exec_insert_pos, std::begin(exec_mode), std::end(exec_mode));
+        spirv.insert(spirv.begin() + exec_insert_pos, std::begin(exec_mode), std::end(exec_mode));
 
         // OpExtension "SPV_KHR_float_controls"
         const char ext_str[] = "SPV_KHR_float_controls";
@@ -2197,13 +2197,13 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         std::vector<uint32_t> extension(1 + ext_str_words, 0);
         extension[0] = (uint32_t)((1 + ext_str_words) << spv::WordCountShift) | spv::OpExtension;
         memcpy(&extension[1], ext_str, sizeof(ext_str));
-        spv.insert(spv.begin() + ext_insert_pos, extension.begin(), extension.end());
+        spirv.insert(spirv.begin() + ext_insert_pos, extension.begin(), extension.end());
 
         // OpCapability RoundingModeRTE
         uint32_t capability[] = { (2u << spv::WordCountShift) | spv::OpCapability, spv::CapabilityRoundingModeRTE };
-        spv.insert(spv.begin() + cap_insert_pos, std::begin(capability), std::end(capability));
+        spirv.insert(spirv.begin() + cap_insert_pos, std::begin(capability), std::end(capability));
 
-        shader_module_create_info = vk::ShaderModuleCreateInfo({}, spv.size() * sizeof(uint32_t), spv.data());
+        shader_module_create_info = vk::ShaderModuleCreateInfo({}, spirv.size() * sizeof(uint32_t), spirv.data());
     }
 
     pipeline->shader_module = device->device.createShaderModule(shader_module_create_info);
