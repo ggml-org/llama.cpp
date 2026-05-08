@@ -1525,6 +1525,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"-q", "--quiet"},
+        "suppress non-model output (banner, loading messages, prompts, etc.)\n"
+        "only model-generated text is printed to stdout\n"
+        "(default: false)",
+        [](common_params & params) {
+            params.quiet = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"-i", "--interactive"},
         string_format("run in interactive mode (default: %s)", params.interactive ? "true" : "false"),
         [](common_params & params) {

@@ -69,6 +69,7 @@ namespace console {
 
     static bool         advanced_display = false;
     static bool         simple_io        = true;
+    static bool         quiet            = false;
     static display_type current_display  = DISPLAY_TYPE_RESET;
 
     static FILE*        out              = stdout;
@@ -1107,7 +1108,7 @@ namespace console {
         }
         void start() {
             std::unique_lock<std::mutex> lock(mtx);
-            if (simple_io || running) {
+            if (simple_io || quiet || running) {
                 return;
             }
             common_log_flush(common_log_main());
@@ -1143,7 +1144,21 @@ namespace console {
         }
     }
 
+    void set_quiet(bool value) {
+        quiet = value;
+    }
+
     void log(const char * fmt, ...) {
+        if (quiet) {
+            return;
+        }
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(out, fmt, args);
+        va_end(args);
+    }
+
+    void output(const char * fmt, ...) {
         va_list args;
         va_start(args, fmt);
         vfprintf(out, fmt, args);

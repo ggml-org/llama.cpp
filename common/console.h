@@ -31,13 +31,22 @@ namespace console {
         void stop();
     }
 
+    // Enable/disable quiet mode. When quiet, log() is suppressed but output() still prints.
+    void set_quiet(bool quiet);
+
     // note: the logging API below output directly to stdout
     // it can negatively impact performance if used on inference thread
     // only use in in a dedicated CLI thread
     // for logging in inference thread, use log.h instead
 
+    // Informational/chrome messages (banner, prompts, status).
+    // Suppressed when quiet mode is enabled via set_quiet(true).
     LLAMA_COMMON_ATTRIBUTE_FORMAT(1, 2)
     void log(const char * fmt, ...);
+
+    // Model-generated output. Always printed regardless of quiet mode.
+    LLAMA_COMMON_ATTRIBUTE_FORMAT(1, 2)
+    void output(const char * fmt, ...);
 
     LLAMA_COMMON_ATTRIBUTE_FORMAT(1, 2)
     void error(const char * fmt, ...);
