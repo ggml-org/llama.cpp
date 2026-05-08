@@ -11,8 +11,8 @@
 //
 
 #include "common.hpp"
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
 #include <sycl/backend.hpp>
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
 #include <level_zero/ze_api.h>
 #endif
 
