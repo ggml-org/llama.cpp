@@ -110,7 +110,7 @@ static void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
     const int nloe = num_elems % VLEN_FP32;    // leftover elements
 
     // Compute sum of squares for full vectors
-    HVX_Vector sum_v = hvx_vec_splat_f32(0.0f);
+    HVX_Vector sum_v = Q6_V_vsplat_R(0x00000000);
     HVX_Vector epsilon_v = hvx_vec_splat_f32(epsilon);
 
     #pragma unroll(4)
