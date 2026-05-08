@@ -215,7 +215,12 @@ int main(int argc, char ** argv) {
     }
     // EXPERIMENTAL built-in tools
     if (!params.server_tools.empty()) {
-        tools.setup(params.server_tools);
+        try {
+            tools.setup(params.server_tools);
+        } catch (const std::exception & e) {
+            LOG_ERR("%s: tools setup failed: %s\n", __func__, e.what());
+            return 1;
+        }
         SRV_WRN("%s", "-----------------\n");
         SRV_WRN("%s", "Built-in tools are enabled, do not expose server to untrusted environments\n");
         SRV_WRN("%s", "This feature is EXPERIMENTAL and may be changed in the future\n");
@@ -329,7 +334,8 @@ int main(int argc, char ** argv) {
         // optionally, notify router server that this instance is ready
         std::thread monitor_thread;
         if (server_models::is_child_server()) {
-            monitor_thread = server_models::setup_child_server(shutdown_handler);
+            json model_info = routes.get_model_info();
+            monitor_thread = server_models::setup_child_server(shutdown_handler, model_info);
         }
 
         // this call blocks the main thread until queue_tasks.terminate() is called

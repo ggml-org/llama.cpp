@@ -9,9 +9,9 @@
 	import { SettingsFieldType } from '$lib/enums/settings';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
-	import { modelsStore, selectedModelName } from '$lib/stores/models.svelte';
+	import { modelsStore, selectedModelName, propsCacheVersion } from '$lib/stores/models.svelte';
 	import { normalizeFloatingPoint } from '$lib/utils/precision';
-	import SettingsChatParameterSourceIndicator from './SettingsChatParameterSourceIndicator.svelte';
+	import { SettingsChatParameterSourceIndicator } from '$lib/components/app/settings';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -23,13 +23,19 @@
 
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
 
-	// server sampling defaults for placeholders
-	let sp = $derived.by(() => {
+	let currentModelParams = $derived.by(() => {
+		propsCacheVersion();
+
 		if (serverStore.isRouterMode) {
-			const m = selectedModelName();
-			if (m) {
-				const p = modelsStore.getModelProps(m);
-				return (p?.default_generation_settings?.params ?? {}) as Record<string, unknown>;
+			const currentModelName = selectedModelName();
+
+			if (currentModelName) {
+				const currentModelProps = modelsStore.getModelProps(currentModelName);
+
+				return (currentModelProps?.default_generation_settings?.params ?? {}) as Record<
+					string,
+					unknown
+				>;
 			}
 		}
 		return (serverStore.defaultParams ?? {}) as Record<string, unknown>;
@@ -40,7 +46,7 @@
 	<div class="space-y-2">
 		{#if field.type === SettingsFieldType.INPUT}
 			{@const currentValue = String(localConfig[field.key] ?? '')}
-			{@const serverDefault = sp[field.key]}
+			{@const serverDefault = currentModelParams[field.key]}
 			{@const isCustomRealTime = (() => {
 				if (serverDefault == null) return false;
 				if (currentValue === '') return false;
@@ -78,8 +84,8 @@
 						// Update local config immediately for real-time badge feedback
 						onConfigChange(field.key, e.currentTarget.value);
 					}}
-					placeholder={sp[field.key] != null
-						? `Default: ${normalizeFloatingPoint(sp[field.key])}`
+					placeholder={currentModelParams[field.key] != null
+						? `Default: ${normalizeFloatingPoint(currentModelParams[field.key])}`
 						: ''}
 					class="w-full {isCustomRealTime ? 'pr-8' : ''}"
 				/>
@@ -104,13 +110,15 @@
 				</p>
 			{/if}
 		{:else if field.type === SettingsFieldType.TEXTAREA}
-			<Label for={field.key} class="block flex items-center gap-1.5 text-sm font-medium">
-				{field.label}
+			{#if field.label}
+				<Label for={field.key} class="block flex items-center gap-1.5 text-sm font-medium">
+					{field.label}
 
-				{#if field.isExperimental}
-					<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
-				{/if}
-			</Label>
+					{#if field.isExperimental}
+						<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+					{/if}
+				</Label>
+			{/if}
 
 			<Textarea
 				id={field.key}
@@ -131,7 +139,8 @@
 					<Checkbox
 						id="showSystemMessage"
 						checked={Boolean(localConfig.showSystemMessage ?? true)}
-						onCheckedChange={(checked) => onConfigChange('showSystemMessage', Boolean(checked))}
+						onCheckedChange={(checked) =>
+							onConfigChange(SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, Boolean(checked))}
 					/>
 
 					<Label for="showSystemMessage" class="cursor-pointer text-sm font-normal">
@@ -145,7 +154,7 @@
 					opt.value === localConfig[field.key]
 			)}
 			{@const currentValue = localConfig[field.key]}
-			{@const serverDefault = sp[field.key]}
+			{@const serverDefault = currentModelParams[field.key]}
 			{@const isCustomRealTime = (() => {
 				if (serverDefault == null) return false;
 				if (currentValue === '' || currentValue === undefined) return false;

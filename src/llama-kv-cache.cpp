@@ -67,6 +67,7 @@ static ggml_tensor * ggml_mul_mat_aux(
 
     res = ggml_reshape_2d(ctx, cur, n, ggml_nelements(cur)/n);
     res = ggml_mul_mat   (ctx, rot, res);
+    ggml_mul_mat_set_hint(res, GGML_HINT_SRC0_IS_HADAMARD);
     res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
 
     return res;
@@ -1900,14 +1901,14 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
 
     uint32_t n_stream_cur;
-    io.read_to(&n_stream_cur, sizeof(n_stream_cur));
+    io.read(&n_stream_cur, sizeof(n_stream_cur));
     if (n_stream_cur != n_stream) {
         throw std::runtime_error("n_stream mismatch");
     }
 
     for (uint32_t s = 0; s < n_stream; ++s) {
         uint32_t cell_count;
-        io.read_to(&cell_count, sizeof(cell_count));
+        io.read(&cell_count, sizeof(cell_count));
 
         if (cell_count == 0) {
             continue;
@@ -2082,8 +2083,8 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
             llama_pos pos;
             uint32_t n_seq_id;
 
-            io.read_to(&pos,      sizeof(pos));
-            io.read_to(&n_seq_id, sizeof(n_seq_id));
+            io.read(&pos,      sizeof(pos));
+            io.read(&n_seq_id, sizeof(n_seq_id));
 
             if (n_seq_id != 1) {
                 LLAMA_LOG_ERROR("%s: invalid seq_id-agnostic kv cell\n", __func__);
@@ -2092,7 +2093,7 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
 
             if (hparams.n_pos_per_embd() > 1) {
                 llama_kv_cell_ext ext;
-                io.read_to(&ext, sizeof(ext));
+                io.read(&ext, sizeof(ext));
 
                 ubatch.pos[i + ubatch.n_tokens]   = ext.y;
                 ubatch.pos[i + ubatch.n_tokens*2] = ext.x;
@@ -2101,7 +2102,7 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
             // read the sequence id, but directly discard it - we will use dest_seq_id instead
             {
                 llama_seq_id seq_id;
-                io.read_to(&seq_id, sizeof(seq_id));
+                io.read(&seq_id, sizeof(seq_id));
             }
 
             ubatch.pos[i]      = pos;
@@ -2143,20 +2144,20 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
             llama_pos pos;
             uint32_t  n_seq_id;
 
-            io.read_to(&pos,      sizeof(pos));
-            io.read_to(&n_seq_id, sizeof(n_seq_id));
+            io.read(&pos,      sizeof(pos));
+            io.read(&n_seq_id, sizeof(n_seq_id));
 
             cells.pos_set(i, pos);
 
             if (hparams.n_pos_per_embd() > 1) {
                 llama_kv_cell_ext ext;
-                io.read_to(&ext, sizeof(ext));
+                io.read(&ext, sizeof(ext));
                 cells.ext_set(i, ext);
             }
 
             for (uint32_t j = 0; j < n_seq_id; ++j) {
                 llama_seq_id seq_id;
-                io.read_to(&seq_id, sizeof(seq_id));
+                io.read(&seq_id, sizeof(seq_id));
 
                 if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max) {
                     LLAMA_LOG_ERROR("%s: invalid seq_id, %d is out of range [0, %u)\n", __func__, seq_id, n_seq_max);
@@ -2189,8 +2190,8 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
     uint32_t v_trans;
     uint32_t n_layer;
 
-    io.read_to(&v_trans, sizeof(v_trans));
-    io.read_to(&n_layer, sizeof(n_layer));
+    io.read(&v_trans, sizeof(v_trans));
+    io.read(&n_layer, sizeof(n_layer));
 
     if (n_layer != layers.size()) {
         LLAMA_LOG_ERROR("%s: mismatched layer count (%u instead of %u)\n", __func__, n_layer, (uint32_t) layers.size());
@@ -2217,7 +2218,7 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
         // Read type of key
         int32_t k_type_i_ref;
-        io.read_to(&k_type_i_ref, sizeof(k_type_i_ref));
+        io.read(&k_type_i_ref, sizeof(k_type_i_ref));
         const int32_t k_type_i = (int32_t) k->type;
         if (k_type_i != k_type_i_ref) {
             LLAMA_LOG_ERROR("%s: mismatched key type (%d != %d, layer %d)\n", __func__, k_type_i, k_type_i_ref, il);
@@ -2226,7 +2227,7 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
         // Read row size of key
         uint64_t k_size_row_ref;
-        io.read_to(&k_size_row_ref, sizeof(k_size_row_ref));
+        io.read(&k_size_row_ref, sizeof(k_size_row_ref));
         const size_t k_size_row = ggml_row_size(k->type, n_embd_k_gqa);
         if (k_size_row != k_size_row_ref) {
             LLAMA_LOG_ERROR("%s: mismatched key row size (%zu != %zu, layer %d)\n", __func__, k_size_row, (size_t) k_size_row_ref, il);
@@ -2236,13 +2237,12 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         if (cell_count) {
             if (sinfo.is_contiguous()) {
                 // Fast path: contiguous cells, single memcpy
-                ggml_backend_tensor_set(k, io.read(cell_count * k_size_row), sinfo.head() * k_size_row, cell_count * k_size_row);
+                io.read_tensor(k, sinfo.head() * k_size_row, cell_count * k_size_row);
             } else {
                 // Slow path: scatter to non-contiguous positions
-                const void * src = io.read(cell_count * k_size_row);
                 for (uint32_t i = 0; i < cell_count; ++i) {
                     const size_t dst_offset = sinfo.idxs[0][i] * k_size_row;
-                    ggml_backend_tensor_set(k, (const char*)src + i * k_size_row, dst_offset, k_size_row);
+                    io.read_tensor(k, dst_offset, k_size_row);
                 }
             }
         }
@@ -2261,7 +2261,7 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
             // Read type of value
             int32_t v_type_i_ref;
-            io.read_to(&v_type_i_ref, sizeof(v_type_i_ref));
+            io.read(&v_type_i_ref, sizeof(v_type_i_ref));
             const int32_t v_type_i = (int32_t) v->type;
             if (v_type_i != v_type_i_ref) {
                 LLAMA_LOG_ERROR("%s: mismatched value type (%d != %d, layer %d)\n", __func__, v_type_i, v_type_i_ref, il);
@@ -2270,7 +2270,7 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
             // Read row size of value
             uint64_t v_size_row_ref;
-            io.read_to(&v_size_row_ref, sizeof(v_size_row_ref));
+            io.read(&v_size_row_ref, sizeof(v_size_row_ref));
             const size_t v_size_row = ggml_row_size(v->type, n_embd_v_gqa);
             if (v_size_row != v_size_row_ref) {
                 LLAMA_LOG_ERROR("%s: mismatched value row size (%zu != %zu, layer %d)\n", __func__, v_size_row, (size_t) v_size_row_ref, il);
@@ -2280,13 +2280,12 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             if (cell_count) {
                 if (sinfo.is_contiguous()) {
                     // Fast path: contiguous cells, single memcpy
-                    ggml_backend_tensor_set(v, io.read(cell_count * v_size_row), sinfo.head() * v_size_row, cell_count * v_size_row);
+                    io.read_tensor(v, sinfo.head() * v_size_row, cell_count * v_size_row);
                 } else {
                     // Slow path: scatter to non-contiguous positions
-                    const void * src = io.read(cell_count * v_size_row);
                     for (uint32_t i = 0; i < cell_count; ++i) {
                         const size_t dst_offset = sinfo.idxs[0][i] * v_size_row;
-                        ggml_backend_tensor_set(v, (const char*)src + i * v_size_row, dst_offset, v_size_row);
+                        io.read_tensor(v, dst_offset, v_size_row);
                     }
                 }
             }
@@ -2305,7 +2304,7 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
             // Read type of value
             int32_t v_type_i_ref;
-            io.read_to(&v_type_i_ref, sizeof(v_type_i_ref));
+            io.read(&v_type_i_ref, sizeof(v_type_i_ref));
             const int32_t v_type_i = (int32_t) v->type;
             if (v_type_i != v_type_i_ref) {
                 LLAMA_LOG_ERROR("%s: mismatched value type (%d != %d, layer %d)\n", __func__, v_type_i, v_type_i_ref, il);
@@ -2314,7 +2313,7 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
             // Read element size of value
             uint32_t v_size_el_ref;
-            io.read_to(&v_size_el_ref, sizeof(v_size_el_ref));
+            io.read(&v_size_el_ref, sizeof(v_size_el_ref));
             const size_t v_size_el = ggml_type_size(v->type);
             if (v_size_el != v_size_el_ref) {
                 LLAMA_LOG_ERROR("%s: mismatched value element size (%zu != %zu, layer %d)\n", __func__, v_size_el, (size_t) v_size_el_ref, il);
@@ -2323,7 +2322,7 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
             // Read GQA embedding size
             uint32_t n_embd_v_gqa_ref;
-            io.read_to(&n_embd_v_gqa_ref, sizeof(n_embd_v_gqa_ref));
+            io.read(&n_embd_v_gqa_ref, sizeof(n_embd_v_gqa_ref));
             if (n_embd_v_gqa != n_embd_v_gqa_ref) {
                 LLAMA_LOG_ERROR("%s: mismatched GQA embedding size (%u != %u, layer %d)\n", __func__, n_embd_v_gqa, n_embd_v_gqa_ref, il);
                 return false;
@@ -2335,15 +2334,14 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
                     const uint32_t h = sinfo.head();
                     for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
                         const size_t dst_offset = (h + j * cells.size()) * v_size_el;
-                        ggml_backend_tensor_set(v, io.read(cell_count * v_size_el), dst_offset, cell_count * v_size_el);
+                        io.read_tensor(v, dst_offset, cell_count * v_size_el);
                     }
                 } else {
                     // Slow path: scatter to non-contiguous positions
                     for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
-                        const void * src = io.read(cell_count * v_size_el);
                         for (uint32_t i = 0; i < cell_count; ++i) {
                             const size_t dst_offset = (sinfo.idxs[0][i] + j * cells.size()) * v_size_el;
-                            ggml_backend_tensor_set(v, (const char*)src + i * v_size_el, dst_offset, v_size_el);
+                            io.read_tensor(v, dst_offset, v_size_el);
                         }
                     }
                 }

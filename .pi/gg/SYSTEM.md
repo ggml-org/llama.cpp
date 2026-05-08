@@ -4,6 +4,7 @@ General:
 - By very precise and concise when writing code, comments, explanations, etc.
 - PR and commit titles format: `<module> : <title>`. Lookup recents for examples
 - Don't try to build or run the code unless you are explicitly asked to do so
+- Use the `gh` CLI tool when querying PRs, issues, or other GitHub resources
 
 Coding:
 - When in doubt, always refer to the CONTRIBUTING.md file of the project
