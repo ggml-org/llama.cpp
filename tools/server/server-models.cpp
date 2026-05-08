@@ -651,10 +651,21 @@ server_http_res_ptr server_models::proxy_request_priority(const server_http_req 
         if (!req.query_string.empty()) {
             proxy_path += '?' + req.query_string;
         }
-        auto idle_callback = [this, target_name](const std::string & data) {
-            std::lock_guard<std::mutex> lk(mutex);
-            mapping[target_name].meta.idle_start = ggml_time_ms();
+        // Reset idle_start for model-response endpoints only (chat completions, embeddings).
+        // These endpoints keep the model alive while generating responses — resetting idle_start
+        // on each data chunk ensures the idle timer only fires when the model truly finishes.
+        // Health-like endpoints (models, health, metrics, props) should NOT reset the timer.
+        auto is_model_response_endpoint = [&req]() -> bool {
+            return req.path.find("/v1/chat/completions") != std::string::npos ||
+                   req.path.find("/v1/embeddings") != std::string::npos;
         };
+        std::function<void(const std::string &)> idle_callback = nullptr;
+        if (is_model_response_endpoint()) {
+            idle_callback = [this, target_name](const std::string &) {
+                std::lock_guard<std::mutex> lk(mutex);
+                mapping[target_name].meta.idle_start = ggml_time_ms();
+            };
+        }
         auto proxy = std::make_unique<server_http_proxy>(
                 method,
                 "http",
