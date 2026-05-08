@@ -2,6 +2,7 @@
 #include "server-models.h"
 
 #include "build-info.h"
+#include "arg.h"
 #include "preset.h"
 #include "download.h"
 
@@ -236,9 +237,17 @@ void server_models::add_model(server_model_meta && meta) {
     meta.update_args(ctx_preset, bin_path); // render args
     // read priority from preset (if set, otherwise defaults to 0)
     std::string priority_str;
-    if (meta.preset.get_option("LLAMA_ARG_PRIORITY", priority_str)) {
+    if (meta.preset.get_option(COMMON_ARG_PRESET_PRIORITY, priority_str)) {
         meta.priority = std::stoi(priority_str);
-        SRV_DBG("Model '%s' priority: %d\n", meta.name.c_str(), meta.priority);
+        SRV_INF("add_model(%s): parsed priority from preset: %d (string='%s')\n", meta.name.c_str(), meta.priority, priority_str.c_str());
+    } else {
+        SRV_INF("add_model(%s): NO priority key found in preset, defaulting to 0\n", meta.name.c_str());
+    }
+    SRV_INF("add_model(%s): preset has %zu options total\n", meta.name.c_str(), meta.preset.options.size());
+    for (const auto & [opt, val] : meta.preset.options) {
+        if (opt.env) {
+            SRV_INF("  option: env='%s' val='%s'\n", opt.env, val.c_str());
+        }
     }
     std::string name = meta.name;
     mapping[name] = instance_t{
@@ -593,13 +602,24 @@ server_http_res_ptr server_models::proxy_request_priority(const server_http_req 
     }
 
     std::string running_name = get_running_model_name();
+    SRV_INF("proxy_request_priority(%s): target_priority=%d, running=%s\n", target_name.c_str(), target_priority, running_name.empty() ? "(none)" : running_name.c_str());
     if (running_name.empty()) {
         ensure_model_ready(target_name);
     } else {
         auto running_meta = get_meta(running_name);
         if (running_meta.has_value()) {
             const int running_priority = running_meta->priority;
+            SRV_INF("proxy_request_priority(%s): running=%s running_priority=%d\n", target_name.c_str(), running_name.c_str(), running_priority);
             if (target_priority > running_priority) {
+                // Higher-priority target always preempts regardless of pending requests
+                SRV_INF("preempting model %s (priority %d) for model %s (priority %d)\n",
+                        running_name.c_str(), running_priority, target_name.c_str(), target_priority);
+                std::lock_guard<std::mutex> lk(mutex);
+                stopping_models.insert(running_name);
+                cv_stop.notify_all();
+            } else if (target_priority == running_priority) {
+                // Equal priority: drain window blocks preemption if running model
+                // has queued requests
                 bool running_has_pending = has_pending_requests(running_name);
                 if (!running_has_pending) {
                     SRV_INF("preempting model %s (priority %d) for model %s (priority %d)\n",
@@ -607,9 +627,18 @@ server_http_res_ptr server_models::proxy_request_priority(const server_http_req 
                     std::lock_guard<std::mutex> lk(mutex);
                     stopping_models.insert(running_name);
                     cv_stop.notify_all();
+                } else {
+                    // running model has pending requests, wait for them
                 }
             }
+            // target_priority < running_priority: lower-priority target, higher-priority model stays running.
+            // ensure_model_ready/load will refuse to evict the higher-priority model, so this falls through
+            // and eventually returns a 503 / error to the caller.
         }
+        // Wait for the slot to become available. If the target model becomes running
+        // (after preemption or successful load), ensure_model_ready will return
+        // normally. If it fails to load (e.g. capacity exceeded),
+        // ensure_model_ready throws an error.
         ensure_model_ready(target_name);
     }
 
@@ -620,7 +649,27 @@ void server_models::load(const std::string & name) {
     if (!has_model(name)) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
-    unload_lru();
+    // Skip unloading if a higher-priority model is running - don't evict higher-priority models for lower-priority targets
+    bool skip_unload = false;
+    int target_priority = 0;
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        target_priority = mapping[name].meta.priority;
+        SRV_INF("load(%s): target_priority=%d\n", name.c_str(), target_priority);
+        for (const auto & m : mapping) {
+            SRV_INF("  mapping[%s]: status=%d priority=%d\n", m.first.c_str(), (int)m.second.meta.status, m.second.meta.priority);
+            if (m.second.meta.is_running() && m.second.meta.priority > target_priority) {
+                SRV_INF("skipping unload for model %s - %s (priority %d) has higher priority (%d vs %d)\n",
+                        name.c_str(), m.first.c_str(), m.second.meta.priority, target_priority, m.second.meta.priority);
+                skip_unload = true;
+                break;
+            }
+        }
+        SRV_INF("load(%s): skip_unload=%d\n", name.c_str(), skip_unload);
+    }
+    if (!skip_unload) {
+        unload_lru();
+    }
 
     std::lock_guard<std::mutex> lk(mutex);
 
