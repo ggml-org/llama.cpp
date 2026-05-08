@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Music, FileText } from '@lucide/svelte';
+	import { Music, Video, FileText } from '@lucide/svelte';
 	import { HorizontalScrollCarousel } from '$lib/components/app/misc';
 
 	interface PreviewItem {
@@ -7,6 +7,7 @@
 		name: string;
 		isImage: boolean;
 		isAudio: boolean;
+		isVideo: boolean;
 		preview?: string;
 	}
 
@@ -49,6 +50,8 @@
 						>
 							{#if item.isAudio}
 								<Music class="h-4 w-4 text-white/70" />
+							{:else if item.isVideo}
+								<Video class="h-4 w-4 text-white/70" />
 							{:else}
 								<FileText class="h-4 w-4 text-white/70" />
 							{/if}

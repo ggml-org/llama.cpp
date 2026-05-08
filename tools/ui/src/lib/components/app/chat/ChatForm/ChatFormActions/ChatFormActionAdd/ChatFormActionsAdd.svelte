@@ -7,6 +7,7 @@
 	interface Props {
 		disabled?: boolean;
 		hasAudioModality?: boolean;
+		hasVideoModality?: boolean;
 		hasMcpPromptsSupport?: boolean;
 		hasMcpResourcesSupport?: boolean;
 		hasVisionModality?: boolean;
@@ -20,6 +21,7 @@
 	let {
 		disabled = false,
 		hasAudioModality = false,
+		hasVideoModality = false,
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
 		hasVisionModality = false,
@@ -37,6 +39,7 @@
 	<ChatFormActionAddSheet
 		{disabled}
 		{hasAudioModality}
+		{hasVideoModality}
 		{hasVisionModality}
 		{hasMcpPromptsSupport}
 		{hasMcpResourcesSupport}
@@ -52,6 +55,7 @@
 	<ChatFormActionAddDropdown
 		{disabled}
 		{hasAudioModality}
+		{hasVideoModality}
 		{hasVisionModality}
 		{hasMcpPromptsSupport}
 		{hasMcpResourcesSupport}
