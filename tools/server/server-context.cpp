@@ -947,6 +947,10 @@ private:
             SRV_WRN("%s", "destroying the draft model as it is not going to be used\n");
 
             ctx_drft.reset();
+
+            for (auto & slot : slots) {
+                slot.ctx_drft = nullptr;
+            }
         }
 
         {
