@@ -250,8 +250,8 @@ class LoraTorchTensor:
                 raise NotImplementedError
         elif func is torch.split:
             assert len(args) >= 2
-            tensor, split_size = args[0], args[1]
-            dim = args[2] if len(args) > 2 else kwargs.get("dim", 0)
+            tensor, split_size = args[0], args[1]  # ty: ignore[index-out-of-bounds]
+            dim = args[2] if len(args) > 2 else kwargs.get("dim", 0)  # ty: ignore[index-out-of-bounds]
             return tensor.split(split_size, dim=dim)
         else:
             raise NotImplementedError
