@@ -6608,6 +6608,30 @@ class ZayaModel(TextModel):
             else:
                 raise
 
+    def set_vocab(self):
+        from gguf.vocab import LlamaHfVocab
+
+        vocab = LlamaHfVocab(self.dir_model)
+        tokens = []
+        scores = []
+        toktypes = []
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            toktypes.append(toktype)
+
+        assert len(tokens) == vocab.vocab_size
+
+        self.gguf_writer.add_tokenizer_model("gemma4")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+        self.gguf_writer.add_add_space_prefix(False)
+        self.gguf_writer.add_add_bos_token(True)
+
     def prepare_tensors(self):
         super().prepare_tensors()
         if self._experts:
