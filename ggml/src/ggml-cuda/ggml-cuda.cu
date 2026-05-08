@@ -1144,10 +1144,10 @@ static const ggml_backend_buffer_type_i ggml_backend_cuda_split_buffer_type_inte
 
 // Communication context for multi-GPU AllReduce during tensor parallelism.
 //
-// Created once per meta backend instance. The internal pipeline (if any) is
-// allocated eagerly at init time; NCCL communicators are created lazily on
-// first use so NCCL's init/runtime quirks don't interfere with configurations
-// that never hit the fallback path.
+// Created once per meta backend instance.  Resources for the selected mode
+// (NCCL communicators or the internal AllReduce pipeline) are initialised
+// eagerly during comm_init so any init failure surfaces at startup rather
+// than mid-run.
 struct ggml_backend_cuda_comm_context {
     using try_allreduce_fn = bool(*)(ggml_backend_cuda_comm_context *, struct ggml_tensor **);
 
@@ -1165,14 +1165,14 @@ struct ggml_backend_cuda_comm_context {
 
 #ifdef GGML_USE_NCCL
     std::vector<ncclComm_t>     comms;
-#endif
+#endif // GGML_USE_NCCL
 
     ~ggml_backend_cuda_comm_context() {
 #ifdef GGML_USE_NCCL
         for (ncclComm_t comm : comms) {
             NCCL_CHECK(ncclCommDestroy(comm));
         }
-#endif
+#endif // GGML_USE_NCCL
         ggml_cuda_ar_pipeline_free(ar_pipeline);
     }
 };
@@ -1276,6 +1276,13 @@ static bool ggml_backend_cuda_comm_allreduce_internal(
         return true;
     }
 
+    // Per-AR vector path requires the byte size to be a 16-byte multiple so
+    // the chunked-kernel can issue full-width vector loads/stores.  In
+    // practice all tensors we hand off here come from tensor-parallel splits
+    // of hidden_dim-multiples and trivially satisfy this; a violation would
+    // indicate a caller-side bug.
+    GGML_ASSERT(((size_t) ne * ggml_type_size(type) & 0xF) == 0);
+
     for (size_t i = 0; i < n_backends; ++i) {
         if (tensors[i] == nullptr) {
             GGML_LOG_ERROR("%s: internal failed: tensor[%zu] is null\n", __func__, i);
@@ -1318,7 +1325,7 @@ static bool ggml_backend_cuda_comm_try_allreduce_nccl(
 #else
     GGML_UNUSED(comm_ctx); GGML_UNUSED(tensors);
     GGML_ABORT("try_allreduce_nccl unreachable: built without NCCL");
-#endif
+#endif // GGML_USE_NCCL
 }
 
 // Internal-only (env=internal).  Failure aborts so the user knows their
@@ -1371,7 +1378,7 @@ static bool ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * ct
     }
     return true;
 }
-#endif
+#endif // GGML_USE_NCCL
 
 static bool ggml_backend_cuda_comm_init_internal(ggml_backend_cuda_comm_context * ctx) {
     ctx->ar_pipeline = ggml_cuda_ar_pipeline_init(ctx->dev_ids.data(), ctx->dev_ids.size());
@@ -1437,7 +1444,7 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
                            "multi-GPU performance will be suboptimal.  "
                            "Recompile with -DGGML_CUDA_NCCL=ON for best performance.");
         ret->try_allreduce = ggml_backend_cuda_comm_try_allreduce_butterfly;
-#endif
+#endif // GGML_USE_NCCL
     } else if (ret->try_allreduce == ggml_backend_cuda_comm_try_allreduce_internal_strict) {
         if (!ggml_backend_cuda_comm_init_internal(ret)) {
             GGML_ABORT("internal AllReduce pipeline init failed (n_devices != 2 or pre-Ampere?).  "
