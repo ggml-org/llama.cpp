@@ -265,7 +265,7 @@ class ChatStore {
 	}
 
 	private isChatLoadingInternal(convId: string): boolean {
-		return this.chatStreamingStates.has(convId);
+		return this.chatLoadingStates.has(convId) || this.chatStreamingStates.has(convId);
 	}
 
 	hasPendingMessage(convId: string): boolean {
