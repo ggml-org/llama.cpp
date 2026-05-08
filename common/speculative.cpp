@@ -267,6 +267,7 @@ struct common_speculative_state_draft : public common_speculative_state {
                 }
 
                 common_sampler_sample(smpl.get(), ctx_dft, i_batch, true);
+                ++i_batch;
 
                 const auto * cur_p = common_sampler_get_candidates(smpl.get(), true);
 
@@ -922,6 +923,7 @@ void common_speculative_draft(
         }
 
         int n_drafting = 0;
+
         for (auto & dp : dparams) {
             auto & result = *dp.second.result;
 
@@ -945,8 +947,6 @@ void common_speculative_draft(
 
                     impl->n_gen_drafts++;
                     impl->n_gen_tokens += result.size();
-
-                    break; // we have a draft, so break out of the loop and return it.
                 }
             }
 
@@ -980,8 +980,6 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, u
         impl->accept(seq_id, n_accepted);
         impl->n_call_accept++;
     }
-
-    spec->impl_for_seq_id[seq_id] = nullptr;
 }
 
 void common_speculative_print_stats(const common_speculative * spec) {

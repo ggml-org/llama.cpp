@@ -308,76 +308,7 @@ struct server_slot {
         return n_draft_max;
     }
 
-    void update_batch(llama_batch & batch, bool use_ckpt_tgt, bool use_ckpt_dft) {
-        const int n_draft_max = get_n_draft_max();
-        if (n_draft_max > 0) {
-            GGML_ASSERT(can_speculate());
-
-            // generate draft tokens in speculative decoding mode
-            // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
-            //       perform the speculative drafting for all sequences at the same time in a single batch
-            const llama_tokens & tokens_text = prompt.tokens.get_text_tokens();
-
-            if (!spec_draft.empty()) {
-                // we have a previous (partial) draft to reuse
-                if (use_ckpt_tgt) {
-                    GGML_ASSERT(!spec_ckpt.empty());
-                }
-            } else {
-                GGML_ASSERT(spec_i_batch.empty());
-
-                spec_ckpt.update_pos(
-                        prompt.n_tokens(),
-                        llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), id),
-                        llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), id));
-
-                if (use_ckpt_dft) {
-                    spec_ckpt.update_dft(ctx_dft, this->id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
-                }
-
-                // generate a new draft
-                common_speculative_draft_params_map dparams;
-                dparams[this->id] = common_speculative_draft_params {
-                    /* .drafting = */ true,
-                    /* .n_max    = */ n_draft_max,
-                    /* .n_past   = */ prompt.n_tokens(),
-                    /* .id_last  = */ sampled,
-                    /* .prompt   = */ &tokens_text,
-                    /* .result   = */ &spec_draft,
-                };
-                common_speculative_draft(spec, dparams);
-                n_draft_total += spec_draft.size();
-
-                if (spec_draft.size() > (size_t) n_draft_max) {
-                    SLT_WRN(*this, "draft size %d exceeds max %d, truncating\n", (int) spec_draft.size(), n_draft_max);
-                    spec_draft.resize(n_draft_max);
-                }
-
-                if (!spec_draft.empty()) {
-                    if (use_ckpt_tgt) {
-                        //const int64_t t_start = ggml_time_us();
-
-                        spec_ckpt.update_tgt(ctx_tgt, this->id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
-
-                        //const int64_t t_total = ggml_time_us() - t_start;
-                        //printf("checkpoint total: %f ms\n", t_total / 1000.0);
-
-                        SLT_DBG(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %d, size = %.3f MiB, draft = %.3f MiB)\n",
-                                spec_ckpt.pos_min, spec_ckpt.pos_max, prompt.n_tokens(), (float) spec_ckpt.size() / 1024 / 1024, (float) spec_ckpt.data_dft.size() / 1024 / 1024);
-                    }
-                }
-
-                // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
-                if (ctx_dft) {
-                    spec_ckpt.load_dft(ctx_dft, this->id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
-
-                    llama_memory_seq_rm(llama_get_memory(ctx_dft), this->id, spec_ckpt.pos_max + 1, -1);
-                }
-            }
-
-            GGML_ASSERT(spec_draft.size() <= (size_t) n_draft_max);
-        }
-
+    void update_batch(llama_batch & batch) {
         if (spec_draft.empty()) {
             // no speculative decoding
             i_batch = batch.n_tokens;
@@ -2252,12 +2183,9 @@ private:
         // track if given slot can be batched with slots already in the batch
         server_slot * slot_batched = nullptr;
 
-        auto accept_special_token = [&](server_slot & slot, llama_token token) {
-            return params_base.special ||
-                slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
-        };
+        common_speculative_draft_params_map dparams;
 
-        // first, add sampled tokens from any ongoing sequences
+        // first, process slots that are speculative decoding
         for (auto & slot : slots) {
             if (slot.state != SLOT_STATE_GENERATING) {
                 continue;
@@ -2270,9 +2198,102 @@ private:
                 continue;
             }
 
-            slot.update_batch(batch,
-                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL,
-                    ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
+            const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+            const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+
+            const int n_draft_max = slot.get_n_draft_max();
+            if (n_draft_max > 0) {
+                GGML_ASSERT(slot.can_speculate());
+
+                if (!slot.spec_draft.empty()) {
+                    // we have a previous (partial) draft to reuse
+                    if (use_ckpt_tgt) {
+                        GGML_ASSERT(!slot.spec_ckpt.empty());
+                    }
+                } else {
+                    GGML_ASSERT(slot.spec_i_batch.empty());
+
+                    slot.spec_ckpt.update_pos(
+                            slot.prompt.n_tokens(),
+                            llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id),
+                            llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id));
+
+                    if (use_ckpt_dft) {
+                        slot.spec_ckpt.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+                    }
+
+                    dparams[slot.id] = common_speculative_draft_params {
+                        /* .drafting = */ true,
+                        /* .n_max    = */ n_draft_max,
+                        /* .n_past   = */ slot.prompt.n_tokens(),
+                        /* .id_last  = */ slot.sampled,
+                        /* .prompt   = */ nullptr,
+                        /* .result   = */ &slot.spec_draft,
+                    };
+                }
+            }
+        }
+
+        // generate the actual drafts (if any)
+        if (!dparams.empty()) {
+            const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+
+            // TODO: tmp
+            std::map<llama_seq_id, llama_tokens> prompts;
+            for (auto & dp : dparams) {
+                auto & slot = slots[dp.first];
+                prompts[dp.first] = slot.prompt.tokens.get_text_tokens();
+
+                dp.second.prompt = &prompts[dp.first];
+            }
+
+            common_speculative_draft(spec.get(), dparams);
+
+            for (auto & dp : dparams) {
+                auto & slot = slots[dp.first];
+
+                slot.n_draft_total += slot.spec_draft.size();
+
+                // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
+                if (ctx_dft) {
+                    slot.spec_ckpt.load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+
+                    llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, slot.spec_ckpt.pos_max + 1, -1);
+                }
+
+                if (!slot.spec_draft.empty()) {
+                    if (use_ckpt_tgt) {
+                        //const int64_t t_start = ggml_time_us();
+
+                        slot.spec_ckpt.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+
+                        //const int64_t t_total = ggml_time_us() - t_start;
+                        //printf("checkpoint total: %f ms\n", t_total / 1000.0);
+
+                        SLT_DBG(slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %d, size = %.3f MiB, draft = %.3f MiB)\n",
+                                slot.spec_ckpt.pos_min, slot.spec_ckpt.pos_max, slot.prompt.n_tokens(),
+                                (float) slot.spec_ckpt.size() / 1024 / 1024, (float) slot.spec_ckpt.data_dft.size() / 1024 / 1024);
+                    }
+                }
+            }
+        }
+
+        slot_batched = nullptr;
+
+        // add the speculative drafts to the batch, or simply add the sampled tokens
+        for (auto & slot : slots) {
+            if (slot.state != SLOT_STATE_GENERATING) {
+                continue;
+            }
+
+            // check if we can batch this slot with the previous one
+            if (!slot_batched) {
+                slot_batched = &slot;
+            } else if (!slot_batched->can_batch_with(slot)) {
+                continue;
+            }
+
+            slot.update_batch(batch);
         }
 
         // process in chunks of params.n_batch
@@ -2795,6 +2816,11 @@ private:
         }
 
         SRV_DBG("decoding batch, n_tokens = %d\n", batch.n_tokens);
+
+        auto accept_special_token = [&](server_slot & slot, llama_token token) {
+            return params_base.special ||
+                slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
+        };
 
         if (slot_batched) {
             // apply lora, only need to do it once per batch
