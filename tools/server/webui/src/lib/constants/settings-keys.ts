@@ -28,6 +28,7 @@ export const SETTINGS_KEYS = {
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
+	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	// Sampling
 	TEMPERATURE: 'temperature',
 	DYNATEMP_RANGE: 'dynatemp_range',
@@ -51,6 +52,7 @@ export const SETTINGS_KEYS = {
 	DRY_ALLOWED_LENGTH: 'dry_allowed_length',
 	DRY_PENALTY_LAST_N: 'dry_penalty_last_n',
 	// MCP
+	MCP_SERVERS: 'mcpServers',
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
 	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
 	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
@@ -61,5 +63,6 @@ export const SETTINGS_KEYS = {
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
+	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	CUSTOM: 'custom'
 } as const;

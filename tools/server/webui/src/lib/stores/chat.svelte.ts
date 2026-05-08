@@ -37,7 +37,7 @@ import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
-	TITLE
+	TITLE_GENERATION
 } from '$lib/constants';
 import type {
 	ChatMessageTimings,
@@ -265,7 +265,7 @@ class ChatStore {
 	}
 
 	private isChatLoadingInternal(convId: string): boolean {
-		return this.chatStreamingStates.has(convId);
+		return this.chatLoadingStates.has(convId) || this.chatStreamingStates.has(convId);
 	}
 
 	hasPendingMessage(convId: string): boolean {
@@ -950,7 +950,7 @@ class ChatStore {
 			typeof configValue.titleGenerationPrompt === 'string' &&
 			configValue.titleGenerationPrompt.trim()
 				? configValue.titleGenerationPrompt
-				: TITLE.DEFAULT_PROMPT;
+				: TITLE_GENERATION.DEFAULT_PROMPT;
 
 		const titlePrompt = titlePromptTemplate
 			.replace('{{USER}}', String(userContent || ''))
@@ -969,14 +969,14 @@ class ChatStore {
 
 		let cleanTitle = titleResponse.trim();
 		cleanTitle = cleanTitle
-			.replace(TITLE.PREFIX_PATTERN, '')
-			.replace(TITLE.QUOTE_PATTERN, '')
+			.replace(TITLE_GENERATION.PREFIX_PATTERN, '')
+			.replace(TITLE_GENERATION.QUOTE_PATTERN, '')
 			.trim();
-		if (!cleanTitle || cleanTitle.length < TITLE.MIN_LENGTH) {
+		if (!cleanTitle || cleanTitle.length < TITLE_GENERATION.MIN_LENGTH) {
 			const firstLine = userContent.split('\n').find((l) => l.trim().length > 0);
-			cleanTitle = firstLine ? firstLine.trim() : TITLE.FALLBACK;
+			cleanTitle = firstLine ? firstLine.trim() : TITLE_GENERATION.FALLBACK;
 		}
-		if (cleanTitle && cleanTitle.length >= TITLE.MIN_LENGTH) {
+		if (cleanTitle && cleanTitle.length >= TITLE_GENERATION.MIN_LENGTH) {
 			await conversationsStore.updateConversationName(convId, cleanTitle);
 		}
 	}
