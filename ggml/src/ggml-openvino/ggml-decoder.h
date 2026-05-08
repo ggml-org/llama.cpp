@@ -285,9 +285,6 @@ public:
     }
 
     std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) {
-        if (is_inp_tok(tensor, op)) {
-            return "inp_tokens";
-        }
         if (is_inp_pos(tensor, op)) {
             return "inp_pos";
         }
