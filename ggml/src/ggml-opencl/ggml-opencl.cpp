@@ -5179,9 +5179,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
             return;
         }
-#endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
-#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         cl_kernel kernel = backend_ctx->kernel_convert_block_q4_1;
 
         if (use_adreno_kernels(backend_ctx, tensor)) {
@@ -13338,7 +13336,6 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     // Use pre-allocated placeholder
                     region.origin = 0;
                     region.size = ne00 * max_post_router_tile * n_tile_size * sizeof(float);
-                    GGML_ASSERT((region.size <= 145088768) && "[Runtime error] Q4_1 MoE ILA src1 allocation exceeds placeholder\n");
                     backend_ctx->prealloc_act_trans.allocate(backend_ctx->context, region.size);
                     buf_src1_reordered = clCreateSubBuffer(
                         backend_ctx->prealloc_act_trans.buffer,
