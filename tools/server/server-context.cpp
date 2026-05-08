@@ -36,54 +36,6 @@ using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
 
-static void server_prompt_checkpoint_update(
-        server_prompt_checkpoint & ckpt,
-        llama_context * ctx_main,
-        llama_context * ctx_drft,
-        int id, int64_t n_tokens, bool on_device,
-        llama_pos pos_min = -1,
-        llama_pos pos_max = -1) {
-    auto * ctx = ctx_main ? ctx_main : ctx_drft;
-
-    if (pos_min == -1) {
-        pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), id);
-    }
-    if (pos_max == -1) {
-        pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx), id);
-    }
-
-    auto flags = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
-    if (on_device) {
-        flags |= LLAMA_STATE_SEQ_FLAGS_ON_DEVICE;
-    }
-
-    ckpt.pos_min  = pos_min;
-    ckpt.pos_max  = pos_max;
-    ckpt.n_tokens = n_tokens;
-
-    if (ctx_main) {
-        const size_t ckpt_size = llama_state_seq_get_size_ext(ctx_main, id, flags);
-
-        ckpt.data_main.resize(ckpt_size);
-
-        const size_t n = llama_state_seq_get_data_ext(ctx_main, ckpt.data_main.data(), ckpt_size, id, flags);
-        if (n != ckpt_size) {
-            GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", ckpt_size, n);
-        }
-    }
-
-    if (ctx_drft) {
-        const size_t ckpt_size = llama_state_seq_get_size_ext(ctx_drft, id, flags);
-
-        ckpt.data_drft.resize(ckpt_size);
-
-        const size_t n = llama_state_seq_get_data_ext(ctx_drft, ckpt.data_drft.data(), ckpt_size, id, flags);
-        if (n != ckpt_size) {
-            GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", ckpt_size, n);
-        }
-    }
-}
-
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
     SLOT_STATE_IDLE,
@@ -156,8 +108,8 @@ struct server_slot {
     void prompt_save(server_prompt_cache & prompt_cache) const {
         GGML_ASSERT(prompt.data.size() == 0);
 
-        const size_t cur_size_main =            llama_state_seq_get_size_ext(ctx_main, id, 0);
-        const size_t cur_size_drft = ctx_drft ? llama_state_seq_get_size_ext(ctx_drft, id, 0) : 0;
+        const size_t cur_size_main =            llama_state_seq_get_size_ext(ctx_main, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        const size_t cur_size_drft = ctx_drft ? llama_state_seq_get_size_ext(ctx_drft, id, LLAMA_STATE_SEQ_FLAGS_NONE) : 0;
 
         const size_t cur_size = cur_size_main + cur_size_drft;
 
@@ -169,9 +121,9 @@ struct server_slot {
             return;
         }
 
-        llama_state_seq_get_data_ext(ctx_main, cur->data.main.data(), cur_size_main, id, 0);
+        llama_state_seq_get_data_ext(ctx_main, cur->data.main.data(), cur_size_main, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         if (ctx_drft) {
-            llama_state_seq_get_data_ext(ctx_drft, cur->data.drft.data(), cur_size_drft, id, 0);
+            llama_state_seq_get_data_ext(ctx_drft, cur->data.drft.data(), cur_size_drft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         }
     }
 
@@ -384,19 +336,17 @@ struct server_slot {
             } else {
                 GGML_ASSERT(spec_i_batch.empty());
 
-                spec_ckpt.pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_main), id);
+                spec_ckpt.update_pos(
+                        prompt.n_tokens(),
+                        llama_memory_seq_pos_min(llama_get_memory(ctx_main), id),
+                        llama_memory_seq_pos_max(llama_get_memory(ctx_main), id));
 
                 if (use_ckpt_drft) {
-                    const auto n_tokens = prompt.tokens.size();
-
-                    server_prompt_checkpoint_update(spec_ckpt, nullptr, ctx_drft, this->id, n_tokens, true);
-
-                    SLT_DBG(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
-                            spec_ckpt.pos_min, spec_ckpt.pos_max, n_tokens, (float) spec_ckpt.size() / 1024 / 1024);
+                    spec_ckpt.update_drft(ctx_drft, this->id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
                 }
 
                 // generate a new draft
-                spec_draft = common_speculative_draft(spec.get(), params_spec, tokens_text, prompt.tokens.size(), sampled);
+                spec_draft = common_speculative_draft(spec.get(), params_spec, tokens_text, prompt.n_tokens(), sampled);
                 n_draft_total += spec_draft.size();
 
                 if (spec_draft.size() > (size_t) n_draft_max) {
@@ -406,29 +356,21 @@ struct server_slot {
 
                 if (!spec_draft.empty()) {
                     if (use_ckpt_main) {
-                        const auto n_tokens = prompt.tokens.size();
-
                         //const int64_t t_start = ggml_time_us();
 
-                        server_prompt_checkpoint_update(spec_ckpt, ctx_main, nullptr, this->id, n_tokens, true);
+                        spec_ckpt.update_main(ctx_main, this->id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
                         //const int64_t t_total = ggml_time_us() - t_start;
                         //printf("checkpoint total: %f ms\n", t_total / 1000.0);
 
-                        SLT_DBG(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
-                                spec_ckpt.pos_min, spec_ckpt.pos_max, n_tokens, (float) spec_ckpt.size() / 1024 / 1024);
+                        SLT_DBG(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %d, size = %.3f MiB, draft = %.3f MiB)\n",
+                                spec_ckpt.pos_min, spec_ckpt.pos_max, prompt.n_tokens(), (float) spec_ckpt.size() / 1024 / 1024, (float) spec_ckpt.data_drft.size() / 1024 / 1024);
                     }
                 }
 
                 // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
                 if (ctx_drft) {
-                    if (use_ckpt_drft) {
-                        const size_t n = llama_state_seq_set_data_ext(ctx_drft, spec_ckpt.data_drft.data(), spec_ckpt.data_drft.size(), this->id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
-                        if (n != spec_ckpt.data_drft.size()) {
-                            GGML_ABORT("%s: failed to restore draft checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
-                                    __func__, spec_ckpt.pos_min, spec_ckpt.pos_max, spec_ckpt.data_drft.size(), spec_ckpt.data_drft.size(), n);
-                        }
-                    }
+                    spec_ckpt.load_drft(ctx_drft, this->id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
                     llama_memory_seq_rm(llama_get_memory(ctx_drft), this->id, spec_ckpt.pos_max + 1, -1);
                 }
@@ -1926,7 +1868,11 @@ private:
         }
 
         auto & cur = slot.prompt.checkpoints.emplace_back();
-        server_prompt_checkpoint_update(cur, ctx_main, ctx_drft.get(), slot.id, slot.prompt.n_tokens() - n_tokens_cur, false, pos_min, pos_max);
+
+        cur.update_pos(slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max);
+
+        cur.update_main(ctx_main,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        cur.update_drft(ctx_drft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
         SLT_WRN(slot,
                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
@@ -2603,25 +2549,13 @@ private:
 
                                     if (!do_reset) {
                                         // restore the context checkpoint
-                                        const size_t ckpt_size_main = it->data_main.size();
-                                        const size_t n = llama_state_seq_set_data_ext(ctx_main, it->data_main.data(), ckpt_size_main, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                        if (n != ckpt_size_main) {
-                                            SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float) ckpt_size_main / 1024 / 1024);
-                                            do_reset = true;
-                                            //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
-                                        } else {
-                                            pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
-                                            n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
-                                            SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) ckpt_size_main / 1024 / 1024);
 
-                                            if (ctx_drft) {
-                                                const size_t ckpt_size_drft = it->data_drft.size();
-                                                const size_t n = llama_state_seq_set_data_ext(ctx_drft.get(), it->data_drft.data(), ckpt_size_drft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                                if (n != ckpt_size_drft) {
-                                                    GGML_ABORT("inconsistent draft state");
-                                                }
-                                            }
-                                        }
+                                        it->load_main(ctx_main,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        it->load_drft(ctx_drft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+                                        pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
+                                        n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
+                                        SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
                                     }
 
                                     if (do_reset) {
@@ -2973,9 +2907,9 @@ private:
             //
             //       | spec type   | need re-eval |
             //       | ---         | ---          |
-            //       | draft model | no           |
+            //       | draft model | no           | because the draft model does not use embeddings from the target
             //       | MTP (std)   | yes          |
-            //       | MTP Gemma4  | no           |
+            //       | MTP Gemma4  | no           | because the KV cache is shared
             //       | Eagle3      | yes          |
             //       | DFlash      | yes?         |
             //
@@ -3138,7 +3072,6 @@ private:
                 // verify and try to accept the draft
                 {
                     const bool use_ckpt_main = ctx_main_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
-                    const bool use_ckpt_drft = ctx_drft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
                     // only save the sampler sampler state if we use checkpoints
                     common_sampler_ptr smpl_save;
@@ -3164,27 +3097,16 @@ private:
 
                             const auto & ckpt = slot.spec_ckpt;
 
-                            SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n",
-                                    ckpt.pos_min, ckpt.pos_max, ckpt.size());
+                            SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
 
                             {
-                                const size_t n = llama_state_seq_set_data_ext(slot.ctx_main, ckpt.data_main.data(), ckpt.data_main.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
-                                if (n != ckpt.data_main.size()) {
-                                    GGML_ABORT("%s: failed to restore context checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
-                                            __func__, ckpt.pos_min, ckpt.pos_max, ckpt.data_main.size(), ckpt.data_main.size(), n);
-                                }
+                                ckpt.load_main(slot.ctx_main, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
                                 llama_memory_seq_rm(llama_get_memory(slot.ctx_main), slot.id, ckpt.pos_max + 1, -1);
                             }
 
                             if (slot.ctx_drft) {
-                                if (use_ckpt_drft) {
-                                    const size_t n = llama_state_seq_set_data_ext(slot.ctx_drft, ckpt.data_drft.data(), ckpt.data_drft.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
-                                    if (n != ckpt.data_drft.size()) {
-                                        GGML_ABORT("%s: failed to restore draft checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
-                                                __func__, ckpt.pos_min, ckpt.pos_max, ckpt.data_drft.size(), ckpt.data_drft.size(), n);
-                                    }
-                                }
+                                ckpt.load_drft(slot.ctx_drft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
                                 llama_memory_seq_rm(llama_get_memory(slot.ctx_drft), slot.id, ckpt.pos_max + 1, -1);
                             }
