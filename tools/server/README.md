@@ -1651,6 +1651,7 @@ Note:
 2. Adding `?reload=1` to the query params will refresh the list of models. The behavior is as follow:
     - If a model is running but updated or removed from the source, it will be unloaded
     - If a model is not running, it will be added or updated according to the source
+3. When the model is loaded, the info from `/v1/models` is forwarded to router's `/v1/models`. This includes metadata about the model and the runtime instance.
 
 The `status` object can be:
 

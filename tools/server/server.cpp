@@ -334,7 +334,8 @@ int main(int argc, char ** argv) {
         // optionally, notify router server that this instance is ready
         std::thread monitor_thread;
         if (server_models::is_child_server()) {
-            monitor_thread = server_models::setup_child_server(shutdown_handler);
+            json model_info = routes.get_model_info();
+            monitor_thread = server_models::setup_child_server(shutdown_handler, model_info);
         }
 
         // this call blocks the main thread until queue_tasks.terminate() is called
