@@ -2406,21 +2406,6 @@ static bool ggml_hexagon_supported_add_id(const struct ggml_hexagon_session * se
     return true;
 }
 
-// Variant of ggml_hexagon_supported_unary that allows non-contiguous src0.
-// Used for ops (like L2_NORM) whose DMA loop handles strides explicitly.
-static bool ggml_hexagon_supported_unary_nc(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
-    const struct ggml_tensor * src0 = op->src[0];
-    const struct ggml_tensor * dst  = op;
-
-    if (src0->type != GGML_TYPE_F32) return false;
-    if (dst->type  != GGML_TYPE_F32) return false;
-    if (!ggml_are_same_shape(src0, dst)) return false;
-    // dst must be contiguous; src0 may be non-contiguous
-    if (!ggml_is_contiguous(dst)) return false;
-
-    return true;
-}
-
 static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
@@ -2435,8 +2420,8 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
         return false;
     }
 
-    // TODO: add support for non-contiguous elements within a row
-    if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous_rows(dst)) {
+    // dst must be contiguous; src0 may be non-contiguous
+    if (!ggml_is_contiguous(dst)) {
         return false;
     }
 
@@ -3270,7 +3255,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             break;
 
         case GGML_OP_L2_NORM:
-            supp = ggml_hexagon_supported_unary_nc(sess, op);
+            supp = ggml_hexagon_supported_unary(sess, op);
             break;
 
         case GGML_OP_RMS_NORM:
