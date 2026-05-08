@@ -6454,6 +6454,45 @@ class KimiLinearModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("ZayaModel", "ZayaForCausalLM")
+class ZayaModel(TextModel):
+    """Zaya-1 model with Compressed Convolutional Attention"""
+    model_arch = gguf.MODEL_ARCH.ZAYA
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        
+        # ZAYA-specific params if any from config.json (e.g. ssm_d_conv)
+        if "ssm_d_conv" in self.hparams:
+            self.gguf_writer.add_ssm_conv_kernel(self.hparams["ssm_d_conv"])
+        else:
+            # Fallback if config is different
+            self.gguf_writer.add_ssm_conv_kernel(2) # Default for ZAYA1-8B
+            
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Tensors will be automatically mapped based on tensor_mapping.py if they match
+        
+        # We skip MoE FFN weights, unused biases, etc. temporarily since we are using dense FFN
+        skip_keywords = [
+            "zaya_block.experts", 
+            "res_scale.", 
+            "val_proj2"
+        ]
+        
+        if any(kw in name for kw in skip_keywords):
+            logger.info(f"Skipping tensor (dense FFN test): {name}")
+            return
+            
+        try:
+            yield from super().modify_tensors(data_torch, name, bid)
+        except ValueError as e:
+            if "Can not map tensor" in str(e):
+                logger.warning(f"Skipping unmapped tensor: {name}")
+            else:
+                raise
+
+
 @ModelBase.register("InternLM2ForCausalLM")
 class InternLM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.INTERNLM2

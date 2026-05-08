@@ -259,6 +259,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.q_proj",                     # llada
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
+            "model.layers.{bid}.self_attn.qkv.linear_q",                 # Zaya
         ),
 
         # Attention key
@@ -279,6 +280,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.k_proj",                   # llada
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
             "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
+            "model.layers.{bid}.self_attn.qkv.linear_k",               # Zaya
         ),
 
         # Attention value
@@ -298,6 +300,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.v_proj",                     # llada
             "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.v_proj",                        # nemotron-h
+            "model.layers.{bid}.self_attn.qkv.val_proj1",                # Zaya
         ),
 
         # Attention output
@@ -336,6 +339,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.o_proj",                                # qwen3-embedding
             "backbone.layers.{bid}.mixer.o_proj",                           # nemotron-h
             "model.layers.{bid}.self_attn.language_expert_dense",           # cogvlm
+            "model.layers.{bid}.self_attn.o_proj",                          # Zaya
         ),
 
         # Attention output norm
@@ -854,6 +858,12 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.norm",     # mamba2
             "model.layers.{bid}.self_attn.o_norm",  # kimi
         ),
+        MODEL_TENSOR.ATTN_NORM: (
+            "model.layers.{bid}.input_layernorm",
+            "model.layers.{bid}.ln_1",
+            "model.layers.{bid}.norm1",
+            "model.layers.{bid}.input_norm",        # Zaya
+        ),
 
         MODEL_TENSOR.SSM_OUT: (
             "model.layers.{bid}.out_proj",               # mamba-hf
@@ -890,6 +900,19 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_BETA: (
             "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5
             "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
+        ),
+        # ZAYA CCA
+        MODEL_TENSOR.CCA_CONV_DW: (
+            "model.layers.{bid}.self_attn.qkv.conv_qk.0", # Zaya
+        ),
+        MODEL_TENSOR.CCA_CONV_GRP: (
+            "model.layers.{bid}.self_attn.qkv.conv_qk.1", # Zaya
+        ),
+        MODEL_TENSOR.CCA_QK_NORM: (
+            "model.layers.{bid}.self_attn.qk_norm",   # Zaya
+        ),
+        MODEL_TENSOR.CCA_K_SCALE: (
+            "model.layers.{bid}.self_attn.qkv.temp",          # Zaya
         ),
         MODEL_TENSOR.SSM_G_A: (
             "model.layers.{bid}.self_attn.g_a_proj",

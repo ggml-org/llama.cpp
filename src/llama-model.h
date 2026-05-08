@@ -477,6 +477,13 @@ struct llama_layer {
     struct ggml_tensor * ssm_g_b    = nullptr;
     struct ggml_tensor * ssm_o_norm = nullptr;
 
+    // ZAYA CCA (Compressed Convolutional Attention)
+    struct ggml_tensor * cca_conv_dw    = nullptr;  // depthwise conv (conv_qk.0)
+    struct ggml_tensor * cca_conv_grp   = nullptr;  // grouped conv   (conv_qk.1)
+    struct ggml_tensor * cca_conv_grp_b = nullptr;  // grouped conv bias
+    struct ggml_tensor * cca_qk_norm    = nullptr;  // RMSNorm on concat(Q,K)
+    struct ggml_tensor * cca_k_scale    = nullptr;  // learned K temperature
+
     // DSA (deepseek sparse attention)
     struct ggml_tensor * indexer_k_norm   = nullptr;
     struct ggml_tensor * indexer_k_norm_b = nullptr;

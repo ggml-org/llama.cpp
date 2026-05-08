@@ -137,6 +137,7 @@ enum llm_arch {
     LLM_ARCH_LLAMA_EMBED,
     LLM_ARCH_MAINCODER,
     LLM_ARCH_KIMI_LINEAR,
+    LLM_ARCH_ZAYA,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -444,6 +445,11 @@ enum llm_tensor {
     LLM_TENSOR_SSM_BETA,            // kimi: beta mixing coefficient and qwen3.5
     LLM_TENSOR_SSM_G_A,             // kimi: output gate projection A
     LLM_TENSOR_SSM_G_B,             // kimi: output gate projection B
+    // ZAYA CCA (Compressed Convolutional Attention)
+    LLM_TENSOR_CCA_CONV_DW,         // zaya: depthwise conv1d (conv_qk.0)
+    LLM_TENSOR_CCA_CONV_GRP,        // zaya: grouped conv1d  (conv_qk.1)
+    LLM_TENSOR_CCA_QK_NORM,         // zaya: RMSNorm on concat(Q,K)
+    LLM_TENSOR_CCA_K_SCALE,         // zaya: learned K temperature
     LLM_TENSOR_TIME_MIX_W0,
     LLM_TENSOR_TIME_MIX_W1,
     LLM_TENSOR_TIME_MIX_W2,
