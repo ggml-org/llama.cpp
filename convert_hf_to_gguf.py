@@ -710,7 +710,7 @@ class ModelBase:
                 self._repack_nvfp4(name, weight, scale, scale2, input_scale)
 
         # Flush any remaining experts (fallback if n_experts was unknown)
-        for bid, proj_type in expert_blocks.keys():
+        for bid, proj_type in list(expert_blocks.keys()):
             self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type)
 
         # Remove consumed tensors so get_tensors/modify_tensors won't see them
@@ -718,7 +718,7 @@ class ModelBase:
             self.model_tensors.pop(name, None)
 
         # Remove any remaining unused auxiliary tensors
-        for name in self.model_tensors.keys():
+        for name in list(self.model_tensors.keys()):
             if name.endswith((".k_scale", ".v_scale")):
                 del self.model_tensors[name]
 
