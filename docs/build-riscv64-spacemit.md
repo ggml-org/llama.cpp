@@ -9,18 +9,20 @@ wget https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_6
 ~~~
 
 2. Build
-Below is the build script: it requires utilizing RISC-V vector instructions for acceleration. Ensure the `GGML_CPU_RISCV64_SPACEMIT` compilation option is enabled. The currently supported optimization version is `RISCV64_SPACEMIT_IME1`, corresponding to the `RISCV64_SPACEMIT_IME_SPEC` compilation option. Compiler configurations are defined in the `riscv64-spacemit-linux-gnu-gcc.cmake` file. Please ensure you have installed the RISC-V compiler and set the environment variable via `export RISCV_ROOT_PATH={your_compiler_path}`.
+Below is the build script: it requires utilizing RISC-V vector instructions for acceleration. Ensure the `GGML_CPU_RISCV64_SPACEMIT` compilation option is enabled. The currently supported optimization version is `RISCV64_SPACEMIT_IME1` and `RISCV64_SPACEMIT_IME2`, corresponding to the `RISCV64_SPACEMIT_IME_SPEC` compilation option. Compiler configurations are defined in the `riscv64-spacemit-linux-gnu-gcc.cmake` file. Please ensure you have installed the RISC-V compiler and set the environment variable via `export RISCV_ROOT_PATH={your_compiler_path}`.
 ```bash
 
 cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_CPU_RISCV64_SPACEMIT=ON \
+    -DGGML_CPU_REPACK=OFF \
     -DLLAMA_OPENSSL=OFF \
     -DGGML_RVV=ON \
+    -DGGML_RV_ZVFH=ON \
     -DGGML_RV_ZFH=ON \
     -DGGML_RV_ZICBOP=ON \
     -DGGML_RV_ZIHINTPAUSE=ON \
-    -DRISCV64_SPACEMIT_IME_SPEC=RISCV64_SPACEMIT_IME1 \
+    -DGGML_RV_ZBA=ON \
     -DCMAKE_TOOLCHAIN_FILE=${PWD}/cmake/riscv64-spacemit-linux-gnu-gcc.cmake \
     -DCMAKE_INSTALL_PREFIX=build/installed
 
@@ -49,6 +51,8 @@ ${QEMU_ROOT_PATH}/bin/qemu-riscv64 -L ${RISCV_ROOT_PATH_IME1}/sysroot -cpu max,v
 ~~~
 ## Performance
 #### Quantization Support For Matrix
+
+* Spacemit(R) X60
 ~~~
 model name      : Spacemit(R) X60
 isa             : rv64imafdcv_zicbom_zicboz_zicntr_zicond_zicsr_zifencei_zihintpause_zihpm_zfh_zfhmin_zca_zcd_zba_zbb_zbc_zbs_zkt_zve32f_zve32x_zve64d_zve64f_zve64x_zvfh_zvfhmin_zvkt_sscofpmf_sstc_svinval_svnapot_svpbmt
@@ -88,3 +92,14 @@ Qwen2.5 1.5B | 1.04 GiB | 1.78 B |   cpu   |    4    | pp512|10.38 ± 0.10|
 Qwen2.5 1.5B | 1.04 GiB | 1.78 B |   cpu   |    4    | tg128|3.17 ± 0.08|
 Qwen2.5 3B   | 1.95 GiB | 3.40 B |   cpu   |    4    | pp512|4.23 ± 0.04|
 Qwen2.5 3B   | 1.95 GiB | 3.40 B |   cpu   |    4    | tg128|1.73 ± 0.00|
+
+* Spacemit(R) A100
+~~~
+model name      : Spacemit(R) A100
+isa             : rv64imafdcvh_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zihpm_zimop_zaamo_zalrsc_zawrs_zfa_zfh_zfhmin_zca_zcb_zcd_zcmop_zba_zbb_zbc_zbs_zkt_zvbb_zvbc_zve32f_zve32x_zve64d_zve64f_zve64x_zvfh_zvfhmin_zvkb_zvkg_zvkned_zvknha_zvknhb_zvksed_zvksh_zvkt_smaia_smstateen_ssaia_sscofpmf_sstc_svinval_svnapot_svpbmt_sdtrig
+mmu             : sv39
+mvendorid       : 0x710
+marchid         : 0x8000000041000002
+mimpid          : 0x10000000d5686200
+hart isa        : rv64imafdcv_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zihpm_zimop_zaamo_zalrsc_zawrs_zfa_zfh_zfhmin_zca_zcb_zcd_zcmop_zba_zbb_zbc_zbs_zkt_zvbb_zvbc_zve32f_zve32x_zve64d_zve64f_zve64x_zvfh_zvfhmin_zvkb_zvkg_zvkned_zvknha_zvknhb_zvksed_zvksh_zvkt_smaia_smstateen_ssaia_sscofpmf_sstc_svinval_svnapot_svpbmt_sdtrig
+~~~
