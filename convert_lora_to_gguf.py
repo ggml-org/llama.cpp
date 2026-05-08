@@ -384,7 +384,9 @@ if __name__ == '__main__':
 
     with torch.inference_mode():
         try:
-            model_class = ModelBase.from_model_architecture(hparams["architectures"][0])
+            model_arch = hparams.get("text_config", {}).get("architectures", hparams["architectures"])[0]
+            logger.info("Using model architecture: %s", model_arch)
+            model_class = ModelBase.from_model_architecture(model_arch)
         except NotImplementedError:
             logger.error(f"Model {hparams['architectures'][0]} is not supported")
             sys.exit(1)
