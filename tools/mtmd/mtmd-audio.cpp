@@ -925,7 +925,7 @@ void mtmd_audio_preprocessor_parakeet::initialize() {
     cache.filters.data  = hparams.mel_filters;
 
     GGML_ASSERT(hparams.window.size() == (size_t)hparams.audio_window_len);
-    GGML_ASSERT(hparams.window.size() <= hparams.audio_n_fft);
+    GGML_ASSERT(hparams.window.size() <= (size_t) hparams.audio_n_fft);
     cache.hann_window = hparams.window;
 }
 
