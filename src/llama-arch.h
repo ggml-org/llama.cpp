@@ -447,9 +447,28 @@ enum llm_tensor {
     LLM_TENSOR_SSM_G_B,             // kimi: output gate projection B
     // ZAYA CCA (Compressed Convolutional Attention)
     LLM_TENSOR_CCA_CONV_DW,         // zaya: depthwise conv1d (conv_qk.0)
+    LLM_TENSOR_CCA_CONV_DW_B,       // zaya: depthwise conv1d bias
     LLM_TENSOR_CCA_CONV_GRP,        // zaya: grouped conv1d  (conv_qk.1)
     LLM_TENSOR_CCA_QK_NORM,         // zaya: RMSNorm on concat(Q,K)
     LLM_TENSOR_CCA_K_SCALE,         // zaya: learned K temperature
+    LLM_TENSOR_CCA_VAL_PROJ1,       // zaya: V projection 1
+    LLM_TENSOR_CCA_VAL_PROJ2,       // zaya: V projection 2
+    // ZAYA residual scaling
+    LLM_TENSOR_RES_SCALE_HS,        // zaya: hidden_states_scale
+    LLM_TENSOR_RES_SCALE_HS_B,      // zaya: hidden_states_bias
+    LLM_TENSOR_RES_SCALE_RES,       // zaya: residual_scale
+    LLM_TENSOR_RES_SCALE_RES_B,     // zaya: residual_bias
+    // ZAYA Router (MoE gating)
+    LLM_TENSOR_ZAYA_ROUTER_DOWN,      // zaya: router down_proj weight
+    LLM_TENSOR_ZAYA_ROUTER_DOWN_B,    // zaya: router down_proj bias
+    LLM_TENSOR_ZAYA_ROUTER_NORM,      // zaya: router rmsnorm_eda weight
+    LLM_TENSOR_ZAYA_ROUTER_MLP0,      // zaya: router MLP layer 0 weight
+    LLM_TENSOR_ZAYA_ROUTER_MLP0_B,    // zaya: router MLP layer 0 bias
+    LLM_TENSOR_ZAYA_ROUTER_MLP2,      // zaya: router MLP layer 2 weight
+    LLM_TENSOR_ZAYA_ROUTER_MLP2_B,    // zaya: router MLP layer 2 bias
+    LLM_TENSOR_ZAYA_ROUTER_MLP4,      // zaya: router MLP layer 4 weight
+    LLM_TENSOR_ZAYA_ROUTER_BIASES,    // zaya: router balancing_biases
+    LLM_TENSOR_ZAYA_ROUTER_EDA_SCALE, // zaya: router router_states_scale
     LLM_TENSOR_TIME_MIX_W0,
     LLM_TENSOR_TIME_MIX_W1,
     LLM_TENSOR_TIME_MIX_W2,

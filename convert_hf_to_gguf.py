@@ -6456,34 +6456,150 @@ class KimiLinearModel(TextModel):
 
 @ModelBase.register("ZayaModel", "ZayaForCausalLM")
 class ZayaModel(TextModel):
-    """Zaya-1 model with Compressed Convolutional Attention"""
+    """Zaya-1 model with Compressed Convolutional Attention and MoE"""
     model_arch = gguf.MODEL_ARCH.ZAYA
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Buffer for accumulating expert weights per layer
+        self._experts: dict[int, dict[str, Tensor]] | None = {}
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
-        
-        # ZAYA-specific params if any from config.json (e.g. ssm_d_conv)
-        if "ssm_d_conv" in self.hparams:
-            self.gguf_writer.add_ssm_conv_kernel(self.hparams["ssm_d_conv"])
-        else:
-            # Fallback if config is different
-            self.gguf_writer.add_ssm_conv_kernel(2) # Default for ZAYA1-8B
-            
+
+        # n_ff = ffn_hidden_size / 2 (SwiGLU halves the intermediate)
+        n_ff = self.hparams.get("ffn_hidden_size", 4096) // 2
+        self.gguf_writer.add_feed_forward_length(n_ff)
+
+        # ssm_d_conv = conv_qk kernel size
+        self.gguf_writer.add_ssm_conv_kernel(5)
+
+        # partial_rotary_factor -> n_rot
+        head_dim = self.hparams.get("head_dim", 128)
+        partial_rotary = self.hparams.get("partial_rotary_factor", 0.5)
+        self.gguf_writer.add_rope_dimension_count(int(partial_rotary * head_dim))
+
+        # MoE params
+        n_expert = self.find_hparam(["num_experts"])
+        self.gguf_writer.add_expert_count(n_expert)
+        n_expert_used = self.find_hparam(["moe_router_topk", "num_experts_per_tok"], optional=True) or 1
+        self.gguf_writer.add_expert_used_count(n_expert_used)
+
+    def _map_cca(self, name: str, data_torch: Tensor, bid: int) -> Iterable[tuple[str, Tensor]]:
+        if "linear_q" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), data_torch
+        elif "linear_k" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid), data_torch
+        elif "val_proj1" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_VAL_PROJ1, bid), data_torch
+        elif "val_proj2" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_VAL_PROJ2, bid), data_torch
+        elif "o_proj" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_OUT, bid), data_torch
+        elif "conv_qk.0" in name and name.endswith(".weight"):
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_DW, bid), data_torch
+        elif "conv_qk.0" in name and name.endswith(".bias"):
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_DW_B, bid, suffix=".bias"), data_torch
+        elif "conv_qk.1" in name and name.endswith(".weight"):
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_GRP, bid), data_torch
+        elif "conv_qk.1" in name and name.endswith(".bias"):
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_GRP, bid, suffix=".bias"), data_torch
+        elif "temp" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_K_SCALE, bid), data_torch
+
+    def _map_router(self, name: str, data_torch: Tensor, bid: int) -> Iterable[tuple[str, Tensor]]:
+        if "down_proj.weight" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_DOWN, bid), data_torch
+        elif "down_proj.bias" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_DOWN_B, bid, suffix=".bias"), data_torch
+        elif "rmsnorm_eda" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_NORM, bid), data_torch
+        elif "router_mlp.0.weight" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP0, bid), data_torch
+        elif "router_mlp.0.bias" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP0_B, bid, suffix=".bias"), data_torch
+        elif "router_mlp.2.weight" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP2, bid), data_torch
+        elif "router_mlp.2.bias" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP2_B, bid, suffix=".bias"), data_torch
+        elif "router_mlp.4.weight" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP4, bid), data_torch
+        elif "balancing_biases" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_BIASES, bid), data_torch
+        elif "router_states_scale" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_EDA_SCALE, bid), data_torch
+
+    def _map_res_scale(self, name: str, data_torch: Tensor, bid: int) -> Iterable[tuple[str, Tensor]]:
+        if "hidden_states_scale" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_HS, bid), data_torch
+        elif "hidden_states_bias" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_HS_B, bid, suffix=".bias"), data_torch
+        elif "residual_scale" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES, bid), data_torch
+        elif "residual_bias" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES_B, bid, suffix=".bias"), data_torch
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Tensors will be automatically mapped based on tensor_mapping.py if they match
-        
-        # We skip MoE FFN weights, unused biases, etc. temporarily since we are using dense FFN
-        skip_keywords = [
-            "zaya_block.experts", 
-            "res_scale.", 
-            "val_proj2"
-        ]
-        
-        if any(kw in name for kw in skip_keywords):
-            logger.info(f"Skipping tensor (dense FFN test): {name}")
+        # Common tensors
+        if name == "model.embed_tokens.weight":
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.TOKEN_EMBD), data_torch
             return
-            
+        if name == "model.final_norm.weight":
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT_NORM), data_torch
+            return
+
+        # Block-level tensors
+        if bid is not None:
+            # CCA attention tensors
+            if "self_attn" in name:
+                yield from self._map_cca(name, data_torch, bid)
+                return
+
+            # Router tensors
+            if "router" in name:
+                yield from self._map_router(name, data_torch, bid)
+                return
+
+            # Input norm
+            if "input_norm" in name:
+                yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_NORM, bid), data_torch
+                return
+
+            # Residual scaling
+            if "res_scale" in name:
+                yield from self._map_res_scale(name, data_torch, bid)
+                return
+
+            # Expert stacking
+            if "zaya_block.experts" in name:
+                assert bid is not None
+                if self._experts is None:
+                    self._experts = {}
+                if bid not in self._experts:
+                    self._experts[bid] = {}
+                self._experts[bid][name] = data_torch
+
+                n_expert = self.find_hparam(["num_experts"])
+                # Each layer has 2 expert weights per expert (fc1, fc2) = 2 * n_expert tensors
+                if len(self._experts[bid]) >= n_expert * 2:
+                    for w_name, gguf_tensor, permute_dims in [
+                        ("linear_fc1", gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, None),
+                        ("linear_fc2", gguf.MODEL_TENSOR.FFN_DOWN_EXP, (0, 2, 1)),
+                    ]:
+                        datas: list[Tensor] = []
+                        for xid in range(n_expert):
+                            ename = f"model.layers.{bid}.zaya_block.experts.local_experts.{xid}.{w_name}.weight"
+                            datas.append(self._experts[bid][ename])
+                            del self._experts[bid][ename]
+                        data_torch_stacked = torch.stack(datas, dim=0)
+                        if permute_dims is not None:
+                            data_torch_stacked = data_torch_stacked.permute(*permute_dims)
+                        yield self.format_tensor_name(gguf_tensor, bid), data_torch_stacked
+                    del self._experts[bid]
+                return
+
+        # Fallback for any remaining tensors: use tensor_mapping
         try:
             yield from super().modify_tensors(data_torch, name, bid)
         except ValueError as e:
@@ -6491,6 +6607,13 @@ class ZayaModel(TextModel):
                 logger.warning(f"Skipping unmapped tensor: {name}")
             else:
                 raise
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts:
+            unprocessed = [k for d in self._experts.values() for k in d.keys()]
+            if unprocessed:
+                raise ValueError(f"Unprocessed expert tensors: {unprocessed}")
 
 
 @ModelBase.register("InternLM2ForCausalLM")

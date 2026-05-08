@@ -613,8 +613,25 @@ class MODEL_TENSOR(IntEnum):
     SSM_G_B              = auto() # Kimi Linear
     CCA_CONV_DW          = auto() # Zaya
     CCA_CONV_GRP         = auto() # Zaya
-    CCA_QK_NORM          = auto() # Zaya
+    CCA_CONV_DW_B        = auto() # Zaya: conv_qk.0.bias
+    CCA_QK_NORM          = auto() # Zaya (weightless - unit RMSNorm)
     CCA_K_SCALE          = auto() # Zaya
+    CCA_VAL_PROJ1        = auto() # Zaya: CCA value projection stream 1
+    CCA_VAL_PROJ2        = auto() # Zaya: CCA value projection stream 2
+    RES_SCALE_HS         = auto() # Zaya: hidden_states_scale
+    RES_SCALE_HS_B       = auto() # Zaya: hidden_states_bias
+    RES_SCALE_RES        = auto() # Zaya: residual_scale
+    RES_SCALE_RES_B      = auto() # Zaya: residual_bias
+    ZAYA_ROUTER_DOWN     = auto() # Zaya
+    ZAYA_ROUTER_DOWN_B   = auto() # Zaya
+    ZAYA_ROUTER_NORM     = auto() # Zaya
+    ZAYA_ROUTER_MLP0     = auto() # Zaya
+    ZAYA_ROUTER_MLP0_B   = auto() # Zaya
+    ZAYA_ROUTER_MLP2     = auto() # Zaya
+    ZAYA_ROUTER_MLP2_B   = auto() # Zaya
+    ZAYA_ROUTER_MLP4     = auto() # Zaya
+    ZAYA_ROUTER_BIASES   = auto() # Zaya
+    ZAYA_ROUTER_EDA_SCALE = auto() # Zaya
     TIME_MIX_W0          = auto()
     TIME_MIX_W1          = auto()
     TIME_MIX_W2          = auto()
@@ -1130,9 +1147,26 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_G_A:                   "blk.{bid}.ssm_g_a",              # Kimi Linear
     MODEL_TENSOR.SSM_G_B:                   "blk.{bid}.ssm_g_b",              # Kimi Linear
     MODEL_TENSOR.CCA_CONV_DW:               "blk.{bid}.cca_conv_dw",          # Zaya
+    MODEL_TENSOR.CCA_CONV_DW_B:             "blk.{bid}.cca_conv_dw_b",        # Zaya
     MODEL_TENSOR.CCA_CONV_GRP:              "blk.{bid}.cca_conv_grp",         # Zaya
     MODEL_TENSOR.CCA_QK_NORM:               "blk.{bid}.cca_qk_norm",          # Zaya
     MODEL_TENSOR.CCA_K_SCALE:               "blk.{bid}.cca_k_scale",          # Zaya
+    MODEL_TENSOR.CCA_VAL_PROJ1:             "blk.{bid}.cca_val_proj1",        # Zaya
+    MODEL_TENSOR.CCA_VAL_PROJ2:             "blk.{bid}.cca_val_proj2",        # Zaya
+    MODEL_TENSOR.RES_SCALE_HS:              "blk.{bid}.res_scale_hs",         # Zaya
+    MODEL_TENSOR.RES_SCALE_HS_B:            "blk.{bid}.res_scale_hs_b",       # Zaya
+    MODEL_TENSOR.RES_SCALE_RES:             "blk.{bid}.res_scale_res",        # Zaya
+    MODEL_TENSOR.RES_SCALE_RES_B:           "blk.{bid}.res_scale_res_b",      # Zaya
+    MODEL_TENSOR.ZAYA_ROUTER_DOWN:          "blk.{bid}.zaya_router_down",     # Zaya
+    MODEL_TENSOR.ZAYA_ROUTER_DOWN_B:        "blk.{bid}.zaya_router_down_b",   # Zaya
+    MODEL_TENSOR.ZAYA_ROUTER_NORM:          "blk.{bid}.zaya_router_norm",     # Zaya
+    MODEL_TENSOR.ZAYA_ROUTER_MLP0:          "blk.{bid}.zaya_router_mlp0",     # Zaya
+    MODEL_TENSOR.ZAYA_ROUTER_MLP0_B:        "blk.{bid}.zaya_router_mlp0_b",   # Zaya
+    MODEL_TENSOR.ZAYA_ROUTER_MLP2:          "blk.{bid}.zaya_router_mlp2",     # Zaya
+    MODEL_TENSOR.ZAYA_ROUTER_MLP2_B:        "blk.{bid}.zaya_router_mlp2_b",   # Zaya
+    MODEL_TENSOR.ZAYA_ROUTER_MLP4:          "blk.{bid}.zaya_router_mlp4",     # Zaya
+    MODEL_TENSOR.ZAYA_ROUTER_BIASES:        "blk.{bid}.zaya_router_biases",   # Zaya
+    MODEL_TENSOR.ZAYA_ROUTER_EDA_SCALE:     "blk.{bid}.zaya_router_eda",      # Zaya
     MODEL_TENSOR.TIME_MIX_W0:               "blk.{bid}.time_mix_w0",
     MODEL_TENSOR.TIME_MIX_W1:               "blk.{bid}.time_mix_w1",
     MODEL_TENSOR.TIME_MIX_W2:               "blk.{bid}.time_mix_w2",
@@ -4009,16 +4043,30 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
-        MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.CCA_CONV_DW,
+        MODEL_TENSOR.CCA_CONV_DW_B,
         MODEL_TENSOR.CCA_CONV_GRP,
         MODEL_TENSOR.CCA_QK_NORM,
         MODEL_TENSOR.CCA_K_SCALE,
-        MODEL_TENSOR.FFN_NORM,
-        MODEL_TENSOR.FFN_GATE,
-        MODEL_TENSOR.FFN_DOWN,
-        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.CCA_VAL_PROJ1,
+        MODEL_TENSOR.CCA_VAL_PROJ2,
+        MODEL_TENSOR.RES_SCALE_HS,
+        MODEL_TENSOR.RES_SCALE_HS_B,
+        MODEL_TENSOR.RES_SCALE_RES,
+        MODEL_TENSOR.RES_SCALE_RES_B,
+        MODEL_TENSOR.ZAYA_ROUTER_DOWN,
+        MODEL_TENSOR.ZAYA_ROUTER_DOWN_B,
+        MODEL_TENSOR.ZAYA_ROUTER_NORM,
+        MODEL_TENSOR.ZAYA_ROUTER_MLP0,
+        MODEL_TENSOR.ZAYA_ROUTER_MLP0_B,
+        MODEL_TENSOR.ZAYA_ROUTER_MLP2,
+        MODEL_TENSOR.ZAYA_ROUTER_MLP2_B,
+        MODEL_TENSOR.ZAYA_ROUTER_MLP4,
+        MODEL_TENSOR.ZAYA_ROUTER_BIASES,
+        MODEL_TENSOR.ZAYA_ROUTER_EDA_SCALE,
+        MODEL_TENSOR.FFN_GATE_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
     ],
     # TODO
 }
