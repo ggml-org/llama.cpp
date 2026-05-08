@@ -1,0 +1,53 @@
+name: WebUI Publish
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'tools/server/webui/**'
+  workflow_dispatch: # allows manual triggering
+
+permissions:
+  contents: read
+
+jobs:
+  publish-webui:
+    name: Publish WebUI to Hugging Face Bucket
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "tools/server/webui/package-lock.json"
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: tools/server/webui
+
+      - name: Build application
+        run: npm run build
+        working-directory: tools/server/webui
+
+      - name: Install Hugging Face Hub CLI
+        run: pip install -U huggingface_hub
+
+      - name: Authenticate with Hugging Face
+        run: hf auth login --token ${{ secrets.HUGGINGFACE_HUB_TOKEN }}
+
+      - name: Sync built files to Hugging Face bucket
+        run: |
+          # Upload the built files to the Hugging Face bucket
+          # The bucket was created beforehand via: hf buckets create ggml-org/llama-cpp-webui-static-output
+          hf buckets sync tools/server/public hf://buckets/ggml-org/llama-cpp-webui-static-output --delete --quiet
+
+      - name: Verify upload
+        run: |
+          # List the files in the bucket to verify the upload
+          hf buckets list hf://buckets/ggml-org/llama-cpp-webui-static-output -R -h
+
