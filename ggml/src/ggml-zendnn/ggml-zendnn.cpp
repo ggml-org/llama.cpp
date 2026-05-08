@@ -545,6 +545,11 @@ static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const
             const int64_t ne10 = inputs->ne[0];
             const int64_t ne0 = op->ne[0];
             const int64_t ne1 = op->ne[1];
+            const int64_t min_batch = 1;
+
+            if(!ggml_is_contiguous(weights) || !ggml_is_contiguous(inputs)) {
+                return false;
+            }
 
             if (ggml_zendnn_adaptive_fallback_enabled()) {
                 const int64_t K = inputs->ne[0];
@@ -554,8 +559,7 @@ static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const
                     return false;
                 }
             }
-
-            if (!ggml_is_contiguous(weights) || !ggml_is_contiguous(inputs)) {
+            else if (ne0 < min_batch || ne1 < min_batch || ne10 < min_batch) {
                 return false;
             }
 
