@@ -11,6 +11,10 @@ const int CUDA_CPY_TILE_DIM_2D = 32; // 2D tile dimension for transposed blocks
 const int CUDA_CPY_BLOCK_NM = 8;     // block size of 3rd dimension if available
 const int CUDA_CPY_BLOCK_ROWS = 8;   // block dimension for marching through rows
 
+static char * ggml_cuda_cpy_data(const ggml_tensor * t) {
+    return (char *) (t->view_src ? t->view_src->data : t->data) + t->view_offs;
+}
+
 template <cpy_kernel_t cpy_1>
 static __global__ void cpy_scalar(const char * cx, char * cdst, const int64_t ne,
                                   const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
@@ -400,8 +404,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 
     cudaStream_t main_stream = ctx.stream();
 
-    char * src0_ddc = (char *) src0->data;
-    char * src1_ddc = (char *) src1->data;
+    char * src0_ddc = ggml_cuda_cpy_data(src0);
+    char * src1_ddc = ggml_cuda_cpy_data(src1);
 
     const bool contiguous_srcs = ggml_is_contiguous(src0) && ggml_is_contiguous(src1);
     const bool can_be_transposed = nb01 == (int64_t)ggml_element_size(src0) &&
