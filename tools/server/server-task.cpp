@@ -296,6 +296,8 @@ task_params server_task::params_from_json_cmpl(
 
     params.speculative = defaults.speculative;
 
+    // TODO: to keep things simple, we disable speculative parameter adjustments for now
+#if 0
     // TODO: for now, be able to adjust only the draft-model based speculative parameters
     params.speculative.draft.n_min = json_value(data, "speculative.n_min", defaults.speculative.draft.n_min);
     params.speculative.draft.n_max = json_value(data, "speculative.n_max", defaults.speculative.draft.n_max);
@@ -305,7 +307,6 @@ task_params server_task::params_from_json_cmpl(
     params.speculative.draft.n_min = std::max(params.speculative.draft.n_min, 0);
     params.speculative.draft.n_max = std::max(params.speculative.draft.n_max, 0);
 
-#if 0
     // for debugging and research purposes
     params.speculative.type = common_speculative_type_from_name(json_value(data, "speculative.type", common_speculative_type_to_str(defaults.speculative.type)));
 

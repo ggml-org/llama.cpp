@@ -318,8 +318,6 @@ struct server_slot {
             //       perform the speculative drafting for all sequences at the same time in a single batch
             const llama_tokens & tokens_text = prompt.tokens.get_text_tokens();
 
-            const auto & params_spec = task->params.speculative;
-
             if (!spec_draft.empty()) {
                 // we have a previous (partial) draft to reuse
                 if (use_ckpt_tgt) {
@@ -338,7 +336,13 @@ struct server_slot {
                 }
 
                 // generate a new draft
-                spec_draft = common_speculative_draft(spec, this->id, params_spec, tokens_text, prompt.n_tokens(), sampled);
+                const auto dparams = common_speculative_draft_params {
+                    /* .n_max      = */ n_draft_max,
+                    /* .n_past     = */ prompt.n_tokens(),
+                    /* .id_last    = */ sampled,
+                    /* .prompt     = */ tokens_text,
+                };
+                spec_draft = common_speculative_draft(spec, this->id, dparams);
                 n_draft_total += spec_draft.size();
 
                 if (spec_draft.size() > (size_t) n_draft_max) {
@@ -901,12 +905,12 @@ private:
             } catch (const std::exception & e) {
                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
             }
+        }
 
-            if (spec) {
-                SRV_INF("%s", "speculative decoding context initialized\n");
-            } else {
-                ctx_dft.reset();
-            }
+        if (spec) {
+            SRV_INF("%s", "speculative decoding context initialized\n");
+        } else {
+            ctx_dft.reset();
         }
 
         for (int i = 0; i < params_base.n_parallel; i++) {
@@ -2886,14 +2890,15 @@ private:
             //       for now, always re-evaluate for simplicity
             //       ref: https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4400925384
             //
-            //       | spec type   | need re-eval |
-            //       | ---         | ---          |
-            //       | draft model | no           | because the draft model does not use embeddings from the target
-            //       | MTP (std)   | yes          |
-            //       | MTP Gemma4  | no           | because the KV cache is shared
-            //       | Eagle3      | yes          |
-            //       | DFlash      | yes?         |
+            // | spec type   | need re-eval |
+            // | ---         | ---          |
+            // | draft model | no           | because the draft model does not use embeddings from the target
+            // | MTP (std)   | yes          |
+            // | MTP Gemma4  | no           | because the KV cache is shared
+            // | Eagle3      | yes          |
+            // | DFlash      | yes          | https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4405406982
             //
+            // TODO: move to `common_speculative_process(spec, batch, ...)`
             if (ctx_dft) {
                 // TODO: update as needed for MTP, Eagle3, etc.
                 const bool need_tgt_embd = false;
