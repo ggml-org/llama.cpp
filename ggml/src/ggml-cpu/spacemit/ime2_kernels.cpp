@@ -2903,8 +2903,6 @@ void gemm_kernel_i8i4_hp_m1(size_t          blk_len,
                                      (quant_b_zp ? NB_COLS * k_subblks_per_superblk * sizeof(uint8_t) : 0);
     const size_t b_tile_stride = k_blks * b_superblk_stride;
 
-    const float dst_scale = 0.0625f;
-
     if (quant_b_zp == NULL) {
         for (size_t ni = 0; ni < count_n; ni += 32) {
             uint8_t * b_data = (uint8_t *) quant_b_data + (ni / NB_COLS) * b_tile_stride;
@@ -2931,9 +2929,10 @@ void gemm_kernel_i8i4_hp_m1(size_t          blk_len,
                 "vxor.vv        v19, v18, v18           \n\t"
 
                 "INNER_BLK_LOOP%=:                      \n\t"
-                // load scale a and asum
+                // load asum, blk scale, a sum
                 "flh            fa1, (t6)               \n\t"
-                "addi           t6, t6, 2               \n\t"
+                "flh            ft1, 2(t6)              \n\t"
+                "addi           t6, t6, 4               \n\t"
                 "flh            ft0, (%[A])             \n\t"
                 "addi           %[A], %[A], 2           \n\t"
                 // load A
@@ -2949,7 +2948,8 @@ void gemm_kernel_i8i4_hp_m1(size_t          blk_len,
                 "addi           %[B], %[B], 512         \n\t"
                 "vfmul.vf       v8, v8, ft0             \n\t"  // scale b * scale a
                 "vfmul.vf       v9, v8, fa0             \n\t"
-                "vfwmacc.vf     v31, fa1, v8            \n\t"  // asum * scale a * scale b
+                "fmul.h         fa1, fa1, ft1           \n\t"
+                "vfwmacc.vf     v31, fa1, v8            \n\t"  // asum * scale a * scale b * blk scale
 
                 "vsetvli        t0, x0, e8, m1          \n\t"
                 "vpack.vv       v0, v8, v9, 3           \n\t"
@@ -2988,10 +2988,9 @@ void gemm_kernel_i8i4_hp_m1(size_t          blk_len,
 
                 // save
                 "vsetvli        t0, x0, e32, m1         \n\t"
-                // "vfmul.vf       v31, v31, %[Fd_scale]   \n\t"
                 "vse32.v        v31, (%[DST])           \n\t"
                 : [A] "+r"(a_data), [B] "+r"(b_data)
-                : [DST] "r"(dst_c), [BK] "r"(k_blks), [Fd_scale] "f"(dst_scale)
+                : [DST] "r"(dst_c), [BK] "r"(k_blks)
                 : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9",
                   "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
                   "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "fa0", "fa1", "ft0", "ft1");
@@ -5631,8 +5630,6 @@ size_t gemm_kernel_i8i4_hp(size_t          blk_len,
                                             k_blks, ldc);
 #else
         gemm_kernel_i8i4_hp_m1(blk_len, quant_a_ptr, quant_b_data, quant_b_zp, c_ptr, count_m, count_n, k_blks, ldc);
-        //gemm_kernel_i8i4_hp_mrow_ref<1, 32>(blk_len, quant_a_ptr, quant_b_data, quant_b_zp, c_ptr, count_m, count_n,
-        //                                    k_blks, ldc);
 #endif
         return 1;
     }
