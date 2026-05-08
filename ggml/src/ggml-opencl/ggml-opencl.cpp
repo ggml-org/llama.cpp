@@ -462,7 +462,6 @@ struct ggml_backend_opencl_context {
     cl_program program_mul_mv_f32_f32;
     cl_program program_mul;
     cl_program program_mul_mat_f16_f32_tiled;
-    cl_program program_adreno_xmem_gemm_f16_f32;
     cl_program program_mul_mm_f16_f32_kqv;
     cl_program program_mul_mm_f16_f32_kq;
     cl_program program_div;
@@ -1570,17 +1569,18 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 #else
         const std::string kernel_src = read_file("adreno_xmem_gemm_f16_f32.cl");
 #endif
-        backend_ctx->program_adreno_xmem_gemm_f16_f32 =
+        cl_program prog =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_adreno_xmem_pack_src_f32 =
-            clCreateKernel(backend_ctx->program_adreno_xmem_gemm_f16_f32, "adreno_xmem_pack_src_f32", &err), err));
+            clCreateKernel(prog, "adreno_xmem_pack_src_f32", &err), err));
         CL_CHECK((backend_ctx->kernel_adreno_xmem_prepack_weight_f16 =
-            clCreateKernel(backend_ctx->program_adreno_xmem_gemm_f16_f32, "adreno_xmem_prepack_weight_f16", &err), err));
+            clCreateKernel(prog, "adreno_xmem_prepack_weight_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_adreno_xmem_gemm_os8_f16_f32 =
-            clCreateKernel(backend_ctx->program_adreno_xmem_gemm_f16_f32, "adreno_xmem_gemm_os8_f16_f32", &err), err));
+            clCreateKernel(prog, "adreno_xmem_gemm_os8_f16_f32", &err), err));
         CL_CHECK((backend_ctx->kernel_adreno_xmem_store_dst_f32 =
-            clCreateKernel(backend_ctx->program_adreno_xmem_gemm_f16_f32, "adreno_xmem_store_dst_f32", &err), err));
+            clCreateKernel(prog, "adreno_xmem_store_dst_f32", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
@@ -3472,8 +3472,7 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     backend_ctx->adreno_xmem_gemm_enabled = getenv("GGML_OPENCL_ADRENO_XMEM_GEMM") != nullptr &&
-                                             backend_ctx->gpu_family == GPU_FAMILY::ADRENO &&
-                                             backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X;
+                                             backend_ctx->gpu_family == GPU_FAMILY::ADRENO;
     if (getenv("GGML_OPENCL_ADRENO_XMEM_GEMM") != nullptr) {
         GGML_LOG_INFO("ggml_opencl: Adreno xmem F16xF32 GEMM %s\n",
                       backend_ctx->adreno_xmem_gemm_enabled ?
@@ -9918,7 +9917,7 @@ static bool ggml_cl_can_use_adreno_xmem_gemm_f16_f32(
     if (!backend_ctx->adreno_xmem_gemm_enabled) {
         return false;
     }
-    if (backend_ctx->gpu_family != GPU_FAMILY::ADRENO || backend_ctx->adreno_gen != ADRENO_GPU_GEN::A8X) {
+    if (backend_ctx->gpu_family != GPU_FAMILY::ADRENO) {
         return false;
     }
     if (src0->type != GGML_TYPE_F16 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
