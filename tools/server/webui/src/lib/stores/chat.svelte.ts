@@ -856,6 +856,10 @@ class ChatStore {
 				perChatOverrides
 			});
 			if (agenticResult.handled) {
+				// Generate LLM based title for new conversations after agentic flow completes
+				if (firstUserMessageContent) {
+					await this.generateTitleWithLLM(firstUserMessageContent, streamedContent, convId);
+				}
 				// Check if there's a pending steering message to re-send
 				const pending = agenticStore.consumePendingSteeringMessage(convId);
 				if (pending) {
