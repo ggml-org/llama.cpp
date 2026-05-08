@@ -229,7 +229,7 @@ struct common_speculative_state_draft : public common_speculative_state {
     void draft(
             const common_params_speculative & params,
             const llama_tokens & prompt_tgt,
-            llama_token n_past,
+            llama_pos n_past,
             llama_token id_last,
             llama_tokens & result) override {
         const auto & sparams = params.draft;
