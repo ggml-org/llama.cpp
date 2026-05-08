@@ -3383,8 +3383,8 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
     const size_t b_superblk_stride = sizeof(block_q4_0x32_layout) * K_SUBBLKS_PER_SUPERBLK +
                                      (quant_b_zp ? NB_COLS * K_SUBBLKS_PER_SUPERBLK * sizeof(uint8_t) : 0);
     const size_t b_tile_stride       = k_blks * b_superblk_stride;
-    const size_t a_nrow_block_stride = q8_hp_blk_size(blk_len, true) * 4;
-    const size_t a_subblk_stride     = q8_hp_blk_size(K_SUBBLK_LEN, false) * 4;
+    const size_t a_nrow_block_stride = q8_hp_blk_size(blk_len, true, true) * 4;
+    const size_t a_subblk_stride     = q8_hp_blk_size(K_SUBBLK_LEN, false, false) * 4;
 
     if (quant_b_zp != nullptr) {
         for (size_t ni = 0; ni < count_n; ni += NB_COLS) {
@@ -3404,8 +3404,9 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
             //   - each K32 subblock is 136B:
             //       8B   = 4 x fp16 row scales
             //       128B = 4 x int8[32] row payloads
-            //   - trailer after 8 subblocks is 64B:
+            //   - trailer after 8 subblocks is 72B:
             //       4 rows x fp16[8] a_sum values, indexed as [row][ksi]
+            //       4 rows x fp16 scale_avg tail
             //
             // B: N32 x K256 q4 HP block with explicit zp area
             //   - each K32 subblock is 576B:
@@ -3427,7 +3428,7 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
             //
             // Loop progression:
             //   - per ksi: A += 136, a_sum += 2, B_data += 576, B_zp += 32
-            //   - per ki : skip the 64B A trailer and advance B to the next 4864B superblock
+            //   - per ki : skip the 72B A trailer and advance B to the next 4864B superblock
 
             const _Float16 hp_scale_16   = (_Float16) 16.0f;
             const _Float16 hp_scale_1    = (_Float16) 1.0f;
@@ -3452,15 +3453,21 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "vxor.vv        v31, v31, v31             \n\t"
                 "li             t4, 8                     \n\t"
                 "li             t1, 4608                  \n\t"
-                "addi           t2, t6, 1088              \n\t"  // 8 * 136B A K32 subblocks, trailer starts here
+                "addi           t2, t6, 1088              \n\t"  // 8 * 136B A K32 subblocks, a_sum trailer starts here
                 "add            s6, s5, t1                \n\t"  // 8 * 576B B(scale+qs), zp area starts here
 
                 ".align 4                                 \n\t"
                 "_BLK_LPST%=:                             \n\t"
+                "flh            fa1, 64(t2)               \n\t"  // a_scale_avg_row[0]
                 "vsetvli        t0, x0, e32, m1           \n\t"
                 "vxor.vv        v26, v30, v30             \n\t"
                 "vxor.vv        v27, v31, v31             \n\t"
                 "_KsubBLK_LPST%=:                         \n\t"
+                "vsetvli        t0, x0, e32, m1           \n\t"
+                "vxor.vv        v18, v30, v30             \n\t"
+                "vxor.vv        v19, v31, v31             \n\t"
+                "vxor.vv        v20, v30, v30             \n\t"
+                "vxor.vv        v21, v31, v31             \n\t"
                 // load first subblock scales for 4 rows
                 "flh            fa0,   0(t6)              \n\t"  // ascale_fp16
 
@@ -3504,17 +3511,20 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "vfmv.v.f       v0, %[HP16]               \n\t"
                 "vfmv.v.f       v1, %[HP1]                \n\t"
 
+                "vsetvli        t0, x0, e16, mf2          \n\t"  // mf2 -> mf2
+                "vfmul.vv       v10, v10, v16             \n\t"  // zp * ascale * bscale; fp16*fp16
+
                 "vsetvli        t0, x0, e16, mf2          \n\t"  // mf2 -> m1
-                "vfmul.vf       v12, v10, ft1             \n\t"  // zp(1:n)* asum_m0; fp16*fp16
-                "vfmul.vf       v13, v10, ft2             \n\t"  // zp(1:n)* asum_m1; fp16*fp16
-                "vfmul.vf       v24, v10, ft3             \n\t"  // zp(1:n)* asum_m2; fp16*fp16
-                "vfmul.vf       v25, v10, ft4             \n\t"  // zp(1:n)* asum_m3; fp16*fp16
-                "vsetvli        t0, x0, e16, m1           \n\t"
-                "vpack.vv       v16, v12, v13, 1          \n\t"  // init m0m1 asumbzp
-                "vpack.vv       v22, v24, v25, 1          \n\t"  // init m2m3 asumbzp
-                "vpack.vv       v12, v16, v22, 2          \n\t"
-                "vupack.vv      v18, v12, v12, 3          \n\t"
-                "vupack.vv      v20, v13, v13, 3          \n\t"
+                "vfmul.vf       v12, v10, ft1             \n\t"  // zp(1:n)* abscale * asum_m0; fp16*fp16
+                "vfmul.vf       v13, v10, ft2             \n\t"  // zp(1:n)* abscale * asum_m1; fp16*fp16
+                "vfmul.vf       v24, v10, ft3             \n\t"  // zp(1:n)* abscale * asum_m2; fp16*fp16
+                "vfmul.vf       v25, v10, ft4             \n\t"  // zp(1:n)* abscale * asum_m3; fp16*fp16
+
+                "vsetvli        t0, x0, e16, mf2           \n\t"
+                "vfwmacc.vf     v28, fa1, v12             \n\t"  // row0/1 accum += dot * packed scale
+                "vfwmacc.vf     v29, fa1, v13             \n\t"
+                "vfwmacc.vf     v30, fa1, v24             \n\t"
+                "vfwmacc.vf     v31, fa1, v25             \n\t"
 
                 "vsetvli        t0, x0, e32, m1           \n\t"
                 "vmadotsu.hp    v18, v3, v4, v0, 0, i4    \n\t"  //lo4;n0n7
@@ -3543,14 +3553,14 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "bgtz           t4, _KsubBLK_LPST%=       \n\t"
 
                 "vsetvli        t0, x0, e16, m1           \n\t"
-                "vfwadd.wv      v28, v28, v26             \n\t"  // row0/1 accum += dot * packed scale
-                "vfwadd.wv      v30, v30, v27             \n\t"
+                "vfwmacc.vf     v28, fa1, v26             \n\t"  // row0/1 accum += dot * packed scale
+                "vfwmacc.vf     v30, fa1, v27             \n\t"
 
                 "li             t4, 8                     \n\t"
                 "addi           t5, t5, -1                \n\t"
-                "addi           t6, t6, 64                \n\t"  // skip A trailer after 8 subblocks
+                "addi           t6, t6, 72                \n\t"  // skip A trailer after 8 subblocks and scale_avg tail
                 "mv             s5, s6                    \n\t"  // s6 already points to next B superblock base
-                "addi           t2, t6, 1088              \n\t"  // 8 * 136B A K32 subblocks, trailer starts here
+                "addi           t2, t6, 1088              \n\t"  // 8 * 136B A K32 subblocks, a_sum trailer starts here
                 "add            s6, s5, t1                \n\t"  // 8 * 576B B(scale+qs), zp area starts here
                 "bgtz           t5, _BLK_LPST%=           \n\t"
 
@@ -3568,7 +3578,7 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                   [HP1] "f"(hp_scale_1), [HP0125] "f"(hp_scale_0125)
                 : "t0", "t1", "t2", "t3", "t4", "t5", "t6", "s5", "s6", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
                   "v8", "v10", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v24",
-                  "v25", "v28", "v29", "v30", "v31", "fa0", "fa1", "fa2", "fa3", "ft1", "ft2", "ft3", "ft4", "memory");
+                  "v25", "v26", "v27", "v28", "v29", "v30", "v31", "fa0", "fa1", "ft1", "ft2", "ft3", "ft4", "memory");
         }
         return;
     } else {
@@ -3603,7 +3613,7 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
             //
             // Loop progression:
             //   - per ksi: A += 136, a_sum += 2, B_data += 576
-            //   - per ki : skip the 64B A trailer and advance B to the next 4608B superblock
+            //   - per ki : skip the 72B A trailer and advance B to the next 4608B superblock
 
             const _Float16 hp_scale_16 = (_Float16) 16.0f;
             const _Float16 hp_scale_1  = (_Float16) 1.0f;
@@ -3626,14 +3636,20 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "vxor.vv        v30, v30, v30             \n\t"
                 "vxor.vv        v31, v31, v31             \n\t"
                 "li             t4, 8                     \n\t"
-                "addi           t2, t6, 1088              \n\t"  // 8 * 136B A K32 subblocks, trailer starts here
+                "addi           t2, t6, 1088              \n\t"  // 8 * 136B A K32 subblocks, a_sum trailer starts here
 
                 ".align 4                                 \n\t"
                 "_BLK_LPST%=:                             \n\t"
+                "flh            fa1, 64(t2)               \n\t"  // a_scale_avg_row[0]
                 "vsetvli        t0, x0, e32, m1           \n\t"
                 "vxor.vv        v26, v30, v30             \n\t"
                 "vxor.vv        v27, v31, v31             \n\t"
                 "_KsubBLK_LPST%=:                         \n\t"
+                "vsetvli        t0, x0, e32, m1           \n\t"
+                "vxor.vv        v18, v30, v30             \n\t"
+                "vxor.vv        v19, v31, v31             \n\t"
+                "vxor.vv        v20, v30, v30             \n\t"
+                "vxor.vv        v21, v31, v31             \n\t"
                 // load first subblock scales for 4 rows
                 "flh            fa0,   0(t6)              \n\t"  // ascale_fp16
 
@@ -3672,17 +3688,20 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "vfmv.v.f       v0, %[HP16]               \n\t"
                 "vfmv.v.f       v1, %[HP1]                \n\t"
 
+                "vsetvli        t0, x0, e16, mf2          \n\t"  // mf2 -> mf2
+                "vfmul.vv       v10, v10, v16             \n\t"  // zp * ascale * bscale; fp16*fp16
+
                 "vsetvli        t0, x0, e16, mf2          \n\t"  // mf2 -> m1
-                "vfmul.vf       v12, v10, ft1             \n\t"  // zp(1:n)* asum_m0; fp16*fp16
-                "vfmul.vf       v13, v10, ft2             \n\t"  // zp(1:n)* asum_m1; fp16*fp16
-                "vfmul.vf       v24, v10, ft3             \n\t"  // zp(1:n)* asum_m2; fp16*fp16
-                "vfmul.vf       v25, v10, ft4             \n\t"  // zp(1:n)* asum_m3; fp16*fp16
-                "vsetvli        t0, x0, e16, m1           \n\t"
-                "vpack.vv       v16, v12, v13, 1          \n\t"  // init m0m1 asumbzp
-                "vpack.vv       v22, v24, v25, 1          \n\t"  // init m2m3 asumbzp
-                "vpack.vv       v12, v16, v22, 2          \n\t"
-                "vupack.vv      v18, v12, v12, 3          \n\t"
-                "vupack.vv      v20, v13, v13, 3          \n\t"
+                "vfmul.vf       v12, v10, ft1             \n\t"  // zp(1:n)* abscale * asum_m0; fp16*fp16
+                "vfmul.vf       v13, v10, ft2             \n\t"  // zp(1:n)* abscale * asum_m1; fp16*fp16
+                "vfmul.vf       v24, v10, ft3             \n\t"  // zp(1:n)* abscale * asum_m2; fp16*fp16
+                "vfmul.vf       v25, v10, ft4             \n\t"  // zp(1:n)* abscale * asum_m3; fp16*fp16
+
+                "vsetvli        t0, x0, e16, mf2          \n\t"
+                "vfwmacc.vf     v28, fa1, v12             \n\t"
+                "vfwmacc.vf     v29, fa1, v13             \n\t"
+                "vfwmacc.vf     v30, fa1, v24             \n\t"
+                "vfwmacc.vf     v31, fa1, v25             \n\t"
 
                 "vsetvli        t0, x0, e32, m1           \n\t"
                 "vmadotsu.hp    v18, v3, v4, v0, 0, i4    \n\t"  //lo4;n0n7
@@ -3710,14 +3729,14 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "bgtz           t4, _KsubBLK_LPST%=       \n\t"
 
                 "vsetvli        t0, x0, e16, m1           \n\t"
-                "vfwadd.wv      v28, v28, v26             \n\t"  // row0/1 accum += dot * packed scale
-                "vfwadd.wv      v30, v30, v27             \n\t"
+                "vfwmacc.vf     v28, fa1, v26             \n\t"  // row0/1 accum += dot * packed scale
+                "vfwmacc.vf     v30, fa1, v27             \n\t"
 
                 "li             t4, 8                     \n\t"
                 "addi           t5, t5, -1                \n\t"
-                "addi           t6, t6, 64                \n\t"  // skip A trailer after 8 subblocks
+                "addi           t6, t6, 72                \n\t"  // skip A trailer after 8 subblocks and scale_avg tail
                 // s5 already points to next B superblock base
-                "addi           t2, t6, 1088              \n\t"  // 8 * 136B A K32 subblocks, trailer starts here
+                "addi           t2, t6, 1088              \n\t"  // 8 * 136B A K32 subblocks, a_sum trailer starts here
                 "bgtz           t5, _BLK_LPST%=           \n\t"
 
                 "_BLK_LPND%=:                             \n\t"
@@ -3732,8 +3751,8 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 : [A] "+r"(a_block), [B] "+r"(b_tile_base)
                 : [DST] "r"(dst_c), [LDC] "r"(ldc * 4), [BK] "r"(k_blks), [HP16] "f"(hp_scale_16), [HP1] "f"(hp_scale_1)
                 : "t0", "t2", "t3", "t4", "t5", "t6", "s5", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v10",
-                  "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v24", "v25", "v28",
-                  "v29", "v30", "v31", "fa0", "fa1", "fa2", "fa3", "ft1", "ft2", "ft3", "ft4", "memory");
+                  "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v24", "v25", "v26",
+                  "v27", "v28", "v29", "v30", "v31", "fa0", "fa1", "ft1", "ft2", "ft3", "ft4", "memory");
         }
         return;
     }
@@ -5617,7 +5636,7 @@ size_t gemm_kernel_i8i4_hp(size_t          blk_len,
                            size_t          k_blks,
                            size_t          ldc) {
     if (count_m >= 4) {
-#if 1
+#if 0
         gemm_kernel_i8i4_hp_mrow_ref<4, 32>(blk_len, quant_a_ptr, quant_b_data, quant_b_zp, c_ptr, count_m, count_n,
                                             k_blks, ldc);
 #else
