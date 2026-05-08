@@ -2335,7 +2335,7 @@ void quantize_row_tq2_0_ref(const float * GGML_RESTRICT x, block_tq2_0 * GGML_RE
     }
 }
 
-void quantize_row_stq_0_ref(const float * GGML_RESTRICT x, block_stq_0 * GGML_RESTRICT y, int64_t k) {
+void quantize_row_stq1_0_ref(const float * GGML_RESTRICT x, block_stq1_0 * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2350,7 +2350,7 @@ void quantize_row_stq_0_ref(const float * GGML_RESTRICT x, block_stq_0 * GGML_RE
         }
         y[i].d = GGML_FP32_TO_FP16(amax);
 
-        // STQ_0 forces exactly one zero per group of 4. Pick the smallest-|x|
+        // STQ1_0 forces exactly one zero per group of 4. Pick the smallest-|x|
         // lane as that zero; project the other 3 onto {-d, +d} via sign.
         for (int g = 0; g < QK_K/4; ++g) {
             const float * xv = x + g*4;
@@ -2374,8 +2374,8 @@ void quantize_row_stq_0_ref(const float * GGML_RESTRICT x, block_stq_0 * GGML_RE
                 qpack |= (uint8_t)(lane << (2*p));
             }
 
-            const uint8_t code = stq_0_qpack_to_slot[qpack];
-            const uint8_t sign = stq_0_qpack_to_sign[qpack];
+            const uint8_t code = stq1_0_qpack_to_slot[qpack];
+            const uint8_t sign = stq1_0_qpack_to_sign[qpack];
             assert(code != 0xFF);
 
             y[i].qs  [g/2] |= (uint8_t)((code & 0x0F) << (4 * (g & 1)));
@@ -2400,10 +2400,10 @@ size_t quantize_tq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     return nrow * row_size;
 }
 
-size_t quantize_stq_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+size_t quantize_stq1_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     (void)quant_weights; // not used
-    const size_t row_size = ggml_row_size(GGML_TYPE_STQ_0, n_per_row);
-    quantize_row_stq_0_ref(src, dst, (int64_t)nrow*n_per_row);
+    const size_t row_size = ggml_row_size(GGML_TYPE_STQ1_0, n_per_row);
+    quantize_row_stq1_0_ref(src, dst, (int64_t)nrow*n_per_row);
     return nrow * row_size;
 }
 
@@ -2465,7 +2465,7 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
-void dequantize_row_stq_0(const block_stq_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_stq1_0(const block_stq1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
 
@@ -2475,7 +2475,7 @@ void dequantize_row_stq_0(const block_stq_0 * GGML_RESTRICT x, float * GGML_REST
         for (int g = 0; g < QK_K/4; ++g) {
             const uint8_t code = (x[i].qs[g/2] >> (4 * (g & 1))) & 0x0F;
             const uint8_t sign = (x[i].sign[g/8] >> (g % 8)) & 0x01;
-            const uint8_t qpack = stq_0_codebook[((uint32_t) sign << 4) | code];
+            const uint8_t qpack = stq1_0_codebook[((uint32_t) sign << 4) | code];
 
             for (int p = 0; p < 4; ++p) {
                 const int q = (qpack >> (2*p)) & 0x3;
@@ -5506,9 +5506,9 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_tq2_0, data, nb);
             } break;
-        case GGML_TYPE_STQ_0:
+        case GGML_TYPE_STQ1_0:
             {
-                VALIDATE_ROW_DATA_D_F16_IMPL(block_stq_0, data, nb);
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_stq1_0, data, nb);
             } break;
         case GGML_TYPE_IQ1_S:
             {
