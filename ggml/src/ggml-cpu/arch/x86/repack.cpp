@@ -3228,7 +3228,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     // Mins of first and second sub block of Q4_K block are arranged side by side
                     const __m256i mins_01 = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(_mm_shuffle_epi32(mins_and_scales_0, 78), _mm_shuffle_epi32(mins_and_scales_1, 78)));
-                    
+
                     const __m256i scale_0145_0 = _mm256_shuffle_epi32(scales_0, 68);
                     const __m256i scale_2367_0 = _mm256_shuffle_epi32(scales_0, 238);
 
