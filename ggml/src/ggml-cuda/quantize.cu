@@ -30,7 +30,6 @@ static __global__ void quantize_q8_1(
     const int64_t ib  = i_cont / QK8_1; // block index
     const int64_t iqs = i_cont % QK8_1; // quant index
 
-    // GGML_CUDA_PDL_LC(); // Try 2;  348.48  on maxq; NSYS: Takes even longer, more contention?
     GGML_CUDA_PDL_SYNC();
     const float xi = i0 < ne00 ? x[i03*s03 + i02*s02 + i01*s01 + i00] : 0.0f;
     float amax = fabsf(xi);

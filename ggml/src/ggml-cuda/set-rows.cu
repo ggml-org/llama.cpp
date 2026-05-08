@@ -133,7 +133,6 @@ static __global__ void k_set_rows(const src_t * __restrict__ src0,
                                   const uint3   ne02,
                                   const uint3   ne11_fd,
                                   const uint3   ne12_fd) {
-    // GGML_CUDA_PDL_LC(); // SET_ROWS try 1; on maxq
     const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
 
     if (i >= ne_total) {

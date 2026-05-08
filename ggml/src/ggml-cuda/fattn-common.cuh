@@ -898,7 +898,6 @@ static __global__ void flash_attn_combine_results(
         ((float *) meta)[i] = ((const float *)VKQ_meta) [i];
     }
 
-    // GGML_CUDA_PDL_LC(); // FATTN_COMBINE_RESULTS try 2; on maxq
     __syncthreads();
 
     float kqmax = meta[0].x;

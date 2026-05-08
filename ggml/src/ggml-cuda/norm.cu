@@ -132,7 +132,6 @@ static __global__ void rms_norm_f32(const float * x,
         const float xi = x[col];
         tmp += xi * xi;
     }
-    // GGML_CUDA_PDL_LC(); // RMS_NORM try 2; on maxq
 
     // sum up partial sums
     extern __shared__ float s_sum[];
@@ -246,7 +245,6 @@ template <int block_size>
 static __global__ void l2_norm_f32(
         const float * x, float * dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps) {
-    // GGML_CUDA_PDL_LC(); // L2_NORM try 1; on maxq
     const int nrows     = gridDim.x;
     const int nchannels = gridDim.y;
 
@@ -260,14 +258,12 @@ static __global__ void l2_norm_f32(
 
     float tmp = 0.0f; // partial sum for thread in warp
 
-    // GGML_CUDA_PDL_LC(); // L2_NORM try 2; on maxq
     GGML_CUDA_PDL_SYNC(); // needs to guard data access (except pointer arithmetic) for x, dst.
     for (int col = tid; col < ncols; col += block_size) {
         const float xi = x[col];
         tmp += xi * xi;
     }
 
-    // GGML_CUDA_PDL_LC(); // L2_NORM try 3; on maxq
     // sum up partial sums
     extern __shared__ float s_sum[];
     tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);

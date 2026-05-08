@@ -77,7 +77,6 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
     dst_t * dst_row = dst + i_dst;
 
-    // GGML_CUDA_PDL_LC(); // BINBCAST try 2; 352.44 352.42, 352.05 on maxq
     for (int i0 = i0s; i0 < ne0; i0 += blockDim.x * gridDim.x) {
         const uint32_t i10 = fastmodulo(i0, ne10);
 

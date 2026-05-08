@@ -139,7 +139,6 @@ static __global__ void flash_attn_ext_vec(
     float2  Q_ds[ncols][1 > D/(sizeof(int)*nthreads_KQ) ? 1 : D/(sizeof(int)*nthreads_KQ)];
 
     GGML_CUDA_PDL_SYNC();
-    // GGML_CUDA_PDL_LC(); // FATTN_VEC try 2; on maxq
     if constexpr (Q_q8_1) {
 #pragma unroll
         for (int j0 = 0; j0 < ncols; j0 += nwarps) {
