@@ -5,6 +5,7 @@
 #include "common.hpp"
 #include "convert.hpp"
 #include "vecdotq.hpp"
+#include "fattn-buffers.hpp"
 
 #include "ggml.h"
 
