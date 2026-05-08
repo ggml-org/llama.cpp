@@ -1276,13 +1276,6 @@ static bool ggml_backend_cuda_comm_allreduce_internal(
         return true;
     }
 
-    // Per-AR vector path requires the byte size to be a 16-byte multiple so
-    // the chunked-kernel can issue full-width vector loads/stores.  In
-    // practice all tensors we hand off here come from tensor-parallel splits
-    // of hidden_dim-multiples and trivially satisfy this; a violation would
-    // indicate a caller-side bug.
-    GGML_ASSERT(((size_t) ne * ggml_type_size(type) & 0xF) == 0);
-
     for (size_t i = 0; i < n_backends; ++i) {
         if (tensors[i] == nullptr) {
             GGML_LOG_ERROR("%s: internal failed: tensor[%zu] is null\n", __func__, i);
@@ -1304,6 +1297,7 @@ static bool ggml_backend_cuda_comm_allreduce_internal(
                            __func__, i, tensors[i]->data, (int) type, ne);
             return false;
         }
+        GGML_ASSERT((ggml_nbytes(tensors[i]) & 0xF) == 0);
     }
 
     return ggml_cuda_ar_allreduce(comm_ctx->ar_pipeline, comm_ctx->backends.data(), tensors);
@@ -1410,7 +1404,7 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
         ggml_backend_cuda_comm_init_nccl(ret);
 #else
         ggml_backend_cuda_comm_init_internal(ret);
-#endif
+#endif // defined(__linux__)
     } else {
         std::string env_str(env);
         if (env_str == "nccl") {
@@ -1420,7 +1414,7 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
         } else if (env_str == "none") {
             ggml_backend_cuda_comm_init_none(ret);
         } else {
-            GGML_LOG_WARN("unknown GGML_CUDA_ALLREDUCE value: %s", env);
+            GGML_LOG_WARN("unknown GGML_CUDA_ALLREDUCE value: %s\n", env);
             ggml_backend_cuda_comm_init_none(ret);
         }
     }
