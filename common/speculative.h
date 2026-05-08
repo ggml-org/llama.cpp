@@ -22,20 +22,23 @@ void common_speculative_free(common_speculative * spec);
 void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt);
 
 struct common_speculative_draft_params {
+    bool drafting = true;
+
     int32_t n_max = -1; // overrides individual configurations
 
     llama_pos   n_past;
     llama_token id_last;
 
-    const llama_tokens & prompt;
+    const llama_tokens * prompt;
 
-    llama_tokens & result;
+    llama_tokens * result;
 };
+
+using common_speculative_draft_params_map = std::map<llama_seq_id, common_speculative_draft_params>;
 
 void common_speculative_draft(
                      common_speculative * spec,
-                           llama_seq_id   seq_id,
-        common_speculative_draft_params & dparams);
+    common_speculative_draft_params_map & dparams);
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);

@@ -336,14 +336,16 @@ struct server_slot {
                 }
 
                 // generate a new draft
-                auto dparams = common_speculative_draft_params {
-                    /* .n_max      = */ n_draft_max,
-                    /* .n_past     = */ prompt.n_tokens(),
-                    /* .id_last    = */ sampled,
-                    /* .prompt     = */ tokens_text,
-                    /* .result     = */ spec_draft,
+                common_speculative_draft_params_map dparams;
+                dparams[this->id] = common_speculative_draft_params {
+                    /* .drafting = */ true,
+                    /* .n_max    = */ n_draft_max,
+                    /* .n_past   = */ prompt.n_tokens(),
+                    /* .id_last  = */ sampled,
+                    /* .prompt   = */ &tokens_text,
+                    /* .result   = */ &spec_draft,
                 };
-                common_speculative_draft(spec, this->id, dparams);
+                common_speculative_draft(spec, dparams);
                 n_draft_total += spec_draft.size();
 
                 if (spec_draft.size() > (size_t) n_draft_max) {
