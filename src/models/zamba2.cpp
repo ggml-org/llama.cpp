@@ -9,9 +9,9 @@ void llama_model_zamba2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
     // All layers have Mamba-2 (recurrent state needed for all)
-    std::fill(hparams.recurrent_layer_arr.begin(), hparams.recurrent_layer_arr.end(), true);
+    std::fill(hparams.is_recr_impl.begin(), hparams.is_recr_impl.end(), true);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 38: type = LLM_TYPE_1B; break;
         case 54: type = LLM_TYPE_3B; break;
         case 76: type = LLM_TYPE_7B; break;
