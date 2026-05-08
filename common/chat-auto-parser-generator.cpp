@@ -369,9 +369,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                            arguments.name_suffix) +
                            arguments.value_prefix +
                            (schema_info.resolves_to_string(param_schema) ?
-                                p.tool_arg_string_value(p.schema(until_suffix,
-                                                                 "tool-" + name + "-arg-" + param_name + "-schema",
-                                                                 param_schema, true)) :
+                                p.tool_arg_string_value(until_suffix) :
                                 p.tool_arg_json_value(p.schema(
                                     p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
                                     p.space()) +
