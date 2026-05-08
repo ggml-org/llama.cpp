@@ -13162,7 +13162,7 @@ class Granite4VisionMmprojModel(MmprojModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, _ = item
-        if name.startswith("language_model."):
+        if name.startswith("language_model.") or "vision_model.head" in name:
             return None
         return super().filter_tensors(item)
 

@@ -1424,6 +1424,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
+            "model.vision_tower.vision_model.embeddings.patch_embedding", # Granite4Vision
             "vision_tower.vision_model.embeddings.patch_embedding",
             "model.vision_tower.embeddings.patch_embedding", # minicpmv4_6
             "model.vision_tower.embeddings.patch_embeddings.projection", # Intern-S1
@@ -1450,6 +1451,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
+            "model.vision_tower.vision_model.embeddings.position_embedding", # Granite4Vision
             "vision_tower.vision_model.embeddings.position_embedding",
             "model.vision_tower.embeddings.position_embedding", # minicpmv4_6
             "model.vision_tower.embeddings.position_embeddings", # Intern-S1
@@ -1488,6 +1490,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q: (
+            "model.vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj",
             "model.vision_tower.encoder.layers.{bid}.self_attn.q_proj", # minicpmv4_6
             "model.vision_tower.encoder.layer.{bid}.attention.q_proj", # Intern-S1
@@ -1512,6 +1515,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K: (
+            "model.vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj",
             "model.vision_tower.encoder.layers.{bid}.self_attn.k_proj", # minicpmv4_6
             "model.vision_tower.encoder.layer.{bid}.attention.k_proj", # Intern-S1
@@ -1536,6 +1540,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_V: (
+            "model.vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj",
             "model.vision_tower.encoder.layers.{bid}.self_attn.v_proj", # minicpmv4_6
             "model.vision_tower.encoder.layer.{bid}.attention.v_proj", # Intern-S1
@@ -1553,6 +1558,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
+            "model.vision_tower.vision_model.encoder.layers.{bid}.layer_norm1", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1",
             "model.vision_tower.encoder.layers.{bid}.layer_norm1", # minicpmv4_6
             "vision_tower.vision_model.encoder.layers.{bid}.norm1", # InternVL
@@ -1574,6 +1580,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
+            "model.vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_tower.encoder.layers.{bid}.self_attn.out_proj", # minicpmv4_6
             "vision_tower.vision_model.encoder.layers.{bid}.attn.proj", # InternVL
@@ -1601,6 +1608,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
+            "model.vision_tower.vision_model.encoder.layers.{bid}.layer_norm2", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2",
             "model.vision_tower.encoder.layers.{bid}.layer_norm2", # minicpmv4_6
             "vision_tower.vision_model.encoder.layers.{bid}.norm2", # InternVL
@@ -1623,6 +1631,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
+            "model.vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1",
             "model.vision_tower.encoder.layers.{bid}.mlp.fc1", # minicpmv4_6
             "model.vision_tower.encoder.layer.{bid}.mlp.fc1", # Intern-S1
@@ -1652,6 +1661,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
+            "model.vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2", # Granite4Vision
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2",
             "model.vision_tower.encoder.layers.{bid}.mlp.fc2", # minicpmv4_6
             "model.vision_tower.encoder.layer.{bid}.mlp.fc2", # Intern-S1
@@ -1708,6 +1718,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_POST_NORM: (
+            "model.vision_tower.vision_model.post_layernorm", # Granite4Vision
             "vision_tower.vision_model.post_layernorm",
             "model.vision_tower.post_layernorm", # minicpmv4_6
             "model.vision_model.post_layernorm", # SmolVLM
