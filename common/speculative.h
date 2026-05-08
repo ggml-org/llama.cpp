@@ -28,13 +28,14 @@ struct common_speculative_draft_params {
     llama_token id_last;
 
     const llama_tokens & prompt;
+
+    llama_tokens & result;
 };
 
-// sample up to n_draft tokens and add them to the batch using the draft model
-llama_tokens common_speculative_draft(
+void common_speculative_draft(
                      common_speculative * spec,
                            llama_seq_id   seq_id,
-  const common_speculative_draft_params & dparams);
+        common_speculative_draft_params & dparams);
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);

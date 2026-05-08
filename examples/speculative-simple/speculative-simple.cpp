@@ -179,13 +179,14 @@ int main(int argc, char ** argv) {
             }
 
             // generate a new draft
-            const auto dparams = common_speculative_draft_params {
+            auto dparams = common_speculative_draft_params {
                 /* .n_max      = */ -1,
                 /* .n_past     = */ n_past,
                 /* .id_last    = */ id_last,
                 /* .prompt     = */ prompt_tgt,
+                /* .result     = */ draft, // output
             };
-            draft = common_speculative_draft(spec, seq_id, dparams);
+            common_speculative_draft(spec, seq_id, dparams);
 
             // save the original draft size
             n_draft = draft.size();

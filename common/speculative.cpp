@@ -146,8 +146,7 @@ struct common_speculative_state {
 
     virtual void draft(
             llama_seq_id seq_id,
-            const common_speculative_draft_params & dparams,
-            llama_tokens & result) = 0;
+            common_speculative_draft_params & dparams) = 0;
 
     virtual void accept(llama_seq_id seq_id, uint16_t n_accepted) = 0;
 };
@@ -226,8 +225,7 @@ struct common_speculative_state_draft : public common_speculative_state {
 
     void draft(
             llama_seq_id seq_id,
-            const common_speculative_draft_params & dparams,
-            llama_tokens & result) override {
+            common_speculative_draft_params & dparams) override {
         auto * spec = this;
 
         auto & batch   = spec->batch;
@@ -248,7 +246,7 @@ struct common_speculative_state_draft : public common_speculative_state {
 
         common_sampler_reset(smpl.get());
 
-        const auto n_max = dparams.n_max > 1 ? std::min(dparams.n_max, spec->params.n_max) : spec->params.n_max;
+        const auto n_max = dparams.n_max > 0 ? std::min(dparams.n_max, spec->params.n_max) : spec->params.n_max;
 
         // sample n_draft tokens from the draft model
         for (int i = 0; i < n_max; ++i) {
@@ -273,9 +271,9 @@ struct common_speculative_state_draft : public common_speculative_state {
                 break;
             }
 
-            result.push_back(id);
+            dparams.result.push_back(id);
 
-            if (spec->params.n_max <= (int) result.size()) {
+            if (spec->params.n_max <= (int) dparams.result.size()) {
                 break;
             }
 
@@ -289,8 +287,8 @@ struct common_speculative_state_draft : public common_speculative_state {
             }
         }
 
-        if (result.size() < (size_t) spec->params.n_min) {
-            result.clear();
+        if (dparams.result.size() < (size_t) spec->params.n_min) {
+            dparams.result.clear();
         }
     }
 
@@ -311,8 +309,7 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
 
     void draft(
             llama_seq_id /*seq_id*/, 
-            const common_speculative_draft_params & /*dparams*/,
-            llama_tokens & /*result*/) override {
+            common_speculative_draft_params & /*dparams*/) override {
         // TODO: implement
     }
 
@@ -340,10 +337,8 @@ struct common_speculative_state_ngram_simple : public common_speculative_state {
 
     void draft(
             llama_seq_id /*seq_id*/, 
-            const common_speculative_draft_params & dparams,
-            llama_tokens & result) override {
-
-        result = common_ngram_simple_draft(config, dparams.prompt, dparams.id_last);
+            common_speculative_draft_params & dparams) override {
+        dparams.result = common_ngram_simple_draft(config, dparams.prompt, dparams.id_last);
     }
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/) override {
@@ -375,9 +370,8 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
 
     void draft(
             llama_seq_id seq_id, 
-            const common_speculative_draft_params & dparams,
-            llama_tokens & result) override {
-        common_ngram_map_draft(config[seq_id], dparams.prompt, dparams.id_last, result);
+            common_speculative_draft_params & dparams) override {
+        common_ngram_map_draft(config[seq_id], dparams.prompt, dparams.id_last, dparams.result);
     }
 
     void accept(llama_seq_id seq_id, uint16_t n_accepted) override {
@@ -460,9 +454,9 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
 
     void draft(
             llama_seq_id seq_id,
-            const common_speculative_draft_params & dparams,
-            llama_tokens & result) override {
+            common_speculative_draft_params & dparams) override {
         auto & sinfo = sinfos[seq_id];
+        auto & result = dparams.result;
 
         sinfo.n_draft_last = 0;
 
@@ -603,9 +597,9 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
 
     void draft(
             llama_seq_id seq_id,
-            const common_speculative_draft_params & dparams,
-            llama_tokens & result) override {
+            common_speculative_draft_params & dparams) override {
         auto & sinfo = sinfos[seq_id];
+        auto & result = dparams.result;
 
         if (sinfo.cache_size < dparams.prompt.size() + 1) {
             llama_tokens tokens_new;
@@ -847,23 +841,23 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
     }
 }
 
-llama_tokens common_speculative_draft(
+void common_speculative_draft(
         common_speculative * spec,
         llama_seq_id seq_id,
-        const common_speculative_draft_params & dparams) {
-    llama_tokens result;
-
+        common_speculative_draft_params & dparams) {
     spec->curr_impl = nullptr; // reset current implementation
 
     for (auto & impl : spec->impls) {
         {
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
-            impl->draft(seq_id, dparams, result);
+            impl->draft(seq_id, dparams);
             impl->n_call_draft++;
         }
 
-        if (dparams.n_max > 0 ) {
-            if (!result.empty() && (int) result.size() < dparams.n_max) {
+        auto & result = dparams.result;
+
+        if (dparams.n_max > 0) {
+            if (!result.empty() && (int) result.size() > dparams.n_max) {
                 LOG_DBG("%s: truncating draft to %d tokens\n", __func__, dparams.n_max);
                 result.resize(dparams.n_max);
             }
@@ -881,8 +875,6 @@ llama_tokens common_speculative_draft(
             break; // we have a draft, so break out of the loop and return it.
         }
     }
-
-    return result;
 }
 
 void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, uint16_t n_accepted) {
