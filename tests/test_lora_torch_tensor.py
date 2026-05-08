@@ -131,6 +131,13 @@ class TestTorchSplitFunction:
         assert len(chunks) == 2
         assert all(c.shape == (5, 16) for c in chunks)
 
+    def test_dim_positional(self):
+        lora = _make_lora((), 8, 4, 12)
+        chunks = torch.split(lora, 4, -1)
+        assert len(chunks) == 3
+        assert all(c.shape == (8, 4) for c in chunks)
+        assert chunks[0]._lora_B is chunks[1]._lora_B
+
 
 class TestSplitCatRoundtrip:
     """Verify split then cat reconstructs the original tensor."""
