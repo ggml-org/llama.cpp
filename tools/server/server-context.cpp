@@ -2968,7 +2968,17 @@ private:
             }
 
             // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
-            //       for methods that require the target embeddings, I think we have to re-evaluate the draft tokens?
+            //       for now, always re-evaluate for simplicity
+            //       ref: https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4400925384
+            //
+            //       | spec type   | need re-eval |
+            //       | ---         | ---          |
+            //       | draft model | no           |
+            //       | MTP (std)   | yes          |
+            //       | MTP Gemma4  | no           |
+            //       | Eagle3      | yes          |
+            //       | DFlash      | yes?         |
+            //
             if (ctx_drft) {
                 // TODO: update as needed for MTP, Eagle3, etc.
                 const bool need_tgt_embd = false;
@@ -2978,7 +2988,7 @@ private:
                 }
 
                 // the logic here varies depending on the speculative decoding method
-                //  - some draft contexts require emebeddings from the target context, others don't
+                //  - some draft contexts require embeddings from the target context, others don't
                 //  - some draft contexts involve an encoder step to transform the target embeddings to draft embeddings
                 // TODO: extract this in a function ?
                 {
