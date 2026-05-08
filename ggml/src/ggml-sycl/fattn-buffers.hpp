@@ -34,7 +34,7 @@ struct ggml_sycl_fattn_kv_buffers {
         sycl::half * ptr      = nullptr;
         size_t       capacity = 0;
         queue_ptr    qptr     = nullptr;
-        [[maybe_unused]] int device   = 0;
+        [[maybe_unused]] int device = 0;
     };
 
     kv_buffer K;
