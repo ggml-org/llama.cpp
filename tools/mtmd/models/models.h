@@ -56,6 +56,11 @@ struct clip_graph_minicpmv : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_minicpmv4_6 : clip_graph {
+    clip_graph_minicpmv4_6(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_internvl : clip_graph {
     clip_graph_internvl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -108,6 +113,11 @@ struct clip_graph_deepseekocr : clip_graph {
 
 struct clip_graph_conformer : clip_graph {
     clip_graph_conformer(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct clip_graph_granite_speech : clip_graph {
+    clip_graph_granite_speech(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 

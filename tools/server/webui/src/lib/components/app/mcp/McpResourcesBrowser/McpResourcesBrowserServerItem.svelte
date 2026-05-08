@@ -12,6 +12,7 @@
 		sortTreeChildren
 	} from './mcp-resources-browser';
 	import { getDisplayName, getResourceIcon } from '$lib/utils';
+	import { McpServerIdentity } from '$lib/components/app/mcp';
 
 	interface Props {
 		serverName: string;
@@ -43,11 +44,12 @@
 		searchQuery = ''
 	}: Props = $props();
 
+	let serverDisplayName = $derived(mcpStore.getServerDisplayName(serverName));
+	let serverFaviconUrl = $derived(mcpStore.getServerFavicon(serverName));
+
 	const hasResources = $derived(serverRes.resources.length > 0);
 	const hasTemplates = $derived(serverRes.templates.length > 0);
 	const hasContent = $derived(hasResources || hasTemplates);
-	const displayName = $derived(mcpStore.getServerDisplayName(serverName));
-	const favicon = $derived(mcpStore.getServerFavicon(serverName));
 	const resourceTree = $derived(buildResourceTree(serverRes.resources, serverName, searchQuery));
 
 	const templateInfos = $derived<MCPResourceTemplateInfo[]>(
@@ -153,21 +155,15 @@
 			<ChevronRight class="h-3.5 w-3.5" />
 		{/if}
 
-		<span class="inline-flex flex-col items-start text-left">
-			<span class="inline-flex items-center justify-start gap-1.5 font-medium">
-				{#if favicon}
-					<img
-						src={favicon}
-						alt=""
-						class="h-4 w-4 shrink-0 rounded-sm"
-						onerror={(e) => {
-							(e.currentTarget as HTMLImageElement).style.display = 'none';
-						}}
-					/>
-				{/if}
-
-				{displayName}
-			</span>
+		<span class="inline-flex flex-col items-start gap-1 text-left">
+			<div class="inline-flex min-w-0 items-center gap-1.5">
+				<McpServerIdentity
+					displayName={serverDisplayName}
+					faviconUrl={serverFaviconUrl}
+					iconClass="h-4 w-4"
+					showVersion={false}
+				/>
+			</div>
 
 			<span class="text-xs text-muted-foreground">
 				({serverRes.resources.length} resource{serverRes.resources.length !== 1
