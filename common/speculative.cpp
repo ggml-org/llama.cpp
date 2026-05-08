@@ -246,8 +246,9 @@ struct common_speculative_state_draft : public common_speculative_state {
         common_batch_add  (batch, id_last, n_past, { seq_id }, true);
 
         int ret = llama_decode(ctx_dft, batch);
-        if (ret != 0 && ret != 1) {
+        if (ret != 0) {
             LOG_WRN("%s: llama_decode returned %d\n", __func__, ret);
+            return;
         }
 
         common_sampler_reset(smpl);
@@ -287,6 +288,7 @@ struct common_speculative_state_draft : public common_speculative_state {
             ret = llama_decode(ctx_dft, batch);
             if (ret != 0) {
                 LOG_WRN("%s: llama_decode[%d] returned %d\n", __func__, i, ret);
+                break;
             }
         }
 
