@@ -295,8 +295,6 @@ struct common_params_model {
     std::string name        = ""; // in format <user>/<model>[:<tag>] (tag is optional)     // NOLINT
 };
 
-struct common_ngram_mod;
-
 // draft-model-based speculative decoding parameters
 struct common_params_speculative_draft {
     int32_t n_max = 16; // maximum number of tokens to draft during speculative decoding
@@ -328,9 +326,6 @@ struct common_params_speculative_ngram_mod {
 
     int32_t n_max = 64;
     int32_t n_min = 48;
-
-    // shared instance of the ngram container for all speculative decoding contexts
-    std::shared_ptr<common_ngram_mod> obj;
 };
 
 struct common_params_speculative_ngram_map {

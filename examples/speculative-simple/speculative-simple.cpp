@@ -147,7 +147,7 @@ int main(int argc, char ** argv) {
 
     struct common_speculative * spec = common_speculative_init(params.speculative, seq_id);
 
-    common_speculative_begin(spec, prompt_tgt);
+    common_speculative_begin(spec, seq_id, prompt_tgt);
 
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
 
@@ -179,7 +179,7 @@ int main(int argc, char ** argv) {
             }
 
             // generate a new draft
-            draft = common_speculative_draft(spec, params_spec, prompt_tgt, prompt_tgt.size(), id_last);
+            draft = common_speculative_draft(spec, seq_id, params_spec, prompt_tgt, prompt_tgt.size(), id_last);
 
             // save the original draft size
             n_draft = draft.size();
@@ -272,7 +272,7 @@ int main(int argc, char ** argv) {
             continue;
         }
 
-        common_speculative_accept(spec, ids.size() - 1);
+        common_speculative_accept(spec, seq_id, ids.size() - 1);
 
         // full acceptance: consume the draft and commit accepted tokens
         n_past    += ids.size() - 1;
