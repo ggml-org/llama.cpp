@@ -438,9 +438,6 @@ static bool parse_bool_value(const std::string & value) {
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
 
-    // setup log directly from params.verbosity: see tools/cli/cli.cpp
-    common_log_set_verbosity_thold(params.verbosity);
-
     std::unordered_map<std::string, std::pair<common_arg *, bool>> arg_to_options;
     for (auto & opt : ctx_arg.options) {
         for (const auto & arg : opt.args) {
@@ -1021,6 +1018,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     } else if (ex == LLAMA_EXAMPLE_SERVER) {
         params.n_parallel = -1;     // auto by default
     }
+
+    // Set log verbosity before other functions (they might log).
+    common_log_set_verbosity_thold(params.verbosity);
 
     params.use_color = tty_can_use_colors();
 
