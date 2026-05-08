@@ -378,6 +378,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
+    res->t_h_pre_norm = cur;
+    ggml_build_forward_expand(gf, res->t_h_pre_norm);
 
     // lm_head
     cur = build_lora_mm(model.output, cur);

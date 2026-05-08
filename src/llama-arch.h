@@ -63,6 +63,7 @@ enum llm_arch {
     LLM_ARCH_GEMMA3,
     LLM_ARCH_GEMMA3N,
     LLM_ARCH_GEMMA4,
+    LLM_ARCH_GEMMA4_MTP,
     LLM_ARCH_GEMMA_EMBEDDING,
     LLM_ARCH_STARCODER2,
     LLM_ARCH_MAMBA,
@@ -413,6 +414,9 @@ enum llm_tensor {
     LLM_TENSOR_PER_LAYER_PROJ,       // gemma3n
     LLM_TENSOR_PER_LAYER_PROJ_NORM,  // gemma3n
     LLM_TENSOR_PER_LAYER_POST_NORM,  // gemma3n
+    LLM_TENSOR_MTP_INP_EMBD,         // gemma4_mtp
+    LLM_TENSOR_MTP_PRE_PROJ,         // gemma4_mtp
+    LLM_TENSOR_MTP_POST_PROJ,        // gemma4_mtp
     LLM_TENSOR_ALTUP_PROJ,           // gemma3n
     LLM_TENSOR_ALTUP_UNEMBD_PROJ,    // gemma3n
     LLM_TENSOR_ALTUP_CORRECT_COEF,   // gemma3n

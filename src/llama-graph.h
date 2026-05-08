@@ -19,7 +19,9 @@ struct ggml_tensor;
 struct llama_cparams;
 struct llama_layer;
 struct llama_context;
+struct llama_model;
 
+struct llama_memory_i;
 struct llama_memory_context_i;
 
 class llama_kv_cache_context;
@@ -366,6 +368,10 @@ public:
         cparams(cparams),
         mctx(mctx) {
     }
+    llm_graph_input_attn_kv_iswa(
+            const llama_hparams & hparams,
+            const llama_cparams & cparams,
+            std::unique_ptr<llama_memory_context_i> owned_mctx);
     ~llm_graph_input_attn_kv_iswa() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -399,6 +405,7 @@ public:
     const llama_hparams hparams;
     const llama_cparams cparams;
 
+    std::unique_ptr<llama_memory_context_i> owned_mctx;
     const llama_kv_cache_iswa_context * mctx;
 };
 
@@ -544,6 +551,8 @@ struct llm_graph_params {
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
+    const llama_model            * mtp_target_model;
+          llama_memory_i         * mtp_target_memory;
     const llama_cross            * cross;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
@@ -631,6 +640,8 @@ struct llm_graph_params {
             gtype == other.gtype &&
             cvec  == other.cvec  &&
             loras == other.loras &&
+            mtp_target_model  == other.mtp_target_model  &&
+            mtp_target_memory == other.mtp_target_memory &&
             cross == other.cross;
     }
 };
@@ -960,6 +971,7 @@ struct llm_graph_context {
                     int   il) const;
 
     llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa() const;
+    llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa(std::unique_ptr<llama_memory_context_i> owned_mctx, const llama_hparams & hparams_inp) const;
 
     // note: if k_cur or v_cur are not provided, they will not be stored in the memory
     ggml_tensor * build_attn(

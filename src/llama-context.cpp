@@ -1245,7 +1245,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
-    if (mtp.ctx_mtp) {
+    if (mtp.ctx_mtp && mtp.ctx_mtp->model.arch != LLM_ARCH_GEMMA4_MTP) {
         handle_mtp_for_ubatch(
                 (int32_t) ubatch.n_tokens,
                 ubatch.token,
@@ -2179,6 +2179,8 @@ llm_graph_params llama_context::graph_params(
         /*.cvec        =*/ cvec.get(),
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
+        /*.mtp_target_model  =*/ mtp.ctx_target ? &mtp.ctx_target->model : nullptr,
+        /*.mtp_target_memory =*/ mtp.ctx_target ?  mtp.ctx_target->memory.get() : nullptr,
         /*.cross       =*/ &cross,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
@@ -3416,6 +3418,33 @@ ggml_tensor * llama_context_get_t_mtp_out(struct llama_context * ctx) {
     return ctx ? ctx->get_t_mtp_out() : nullptr;
 }
 
+bool llama_context::copy_tensor_data(ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    if (tensor == nullptr) {
+        return false;
+    }
+
+    synchronize();
+
+    ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), tensor);
+    if (backend == nullptr) {
+        return false;
+    }
+
+    ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
+    ggml_backend_synchronize(backend);
+
+    return true;
+}
+
+bool llama_context_copy_tensor_data(
+        struct llama_context * ctx,
+        struct ggml_tensor   * tensor,
+        void                 * data,
+        size_t                 offset,
+        size_t                 size) {
+    return ctx ? ctx->copy_tensor_data(tensor, data, offset, size) : false;
+}
+
 void llama_set_mtp(struct llama_context * ctx_target, struct llama_context * ctx_mtp) {
     if (!ctx_target) return;
     ctx_target->set_mtp(ctx_mtp);
@@ -3423,6 +3452,10 @@ void llama_set_mtp(struct llama_context * ctx_target, struct llama_context * ctx
 
 void llama_context::set_mtp(llama_context * ctx_mtp_in) {
     if (mtp.ctx_mtp == ctx_mtp_in) return;
+
+    if (mtp.ctx_mtp && mtp.ctx_mtp->mtp.ctx_target == this) {
+        mtp.ctx_mtp->mtp.ctx_target = nullptr;
+    }
 
     if (mtp.hook_batch.pos != nullptr) {
         llama_batch_free(mtp.hook_batch);
@@ -3433,6 +3466,7 @@ void llama_context::set_mtp(llama_context * ctx_mtp_in) {
     mtp.pending_pos = -1;
 
     if (mtp.ctx_mtp) {
+        mtp.ctx_mtp->mtp.ctx_target = this;
         const int32_t n_ub   = (int32_t) cparams.n_ubatch;
         const int32_t n_embd = (int32_t) model.hparams.n_embd;
         mtp.hook_batch       = llama_batch_init(n_ub, n_embd, 1);

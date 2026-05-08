@@ -4084,6 +4084,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
+    add_opt(common_arg(
+        {"--gemma4-e2b-spec"},
+        string_format("use Gemma 4 E2B Q4_K_M draft for speculative decoding (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.speculative.draft.mparams.hf_repo = "unsloth/gemma-4-E2B-it-GGUF";
+            params.speculative.draft.mparams.hf_file = "gemma-4-E2B-it-Q4_K_M.gguf";
+            params.speculative.draft.n_ctx = 4096;
+            params.speculative.draft.n_max = 2;
+            params.speculative.draft.n_min = 1;
+            params.speculative.draft.n_gpu_layers = -1;
+            params.speculative.draft.cache_type_k = GGML_TYPE_Q5_0;
+            params.speculative.draft.cache_type_v = GGML_TYPE_Q5_0;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
     return ctx_arg;
 }
 

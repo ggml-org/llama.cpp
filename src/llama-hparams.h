@@ -179,6 +179,7 @@ struct llama_hparams {
     uint32_t n_cls_out = 1;
 
     // output embedding dimension (0 = use n_embd)
+    uint32_t n_embd_inp_impl = 0;
     uint32_t n_embd_out_impl = 0;
 
     // llama4 smallthinker

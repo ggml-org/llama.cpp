@@ -87,6 +87,7 @@ struct llama_context {
 
     ggml_tensor * get_t_h_pre_norm() const;
     ggml_tensor * get_t_mtp_out()    const;
+    bool copy_tensor_data(ggml_tensor * tensor, void * data, size_t offset, size_t size);
 
     void            set_mtp(llama_context * ctx_mtp_in);
     llama_context * get_mtp() const { return mtp.ctx_mtp; }

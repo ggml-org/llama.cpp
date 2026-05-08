@@ -500,7 +500,41 @@ bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+llm_graph_input_attn_kv_iswa::llm_graph_input_attn_kv_iswa(
+        const llama_hparams & hparams,
+        const llama_cparams & cparams,
+        std::unique_ptr<llama_memory_context_i> owned_mctx) :
+    hparams(hparams),
+    cparams(cparams),
+    owned_mctx(std::move(owned_mctx)),
+    mctx(dynamic_cast<const llama_kv_cache_iswa_context *>(this->owned_mctx.get())) {
+    GGML_ASSERT(mctx && "expected llama_kv_cache_iswa_context");
+}
+
 void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
+    if (owned_mctx) {
+        mctx->get_base()->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+        mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+
+        if (self_k_rot) {
+            mctx->get_base()->set_input_k_rot(self_k_rot);
+        }
+
+        if (self_v_rot) {
+            mctx->get_base()->set_input_v_rot(self_v_rot);
+        }
+
+        if (self_k_rot_swa) {
+            mctx->get_swa()->set_input_k_rot(self_k_rot_swa);
+        }
+
+        if (self_v_rot_swa) {
+            mctx->get_swa()->set_input_v_rot(self_v_rot_swa);
+        }
+
+        return;
+    }
+
     mctx->get_base()->set_input_k_idxs(self_k_idxs, ubatch);
     mctx->get_base()->set_input_v_idxs(self_v_idxs, ubatch);
 
@@ -529,6 +563,10 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
 }
 
 bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
+    if (owned_mctx) {
+        return false;
+    }
+
     const auto * mctx = static_cast<const llama_kv_cache_iswa_context *>(params.mctx);
 
     this->mctx = mctx;
@@ -811,6 +849,8 @@ void llm_graph_result::reset() {
     t_logits      = nullptr;
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
+    t_h_pre_norm  = nullptr;
+    t_mtp_out     = nullptr;
     t_sampled.clear();
     t_sampled_probs.clear();
     t_sampled_logits.clear();
@@ -848,6 +888,12 @@ void llm_graph_result::set_outputs() {
     }
     if (t_embd_pooled != nullptr) {
         ggml_set_output(t_embd_pooled);
+    }
+    if (t_h_pre_norm != nullptr) {
+        ggml_set_output(t_h_pre_norm);
+    }
+    if (t_mtp_out != nullptr) {
+        ggml_set_output(t_mtp_out);
     }
     for (auto & [seq_id, t] : t_sampled) {
         if (t != nullptr) {
@@ -2501,6 +2547,35 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
     {
         GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE && "Use llama_kv_cache for non-SWA");
 
+        inp->self_k_idxs_swa = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
+        inp->self_v_idxs_swa = mctx_cur->get_swa()->build_input_v_idxs(ctx0, ubatch);
+
+        inp->self_kq_mask_swa = build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
+        inp->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_swa, GGML_TYPE_F16) : inp->self_kq_mask_swa;
+    }
+
+    inp->self_k_rot = mctx_cur->get_base()->build_input_k_rot(ctx0);
+    inp->self_v_rot = mctx_cur->get_base()->build_input_v_rot(ctx0);
+
+    inp->self_k_rot_swa = mctx_cur->get_swa()->build_input_k_rot(ctx0);
+    inp->self_v_rot_swa = mctx_cur->get_swa()->build_input_v_rot(ctx0);
+
+    return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
+}
+
+llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa(std::unique_ptr<llama_memory_context_i> owned_mctx, const llama_hparams & hparams_inp) const {
+    auto inp = std::make_unique<llm_graph_input_attn_kv_iswa>(hparams_inp, cparams, std::move(owned_mctx));
+    const auto * mctx_cur = inp->mctx;
+
+    {
+        inp->self_k_idxs = mctx_cur->get_base()->build_input_k_idxs(ctx0, ubatch);
+        inp->self_v_idxs = mctx_cur->get_base()->build_input_v_idxs(ctx0, ubatch);
+
+        inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
+        inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+    }
+
+    {
         inp->self_k_idxs_swa = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs_swa = mctx_cur->get_swa()->build_input_v_idxs(ctx0, ubatch);
 

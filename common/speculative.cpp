@@ -607,7 +607,9 @@ struct common_speculative_state_mtp : public common_speculative_state {
 
     llama_batch       batch;       // single token draft step
     common_sampler  * smpl = nullptr;
-    int32_t           n_embd = 0;
+    int32_t           n_embd_in  = 0;
+    int32_t           n_embd_out = 0;
+    bool              constant_pos = false;
 
     uint16_t last_n_drafted  = 0;
     int32_t  last_n_accepted = -1;
@@ -618,7 +620,9 @@ struct common_speculative_state_mtp : public common_speculative_state {
         : common_speculative_state(type), ctx_tgt(ctx_tgt), ctx_mtp(ctx_mtp) {
         GGML_ASSERT(ctx_tgt && ctx_mtp);
         const llama_model * model_mtp = llama_get_model(ctx_mtp);
-        n_embd = llama_model_n_embd(model_mtp);
+        n_embd_in    = llama_model_n_embd_inp(model_mtp);
+        n_embd_out   = llama_model_n_embd_out(model_mtp);
+        constant_pos = n_embd_in != llama_model_n_embd(model_mtp);
 
         {
             common_params_sampling sparams;
@@ -629,7 +633,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
         }
 
         // TODO: multiple seq support
-        batch = llama_batch_init(/*n_tokens=*/ 1, /*embd=*/ n_embd, /*n_seq_max=*/ 1);
+        batch = llama_batch_init(/*n_tokens=*/ 1, /*embd=*/ n_embd_in, /*n_seq_max=*/ 1);
         batch.token = (llama_token *) malloc(sizeof(llama_token));
         batch.n_tokens     = 1;
         batch.n_seq_id[0]  = 1;
@@ -656,6 +660,9 @@ struct common_speculative_state_mtp : public common_speculative_state {
         if (N <= 0) {
             return;
         }
+        if (constant_pos) {
+            return;
+        }
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_mtp), 0);
         if (pos_max < N - 1) {
             LOG_WRN("%s: ctx_mtp pos_max=%d < N-1=%d — "
@@ -675,7 +682,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
 
         // accept with no-accepts (i.e. 0 accepts) returns early, but we still need to remove from the MTP kv-cache
         // TODO: check if bug in other spec states
-        if (last_n_drafted > 0) {
+        if (last_n_drafted > 0 && !constant_pos) {
             const int32_t n_to_drop = (int32_t) last_n_drafted - 1;
             if (n_to_drop > 0) {
                 const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_mtp), 0);
@@ -687,12 +694,17 @@ struct common_speculative_state_mtp : public common_speculative_state {
             last_n_drafted  = 0;
             last_n_accepted = 0;
         }
+        if (constant_pos) {
+            llama_memory_clear(llama_get_memory(ctx_mtp), true);
+        }
 
-        const int32_t n_max     = std::max(1, params.draft.n_max);
-        const size_t  row_bytes = (size_t) n_embd * sizeof(float);
+        const int32_t n_max        = std::max(1, params.draft.n_max);
+        const size_t  row_bytes_in = (size_t) n_embd_in * sizeof(float);
 
         llama_token cond_tok = id_last;
-        llama_pos   pos      = llama_memory_seq_pos_max(llama_get_memory(ctx_mtp), 0) + 1;
+        llama_pos   pos      = constant_pos
+                ? llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), 0)
+                : llama_memory_seq_pos_max(llama_get_memory(ctx_mtp), 0) + 1;
 
         // auto-regressive loop for MTP
         for (int32_t k = 0; k < n_max; ++k) {
@@ -718,8 +730,15 @@ struct common_speculative_state_mtp : public common_speculative_state {
                 LOG_WRN("%s: missing source tensor at k=%d; stopping chain\n", __func__, k);
                 return;
             }
-            ggml_backend_tensor_get(src, batch.embd,
-                                    (size_t) src_row * row_bytes, row_bytes);
+            if (src_row < 0 || src_row >= src->ne[1]) {
+                src_row = src->ne[1] > 0 ? (int32_t) src->ne[1] - 1 : 0;
+            }
+            llama_context * ctx_src = k == 0 ? ctx_tgt : ctx_mtp;
+            if (!llama_context_copy_tensor_data(ctx_src, src, batch.embd,
+                                                (size_t) src_row * row_bytes_in, row_bytes_in)) {
+                LOG_WRN("%s: could not copy source tensor row at k=%d; stopping chain\n", __func__, k);
+                return;
+            }
 
             batch.token[0] = cond_tok;
             batch.pos[0]   = pos;
@@ -741,6 +760,12 @@ struct common_speculative_state_mtp : public common_speculative_state {
     }
 
     void accept(uint16_t n_accepted) override {
+        if (constant_pos) {
+            last_n_drafted = 0;
+            last_n_accepted = (int32_t) n_accepted;
+            return;
+        }
+
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_mtp), 0);
         const int32_t n_drafted_last = (int32_t) last_n_drafted;
         const int32_t n_to_drop = std::max(0, n_drafted_last - (int32_t) n_accepted - 1);
@@ -1166,7 +1191,7 @@ common_speculative * common_speculative_init(
     // Compute the implementations to use based on the config and their order of preference
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
-        bool has_draft = !params.draft.mparams.path.empty();
+        bool has_draft = params.draft.model != nullptr;
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
         bool has_mtp = (params.type == COMMON_SPECULATIVE_TYPE_MTP) && (ctx_mtp != nullptr);
 
