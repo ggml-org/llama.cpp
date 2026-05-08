@@ -556,6 +556,7 @@ class MODEL_ARCH(IntEnum):
     TALKIE           = auto()
     MELLUM           = auto()
     NANBEIGE         = auto()
+    ZAYA             = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -669,6 +670,10 @@ class MODEL_TENSOR(IntEnum):
     SSM_BETA             = auto() # Kimi Linear qwen3.5
     SSM_G_A              = auto() # Kimi Linear
     SSM_G_B              = auto() # Kimi Linear
+    CCA_CONV_DW          = auto() # Zaya
+    CCA_CONV_GRP         = auto() # Zaya
+    CCA_QK_NORM          = auto() # Zaya
+    CCA_K_SCALE          = auto() # Zaya
     TIME_MIX_W0          = auto()
     TIME_MIX_W1          = auto()
     TIME_MIX_W2          = auto()
@@ -1168,6 +1173,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
     MODEL_ARCH.NANBEIGE:         "nanbeige",
+    MODEL_ARCH.ZAYA:             "zaya",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1279,6 +1285,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_BETA:                  "blk.{bid}.ssm_beta",             # Kimi Linear qwen3.5
     MODEL_TENSOR.SSM_G_A:                   "blk.{bid}.ssm_g_a",              # Kimi Linear
     MODEL_TENSOR.SSM_G_B:                   "blk.{bid}.ssm_g_b",              # Kimi Linear
+    MODEL_TENSOR.CCA_CONV_DW:               "blk.{bid}.cca_conv_dw",          # Zaya
+    MODEL_TENSOR.CCA_CONV_GRP:              "blk.{bid}.cca_conv_grp",         # Zaya
+    MODEL_TENSOR.CCA_QK_NORM:               "blk.{bid}.cca_qk_norm",          # Zaya
+    MODEL_TENSOR.CCA_K_SCALE:               "blk.{bid}.cca_k_scale",          # Zaya
     MODEL_TENSOR.TIME_MIX_W0:               "blk.{bid}.time_mix_w0",
     MODEL_TENSOR.TIME_MIX_W1:               "blk.{bid}.time_mix_w1",
     MODEL_TENSOR.TIME_MIX_W2:               "blk.{bid}.time_mix_w2",
@@ -4602,6 +4612,25 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.ZAYA: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.CCA_CONV_DW,
+        MODEL_TENSOR.CCA_CONV_GRP,
+        MODEL_TENSOR.CCA_QK_NORM,
+        MODEL_TENSOR.CCA_K_SCALE,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    # TODO
 }
 
 # tensors that will not be serialized
