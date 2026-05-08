@@ -1023,3 +1023,47 @@ ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std
 
 // "adamw" or "sgd" (case insensitive)
 enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
+
+//
+// prompt utils
+//
+
+struct common_prompt_checkpoint {
+    int64_t n_tokens;
+
+    llama_pos pos_min;
+    llama_pos pos_max;
+
+    std::vector<uint8_t> data_main;
+    std::vector<uint8_t> data_drft;
+
+    size_t size() const;
+
+    bool empty() const;
+    void clear();
+
+    void update_pos(
+            int64_t n_tokens,
+            llama_pos pos_min,
+            llama_pos pos_max);
+
+    void update_main(
+            llama_context * ctx,
+            llama_seq_id seq_id,
+            llama_state_seq_flags flags);
+
+    void update_drft(
+            llama_context * ctx,
+            llama_seq_id seq_id,
+            llama_state_seq_flags flags);
+
+    void load_main(
+            llama_context * ctx,
+            llama_seq_id seq_id,
+            llama_state_seq_flags flags) const;
+
+    void load_drft(
+            llama_context * ctx,
+            llama_seq_id seq_id,
+            llama_state_seq_flags flags) const;
+};

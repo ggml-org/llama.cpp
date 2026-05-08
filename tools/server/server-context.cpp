@@ -63,7 +63,7 @@ struct server_slot {
     // speculative decoding
     llama_tokens spec_draft;
     std::vector<int32_t> spec_i_batch;
-    server_prompt_checkpoint spec_ckpt;
+    common_prompt_checkpoint spec_ckpt;
     common_speculative_ptr spec;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
