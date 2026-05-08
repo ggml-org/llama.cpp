@@ -1,5 +1,6 @@
 import { ColorMode } from '$lib/enums/ui';
 import { Monitor, Moon, Sun } from '@lucide/svelte';
+import { TITLE } from './title-generation';
 
 export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | undefined> = {
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value.
@@ -16,6 +17,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	showMessageStats: true,
 	askForTitleConfirmation: false,
 	titleGenerationUseFirstLine: false,
+	titleGenerationUseLLM: false,
+	titleGenerationPrompt: TITLE.DEFAULT_PROMPT,
 	pasteLongTextToFileLen: 2500,
 	copyTextAttachmentsAsPlainText: false,
 	pdfAsImage: false,
@@ -121,6 +124,10 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Ask for confirmation before automatically changing conversation title when editing the first message.',
 	titleGenerationUseFirstLine:
 		'Use only the first non-empty line of the prompt to generate the conversation title.',
+	titleGenerationUseLLM:
+		'Use the LLM to automatically generate conversation titles based on the first message exchange.',
+	titleGenerationPrompt:
+		'Optional template for the title generation prompt. Use {{USER}} for the user message and {{ASSISTANT}} for the assistant message.',
 	pdfAsImage:
 		'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
 	disableAutoScroll:

@@ -310,6 +310,18 @@ struct mtmd_context {
                     }
                     image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_MINICPMV4_6:
+                {
+                    slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
+                    tok_ov_img_start  = {lookup_token("<image>")};
+                    tok_ov_img_end    = {lookup_token("</image>")};
+                    tok_sli_img_start = {lookup_token("<slice>")};
+                    tok_sli_img_end   = {lookup_token("</slice>")};
+                    tok_row_end       = {lookup_token("\n")};
+                    tok_row_end_trail = false; // no trailing end-of-row token
+                    ov_img_first      = true;
+                    image_preproc     = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
             case PROJECTOR_TYPE_QWEN3VL:
@@ -531,6 +543,10 @@ struct mtmd_context {
             case PROJECTOR_TYPE_LFM2A:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_GRANITE_SPEECH:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_granite_speech>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_GEMMA4A:
                 {

@@ -1,6 +1,7 @@
 #ifndef GGML_WEBGPU_SHADER_LIB_HPP
 #define GGML_WEBGPU_SHADER_LIB_HPP
 
+#include "ggml-impl.h"
 #include "ggml-wgsl-shaders.hpp"
 #include "ggml.h"
 #include "pre_wgsl.hpp"
@@ -227,11 +228,13 @@ struct ggml_webgpu_get_rows_pipeline_key_hash {
 /** Row Norm **/
 
 struct ggml_webgpu_row_norm_pipeline_key {
-    ggml_op op;
-    bool    inplace;
+    ggml_op   op;
+    ggml_type src_type;
+    ggml_type dst_type;
+    bool      inplace;
 
     bool operator==(const ggml_webgpu_row_norm_pipeline_key & other) const {
-        return op == other.op && inplace == other.inplace;
+        return op == other.op && src_type == other.src_type && dst_type == other.dst_type && inplace == other.inplace;
     }
 };
 
@@ -239,6 +242,8 @@ struct ggml_webgpu_row_norm_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_row_norm_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.op);
+        ggml_webgpu_hash_combine(seed, key.src_type);
+        ggml_webgpu_hash_combine(seed, key.dst_type);
         ggml_webgpu_hash_combine(seed, key.inplace);
         return seed;
     }
@@ -401,6 +406,31 @@ struct ggml_webgpu_scale_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_scale_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.inplace);
+        return seed;
+    }
+};
+
+/** Upscale **/
+
+struct ggml_webgpu_upscale_pipeline_key {
+    ggml_type input_type;
+    ggml_type output_type;
+    uint32_t  base_mode;
+    bool      antialias;
+
+    bool operator==(const ggml_webgpu_upscale_pipeline_key & other) const {
+        return input_type == other.input_type && output_type == other.output_type && base_mode == other.base_mode &&
+               antialias == other.antialias;
+    }
+};
+
+struct ggml_webgpu_upscale_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_upscale_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.input_type);
+        ggml_webgpu_hash_combine(seed, key.output_type);
+        ggml_webgpu_hash_combine(seed, key.base_mode);
+        ggml_webgpu_hash_combine(seed, key.antialias);
         return seed;
     }
 };
@@ -1049,6 +1079,8 @@ class ggml_webgpu_shader_lib {
                        webgpu_pipeline,
                        ggml_webgpu_rms_norm_mul_pipeline_key_hash>
         rms_norm_mul_pipelines;
+    std::unordered_map<ggml_webgpu_upscale_pipeline_key, webgpu_pipeline, ggml_webgpu_upscale_pipeline_key_hash>
+        upscale_pipelines;
 
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
@@ -1069,6 +1101,8 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_row_norm_pipeline_key key = {};
         key.op                                = context.dst->op;
+        key.src_type                          = context.src0->type;
+        key.dst_type                          = context.dst->type;
         key.inplace                           = ggml_webgpu_tensor_equal(context.src0, context.dst);
 
         auto it = row_norm_pipelines.find(key);
@@ -1083,6 +1117,10 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("RMS_NORM");
                 variant = "rms_norm";
                 break;
+            case GGML_OP_NORM:
+                defines.push_back("NORM");
+                variant = "norm";
+                break;
             case GGML_OP_L2_NORM:
                 defines.push_back("L2_NORM");
                 variant = "l2_norm";
@@ -1094,6 +1132,22 @@ class ggml_webgpu_shader_lib {
         if (key.inplace) {
             defines.push_back("INPLACE");
             variant += "_inplace";
+        }
+
+        if (key.src_type == GGML_TYPE_F32) {
+            defines.push_back("SRC_F32");
+            variant += "_src_f32";
+        } else if (key.src_type == GGML_TYPE_F16) {
+            defines.push_back("SRC_F16");
+            variant += "_src_f16";
+        }
+
+        if (key.dst_type == GGML_TYPE_F32) {
+            defines.push_back("DST_F32");
+            variant += "_dst_f32";
+        } else if (key.dst_type == GGML_TYPE_F16) {
+            defines.push_back("DST_F16");
+            variant += "_dst_f16";
         }
 
         const uint32_t row_norm_wg_size = 128u;
@@ -1751,12 +1805,12 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_mul_mat_fast_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_mul_mat_pipeline_key key = {};
-        key.src0_type                        = context.src0->type;
-        key.src1_type                        = context.src1->type;
-        key.vectorized = (context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 && context.dst->ne[1] % 4 == 0 &&
-                          (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
-                             1 :
-                             0;
+        key.src0_type           = context.src0->type;
+        key.src1_type           = context.src1->type;
+        key.vectorized          = (context.src0->ne[0] % 4 == 0 && context.dst->ne[0] % 4 == 0 &&
+                                   (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
+                                      1 :
+                                      0;
         key.use_subgroup_matrix = context.supports_subgroup_matrix;
 
         auto it = mul_mat_fast_pipelines.find(key);
@@ -2115,6 +2169,9 @@ class ggml_webgpu_shader_lib {
 
         // variant suffix for src1 type
         variant += std::string("_") + (context.src1->type == GGML_TYPE_F32 ? "f32" : "f16");
+        if (key.vectorized) {
+            variant += "_vectorized";
+        }
 
         auto processed = preprocessor.preprocess(wgsl_mul_mat_id, defines);
 
@@ -2945,6 +3002,72 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         im2col_pipelines[key]    = pipeline;
         return im2col_pipelines[key];
+    }
+
+    webgpu_pipeline get_upscale_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        const uint32_t mode_flags = (uint32_t) ggml_get_op_params_i32(context.dst, 0);
+        const uint32_t base_mode  = mode_flags & 0xFFu;
+        const bool     antialias  = (mode_flags & GGML_SCALE_FLAG_ANTIALIAS) != 0u;
+
+        ggml_webgpu_upscale_pipeline_key key = {};
+        key.input_type                       = context.src0->type;
+        key.output_type                      = context.dst->type;
+        key.base_mode                        = base_mode;
+        key.antialias                        = antialias;
+
+        auto it = upscale_pipelines.find(key);
+        if (it != upscale_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "upscale";
+
+        if (key.input_type == GGML_TYPE_F16) {
+            defines.push_back("SRC_F16");
+            variant += "_src_f16";
+        } else {
+            variant += "_src_f32";
+        }
+
+        if (key.output_type == GGML_TYPE_F16) {
+            defines.push_back("DST_F16");
+            variant += "_dst_f16";
+        } else {
+            variant += "_dst_f32";
+        }
+
+        switch (base_mode) {
+            case GGML_SCALE_MODE_NEAREST:
+                defines.push_back("NEAREST");
+                variant += "_nearest";
+                break;
+            case GGML_SCALE_MODE_BILINEAR:
+                defines.push_back("BILINEAR");
+                variant += "_bilinear";
+                break;
+            case GGML_SCALE_MODE_BICUBIC:
+                defines.push_back("BICUBIC");
+                variant += "_bicubic";
+                break;
+            default:
+                GGML_ABORT("Unsupported upscale mode");
+        }
+
+        if (antialias) {
+            defines.push_back("ANTIALIAS");
+            variant += "_aa";
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_upscale, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        upscale_pipelines[key]   = pipeline;
+        return upscale_pipelines[key];
     }
 
   private:

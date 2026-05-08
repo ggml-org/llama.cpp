@@ -6,11 +6,8 @@
  *
  */
 
-/** Badge displaying chat statistics (tokens, timing). */
-export { default as BadgeChatStatistic } from './BadgeChatStatistic.svelte';
-
 /** Generic info badge with optional tooltip and click handler. */
 export { default as BadgeInfo } from './BadgeInfo.svelte';
 
 /** Badge indicating model modality (vision, audio, tools). */
-export { default as BadgeModality } from './BadgeModality.svelte';
+export { default as BadgesModality } from './BadgesModality.svelte';

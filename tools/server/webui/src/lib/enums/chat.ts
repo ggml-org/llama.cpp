@@ -54,3 +54,11 @@ export enum ConversationSelectionMode {
 	EXPORT = 'export',
 	IMPORT = 'import'
 }
+
+/**
+ * PDF view mode options for previewing PDF attachments.
+ */
+export enum PdfViewMode {
+	TEXT = 'text',
+	PAGES = 'pages'
+}

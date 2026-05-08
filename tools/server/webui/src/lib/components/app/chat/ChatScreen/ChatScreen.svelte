@@ -1,16 +1,22 @@
 <script lang="ts">
+	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
 	import { afterNavigate } from '$app/navigation';
+	import { page } from '$app/state';
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatScreenForm,
 		ChatMessages,
+		ChatScreenDragOverlay,
 		ChatScreenProcessingInfo,
 		DialogEmptyFileAlert,
+		DialogFileUploadError,
 		DialogChatError,
 		ServerLoadingSplash,
 		DialogConfirmation
 	} from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import { setProcessingInfoContext } from '$lib/contexts';
+	import { ErrorDialogType } from '$lib/enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
@@ -32,13 +38,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
-	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
-	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
-	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
-	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
-	import { page } from '$app/state';
-	import { setProcessingInfoContext } from '$lib/contexts';
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -87,12 +87,6 @@
 			activeProcessingState() !== null
 	);
 
-	setProcessingInfoContext({
-		get showProcessingInfo() {
-			return showProcessingInfo;
-		}
-	});
-
 	let isRouter = $derived(isRouterMode());
 
 	let conversationModel = $derived(
@@ -122,9 +116,16 @@
 
 	let modelPropsVersion = $state(0);
 
+	setProcessingInfoContext({
+		get showProcessingInfo() {
+			return showProcessingInfo;
+		}
+	});
+
 	$effect(() => {
 		if (activeModelId) {
 			const cached = modelsStore.getModelProps(activeModelId);
+
 			if (!cached) {
 				modelsStore.fetchModelProps(activeModelId).then(() => {
 					modelPropsVersion++;
@@ -136,6 +137,7 @@
 	let hasAudioModality = $derived.by(() => {
 		if (activeModelId) {
 			void modelPropsVersion;
+
 			return modelsStore.modelSupportsAudio(activeModelId);
 		}
 
@@ -428,7 +430,6 @@
 						onSend={handleSendMessage}
 						onStop={() => chatStore.stopGeneration()}
 						onSystemPromptAdd={handleSystemPromptAdd}
-						showHelperText={false}
 						bind:uploadedFiles
 					/>
 				</div>
@@ -437,74 +438,7 @@
 	</div>
 {/if}
 
-<!-- File Upload Error Alert Dialog -->
-<AlertDialog.Root bind:open={showFileErrorDialog}>
-	<AlertDialog.Portal>
-		<AlertDialog.Overlay />
-
-		<AlertDialog.Content class="flex max-w-md flex-col">
-			<AlertDialog.Header>
-				<AlertDialog.Title>File Upload Error</AlertDialog.Title>
-
-				<AlertDialog.Description class="text-sm text-muted-foreground">
-					Some files cannot be uploaded with the current model.
-				</AlertDialog.Description>
-			</AlertDialog.Header>
-
-			<div class="!max-h-[50vh] min-h-0 flex-1 space-y-4 overflow-y-auto">
-				{#if fileErrorData.generallyUnsupported.length > 0}
-					<div class="space-y-2">
-						<h4 class="text-sm font-medium text-destructive">Unsupported File Types</h4>
-
-						<div class="space-y-1">
-							{#each fileErrorData.generallyUnsupported as file (file.name)}
-								<div class="rounded-md bg-destructive/10 px-3 py-2">
-									<p class="font-mono text-sm break-all text-destructive">
-										{file.name}
-									</p>
-
-									<p class="mt-1 text-xs text-muted-foreground">File type not supported</p>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
-
-				{#if fileErrorData.modalityUnsupported.length > 0}
-					<div class="space-y-2">
-						<div class="space-y-1">
-							{#each fileErrorData.modalityUnsupported as file (file.name)}
-								<div class="rounded-md bg-destructive/10 px-3 py-2">
-									<p class="font-mono text-sm break-all text-destructive">
-										{file.name}
-									</p>
-
-									<p class="mt-1 text-xs text-muted-foreground">
-										{fileErrorData.modalityReasons[file.name] || 'Not supported by current model'}
-									</p>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
-			</div>
-
-			<div class="rounded-md bg-muted/50 p-3">
-				<h4 class="mb-2 text-sm font-medium">This model supports:</h4>
-
-				<p class="text-sm text-muted-foreground">
-					{fileErrorData.supportedTypes.join(', ')}
-				</p>
-			</div>
-
-			<AlertDialog.Footer>
-				<AlertDialog.Action onclick={() => (showFileErrorDialog = false)}>
-					Got it
-				</AlertDialog.Action>
-			</AlertDialog.Footer>
-		</AlertDialog.Content>
-	</AlertDialog.Portal>
-</AlertDialog.Root>
+<DialogFileUploadError bind:open={showFileErrorDialog} {fileErrorData} />
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}

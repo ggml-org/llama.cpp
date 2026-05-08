@@ -1,6 +1,7 @@
 #include "virtgpu-shm.h"
 
 #include "virtgpu.h"
+#include "ggml-remoting.h"
 
 #include <assert.h>
 

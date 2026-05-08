@@ -14,8 +14,6 @@ interface UseDraftMessagesOptions {
 export function useDraftMessages(options: UseDraftMessagesOptions) {
 	onMount(() => {
 		const chatId = options.getChatId();
-		if (!chatId) return;
-
 		const draft = draftMessagesStore.getDraftMessage(chatId);
 
 		if ((draft.message || draft.files.length > 0) && !options.getInitialMessage()) {
@@ -26,14 +24,12 @@ export function useDraftMessages(options: UseDraftMessagesOptions) {
 
 	beforeNavigate(() => {
 		const chatId = options.getChatId();
-		if (!chatId) return;
 		draftMessagesStore.saveDraftMessage(chatId, options.getMessage(), options.getFiles());
 	});
 
 	afterNavigate((navigation) => {
 		if (navigation?.from != null) {
 			const chatId = options.getChatId();
-			if (!chatId) return;
 			const draft = draftMessagesStore.getDraftMessage(chatId);
 			options.setMessage(draft.message);
 			options.setFiles(draft.files);
@@ -42,7 +38,6 @@ export function useDraftMessages(options: UseDraftMessagesOptions) {
 
 	function clearDraft() {
 		const chatId = options.getChatId();
-		if (!chatId) return;
 		draftMessagesStore.clearDraftMessage(chatId);
 	}
 
