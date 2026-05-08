@@ -137,9 +137,23 @@ uint32_t llama_hparams::n_embd_v_gqa(uint32_t il) const {
 }
 
 bool llama_hparams::is_n_embd_k_gqa_variable() const {
-    const uint32_t val = n_embd_k_gqa();
+    // Skip layers with n_head_kv=0 (e.g. Mamba layers in Zamba2 hybrid models)
+    // to avoid falsely reporting variable KV embedding sizes.
+    // Without this, layer 0 (Mamba, n_head_kv=0) gives n_embd_k_gqa=0 as the
+    // reference, and attention layers (n_head_kv>0) differ, returning true.
+    // This incorrectly disables KV cache quantization rotation (attn_rot_k/v).
+    uint32_t ref_val = 0;
+    bool found_ref = false;
     for (uint32_t il = 0; il < n_layer_all; ++il) {
-        if (val != n_embd_k_gqa(il)) {
+        if (n_head_kv(il) == 0) {
+            continue;
+        }
+        if (!found_ref) {
+            ref_val = n_embd_k_gqa(il);
+            found_ref = true;
+            continue;
+        }
+        if (ref_val != n_embd_k_gqa(il)) {
             return true;
         }
     }
@@ -148,9 +162,19 @@ bool llama_hparams::is_n_embd_k_gqa_variable() const {
 }
 
 bool llama_hparams::is_n_embd_v_gqa_variable() const {
-    const uint32_t val = n_embd_v_gqa();
+    // Same fix as is_n_embd_k_gqa_variable: skip non-KV layers (n_head_kv=0)
+    uint32_t ref_val = 0;
+    bool found_ref = false;
     for (uint32_t il = 0; il < n_layer_all; ++il) {
-        if (val != n_embd_v_gqa(il)) {
+        if (n_head_kv(il) == 0) {
+            continue;
+        }
+        if (!found_ref) {
+            ref_val = n_embd_v_gqa(il);
+            found_ref = true;
+            continue;
+        }
+        if (ref_val != n_embd_v_gqa(il)) {
             return true;
         }
     }
