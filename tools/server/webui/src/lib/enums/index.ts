@@ -15,6 +15,7 @@ export {
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
+	PdfViewMode,
 	ReasoningFormat
 } from './chat';
 

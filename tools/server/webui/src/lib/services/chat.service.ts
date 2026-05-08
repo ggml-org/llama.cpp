@@ -14,11 +14,59 @@ import {
 	ReasoningFormat,
 	UrlProtocol
 } from '$lib/enums';
-import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
+import type {
+	ApiChatMessageContentPart,
+	ApiChatMessageData,
+	ApiChatCompletionToolCall
+} from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 
 export class ChatService {
+	/**
+	 *
+	 *
+	 * Title Generation
+	 *
+	 *
+	 */
+
+	/**
+	 * Sends a streaming chat completion request for generating a chat title.
+	 * Delegates to `sendMessage` for fetch, SSE parsing, and error handling.
+	 *
+	 * @param message - The single message to send (a user message containing the title generation prompt)
+	 * @param model - Optional model name to use (required in ROUTER mode)
+	 * @param signal - Optional AbortSignal to cancel the request
+	 * @returns {Promise<string>} The aggregated title text, or empty string if request failed
+	 * @static
+	 */
+	static async generateTitle(
+		message: ApiChatMessageData,
+		model?: string | null,
+		signal?: AbortSignal
+	): Promise<string> {
+		let titleResponse = '';
+		try {
+			await ChatService.sendMessage(
+				[message],
+				{
+					model: model || undefined,
+					stream: true,
+					custom: { chat_template_kwargs: { enable_thinking: false } },
+					onChunk: (chunk: string) => {
+						titleResponse += chunk;
+					}
+				},
+				undefined,
+				signal
+			);
+		} catch {
+			return '';
+		}
+		return titleResponse;
+	}
+
 	/**
 	 *
 	 *
@@ -122,7 +170,11 @@ export class ChatService {
 						return true;
 					});
 					// If only text remains and it's a single part, simplify to string
-					if (msg.content.length === 1 && msg.content[0].type === ContentPartType.TEXT) {
+					if (
+						msg.content.length === 1 &&
+						msg.content[0].type === ContentPartType.TEXT &&
+						typeof msg.content[0].text === 'string'
+					) {
 						msg.content = msg.content[0].text;
 					}
 				}
@@ -461,7 +513,7 @@ export class ChatService {
 
 			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
 
-			if (import.meta.env.DEV) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
 			}
 

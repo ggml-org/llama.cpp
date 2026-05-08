@@ -7,11 +7,11 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
-	import { APP_NAME } from '$lib/constants';
+	import { APP_NAME, NEW_CHAT_PARAM } from '$lib/constants';
 
 	let qParam = $derived(page.url.searchParams.get('q'));
 	let modelParam = $derived(page.url.searchParams.get('model'));
-	let newChatParam = $derived(page.url.searchParams.get('new_chat'));
+	let newChatParam = $derived(page.url.searchParams.get(NEW_CHAT_PARAM));
 
 	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
@@ -26,7 +26,7 @@
 
 		url.searchParams.delete('q');
 		url.searchParams.delete('model');
-		url.searchParams.delete('new_chat');
+		url.searchParams.delete(NEW_CHAT_PARAM);
 
 		replaceState(url.toString(), {});
 	}

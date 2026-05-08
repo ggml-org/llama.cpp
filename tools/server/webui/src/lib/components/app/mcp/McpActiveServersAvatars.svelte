@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { cn } from '$lib/components/ui/utils';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -9,10 +8,10 @@
 
 	interface Props {
 		class?: string;
-		onClick?: () => void;
+		onclick?: () => void;
 	}
 
-	let { class: className = '', onClick }: Props = $props();
+	let { class: className = '', onclick }: Props = $props();
 
 	let mcpServers = $derived(mcpStore.getServersSorted().filter((s) => s.enabled));
 	let enabledMcpServersForChat = $derived(
@@ -42,12 +41,12 @@
 
 {#if !hasEnabledMcpServers}
 	<button
-		class={cn(
+		class={[
 			'inline-flex cursor-pointer items-center gap-0.75 opacity-70 transition-opacity hover:opacity-100',
 			className,
 			'opacity-50 hover:opacity-100'
-		)}
-		onclick={onClick}
+		]}
+		{onclick}
 	>
 		<Tooltip.Root>
 			<Tooltip.Trigger>
@@ -60,7 +59,7 @@
 		</Tooltip.Root>
 	</button>
 {:else if mcpFavicons.length > 0}
-	<button class={cn('inline-flex items-center gap-0.75', className)} onclick={onClick}>
+	<button class={['inline-flex items-center gap-0.75', className]} {onclick}>
 		<div class="flex -space-x-1">
 			{#each mcpFavicons as favicon (favicon.id)}
 				<Tooltip.Root>

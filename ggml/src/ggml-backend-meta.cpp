@@ -1826,7 +1826,24 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     continue;
                 }
 
-                i = get_i_delayed(i);
+                const int i_delayed = get_i_delayed(i);
+
+                // If we can delay the AllReduce we need to consider the interaction with zero-sized tensor slices.
+                // A backend with such a slice would normally have valid data after participating in the AllReduce with a node that has
+                //     its compute flag disabled and thus gets its data zeroed out.
+                // If the AllReduce is delayed then the nodes until that point also need to have their compute flag disabled.
+                if (i_delayed > i) {
+                    for (size_t j = 0; j < n_backends; j++) {
+                        auto & bcj = backend_ctx->backend_configs[j];
+                        if ((bcj.nodes[i]->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+                            for (int ii = i + 1; ii <= i_delayed; ii++) {
+                                bcj.nodes[ii]->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
+                            }
+                        }
+                    }
+                }
+
+                i = i_delayed;
 
                 for (size_t j = 0; j < n_backends; j++) {
                     auto & bcj = backend_ctx->backend_configs[j];
@@ -2083,8 +2100,8 @@ static const ggml_backend_i ggml_backend_meta_i = {
     /* .free                    = */ ggml_backend_meta_free,
     /* .set_tensor_async        = */ ggml_backend_meta_set_tensor_async,
     /* .get_tensor_async        = */ ggml_backend_meta_get_tensor_async,
-    /* .get_tensor_2d_async     = */ nullptr,
     /* .set_tensor_2d_async     = */ nullptr,
+    /* .get_tensor_2d_async     = */ nullptr,
     /* .cpy_tensor_async        = */ nullptr,
     /* .synchronize             = */ ggml_backend_meta_synchronize,
     /* .graph_plan_create       = */ nullptr,
