@@ -310,6 +310,7 @@ struct ggml_tensor_extra_gpu {
 };
 
 extern int g_ggml_sycl_enable_level_zero;
+void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});

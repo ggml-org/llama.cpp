@@ -600,6 +600,7 @@ jobs:
     env:
       WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
       WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
+      LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.28.2/level-zero-win-sdk-1.28.2.zip
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
       ONEAPI_INSTALLER_VERSION: "2025.3.3"
 
@@ -624,9 +625,7 @@ jobs:
       - name: Install Level Zero SDK
         shell: pwsh
         run: |
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/oneapi-src/level-zero/releases/latest"
-          $asset = $release.assets | Where-Object { $_.name -like "level-zero-win-sdk*.zip" } | Select-Object -First 1
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "level-zero-win-sdk.zip"
+          Invoke-WebRequest -Uri "${{ env.LEVEL_ZERO_SDK_URL }}" -OutFile "level-zero-win-sdk.zip"
           Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
           "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
 
@@ -707,6 +706,8 @@ jobs:
     env:
       ONEAPI_ROOT: /opt/intel/oneapi/
       ONEAPI_INSTALLER_VERSION: "2025.3.3"
+      LEVEL_ZERO_VERSION: "1.28.2"
+      LEVEL_ZERO_UBUNTU_VERSION: "u24.04"
 
     steps:
       - name: Clone
@@ -733,8 +734,10 @@ jobs:
       - name: Install Level Zero SDK
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libze-dev
+          cd /tmp
+          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero.deb
+          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb
+          sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
