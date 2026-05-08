@@ -282,8 +282,8 @@ typedef struct {
     uint8_t qs[QK_K/8];    // 4-bit code per group of 4
     uint8_t sign[QK_K/32]; // 1-bit table select per group of 4
     ggml_half d;           // scale
-} block_stq_0;
-static_assert(sizeof(block_stq_0) == sizeof(ggml_half) + QK_K / 8 + QK_K / 32, "wrong stq_0 block size/padding");
+} block_stq1_0;
+static_assert(sizeof(block_stq1_0) == sizeof(ggml_half) + QK_K / 8 + QK_K / 32, "wrong stq1_0 block size/padding");
 
 //
 // Super-block quantization structures
@@ -504,9 +504,9 @@ static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_
 
 #if defined(GGML_COMMON_IMPL)
 
-// STQ_0 codebook: index = (sign << 4) | slot -> packed 4-lane ternary pattern.
+// STQ1_0 codebook: index = (sign << 4) | slot -> packed 4-lane ternary pattern.
 //
-// Each STQ_0 group has 4 lanes with exactly one 0 and three non-zero (+1/-1) of
+// Each STQ1_0 group has 4 lanes with exactly one 0 and three non-zero (+1/-1) of
 // equal magnitude — 4 zero-positions × 2^3 signs = 32 patterns. They are split
 // into 4-bit slot + 1-bit sign.
 //
@@ -526,8 +526,8 @@ static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_
 //   lanes = (0, -1, -1, -1) -> qpack = 00_00_00_01 = 0x01
 //
 // The sign=1 half is precomputed so decode is a single load:
-//   qpack = stq_0_codebook[(sign << 4) | slot]
-GGML_TABLE_BEGIN(uint8_t, stq_0_codebook, 32)
+//   qpack = stq1_0_codebook[(sign << 4) | slot]
+GGML_TABLE_BEGIN(uint8_t, stq1_0_codebook, 32)
     // sign = 0 (first non-zero lane is +1)
     0xA9, 0x89, 0x29, 0x09, 0xA6, 0x86, 0x26, 0x06,
     0x9A, 0x92, 0x1A, 0x12, 0x6A, 0x62, 0x4A, 0x42,
@@ -537,9 +537,9 @@ GGML_TABLE_BEGIN(uint8_t, stq_0_codebook, 32)
 GGML_TABLE_END()
 
 // Reverse maps for the encoder: qpack byte -> (slot, sign). Derived from
-// stq_0_codebook above; entries for non-codebook qpack values are 0xFF (slot)
+// stq1_0_codebook above; entries for non-codebook qpack values are 0xFF (slot)
 // / 0 (sign), which the encoder asserts against.
-GGML_TABLE_BEGIN(uint8_t, stq_0_qpack_to_slot, 256)
+GGML_TABLE_BEGIN(uint8_t, stq1_0_qpack_to_slot, 256)
     0xFF, 0x00, 0xFF, 0xFF, 0x04, 0xFF, 0x07, 0xFF, 0xFF, 0x03, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
     0x08, 0xFF, 0x0B, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x09, 0xFF, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
     0xFF, 0x01, 0xFF, 0xFF, 0x05, 0xFF, 0x06, 0xFF, 0xFF, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -558,7 +558,7 @@ GGML_TABLE_BEGIN(uint8_t, stq_0_qpack_to_slot, 256)
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 GGML_TABLE_END()
 
-GGML_TABLE_BEGIN(uint8_t, stq_0_qpack_to_sign, 256)
+GGML_TABLE_BEGIN(uint8_t, stq1_0_qpack_to_sign, 256)
     0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
