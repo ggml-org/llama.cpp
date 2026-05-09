@@ -251,6 +251,6 @@ void main() {
         if (first_row >= p.stride_d) {
             return;
         }
-        compute_outputs(first_row, p.stride_d - first_row);
+        compute_outputs(first_row, min(NUM_ROWS, p.stride_d - first_row));
     }
 }
