@@ -93,7 +93,7 @@
 </script>
 
 <svelte:head>
-	<title>{APP_NAME}</title>
+	<title>{APP_NAME} IS COOL</title>
 </svelte:head>
 
 <DialogModelNotAvailable
