@@ -2676,6 +2676,7 @@ private:
                         if (ctx_dft) {
                             // TODO: in the future, figure out how to infuse target embeddings to the images
                             //       for now, we skip this for simplicity
+                            //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
                             res = input_tokens.process_chunk(ctx_dft.get(), mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
                             if (res != 0) {
                                 GGML_ABORT("failed to process multi-modal data on draft context\n");
@@ -2925,36 +2926,44 @@ private:
             // | Eagle3      | yes          |
             // | DFlash      | yes          | https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4405406982
             //
-            // TODO: move to `common_speculative_process(spec, batch, ...)` [TAG_COMMON_SPECULATIVE_PROCESS]
-            if (ctx_dft) {
-                // TODO: update as needed for MTP, Eagle3, etc.
-                const bool need_tgt_embd = false;
+            // note: this logic is now moved in `common_speculative_process()`
+            //       keeping the sketch here until for a bit, until the logic is finalized
+            //
+            //if (ctx_dft) {
+            //    // TODO: update as needed for MTP, Eagle3, etc.
+            //    const bool need_tgt_embd = false;
 
-                if (need_tgt_embd) {
-                    llama_synchronize(ctx_tgt);
-                }
+            //    if (need_tgt_embd) {
+            //        llama_synchronize(ctx_tgt);
+            //    }
 
-                // the logic here varies depending on the speculative decoding method
-                //  - some draft contexts require embeddings from the target context, others don't
-                //  - some draft contexts involve an encoder step to transform the target embeddings to draft embeddings
-                // TODO: extract this in a function ?
-                {
-                    // TODO: hook the embeddings from the last target batch here
-                    if (llama_model_has_encoder(model_dft.get())) {
-                        //llama_encode(ctx_dft, ...);
+            //    // the logic here varies depending on the speculative decoding method
+            //    //  - some draft contexts require embeddings from the target context, others don't
+            //    //  - some draft contexts involve an encoder step to transform the target embeddings to draft embeddings
+            //    // TODO: extract this in a function ?
+            //    {
+            //        // TODO: hook the embeddings from the last target batch here
+            //        if (llama_model_has_encoder(model_dft.get())) {
+            //            //llama_encode(ctx_dft, ...);
 
-                        GGML_ABORT("not implemented yet\n");
-                    }
+            //            GGML_ABORT("not implemented yet\n");
+            //        }
 
-                    const int ret = llama_decode(ctx_dft.get(), batch_view);
+            //        const int ret = llama_decode(ctx_dft.get(), batch_view);
 
-                    if (ret != 0) {
-                        SRV_ERR("failed to decode draft batch, ret = %d\n", ret);
+            //        if (ret != 0) {
+            //            SRV_ERR("failed to decode draft batch, ret = %d\n", ret);
 
-                        // TODO: handle error
-                        break;
-                    }
-                }
+            //            // TODO: handle error
+            //            break;
+            //        }
+            //    }
+            //}
+            if (!common_speculative_process(spec.get(), batch_view)) {
+                SRV_ERR("%s", "failed to process speculative batch\n");
+
+                // TODO: handle error
+                break;
             }
 
             // move the head of the batch forward with the number of tokens we just processed

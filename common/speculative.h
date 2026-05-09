@@ -22,6 +22,7 @@ struct common_speculative_draft_params {
     // this flag is used to chain the drafts through all the available implementations
     // after the first successful draft from an implementation, we set it
     //   to false to prevent further drafts for that sequence
+    // at the end of the draft() call, all drafting flags will be reset to false
     bool drafting = false;
 
     // overrides individual configurations (-1 disabled)
@@ -43,8 +44,8 @@ common_speculative_draft_params & common_speculative_get_draft_params(common_spe
 // optionally call once at the beginning of a new generation
 void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt);
 
-// TODO: implement [TAG_COMMON_SPECULATIVE_PROCESS]
-//bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
+// process the batch and update the internal state of the speculative context
+bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
 
 // generate drafts for the sequences specified with `common_speculative_get_draft_params`
 void common_speculative_draft(common_speculative * spec);

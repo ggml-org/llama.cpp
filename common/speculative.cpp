@@ -149,6 +149,8 @@ struct common_speculative_impl {
 
     virtual void begin(llama_seq_id seq_id, const llama_tokens & prompt) = 0;
 
+    virtual bool process(const llama_batch & batch) = 0;
+
     virtual void draft(common_speculative_draft_params_vec & dparams) = 0;
 
     virtual void accept(llama_seq_id seq_id, uint16_t n_accepted) = 0;
@@ -221,6 +223,20 @@ struct common_speculative_state_draft : public common_speculative_impl {
 
     void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
         // noop
+    }
+
+    bool process(const llama_batch & batch) override {
+        auto * ctx_dft = params.ctx_dft;
+
+        const int ret = llama_decode(ctx_dft, batch);
+
+        if (ret != 0) {
+            LOG_ERR("%s: failed to decode draft batch, ret = %d\n", __func__, ret);
+
+            return false;
+        }
+
+        return true;
     }
 
     void draft(common_speculative_draft_params_vec & dparams) override {
@@ -345,6 +361,11 @@ struct common_speculative_state_eagle3 : public common_speculative_impl {
         // noop
     }
 
+    bool process(const llama_batch & /*batch*/) override {
+        // TODO: implement
+        return true;
+    }
+
     void draft(common_speculative_draft_params_vec & /*dparams*/) override {
         // TODO: implement
     }
@@ -370,6 +391,11 @@ struct common_speculative_state_ngram_simple : public common_speculative_impl {
 
     void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
         // noop
+    }
+
+    bool process(const llama_batch & /*batch*/) override {
+        // TODO: implement
+        return true;
     }
 
     void draft(common_speculative_draft_params_vec & dparams) override {
@@ -411,6 +437,11 @@ struct common_speculative_state_ngram_map_k : public common_speculative_impl {
         GGML_ASSERT(seq_id < (llama_seq_id) n_seq);
 
         common_ngram_map_begin(config[seq_id], prompt);
+    }
+
+    bool process(const llama_batch & /*batch*/) override {
+        // TODO: implement
+        return true;
     }
 
     void draft(common_speculative_draft_params_vec & dparams) override {
@@ -559,6 +590,11 @@ struct common_speculative_state_ngram_mod : public common_speculative_impl {
         sinfo.n_draft_last = result.size();
     }
 
+    bool process(const llama_batch & /*batch*/) override {
+        // TODO: implement
+        return true;
+    }
+
     void draft(common_speculative_draft_params_vec & dparams) override {
         assert(dparams.size() == n_seq);
 
@@ -704,6 +740,11 @@ struct common_speculative_state_ngram_cache : public common_speculative_impl {
             // delete first token in result (which is the id_last token)
             result.erase(result.begin());
         }
+    }
+
+    bool process(const llama_batch & /*batch*/) override {
+        // TODO: implement
+        return true;
     }
 
     void draft(common_speculative_draft_params_vec & dparams) override {
@@ -935,6 +976,20 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
         impl->begin(seq_id, prompt);
         impl->n_call_begin++;
     }
+}
+
+bool common_speculative_process(common_speculative * spec, const llama_batch & batch) {
+    bool result = true;
+
+    if (spec == nullptr) {
+        return result;
+    }
+
+    for (auto & impl : spec->impls) {
+        result = result && impl->process(batch);
+    }
+
+    return result;
 }
 
 void common_speculative_draft(common_speculative * spec) {
