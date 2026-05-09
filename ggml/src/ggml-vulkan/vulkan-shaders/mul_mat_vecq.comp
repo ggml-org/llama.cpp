@@ -1,6 +1,7 @@
 #version 450
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_EXT_integer_dot_product : require
 
 #define MMQ
@@ -23,7 +24,12 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 uint a_offset, b_offset, d_offset;
 
 int32_t cache_b_qs[K_PER_ITER / 4];
+
+#if defined(DATA_A_Q4_0)
+f16vec2 cache_b_ds;
+#else
 vec2 cache_b_ds;
+#endif
 
 #include "mul_mat_vecq_funcs.glsl"
 
@@ -33,7 +39,11 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
         const uint b_block_idx = (j*p.batch_stride_b + col) / QUANT_K_Q8_1 + b_offset;
         const uint b_block_idx_outer = b_block_idx / 4;
         const uint b_block_idx_inner = b_block_idx % 4;
+#if defined(DATA_A_Q4_0)
+        cache_b_ds = data_b[b_block_idx_outer].ds[b_block_idx_inner];
+#else
         cache_b_ds = vec2(data_b[b_block_idx_outer].ds[b_block_idx_inner]);
+#endif
 
 #if QUANT_R == 2
         // Assumes K_PER_ITER == 8
