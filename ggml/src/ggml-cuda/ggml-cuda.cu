@@ -1353,7 +1353,7 @@ static void ggml_backend_cuda_comm_init_internal(ggml_backend_cuda_comm_context 
 
     // Clear sticky CUDA error from the failed init.
     (void) cudaGetLastError();
-    GGML_LOG_WARN("internal AllReduce init failed (n_devices != 2 or pre-Ampere?); "
+    GGML_LOG_WARN("internal AllReduce init failed (n_devices != 2?); "
                   "falling back to meta-backend butterfly\n");
     ggml_backend_cuda_comm_init_none(ret);
 }
@@ -1372,8 +1372,10 @@ static void ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * re
     GGML_LOG_WARN("NCCL init failed (%s); falling back to internal AllReduce\n",
                   ncclGetErrorString(rc));
 #else // GGML_USE_NCCL
+#ifndef GGML_USE_HIP
     GGML_LOG_WARN("NCCL not compiled in; falling back to internal AllReduce.  "
                   "Recompile with -DGGML_CUDA_NCCL=ON for best multi-GPU performance.\n");
+#endif // !GGML_USE_HIP
 #endif // GGML_USE_NCCL
 
     ggml_backend_cuda_comm_init_internal(ret);
