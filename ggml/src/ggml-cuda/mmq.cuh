@@ -107,9 +107,9 @@ struct tile_x_sizes {
 };
 
 static int get_mmq_x_max_host(const int cc) {
-    // RDNA3_5 (GFX1151): mmq_x_max=48 for optimal VGPR/performance balance
+    // RDNA3_5 (gfx1151): use 128 to give dense GEMM the largest tiles; MoE path is capped to 48 in mul_mat_q_case.
     if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
-        return 48;
+        return 128;
     }
     if (turing_mma_available(cc) || amd_wmma_available(cc)) {
          return 128;
@@ -125,14 +125,8 @@ static int get_mmq_x_max_host(const int cc) {
 }
 
 static constexpr __device__ int get_mmq_x_max_device() {
-#if defined(TURING_MMA_AVAILABLE)
+#if defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     return 128;
-#elif defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA3_5)
-    return 48;
-#else
-    return 128;
-#endif // defined(RDNA3_5)
 #else // defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 
 #if defined(GGML_USE_HIP)
@@ -4089,7 +4083,12 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     const int warp_size = ggml_cuda_info().devices[id].warp_size;
     const int nwarps    = mmq_get_nwarps_host(cc, warp_size);
 
-    const int mmq_x_max = get_mmq_x_max_host(cc);
+    int mmq_x_max = get_mmq_x_max_host(cc);
+    // RDNA3_5: cap MoE path to 48 (preserves the original VGPR/performance balance for per-expert dispatch)
+    // but let dense path use the full 128 cap from get_mmq_x_max_host.
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc) && args.expert_bounds != nullptr) {
+        mmq_x_max = 48;
+    }
     const int mmq_y = get_mmq_y_host(cc);
 
     int mmq_x_best  = 0;
