@@ -5179,7 +5179,10 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
             return;
         }
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
+        // normal q4_1 repack
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         cl_kernel kernel = backend_ctx->kernel_convert_block_q4_1;
 
         if (use_adreno_kernels(backend_ctx, tensor)) {
@@ -5219,7 +5222,6 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             transpose_2d_as_16b(backend_ctx, extra->m, extra->m, size_m, K/32, M);
         }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
-        GGML_ASSERT(false && "General Q4_1 pre-transpose not implemented yet");
         return;
     }
     if (tensor->type == GGML_TYPE_MXFP4) {
@@ -13416,9 +13418,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 }
                 return;
             }
-
 #endif //GGML_OPENCL_USE_ADRENO_KERNELS
-            GGML_ASSERT(false && "CLC general Q4_1 MoE kernel not implemented yet");
         }
         case GGML_TYPE_Q8_0: {
 #ifdef GGML_OPENCL_SOA_Q
