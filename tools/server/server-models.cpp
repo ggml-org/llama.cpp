@@ -211,7 +211,7 @@ void server_models::idle_loop() {
                 int64_t elapsed_s = elapsed_ms / 1000;
                 if (elapsed_s >= this->idle_timeout) {
                     lk.unlock();
-                    SRV_INF("model %s idle for %d seconds, unloading\n", name.c_str(), this->idle_timeout);
+                    SRV_DBG("model %s idle for %d seconds, unloading\n", name.c_str(), this->idle_timeout);
                     this->unload(name);
                     continue;
                 }
@@ -290,14 +290,14 @@ void server_models::add_model(server_model_meta && meta) {
     std::string priority_str;
     if (meta.preset.get_option(COMMON_ARG_PRESET_PRIORITY, priority_str)) {
         meta.priority = std::stoi(priority_str);
-        SRV_INF("add_model(%s): parsed priority from preset: %d (string='%s')\n", meta.name.c_str(), meta.priority, priority_str.c_str());
+                  SRV_DBG("add_model(%s): parsed priority from preset: %d (string='%s')\n", meta.name.c_str(), meta.priority, priority_str.c_str());
     } else {
-        SRV_INF("add_model(%s): NO priority key found in preset, defaulting to 0\n", meta.name.c_str());
+        SRV_DBG("add_model(%s): NO priority key found in preset, defaulting to 0\n", meta.name.c_str());
     }
-    SRV_INF("add_model(%s): preset has %zu options total\n", meta.name.c_str(), meta.preset.options.size());
+    SRV_DBG("add_model(%s): preset has %zu options total\n", meta.name.c_str(), meta.preset.options.size());
     for (const auto & [opt, val] : meta.preset.options) {
         if (opt.env) {
-            SRV_INF("  option: env='%s' val='%s'\n", opt.env, val.c_str());
+            SRV_DBG("  option: env='%s' val='%s'\n", opt.env, val.c_str());
         }
     }
     std::string name = meta.name;
@@ -361,7 +361,7 @@ void server_models::load_models() {
 
     // convert presets to server_model_meta and add to mapping
     for (const auto & preset : final_presets) {
-        SRV_INF("Adding model '%s'\n", preset.first.c_str());
+        SRV_DBG("Adding model '%s'\n", preset.first.c_str());
         server_model_meta meta{
             /* preset       */ preset.second,
             /* name         */ preset.first,
@@ -407,7 +407,7 @@ void server_models::load_models() {
             return result;
         };
 
-        SRV_INF("Available models (%zu) (*: custom preset)\n", mapping.size());
+        SRV_DBG("Available models (%zu) (*: custom preset)\n", mapping.size());
         for (const auto & [name, inst] : mapping) {
             bool has_custom = custom_names.find(name) != custom_names.end();
             std::string info;
@@ -417,7 +417,7 @@ void server_models::load_models() {
             if (!inst.meta.tags.empty()) {
                 info += " [tags: " + join_set(inst.meta.tags) + "]";
             }
-            SRV_INF("  %c %s%s\n", has_custom ? '*' : ' ', name.c_str(), info.c_str());
+            SRV_DBG("  %c %s%s\n", has_custom ? '*' : ' ', name.c_str(), info.c_str());
         }
     }
 
@@ -646,7 +646,7 @@ server_http_res_ptr server_models::proxy_request_priority(const server_http_req 
             mapping[target_name].meta.last_used = ggml_time_ms();
             mapping[target_name].meta.idle_start = 0;
         }
-        SRV_INF("proxying request to model %s on port %d (priority %d)\n", target_name.c_str(), target_meta->port, target_priority);
+        SRV_DBG("proxying request to model %s on port %d (priority %d)\n", target_name.c_str(), target_meta->port, target_priority);
         std::string proxy_path = req.path;
         if (!req.query_string.empty()) {
             proxy_path += '?' + req.query_string;
@@ -684,14 +684,14 @@ server_http_res_ptr server_models::proxy_request_priority(const server_http_req 
     }
 
     std::string running_name = get_running_model_name();
-    SRV_INF("proxy_request_priority(%s): target_priority=%d, running=%s\n", target_name.c_str(), target_priority, running_name.empty() ? "(none)" : running_name.c_str());
+    SRV_DBG("proxy_request_priority(%s): target_priority=%d, running=%s\n", target_name.c_str(), target_priority, running_name.empty() ? "(none)" : running_name.c_str());
     if (running_name.empty()) {
         ensure_model_ready(target_name);
     } else {
         auto running_meta = get_meta(running_name);
         if (running_meta.has_value()) {
             const int running_priority = running_meta->priority;
-            SRV_INF("proxy_request_priority(%s): running=%s running_priority=%d\n", target_name.c_str(), running_name.c_str(), running_priority);
+             SRV_DBG("proxy_request_priority(%s): running=%s running_priority=%d\n", target_name.c_str(), running_name.c_str(), running_priority);
             if (target_priority > running_priority) {
                 // Higher-priority target always preempts regardless of pending requests
                 SRV_INF("preempting model %s (priority %d) for model %s (priority %d)\n",
@@ -704,7 +704,7 @@ server_http_res_ptr server_models::proxy_request_priority(const server_http_req 
                 // has queued requests
                 bool running_has_pending = has_pending_requests(running_name);
                 if (!running_has_pending) {
-                    SRV_INF("preempting model %s (priority %d) for model %s (priority %d)\n",
+              SRV_DBG("preempting model %s (priority %d) for model %s (priority %d)\n",
                             running_name.c_str(), running_priority, target_name.c_str(), target_priority);
                     std::lock_guard<std::mutex> lk(mutex);
                     stopping_models.insert(running_name);
@@ -737,17 +737,17 @@ void server_models::load(const std::string & name) {
     {
         std::lock_guard<std::mutex> lk(mutex);
         target_priority = mapping[name].meta.priority;
-        SRV_INF("load(%s): target_priority=%d\n", name.c_str(), target_priority);
+        SRV_DBG("load(%s): target_priority=%d\n", name.c_str(), target_priority);
         for (const auto & m : mapping) {
-            SRV_INF("  mapping[%s]: status=%d priority=%d\n", m.first.c_str(), (int)m.second.meta.status, m.second.meta.priority);
+            SRV_DBG("  mapping[%s]: status=%d priority=%d\n", m.first.c_str(), (int)m.second.meta.status, m.second.meta.priority);
             if (m.second.meta.is_running() && m.second.meta.priority > target_priority) {
-                SRV_INF("skipping unload for model %s - %s (priority %d) has higher priority (%d vs %d)\n",
+                SRV_DBG("skipping unload for model %s - %s (priority %d) has higher priority (%d vs %d)\n",
                         name.c_str(), m.first.c_str(), m.second.meta.priority, target_priority, m.second.meta.priority);
                 skip_unload = true;
                 break;
             }
         }
-        SRV_INF("load(%s): skip_unload=%d\n", name.c_str(), skip_unload);
+        SRV_DBG("load(%s): skip_unload=%d\n", name.c_str(), skip_unload);
     }
     if (!skip_unload) {
         unload_lru();
@@ -1074,7 +1074,7 @@ static void res_err(std::unique_ptr<server_http_res> & res, const json & error_d
 }
 
 static bool router_validate_model(std::string & name, server_models & models, bool models_autoload, std::unique_ptr<server_http_res> & res) {
-    SRV_INF("router_validate_model: name='%s' autoload=%s\n", name.c_str(), models_autoload ? "true" : "false");
+    SRV_DBG("router_validate_model: name='%s' autoload=%s\n", name.c_str(), models_autoload ? "true" : "false");
     // try to find it
     if (name.empty()) {
         res_err(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
@@ -1082,7 +1082,7 @@ static bool router_validate_model(std::string & name, server_models & models, bo
     }
     auto meta = models.get_meta(name);
     if (!meta.has_value()) {
-        SRV_INF("  -> model '%s' not found in mapping or aliases\n", name.c_str());
+        SRV_DBG("  -> model '%s' not found in mapping or aliases\n", name.c_str());
         res_err(res, format_error_response(string_format("model '%s' not found", name.c_str()), ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
@@ -1137,7 +1137,7 @@ void server_models_routes::init_routes() {
     this->proxy_get = [this](const server_http_req & req) {
         std::string method = "GET";
         std::string name = req.get_param("model");
-        SRV_INF("proxy_get: model=%s\n", name.c_str());
+        SRV_DBG("proxy_get: model=%s\n", name.c_str());
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
@@ -1150,14 +1150,14 @@ void server_models_routes::init_routes() {
         std::string method = "POST";
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
-        SRV_INF("proxy_post: model=%s autoload=%s body_len=%zu\n", name.c_str(),
+        SRV_DBG("proxy_post: model=%s autoload=%s body_len=%zu\n", name.c_str(),
               is_autoload(params, req) ? "true" : "false", req.body.size());
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
             return error_res;
         }
-        SRV_INF("  -> proxying to model %s\n", name.c_str());
+        SRV_DBG("  -> proxying to model %s\n", name.c_str());
         return models.proxy_request(req, method, name, true); // update last usage for POST request only
     };
 

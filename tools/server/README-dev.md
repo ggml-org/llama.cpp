@@ -195,6 +195,18 @@ That requires `JSON.stringify` when formatted to message content:
 - INI presets: https://github.com/ggml-org/llama.cpp/pull/17859 (+ refactoring: https://github.com/ggml-org/llama.cpp/pull/18169)
 - Sleeping mode: https://github.com/ggml-org/llama.cpp/pull/18228
 
+### Idle Timeout
+
+The router server supports automatic unloading of models that have been idle for a configurable number of seconds.
+
+- The `--models-idle-timeout N` argument sets the idle timeout in seconds (0 = disabled).
+- `server_model_meta::idle_start` tracks when a model became idle (timestamp from `ggml_time_ms()`).
+- An idle loop thread (`server_models::idle_loop`) runs every second, checking running models against `idle_timeout`. Models that exceed the threshold are unloaded via `unload()`.
+- `idle_start` is set when a model transitions to `SERVER_MODEL_STATUS_LOADED` and reset to 0 when unloading/loading.
+- `server_models::idle_thread_start()` and `idle_thread_stop()` manage the idle loop thread lifecycle.
+- For model-response endpoints (`/v1/chat/completions`, `/v1/embeddings`), the idle callback is set on each proxy chunk to keep the model alive during response generation.
+- Health-like endpoints (`/metrics`, `/models`, `/props`, `/health`) do NOT reset the idle timer — they are not model-response endpoints and should not extend model lifetime.
+
 
 
 
