@@ -737,6 +737,14 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
 
+## Compile-time Flags
+
+Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spot.
+
+| Name            | Function                                                                         |
+|-----------------|----------------------------------------------------------------------------------|
+| DEBUG_SYCL_POOL | Enable device memory pool logging on teardown. Useful for profiling allocations. |
+
 ## Design Rule
 
 - Open to all contributors.
