@@ -13,6 +13,36 @@
 #include <future>
 #include <regex>
 
+
+static split_info_t read_split_info(const struct gguf_context * ctx) {
+    split_info_t info;
+    auto get_str = [&](const char* key) -> std::string {
+        int idx = gguf_find_key(ctx, key);
+        return idx >= 0 ? gguf_get_val_str(ctx, idx) : "";
+    };
+    auto get_u32 = [&](const char* key) -> uint32_t {
+        int idx = gguf_find_key(ctx, key);
+        return idx >= 0 ? gguf_get_val_u32(ctx, idx) : 0;
+    };
+    std::string type_str = get_str("split.type");
+    if      (type_str == "attention") info.type = SPLIT_ATTENTION;
+    else if (type_str == "ffn")       info.type = SPLIT_FFN;
+    else if (type_str == "embed")     info.type = SPLIT_EMBED;
+    info.source_sha256     = get_str("split.source_sha256");
+    info.layer_first       = get_u32("split.layer_first");
+    info.layer_last        = get_u32("split.layer_last");
+    info.n_embd            = get_u32("split.n_embd");
+    info.wire_version      = get_u32("split.wire_version");
+    info.ffn_norm_placement= get_str("split.ffn_norm_placement");
+    if (!type_str.empty()) {
+        LLAMA_LOG_INFO("split.type: %s | sha256: %.16s... | layers: %u-%u\n",
+            type_str.c_str(), info.source_sha256.c_str(),
+            info.layer_first, info.layer_last);
+    }
+    return info;
+}
+
+
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
@@ -544,6 +574,7 @@ llama_model_loader::llama_model_loader(
 
         metadata_ptr.reset(gguf_init_from_file(fname.c_str(), params));
         metadata = metadata_ptr.get();
+        if (metadata) { this->split_info = read_split_info(metadata); }
         if (metadata == nullptr) {
             throw std::runtime_error(format("%s: failed to load model from %s", __func__, fname.c_str()));
         }
@@ -670,6 +701,7 @@ llama_model_loader::llama_model_loader(
 
         metadata_ptr.reset(gguf_init_from_file_ptr(file, params));
         metadata = metadata_ptr.get();
+        if (metadata) { this->split_info = read_split_info(metadata); }
         if (metadata == nullptr) {
             throw std::runtime_error(format("%s: failed to load model from file pointer", __func__));
         }
@@ -1077,7 +1109,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
     auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
         if (!t_meta) {
-            if (flags & TENSOR_NOT_REQUIRED) {
+            bool is_ffn = tn.str().find("ffn") != std::string::npos;
+            if ((flags & TENSOR_NOT_REQUIRED) || (this->split_info.type == SPLIT_ATTENTION && is_ffn)) {
                 return nullptr;
             }
             throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));

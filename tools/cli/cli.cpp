@@ -388,6 +388,11 @@ int main(int argc, char ** argv) {
 
     console::log("\nLoading model... "); // followed by loading animation
     console::spinner::start();
+
+    if (!params.ffn_file.empty()) {
+        extern void set_global_ffn_mmap(const char*);
+        set_global_ffn_mmap(params.ffn_file.c_str());
+    }
     if (!ctx_cli.ctx_server.load_model(params)) {
         console::spinner::stop();
         console::error("\nFailed to load the model\n");
