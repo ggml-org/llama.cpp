@@ -3,7 +3,10 @@
 from glob import glob
 import os
 
-HEAD_SIZES_KQ = [40, 64, 72, 80, 96, 112, 128, 256, 320, 512, 576]
+HEAD_SIZES_KQ = [40, 64, 72, 80, 96, 112, 128, 192, 256, 320, 512, 576]
+
+# DKQ -> DV override for asymmetric head dims.
+HEAD_SIZES_V_OVERRIDE = {576: 512, 320: 256, 192: 128}
 
 TYPES_KV = ["GGML_TYPE_F16", "GGML_TYPE_Q4_0", "GGML_TYPE_Q4_1", "GGML_TYPE_Q5_0", "GGML_TYPE_Q5_1", "GGML_TYPE_Q8_0", "GGML_TYPE_BF16"]
 
@@ -62,7 +65,7 @@ for filename in glob("*.cu"):
     os.remove(filename)
 
 for head_size_kq in HEAD_SIZES_KQ:
-    head_size_v = 256 if head_size_kq == 320 else (head_size_kq if head_size_kq != 576 else 512)
+    head_size_v = HEAD_SIZES_V_OVERRIDE.get(head_size_kq, head_size_kq)
     with open(f"fattn-tile-instance-dkq{head_size_kq}-dv{head_size_v}.cu", "w") as f:
         f.write(SOURCE_FATTN_TILE.format(head_size_kq=head_size_kq, head_size_v=head_size_v))
 
@@ -85,15 +88,17 @@ for ncols in [8, 16, 32, 64]:
                 if head_size_kq == 72:
                     continue
                 # Skip compilation of unused ncols2 values for niche head sizes:
+                if head_size_kq == 192 and ncols2 not in (8, 16): # MiMo-V2.5
+                    continue
                 if head_size_kq == 320 and ncols2 != 32: # Mistral Small 4
                     continue
                 if head_size_kq == 512 and ncols2 not in (4, 8): # Gemma 4
                     continue
                 if head_size_kq == 576 and ncols2 not in (4, 16, 32): # Deepseek, GLM 4.7 Flash
                     continue
-                if head_size_kq not in (320, 576) and ncols2 in (16, 32):
+                if head_size_kq not in (192, 320, 576) and ncols2 in (16, 32):
                     continue
-                head_size_v = 256 if head_size_kq == 320 else (head_size_kq if head_size_kq != 576 else 512)
+                head_size_v = HEAD_SIZES_V_OVERRIDE.get(head_size_kq, head_size_kq)
                 f.write(SOURCE_FATTN_MMA_CASE.format(ncols1=ncols1, ncols2=ncols2, head_size_kq=head_size_kq, head_size_v=head_size_v))
 
 for type in TYPES_MMQ:
