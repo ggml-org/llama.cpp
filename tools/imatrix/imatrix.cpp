@@ -24,6 +24,11 @@
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
 static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s \\\n"
@@ -404,6 +409,16 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             }
         }
     }
+
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+    if (m_params.use_mmap && src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
+        const size_t page_size = sysconf(_SC_PAGESIZE);
+        const uintptr_t addr = (uintptr_t)src0->data;
+        const uintptr_t aligned_addr = addr & ~(page_size - 1);
+        const size_t size = ggml_nbytes(src0) + (addr - aligned_addr);
+        madvise((void *)aligned_addr, size, MADV_DONTNEED); // hint OS pages in this region are not needed anymore
+    }
+#endif
 
     return true;
 }
