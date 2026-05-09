@@ -20,6 +20,8 @@ jobs:
     publish-webui:
         name: Publish WebUI to Hugging Face Bucket
         runs-on: ubuntu-latest
+        env:
+            BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 
         needs:
             - webui-build
