@@ -4228,6 +4228,35 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
     return GGML_STATUS_SUCCESS;
 }
 
+// The optimized gemm and gemv kernels are used for large matrices without batch.
+// tensor is the quantized weights matrix.
+inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    int64_t threshold_ne0 = 512;
+    int64_t threshold_ne1 = 512;
+    if (!backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) &&
+         backend_ctx->adreno_cl_compiler_version.type != DX) {
+        threshold_ne0 = 128;
+        threshold_ne1 = 128;
+    }
+    return tensor->ne[0] >= threshold_ne0 && tensor->ne[1] >= threshold_ne1 &&
+            tensor->ne[2] == 1 && tensor->ne[3] == 1;
+}
+
+inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    GGML_UNUSED(backend_ctx);
+    int ne01 = tensor->ne[1];
+    return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 64 == 0);
+}
+
+inline bool enable_adreno_trans_weight(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+
+    bool adreno_kernel = use_adreno_kernels(backend_ctx, tensor);
+
+    size_t elem_num = tensor->ne[0] * tensor->ne[1] * tensor->ne[2] * tensor->ne[3];
+
+    return ((elem_num < 128 * 1024 * 1024) && adreno_kernel);  // max element num: 2**27
+}
+
 static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     ggml_backend_opencl_device_context * dev_ctx     = (ggml_backend_opencl_device_context *)dev->context;
     ggml_backend_opencl_context *        backend_ctx = dev_ctx->backend_ctx;
@@ -4418,12 +4447,23 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return false;
         case GGML_OP_MUL_MAT_ID:
             if (op->src[0]->type == GGML_TYPE_Q4_0 ||
-                op->src[0]->type == GGML_TYPE_Q4_1 ||
                 op->src[0]->type == GGML_TYPE_Q8_0 ||
                 op->src[0]->type == GGML_TYPE_MXFP4) {
                 if (op->src[1]->type == GGML_TYPE_F32) {
                     return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
                 }
+            }
+            // q4_0, q8_0 and mxfp4 have general MUL_MAT_ID support,
+            // the quantizations here currently do not - they are only supported by Adreno with certain shapes
+            if (op->src[0]->type == GGML_TYPE_Q4_1) {
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+                if (op->src[1]->type == GGML_TYPE_F32) {
+                    return use_adreno_moe_kernels(backend_ctx, op->src[0])
+                        && ggml_is_contiguous(op->src[0])
+                        && ggml_is_contiguous(op->src[1]);
+                }
+#endif
+                return false;
             }
             return false;
         case GGML_OP_RESHAPE:
@@ -4912,35 +4952,6 @@ static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buff
         }
     }
     return GGML_STATUS_SUCCESS;
-}
-
-// The optimized gemm and gemv kernels are used for large matrices without batch.
-// tensor is the quantized weights matrix.
-inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-    int64_t threshold_ne0 = 512;
-    int64_t threshold_ne1 = 512;
-    if (!backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) &&
-         backend_ctx->adreno_cl_compiler_version.type != DX) {
-        threshold_ne0 = 128;
-        threshold_ne1 = 128;
-    }
-    return tensor->ne[0] >= threshold_ne0 && tensor->ne[1] >= threshold_ne1 &&
-            tensor->ne[2] == 1 && tensor->ne[3] == 1;
-}
-
-inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-    GGML_UNUSED(backend_ctx);
-    int ne01 = tensor->ne[1];
-    return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 64 == 0);
-}
-
-inline bool enable_adreno_trans_weight(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-
-    bool adreno_kernel = use_adreno_kernels(backend_ctx, tensor);
-
-    size_t elem_num = tensor->ne[0] * tensor->ne[1] * tensor->ne[2] * tensor->ne[3];
-
-    return ((elem_num < 128 * 1024 * 1024) && adreno_kernel);  // max element num: 2**27
 }
 
 static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
