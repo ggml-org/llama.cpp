@@ -1269,7 +1269,8 @@ std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
         {GGML_OP_L2_NORM,         "GGML_OP_L2_NORM"        },
         {GGML_OP_PAD,             "GGML_OP_PAD"            },
         {GGML_OP_SSM_CONV,        "GGML_OP_SSM_CONV"       },
-        {GGML_OP_GATED_DELTA_NET, "GGML_OP_GATED_DELTA_NET"}
+        {GGML_OP_GATED_DELTA_NET, "GGML_OP_GATED_DELTA_NET"},
+        {GGML_OP_ARGSORT,         "GGML_OP_ARGSORT"        }
     };
     static const std::map<ggml_unary_op, std::string> unary_ops = {
         {GGML_UNARY_OP_ABS,         "GGML_UNARY_OP_ABS"        },

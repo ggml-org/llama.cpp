@@ -29,6 +29,7 @@ GGML_OP_CONVERTER(translate_glu_swiglu);
 GGML_OP_CONVERTER(translate_glu_geglu);
 GGML_OP_CONVERTER(translate_set_rows);
 GGML_OP_CONVERTER(translate_cpy);
+GGML_OP_CONVERTER(translate_argsort);
 GGML_OP_CONVERTER(translate_flash_attn_ext);
 GGML_OP_CONVERTER(translate_pad);
 GGML_OP_CONVERTER(translate_ssm_conv);
