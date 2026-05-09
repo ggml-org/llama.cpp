@@ -1007,6 +1007,15 @@ void common_speculative_draft(common_speculative * spec) {
             break;
         }
     }
+
+    // these sequences failed to generate a draft
+    for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) dparams.size(); ++seq_id) {
+        auto & dp = dparams[seq_id];
+
+        if (dp.drafting) {
+            dp.drafting = false;
+        }
+    }
 }
 
 void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, uint16_t n_accepted) {
