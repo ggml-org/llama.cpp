@@ -14584,6 +14584,12 @@ static bool ggml_vk_can_fuse_snake(ggml_backend_vk_context * ctx, const struct g
     if (a->ne[0] != 1 || a->ne[1] != x->ne[1]) {
         return false;
     }
+    // Dispatch is 2D over (ne0, ne1), so x and add must be 2D and a / inv_b
+    // must collapse to [1, C, 1, 1]. Higher dims are not handled by the shader.
+    if (x->ne[2]     != 1 || x->ne[3]     != 1) return false;
+    if (add->ne[2]   != 1 || add->ne[3]   != 1) return false;
+    if (a->ne[2]     != 1 || a->ne[3]     != 1) return false;
+    if (inv_b->ne[2] != 1 || inv_b->ne[3] != 1) return false;
     // Shader uses idx = i0 + i1 * ne0 and reads data_a[i1] / data_inv_b[i1],
     // so every operand must be contiguous.
     if (!ggml_is_contiguous(x) || !ggml_is_contiguous(add) ||
