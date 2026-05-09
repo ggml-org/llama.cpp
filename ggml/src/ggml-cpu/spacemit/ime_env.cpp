@@ -296,7 +296,8 @@ spine_env_info::spine_env_info() {
     if (init_barrier != nullptr) {
         init_barrier_is_shared_mem = true;
     } else {
-        GGML_LOG_WARN("%s: failed to allocate init_barrier from shared mem, falling back to heap\n", __func__);
+        GGML_LOG_WARN("CPU_RISCV64_SPACEMIT: failed to allocate init_barrier from shared mem, falling back to heap\n",
+                      __func__);
         init_barrier = new spine_barrier_t[spine_init_barrier_count];
     }
 

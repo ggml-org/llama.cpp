@@ -2919,6 +2919,8 @@ void gemm_kernel_i8i4_hp_m1(size_t          blk_len,
                 ".align 4                               \n\t"
                 "BLK_LOOP%=:                            \n\t"
                 "li             t5, 8                   \n\t"
+                "addi           t6, %[A], 288           \n\t"  // point to blk scale
+                "flh            ft1, (t6)               \n\t"
                 "addi           t6, %[A], 272           \n\t"  // point to asum
 
                 // init the acc fp16
@@ -2929,10 +2931,9 @@ void gemm_kernel_i8i4_hp_m1(size_t          blk_len,
                 "vxor.vv        v19, v18, v18           \n\t"
 
                 "INNER_BLK_LOOP%=:                      \n\t"
-                // load asum, blk scale, a sum
+                // load a sum and scale
                 "flh            fa1, (t6)               \n\t"
-                "flh            ft1, 2(t6)              \n\t"
-                "addi           t6, t6, 4               \n\t"
+                "addi           t6, t6, 2               \n\t"
                 "flh            ft0, (%[A])             \n\t"
                 "addi           %[A], %[A], 2           \n\t"
                 // load A
@@ -2948,8 +2949,8 @@ void gemm_kernel_i8i4_hp_m1(size_t          blk_len,
                 "addi           %[B], %[B], 512         \n\t"
                 "vfmul.vf       v8, v8, ft0             \n\t"  // scale b * scale a
                 "vfmul.vf       v9, v8, fa0             \n\t"
-                "fmul.h         fa1, fa1, ft1           \n\t"
-                "vfwmacc.vf     v31, fa1, v8            \n\t"  // asum * scale a * scale b * blk scale
+                "vfmul.vf       v10, v8, fa1            \n\t"  // scale b * scale a * asm
+                "vfwmacc.vf     v31, ft1, v10           \n\t"  // asum * scale a * scale b * blk scale
 
                 "vsetvli        t0, x0, e8, m1          \n\t"
                 "vpack.vv       v0, v8, v9, 3           \n\t"
@@ -2979,10 +2980,12 @@ void gemm_kernel_i8i4_hp_m1(size_t          blk_len,
 
                 "vsetvli        t0, x0, e16, mf2        \n\t"
                 "addi           t4, t4, -1              \n\t"
-                "vfwadd.wv      v31, v31, v20           \n\t"
+                "vfwmacc.vf     v31, ft1, v20           \n\t"
+                //"vsetvli        t0, x0, e32, m1         \n\t"
+                //"vfmul.vf       v31, v31, ft1           \n\t"  // blk scale
 
                 // update A ptr
-                "mv             %[A], t6                \n\t"
+                "addi           %[A], t6, 2             \n\t"
 
                 "bgtz           t4, BLK_LOOP%=          \n\t"
 
@@ -2996,7 +2999,8 @@ void gemm_kernel_i8i4_hp_m1(size_t          blk_len,
                   "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "fa0", "fa1", "ft0", "ft1");
         }
     } else {
-        assert(false && "gemm_kernel_i8i4_hp_m1 with quant_b_zp is not implemented yet");
+        // TODO: support quant_b_zp for i8i4 hp kernel
+        GGML_ABORT("gemm_kernel_i8i4_hp_m1 with quant_b_zp is not supported yet");
     }
 }
 
@@ -5622,7 +5626,7 @@ size_t gemm_kernel_i8i4_hp(size_t          blk_len,
 #endif
         return 4;
     } else {
-#if 1
+#if 0
         gemm_kernel_i8i4_hp_mrow_ref<1, 32>(blk_len, quant_a_ptr, quant_b_data, quant_b_zp, c_ptr, count_m, count_n,
                                             k_blks, ldc);
 #else

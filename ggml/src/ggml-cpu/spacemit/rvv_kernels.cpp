@@ -1993,27 +1993,26 @@ void quantize_a_4row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uin
 }
 
 void quantize_a_row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
-#if 1
+#if 0
     quantize_a_nrow_i8_hp_ref<1>(blk_len, a_ptr, count_k, quant_a_ptr);
 #else
     constexpr size_t k_subblk_len = 32;
+    GGML_ASSERT(blk_len == 256);
 
-    GGML_ASSERT(blk_len % k_subblk_len == 0);
-
-    const size_t subblk_count    = blk_len / k_subblk_len;
-    int64_t      a_blk_stride    = q8_hp_blk_size(blk_len, true);
-    int64_t      a_subblk_stride = q8_hp_blk_size(k_subblk_len, false);
-    size_t       vlenb           = __riscv_vlenb();
+    constexpr size_t subblk_count             = 256 / k_subblk_len;
+    int64_t          a_blk_stride             = q8_hp_blk_size(blk_len, true, true);
+    int64_t          a_subblk_stride          = q8_hp_blk_size(k_subblk_len, false, false);
+    size_t           vlenb                    = __riscv_vlenb();
+    float            scale_temp[subblk_count] = { 0.0f };
 
     if (vlenb == 128) {
         for (size_t k = 0; k < count_k; k += blk_len, quant_a_ptr += a_blk_stride) {
-            _Float16 * a_sum_ptr = reinterpret_cast<_Float16 *>(quant_a_ptr + a_subblk_stride * subblk_count);
+            _Float16 * a_sum_ptr     = reinterpret_cast<_Float16 *>(quant_a_ptr + a_subblk_stride * subblk_count);
+            _Float16 * scale_avg_ptr = reinterpret_cast<_Float16 *>(quant_a_ptr + a_blk_stride - sizeof(_Float16));
+            float      scale_avg     = 0.0f;
 
             for (size_t kk = 0; kk < subblk_count; ++kk) {
-                uint8_t *     a_subblk_base = quant_a_ptr + kk * a_subblk_stride;
-                _Float16 *    scale_a_ptr   = reinterpret_cast<_Float16 *>(a_subblk_base);
-                int8_t *      quant_a_blk   = reinterpret_cast<int8_t *>(a_subblk_base + sizeof(_Float16));
-                const float * a_src_ptr     = a_ptr + k + kk * k_subblk_len;
+                const float * a_src_ptr = a_ptr + k + kk * k_subblk_len;
 
                 size_t       vl      = __riscv_vsetvl_e32m1(k_subblk_len);
                 vfloat32m1_t v_a     = __riscv_vle32_v_f32m1(a_src_ptr, vl);
@@ -2023,9 +2022,24 @@ void quantize_a_row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, u
                 vfloat32m1_t v_a_max   = __riscv_vfredmax_vs_f32m1_f32m1(v_a_abs, tmp, vl);
                 float        max_abs_a = __riscv_vfmv_f_s_f32m1_f32(v_a_max);
 
-                float scale_a     = max_abs_a / ((1 << 7) - 1);
-                float rep_scale_a = scale_a ? 1.0f / scale_a : 0.0f;
-                scale_a_ptr[0]    = static_cast<_Float16>(scale_a);
+                scale_temp[kk] = max_abs_a / ((1 << 7) - 1);
+                scale_avg += scale_temp[kk];
+            }
+
+            scale_avg /= subblk_count;
+            const float scale_factor = scale_avg ? 1.0f / scale_avg : 0.0f;
+            scale_avg_ptr[0]         = static_cast<_Float16>(scale_avg);
+
+            for (size_t kk = 0; kk < subblk_count; ++kk) {
+                uint8_t *     a_subblk_base = quant_a_ptr + kk * a_subblk_stride;
+                _Float16 *    scale_a_ptr   = reinterpret_cast<_Float16 *>(a_subblk_base);
+                int8_t *      quant_a_blk   = reinterpret_cast<int8_t *>(a_subblk_base + sizeof(_Float16));
+                const float * a_src_ptr     = a_ptr + k + kk * k_subblk_len;
+
+                size_t       vl          = __riscv_vsetvl_e32m1(k_subblk_len);
+                vfloat32m1_t v_a         = __riscv_vle32_v_f32m1(a_src_ptr, vl);
+                float        rep_scale_a = scale_temp[kk] ? 1.0f / scale_temp[kk] : 0.0f;
+                scale_a_ptr[0]           = static_cast<_Float16>(scale_temp[kk] * scale_factor);
 
                 vfloat32m1_t v_a_scale    = __riscv_vfmul_vf_f32m1(v_a, rep_scale_a, vl);
                 vint16mf2_t  v_a_quant    = __riscv_vfncvt_x_f_w_i16mf2(v_a_scale, vl);
@@ -2041,13 +2055,12 @@ void quantize_a_row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, u
         }
     } else if (vlenb == 32) {
         for (size_t k = 0; k < count_k; k += blk_len, quant_a_ptr += a_blk_stride) {
-            _Float16 * a_sum_ptr = reinterpret_cast<_Float16 *>(quant_a_ptr + a_subblk_stride * subblk_count);
+            _Float16 * a_sum_ptr     = reinterpret_cast<_Float16 *>(quant_a_ptr + a_subblk_stride * subblk_count);
+            _Float16 * scale_avg_ptr = reinterpret_cast<_Float16 *>(quant_a_ptr + a_blk_stride - sizeof(_Float16));
+            float      scale_avg     = 0.0f;
 
             for (size_t kk = 0; kk < subblk_count; ++kk) {
-                uint8_t *     a_subblk_base = quant_a_ptr + kk * a_subblk_stride;
-                _Float16 *    scale_a_ptr   = reinterpret_cast<_Float16 *>(a_subblk_base);
-                int8_t *      quant_a_blk   = reinterpret_cast<int8_t *>(a_subblk_base + sizeof(_Float16));
-                const float * a_src_ptr     = a_ptr + k + kk * k_subblk_len;
+                const float * a_src_ptr = a_ptr + k + kk * k_subblk_len;
 
                 size_t       vl      = __riscv_vsetvl_e32m4(k_subblk_len);
                 vfloat32m4_t v_a     = __riscv_vle32_v_f32m4(a_src_ptr, vl);
@@ -2057,9 +2070,24 @@ void quantize_a_row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, u
                 vfloat32m1_t v_a_max   = __riscv_vfredmax_vs_f32m4_f32m1(v_a_abs, tmp, vl);
                 float        max_abs_a = __riscv_vfmv_f_s_f32m1_f32(v_a_max);
 
-                float scale_a     = max_abs_a / ((1 << 7) - 1);
-                float rep_scale_a = scale_a ? 1.0f / scale_a : 0.0f;
-                scale_a_ptr[0]    = static_cast<_Float16>(scale_a);
+                scale_temp[kk] = max_abs_a / ((1 << 7) - 1);
+                scale_avg += scale_temp[kk];
+            }
+
+            scale_avg /= subblk_count;
+            const float scale_factor = scale_avg ? 1.0f / scale_avg : 0.0f;
+            scale_avg_ptr[0]         = static_cast<_Float16>(scale_avg);
+
+            for (size_t kk = 0; kk < subblk_count; ++kk) {
+                uint8_t *     a_subblk_base = quant_a_ptr + kk * a_subblk_stride;
+                _Float16 *    scale_a_ptr   = reinterpret_cast<_Float16 *>(a_subblk_base);
+                int8_t *      quant_a_blk   = reinterpret_cast<int8_t *>(a_subblk_base + sizeof(_Float16));
+                const float * a_src_ptr     = a_ptr + k + kk * k_subblk_len;
+
+                size_t       vl          = __riscv_vsetvl_e32m4(k_subblk_len);
+                vfloat32m4_t v_a         = __riscv_vle32_v_f32m4(a_src_ptr, vl);
+                float        rep_scale_a = scale_temp[kk] ? 1.0f / scale_temp[kk] : 0.0f;
+                scale_a_ptr[0]           = static_cast<_Float16>(scale_temp[kk] * scale_factor);
 
                 vfloat32m4_t v_a_scale    = __riscv_vfmul_vf_f32m4(v_a, rep_scale_a, vl);
                 vint16m2_t   v_a_quant    = __riscv_vfncvt_x_f_w_i16m2(v_a_scale, vl);
@@ -2073,38 +2101,36 @@ void quantize_a_row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, u
                 __riscv_vse8_v_i8m1(quant_a_blk, v_a_quant_i8, vl);
             }
         }
-    } else {
-        assert(vlenb == 32 || vlenb == 128);
     }
 #endif
 }
 
 void quantize_a_4row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
-#if 1
+#if 0
     quantize_a_nrow_i8_hp_ref<4>(blk_len, a_ptr, count_k, quant_a_ptr);
 #else
     constexpr size_t k_subblk_len = 32;
+    GGML_ASSERT(blk_len == 256);
 
-    GGML_ASSERT(blk_len % k_subblk_len == 0);
-
-    const size_t subblk_count        = blk_len / k_subblk_len;
-    int64_t      a_blk_stride        = q8_hp_blk_size(blk_len, true);
-    int64_t      a_nrow_block_stride = a_blk_stride * 4;
-    int64_t      a_subblk_stride     = q8_hp_blk_size(k_subblk_len, false) * 4;
-    size_t       vlenb               = __riscv_vlenb();
+    constexpr size_t subblk_count             = 256 / k_subblk_len;
+    int64_t          a_blk_stride             = q8_hp_blk_size(blk_len, true, true);
+    int64_t          a_nrow_block_stride      = a_blk_stride * 4;
+    int64_t          a_subblk_stride          = q8_hp_blk_size(k_subblk_len, false, false) * 4;
+    size_t           vlenb                    = __riscv_vlenb();
+    float            scale_temp[subblk_count] = { 0.0f };
 
     if (vlenb == 128) {
         for (size_t k = 0; k < count_k; k += blk_len, quant_a_ptr += a_nrow_block_stride) {
             _Float16 * a_sum_ptr = reinterpret_cast<_Float16 *>(quant_a_ptr + a_subblk_stride * subblk_count);
+            _Float16 * scale_avg_ptr =
+                reinterpret_cast<_Float16 *>(quant_a_ptr + a_nrow_block_stride - sizeof(_Float16) * 4);
+            float scale_avg = 0.0f;
 
             for (size_t kk = 0; kk < subblk_count; ++kk) {
-                uint8_t *     a_subblk_base = quant_a_ptr + kk * a_subblk_stride;
-                _Float16 *    scale_a_ptr   = reinterpret_cast<_Float16 *>(a_subblk_base);
-                int8_t *      quant_a_blk   = reinterpret_cast<int8_t *>(a_subblk_base + sizeof(_Float16) * 4);
-                const float * a_src_ptr0    = a_ptr + 0 * count_k + k + kk * k_subblk_len;
-                const float * a_src_ptr1    = a_ptr + 1 * count_k + k + kk * k_subblk_len;
-                const float * a_src_ptr2    = a_ptr + 2 * count_k + k + kk * k_subblk_len;
-                const float * a_src_ptr3    = a_ptr + 3 * count_k + k + kk * k_subblk_len;
+                const float * a_src_ptr0 = a_ptr + 0 * count_k + k + kk * k_subblk_len;
+                const float * a_src_ptr1 = a_ptr + 1 * count_k + k + kk * k_subblk_len;
+                const float * a_src_ptr2 = a_ptr + 2 * count_k + k + kk * k_subblk_len;
+                const float * a_src_ptr3 = a_ptr + 3 * count_k + k + kk * k_subblk_len;
 
                 size_t       vl       = __riscv_vsetvl_e32m1(k_subblk_len);
                 vfloat32m1_t v_a0     = __riscv_vle32_v_f32m1(a_src_ptr0, vl);
@@ -2124,13 +2150,31 @@ void quantize_a_4row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, 
                 vfloat32m1_t v_a_max   = __riscv_vfredmax_vs_f32m1_f32m1(v_max_abs, tmp, vl);
                 float        max_abs_a = __riscv_vfmv_f_s_f32m1_f32(v_a_max);
 
-                float scale_a     = max_abs_a / ((1 << 7) - 1);
-                float rep_scale_a = scale_a ? 1.0f / scale_a : 0.0f;
+                scale_temp[kk] = max_abs_a / ((1 << 7) - 1);
+                scale_avg += scale_temp[kk];
+            }
 
-                scale_a_ptr[0] = static_cast<_Float16>(scale_a);
-                scale_a_ptr[1] = static_cast<_Float16>(scale_a);
-                scale_a_ptr[2] = static_cast<_Float16>(scale_a);
-                scale_a_ptr[3] = static_cast<_Float16>(scale_a);
+            scale_avg /= subblk_count;
+            const float scale_factor = scale_avg ? 1.0f / scale_avg : 0.0f;
+            scale_avg_ptr[0]         = static_cast<_Float16>(scale_avg);
+
+            for (size_t kk = 0; kk < subblk_count; ++kk) {
+                uint8_t *     a_subblk_base = quant_a_ptr + kk * a_subblk_stride;
+                _Float16 *    scale_a_ptr   = reinterpret_cast<_Float16 *>(a_subblk_base);
+                int8_t *      quant_a_blk   = reinterpret_cast<int8_t *>(a_subblk_base + sizeof(_Float16) * 4);
+                const float * a_src_ptr0    = a_ptr + 0 * count_k + k + kk * k_subblk_len;
+                const float * a_src_ptr1    = a_ptr + 1 * count_k + k + kk * k_subblk_len;
+                const float * a_src_ptr2    = a_ptr + 2 * count_k + k + kk * k_subblk_len;
+                const float * a_src_ptr3    = a_ptr + 3 * count_k + k + kk * k_subblk_len;
+
+                size_t       vl   = __riscv_vsetvl_e32m1(k_subblk_len);
+                vfloat32m1_t v_a0 = __riscv_vle32_v_f32m1(a_src_ptr0, vl);
+                vfloat32m1_t v_a1 = __riscv_vle32_v_f32m1(a_src_ptr1, vl);
+                vfloat32m1_t v_a2 = __riscv_vle32_v_f32m1(a_src_ptr2, vl);
+                vfloat32m1_t v_a3 = __riscv_vle32_v_f32m1(a_src_ptr3, vl);
+
+                float rep_scale_a = scale_temp[kk] ? 1.0f / scale_temp[kk] : 0.0f;
+                scale_a_ptr[0]    = static_cast<_Float16>(scale_temp[kk] * scale_factor);
 
                 vfloat32m1_t v_a0_scale    = __riscv_vfmul_vf_f32m1(v_a0, rep_scale_a, vl);
                 vfloat32m1_t v_a1_scale    = __riscv_vfmul_vf_f32m1(v_a1, rep_scale_a, vl);
@@ -2172,6 +2216,42 @@ void quantize_a_4row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, 
     } else if (vlenb == 32) {
         for (size_t k = 0; k < count_k; k += blk_len, quant_a_ptr += a_nrow_block_stride) {
             _Float16 * a_sum_ptr = reinterpret_cast<_Float16 *>(quant_a_ptr + a_subblk_stride * subblk_count);
+            _Float16 * scale_avg_ptr =
+                reinterpret_cast<_Float16 *>(quant_a_ptr + a_nrow_block_stride - sizeof(_Float16) * 4);
+            float scale_avg = 0.0f;
+
+            for (size_t kk = 0; kk < subblk_count; ++kk) {
+                const float * a_src_ptr0 = a_ptr + 0 * count_k + k + kk * k_subblk_len;
+                const float * a_src_ptr1 = a_ptr + 1 * count_k + k + kk * k_subblk_len;
+                const float * a_src_ptr2 = a_ptr + 2 * count_k + k + kk * k_subblk_len;
+                const float * a_src_ptr3 = a_ptr + 3 * count_k + k + kk * k_subblk_len;
+
+                size_t       vl   = __riscv_vsetvl_e32m4(k_subblk_len);
+                vfloat32m4_t v_a0 = __riscv_vle32_v_f32m4(a_src_ptr0, vl);
+                vfloat32m4_t v_a1 = __riscv_vle32_v_f32m4(a_src_ptr1, vl);
+                vfloat32m4_t v_a2 = __riscv_vle32_v_f32m4(a_src_ptr2, vl);
+                vfloat32m4_t v_a3 = __riscv_vle32_v_f32m4(a_src_ptr3, vl);
+
+                vfloat32m4_t v_a0_abs = __riscv_vfabs_v_f32m4(v_a0, vl);
+                vfloat32m4_t v_a1_abs = __riscv_vfabs_v_f32m4(v_a1, vl);
+                vfloat32m4_t v_a2_abs = __riscv_vfabs_v_f32m4(v_a2, vl);
+                vfloat32m4_t v_a3_abs = __riscv_vfabs_v_f32m4(v_a3, vl);
+
+                vfloat32m4_t v_max_abs = __riscv_vfmax_vv_f32m4(v_a0_abs, v_a1_abs, vl);
+                v_max_abs              = __riscv_vfmax_vv_f32m4(v_max_abs, v_a2_abs, vl);
+                v_max_abs              = __riscv_vfmax_vv_f32m4(v_max_abs, v_a3_abs, vl);
+
+                vfloat32m1_t tmp       = __riscv_vfmv_v_f_f32m1(0.0f, vl);
+                vfloat32m1_t v_a_max   = __riscv_vfredmax_vs_f32m4_f32m1(v_max_abs, tmp, vl);
+                float        max_abs_a = __riscv_vfmv_f_s_f32m1_f32(v_a_max);
+
+                scale_temp[kk] = max_abs_a / ((1 << 7) - 1);
+                scale_avg += scale_temp[kk];
+            }
+
+            scale_avg /= subblk_count;
+            const float scale_factor = scale_avg ? 1.0f / scale_avg : 0.0f;
+            scale_avg_ptr[0]         = static_cast<_Float16>(scale_avg);
 
             for (size_t kk = 0; kk < subblk_count; ++kk) {
                 uint8_t *     a_subblk_base = quant_a_ptr + kk * a_subblk_stride;
@@ -2188,29 +2268,8 @@ void quantize_a_4row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, 
                 vfloat32m4_t v_a2 = __riscv_vle32_v_f32m4(a_src_ptr2, vl);
                 vfloat32m4_t v_a3 = __riscv_vle32_v_f32m4(a_src_ptr3, vl);
 
-                vfloat32m4_t v_a0_abs = __riscv_vfabs_v_f32m4(v_a0, vl);
-                vfloat32m4_t v_a1_abs = __riscv_vfabs_v_f32m4(v_a1, vl);
-                vfloat32m4_t v_a2_abs = __riscv_vfabs_v_f32m4(v_a2, vl);
-                vfloat32m4_t v_a3_abs = __riscv_vfabs_v_f32m4(v_a3, vl);
-
-                vfloat32m1_t tmp      = __riscv_vfmv_v_f_f32m1(0.0f, vl);
-                vfloat32m1_t v_a0_max = __riscv_vfredmax_vs_f32m4_f32m1(v_a0_abs, tmp, vl);
-                vfloat32m1_t v_a1_max = __riscv_vfredmax_vs_f32m4_f32m1(v_a1_abs, tmp, vl);
-                vfloat32m1_t v_a2_max = __riscv_vfredmax_vs_f32m4_f32m1(v_a2_abs, tmp, vl);
-                vfloat32m1_t v_a3_max = __riscv_vfredmax_vs_f32m4_f32m1(v_a3_abs, tmp, vl);
-
-                float max_abs_a = __riscv_vfmv_f_s_f32m1_f32(v_a0_max);
-                max_abs_a       = std::max(max_abs_a, __riscv_vfmv_f_s_f32m1_f32(v_a1_max));
-                max_abs_a       = std::max(max_abs_a, __riscv_vfmv_f_s_f32m1_f32(v_a2_max));
-                max_abs_a       = std::max(max_abs_a, __riscv_vfmv_f_s_f32m1_f32(v_a3_max));
-
-                float scale_a     = max_abs_a / ((1 << 7) - 1);
-                float rep_scale_a = scale_a ? 1.0f / scale_a : 0.0f;
-
-                scale_a_ptr[0] = static_cast<_Float16>(scale_a);
-                scale_a_ptr[1] = static_cast<_Float16>(scale_a);
-                scale_a_ptr[2] = static_cast<_Float16>(scale_a);
-                scale_a_ptr[3] = static_cast<_Float16>(scale_a);
+                float rep_scale_a = scale_temp[kk] ? 1.0f / scale_temp[kk] : 0.0f;
+                scale_a_ptr[0]    = static_cast<_Float16>(scale_temp[kk] * scale_factor);
 
                 vfloat32m4_t v_a0_scale    = __riscv_vfmul_vf_f32m4(v_a0, rep_scale_a, vl);
                 vfloat32m4_t v_a1_scale    = __riscv_vfmul_vf_f32m4(v_a1, rep_scale_a, vl);
@@ -2249,8 +2308,6 @@ void quantize_a_4row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, 
                 __riscv_vse8_v_i8m1(quant_a_blk + 3 * k_subblk_len, v_a3_quant_i8, vl);
             }
         }
-    } else {
-        assert(vlenb == 32 || vlenb == 128);
     }
 #endif
 }
