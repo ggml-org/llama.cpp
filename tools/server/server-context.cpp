@@ -64,6 +64,7 @@ struct server_slot {
     common_speculative * spec;
 
     llama_tokens spec_draft;
+    llama_tokens spec_prompt;
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
 
@@ -615,6 +616,7 @@ private:
     common_context_seq_rm_type ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
 
     common_speculative_ptr spec;
+    common_speculative_draft_params_vec spec_dparams;
 
     bool add_bos_token = true;
 
@@ -836,6 +838,7 @@ private:
         if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
             try {
                 spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
+                spec_dparams.resize(params_base.n_parallel);
             } catch (const std::exception & e) {
                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
             }
@@ -2183,10 +2186,10 @@ private:
         // track if given slot can be batched with slots already in the batch
         server_slot * slot_batched = nullptr;
 
-        common_speculative_draft_params_map dparams;
-
         // first, process slots that are speculative decoding
         for (auto & slot : slots) {
+            spec_dparams[slot.id].drafting = false;
+
             if (slot.state != SLOT_STATE_GENERATING) {
                 continue;
             }
@@ -2202,6 +2205,7 @@ private:
             const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
             const int n_draft_max = slot.get_n_draft_max();
+
             if (n_draft_max > 0) {
                 GGML_ASSERT(slot.can_speculate());
 
@@ -2222,7 +2226,7 @@ private:
                         slot.spec_ckpt.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
                     }
 
-                    dparams[slot.id] = common_speculative_draft_params {
+                    spec_dparams[slot.id] = common_speculative_draft_params {
                         /* .drafting = */ true,
                         /* .n_max    = */ n_draft_max,
                         /* .n_past   = */ slot.prompt.n_tokens(),
@@ -2235,45 +2239,45 @@ private:
         }
 
         // generate the actual drafts (if any)
-        if (!dparams.empty()) {
-            const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+        {
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) spec_dparams.size(); seq_id++) {
+                auto & slot = slots[seq_id];
+                auto & dp = spec_dparams[seq_id];
 
-            // TODO: tmp
-            std::map<llama_seq_id, llama_tokens> prompts;
-            for (auto & dp : dparams) {
-                auto & slot = slots[dp.first];
-                prompts[dp.first] = slot.prompt.tokens.get_text_tokens();
+                slot.spec_prompt = slot.prompt.tokens.get_text_tokens();
 
-                dp.second.prompt = &prompts[dp.first];
+                dp.prompt = &slot.spec_prompt;
             }
 
-            common_speculative_draft(spec.get(), dparams);
+            common_speculative_draft(spec.get(), spec_dparams);
+        }
 
-            for (auto & dp : dparams) {
-                auto & slot = slots[dp.first];
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) spec_dparams.size(); seq_id++) {
+            auto & slot = slots[seq_id];
 
-                slot.n_draft_total += slot.spec_draft.size();
+            slot.n_draft_total += slot.spec_draft.size();
 
-                // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
-                if (ctx_dft) {
-                    slot.spec_ckpt.load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+            // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
+            if (ctx_dft) {
+                slot.spec_ckpt.load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
-                    llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, slot.spec_ckpt.pos_max + 1, -1);
-                }
+                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, slot.spec_ckpt.pos_max + 1, -1);
+            }
 
-                if (!slot.spec_draft.empty()) {
-                    if (use_ckpt_tgt) {
-                        //const int64_t t_start = ggml_time_us();
+            const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
-                        slot.spec_ckpt.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+            if (!slot.spec_draft.empty()) {
+                if (use_ckpt_tgt) {
+                    //const int64_t t_start = ggml_time_us();
 
-                        //const int64_t t_total = ggml_time_us() - t_start;
-                        //printf("checkpoint total: %f ms\n", t_total / 1000.0);
+                    slot.spec_ckpt.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
-                        SLT_DBG(slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %d, size = %.3f MiB, draft = %.3f MiB)\n",
-                                slot.spec_ckpt.pos_min, slot.spec_ckpt.pos_max, slot.prompt.n_tokens(),
-                                (float) slot.spec_ckpt.size() / 1024 / 1024, (float) slot.spec_ckpt.data_dft.size() / 1024 / 1024);
-                    }
+                    //const int64_t t_total = ggml_time_us() - t_start;
+                    //printf("checkpoint total: %f ms\n", t_total / 1000.0);
+
+                    SLT_DBG(slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %d, size = %.3f MiB, draft = %.3f MiB)\n",
+                            slot.spec_ckpt.pos_min, slot.spec_ckpt.pos_max, slot.prompt.n_tokens(),
+                            (float) slot.spec_ckpt.size() / 1024 / 1024, (float) slot.spec_ckpt.data_dft.size() / 1024 / 1024);
                 }
             }
         }
@@ -2927,7 +2931,7 @@ private:
             // | Eagle3      | yes          |
             // | DFlash      | yes          | https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4405406982
             //
-            // TODO: move to `common_speculative_process(spec, batch, ...)`
+            // TODO: move to `common_speculative_process(spec, batch, ...)` [TAG_COMMON_SPECULATIVE_PROCESS]
             if (ctx_dft) {
                 // TODO: update as needed for MTP, Eagle3, etc.
                 const bool need_tgt_embd = false;

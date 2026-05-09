@@ -145,7 +145,7 @@ int main(int argc, char ** argv) {
     // init the speculator
     const auto & params_spec = params.speculative;
 
-    struct common_speculative * spec = common_speculative_init(params.speculative, seq_id);
+    struct common_speculative * spec = common_speculative_init(params.speculative, 1);
 
     common_speculative_begin(spec, seq_id, prompt_tgt);
 
@@ -179,7 +179,7 @@ int main(int argc, char ** argv) {
             }
 
             // generate a new draft
-            common_speculative_draft_params_map dparams;
+            common_speculative_draft_params_vec dparams(1);
             dparams[seq_id] = {
                 /* .drafting   = */ true,
                 /* .n_max      = */ -1,

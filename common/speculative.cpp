@@ -10,6 +10,7 @@
 #include "sampling.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <iomanip>
 #include <map>
@@ -122,6 +123,8 @@ static bool common_speculative_are_compatible(
 struct common_speculative_state {
     const common_speculative_type type;
 
+    uint32_t n_seq;
+
     size_t n_call_begin  = 0; // number of times this implementation was called for refresh.
     size_t n_call_draft  = 0; // number of times this implementation was called for generation.
     size_t n_call_accept = 0; // number of times this implementation was called for accumulation.
@@ -138,13 +141,13 @@ struct common_speculative_state {
     int64_t t_draft_us  = 0; // total time spent in generating drafts in this implementation in microseconds.
     int64_t t_accept_us = 0; // total time spent in accumulation of this implementation in microseconds.
 
-    common_speculative_state(common_speculative_type type) : type(type) {}
+    common_speculative_state(common_speculative_type type, uint32_t n_seq) : type(type), n_seq(n_seq) {}
 
     virtual ~common_speculative_state() = default;
 
     virtual void begin(llama_seq_id seq_id, const llama_tokens & prompt) = 0;
 
-    virtual void draft(common_speculative_draft_params_map & dparams) = 0;
+    virtual void draft(common_speculative_draft_params_vec & dparams) = 0;
 
     virtual void accept(llama_seq_id seq_id, uint16_t n_accepted) = 0;
 };
@@ -152,23 +155,18 @@ struct common_speculative_state {
 struct common_speculative_state_draft : public common_speculative_state {
     common_params_speculative_draft params;
 
-    uint32_t n_seq;
-
     llama_batch batch;
 
-    // TODO: can become n_seq separate samplers
-    common_sampler_ptr smpl;
+    std::vector<common_sampler_ptr> smpls;
 
     common_speculative_state_draft(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_DRAFT)
+        : common_speculative_state(COMMON_SPECULATIVE_TYPE_DRAFT, n_seq)
         , params(params.draft)
-        , n_seq(n_seq)
     {
         auto * ctx_dft = this->params.ctx_dft;
         auto * ctx_tgt = this->params.ctx_tgt;
 
         batch = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
-        smpl = nullptr;
 
         // TODO: optimize or pass from outside?
         // {
@@ -186,7 +184,9 @@ struct common_speculative_state_draft : public common_speculative_state {
         //
         //     result->smpl = common_sampler_init(llama_get_model(ctx_dft), params);
         // }
-        {
+
+        smpls.resize(n_seq);
+        for (auto & smpl : smpls) {
             common_params_sampling params;
             params.no_perf = false;
             params.top_k = 10;
@@ -221,29 +221,27 @@ struct common_speculative_state_draft : public common_speculative_state {
         // noop
     }
 
-    void draft(common_speculative_draft_params_map & dparams) override {
-        auto * spec = this;
-
-        auto & batch   = spec->batch;
-        auto & ctx_dft = spec->params.ctx_dft;
-        auto & smpl    = spec->smpl;
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        auto & ctx_dft = params.ctx_dft;
 
         common_batch_clear(batch);
 
+        // keep track of which sequences are still drafting
         int n_drafting = 0;
-        std::map<llama_seq_id, bool> drafting;
+        std::vector<bool> drafting(n_seq);
 
-        for (auto & dp : dparams) {
-            if (!dp.second.drafting) {
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+
+            if (!dp.drafting) {
                 continue;
             }
 
-            llama_seq_id seq_id = dp.first;
-
             n_drafting++;
             drafting[seq_id] = true;
+            common_sampler_reset(smpls[seq_id].get());
 
-            common_batch_add(batch, dp.second.id_last, dp.second.n_past, { seq_id }, true);
+            common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
         }
 
         int ret = llama_decode(ctx_dft, batch);
@@ -252,8 +250,6 @@ struct common_speculative_state_draft : public common_speculative_state {
             return;
         }
 
-        common_sampler_reset(smpl.get());
-
         int i = 0;
 
         while (n_drafting > 0) {
@@ -261,40 +257,44 @@ struct common_speculative_state_draft : public common_speculative_state {
 
             common_batch_clear(batch);
 
-            for (auto [seq_id, _] : drafting) {
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 if (!drafting[seq_id]) {
                     continue;
                 }
 
-                common_sampler_sample(smpl.get(), ctx_dft, i_batch, true);
+                auto * smpl = smpls[seq_id].get();
+
+                common_sampler_sample(smpl, ctx_dft, i_batch, true);
                 ++i_batch;
 
-                const auto * cur_p = common_sampler_get_candidates(smpl.get(), true);
+                const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
                 for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
-                    LOG_DBG(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                            k, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                    LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                            seq_id, k, i, cur_p->data[k].id, cur_p->data[k].p,
+                            common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
                 }
 
                 // add drafted token for each sequence
                 const llama_token id = cur_p->data[0].id;
 
-                common_sampler_accept(smpl.get(), id, true);
-
                 // only collect very high-confidence draft tokens
-                if (cur_p->data[0].p < spec->params.p_min) {
+                if (cur_p->data[0].p < params.p_min) {
                     drafting[seq_id] = false;
                     n_drafting--;
 
                     continue;
                 }
 
+                common_sampler_accept(smpl, id, true);
+
                 auto & dp = dparams.at(seq_id);
+                auto & result = *dp.result;
 
-                dp.result->push_back(id);
+                result.push_back(id);
 
-                if ((spec->params.n_max <= (int) dp.result->size()) ||
-                    (dp.n_max > 0 && dp.n_max <= (int) dp.result->size())) {
+                if ((params.n_max <= (int) result.size()) ||
+                    (dp.n_max > 0 && dp.n_max <= (int) result.size())) {
                     drafting[seq_id] = false;
                     n_drafting--;
                     continue;
@@ -318,12 +318,12 @@ struct common_speculative_state_draft : public common_speculative_state {
         }
 
         for (auto & dp : dparams) {
-            if (!dp.second.drafting) {
+            if (!dp.drafting) {
                 continue;
             }
 
-            if (dp.second.result->size() < (size_t) spec->params.n_min) {
-                dp.second.result->clear();
+            if (dp.result->size() < (size_t) params.n_min) {
+                dp.result->clear();
             }
         }
     }
@@ -336,14 +336,14 @@ struct common_speculative_state_draft : public common_speculative_state {
 struct common_speculative_state_eagle3 : public common_speculative_state {
     //common_params_speculative_eagle3 params;
 
-    common_speculative_state_eagle3(common_speculative_type /*type*/)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_EAGLE3) {}
+    common_speculative_state_eagle3(const common_params_speculative & /*params*/, uint32_t n_seq)
+        : common_speculative_state(COMMON_SPECULATIVE_TYPE_EAGLE3, n_seq) {}
 
     void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
         // noop
     }
 
-    void draft(common_speculative_draft_params_map & /*dparams*/) override {
+    void draft(common_speculative_draft_params_vec & /*dparams*/) override {
         // TODO: implement
     }
 
@@ -356,12 +356,13 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
 struct common_speculative_state_ngram_simple : public common_speculative_state {
     common_params_speculative_ngram_map params;
 
+    // shared across all sequences
     common_ngram_simple_config config;
 
     common_speculative_state_ngram_simple(
-            const common_params_speculative & params,
+            const common_params_speculative & params, uint32_t n_seq,
             common_ngram_simple_config config)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE)
+        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, n_seq)
         , params(params.ngram_simple)
         , config(config) {}
 
@@ -369,13 +370,16 @@ struct common_speculative_state_ngram_simple : public common_speculative_state {
         // noop
     }
 
-    void draft(common_speculative_draft_params_map & dparams) override {
-        for (auto & dp : dparams) {
-            if (!dp.second.drafting) {
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        assert(dparams.size() == n_seq);
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
                 continue;
             }
 
-            *dp.second.result = common_ngram_simple_draft(config, *dp.second.prompt, dp.second.id_last);
+            *dp.result = common_ngram_simple_draft(config, *dp.prompt, dp.id_last);
         }
     }
 
@@ -387,13 +391,14 @@ struct common_speculative_state_ngram_simple : public common_speculative_state {
 struct common_speculative_state_ngram_map_k : public common_speculative_state {
     common_params_speculative_ngram_map params;
 
+    // n_seq configs
     std::vector<common_ngram_map> config;
 
     common_speculative_state_ngram_map_k(
             const common_params_speculative & params,
             const common_ngram_map & config,
             uint32_t n_seq)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K)
+        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, n_seq)
         , params(params.ngram_map_k) {
         for (uint32_t i = 0; i < n_seq; i++) {
             this->config.push_back(config);
@@ -401,18 +406,21 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
     }
 
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
-        GGML_ASSERT((seq_id < (llama_seq_id) config.size()));
+        GGML_ASSERT(seq_id < (llama_seq_id) n_seq);
 
         common_ngram_map_begin(config[seq_id], prompt);
     }
 
-    void draft(common_speculative_draft_params_map & dparams) override {
-        for (auto & dp : dparams) {
-            if (!dp.second.drafting) {
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        assert(dparams.size() == n_seq);
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
                 continue;
             }
 
-            common_ngram_map_draft(config[dp.first], *dp.second.prompt, dp.second.id_last, *dp.second.result);
+            common_ngram_map_draft(config[seq_id], *dp.prompt, dp.id_last, *dp.result);
         }
     }
 
@@ -426,6 +434,7 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
 struct common_speculative_state_ngram_mod : public common_speculative_state {
     common_params_speculative_ngram_mod params;
 
+    // shared across all sequences
     common_ngram_mod mod;
 
     // enable trace logging if LLAMA_TRACE is set
@@ -447,7 +456,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
     common_speculative_state_ngram_mod(
             const common_params_speculative & params,
             uint32_t n_seq)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_MOD)
+        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_MOD, n_seq)
         , params(params.ngram_mod)
         , mod(params.ngram_mod.n_match, 4*1024*1024)
         , verbose(std::getenv("LLAMA_TRACE") != nullptr) {
@@ -468,11 +477,9 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
         auto & sinfo = sinfos[seq_id];
 
         sinfo.i_last = 0;
-
         sinfo.n_draft_last = 0;
 
         const size_t n = mod.get_n();
-
         if (prompt.size() < n) {
             return;
         }
@@ -548,13 +555,16 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
         sinfo.n_draft_last = result.size();
     }
 
-    void draft(common_speculative_draft_params_map & dparams) override {
-        for (auto & dp : dparams) {
-            if (!dp.second.drafting) {
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        assert(dparams.size() == n_seq);
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
                 continue;
             }
 
-            draft_one(dp.first, dp.second);
+            draft_one(seq_id, dp);
         }
     }
 
@@ -608,7 +618,7 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
             const std::string & path_dynamic,
             bool save_dynamic,
             bool save_static)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE)
+        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, n_seq)
         , params(params.ngram_cache)
         , n_draft(n_draft)
         , save_dynamic(save_dynamic)
@@ -692,13 +702,16 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
         }
     }
 
-    void draft(common_speculative_draft_params_map & dparams) override {
-        for (auto & dp : dparams) {
-            if (!dp.second.drafting) {
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        assert(dparams.size() == n_seq);
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
                 continue;
             }
 
-            draft_one(dp.first, dp.second);
+            draft_one(seq_id, dp);
         }
     }
 
@@ -712,7 +725,7 @@ struct common_speculative {
     std::vector<std::unique_ptr<common_speculative_state>> impls;
 
     // which implementaion was used for a given seq_id
-    std::vector<common_speculative_state *> impl_for_seq_id;
+    std::vector<common_speculative_state *> impl_last;
 };
 
 static common_ngram_map get_common_ngram_map(
@@ -829,7 +842,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_EAGLE3: {
-                impls.push_back(std::make_unique<common_speculative_state_eagle3>(config.type));
+                impls.push_back(std::make_unique<common_speculative_state_eagle3>(config.params, n_seq));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
@@ -843,8 +856,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                     /* .size_mgram = */ mgram_size_value
                 };
                 auto state = std::make_unique<common_speculative_state_ngram_simple>(
-                    /* .type  = */ config.params,
-                    /* .state = */ config_simple
+                    /* .params = */ config.params,
+                    /* .n_seq  = */ n_seq,
+                    /* .state  = */ config_simple
                 );
                 impls.push_back(std::move(state));
                 break;
@@ -880,8 +894,8 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     }
 
     auto * result = new common_speculative {
-        /* .impls           = */ std::move(impls),
-        /* .impl_for_seq_id = */ std::vector<common_speculative_state *>(n_seq, nullptr)
+        /* .impls     = */ std::move(impls),
+        /* .impl_last = */ std::vector<common_speculative_state *>(n_seq, nullptr)
     };
 
     return result;
@@ -909,10 +923,21 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
 
 void common_speculative_draft(
         common_speculative * spec,
-        common_speculative_draft_params_map & dparams) {
-    for (auto & dp : dparams) {
-        GGML_ASSERT(dp.second.drafting);
-        GGML_ASSERT(dp.second.result->empty());
+        common_speculative_draft_params_vec & dparams) {
+    {
+        int n_drafting = 0;
+
+        for (auto & dp : dparams) {
+            GGML_ASSERT(!dp.drafting || dp.result->empty());
+
+            if (dp.drafting) {
+                n_drafting++;
+            }
+        }
+
+        if (n_drafting == 0) {
+            return;
+        }
     }
 
     for (auto & impl : spec->impls) {
@@ -924,33 +949,36 @@ void common_speculative_draft(
 
         int n_drafting = 0;
 
-        for (auto & dp : dparams) {
-            auto & result = *dp.second.result;
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) dparams.size(); ++seq_id) {
+            auto & dp = dparams[seq_id];
 
-            if (!result.empty() && dp.second.drafting) {
-                dp.second.drafting = false;
+            auto & result = *dp.result;
 
-                if (dp.second.n_max > 0) {
-                    if (!result.empty() && (int) result.size() > dp.second.n_max) {
-                        LOG_DBG("%s: truncating draft to %d tokens\n", __func__, dp.second.n_max);
-                        result.resize(dp.second.n_max);
+            // a new draft has been sampled
+            if (dp.drafting && !result.empty()) {
+                dp.drafting = false;
+
+                if (dp.n_max > 0) {
+                    if (!result.empty() && (int) result.size() > dp.n_max) {
+                        LOG_DBG("%s: truncating draft to %d tokens\n", __func__, dp.n_max);
+                        result.resize(dp.n_max);
                     }
                 }
 
                 if (!result.empty()) {
                     LOG_DBG("%s: called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
-                            common_speculative_type_to_str(impl.get()->type).c_str(), dp.second.prompt->size(),
+                            common_speculative_type_to_str(impl.get()->type).c_str(), dp.prompt->size(),
                             impl.get()->n_call_draft, result.size());
 
                     // remember which implementation was used
-                    spec->impl_for_seq_id[dp.first] = impl.get();
+                    spec->impl_last[seq_id] = impl.get();
 
                     impl->n_gen_drafts++;
                     impl->n_gen_tokens += result.size();
                 }
             }
 
-            if (dp.second.drafting) {
+            if (dp.drafting) {
                 n_drafting++;
             }
         }
@@ -966,7 +994,7 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, u
         return;
     }
 
-    common_speculative_state * impl = spec->impl_for_seq_id[seq_id];
+    common_speculative_state * impl = spec->impl_last[seq_id];
 
     GGML_ASSERT(impl);
 
