@@ -54,6 +54,7 @@
 /tmp/
 /autogen-*.md
 /common/build-info.cpp
+/tools/server/public
 
 # Deprecated
 
