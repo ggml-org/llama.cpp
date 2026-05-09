@@ -644,7 +644,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         string(FIND "${ARCH_FLAGS_TEMP}" "+sme" SME_ENABLED)
         string(FIND "${ARCH_FLAGS_TEMP}" "+sve" SVE_ENABLED)
 
-        set(PRIVATE_ARCH_FLAGS ${ARCH_FLAGS_TEMP})
+        set(PRIVATE_ARCH_FLAGS "-fno-vectorize;-fno-slp-vectorize;${ARCH_FLAGS_TEMP}")
 
         list(APPEND GGML_KLEIDIAI_SOURCES
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_lhs_quant_pack_qsi8d32p_f32.c
@@ -698,8 +698,27 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qsi8d32p_qsi4c32p/kai_matmul_clamp_f32_qsi8d32p4x8_qsi4c32p8x8_16x8_sve_i8mm.c)
         endif()
 
-        set_source_files_properties(${GGML_KLEIDIAI_SOURCES} PROPERTIES COMPILE_OPTIONS "${PRIVATE_ARCH_FLAGS}")
-        list(APPEND GGML_CPU_SOURCES ${GGML_KLEIDIAI_SOURCES})
+        set(KLEIDIAI_OBJS_TARGET ${GGML_CPU_NAME}_kleidiai_objs)
+        add_library(${KLEIDIAI_OBJS_TARGET} OBJECT ${GGML_KLEIDIAI_SOURCES})
+        target_compile_options(${KLEIDIAI_OBJS_TARGET} PRIVATE ${PRIVATE_ARCH_FLAGS})
+        target_include_directories(${KLEIDIAI_OBJS_TARGET} PRIVATE
+            ${KLEIDIAI_SRC}/
+            ${KLEIDIAI_SRC}/kai/
+            ${KLEIDIAI_SRC}/kai/ukernels/
+            ${KLEIDIAI_SRC}/kai/ukernels/matmul/
+            ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qsi8d32p_qsi4c32p/
+            ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_qai8dxp_qsi8cxp/
+            ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_fp32_bf16p_bf16p/
+            ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f16p_qsi4c32p/
+            ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/)
+        target_compile_definitions(${KLEIDIAI_OBJS_TARGET} PRIVATE
+            GGML_USE_CPU_KLEIDIAI
+            GGML_BACKEND_BUILD
+            GGML_BACKEND_DL
+            GGML_BACKEND_SHARED
+            GGML_SHARED)
+        set_target_properties(${KLEIDIAI_OBJS_TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        list(APPEND GGML_CPU_SOURCES $<TARGET_OBJECTS:${KLEIDIAI_OBJS_TARGET}>)
     endif()
 
     message(STATUS "Adding CPU backend variant ${GGML_CPU_NAME}: ${ARCH_FLAGS} ${ARCH_DEFINITIONS}")
