@@ -13,6 +13,35 @@
 #include <future>
 #include <regex>
 
+// spec §3.3 — read split.* metadata keys
+static split_info_t read_split_info(const struct gguf_context * ctx) {
+    split_info_t info;
+    auto get_str = [&](const char* key) -> std::string {
+        int idx = gguf_find_key(ctx, key);
+        return idx >= 0 ? gguf_get_val_str(ctx, idx) : "";
+    };
+    auto get_u32 = [&](const char* key) -> uint32_t {
+        int idx = gguf_find_key(ctx, key);
+        return idx >= 0 ? gguf_get_val_u32(ctx, idx) : 0;
+    };
+    std::string type_str = get_str("split.type");
+    if      (type_str == "attention") info.type = SPLIT_ATTENTION;
+    else if (type_str == "ffn")       info.type = SPLIT_FFN;
+    else if (type_str == "embed")     info.type = SPLIT_EMBED;
+    info.source_sha256     = get_str("split.source_sha256");
+    info.layer_first       = get_u32("split.layer_first");
+    info.layer_last        = get_u32("split.layer_last");
+    info.n_embd            = get_u32("split.n_embd");
+    info.wire_version      = get_u32("split.wire_version");
+    info.ffn_norm_placement= get_str("split.ffn_norm_placement");
+    if (!type_str.empty()) {
+        LLAMA_LOG_INFO("split.type: %s | sha256: %.16s... | layers: %u-%u\n",
+            type_str.c_str(), info.source_sha256.c_str(),
+            info.layer_first, info.layer_last);
+    }
+    return info;
+}
+
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
@@ -703,6 +732,18 @@ llama_model_loader::llama_model_loader(
 
     LLAMA_LOG_INFO("%s: loaded meta data with %d key-value pairs and %d tensors from %s (version %s)\n",
             __func__, n_kv, n_tensors, fname.empty() ? "(file*)" : fname.c_str(), llama_file_version_name(fver));
+
+    // spec §3.3 — read split.* metadata keys
+    // MODIFICATION: add after existing KV loop
+    split_info = read_split_info(metadata);
+    if (!split_info.source_sha256.empty()) {
+        LLAMA_LOG_INFO("split.type: %s | sha256: %.16s... | layers: %u-%u\n",
+            split_info.type == SPLIT_ATTENTION ? "attention" :
+            split_info.type == SPLIT_FFN ? "ffn" :
+            split_info.type == SPLIT_EMBED ? "embed" : "none",
+            split_info.source_sha256.c_str(),
+            split_info.layer_first, split_info.layer_last);
+    }
 
     // determine file type based on the number of tensors for each quantization and print meta data
     // TODO: make optional

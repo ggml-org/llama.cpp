@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama.h"
+#include "llama-split-info.h"
 
 #include "llama-impl.h"
 #include "llama-arch.h"
@@ -95,6 +96,8 @@ struct llama_model_loader {
     llama_model_set_tensor_data_t set_tensor_data;
     void * set_tensor_data_ud;
     std::vector<ggml_context_ptr> contexts;
+
+    split_info_t split_info; // Split metadata from GGUF file
 
     std::string arch_name;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
