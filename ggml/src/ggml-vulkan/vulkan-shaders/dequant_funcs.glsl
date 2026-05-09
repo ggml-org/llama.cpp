@@ -5,6 +5,9 @@
 #include "types.glsl"
 
 #if defined(DATA_A_F32)
+FLOAT_TYPE dequantize1(uint ib, uint iqs, uint a_offset) {
+    return data_a[a_offset + ib];
+}
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(data_a[a_offset + ib], data_a[a_offset + ib + 1]);
 }
@@ -20,6 +23,9 @@ vec4 dequantize4_2aligned(uint ib, uint iqs, uint a_offset) {
 #endif
 
 #if defined(DATA_A_F16)
+FLOAT_TYPE dequantize1(uint ib, uint iqs, uint a_offset) {
+    return data_a[a_offset + ib];
+}
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(data_a[a_offset + ib], data_a[a_offset + ib + 1]);
 }
@@ -35,6 +41,9 @@ vec4 dequantize4_2aligned(uint ib, uint iqs, uint a_offset) {
 #endif
 
 #if defined(DATA_A_BF16)
+FLOAT_TYPE dequantize1(uint ib, uint iqs, uint a_offset) {
+    return bf16_to_fp32(data_a[a_offset + ib]);
+}
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(bf16_to_fp32(data_a[a_offset + ib]), bf16_to_fp32(data_a[a_offset + ib + 1]));
 }
