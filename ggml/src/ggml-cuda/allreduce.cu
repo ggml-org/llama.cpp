@@ -107,8 +107,8 @@ static constexpr int GGML_CUDA_AR_KERNEL_BLOCKS = 8;
 // ---------------------------------------------------------------------------
 template <typename T_dst, typename T_wire>
 static __global__ void ggml_cuda_ar_kernel(
-        const T_dst  * __restrict__ sendbuf,
-        T_dst        * __restrict__ recvbuf,
+        const T_dst  *              sendbuf,
+        T_dst        *              recvbuf,
         T_wire       * __restrict__ host_mine,
         const T_wire * __restrict__ host_other,
         int                         count,
@@ -430,7 +430,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     }
 
     // Per-device streams and event pools.
-    for (int i = 0; i < n_devices; ++i) {
+    for (size_t i = 0; i < n_devices; ++i) {
         ggml_cuda_set_device(p->devices[i]);
 
         cudaStream_t stream = nullptr;
@@ -495,7 +495,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     // the previous slot's. Indexed by (slot * buf_bytes) at the call site.
     p->buf_bytes = GGML_CUDA_AR_MAX_BYTES;
     const size_t host_buf_total = (size_t) GGML_CUDA_AR_POOL_SIZE * p->buf_bytes;
-    for (int i = 0; i < n_devices; ++i) {
+    for (size_t i = 0; i < n_devices; ++i) {
         if (p->host_buf[i].alloc(host_buf_total) != cudaSuccess) {
             GGML_LOG_ERROR("%s: alloc for staging failed (%zu bytes)\n",
                            __func__, host_buf_total);
@@ -508,7 +508,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     // largest tensor we accept on this path (GGML_CUDA_AR_COPY_MAX_BYTES).
     // dev_tmp is single-buffered; cross-AR safety is enforced by an explicit
     // cross-stream wait in copy_impl on the prior AR's add_kernel-done event.
-    for (int i = 0; i < n_devices; ++i) {
+    for (size_t i = 0; i < n_devices; ++i) {
         ggml_cuda_set_device(p->devices[i]);
         if (p->host_large[i].alloc(p->copy_bytes) != cudaSuccess) {
             GGML_LOG_ERROR("%s: alloc for large staging failed (%zu bytes)\n",
@@ -524,7 +524,7 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
         }
     }
 
-    GGML_LOG_INFO("%s: initialized AllReduce pipeline: %d GPUs, "
+    GGML_LOG_INFO("%s: initialized AllReduce pipeline: %zu GPUs, "
                   "%zu KB chunked kernel staging + %zu MB copy-engine staging per GPU\n",
                   __func__, n_devices, p->buf_bytes >> 10, p->copy_bytes >> 20);
 
@@ -725,8 +725,8 @@ static bool ggml_cuda_ar_allreduce_copy_outer(
         const int64_t outer_ne     = std::min(outer_max_elems, ne - outer_start);
         const size_t  outer_nbytes = (size_t) outer_ne * sizeof(T_src);
 
-        T_src * src[GGML_CUDA_MAX_DEVICES];
-        T_dst * dst[GGML_CUDA_MAX_DEVICES];
+        T_src * src[GGML_CUDA_MAX_DEVICES] = {};
+        T_dst * dst[GGML_CUDA_MAX_DEVICES] = {};
         for (int i = 0; i < p->n_devices; ++i) {
             src[i] = src_buf[i] + outer_start;
             dst[i] = dst_buf[i] + outer_start;
@@ -836,8 +836,8 @@ bool ggml_cuda_ar_allreduce(
         // post-conversion is needed.  Otherwise src == dst (same native type).
         if (use_bf16) {
             GGML_ASSERT(kernel_type == GGML_TYPE_BF16);
-            nv_bfloat16 * src[GGML_CUDA_MAX_DEVICES];
-            float       * dst[GGML_CUDA_MAX_DEVICES];
+            nv_bfloat16 * src[GGML_CUDA_MAX_DEVICES] = {};
+            float       * dst[GGML_CUDA_MAX_DEVICES] = {};
             for (int i = 0; i < n; ++i) {
                 src[i] = static_cast<nv_bfloat16 *>(copy_src_ptr[i]);
                 dst[i] = static_cast<float *>(tensors[i]->data);
@@ -847,7 +847,7 @@ bool ggml_cuda_ar_allreduce(
         } else {
             switch (kernel_type) {
                 case GGML_TYPE_F32: {
-                    float * buf[GGML_CUDA_MAX_DEVICES];
+                    float * buf[GGML_CUDA_MAX_DEVICES] = {};
                     for (int i = 0; i < n; ++i) {
                         buf[i] = static_cast<float *>(tensors[i]->data);
                     }
@@ -856,7 +856,7 @@ bool ggml_cuda_ar_allreduce(
                     break;
                 }
                 case GGML_TYPE_BF16: {
-                    nv_bfloat16 * buf[GGML_CUDA_MAX_DEVICES];
+                    nv_bfloat16 * buf[GGML_CUDA_MAX_DEVICES] = {};
                     for (int i = 0; i < n; ++i) {
                         buf[i] = static_cast<nv_bfloat16 *>(tensors[i]->data);
                     }
@@ -865,7 +865,7 @@ bool ggml_cuda_ar_allreduce(
                     break;
                 }
                 case GGML_TYPE_F16: {
-                    half * buf[GGML_CUDA_MAX_DEVICES];
+                    half * buf[GGML_CUDA_MAX_DEVICES] = {};
                     for (int i = 0; i < n; ++i) {
                         buf[i] = static_cast<half *>(tensors[i]->data);
                     }
