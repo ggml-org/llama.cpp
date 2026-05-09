@@ -1592,8 +1592,8 @@ static int repack_q5_1_to_q5_1_32_bl(struct ggml_tensor *       t,
             for (int i = 0; i < nrows_interleaved; i++) {
                 const block_q5_1 & s = src[x + i * nblocks];
 
-                float d   = GGML_FP16_TO_FP32(s.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d);
-                float m   = GGML_FP16_TO_FP32(s.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.m);
+                float d = GGML_FP16_TO_FP32(s.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d);
+                float m = GGML_FP16_TO_FP32(s.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.m);
 
                 if (d == 0.0f) {
                     dst_tmp[i].scales16[0] = GGML_FP32_TO_FP16(std::fabs(m));
