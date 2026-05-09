@@ -42,7 +42,7 @@ struct clip_hparams {
     int32_t n_ff = 0;
     int32_t projection_dim = 0;
     int32_t n_head = 0;
-    int32_t n_head_kv = 0; // mimovl GQA; 0 means full MHA
+    int32_t n_head_kv = 0;
     int32_t n_layer = 0;
     // idefics3
     int32_t n_merge = 0; // number of patch merges **per-side**

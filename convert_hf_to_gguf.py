@@ -9733,7 +9733,7 @@ class MimoV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("MiMoV2FlashForCausalLM", "MiMoV2ForCausalLM")
+@ModelBase.register("MiMoV2ForCausalLM")
 class MiMoV2VisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -9778,11 +9778,14 @@ class MiMoV2VisionModel(MmprojModel):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
-    def modify_tensors(self, data_torch, name, bid):
-        # Skip everything outside the vision tower
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
         if not name.startswith("visual."):
-            return
+            return None
+        return super().filter_tensors(item)
 
+    def modify_tensors(self, data_torch, name, bid):
         # Conv3D patch embed: split along the temporal axis (kt=2) into two Conv2D
         # weights that the existing qwen2vl-style two-Conv2D path consumes.
         if name == "visual.patch_embed.proj.weight":

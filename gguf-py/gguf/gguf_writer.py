@@ -1226,10 +1226,6 @@ class GGUFWriter:
         self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
 
     def add_vision_wa_pattern_mode(self, modes: Sequence[int]) -> None:
-        """Add per-layer window-attention mode for vision encoders (e.g. mimovl).
-
-        Values: -1 = full attention, 0 = row-major windowed, 1 = column-major windowed
-        """
         self.add_array(Keys.ClipVision.WA_PATTERN_MODE, modes)
 
     def add_vision_window_size(self, value: int) -> None:
