@@ -37,6 +37,7 @@ add_library(${HTP_LIB} SHARED
     fill-ops.c
     diag-ops.c
     solve-tri-ops.c
+    gated-delta-net-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
