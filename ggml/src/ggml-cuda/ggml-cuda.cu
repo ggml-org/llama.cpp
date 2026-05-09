@@ -1309,15 +1309,12 @@ static bool ggml_backend_cuda_comm_allreduce_internal(
 // returns false; the meta backend's generic implementation handles that call.
 // ---------------------------------------------------------------------------
 
+#ifdef GGML_USE_NCCL
 static bool ggml_backend_cuda_comm_try_allreduce_nccl(
         ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
-#ifdef GGML_USE_NCCL
     return ggml_backend_cuda_comm_allreduce_nccl(comm_ctx, tensors);
-#else
-    GGML_UNUSED(comm_ctx); GGML_UNUSED(tensors);
-    GGML_ABORT("try_allreduce_nccl unreachable: built without NCCL");
-#endif // GGML_USE_NCCL
 }
+#endif // GGML_USE_NCCL
 
 static bool ggml_backend_cuda_comm_try_allreduce_internal(
         ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
