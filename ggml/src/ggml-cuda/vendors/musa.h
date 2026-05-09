@@ -32,6 +32,7 @@
 #define cublasSetMathMode mublasSetMathMode
 #define cublasSetStream mublasSetStream
 #define cublasSgemm mublasSgemm
+#define cublasSgemmStridedBatched mublasSgemmStridedBatched
 #define cublasStatus_t mublasStatus_t
 #define cublasOperation_t mublasOperation_t
 #define cublasGetStatusString mublasGetStatusString

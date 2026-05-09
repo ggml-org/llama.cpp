@@ -36,7 +36,7 @@ using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
 
-static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min = -1, llama_pos pos_max = -1) {
+static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, bool on_device, llama_pos pos_min = -1, llama_pos pos_max = -1) {
     if (pos_min == -1) {
         pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), id);
     }
@@ -44,14 +44,19 @@ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, lla
         pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx), id);
     }
 
-    const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    auto flags = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
+    if (on_device) {
+        flags |= LLAMA_STATE_SEQ_FLAGS_ON_DEVICE;
+    }
+
+    const size_t checkpoint_size = llama_state_seq_get_size_ext(ctx, id, flags);
 
     ckpt.pos_min  = pos_min;
     ckpt.pos_max  = pos_max;
     ckpt.n_tokens = n_tokens;
     ckpt.data.resize(checkpoint_size);
 
-    const size_t n = llama_state_seq_get_data_ext(ctx, ckpt.data.data(), checkpoint_size, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    const size_t n = llama_state_seq_get_data_ext(ctx, ckpt.data.data(), checkpoint_size, id, flags);
     if (n != checkpoint_size) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
     }
@@ -362,7 +367,7 @@ struct server_slot {
 
                     //const int64_t t_start = ggml_time_us();
 
-                    server_prompt_checkpoint_update(spec_ckpt, ctx, this->id, n_tokens);
+                    server_prompt_checkpoint_update(spec_ckpt, ctx, this->id, n_tokens, true);
 
                     //const int64_t t_total = ggml_time_us() - t_start;
                     //printf("checkpoint total: %f ms\n", t_total / 1000.0);
@@ -1838,7 +1843,7 @@ private:
         }
 
         auto & cur = slot.prompt.checkpoints.emplace_back();
-        server_prompt_checkpoint_update(cur, ctx, slot.id, slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max);
+        server_prompt_checkpoint_update(cur, ctx, slot.id, slot.prompt.n_tokens() - n_tokens_cur, false, pos_min, pos_max);
 
         SLT_WRN(slot,
                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
@@ -3003,7 +3008,7 @@ private:
                             SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n",
                                     ckpt.pos_min, ckpt.pos_max, ckpt.size());
 
-                            const size_t n = llama_state_seq_set_data_ext(slot.ctx, ckpt.data.data(), ckpt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                            const size_t n = llama_state_seq_set_data_ext(slot.ctx, ckpt.data.data(), ckpt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
                             if (n != ckpt.size()) {
                                 GGML_ABORT("%s: failed to restore context checkpoint (pos_min=%d, pos_max=%d, size=%zu, get_data_ext->%zu, set_data_ext->%zu",
                                         __func__, ckpt.pos_min, ckpt.pos_max, ckpt.size(), ckpt.size(), n);
@@ -3921,22 +3926,7 @@ void server_routes::init_routes() {
             }},
             {"object", "list"},
             {"data", {
-                {
-                    {"id",       meta->model_name},
-                    {"aliases",  meta->model_aliases},
-                    {"tags",     meta->model_tags},
-                    {"object",   "model"},
-                    {"created",  std::time(0)},
-                    {"owned_by", "llamacpp"},
-                    {"meta",     {
-                        {"vocab_type",  meta->model_vocab_type},
-                        {"n_vocab",     meta->model_vocab_n_tokens},
-                        {"n_ctx_train", meta->model_n_ctx_train},
-                        {"n_embd",      meta->model_n_embd_inp},
-                        {"n_params",    meta->model_n_params},
-                        {"size",        meta->model_size},
-                    }},
-                },
+                get_model_info(),
             }}
         };
 
@@ -4147,6 +4137,26 @@ void server_routes::init_routes() {
         GGML_ASSERT(dynamic_cast<server_task_result_apply_lora*>(result.get()) != nullptr);
         res->ok(result->to_json());
         return res;
+    };
+}
+
+json server_routes::get_model_info() const {
+    return json {
+        {"id",       meta->model_name},
+        {"aliases",  meta->model_aliases},
+        {"tags",     meta->model_tags},
+        {"object",   "model"},
+        {"created",  std::time(0)},
+        {"owned_by", "llamacpp"},
+        {"meta",     {
+            {"vocab_type",  meta->model_vocab_type},
+            {"n_vocab",     meta->model_vocab_n_tokens},
+            {"n_ctx",       meta->slot_n_ctx},
+            {"n_ctx_train", meta->model_n_ctx_train},
+            {"n_embd",      meta->model_n_embd_inp},
+            {"n_params",    meta->model_n_params},
+            {"size",        meta->model_size},
+        }},
     };
 }
 
