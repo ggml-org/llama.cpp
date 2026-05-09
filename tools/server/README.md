@@ -1061,7 +1061,7 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 | `llamacpp:requests_deferred` | Gauge | Number of requests deferred. |
 | `llamacpp:n_tokens_max` | Counter | High watermark of the context size observed. |
 | `llamacpp:n_decode_total` | Counter | Total Number of llama_decode() calls. |
-| `llamacpp:n_busy_slots_per_decode` | Counter | Average number of busy slots per llama_decode() call. |
+| `llamacpp:n_busy_slots_per_decode` | Gauge | Average number of busy slots per llama_decode() call. |
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 
