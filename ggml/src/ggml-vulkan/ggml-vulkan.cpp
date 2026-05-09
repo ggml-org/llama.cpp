@@ -1473,8 +1473,8 @@ struct vk_op_conv_transpose_1d_push_constants {
 };
 
 struct vk_op_snake_push_constants {
-    uint32_t T;
-    uint32_t C;
+    uint32_t ne0;
+    uint32_t ne1;
 };
 
 struct vk_op_pool2d_push_constants {
@@ -12006,10 +12006,10 @@ static void ggml_vk_snake_dispatch_fused(ggml_backend_vk_context * ctx, vk_conte
     vk_subbuffer dst_buf   = ggml_vk_tensor_subbuffer(ctx, add);
 
     vk_op_snake_push_constants pc{};
-    pc.T = static_cast<uint32_t>(x->ne[0]);
-    pc.C = static_cast<uint32_t>(x->ne[1]);
+    pc.ne0 = static_cast<uint32_t>(x->ne[0]);
+    pc.ne1 = static_cast<uint32_t>(x->ne[1]);
 
-    std::array<uint32_t, 3> elements = { pc.T, pc.C, 1 };
+    std::array<uint32_t, 3> elements = { pc.ne0, pc.ne1, 1 };
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { x_buf, a_buf, inv_b_buf, dst_buf }, pc, elements);
 }
 
@@ -14572,6 +14572,12 @@ static bool ggml_vk_can_fuse_snake(ggml_backend_vk_context * ctx, const struct g
         return false;
     }
     if (a->ne[0] != 1 || a->ne[1] != x->ne[1]) {
+        return false;
+    }
+    // Shader uses idx = i0 + i1 * ne0 and reads data_a[i1] / data_inv_b[i1],
+    // so every operand must be contiguous.
+    if (!ggml_is_contiguous(x) || !ggml_is_contiguous(add) ||
+        !ggml_is_contiguous(a) || !ggml_is_contiguous(inv_b)) {
         return false;
     }
     return true;
