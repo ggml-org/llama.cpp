@@ -7,6 +7,8 @@ jobs:
   build:
     name: Build WebUI
     runs-on: ubuntu-latest
+    env:
+      BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 
     steps:
       - name: Checkout code
