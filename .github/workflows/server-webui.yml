@@ -13,16 +13,14 @@ on:
     paths: [
       '.github/workflows/server-webui.yml',
       'tools/server/webui/**.*',
-      'tools/server/tests/**.*',
-      'tools/server/public/**'
+      'tools/server/tests/**.*'
     ]
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/server-webui.yml',
       'tools/server/webui/**.*',
-      'tools/server/tests/**.*',
-      'tools/server/public/**'
+      'tools/server/tests/**.*'
     ]
 
 env:
