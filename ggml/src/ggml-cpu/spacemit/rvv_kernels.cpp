@@ -1846,9 +1846,7 @@ void quantize_a_nrow_i8k_ref(size_t blk_len, const float * a_ptr, size_t count_k
 }
 
 void quantize_a_row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
-#if 0
-    quantize_a_nrow_i8_ref<1>(blk_len, a_ptr, count_k, quant_a_ptr);
-#else
+    GGML_ASSERT(blk_len == 32);
     int64_t a_blk_stride = q8_blk_size(blk_len, true);
     size_t  vlenb        = __riscv_vlenb();
 
@@ -1911,15 +1909,12 @@ void quantize_a_row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uint
             __riscv_vse8_v_i8m1(quant_a_blk, v_a_quant_i8, vl);
         }
     } else {
-        assert(vlenb == 32 || vlenb == 128);
+        quantize_a_nrow_i8_ref<1>(blk_len, a_ptr, count_k, quant_a_ptr);
     }
-#endif
 }
 
 void quantize_a_4row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
-#if 0
-    quantize_a_nrow_i8_ref<4>(blk_len, a_ptr, count_k, quant_a_ptr);
-#else
+    GGML_ASSERT(blk_len == 32);
     int64_t a_blk_stride        = q8_blk_size(blk_len, true);
     int64_t a_nrow_block_stride = a_blk_stride * 4;
     size_t  vlenb               = __riscv_vlenb();
@@ -1987,15 +1982,11 @@ void quantize_a_4row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uin
             }
         }
     } else {
-        assert(vlenb == 32 || vlenb == 128);
+        quantize_a_nrow_i8_ref<4>(blk_len, a_ptr, count_k, quant_a_ptr);
     }
-#endif
 }
 
 void quantize_a_row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
-#if 0
-    quantize_a_nrow_i8_hp_ref<1>(blk_len, a_ptr, count_k, quant_a_ptr);
-#else
     constexpr size_t k_subblk_len = 32;
     GGML_ASSERT(blk_len == 256);
 
@@ -2101,14 +2092,12 @@ void quantize_a_row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, u
                 __riscv_vse8_v_i8m1(quant_a_blk, v_a_quant_i8, vl);
             }
         }
+    } else {
+        quantize_a_nrow_i8_hp_ref<1>(blk_len, a_ptr, count_k, quant_a_ptr);
     }
-#endif
 }
 
 void quantize_a_4row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
-#if 0
-    quantize_a_nrow_i8_hp_ref<4>(blk_len, a_ptr, count_k, quant_a_ptr);
-#else
     constexpr size_t k_subblk_len = 32;
     GGML_ASSERT(blk_len == 256);
 
@@ -2308,14 +2297,13 @@ void quantize_a_4row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, 
                 __riscv_vse8_v_i8m1(quant_a_blk + 3 * k_subblk_len, v_a3_quant_i8, vl);
             }
         }
+    } else {
+        quantize_a_nrow_i8_hp_ref<4>(blk_len, a_ptr, count_k, quant_a_ptr);
     }
-#endif
 }
 
 void quantize_a_row_i8k(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
-#if 0
-    quantize_a_nrow_i8k_ref<1>(blk_len, a_ptr, count_k, quant_a_ptr);
-#else
+    GGML_ASSERT(blk_len == 256);
     constexpr int64_t a_blk_stride = q8k_blk_size(256);
     constexpr int64_t a_sum_size   = 256 / 16;
     size_t            vlenb        = __riscv_vlenb();
@@ -2401,15 +2389,12 @@ void quantize_a_row_i8k(size_t blk_len, const float * a_ptr, size_t count_k, uin
             }
         }
     } else {
-        assert(vlenb == 32 || vlenb == 128);
+        quantize_a_nrow_i8k_ref<1>(blk_len, a_ptr, count_k, quant_a_ptr);
     }
-#endif
 }
 
 void quantize_a_4row_i8k(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
-#if 0
-    quantize_a_nrow_i8k_ref<4>(blk_len, a_ptr, count_k, quant_a_ptr);
-#else
+    GGML_ASSERT(blk_len == 256);
     constexpr int64_t a_blk_stride        = q8k_blk_size(256);
     constexpr int64_t a_nrow_block_stride = a_blk_stride * 4;
     constexpr int64_t a_sum_size          = 256 / 16;
@@ -2500,9 +2485,8 @@ void quantize_a_4row_i8k(size_t blk_len, const float * a_ptr, size_t count_k, ui
             }
         }
     } else {
-        assert(vlenb == 32 || vlenb == 128);
+        quantize_a_nrow_i8k_ref<4>(blk_len, a_ptr, count_k, quant_a_ptr);
     }
-#endif
 }
 
 void forward_cpy_with_permute(ggml_compute_params * params, ggml_tensor * op) {

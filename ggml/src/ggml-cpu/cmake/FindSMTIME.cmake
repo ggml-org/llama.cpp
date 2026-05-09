@@ -1,7 +1,13 @@
 include(CheckCSourceRuns)
 
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(riscv)" AND GGML_CPU_RISCV64_SPACEMIT)
-    set(CMAKE_REQUIRED_FLAGS "-march=rv64gcv_zfh_zvfh_zba_zicbop")
+    set(SMT_MARCH_STR "-march=rv64gcv_zfh_zvfh_zba_zicbop")
+    if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
+        CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 15)
+        string(APPEND SMT_MARCH_STR "_xsmtvdotii")
+    endif()
+    set(CMAKE_REQUIRED_FLAGS "${SMT_MARCH_STR}")
+
     check_c_source_compiles("int main() {__asm__ volatile(\"vmadot v2, v0, v1\");}" SPACEMIT_RISCV_COMPILER_SUPPORT_IME1)
     check_c_source_compiles("int main() {__asm__ volatile(\"vmadot v2, v0, v1, i4\");}" SPACEMIT_RISCV_COMPILER_SUPPORT_VMADOT_S4)
     check_c_source_compiles("int main() {__asm__ volatile(\"vmadot v2, v0, v1, i8\");}" SPACEMIT_RISCV_COMPILER_SUPPORT_VMADOT_S8)
