@@ -1656,11 +1656,11 @@ int bind_ai_thread() {
     return 0;
 }
 
-void ggml_backend_cpu_riscv64_spacemit_set_numa_thread_affinity(int thread_id) {
+void ggml_backend_cpu_riscv64_spacemit_set_numa_thread_affinity(int thread_n) {
     int cpu_id = sched_getcpu();
     if (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2 &&
         !((1 << cpu_id) & ggml::cpu::riscv64_spacemit::global_spine_env_info.cpu_mask)) {
-        GGML_PRINT_DEBUG("bind_ai_thread for thread %d, pid %d\n", thread_id, getpid());
+        GGML_PRINT_DEBUG("bind_ai_thread for thread %d, pid %d\n", thread_n, getpid());
         bind_ai_thread();
     }
 
@@ -1668,17 +1668,17 @@ void ggml_backend_cpu_riscv64_spacemit_set_numa_thread_affinity(int thread_id) {
         ggml::cpu::riscv64_spacemit::tls_context.cpu_id == -1) {
         CPU_ZERO(&(ggml::cpu::riscv64_spacemit::tls_context.cpuset));
         pthread_t main_thread   = pthread_self();
-        auto      perfer_cpu_id = ggml::cpu::riscv64_spacemit::global_spine_env_info.perfer_core_ids[thread_id];
-        if (thread_id < ggml::cpu::riscv64_spacemit::global_spine_env_info.perfer_core_ids.size()) {
+        auto      perfer_cpu_id = ggml::cpu::riscv64_spacemit::global_spine_env_info.perfer_core_ids[thread_n];
+        if (thread_n < ggml::cpu::riscv64_spacemit::global_spine_env_info.perfer_core_ids.size()) {
             CPU_SET(perfer_cpu_id, &(ggml::cpu::riscv64_spacemit::tls_context.cpuset));
         } else {
-            GGML_ABORT("thread_id %d exceeds perfer_core_ids size %zu\n", thread_id,
+            GGML_ABORT("thread_n %d exceeds perfer_core_ids size %zu\n", thread_n,
                        ggml::cpu::riscv64_spacemit::global_spine_env_info.perfer_core_ids.size());
         }
         int s =
             pthread_setaffinity_np(main_thread, sizeof(cpu_set_t), &(ggml::cpu::riscv64_spacemit::tls_context.cpuset));
         if (s != 0) {
-            GGML_ABORT("set thread affinity error for thread_id %d, cpu_id %d\n", thread_id, perfer_cpu_id);
+            GGML_ABORT("set thread affinity error for thread_n %d, cpu_id %d\n", thread_n, perfer_cpu_id);
         }
 
         int ai_cpu_id = perfer_cpu_id - ggml::cpu::riscv64_spacemit::global_spine_env_info.aicpu_id_offset;
