@@ -25,6 +25,11 @@ jobs:
             - webui-build
 
         steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 1
+
             - name: Download WebUI build artifact
               uses: actions/download-artifact@v7
               with:
