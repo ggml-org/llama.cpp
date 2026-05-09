@@ -20,6 +20,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
     return {
         {"GGML_OP_ADD",             op::translate_1to1_match_2_inputs<v1::Add>     },
         {"GGML_OP_ADD1",            op::translate_1to1_match_2_inputs<v1::Add>     },
+        {"GGML_OP_CONCAT",          op::translate_concat                           },
         {"GGML_OP_CONT",            op::translate_cont                             },
         {"GGML_OP_DIV",             op::translate_1to1_match_2_inputs<v1::Divide>  },
         {"GGML_OP_GET_ROWS",        op::translate_get_rows                         },

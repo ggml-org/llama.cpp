@@ -968,6 +968,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
 
     static const std::set<ggml_op> supported_ops{GGML_OP_NONE,
                                                  GGML_OP_ADD,
+                                                 GGML_OP_CONCAT,
                                                  GGML_OP_MUL,
                                                  GGML_OP_MUL_MAT,
                                                  GGML_OP_VIEW,
