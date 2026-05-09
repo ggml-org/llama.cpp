@@ -116,11 +116,13 @@ static bool common_speculative_are_compatible(
     return true;
 }
 
+using common_speculative_draft_params_vec = std::vector<common_speculative_draft_params>;
+
 // state of an implementation of speculative decoding
 //
 // each implementation has a unique type and a state that is implementation-specific
-// in a subclass of common_speculative_state
-struct common_speculative_state {
+// in a subclass of common_speculative_impl
+struct common_speculative_impl {
     const common_speculative_type type;
 
     uint32_t n_seq;
@@ -141,9 +143,9 @@ struct common_speculative_state {
     int64_t t_draft_us  = 0; // total time spent in generating drafts in this implementation in microseconds.
     int64_t t_accept_us = 0; // total time spent in accumulation of this implementation in microseconds.
 
-    common_speculative_state(common_speculative_type type, uint32_t n_seq) : type(type), n_seq(n_seq) {}
+    common_speculative_impl(common_speculative_type type, uint32_t n_seq) : type(type), n_seq(n_seq) {}
 
-    virtual ~common_speculative_state() = default;
+    virtual ~common_speculative_impl() = default;
 
     virtual void begin(llama_seq_id seq_id, const llama_tokens & prompt) = 0;
 
@@ -152,7 +154,7 @@ struct common_speculative_state {
     virtual void accept(llama_seq_id seq_id, uint16_t n_accepted) = 0;
 };
 
-struct common_speculative_state_draft : public common_speculative_state {
+struct common_speculative_state_draft : public common_speculative_impl {
     common_params_speculative_draft params;
 
     llama_batch batch;
@@ -160,7 +162,7 @@ struct common_speculative_state_draft : public common_speculative_state {
     std::vector<common_sampler_ptr> smpls;
 
     common_speculative_state_draft(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_DRAFT, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT, n_seq)
         , params(params.draft)
     {
         auto * ctx_dft = this->params.ctx_dft;
@@ -333,11 +335,11 @@ struct common_speculative_state_draft : public common_speculative_state {
     }
 };
 
-struct common_speculative_state_eagle3 : public common_speculative_state {
+struct common_speculative_state_eagle3 : public common_speculative_impl {
     //common_params_speculative_eagle3 params;
 
     common_speculative_state_eagle3(const common_params_speculative & /*params*/, uint32_t n_seq)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_EAGLE3, n_seq) {}
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_EAGLE3, n_seq) {}
 
     void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
         // noop
@@ -353,7 +355,7 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
 };
 
 // state of self-speculation (simple implementation, not ngram-map)
-struct common_speculative_state_ngram_simple : public common_speculative_state {
+struct common_speculative_state_ngram_simple : public common_speculative_impl {
     common_params_speculative_ngram_map params;
 
     // shared across all sequences
@@ -362,7 +364,7 @@ struct common_speculative_state_ngram_simple : public common_speculative_state {
     common_speculative_state_ngram_simple(
             const common_params_speculative & params, uint32_t n_seq,
             common_ngram_simple_config config)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, n_seq)
         , params(params.ngram_simple)
         , config(config) {}
 
@@ -388,7 +390,7 @@ struct common_speculative_state_ngram_simple : public common_speculative_state {
     }
 };
 
-struct common_speculative_state_ngram_map_k : public common_speculative_state {
+struct common_speculative_state_ngram_map_k : public common_speculative_impl {
     common_params_speculative_ngram_map params;
 
     // n_seq configs
@@ -398,7 +400,7 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
             const common_params_speculative & params,
             const common_ngram_map & config,
             uint32_t n_seq)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, n_seq)
         , params(params.ngram_map_k) {
         for (uint32_t i = 0; i < n_seq; i++) {
             this->config.push_back(config);
@@ -431,7 +433,7 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
     }
 };
 
-struct common_speculative_state_ngram_mod : public common_speculative_state {
+struct common_speculative_state_ngram_mod : public common_speculative_impl {
     common_params_speculative_ngram_mod params;
 
     // shared across all sequences
@@ -456,7 +458,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
     common_speculative_state_ngram_mod(
             const common_params_speculative & params,
             uint32_t n_seq)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_MOD, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MOD, n_seq)
         , params(params.ngram_mod)
         , mod(params.ngram_mod.n_match, 4*1024*1024)
         , verbose(std::getenv("LLAMA_TRACE") != nullptr) {
@@ -507,9 +509,11 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
         auto & sinfo = sinfos[seq_id];
         auto & result = *dparams.result;
 
+        const auto & prompt = *dparams.prompt;
+
         sinfo.n_draft_last = 0;
 
-        const size_t cur_len = dparams.prompt->size();
+        const size_t cur_len = prompt.size();
         if (cur_len < mod.get_n()) {
             return;
         }
@@ -519,7 +523,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
         // add new ngrams in chunks
         if (sinfo.i_last + 32 < cur_len) {
             for (size_t i = sinfo.i_last; i < cur_len - n; ++i) {
-                mod.add(dparams.prompt->data() + i);
+                mod.add(prompt.data() + i);
             }
 
             sinfo.i_last = cur_len - n;
@@ -527,7 +531,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
 
         result.resize(n + params.n_max);
         for (size_t i = 0; i < n - 1; ++i) {
-            result[i] = dparams.prompt->at(cur_len - n + 1 + i);
+            result[i] = prompt.at(cur_len - n + 1 + i);
         }
         result[n - 1] = dparams.id_last;
 
@@ -592,7 +596,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
     }
 };
 
-struct common_speculative_state_ngram_cache : public common_speculative_state {
+struct common_speculative_state_ngram_cache : public common_speculative_impl {
     common_params_speculative_ngram_cache params;
 
     uint16_t n_draft;
@@ -618,7 +622,7 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
             const std::string & path_dynamic,
             bool save_dynamic,
             bool save_static)
-        : common_speculative_state(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, n_seq)
         , params(params.ngram_cache)
         , n_draft(n_draft)
         , save_dynamic(save_dynamic)
@@ -721,11 +725,13 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
 };
 
 struct common_speculative {
+    common_speculative_draft_params_vec dparams;
+
     // list of implementations to use and their states
-    std::vector<std::unique_ptr<common_speculative_state>> impls;
+    std::vector<std::unique_ptr<common_speculative_impl>> impls;
 
     // which implementaion was used for a given seq_id
-    std::vector<common_speculative_state *> impl_last;
+    std::vector<common_speculative_impl *> impl_last;
 };
 
 static common_ngram_map get_common_ngram_map(
@@ -830,7 +836,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         }
     }
 
-    std::vector<std::unique_ptr<common_speculative_state>> impls = {};
+    std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
 
     for (const common_speculative_config & config : configs) {
         LOG_DBG("%s: adding implementation %s\n", __func__, common_speculative_type_to_str(config.type).c_str());
@@ -894,8 +900,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     }
 
     auto * result = new common_speculative {
+        /* .dparams   = */ common_speculative_draft_params_vec(n_seq),
         /* .impls     = */ std::move(impls),
-        /* .impl_last = */ std::vector<common_speculative_state *>(n_seq, nullptr)
+        /* .impl_last = */ std::vector<common_speculative_impl *>(n_seq, nullptr)
     };
 
     return result;
@@ -907,6 +914,15 @@ void common_speculative_free(common_speculative * spec) {
     }
 
     delete spec;
+}
+
+common_speculative_draft_params & common_speculative_get_draft_params(
+        common_speculative * spec,
+        llama_seq_id seq_id) {
+    GGML_ASSERT(spec);
+    GGML_ASSERT(seq_id < (llama_seq_id) spec->dparams.size());
+
+    return spec->dparams[seq_id];
 }
 
 void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt) {
@@ -921,9 +937,13 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
     }
 }
 
-void common_speculative_draft(
-        common_speculative * spec,
-        common_speculative_draft_params_vec & dparams) {
+void common_speculative_draft(common_speculative * spec) {
+    if (!spec) {
+        return;
+    }
+
+    auto & dparams = spec->dparams;
+
     {
         int n_drafting = 0;
 
@@ -994,7 +1014,7 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, u
         return;
     }
 
-    common_speculative_state * impl = spec->impl_last[seq_id];
+    common_speculative_impl * impl = spec->impl_last[seq_id];
 
     GGML_ASSERT(impl);
 

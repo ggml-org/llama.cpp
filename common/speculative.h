@@ -18,19 +18,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
 
 void common_speculative_free(common_speculative * spec);
 
-// optionally call once at the beginning of a new generation
-// TODO: when common_speculative_process() is implemented, we can remove this _begin() function and
-//       implement all the logic within common_speculative_process()
-void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt);
-
-// TODO: implement [TAG_COMMON_SPECULATIVE_PROCESS]
-//bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
-
 struct common_speculative_draft_params {
-    // this flag helps chain the drafts through all the implementations
+    // this flag is used to chain the drafts through all the available implementations
     // after the first successful draft from an implementation, we set it
     //   to false to prevent further drafts for that sequence
-    bool drafting = true;
+    bool drafting = false;
 
     // overrides individual configurations (-1 disabled)
     // can be used to constraint the max draft based on the remaining context size
@@ -39,18 +31,24 @@ struct common_speculative_draft_params {
     llama_pos   n_past;
     llama_token id_last;
 
+    // TODO: remove in the future by keeping track of the prompt from the _begin() call and the consecutive accept calls
     const llama_tokens * prompt;
 
+    // the generated draft from the last _draft() call
     llama_tokens * result;
 };
 
-using common_speculative_draft_params_vec = std::vector<common_speculative_draft_params>;
+common_speculative_draft_params & common_speculative_get_draft_params(common_speculative * spec, llama_seq_id seq_id);
+
+// optionally call once at the beginning of a new generation
+void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt);
+
+// TODO: implement [TAG_COMMON_SPECULATIVE_PROCESS]
+//bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
 
 // generate drafts for the sequences specified in dparams
 // requires that `dparams.size() == n_seq` using during common_speculative_init()
-void common_speculative_draft(
-                     common_speculative * spec,
-    common_speculative_draft_params_vec & dparams);
+void common_speculative_draft(common_speculative * spec);
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);

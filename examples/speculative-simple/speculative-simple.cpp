@@ -179,8 +179,7 @@ int main(int argc, char ** argv) {
             }
 
             // generate a new draft
-            common_speculative_draft_params_vec dparams(1);
-            dparams[seq_id] = {
+            common_speculative_get_draft_params(spec, seq_id) = {
                 /* .drafting   = */ true,
                 /* .n_max      = */ -1,
                 /* .n_past     = */ n_past,
@@ -188,7 +187,7 @@ int main(int argc, char ** argv) {
                 /* .prompt     = */ &prompt_tgt,
                 /* .result     = */ &draft, // output
             };
-            common_speculative_draft(spec, dparams);
+            common_speculative_draft(spec);
 
             // save the original draft size
             n_draft = draft.size();
