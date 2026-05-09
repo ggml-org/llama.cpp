@@ -2484,6 +2484,7 @@ public:
                 } else {
                     //LLAMA_LOG_INFO("%s: reallocating tensors in '%s' buffer %.3f MiB\n", __func__, ggml_backend_buft_name(buft), mbuf.total_size/1024.0/1024.0);
 
+                    // save the old buffer and allocate the new tensors in it
                     auto buf = std::move(mbuf_cur.buf);
 
                     mbuf_cur = std::move(mbuf);

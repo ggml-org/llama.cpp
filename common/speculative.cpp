@@ -938,7 +938,7 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
 }
 
 void common_speculative_draft(common_speculative * spec) {
-    if (!spec) {
+    if (spec == nullptr) {
         return;
     }
 

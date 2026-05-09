@@ -46,11 +46,10 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
 // TODO: implement [TAG_COMMON_SPECULATIVE_PROCESS]
 //bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
 
-// generate drafts for the sequences specified in dparams
-// requires that `dparams.size() == n_seq` using during common_speculative_init()
+// generate drafts for the sequences specified with `common_speculative_get_draft_params`
 void common_speculative_draft(common_speculative * spec);
 
-// informs the speculative decoder that n_accepted tokens were accepted by the target model
+// informs the speculative context that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);
 
 // print statistics about the speculative decoding
