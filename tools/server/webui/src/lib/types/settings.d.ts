@@ -1,11 +1,41 @@
-import type { SETTING_CONFIG_DEFAULT } from '$lib/constants';
+import type { SETTING_CONFIG_DEFAULT, SETTINGS_SECTION_TITLES } from '$lib/constants';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
 import type { OpenAIToolDefinition } from './mcp';
 import type { DatabaseMessageExtra } from './database';
 import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
 import type { Icon } from '@lucide/svelte';
+import type { Component } from 'svelte';
 
 export type SettingsConfigValue = string | number | boolean | undefined;
+
+/** Section title type derived from registry section titles. */
+export type SettingsSectionTitle =
+	(typeof SETTINGS_SECTION_TITLES)[keyof typeof SETTINGS_SECTION_TITLES];
+
+/** Per-setting metadata — one entry per setting. */
+export interface SettingsEntry {
+	key: string;
+	label: string;
+	help: string;
+	defaultValue: SettingsConfigValue;
+	type: SettingsFieldType;
+	section?: string;
+	options?: Array<{ value: string; label: string; icon: Component }>;
+	isExperimental?: boolean;
+	isPositiveInteger?: boolean;
+	sync?: {
+		serverKey: string;
+		paramType: SyncableParameterType;
+	};
+}
+
+/** A settings section with its icon, slug, title, and ordered settings. */
+export interface SettingsSectionEntry {
+	title: SettingsSectionTitle;
+	slug: string;
+	icon: Component;
+	settings: SettingsEntry[];
+}
 
 export interface SettingsFieldConfig {
 	key: string;
@@ -14,6 +44,14 @@ export interface SettingsFieldConfig {
 	isExperimental?: boolean;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
+}
+
+/** Re-exported for backward compatibility. */
+export interface SettingsSection {
+	fields?: SettingsFieldConfig[];
+	icon: Component;
+	slug: string;
+	title: SettingsSectionTitle;
 }
 
 export interface SettingsChatServiceOptions {
@@ -93,4 +131,19 @@ export interface SyncableParameter {
 	serverKey: string;
 	type: SyncableParameterType;
 	canSync: boolean;
+}
+
+/**
+ * Shape of the settings JSON export file.
+ * Versioned to allow future schema evolution.
+ */
+export interface SettingsExportType {
+	/** Export format version — bumped on breaking changes */
+	version: number;
+	/** Unix timestamp of export */
+	timestamp: number;
+	/** Full settings config (includes theme as a config key) */
+	config: SettingsConfigType;
+	/** Keys that differ from server defaults (derived, but persisted for fidelity) */
+	userOverrides: string[];
 }

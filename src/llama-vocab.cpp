@@ -503,6 +503,14 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 };
                 byte_encode = false; // uses raw UTF-8, not GPT-2 byte encoding
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_SARVAM_MOE:
+                // Sarvam uses SPM-style BPE (same shape as Gemma4): spaces replaced with U+2581
+                // by the normalizer, BPE merges over the whole text on raw UTF-8.
+                regex_exprs = {
+                    "[^\\n]+|[\\n]+",
+                };
+                byte_encode = false;
+                break;
             default:
                 // default regex for BPE tokenization pre-processing
                 regex_exprs = {
@@ -2005,6 +2013,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "gemma4") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GEMMA4;
                 escape_whitespaces = true;
+            } else if (
+                    tokenizer_pre == "sarvam-moe") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_SARVAM_MOE;
+                escape_whitespaces = true;
+                clean_spaces = false;
             } else if (
                     tokenizer_pre == "jina-v1-en" ||
                     tokenizer_pre == "jina-v2-code" ||
