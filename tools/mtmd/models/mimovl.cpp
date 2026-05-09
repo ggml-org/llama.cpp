@@ -43,11 +43,6 @@ ggml_cgraph * clip_graph_mimovl::build() {
     const int head_dim     = qkv_rows / (n_head + 2 * n_head_kv);
     GGML_ASSERT(head_dim * (n_head + 2 * n_head_kv) == qkv_rows);
     const float attn_scale = 1.0f / std::sqrt((float) head_dim);
-
-    // ggml_rope_multi VISION layout: the non-CPU kernels only read positions from
-    // slot 0 (sections[0] pairs) and slot 1 (sections[1] pairs); slots 2,3 are
-    // ignored even though the CPU kernel honors them. h_pos is packed in slot 0 and w_pos
-    // in slot 1, and split the rotary dims half/half between them.
     const int rope_n_dims = head_dim / 2;
     int mrope_sections[4] = {rope_n_dims/2, rope_n_dims/2, 0, 0};
 
@@ -81,7 +76,7 @@ ggml_cgraph * clip_graph_mimovl::build() {
     ggml_set_input(positions_col);
 
     // idx_col is the col-major merge-unit permutation. Take it as F32 so we can
-    // derive the inverse permutation in-graph via ggml_argsort (returning I32);
+    // derive the inverse permutation in-graph via ggml_argsort;
     // ggml_get_rows requires its index tensor to be I32, so cast back as well.
     ggml_tensor * idx_col_f = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_units);
     ggml_set_name(idx_col_f, "mimovl_idx_col");
@@ -132,7 +127,7 @@ ggml_cgraph * clip_graph_mimovl::build() {
         cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_RMS, eps, il);
         cb(cur, "ln1", il);
 
-        // Fused QKV with GQA. HF row layout is [Q | K | V] along axis 0
+        // Fused QKV with GQA.
         ggml_tensor * qkv = build_mm(layer.qkv_w, cur);
         qkv = ggml_add(ctx0, qkv, layer.qkv_b);
 
@@ -155,8 +150,7 @@ ggml_cgraph * clip_graph_mimovl::build() {
         cb(Qcur, "Qcur_rope", il);
         cb(Kcur, "Kcur_rope", il);
 
-        // Full layers: plain attention. Windowed layers: same path, plus a
-        // banded mask and per-head sinks.
+        // Full layers: plain attention. Windowed layers: banded mask and per-head sinks.
         ggml_tensor * mask  = is_full ? nullptr : window_mask_attn;
         ggml_tensor * sinks = is_full ? nullptr : layer.attn_sinks;
         if (!is_full) {

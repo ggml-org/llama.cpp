@@ -3722,20 +3722,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             } break;
         case PROJECTOR_TYPE_MIMOVL:
             {
-                // MiMoVL host-side prep:
-                //   - row-major and col-major position arrays for ggml_rope_multi
-                //     with GGML_ROPE_TYPE_VISION (each is a flat 4*n_pos buffer
-                //     [t-section | h-section | w-section | e-section]; sections
-                //     [0]=0 t and [3]=0 e are unused, the t/e slots stay zero)
-                //   - per-merge-unit permutation for row<->col reorder via
-                //     ggml_get_rows between layer-mode boundaries
-                //   - 1D banded sliding-window mask on patch indices
-                //
-                // The per-head sink bias is added inside the attention build
-                // using the attn_sinks tensor (added to QK pre-softmax
-                // at K column 0). Sinks are NOT folded into this mask, to keep
-                // the mask 2D and avoid an n_pos*n_pos*n_heads memory blowup at
-                // large image sizes.
                 const int merge      = hparams.n_merge;        // 2
                 const int merge_unit = merge * merge;          // 4
                 const int patch      = hparams.patch_size;     // 16
@@ -3764,8 +3750,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                     }
                 }
 
-                // Col-major merge-unit permutation: idx_col[u_dst] = u_src,
-                // transposes the (llm_h, llm_w) plane
+                // Col-major merge-unit permutation
                 std::vector<float> idx_col(n_units);
                 for (int r = 0; r < llm_h; r++) {
                     for (int c = 0; c < llm_w; c++) {
@@ -3786,9 +3771,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                     }
                 }
 
-                // Pack into ggml_rope_multi VISION-mode layout. The non-CPU
-                // kernels only read slots 0 and 1, so pack h in slot 0, w in
-                // slot 1 (matching qwen2vl)
+                // Pack into ggml_rope_multi VISION-mode layout. The non-CPU kernels
+                // only read slots 0 and 1, so pack h in slot 0, w in slot 1:
                 //   positions[0..n_pos)         = h
                 //   positions[n_pos..2*n_pos)   = w
                 //   positions[2*n_pos..3*n_pos) = 0
