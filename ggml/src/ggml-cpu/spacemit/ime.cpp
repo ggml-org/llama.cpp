@@ -1662,8 +1662,7 @@ void ggml_backend_cpu_riscv64_spacemit_set_numa_thread_affinity(int thread_id) {
         bind_ai_thread();
     }
 
-    if (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2 &&
-        ggml::cpu::riscv64_spacemit::global_spine_env_info.use_tcm &&
+    if (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_tcm &&
         ggml::cpu::riscv64_spacemit::tls_context.cpu_id == -1) {
         CPU_ZERO(&(ggml::cpu::riscv64_spacemit::tls_context.cpuset));
         pthread_t main_thread   = pthread_self();

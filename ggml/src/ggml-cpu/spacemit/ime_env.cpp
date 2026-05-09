@@ -265,19 +265,21 @@ spine_env_info::spine_env_info() {
     char * spine_disable_tcm_str = getenv("SPACEMIT_DISABLE_TCM");
     auto   user_disable_tcm      = spine_disable_tcm_str != nullptr && strcmp(spine_disable_tcm_str, "0") != 0;
 
-    if (use_ime2 && !user_disable_tcm) {
+    if (!user_disable_tcm) {
         spine_mem_pool_tcm_info tcm_info;
         if (spine_mem_pool_tcm_init(&tcm_info)) {
             use_tcm      = tcm_info.available;
             tcm_blk_size = tcm_info.blk_size;
             GGML_LOG_DEBUG("CPU_RISCV64_SPACEMIT: tcm is available, blk_size: %zu, blk_num: %zu, is_fake_tcm: %d\n",
                            tcm_info.blk_size, tcm_info.blk_num, tcm_info.is_fake_tcm);
-        }
 
-        for (auto & core_info : core_info_list) {
-            auto core_arch_head = (uint16_t) (core_info.arch_id) >> 12;
-            if (core_arch_head != 0xA) {
-                aicpu_id_offset++;
+            for (auto & core_info : core_info_list) {
+                auto core_arch_head = (uint16_t) (core_info.arch_id) >> 12;
+                if (core_arch_head != 0xA) {
+                    aicpu_id_offset++;
+                } else {
+                    break;
+                }
             }
         }
     }
