@@ -8,17 +8,29 @@
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(data_a[a_offset + ib], data_a[a_offset + ib + 1]);
 }
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    return vec4(data_a[a_offset + ib    ], data_a[a_offset + ib + 1],
+                data_a[a_offset + ib + 2], data_a[a_offset + ib + 3]);
+}
 #endif
 
 #if defined(DATA_A_F16)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(data_a[a_offset + ib], data_a[a_offset + ib + 1]);
 }
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    return vec4(data_a[a_offset + ib    ], data_a[a_offset + ib + 1],
+                data_a[a_offset + ib + 2], data_a[a_offset + ib + 3]);
+}
 #endif
 
 #if defined(DATA_A_BF16)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(bf16_to_fp32(data_a[a_offset + ib]), bf16_to_fp32(data_a[a_offset + ib + 1]));
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    return vec4(bf16_to_fp32(data_a[a_offset + ib    ]), bf16_to_fp32(data_a[a_offset + ib + 1]),
+                bf16_to_fp32(data_a[a_offset + ib + 2]), bf16_to_fp32(data_a[a_offset + ib + 3]));
 }
 #endif
 

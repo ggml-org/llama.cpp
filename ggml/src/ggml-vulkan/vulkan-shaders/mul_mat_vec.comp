@@ -10,7 +10,7 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 #if !defined(DATA_A_F32) && !defined(DATA_A_F16) && !defined(DATA_A_BF16)
 #define K_PER_ITER 8
 #else
-#define K_PER_ITER 2
+#define K_PER_ITER 4
 #endif
 
 
@@ -39,12 +39,28 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
         // quantized formats since they'll be within the same block. We should
         // probably skip fetching the second element for F16/F32, but as of now we
         // still do.
-        const bool OOB = lastiter && (iybs + iqs + y_offset >= p.ncols);
+        const bool OOB_y = lastiter && (iybs + iqs + y_offset >= p.ncols);
+        const bool OOB_z = lastiter && (iybs + iqs + y_offset*2 >= p.ncols);
+        const bool OOB_w = lastiter && (iybs + iqs + y_offset*3 >= p.ncols);
 
-        FLOAT_TYPE b0 = 0, b1 = 0;
-        b0 = FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]);
-        if (!OOB) {
-            b1 = FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]);
+        vec4 b;
+        if (!OOB_w) {
+            b = vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
+                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]),
+                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset*2]),
+                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset*3]));
+        } else if (!OOB_z) {
+            b = vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
+                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]),
+                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset*2]),
+                     0);
+        } else if (!OOB_y) {
+            b = vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
+                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]),
+                     0, 0);
+        } else {
+            b = vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
+                     0, 0, 0);
         }
 #endif
         uint ibi = first_row*p.ncols;
@@ -71,13 +87,10 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
 
             temp[j][n] += rowtmp;
 #else
-            const vec2 v = dequantize(ib, iqs, a_offset);
+            const vec4 v = dequantize4(ib, iqs, a_offset);
 
             // matrix multiplication
-            temp[j][n] = fma(FLOAT_TYPE(v.x), b0, temp[j][n]);
-            if (!OOB) {
-                temp[j][n] = fma(FLOAT_TYPE(v.y), b1, temp[j][n]);
-            }
+            temp[j][n] += dot(v, b);
 #endif
         }
     }
@@ -105,10 +118,10 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     int unroll_count = 4;
     uint unrolled_iters = num_iters & ~(unroll_count - 1);
 
-#if K_PER_ITER == 2
+#if K_PER_ITER == 4
     // If the K dimension is odd, we need lastiter==true on the last iteration
     // so OOB is computed correctly. Skip some unrolling to make that happen.
-    if ((p.ncols & 1) != 0 &&
+    if ((p.ncols & 3) != 0 &&
         unrolled_iters == num_iters &&
         unrolled_iters > 0) {
         unrolled_iters -= unroll_count;
@@ -127,8 +140,8 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     unroll_count = 2;
     unrolled_iters = num_iters & ~(unroll_count - 1);
 
-#if K_PER_ITER == 2
-    if ((p.ncols & 1) != 0 &&
+#if K_PER_ITER == 4
+    if ((p.ncols & 3) != 0 &&
         unrolled_iters == num_iters &&
         unrolled_iters > 0) {
         unrolled_iters -= unroll_count;
