@@ -3,7 +3,7 @@
 Quick-revisit summary of two audits. Full detail in:
 
 - `vllm-xpu-kernels/AUDIT.md`
-- `llm-scaler/AUDIT.md`
+- `llm-scaler/AUDIT.md` (`LLM-SCALER-AUDIT.md` in cwd)
 
 ## Context
 
