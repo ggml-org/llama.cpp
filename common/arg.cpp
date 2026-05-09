@@ -2344,30 +2344,45 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_N_GPU_LAYERS"));
+        add_opt(common_arg(
+        {"--ffn-file"}, "FNAME",
+        "path to ffn.gguf (required when split-mode != local-gpu)",
+        [](common_params & params, const std::string & value) {
+            params.ffn_file = value;
+        }
+    ));
     add_opt(common_arg(
-        {"-sm", "--split-mode"}, "{none,layer,row,tensor}",
+        {"--ffn-swap-map"}, "FNAME",
+        "JSON file describing dynamic FFN swapping rules",
+        [](common_params & params, const std::string & value) {
+            params.ffn_swap_map = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--ffn-read-ahead-layers"}, "N",
+        "madvise N layers ahead of current layer (default: 1)",
+        [](common_params & params, const std::string & value) {
+            params.ffn_read_ahead_layers = std::stoi(value);
+        }
+    ));
+    add_opt(common_arg(
+        {"-sm", "--split-mode"}, "{none,layer,row,tensor,local-gpu,local-ssd,local-ram}",
         "how to split the model across multiple GPUs, one of:\n"
         "- none: use one GPU only\n"
         "- layer (default): split layers and KV across GPUs (pipelined)\n"
         "- row: split weight across GPUs by rows (parallelized)\n"
         "- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)",
         [](common_params & params, const std::string & value) {
-            if (value == "none") {
-                params.split_mode = LLAMA_SPLIT_MODE_NONE;
-            } else if (value == "layer") {
-                params.split_mode = LLAMA_SPLIT_MODE_LAYER;
-            } else if (value == "row") {
-                params.split_mode = LLAMA_SPLIT_MODE_ROW;
-            } else if (value == "tensor") {
-                params.split_mode = LLAMA_SPLIT_MODE_TENSOR;
-            } else {
-                throw std::invalid_argument("invalid value");
-            }
-            if (!llama_supports_gpu_offload()) {
-                fprintf(stderr, "warning: llama.cpp was compiled without support for GPU offload. Setting the split mode has no effect.\n");
-            }
-        }
-    ).set_env("LLAMA_ARG_SPLIT_MODE"));
+        if      (value == "none")   { params.split_mode = LLAMA_SPLIT_MODE_NONE; }
+        else if (value == "layer")  { params.split_mode = LLAMA_SPLIT_MODE_LAYER; }
+        else if (value == "row")    { params.split_mode = LLAMA_SPLIT_MODE_ROW; }
+        else if (value == "tensor") { params.split_mode = LLAMA_SPLIT_MODE_TENSOR; }
+        else if (value == "local-gpu") { params.split_mode = LLAMA_SPLIT_MODE_LAYER; }
+        else if (value == "local-ssd") { params.split_mode = (llama_split_mode)4; }
+        else if (value == "local-ram") { params.split_mode = (llama_split_mode)5; }
+        else { throw std::invalid_argument("invalid split mode: " + value); }
+    }
+).set_env("LLAMA_ARG_SPLIT_MODE"));
     add_opt(common_arg(
         {"-ts", "--tensor-split"}, "N0,N1,N2,...",
         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1",

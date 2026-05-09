@@ -1,3 +1,4 @@
+#include "llama-split-info.h"
 #pragma once
 
 #include "llama.h"
@@ -30,6 +31,7 @@ enum llama_fver {
 const char * llama_file_version_name(llama_fver version);
 
 struct llama_model_loader {
+    split_info_t split_info;
     // Holds information on a model weight
     struct llama_tensor_weight {
         uint16_t  idx; // source file index

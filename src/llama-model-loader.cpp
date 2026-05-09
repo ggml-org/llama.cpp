@@ -13,7 +13,7 @@
 #include <future>
 #include <regex>
 
-// spec §3.3 — read split.* metadata keys
+
 static split_info_t read_split_info(const struct gguf_context * ctx) {
     split_info_t info;
     auto get_str = [&](const char* key) -> std::string {
@@ -41,6 +41,7 @@ static split_info_t read_split_info(const struct gguf_context * ctx) {
     }
     return info;
 }
+
 
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
@@ -573,6 +574,7 @@ llama_model_loader::llama_model_loader(
 
         metadata_ptr.reset(gguf_init_from_file(fname.c_str(), params));
         metadata = metadata_ptr.get();
+        if (metadata) { this->split_info = read_split_info(metadata); }
         if (metadata == nullptr) {
             throw std::runtime_error(format("%s: failed to load model from %s", __func__, fname.c_str()));
         }
@@ -699,6 +701,7 @@ llama_model_loader::llama_model_loader(
 
         metadata_ptr.reset(gguf_init_from_file_ptr(file, params));
         metadata = metadata_ptr.get();
+        if (metadata) { this->split_info = read_split_info(metadata); }
         if (metadata == nullptr) {
             throw std::runtime_error(format("%s: failed to load model from file pointer", __func__));
         }
@@ -732,18 +735,6 @@ llama_model_loader::llama_model_loader(
 
     LLAMA_LOG_INFO("%s: loaded meta data with %d key-value pairs and %d tensors from %s (version %s)\n",
             __func__, n_kv, n_tensors, fname.empty() ? "(file*)" : fname.c_str(), llama_file_version_name(fver));
-
-    // spec §3.3 — read split.* metadata keys
-    // MODIFICATION: add after existing KV loop
-    split_info = read_split_info(metadata);
-    if (!split_info.source_sha256.empty()) {
-        LLAMA_LOG_INFO("split.type: %s | sha256: %.16s... | layers: %u-%u\n",
-            split_info.type == SPLIT_ATTENTION ? "attention" :
-            split_info.type == SPLIT_FFN ? "ffn" :
-            split_info.type == SPLIT_EMBED ? "embed" : "none",
-            split_info.source_sha256.c_str(),
-            split_info.layer_first, split_info.layer_last);
-    }
 
     // determine file type based on the number of tensors for each quantization and print meta data
     // TODO: make optional
@@ -1118,7 +1109,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
     auto buft_for_tensor = [&](ggml_tensor * t_meta) -> ggml_backend_buffer_type_t {
         if (!t_meta) {
-            if (flags & TENSOR_NOT_REQUIRED) {
+            bool is_ffn = tn.str().find("ffn") != std::string::npos;
+            if ((flags & TENSOR_NOT_REQUIRED) || (this->split_info.type == SPLIT_ATTENTION && is_ffn)) {
                 return nullptr;
             }
             throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));

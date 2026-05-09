@@ -116,6 +116,12 @@ int main(int argc, char ** argv) {
     // enable performance counters
     ctx_params.no_perf = false;
 
+
+    extern void set_global_ffn_mmap(const char*);
+    const char* ffn_env = getenv("LLAMA_FFN_FILE");
+    if (ffn_env) {
+        set_global_ffn_mmap(ffn_env);
+    }
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
     if (ctx == NULL) {
