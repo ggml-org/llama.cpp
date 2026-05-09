@@ -47,7 +47,6 @@ if (LLAMA_BUILD_WEBUI)
         index.html
         bundle.js
         bundle.css
-        loading.html
     )
 
     foreach(asset ${PUBLIC_ASSETS})
