@@ -277,10 +277,13 @@ struct server_slot {
 
         n_remaining = -1;
 
-        if (task->params.n_predict != -1) {
-            n_remaining = task->params.n_predict - n_decoded;
-        } else if (global_params.n_predict != -1) {
-            n_remaining = global_params.n_predict - n_decoded;
+        const int32_t n_predict = task->params.n_predict != -1 ? task->params.n_predict : global_params.n_predict;
+
+        if (n_predict == -2) {
+            // generate until context is full
+            n_remaining = n_ctx - prompt.n_tokens();
+        } else if (n_predict >= 0) {
+            n_remaining = n_predict - n_decoded;
         }
 
         return n_remaining > 0; // no budget
@@ -2173,6 +2176,22 @@ private:
                     send_error(slot, "context shift is disabled", ERROR_TYPE_SERVER);
                     slot.release();
                     continue;
+                }
+
+                // n_predict == -2: context exhaustion is the limit, do not shift
+                {
+                    const int32_t n_predict = slot.task->params.n_predict != -1 ? slot.task->params.n_predict : params_base.n_predict;
+                    if (n_predict == -2) {
+                        SLT_DBG(slot, "stopped by n_predict = -2 (context full), prompt.n_tokens() = %d, n_decoded = %d, n_ctx = %d\n",
+                                slot.prompt.n_tokens(), slot.n_decoded, slot.n_ctx);
+                        slot.stop      = STOP_TYPE_LIMIT;
+                        slot.truncated = true;
+                        slot.print_timings();
+                        send_final_response(slot);
+                        metrics.on_prediction(slot);
+                        slot.release();
+                        continue;
+                    }
                 }
 
                 if (mctx) {

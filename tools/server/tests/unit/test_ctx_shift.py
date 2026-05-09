@@ -87,3 +87,44 @@ def test_ctx_shift_disabled_stream():
         else:
             assert choice["finish_reason"] is None
             content += choice["text"]
+
+
+@pytest.mark.parametrize("endpoint,n_predict_key", [
+    ("/completion", "n_predict"),
+    ("/v1/completions", "max_tokens"),
+])
+def test_n_predict_minus_2(endpoint: str, n_predict_key: str):
+    """n_predict == -2: generate until context is full, then stop (no ctx shift)."""
+    global server
+    server.n_predict = -1  # global: unlimited, request-level -2 overrides
+    server.enable_ctx_shift = True  # enabled, but -2 should stop instead of shifting
+    server.start()
+    res = server.make_request("POST", endpoint, data={
+        n_predict_key: -2,
+        "prompt": "Hi how are you",
+    })
+    assert res.status_code == 200
+    # "Hi how are you" is 8 tokens, slot ctx = 512/2 = 256, expect ~248 generated
+    if "timings" in res.body:
+        n_predicted = res.body["timings"]["predicted_n"]
+        assert res.body["truncated"] is True
+        assert res.body["stopped_limit"] is True
+    else:
+        n_predicted = res.body["usage"]["completion_tokens"]
+    assert n_predicted == 248, f"n_predict=-2 should fill context (expected 248), got {n_predicted}"
+
+
+def test_n_predict_minus_2_global():
+    """n_predict == -2 set globally (via server CLI) should also work."""
+    global server
+    server.n_predict = -2
+    server.enable_ctx_shift = True
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "Hi how are you",
+    })
+    assert res.status_code == 200
+    n_predicted = res.body["timings"]["predicted_n"]
+    assert res.body["truncated"] is True
+    assert res.body["stopped_limit"] is True
+    assert n_predicted == 248, f"global n_predict=-2 should fill context (expected 248), got {n_predicted}"
