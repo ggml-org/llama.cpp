@@ -692,34 +692,28 @@ struct common_speculative_state_mtp : public common_speculative_state {
         const size_t  row_bytes = (size_t) n_embd * sizeof(float);
 
         llama_token cond_tok = id_last;
-        llama_pos   pos      = llama_memory_seq_pos_max(llama_get_memory(ctx_mtp), 0) + 1;
+        llama_pos   pos      = 0;
 
         // auto-regressive loop for MTP
         for (int32_t k = 0; k < n_max; ++k) {
-            ggml_tensor * src;
-            int32_t       src_row;
             if (k == 0) {
-                src = llama_context_get_t_h_pre_norm(ctx_tgt);
-                if (last_n_accepted < 0) {
-                    // First draft after begin(): trunk's most recent decode is
-                    // the last prefill ubatch; its last row is h_{N-1}.
-                    src_row = (src && src->ne[1] > 0) ? (int32_t) src->ne[1] - 1 : 0;
-                } else {
-                    src_row = last_n_accepted;
+                const int32_t src_row = last_n_accepted < 0 ? -1 : last_n_accepted;
+                if (!llama_context_copy_mtp_h(ctx_tgt, src_row, batch.embd, (size_t) n_embd, &pos)) {
+                    LOG_WRN("%s: missing target MTP seed row=%d; stopping chain\n", __func__, src_row);
+                    return;
                 }
-                llama_synchronize(ctx_tgt);
             } else {
                 // for the AR path get the mtp_out from the mtp ctx
-                src = llama_context_get_t_mtp_out(ctx_mtp);
-                src_row = src ? (int32_t) src->ne[1] - 1 : 0;
+                ggml_tensor * src = llama_context_get_t_mtp_out(ctx_mtp);
+                const int32_t src_row = src ? (int32_t) src->ne[1] - 1 : 0;
                 llama_synchronize(ctx_mtp);
+                if (!src) {
+                    LOG_WRN("%s: missing source tensor at k=%d; stopping chain\n", __func__, k);
+                    return;
+                }
+                ggml_backend_tensor_get(src, batch.embd,
+                                        (size_t) src_row * row_bytes, row_bytes);
             }
-            if (!src) {
-                LOG_WRN("%s: missing source tensor at k=%d; stopping chain\n", __func__, k);
-                return;
-            }
-            ggml_backend_tensor_get(src, batch.embd,
-                                    (size_t) src_row * row_bytes, row_bytes);
 
             batch.token[0] = cond_tok;
             batch.pos[0]   = pos;

@@ -72,6 +72,7 @@ struct llama_context {
 
     ggml_tensor * get_t_h_pre_norm() const;
     ggml_tensor * get_t_mtp_out()    const;
+    bool          copy_mtp_h(int32_t row, float * dst, size_t n_floats, llama_pos * pos_next);
 
     void            set_mtp(llama_context * ctx_mtp_in);
     llama_context * get_mtp() const { return mtp.ctx_mtp; }
@@ -241,9 +242,7 @@ private:
     llm_graph_cb graph_get_cb() const;
 
     void handle_mtp_for_ubatch(
-            int32_t                n_tokens,
-            const llama_token    * tokens,
-            const llama_pos      * positions,
+            const llama_ubatch   & ubatch,
             struct ggml_tensor   * t_h_pre_norm);
 
     // TODO: read/write lora adapters and cvec

@@ -14,4 +14,9 @@ struct llama_mtp {
     // pos_start of the new ubatch != pending_pos+1 (new prompt or seq_rm gap).
     std::vector<float> pending_h;
     llama_pos          pending_pos = -1;
+
+    // Position of each row in the target context's latest t_h_pre_norm tensor.
+    // t_h_pre_norm is reduced through inp_out_ids, so row != ubatch token index
+    // when only selected outputs are requested.
+    std::vector<llama_pos> h_row_pos;
 };

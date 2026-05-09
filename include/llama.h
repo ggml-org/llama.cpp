@@ -971,6 +971,12 @@ extern "C" {
     // [EXPERIMENTAL] MTP APIs, accessors for hidden states
     LLAMA_API struct ggml_tensor * llama_context_get_t_h_pre_norm(struct llama_context * ctx);
     LLAMA_API struct ggml_tensor * llama_context_get_t_mtp_out   (struct llama_context * ctx);
+    LLAMA_API bool llama_context_copy_mtp_h(
+            struct llama_context * ctx,
+            int32_t                row,
+            float *                dst,
+            size_t                 n_floats,
+            llama_pos *            pos_next);
 
     LLAMA_API void llama_set_mtp(
             struct llama_context * ctx_target,
