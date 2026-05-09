@@ -11,6 +11,8 @@
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import Input from '$lib/components/ui/input/input.svelte';
+	import { ROUTES } from '$lib/constants/routes';
+	import { RouterService } from '$lib/services/router.service';
 	import {
 		conversationsStore,
 		conversations,
@@ -159,7 +161,7 @@
 		}
 
 		handleMobileSidebarItemClick();
-		await goto(`#/chat/${id}`);
+		await goto(RouterService.chat(id));
 	}
 
 	function handleStopGeneration(id: string) {
@@ -171,7 +173,7 @@
 	<ScrollArea class="h-full flex-1">
 		<Sidebar.Header class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
 			<div class="flex items-center justify-between">
-				<a href="#/" onclick={handleMobileSidebarItemClick}>
+				<a href={ROUTES.START} onclick={handleMobileSidebarItemClick}>
 					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">{APP_NAME}</h1>
 				</a>
 

@@ -44,6 +44,8 @@ import {
 	MULTIPLE_UNDERSCORE_REGEX,
 	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { ROUTES } from '$lib/constants/routes';
+import { RouterService } from '$lib/services/router.service';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export interface ConversationTreeItem {
@@ -260,7 +262,7 @@ class ConversationsStore {
 		this.activeConversation = conversation;
 		this.activeMessages = [];
 
-		await goto(`#/chat/${conversation.id}`);
+		await goto(RouterService.chat(conversation.id));
 
 		return conversation.id;
 	}
@@ -336,7 +338,7 @@ class ConversationsStore {
 
 				if (this.activeConversation && idsToRemove.has(this.activeConversation.id)) {
 					this.clearActiveConversation();
-					await goto(`?new_chat=true#/`);
+					await goto(ROUTES.NEW_CHAT);
 				}
 			} else {
 				// Reparent direct children to deleted conv's parent (or promote to top-level)
@@ -352,7 +354,7 @@ class ConversationsStore {
 
 				if (this.activeConversation?.id === convId) {
 					this.clearActiveConversation();
-					await goto(`?new_chat=true#/`);
+					await goto(ROUTES.NEW_CHAT);
 				}
 			}
 		} catch (error) {
@@ -376,7 +378,7 @@ class ConversationsStore {
 
 			toast.success('All conversations deleted');
 
-			await goto(`?new_chat=true#/`);
+			await goto(ROUTES.NEW_CHAT);
 		} catch (error) {
 			console.error('Failed to delete all conversations:', error);
 			toast.error('Failed to delete conversations');
@@ -729,7 +731,7 @@ class ConversationsStore {
 
 			this.conversations = [newConv, ...this.conversations];
 
-			await goto(`#/chat/${newConv.id}`);
+			await goto(RouterService.chat(newConv.id));
 
 			toast.success('Conversation forked');
 

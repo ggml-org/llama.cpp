@@ -2173,13 +2173,18 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         fname_inp, splits, /*file*/ nullptr, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /*no_alloc*/ false, kv_overrides, nullptr);
     ml.init_mappings(false); // no prefetching
 
-    llama_model model(llama_model_default_params());
+    auto mparams = llama_model_default_params();
+    std::unique_ptr<llama_model> model_ptr(llama_model_create(ml, mparams));
 
-    model.load_arch   (ml);
-    model.load_hparams(ml);
-    model.load_stats  (ml);
+    auto * model = dynamic_cast<llama_model_base *>(model_ptr.get());
+    if (model == nullptr) {
+        GGML_ABORT("fatal error: model does not implement llama_model_base");
+    }
 
-    quantize_state_impl qs(model, params);
+    model->load_hparams(ml);
+    model->load_stats  (ml);
+
+    quantize_state_impl qs(*model, params);
 
     if (params->only_copy) { ftype = ml.ftype; }
     const std::unordered_map<std::string, std::vector<float>> * values_data = nullptr;
@@ -2326,7 +2331,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         if (!ctx_outs[i_split]) { ctx_outs[i_split].reset(gguf_init_empty()); }
         gguf_add_tensor(ctx_outs[i_split].get(), tensor);
 
-        metadata[i].allows_quantization = tensor_allows_quantization(params, model.arch, tensor);
+        metadata[i].allows_quantization = tensor_allows_quantization(params, model->arch, tensor);
 
         if (metadata[i].allows_quantization) { metadata[i].target_type = llama_tensor_get_type(qs, params, tensor, default_type, metadata[i]); }
         else { metadata[i].target_type = tensor->type; }
@@ -2655,10 +2660,10 @@ void llama_quant_free(const quantize_state_impl * qs) {
 }
 
 llama_model * llama_quant_model_from_metadata(const llama_quant_model_desc * desc) {
-    const struct llama_model_params mparams = llama_model_default_params();
-    auto * model = new llama_model(mparams);
-
-    model->arch = llm_arch_from_string(desc->architecture);
+    struct llama_model_params mparams = llama_model_default_params();
+    const auto arch = llm_arch_from_string(desc->architecture);
+    auto * model = llama_model_create(arch, mparams);
+    model->arch = arch;
 
     // infer llm_type: only LLM_TYPE_70B matters for quantization logic
     if (model->arch == LLM_ARCH_LLAMA && desc->n_layer == 80 && desc->n_head != desc->n_head_kv) { model->type = LLM_TYPE_70B; }

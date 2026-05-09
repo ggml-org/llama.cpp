@@ -38,8 +38,12 @@ int main(int argc, char ** argv) {
     std::string result0;
     std::string result1;
     std::string result2;
+    std::string result3;
 
     // init
+
+    ggml_backend_load_all();
+
     auto llama_init = common_init_from_params(params);
 
     auto * model = llama_init->model();
@@ -213,11 +217,83 @@ int main(int argc, char ** argv) {
         n_past += 1;
     }
 
+    // test on-device state save/load
+    auto params_ctx4 = common_context_params_to_llama(params);
+    params_ctx4.n_seq_max = 2;
+    llama_context * ctx4 = llama_init_from_model(model, params_ctx4);
+
+    llama_sampler * smpl4 = llama_sampler_chain_init(sparams);
+
+    llama_sampler_chain_add(smpl4, llama_sampler_init_dist(params.sampling.seed));
+
+    printf("\nsingle seq run: %s", params.prompt.c_str());
+
+    // load state (rng, logits, embedding and kv_cache) from file
+    n_token_count_out = 0;
+
+    if (!llama_state_load_file(ctx4, state_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
+        fprintf(stderr, "\n%s : failed to load state\n", __func__);
+        return 1;
+    }
+
+    fprintf(stderr, "%s : loaded state with %zu tokens\n", __func__, n_token_count_out);
+
+    // restore state (last tokens)
+    n_past = n_token_count_out;
+    if (!common_replay_last_token(ctx4, tokens.back(), n_past)) {
+        return 1;
+    }
+    ++n_past;
+
+    // save seq 0 and load into seq 1
+    {
+        // save kv of seq 0
+        std::vector<uint8_t> seq_store(llama_state_seq_get_size_ext(ctx4, 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE));
+        const size_t ncopy = llama_state_seq_get_data_ext(ctx4, seq_store.data(), seq_store.size(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+        if (ncopy != seq_store.size()) {
+            fprintf(stderr, "\n%s : seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
+            return 1;
+        }
+        fprintf(stderr, "%s : seq 0 copied, %zd bytes\n", __func__, ncopy);
+
+        // erase whole kv
+        llama_memory_clear(llama_get_memory(ctx4), true);
+        fprintf(stderr, "%s : kv cache cleared\n", __func__);
+
+        // restore kv into seq 0
+        const size_t nset = llama_state_seq_set_data_ext(ctx4, seq_store.data(), seq_store.size(), 1, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+        if (nset != seq_store.size()) {
+            fprintf(stderr, "\n%s : seq set data length %zd does not match expected length %zd\n", __func__, nset, seq_store.size());
+            return 1;
+        }
+        fprintf(stderr, "%s : seq 1 restored, %zd bytes\n", __func__, nset);
+    }
+
+    // forth run
+    for (auto i = 0; i < params.n_predict; i++) {
+        auto next_token     = llama_sampler_sample(smpl4, ctx4, -1);
+        auto next_token_str = common_token_to_piece(ctx4, next_token);
+
+        printf("%s", next_token_str.c_str());
+        result3 += next_token_str;
+
+        common_batch_clear(batch);
+        common_batch_add(batch, next_token, n_past, {1}, true);
+
+        if (llama_decode(ctx4, batch)) {
+            fprintf(stderr, "\n%s : failed to evaluate\n", __func__);
+            llama_batch_free(batch);
+            return 1;
+        }
+        n_past += 1;
+    }
+
     printf("\n");
 
     llama_sampler_free(smpl);
     llama_sampler_free(smpl2);
     llama_sampler_free(smpl3);
+    llama_sampler_free(smpl4);
 
     llama_batch_free(batch);
 
@@ -226,8 +302,14 @@ int main(int argc, char ** argv) {
 
     llama_free(ctx2);
     llama_free(ctx3);
+    llama_free(ctx4);
 
     if (result0 != result2) {
+        fprintf(stderr, "\n%s : error : the seq restore generation is different\n", __func__);
+        return 1;
+    }
+
+    if (result0 != result3) {
         fprintf(stderr, "\n%s : error : the seq restore generation is different\n", __func__);
         return 1;
     }

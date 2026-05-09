@@ -1,5 +1,7 @@
 #include "llama-io.h"
 
+#include <vector>
+
 void llama_io_write_i::write_string(const std::string & str) {
     uint32_t str_size = str.size();
 
@@ -9,7 +11,10 @@ void llama_io_write_i::write_string(const std::string & str) {
 
 void llama_io_read_i::read_string(std::string & str) {
     uint32_t str_size;
-    read_to(&str_size, sizeof(str_size));
+    read(&str_size, sizeof(str_size));
 
-    str.assign((const char *) read(str_size), str_size);
+    std::vector<char> buf(str_size);
+    read(buf.data(), str_size);
+
+    str.assign(buf.data(), str_size);
 }

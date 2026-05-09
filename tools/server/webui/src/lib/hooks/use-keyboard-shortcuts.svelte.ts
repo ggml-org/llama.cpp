@@ -1,5 +1,6 @@
 import { goto } from '$app/navigation';
 import { KeyboardKey } from '$lib/enums';
+import { ROUTES } from '$lib/constants/routes';
 
 interface KeyboardShortcutsCallbacks {
 	activateSearchMode?: () => void;
@@ -27,7 +28,7 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 		) {
 			event.preventDefault();
 
-			goto('?new_chat=true#/');
+			goto(ROUTES.NEW_CHAT);
 		}
 
 		if (event.shiftKey && isCmdOrCtrl && event.key === KeyboardKey.E_UPPER) {
