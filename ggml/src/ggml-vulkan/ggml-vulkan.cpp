@@ -14568,6 +14568,16 @@ static bool ggml_vk_can_fuse_snake(ggml_backend_vk_context * ctx, const struct g
     if (x->type != GGML_TYPE_F32 && x->type != GGML_TYPE_F16 && x->type != GGML_TYPE_BF16) {
         return false;
     }
+    // Shader uses a single A_TYPE / D_TYPE pipeline, so every operand and
+    // intermediate result must share x's type. Defensive against frontends
+    // that could mix precisions on the chain.
+    if (a->type     != x->type) return false;
+    if (inv_b->type != x->type) return false;
+    if (mul0->type  != x->type) return false;
+    if (sqr->type   != x->type) return false;
+    if (mul1->type  != x->type) return false;
+    if (add->type   != x->type) return false;
+    if (cgraph->nodes[node_idx + 1]->type != x->type) return false;
     if (!ggml_are_same_shape(a, inv_b)) {
         return false;
     }
