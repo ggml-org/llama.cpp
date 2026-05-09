@@ -4077,6 +4077,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         src1_row.data = src1_contiguous.get();
         dst_row.data  =  dst_contiguous.get();
 
+        // Multi-stream the per-expert iterations across N stream slots so that
+        // independent experts run concurrently. Each iteration's allocations come
+        // from that slot's pool (per-stream isolation prevents the cross-stream
+        // alias hazard the shared pool would otherwise create).
+        const int n_streams = (int) std::min<int64_t>(GGML_SYCL_MAX_STREAMS, n_as);
+
         for (int64_t i02 = 0; i02 < n_as; i02++) {
             int64_t num_src1_rows = 0;
             for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
@@ -4097,6 +4103,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                 continue;
             }
 
+            ggml_sycl_stream_override_guard slot_guard(ctx, (int)(i02 % n_streams));
+            const queue_ptr stream = ctx.stream();  // per-iter, follows the override
 
             ggml_sycl_pool_alloc<int> dev_cur_src1_row(ctx.pool(), 1);
             ggml_sycl_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), num_src1_rows);
@@ -4170,6 +4178,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                         });
                 });
             }
+        }
+
+        // Barrier-and-join: ensure all per-stream work completes before slot 0
+        // proceeds. The next op in the graph runs on slot 0 by default and may
+        // read tensors written by experts dispatched to slots 1..n_streams-1.
+        if (n_streams > 1) {
+            std::vector<sycl::event> events;
+            events.reserve(n_streams - 1);
+            for (int s = 1; s < n_streams; ++s) {
+                events.push_back(ctx.stream(ctx.device, s)->ext_oneapi_submit_barrier());
+            }
+            ctx.stream(ctx.device, 0)->ext_oneapi_submit_barrier(events);
         }
     }
 }
