@@ -7,12 +7,13 @@ import re
 import time
 import sys
 import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Dict, List, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import datasets
-from flask import Flask, request, jsonify
 
 # Set cache directory for HuggingFace datasets
 cache_dir = Path.home() / ".cache" / "huggingface" / "datasets"
@@ -48,7 +49,7 @@ def debug_log(message: str):
     with open("/tmp/simulator-debug.log", "a") as f:
         f.write(message + "\n")
 
-app = Flask(__name__)
+simulator: Optional["Simulator"] = None
 
 @dataclass
 class EvalState:
@@ -216,21 +217,46 @@ class Simulator:
 
         return response
 
-@app.route('/v1/chat/completions', methods=['POST'])
-def chat_completions():
-    try:
-        request_data = request.get_json()
+class RequestHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path != "/v1/chat/completions":
+            self._send_json({"error": "Not found"}, 404)
+            return
 
-        if not request_data:
-            return jsonify({"error": "Invalid JSON"}), 400
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            request_data = json.loads(body) if body else None
 
-        response = simulator._process_request(request_data)
+            if not request_data:
+                self._send_json({"error": "Invalid JSON"}, 400)
+                return
 
-        return jsonify(response)
+            if simulator is None:
+                self._send_json({"error": "Simulator not initialized"}, 500)
+                return
 
-    except Exception as e:
-        print(f"Error processing request: {e}")
-        return jsonify({"error": str(e)}), 500
+            response = simulator._process_request(request_data)
+            self._send_json(response, 200)
+
+        except json.JSONDecodeError:
+            self._send_json({"error": "Invalid JSON"}, 400)
+        except Exception as e:
+            print(f"Error processing request: {e}")
+            self._send_json({"error": str(e)}, 500)
+
+    def _send_json(self, data: dict, status: int = 200):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        # Suppress default request logging
+        pass
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -271,13 +297,21 @@ def main():
         dataset_split=args.dataset_split
     )
 
+    server = HTTPServer((args.host, args.port), RequestHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
     print("\n=== llama-server-simulator ===")
     print(f"Server running on http://{args.host}:{args.port}")
     print(f"Success rate: {args.success_rate}")
     print(f"AIME dataset loaded: {len(simulator.dataset.questions)} questions")
     print("\nPress Ctrl+C to stop\n")
 
-    app.run(host=args.host, port=args.port, debug=False)
+    try:
+        server_thread.join()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        server.shutdown()
 
 if __name__ == "__main__":
     main()
