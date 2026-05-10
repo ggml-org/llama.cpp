@@ -31,6 +31,7 @@
 #else
 #define A_TYPE float16_t
 #endif
+#define A_TYPE_PACKED32 f16vec2
 #endif
 
 #if defined(DATA_A_BF16)

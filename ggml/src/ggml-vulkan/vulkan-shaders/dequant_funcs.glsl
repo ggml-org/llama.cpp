@@ -12,6 +12,11 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     return vec4(data_a[a_offset + ib    ], data_a[a_offset + ib + 1],
                 data_a[a_offset + ib + 2], data_a[a_offset + ib + 3]);
 }
+vec4 dequantize4_2aligned(uint ib, uint iqs, uint a_offset) {
+    return vec4(data_a[a_offset + ib    ], data_a[a_offset + ib + 1],
+                data_a[a_offset + ib + 2], data_a[a_offset + ib + 3]);
+}
+
 #endif
 
 #if defined(DATA_A_F16)
@@ -22,6 +27,11 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     return vec4(data_a[a_offset + ib    ], data_a[a_offset + ib + 1],
                 data_a[a_offset + ib + 2], data_a[a_offset + ib + 3]);
 }
+vec4 dequantize4_2aligned(uint ib, uint iqs, uint a_offset) {
+    const vec2 a = data_a_packed32[(a_offset + ib)/2];
+    const vec2 b = data_a_packed32[(a_offset + ib)/2 + 1];
+    return vec4(a, b);
+}
 #endif
 
 #if defined(DATA_A_BF16)
@@ -31,6 +41,14 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
 vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     return vec4(bf16_to_fp32(data_a[a_offset + ib    ]), bf16_to_fp32(data_a[a_offset + ib + 1]),
                 bf16_to_fp32(data_a[a_offset + ib + 2]), bf16_to_fp32(data_a[a_offset + ib + 3]));
+}
+vec4 dequantize4_2aligned(uint ib, uint iqs, uint a_offset) {
+    const uint a = data_a_packed32[(a_offset + ib)/2];
+    const uint b = data_a_packed32[(a_offset + ib)/2 + 1];
+    return vec4(uintBitsToFloat((a & 0x0000ffff) << 16),
+                uintBitsToFloat( a & 0xffff0000),
+                uintBitsToFloat((b & 0x0000ffff) << 16),
+                uintBitsToFloat( b & 0xffff0000));
 }
 #endif
 

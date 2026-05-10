@@ -16,6 +16,44 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 uint a_offset, b_offset, d_offset, y_offset;
 
+vec4 load_b(const uint j, const uint iybs, const uint iqs, const bool lastiter) {
+    // Check if the second of the pair of elements is OOB, and don't fetch B or
+    // accumulate it. We still fetch a pair of elements for A, which is fine for
+    // quantized formats since they'll be within the same block. We should
+    // probably skip fetching the second element for F16/F32, but as of now we
+    // still do.
+    const bool OOB_y = lastiter && (iybs + iqs + y_offset >= p.ncols);
+    const bool OOB_z = lastiter && (iybs + iqs + y_offset*2 >= p.ncols);
+    const bool OOB_w = lastiter && (iybs + iqs + y_offset*3 >= p.ncols);
+
+    if (!OOB_w) {
+        return vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
+                 FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]),
+                 FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset*2]),
+                 FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset*3]));
+    } else if (!OOB_z) {
+        return vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
+                 FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]),
+                 FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset*2]),
+                 0);
+    } else if (!OOB_y) {
+        return vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
+                 FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]),
+                 0, 0);
+    } else {
+        return vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
+                 0, 0, 0);
+    }
+}
+
+vec4 load_b_aligned(const uint j, const uint iybs, const uint iqs, const bool lastiter) {
+    const bool OOB_w = lastiter && (iybs + iqs + y_offset*3 >= p.ncols);
+    if (!OOB_w)
+        return data_b_v4[(j*p.batch_stride_b + b_offset + iybs + iqs) / 4];
+    else
+        return load_b(j, iybs, iqs, lastiter);
+}
+
 void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint tid, const uint i, bool lastiter)
 {
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
@@ -34,34 +72,7 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
         const vec4 bv1 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + iybs + iqs) / 4 + 1]);
 #endif
 #else
-        // Check if the second of the pair of elements is OOB, and don't fetch B or
-        // accumulate it. We still fetch a pair of elements for A, which is fine for
-        // quantized formats since they'll be within the same block. We should
-        // probably skip fetching the second element for F16/F32, but as of now we
-        // still do.
-        const bool OOB_y = lastiter && (iybs + iqs + y_offset >= p.ncols);
-        const bool OOB_z = lastiter && (iybs + iqs + y_offset*2 >= p.ncols);
-        const bool OOB_w = lastiter && (iybs + iqs + y_offset*3 >= p.ncols);
-
-        vec4 b;
-        if (!OOB_w) {
-            b = vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
-                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]),
-                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset*2]),
-                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset*3]));
-        } else if (!OOB_z) {
-            b = vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
-                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]),
-                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset*2]),
-                     0);
-        } else if (!OOB_y) {
-            b = vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
-                     FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]),
-                     0, 0);
-        } else {
-            b = vec4(FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs]),
-                     0, 0, 0);
-        }
+        const vec4 b = load_b(j, iybs, iqs, lastiter);
 #endif
         uint ibi = first_row*p.ncols;
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
@@ -96,10 +107,37 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
     }
 }
 
+#if defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16)
+void iter_aligned_nonquant(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint tid, const uint i, bool lastiter)
+{
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        const uint col = i*BLOCK_SIZE + K_PER_ITER*tid;
+        const uint iqs = 0; // quant index
+        const uint iybs = col; // y block start index
+
+        const vec4 b = load_b_aligned(j, iybs, iqs, lastiter);
+        uint ibi = first_row*p.ncols;
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            const uint ib = (ibi + col)/QUANT_K; // block index
+            ibi += p.ncols;
+
+            const vec4 v = dequantize4_2aligned(ib, iqs, a_offset);
+
+            // matrix multiplication
+            temp[j][n] += dot(v, b);
+        }
+    }
+}
+#endif
+
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     const uint tid = gl_LocalInvocationID.x;
 
     get_offsets(a_offset, b_offset, d_offset);
+    const bool is_aligned_nonquant =
+        p.batch_stride_b % 4 == 0 && b_offset % 4 == 0 &&
+        p.ncols % 2 == 0 && BLOCK_SIZE % 4 == 0 &&
+        K_PER_ITER == 4;
 
     y_offset = QUANT_R == 1 ? 1 : QUANT_K/2;
 
@@ -118,6 +156,8 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     int unroll_count = 4;
     uint unrolled_iters = num_iters & ~(unroll_count - 1);
 
+    uint i = 0;
+
 #if K_PER_ITER == 4
     // If the K dimension is odd, we need lastiter==true on the last iteration
     // so OOB is computed correctly. Skip some unrolling to make that happen.
@@ -126,9 +166,16 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
         unrolled_iters > 0) {
         unrolled_iters -= unroll_count;
     }
+    if (is_aligned_nonquant) {
+        while (i < unrolled_iters) {
+            // Manually partially unroll the loop
+            [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
+                iter_aligned_nonquant(temp, first_row, num_rows, tid, i*K_PER_ITER, false);
+                i++;
+            }
+        }
+    } else {
 #endif
-
-    uint i = 0;
     while (i < unrolled_iters) {
         // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
@@ -136,6 +183,9 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
             i++;
         }
     }
+#if K_PER_ITER == 4
+    }
+#endif
 
     unroll_count = 2;
     unrolled_iters = num_iters & ~(unroll_count - 1);
@@ -146,8 +196,17 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
         unrolled_iters > 0) {
         unrolled_iters -= unroll_count;
     }
-#endif
 
+    if (is_aligned_nonquant) {
+        while (i < unrolled_iters && is_aligned_nonquant) {
+            // Manually partially unroll the loop
+            [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
+                iter_aligned_nonquant(temp, first_row, num_rows, tid, i*K_PER_ITER, false);
+                i++;
+            }
+        }
+    } else {
+#endif
     while (i < unrolled_iters) {
         // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
@@ -155,10 +214,25 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
             i++;
         }
     }
+#if K_PER_ITER == 4
+    }
+#endif
+
+#if K_PER_ITER == 4
+    if (is_aligned_nonquant) {
+        while (i < num_iters) {
+            iter_aligned_nonquant(temp, first_row, num_rows, tid, i*K_PER_ITER, true);
+            i++;
+        }
+    } else {
+#endif
     while (i < num_iters) {
         iter(temp, first_row, num_rows, tid, i*K_PER_ITER, true);
         i++;
     }
+#if K_PER_ITER == 4
+    }
+#endif
 
     reduce_result(temp, d_offset, first_row, num_rows, tid);
 }
