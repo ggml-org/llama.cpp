@@ -53,27 +53,6 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
             ibi += p.ncols;
 
 #if K_PER_ITER == 8
-
-#extension GL_EXT_shader_explicit_arithmetic_types: enable
-#if defined(GL_EXT_shader_explicit_arithmetic_types) && defined(DATA_A_Q4_0)
-            f16vec4 v = dequantize4_hf(ib, iqs, a_offset);
-            f16vec4 v2 = dequantize4_hf(ib, iqs+(4/QUANT_R), a_offset);
-
-            const f16vec2 dm = get_dm_hf(ib, a_offset);
-            if (dm.y != float16_t(0)) { // quant has min component
-                v = v * dm.x + dm.y;
-                v2 = v2 * dm.x + dm.y;
-            }
-
-            // matrix multiplication
-            float16_t rowtmp = dot(f16vec4(bv0), v);
-            rowtmp += dot(f16vec4(bv1), v2);
-
-            if (dm.y == float16_t(0))
-                rowtmp *= dm.x;
-
-            temp[j][n] += FLOAT_TYPE(rowtmp);
-#else
             vec4 v = dequantize4(ib, iqs, a_offset);
             vec4 v2 = dequantize4(ib, iqs+(4/QUANT_R), a_offset);
 
@@ -91,8 +70,6 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
                 rowtmp *= dm.x;
 
             temp[j][n] += rowtmp;
-#endif  //GL_EXT_shader_explicit_arithmetic_types
-
 #else
             const vec2 v = dequantize(ib, iqs, a_offset);
 
