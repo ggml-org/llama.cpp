@@ -605,16 +605,6 @@ int entry_point(struct ggml_et_softmax_params* params, void* env) {
         return -1; // Null data pointer
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    if (use_mask) {
-        evict_region_past_l2(src1->data, tensor_bytes(src1));
-    }
-    if (use_sinks) {
-        evict_region_past_l2(src2->data, tensor_bytes(src2));
-    }
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
 
     const int64_t ne00 = src0->ne[0];  // Sequence length (columns)
     const int64_t ne01 = src0->ne[1];  // Number of rows

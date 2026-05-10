@@ -73,17 +73,6 @@ int entry_point(struct ggml_et_ssm_scan_params * params, void * env) {
         return -1;
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    evict_region_past_l2(src1->data, tensor_bytes(src1));
-    evict_region_past_l2(src2->data, tensor_bytes(src2));
-    evict_region_past_l2(src3->data, tensor_bytes(src3));
-    evict_region_past_l2(src4->data, tensor_bytes(src4));
-    evict_region_past_l2(src5->data, tensor_bytes(src5));
-    evict_region_past_l2(src6->data, tensor_bytes(src6));
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     const int64_t d_state      = src0->ne[0];
     const int64_t head_dim     = src0->ne[1];
     const int64_t n_head       = src1->ne[1];

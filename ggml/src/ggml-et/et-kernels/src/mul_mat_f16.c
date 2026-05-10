@@ -47,11 +47,6 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     const uint16_t* src0_data = (const uint16_t*)src0->data;
     float* dst_data  = (float*)dst->data;
 
-#ifdef BUILD_FOR_UBERKERNEL
-    // evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
-    // et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     // Dimensions and Strides
     const int64_t K = src0->ne[0];
     const int64_t M = src0->ne[1];

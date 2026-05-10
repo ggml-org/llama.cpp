@@ -105,16 +105,6 @@ int entry_point(struct ggml_et_gated_delta_net_params* params, void* env) {
         return -1;
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(q_tsr->data, tensor_bytes(q_tsr));
-    evict_region_past_l2(k_tsr->data, tensor_bytes(k_tsr));
-    evict_region_past_l2(v_tsr->data, tensor_bytes(v_tsr));
-    evict_region_past_l2(g_tsr->data, tensor_bytes(g_tsr));
-    evict_region_past_l2(beta_tsr->data, tensor_bytes(beta_tsr));
-    evict_region_past_l2(state_tsr->data, tensor_bytes(state_tsr));
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     // Preserve the original contract for every tensor except q, k, and v, which may be
     // row-contiguous with strided higher dimensions.
     if (q_tsr->nb[0] != sizeof(float) ||

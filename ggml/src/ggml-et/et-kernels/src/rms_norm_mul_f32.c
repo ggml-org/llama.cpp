@@ -55,12 +55,6 @@ int entry_point(struct ggml_et_rms_norm_mul_params* params, void* env) {
         return -1; // Null data pointer
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    evict_region_past_l2(src1->data, tensor_bytes(src1));
-    // et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     if (eps < 0.0f) {
         return -1; // Invalid epsilon
     }

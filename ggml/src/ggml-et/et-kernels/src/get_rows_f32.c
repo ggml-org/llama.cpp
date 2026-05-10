@@ -507,12 +507,6 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     struct ggml_tensor* src1 = &params->src1;  // Row indices tensor (I32)
     struct ggml_tensor* dst = &params->dst;    // Output tensor (F32)
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    evict_region_past_l2(src1->data, tensor_bytes(src1));
-    // et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     // Fast path - we know how to deal with them multi-core
     if((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K) && src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_F32
         && dst->ne[0] % CACHE_ELEMENTS(sizeof(float)) == 0) {

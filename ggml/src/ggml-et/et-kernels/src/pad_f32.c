@@ -78,11 +78,6 @@ int entry_point(struct ggml_et_pad_params* params, void* env) {
         return -1;
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     // Dst dimensions
     const int64_t ne0 = dst->ne[0];
     const int64_t ne1 = dst->ne[1];

@@ -432,14 +432,6 @@ int entry_point(struct ggml_et_glu_params* params, void* env) {
         return -1; // Null data pointer
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    if (src1) {
-        evict_region_past_l2(src1->data, tensor_bytes(src1));
-    }
-    // et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     // Get tensor dimensions
     const int64_t nc = dst->ne[0];  // Output columns (input columns / 2)
     const int64_t nr = dst->ne[1] * dst->ne[2] * dst->ne[3];  // Total rows

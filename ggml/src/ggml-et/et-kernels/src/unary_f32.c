@@ -497,11 +497,6 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
         return -1;
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     // Tensor layout: src and dst are F32 with at least dim-0 contiguity
     //   - nb[0] == sizeof(float) (rows are dense; SIMD loads stay legal)
     //   - nb[1], nb[2], nb[3] may all be arbitrary strides for 4D views
