@@ -705,6 +705,16 @@ class MXFP4(__Quant, qtype=GGMLQuantizationType.MXFP4):
         return (d * qs.astype(np.float32))
 
 
+class MXFP6_E2M3(__Quant, qtype=GGMLQuantizationType.MXFP6_E2M3):
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        raise QuantError("MXFP6_E2M3 quantization is not yet supported")
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        raise QuantError("MXFP6_E2M3 tiled dequantization is not yet supported")
+
+
 class NVFP4(__Quant, qtype=GGMLQuantizationType.NVFP4):
     # E2M1 values doubled (kvalues_mxfp4 convention)
     kvalues = (0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12)
