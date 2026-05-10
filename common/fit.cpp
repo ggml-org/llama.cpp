@@ -8,28 +8,10 @@
 #include <array>
 #include <cassert>
 #include <cinttypes>
-#include <fstream>
 #include <set>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-#if defined(__linux__)
-#include <unistd.h>
-#endif
-
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
-
-#if defined(__APPLE__) && defined(__MACH__)
-#include <mach/mach.h>
-#endif
 
 // this enum is only used in llama_params_fit_impl but needs to be defined outside of it to fix a Windows compilation issue
 // enum to identify part of a layer for distributing its tensors:
@@ -169,14 +151,6 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data(
     return ret;
 }
 
-struct common_fit_host_budget {
-    bool valid = false;
-    size_t budget = 0;
-    size_t available = 0;
-    size_t reserve = 0;
-    const char * source = "unavailable";
-};
-
 static bool common_fit_uses_host_memory(const std::vector<ggml_backend_dev_t> & devs) {
     return devs.empty() || (devs.size() == 1 && ggml_backend_dev_type(devs[0]) == GGML_BACKEND_DEVICE_TYPE_IGPU);
 }
@@ -251,130 +225,6 @@ static void common_fit_try_record_context_profile(
     }
 }
 
-#if defined(__linux__)
-static bool common_fit_linux_get_mem_kib(
-        uint64_t & free_kib, uint64_t & inactive_file_kib, uint64_t & sreclaimable_kib) {
-    std::ifstream f("/proc/meminfo");
-    if (!f.is_open()) {
-        return false;
-    }
-
-    std::string line;
-    bool found_free = false;
-    int found = 0;
-    while (std::getline(f, line)) {
-        if (line.compare(0, 8, "MemFree:") == 0) {
-            if (std::istringstream(line.substr(8)) >> free_kib) {
-                found_free = true;
-                ++found;
-            }
-        } else if (line.compare(0, 15, "Inactive(file):") == 0) {
-            found += (std::istringstream(line.substr(15)) >> inactive_file_kib) ? 1 : 0;
-        } else if (line.compare(0, 13, "SReclaimable:") == 0) {
-            found += (std::istringstream(line.substr(13)) >> sreclaimable_kib) ? 1 : 0;
-        }
-        if (found == 3) {
-            break;
-        }
-    }
-    return found_free;
-}
-
-static uint64_t common_fit_linux_swappiness() {
-    std::ifstream f("/proc/sys/vm/swappiness");
-    uint64_t v = 60;
-    return (f >> v) ? std::min<uint64_t>(v, 200ULL) : v;
-}
-
-static size_t common_fit_linux_zone_high_watermark() {
-    std::ifstream f("/proc/zoneinfo");
-    uint64_t pages = 0;
-    std::string line;
-    while (std::getline(f, line)) {
-        std::string key;
-        uint64_t v = 0;
-        std::istringstream iss(line);
-        if ((iss >> key >> v) && key == "high") {
-            pages += v;
-        }
-    }
-
-    const long page = sysconf(_SC_PAGESIZE);
-    return page > 0 ? static_cast<size_t>(pages) * static_cast<size_t>(page) : 0;
-}
-
-static bool common_fit_linux_cgroup_available(size_t & available) {
-    const char * paths[][2] = {
-        { "/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current" },
-        { "/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes" },
-    };
-    for (const auto & path : paths) {
-        uint64_t limit = 0, used = 0;
-        if ((std::ifstream(path[0]) >> limit) && (std::ifstream(path[1]) >> used) && limit < (1ULL << 60)) {
-            available = static_cast<size_t>(limit > used ? limit - used : 0);
-            return true;
-        }
-    }
-    return false;
-}
-#endif
-
-static common_fit_host_budget common_fit_get_host_pressure_budget() {
-    common_fit_host_budget ret;
-
-#if defined(__linux__)
-    uint64_t free_kib = 0, inactive_file_kib = 0, sreclaimable_kib = 0;
-    if (common_fit_linux_get_mem_kib(free_kib, inactive_file_kib, sreclaimable_kib)) {
-        // Estimate no-swap host budget: free pages plus reclaimable file/slab cache,
-        // minus Linux zone high watermarks kept by the kernel.
-        const uint64_t swappiness = common_fit_linux_swappiness();
-        const uint64_t file_prio = swappiness >= 200 ? 0 : 200 - swappiness;
-        ret.available = static_cast<size_t>(free_kib + inactive_file_kib * file_prio / 200 + sreclaimable_kib) * 1024;
-        ret.reserve = common_fit_linux_zone_high_watermark();
-        ret.budget = ret.available > ret.reserve ? ret.available - ret.reserve : 0;
-        ret.source = "linux:free+weighted_file+slab-high";
-        size_t cgroup_available = 0;
-        if (common_fit_linux_cgroup_available(cgroup_available)) {
-            ret.available = std::min(ret.available, cgroup_available);
-            ret.budget = std::min(ret.budget, cgroup_available);
-            ret.source = "linux:free+weighted_file+slab-high+cgroup";
-        }
-        ret.valid = true;
-        return ret;
-    }
-#elif defined(_WIN32)
-    MEMORYSTATUSEX st;
-    st.dwLength = sizeof(st);
-    if (GlobalMemoryStatusEx(&st)) {
-        ret.available = static_cast<size_t>(st.ullAvailPhys);
-        ret.budget = ret.available;
-        ret.source = "win32:avail_phys";
-        ret.valid = true;
-        return ret;
-    }
-#elif defined(__APPLE__) && defined(__MACH__)
-    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
-    vm_statistics64_data_t vmstat;
-    vm_size_t page_size = 0;
-    mach_port_t host = mach_host_self();
-    const bool ok = host_statistics64(host, HOST_VM_INFO64,
-            reinterpret_cast<host_info64_t>(&vmstat), &count) == KERN_SUCCESS &&
-            host_page_size(host, &page_size) == KERN_SUCCESS;
-    mach_port_deallocate(mach_task_self(), host);
-    if (ok && page_size > 0) {
-        const uint64_t pages = static_cast<uint64_t>(vmstat.free_count) +
-                static_cast<uint64_t>(vmstat.speculative_count);
-        ret.available = static_cast<size_t>(pages) * static_cast<size_t>(page_size);
-        ret.budget = ret.available;
-        ret.source = "darwin:free+speculative";
-        ret.valid = true;
-        return ret;
-    }
-#endif
-
-    return ret;
-}
-
 bool common_fit_context_after_model_load(
         const struct llama_model * model, struct llama_context_params * cparams,
         const common_fit_context_profile * p) {
@@ -398,21 +248,34 @@ bool common_fit_context_after_model_load(
         ggml_backend_dev_memory(dev, &dev_free, &dev_total);
     }
 
-    const common_fit_host_budget host = common_fit_get_host_pressure_budget();
-    if (!host.valid || (dev && dev_free == 0)) {
+    ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (cpu_dev == nullptr) {
+        LOG_DBG("%s: post-load host-pressure fit skipped: no CPU backend found\n", __func__);
+        return false;
+    }
+
+    size_t host_free = 0;
+    size_t host_total = 0;
+    ggml_backend_dev_memory(cpu_dev, &host_free, &host_total);
+
+    if (dev && dev_free == 0) {
         LOG_DBG("%s: post-load host-pressure fit skipped: "
-                "device_free=%" PRId64 "/%" PRId64 " MiB, host_budget=%" PRId64 " MiB (%s)\n",
+                "device_free=%" PRId64 "/%" PRId64 " MiB, host_free=%" PRId64 "/%" PRId64 " MiB\n",
                 __func__, static_cast<int64_t>(dev_free / MiB), static_cast<int64_t>(dev_total / MiB),
-                static_cast<int64_t>(host.budget / MiB), host.source);
+                static_cast<int64_t>(host_free / MiB), static_cast<int64_t>(host_total / MiB));
         return false;
     }
 
     const size_t margin = p->margin;
-    const size_t budget = dev ? std::min(dev_free, host.budget) : host.budget;
+    const size_t budget = dev ? std::min(dev_free, host_free) : host_free;
 
-    LOG_DBG("%s: post-load host-pressure fit: budget=%" PRId64 " MiB, min_ctx_use=%" PRId64
-            " MiB, bytes_per_ctx=%" PRId64 ", source=%s\n",
-            __func__, static_cast<int64_t>(budget / MiB), p->used_min / MiB, p->bytes_per_ctx, host.source);
+    LOG_DBG("%s: post-load host-pressure fit: budget=%" PRId64 " MiB, "
+            "device_free=%" PRId64 "/%" PRId64 " MiB, host_free=%" PRId64 "/%" PRId64
+            " MiB, min_ctx_use=%" PRId64 " MiB, bytes_per_ctx=%" PRId64 "\n",
+            __func__, static_cast<int64_t>(budget / MiB),
+            static_cast<int64_t>(dev_free / MiB), static_cast<int64_t>(dev_total / MiB),
+            static_cast<int64_t>(host_free / MiB), static_cast<int64_t>(host_total / MiB),
+            p->used_min / MiB, p->bytes_per_ctx);
 
     const uint64_t budget_after_margin = budget > margin ? static_cast<uint64_t>(budget - margin) : 0;
     const uint64_t used_min            = static_cast<uint64_t>(p->used_min);
@@ -500,9 +363,9 @@ static void common_params_fit_impl(
 
     if (nd == 0) {
         sum_projected_used = dmds_full.back().mb.total();
-        sum_free           = dmds_full.back().total;
+        sum_free           = dmds_full.back().free;
         sum_projected_free = sum_free - sum_projected_used;
-        LOG_INF("%s: projected to use %" PRId64 " MiB of host memory vs. %" PRId64 " MiB of total host memory\n",
+        LOG_INF("%s: projected to use %" PRId64 " MiB of host memory vs. %" PRId64 " MiB of free host memory\n",
             __func__, sum_projected_used/MiB, sum_free/MiB);
         if (sum_projected_free >= margins[0]) {
             common_fit_try_record_context_profile(path_model, mparams, cparams, devs, dmds_full,

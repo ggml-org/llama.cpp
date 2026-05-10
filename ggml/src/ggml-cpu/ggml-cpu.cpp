@@ -6,7 +6,11 @@
 #include "ggml-impl.h"
 #include "amx/amx.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -35,6 +39,10 @@
 #if defined(__APPLE__)
 #    include <sys/sysctl.h>
 #    include <sys/types.h>
+#endif
+
+#if defined(__APPLE__) && defined(__MACH__)
+#    include <mach/mach.h>
 #endif
 
 // ggml-backend interface
@@ -362,6 +370,124 @@ static const char * ggml_backend_cpu_device_get_description(ggml_backend_dev_t d
     return ctx->description.c_str();
 }
 
+#if defined(__linux__)
+static bool ggml_backend_cpu_linux_get_mem_kib(
+        uint64_t & free_kib, uint64_t & inactive_file_kib, uint64_t & sreclaimable_kib) {
+    std::ifstream f("/proc/meminfo");
+    if (!f.is_open()) {
+        return false;
+    }
+
+    std::string line;
+    bool found_free = false;
+    int found = 0;
+    while (std::getline(f, line)) {
+        if (line.compare(0, 8, "MemFree:") == 0) {
+            if (std::istringstream(line.substr(8)) >> free_kib) {
+                found_free = true;
+                ++found;
+            }
+        } else if (line.compare(0, 15, "Inactive(file):") == 0) {
+            found += (std::istringstream(line.substr(15)) >> inactive_file_kib) ? 1 : 0;
+        } else if (line.compare(0, 13, "SReclaimable:") == 0) {
+            found += (std::istringstream(line.substr(13)) >> sreclaimable_kib) ? 1 : 0;
+        }
+        if (found == 3) {
+            break;
+        }
+    }
+    return found_free;
+}
+
+static uint64_t ggml_backend_cpu_linux_swappiness() {
+    std::ifstream f("/proc/sys/vm/swappiness");
+    uint64_t v = 60;
+    return (f >> v) ? std::min<uint64_t>(v, 200ULL) : v;
+}
+
+static size_t ggml_backend_cpu_linux_zone_high_watermark() {
+    std::ifstream f("/proc/zoneinfo");
+    uint64_t pages = 0;
+    std::string line;
+    while (std::getline(f, line)) {
+        std::string key;
+        uint64_t v = 0;
+        std::istringstream iss(line);
+        if ((iss >> key >> v) && key == "high") {
+            pages += v;
+        }
+    }
+
+    const long page_size = sysconf(_SC_PAGESIZE);
+    return page_size > 0 ? static_cast<size_t>(pages) * static_cast<size_t>(page_size) : 0;
+}
+
+static bool ggml_backend_cpu_linux_cgroup_available(size_t & available) {
+    const char * paths[][2] = {
+        { "/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current" },
+        { "/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes" },
+    };
+    for (const auto & path : paths) {
+        uint64_t limit = 0;
+        uint64_t used  = 0;
+        if ((std::ifstream(path[0]) >> limit) && (std::ifstream(path[1]) >> used) && limit < (1ULL << 60)) {
+            available = static_cast<size_t>(limit > used ? limit - used : 0);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool ggml_backend_cpu_get_available_memory(size_t & available) {
+    uint64_t free_kib = 0;
+    uint64_t inactive_file_kib = 0;
+    uint64_t sreclaimable_kib = 0;
+    if (!ggml_backend_cpu_linux_get_mem_kib(free_kib, inactive_file_kib, sreclaimable_kib)) {
+        return false;
+    }
+
+    // Estimate no-swap host budget: free pages plus reclaimable file/slab cache,
+    // minus Linux zone high watermarks kept by the kernel.
+    const uint64_t swappiness = ggml_backend_cpu_linux_swappiness();
+    const uint64_t file_prio = swappiness >= 200 ? 0 : 200 - swappiness;
+    const size_t reclaimable = static_cast<size_t>(
+            free_kib + inactive_file_kib * file_prio / 200 + sreclaimable_kib) * 1024;
+    const size_t reserve = ggml_backend_cpu_linux_zone_high_watermark();
+    available = reclaimable > reserve ? reclaimable - reserve : 0;
+
+    size_t cgroup_available = 0;
+    if (ggml_backend_cpu_linux_cgroup_available(cgroup_available)) {
+        available = std::min(available, cgroup_available);
+    }
+
+    return true;
+}
+#elif defined(__APPLE__) && defined(__MACH__)
+static bool ggml_backend_cpu_get_available_memory(size_t & available) {
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    vm_statistics64_data_t vmstat;
+    vm_size_t page_size = 0;
+    mach_port_t host = mach_host_self();
+    const bool ok = host_statistics64(host, HOST_VM_INFO64,
+            reinterpret_cast<host_info64_t>(&vmstat), &count) == KERN_SUCCESS &&
+            host_page_size(host, &page_size) == KERN_SUCCESS;
+    mach_port_deallocate(mach_task_self(), host);
+    if (!ok || page_size == 0) {
+        return false;
+    }
+
+    const uint64_t pages = static_cast<uint64_t>(vmstat.free_count) +
+            static_cast<uint64_t>(vmstat.speculative_count);
+    available = static_cast<size_t>(pages) * static_cast<size_t>(page_size);
+    return true;
+}
+#else
+static bool ggml_backend_cpu_get_available_memory(size_t & available) {
+    GGML_UNUSED(available);
+    return false;
+}
+#endif
+
 static void ggml_backend_cpu_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
 #ifdef _WIN32
     MEMORYSTATUSEX status;
@@ -374,8 +500,10 @@ static void ggml_backend_cpu_device_get_memory(ggml_backend_dev_t dev, size_t * 
     long page_size = sysconf(_SC_PAGE_SIZE);
     *total = pages * page_size;
 
-    // "free" system memory is ill-defined, for practical purposes assume that all of it is free:
-    *free = *total;
+    if (!ggml_backend_cpu_get_available_memory(*free)) {
+        // "free" system memory is ill-defined on this platform; keep the old behavior.
+        *free = *total;
+    }
 #endif // _WIN32
 
     GGML_UNUSED(dev);
