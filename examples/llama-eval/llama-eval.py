@@ -1357,6 +1357,9 @@ def main():
 
         grader_server_url = args.grader_server if args.grader_server else server_configs[0].url
         grader_model_name = args.grader_model if args.grader_model else args.model
+        if args.grader_type == "llm" and not grader_model_name:
+            print("Error: --grader-type llm requires --grader-model or --model")
+            sys.exit(1)
         grader = Grader(
             grader_type=args.grader_type,
             grader_script=args.grader_script,
@@ -1372,6 +1375,9 @@ def main():
 
         grader_server_url = args.grader_server if args.grader_server else server_configs[0].url
         grader_model_name = args.grader_model if args.grader_model else args.model
+        if args.grader_type == "llm" and not grader_model_name:
+            print("Error: --grader-type llm requires --grader-model or --model")
+            sys.exit(1)
 
         grader = Grader(
             grader_type=args.grader_type,
