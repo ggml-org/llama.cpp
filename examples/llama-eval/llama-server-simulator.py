@@ -104,7 +104,7 @@ class AimeDataset:
                 debug_log(f"DEBUG: Found match (no LaTeX) at index {i}")
                 return question
 
-            # Calculate Levenshtein distance for partial matches
+            # Calculate Dice coefficient for partial matches
             # Only consider if request is at least 50% of question length
             if len(request_lower) >= len(question_lower) * 0.5:
                 distance = dice(question_lower, request_lower)
