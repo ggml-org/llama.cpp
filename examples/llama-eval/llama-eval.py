@@ -763,14 +763,14 @@ class Grader:
         self,
         grader_type: str = "llm",
         grader_script: Optional[str] = None,
-        judge_model_name: Optional[str] = None,
-        judge_server_url: str = "",
+        grader_model_name: Optional[str] = None,
+        grader_server_url: str = "",
         dataset_type: str = "aime"
     ):
         self.grader_type = grader_type
         self.grader_script = grader_script
-        self.judge_model_name = judge_model_name
-        self.judge_server_url = judge_server_url
+        self.grader_model_name = grader_model_name
+        self.grader_server_url = grader_server_url
         self.dataset_type = dataset_type
         self.pattern = self._get_pattern()
 
@@ -860,10 +860,10 @@ When extracting the answer, provide only the extracted answer itself, nothing el
 
 Please provide only the extracted answer, nothing else. If there is no clear answer that can be extracted from the response, reply with 'no answer'."""
 
-        url = f"{self.judge_server_url}/v1/chat/completions"
+        url = f"{self.grader_server_url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
         data = {
-            "model": self.judge_model_name,
+            "model": self.grader_model_name,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -1126,16 +1126,16 @@ def main():
         help="CLI grader script path (required for --grader-type cli)"
     )
     parser.add_argument(
-        "--judge-server",
+        "--grader-server",
         type=str,
         default="",
-        help="Server URL for LLM judge (default: same as main server)"
+        help="Server URL for LLM grader (default: same as main server)"
     )
     parser.add_argument(
-        "--judge-model",
+        "--grader-model",
         type=str,
         default="",
-        help="Model name for LLM judge (default: same as main model)"
+        help="Model name for LLM grader (default: same as main model)"
     )
     parser.add_argument(
         "--resume",
@@ -1174,13 +1174,13 @@ def main():
         eval_state.tasks = pending_tasks
         eval_state.task_states["cases"] = existing_cases
 
-        judge_server_url = args.judge_server if args.judge_server else args.server
-        judge_model_name = args.judge_model if args.judge_model else args.model
+        grader_server_url = args.grader_server if args.grader_server else args.server
+        grader_model_name = args.grader_model if args.grader_model else args.model
         grader = Grader(
             grader_type=args.grader_type,
             grader_script=args.grader_script,
-            judge_model_name=judge_model_name,
-            judge_server_url=judge_server_url,
+            grader_model_name=grader_model_name,
+            grader_server_url=grader_server_url,
             dataset_type=eval_state.dataset_type
         )
         resume = True
@@ -1189,19 +1189,19 @@ def main():
             print("Error: No existing eval state found to resume")
             sys.exit(1)
 
-        judge_server_url = args.judge_server if args.judge_server else args.server
-        judge_model_name = args.judge_model if args.judge_model else args.model
+        grader_server_url = args.grader_server if args.grader_server else args.server
+        grader_model_name = args.grader_model if args.grader_model else args.model
 
         grader = Grader(
             grader_type=args.grader_type,
             grader_script=args.grader_script,
-            judge_model_name=judge_model_name,
-            judge_server_url=judge_server_url,
+            grader_model_name=grader_model_name,
+            grader_server_url=grader_server_url,
             dataset_type=args.dataset
         )
 
-        if args.grader_type == "llm" and not args.judge_server:
-            print("Warning: Using same server for LLM judge (no --judge-server specified)")
+        if args.grader_type == "llm" and not args.grader_server:
+            print("Warning: Using same server for LLM grader (no --grader-server specified)")
 
         sampling_config = {}
         if args.temperature is not None:
