@@ -1504,6 +1504,12 @@ private:
             // set probability for top n_probs tokens
             result.probs.reserve(n_probs);
             for (size_t i = 0; i < n_probs; i++) {
+                // Some samplers do return 0.0 probabilities, others don't.
+                // Filter 0.0 probailities, to ensure the behavior is consistent.
+                if (cur_p->data[i].p == 0.0) {
+                    break;
+                }
+
                 result.probs.push_back({
                     cur_p->data[i].id,
                     common_token_to_piece(ctx, cur_p->data[i].id, special),

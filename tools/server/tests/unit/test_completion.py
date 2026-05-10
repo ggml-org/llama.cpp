@@ -491,28 +491,38 @@ def test_n_probs_post_sampling():
     global server
     server.start()
     res = server.make_request("POST", "/completion", data={
-        "prompt": "I believe the meaning of life is",
+        "prompt": "Today was the day. Today I would finally become a",
         "n_probs": 10,
-        "temperature": 0.0,
+        "temperature": 1.0,
         "n_predict": 5,
         "post_sampling_probs": True,
     })
     assert res.status_code == 200
     assert "completion_probabilities" in res.body
     assert len(res.body["completion_probabilities"]) == 5
-    for tok in res.body["completion_probabilities"]:
+    for (i, tok) in enumerate(res.body["completion_probabilities"]):
         assert "id" in tok and tok["id"] > 0
         assert "token" in tok and type(tok["token"]) == str
         assert "prob" in tok and 0.0 < tok["prob"] <= 1.0
         assert "bytes" in tok and type(tok["bytes"]) == list
-        assert len(tok["top_probs"]) == 10
+        assert "top_probs" in tok and type(tok["top_probs"]) == list
+
         for prob in tok["top_probs"]:
             assert "id" in prob and prob["id"] > 0
             assert "token" in prob and type(prob["token"]) == str
-            assert "prob" in prob and 0.0 <= prob["prob"] <= 1.0
+            # 0.0 probability tokens should never be returned by the server
+            assert "prob" in prob and 0.0 < prob["prob"] <= 1.0
             assert "bytes" in prob and type(prob["bytes"]) == list
-        # because the test model usually output token with either 100% or 0% probability, we need to check all the top_probs
-        assert any(prob["prob"] == 1.0 for prob in tok["top_probs"])
+
+        if i == 0:
+            # The prompt is vague enough that we should get at least 10 possibilities
+            # for the first token.
+            assert len(tok["top_probs"]) == 10
+
+        if len(tok["top_probs"]) < 10:
+            # Getting less than the requested number of probabilities should only happen
+            # if the ones we did get already sum to 1.0.
+            assert sum(p["prob"] for p in tok["top_probs"]) == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize("tokenize,openai_style", [(False, False), (False, True), (True, False), (True, True)])
