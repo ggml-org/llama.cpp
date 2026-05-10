@@ -88,4 +88,8 @@ static __dpct_inline__ void turbo_wht(T &val, const sycl::nd_item<DIM> &item_ct1
  * }
  */
 
+// ─── Public API ───────────────────────────────────────────────────────────
+// Called from ggml-sycl.cpp to dispatch GGML_OP_TURBO_WHT on SYCL devices.
+void ggml_sycl_op_turbo_wht(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
 #endif // GGML_SYCL_TURBO_WHT_HPP

@@ -211,6 +211,10 @@ if (GGML_SYCL)
     add_executable(test-sycl-fuzz test-sycl-fuzz.cpp)
     target_link_libraries(test-sycl-fuzz PRIVATE llama-common ggml-sycl)
     add_test(NAME test-sycl-fuzz COMMAND test-sycl-fuzz)
+
+    add_executable(test-sycl-stress-deep test-sycl-stress-deep.cpp)
+    target_link_libraries(test-sycl-stress-deep PRIVATE llama-common ggml-sycl)
+    add_test(NAME test-sycl-stress-deep COMMAND test-sycl-stress-deep)
 endif()
 llama_build_and_test(
     test-peg-parser.cpp

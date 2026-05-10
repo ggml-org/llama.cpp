@@ -4,6 +4,7 @@
 #include "common.hpp"
 #include "quants.hpp"
 #include "vecdotq.hpp"
+#include "turbo-quants.hpp"
 
 template <typename reorder_vec_dot_q_sycl>
 static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
@@ -698,6 +699,159 @@ static void reorder_mul_mat_vec_q8_0_q8_1_sycl(const void * vx, const void * vy,
     });
 }
 
+static void mul_mat_vec_turbo2_0_q8_1_sycl(const void *vx, const void *vy,
+                                        float *dst, const int ncols,
+                                        const int nrows,
+                                        dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_TURBO2 == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1)
+                [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+                    if (row >= nrows) return;
+                    
+                    const block_turbo2_0 * x = (const block_turbo2_0 *) vx;
+                    const block_q8_1 * y = (const block_q8_1 *) vy;
+                    
+                    float tmp = 0.0f;
+                    const int blocks_per_row = ncols / QK_TURBO2;
+                    
+                    for (int i = item_ct1.get_local_id(2); i < blocks_per_row; i += WARP_SIZE) {
+                        const int ibx = row * blocks_per_row + i;
+                        const block_turbo2_0 * block_x = &x[ibx];
+                        const block_q8_1 * block_y = &y[i * (QK_TURBO2 / QK8_1)];
+                        
+                        float norm = (float)block_x->norm;
+                        for (int j = 0; j < QK_TURBO2; ++j) {
+                            float val_x = dequantize_turbo2_0(block_x, j, norm);
+                            const int q8_blk = j / QK8_1;
+                            const int q8_idx = j % QK8_1;
+                            const block_q8_1 * yb = block_y + q8_blk;
+                            float val_y = (float)yb->qs[q8_idx] * (float)yb->ds.x() + (float)yb->ds.y();
+                            tmp += val_x * val_y;
+                        }
+                    }
+                    
+                    #pragma unroll
+                    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+                        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+                    }
+                    
+                    if (item_ct1.get_local_id(2) == 0) {
+                        dst[row] = tmp;
+                    }
+                });
+    });
+}
+
+static void mul_mat_vec_turbo4_0_q8_1_sycl(const void *vx, const void *vy,
+                                        float *dst, const int ncols,
+                                        const int nrows,
+                                        dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_TURBO4 == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1)
+                [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+                    if (row >= nrows) return;
+                    
+                    const block_turbo4_0 * x = (const block_turbo4_0 *) vx;
+                    const block_q8_1 * y = (const block_q8_1 *) vy;
+                    
+                    float tmp = 0.0f;
+                    const int blocks_per_row = ncols / QK_TURBO4;
+                    
+                    for (int i = item_ct1.get_local_id(2); i < blocks_per_row; i += WARP_SIZE) {
+                        const int ibx = row * blocks_per_row + i;
+                        const block_turbo4_0 * block_x = &x[ibx];
+                        const block_q8_1 * block_y = &y[i * (QK_TURBO4 / QK8_1)];
+                        
+                        float norm = (float)block_x->norm;
+                        for (int j = 0; j < QK_TURBO4; ++j) {
+                            float val_x = dequantize_turbo4_0(block_x, j, norm);
+                            const int q8_blk = j / QK8_1;
+                            const int q8_idx = j % QK8_1;
+                            const block_q8_1 * yb = block_y + q8_blk;
+                            float val_y = (float)yb->qs[q8_idx] * (float)yb->ds.x() + (float)yb->ds.y();
+                            tmp += val_x * val_y;
+                        }
+                    }
+                    
+                    #pragma unroll
+                    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+                        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+                    }
+                    
+                    if (item_ct1.get_local_id(2) == 0) {
+                        dst[row] = tmp;
+                    }
+                });
+    });
+}
+
+static void mul_mat_vec_turbo3_0_q8_1_sycl(const void *vx, const void *vy,
+                                        float *dst, const int ncols,
+                                        const int nrows,
+                                        dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_TURBO3 == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1)
+                [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+                    if (row >= nrows) return;
+                    
+                    const block_turbo3_0 * x = (const block_turbo3_0 *) vx;
+                    const block_q8_1 * y = (const block_q8_1 *) vy;
+                    
+                    float tmp = 0.0f;
+                    const int blocks_per_row = ncols / QK_TURBO3;
+                    
+                    for (int i = item_ct1.get_local_id(2); i < blocks_per_row; i += WARP_SIZE) {
+                        const int ibx = row * blocks_per_row + i;
+                        const block_turbo3_0 * block_x = &x[ibx];
+                        const block_q8_1 * block_y = &y[i * (QK_TURBO3 / QK8_1)];
+                        
+                        float norm = (float)block_x->norm;
+                        for (int j = 0; j < QK_TURBO3; ++j) {
+                            float val_x = dequantize_turbo3_0(block_x, j, norm);
+                            const int q8_blk = j / QK8_1;
+                            const int q8_idx = j % QK8_1;
+                            const block_q8_1 * yb = block_y + q8_blk;
+                            float val_y = (float)yb->qs[q8_idx] * (float)yb->ds.x() + (float)yb->ds.y();
+                            tmp += val_x * val_y;
+                        }
+                    }
+                    
+                    #pragma unroll
+                    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+                        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+                    }
+                    
+                    if (item_ct1.get_local_id(2) == 0) {
+                        dst[row] = tmp;
+                    }
+                });
+    });
+}
+
 static void mul_mat_vec_q8_0_q8_1_sycl(const void *vx, const void *vy,
                                        float *dst, const int ncols,
                                        const int nrows,
@@ -1082,6 +1236,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                                 const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low,
                                 const int64_t row_high, const int64_t src1_ncols, const int64_t src1_padded_col_size,
                                 const dpct::queue_ptr & stream) {
+    GGML_SYCL_DEBUG("ggml_sycl_op_mul_mat_vec_q: src0 type = %s\n", ggml_type_name(src0->type));
     const int64_t ne10 = src1->ne[0];
     GGML_ASSERT(ne10 % QK8_1 == 0);
 
@@ -1186,6 +1341,15 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 break;
             case GGML_TYPE_MXFP4:
                 mul_mat_vec_mxfp4_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                break;
+            case GGML_TYPE_TURBO2_0:
+                mul_mat_vec_turbo2_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                break;
+            case GGML_TYPE_TURBO3_0:
+                mul_mat_vec_turbo3_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                break;
+            case GGML_TYPE_TURBO4_0:
+                mul_mat_vec_turbo4_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_NVFP4:
                 mul_mat_vec_nvfp4_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);

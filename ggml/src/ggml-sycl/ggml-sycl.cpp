@@ -52,6 +52,7 @@
 #include "ggml-sycl/repeat_back.hpp"
 #include "ggml-sycl/set_rows.hpp"
 #include "ggml-sycl/set.hpp"
+#include "ggml-sycl/turbo-wht.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
 #include "ggml-sycl/sycl_hw.hpp"
 
@@ -3630,12 +3631,14 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
 
 static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     return ggml_sycl_supports_dmmv(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-           src0->ne[0] % GGML_SYCL_DMMV_X == 0 && src1->ne[1] == 1;
+           src0->ne[0] % GGML_SYCL_DMMV_X == 0 && src1->ne[1] == 1 &&
+           src0->type != GGML_TYPE_TURBO2_0 && src0->type != GGML_TYPE_TURBO3_0 && src0->type != GGML_TYPE_TURBO4_0;
 }
 
 static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     return ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-           src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+           src1->ne[1] <= MMVQ_MAX_BATCH_SIZE &&
+           src0->type != GGML_TYPE_TURBO2_0 && src0->type != GGML_TYPE_TURBO3_0 && src0->type != GGML_TYPE_TURBO4_0;
 }
 
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4319,6 +4322,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             break;
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_sycl_flash_attn_ext(ctx, dst);
+            break;
+        case GGML_OP_TURBO_WHT:
+            ggml_sycl_op_turbo_wht(ctx, dst);
             break;
         default:
             return false;
@@ -5029,6 +5035,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return op->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_sycl_flash_attn_ext_supported(device, op);
+        case GGML_OP_TURBO_WHT:
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                   op->src[0]->ne[0] % 32 == 0;
         default:
             return false;
     }
