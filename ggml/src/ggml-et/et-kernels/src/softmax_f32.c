@@ -550,9 +550,6 @@ static inline void compute_softmax_row(
     }
 }
 
-static inline size_t tensor_bytes(const struct ggml_tensor *t) {
-    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
-}
 
 // Main entry point for Softmax kernel
 int entry_point(struct ggml_et_softmax_params* params, void* env) {

@@ -23,9 +23,6 @@ static inline float softplus_f32(float x) {
     return x <= 20.0f ? et_logf(1.0f + et_expf(x)) : x;
 }
 
-static inline size_t tensor_bytes(const struct ggml_tensor *t) {
-    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
-}
 
 int entry_point(struct ggml_et_ssm_scan_params * params, void * env) {
     kernel_environment_t * kernel_env = (kernel_environment_t *) env;

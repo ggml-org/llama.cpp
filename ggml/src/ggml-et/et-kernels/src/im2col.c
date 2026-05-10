@@ -29,9 +29,6 @@ static inline float im2col_load_src_elem(const void * src_base, enum ggml_type s
     return fp16_to_fp32(((const uint16_t *) src_base)[idx]);
 }
 
-static inline size_t tensor_bytes(const struct ggml_tensor *t) {
-    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
-}
 
 int entry_point(struct ggml_et_binary_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;

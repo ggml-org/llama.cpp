@@ -109,9 +109,6 @@ pack_b_interleaved(et_fp16_t *out,
     );
 }
 
-static inline size_t tensor_bytes(const struct ggml_tensor *t) {
-    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
-}
 
 int entry_point(struct ggml_et_binary_params *params, void *env) {
     (void) env;

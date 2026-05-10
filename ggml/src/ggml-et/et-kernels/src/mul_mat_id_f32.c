@@ -47,9 +47,6 @@
 #include "quants.h"
 #include "block_ops.h"
 
-static inline size_t tensor_bytes(const struct ggml_tensor *t) {
-    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
-}
 
 // Main entry point for MUL_MAT_ID kernel (Mixture of Experts)
 int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {

@@ -485,6 +485,8 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     // All teams in a shire must iterate the same number of times so the
     // per-iter shire barriers stay balanced. Teams whose assigned row is
     // past total_rows still call the barriers but skip the packing work.
+    et_barrier(ET_BARRIER_SHIRE);
+    // et_barrier(ET_BARRIER_GLOBAL);
     if (is_hart1) {
         uint32_t chunk_id = 0;
         const int64_t row_base = (int64_t)shire_id + local_tile_idx * NUM_COMPUTE_SHIRES;
