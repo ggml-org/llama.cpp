@@ -13,6 +13,7 @@
 #include <float.h>
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
+#include <stdint.h>
 
 #define GROUP_MAX_EPS 1e-15f
 #define GROUP_MAX_EPS_IQ3_XXS 1e-8f
@@ -52,6 +53,10 @@ void quantize_row_q8_1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRI
 
 void quantize_row_mxfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_mxfp4_ref(x, y, k);
+}
+
+void quantize_row_mxfp6_e2m3(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_mxfp6_e2m3_ref(x, y, k);
 }
 
 void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
@@ -273,6 +278,116 @@ void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         sumf += d * (sumi1 + sumi2);
     }
     *s = sumf;
+}
+
+void ggml_vec_dot_mxfp6_e2m3_q8_0_generic(
+    int n, float * GGML_RESTRICT s, size_t bs,
+    const void * GGML_RESTRICT vx, size_t bx,
+    const void * GGML_RESTRICT vy, size_t by,
+    int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+
+    assert(n % QK_MXFP6 == 0);
+    static_assert(QK_MXFP6 == 2 * QK8_0, "QK_MXFP6 must contain two q8_0 blocks");
+    static_assert(QK_MXFP6_SUB % 4 == 0, "MXFP6 fragment must contain groups of four 6-bit codes");
+
+    typedef struct {
+        uint8_t scale;
+        uint8_t packed[QK_MXFP6_PACKED_BYTES];
+    } mxfp6_k32_ref;
+    typedef struct {
+        mxfp6_k32_ref part[MXFP6_TILE_FRAGS];
+        uint8_t       pad[MXFP6_ROW_BYTES - MXFP6_TILE_FRAGS * sizeof(mxfp6_k32_ref)];
+    } mxfp6_row_ref;
+
+    const block_q8_0    * GGML_RESTRICT y = vy;
+    const int nb = n / QK_MXFP6;
+    const tensor_mxfp6 * tensor = bs != 0 ? (const tensor_mxfp6 *) (uintptr_t) bs : NULL;
+    const int64_t scale_channel = (int64_t) by;
+    float sumf = 0.0f;
+
+    if (bx > 0) {
+        const int row = (int) bx - 1;
+        const int row_in_tile = row & (MXFP6_TILE_ROWS - 1);
+        const size_t row_size = (size_t) nb * MXFP6_ROW_BYTES;
+        const char * tile_group = (const char *) vx - row_in_tile * row_size;
+        const tile_mxfp6 * GGML_RESTRICT tiles = (const tile_mxfp6 *) tile_group;
+
+        for (int ib = 0; ib < nb; ++ib) {
+            const tile_mxfp6 * tile = &tiles[ib];
+            for (int part = 0; part < MXFP6_TILE_FRAGS; ++part) {
+                const tile_mxfp6_frag * xf = &tile->frag[part];
+                const block_q8_0 * GGML_RESTRICT yb = &y[ib * MXFP6_TILE_FRAGS + part];
+                const int8_t * GGML_RESTRICT py = yb->qs;
+
+                const int scale_lane = ((row_in_tile & 7) * 4) + (row_in_tile >> 3);
+                int sumi0 = 0;
+                int sumi1 = 0;
+                int sumi2 = 0;
+                int sumi3 = 0;
+
+                for (int pack = 0; pack < QK_MXFP6_SUB / 4; ++pack, py += 4) {
+                    const int lane = ((row_in_tile & 7) * 4) + (pack & 3);
+                    const uint32_t v0 = xf->lane[lane][0];
+                    const uint32_t v1 = xf->lane[lane][1];
+                    const uint32_t v2 = xf->lane[lane][2];
+                    const uint32_t packed = (row_in_tile & 8) ?
+                        ((pack & 4) ? (v2 >> 8) : ((v0 >> 24) | (v1 << 8))) :
+                        ((pack & 4) ? ((v1 >> 16) | (v2 << 16)) : v0);
+
+                    sumi0 += (int) kvalues_mxfp6_e2m3[(packed >>  0) & 0x3F] * (int) py[0];
+                    sumi1 += (int) kvalues_mxfp6_e2m3[(packed >>  6) & 0x3F] * (int) py[1];
+                    sumi2 += (int) kvalues_mxfp6_e2m3[(packed >> 12) & 0x3F] * (int) py[2];
+                    sumi3 += (int) kvalues_mxfp6_e2m3[(packed >> 18) & 0x3F] * (int) py[3];
+                }
+
+                const float d = GGML_CPU_FP16_TO_FP32(yb->d) * GGML_CPU_E8M0_TO_FP32_HALF(xf->scale[scale_lane]) * 0.25f;
+                sumf += d * (float) (sumi0 + sumi1 + sumi2 + sumi3);
+            }
+        }
+
+        const float tensor_scale = tensor != NULL && tensor->weight_scales != NULL ? tensor->weight_scales[scale_channel] :
+                                   tensor != NULL ? tensor->weight_scale : 1.0f;
+        *s = tensor_scale > 0.0f && tensor_scale != 1.0f ? sumf * tensor_scale : sumf;
+        return;
+    }
+
+    const mxfp6_row_ref * GGML_RESTRICT x = vx;
+    for (int ib = 0; ib < nb; ++ib) {
+        for (int part = 0; part < MXFP6_TILE_FRAGS; ++part) {
+            const uint8_t * GGML_RESTRICT px = x[ib].part[part].packed;
+            const block_q8_0 * GGML_RESTRICT yb = &y[ib * MXFP6_TILE_FRAGS + part];
+            const int8_t * GGML_RESTRICT py = yb->qs;
+
+            int sumi0 = 0;
+            int sumi1 = 0;
+            int sumi2 = 0;
+            int sumi3 = 0;
+
+            for (int group = 0; group < QK_MXFP6_SUB / 4; ++group, px += 3, py += 4) {
+                const uint32_t packed = ((uint32_t) px[0] <<  0) |
+                                        ((uint32_t) px[1] <<  8) |
+                                        ((uint32_t) px[2] << 16);
+
+                sumi0 += (int) kvalues_mxfp6_e2m3[(packed >>  0) & 0x3F] * (int) py[0];
+                sumi1 += (int) kvalues_mxfp6_e2m3[(packed >>  6) & 0x3F] * (int) py[1];
+                sumi2 += (int) kvalues_mxfp6_e2m3[(packed >> 12) & 0x3F] * (int) py[2];
+                sumi3 += (int) kvalues_mxfp6_e2m3[(packed >> 18) & 0x3F] * (int) py[3];
+            }
+
+            const float d = GGML_CPU_FP16_TO_FP32(yb->d) * GGML_CPU_E8M0_TO_FP32_HALF(x[ib].part[part].scale) * 0.25f;
+            sumf += d * (float) (sumi0 + sumi1 + sumi2 + sumi3);
+        }
+    }
+
+    const float tensor_scale = tensor != NULL && tensor->weight_scales != NULL ? tensor->weight_scales[scale_channel] :
+                               tensor != NULL ? tensor->weight_scale : 1.0f;
+    *s = tensor_scale > 0.0f && tensor_scale != 1.0f ? sumf * tensor_scale : sumf;
+}
+
+void ggml_vec_dot_mxfp6_e2m3_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    ggml_vec_dot_mxfp6_e2m3_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
 }
 
 // NVFP4: super-block of 64 elements = 4 sub-blocks of 16 = 2 q8_0 blocks
