@@ -16,9 +16,6 @@ struct ggml_et_cont_params {
     struct ggml_tensor dst;      // F16 output tensor (contiguous)
 };
 
-static inline size_t tensor_bytes(const struct ggml_tensor *t) {
-    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
-}
 
 int entry_point(struct ggml_et_cont_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;

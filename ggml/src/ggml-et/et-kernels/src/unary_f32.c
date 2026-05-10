@@ -456,9 +456,6 @@ static inline void vec_softplus(float* dst, const float* src, int32_t n) {
     }
 }
 
-static inline size_t tensor_bytes(const struct ggml_tensor *t) {
-    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
-}
 
 //******************************************************************************
 // Main entry point

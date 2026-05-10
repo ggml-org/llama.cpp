@@ -39,9 +39,6 @@
 #define CACHE_LINE_F32_ELEMS  16   // 64 / 4
 #define CACHE_LINE_F16_ELEMS  32   // 64 / 2
 
-static inline size_t tensor_bytes(const struct ggml_tensor *t) {
-    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
-}
 
 static int64_t gcd64(int64_t a, int64_t b) {
     while (b) { int64_t t = b; b = a % b; a = t; }
