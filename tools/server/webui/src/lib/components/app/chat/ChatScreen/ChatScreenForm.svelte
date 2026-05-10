@@ -2,7 +2,6 @@
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
-	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
@@ -38,7 +37,6 @@
 	let message = $derived(initialMessage);
 	let previousIsLoading = $derived(isLoading);
 	let previousInitialMessage = $derived(initialMessage);
-	let widthClasses = $derived(chatWidthClasses());
 
 	const { clearDraft } = useDraftMessages({
 		getChatId: () => chatId,
@@ -110,7 +108,7 @@
 	});
 </script>
 
-<div class="relative mx-auto {widthClasses.class}">
+<div class="relative mx-auto">
 	<ChatForm
 		bind:this={chatFormRef}
 		bind:value={message}

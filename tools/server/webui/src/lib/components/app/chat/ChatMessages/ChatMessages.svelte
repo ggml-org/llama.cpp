@@ -7,8 +7,7 @@
 		chatPendingMessageContent,
 		chatPendingMessageExtras,
 		chatClearPendingMessage,
-		chatInjectPendingMessage,
-		chatWidthClasses
+		chatInjectPendingMessage
 	} from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
@@ -35,7 +34,6 @@
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 
 	const currentConfig = config();
-	let widthClasses = $derived(chatWidthClasses());
 
 	setChatActionsContext({
 		copy: async (message: DatabaseMessage) => {
@@ -211,7 +209,7 @@
 
 {#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
 	<ChatMessage
-		class="mx-auto mt-12 w-full {widthClasses.class}"
+		class="mx-auto mt-12 w-full"
 		{message}
 		{toolMessages}
 		{isLastAssistantMessage}
@@ -225,7 +223,7 @@
 
 	{#if pendingContent}
 		<ChatMessageUserPending
-			class="mx-auto mt-12 w-full {widthClasses.class}"
+			class="mx-auto mt-12 w-full"
 			content={pendingContent}
 			extras={agenticPendingSteeringMessageExtras(convId)}
 			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
@@ -239,7 +237,7 @@
 
 	{#if pendingContent}
 		<ChatMessageUserPending
-			class="mx-auto mt-12 w-full {widthClasses.class}"
+			class="mx-auto mt-12 w-full"
 			content={pendingContent}
 			extras={chatPendingMessageExtras(convId)}
 			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
