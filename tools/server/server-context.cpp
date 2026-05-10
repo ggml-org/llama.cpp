@@ -92,6 +92,10 @@ struct server_slot {
     std::vector<int32_t> spec_i_batch;
     server_prompt_checkpoint spec_ckpt;
     common_speculative_ptr spec;
+    bool spec_runtime_disabled = false;
+    int32_t spec_verify_batches = 0;
+    int32_t spec_verify_draft_total = 0;
+    int32_t spec_verify_draft_accepted = 0;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -218,6 +222,10 @@ struct server_slot {
         // clear speculative decoding stats
         n_draft_total = 0;
         n_draft_accepted = 0;
+        spec_runtime_disabled = false;
+        spec_verify_batches = 0;
+        spec_verify_draft_total = 0;
+        spec_verify_draft_accepted = 0;
 
         task_prev = std::move(task);
         task.reset();
@@ -307,6 +315,10 @@ struct server_slot {
         GGML_ASSERT(task);
 
         if (!can_speculate()) {
+            return 0;
+        }
+
+        if (spec_runtime_disabled && spec_draft.empty()) {
             return 0;
         }
 
@@ -2998,6 +3010,24 @@ private:
                     slot.spec_i_batch.clear();
 
                     GGML_ASSERT(accepted.size() >= 1);
+
+                    const int32_t n_draft_accepted_actual = std::max<int32_t>(0,
+                            std::min<int32_t>((int32_t) n_draft, (int32_t) accepted.size() - 1));
+                    slot.spec_verify_batches += 1;
+                    slot.spec_verify_draft_total += (int32_t) n_draft;
+                    slot.spec_verify_draft_accepted += n_draft_accepted_actual;
+                    if (slot.task->params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP &&
+                            !slot.spec_runtime_disabled &&
+                            slot.spec_verify_batches >= 2 &&
+                            slot.spec_verify_draft_total >= 16 &&
+                            4 * slot.spec_verify_draft_accepted < 3 * slot.spec_verify_draft_total) {
+                        slot.spec_runtime_disabled = true;
+                        SLT_WRN(slot,
+                                "disabling MTP speculation for this request: actual draft acceptance %d/%d after %d verify batches\n",
+                                slot.spec_verify_draft_accepted,
+                                slot.spec_verify_draft_total,
+                                slot.spec_verify_batches);
+                    }
 
                     // check for partial draft acceptance
                     if (accepted.size() < slot.spec_draft.size() + 1) {
