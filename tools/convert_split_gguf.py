@@ -61,6 +61,15 @@ def split_gguf(src: Path, attn_dst: Path, ffn_dst: Path,
 
     src_sha256 = hashlib.sha256(src.read_bytes()).hexdigest()
 
+    if dry_run:
+        print(f"Source SHA-256: {src_sha256}")
+        with open(src, 'rb') as f:
+            magic, version = struct.unpack('<II', f.read(8))
+            assert magic == GGUF_MAGIC, "Not a GGUF file"
+            tensor_count, _ = struct.unpack('<QQ', f.read(16))
+            print(f"Total tensors: {tensor_count}")
+        return
+
     with open(src, 'rb') as f:
         magic, version = struct.unpack('<II', f.read(8))
         assert magic == GGUF_MAGIC, "Not a GGUF file"
@@ -182,6 +191,9 @@ def split_gguf(src: Path, attn_dst: Path, ffn_dst: Path,
 
         write_slice(attn_dst, attn_tensors, 'attention')
         write_slice(ffn_dst,  ffn_tensors,  'ffn')
+
+    if verify:
+        print(f"SHA-256 matches for {src}")
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
