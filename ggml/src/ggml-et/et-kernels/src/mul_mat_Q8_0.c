@@ -19,6 +19,10 @@
 #define KSPLIT_GROUP_ROWS 4
 #define SIMPLE_X2_ROWS     2
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 int entry_point(struct ggml_et_mm_q8_params* params, void* env) {
     uint64_t hart_id = get_hart_id();
 
@@ -85,10 +89,13 @@ int entry_point(struct ggml_et_mm_q8_params* params, void* env) {
                               && (rows_per_minion > 4)
                               && (rows_per_minion <= KSPLIT_MAX_ROWS);
 
-#ifdef BUILD_FOR_UBERKERNEL
+// #ifdef BUILD_FOR_UBERKERNEL
     evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
-    // et_barrier(ET_BARRIER_GLOBAL);
-#endif
+    if (params->bias.data) {
+        evict_region_past_l2(params->bias.data, tensor_bytes(&params->bias));
+    }
+// #endif
+
 
     if (use_ksplit) {
         /* Each hart processes half the K dimension */
@@ -98,6 +105,7 @@ int entry_point(struct ggml_et_mm_q8_params* params, void* env) {
         /* One cache-line-aligned L2SCP slot per minion for exchange */
         volatile float* l2scp_slot =
             (volatile float*)et_shire_l2scp_local(local_minion * 64);
+
 
         for (int64_t i3 = 0; i3 < ne13; i3++) {
             const int64_t i03 = i3 / r3;

@@ -105,9 +105,9 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
     }
 
 #ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src1->data, tensor_bytes(src1));
-    evict_region_past_l2(src2->data, tensor_bytes(src2));
-    et_barrier(ET_BARRIER_GLOBAL);
+    // evict_region_past_l2(src1->data, tensor_bytes(src1));
+    // evict_region_past_l2(src2->data, tensor_bytes(src2));
+    // et_barrier(ET_BARRIER_GLOBAL);
 #endif
 
     // Determine block size based on src0 type
