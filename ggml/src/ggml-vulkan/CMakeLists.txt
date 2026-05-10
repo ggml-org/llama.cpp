@@ -112,6 +112,13 @@ if (Vulkan_FOUND)
         list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DGGML_VULKAN_SHADER_DEBUG_INFO=ON)
     endif()
 
+    if (GGML_VULKAN_ENABLE_SLANG)
+        add_compile_definitions(GGML_VULKAN_ENABLE_SLANG)
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DGGML_VULKAN_ENABLE_SLANG=ON)
+        find_program(Vulkan_SLANGC_EXECUTABLE NAMES slangc REQUIRED)
+        message(STATUS "slangc found: ${Vulkan_SLANGC_EXECUTABLE}")
+    endif()
+
     if (GGML_VULKAN_VALIDATE)
         add_compile_definitions(GGML_VULKAN_VALIDATE)
     endif()
@@ -175,6 +182,12 @@ if (Vulkan_FOUND)
 
     file(GLOB _ggml_vk_shader_files CONFIGURE_DEPENDS "${_ggml_vk_input_dir}/*.comp")
 
+    if (GGML_VULKAN_ENABLE_SLANG)
+        list(APPEND _ggml_vk_shader_files
+            "${_ggml_vk_input_dir}/flash_attn.slang"
+        )
+    endif()
+
     # Because external projects do not provide source-level tracking,
     # the vulkan-shaders-gen sources need to be explicitly added to
     # ensure that changes will cascade into shader re-generation.
@@ -194,6 +207,10 @@ if (Vulkan_FOUND)
     )
     target_sources(ggml-vulkan PRIVATE ${_ggml_vk_header})
 
+    if (GGML_VULKAN_ENABLE_SLANG)
+        set(_ggml_vk_slangc_arg --slangc ${Vulkan_SLANGC_EXECUTABLE})
+    endif()
+
     foreach (file_full ${_ggml_vk_shader_files})
         get_filename_component(file ${file_full} NAME)
         set (_ggml_vk_target_cpp "${CMAKE_CURRENT_BINARY_DIR}/${file}.cpp")
@@ -203,6 +220,7 @@ if (Vulkan_FOUND)
             DEPFILE ${_ggml_vk_target_cpp}.d
             COMMAND ${_ggml_vk_genshaders_cmd}
                 --glslc      ${Vulkan_GLSLC_EXECUTABLE}
+                ${_ggml_vk_slangc_arg}
                 --source     ${file_full}
                 --output-dir ${_ggml_vk_output_dir}
                 --target-hpp ${_ggml_vk_header}
