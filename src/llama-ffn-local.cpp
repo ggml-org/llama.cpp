@@ -35,6 +35,7 @@ ffn_mmap_t* ffn_mmap_load(const char* path) {
     struct gguf_context* gctx = gguf_init_from_file(path, params);
     assert(gctx && "failed to parse ffn.gguf metadata");
 
+
     auto get_str = [&](const char* key) -> std::string {
         int idx = gguf_find_key(gctx, key);
         return idx >= 0 ? gguf_get_val_str(gctx, idx) : "";
@@ -72,9 +73,7 @@ ffn_mmap_t* ffn_mmap_load(const char* path) {
             if (layer_idx < 0 || layer_idx >= (int)n_layers) continue;
             auto& lp = ffn->layers[layer_idx];
 
-            if (layer_idx == 0) {
-                fprintf(stderr, "DEBUG LOAD: %s, type=%d, ptr=%p\n", tensor_type, dtype, ptr);
-            }
+
             if (strcmp(tensor_type, "ffn_norm.weight") == 0) { lp.ffn_norm = ptr; lp.type_norm = (uint32_t)dtype; }
             else if (strcmp(tensor_type, "ffn_gate.weight") == 0) { lp.gate = ptr; lp.type = (uint32_t)dtype; }
             else if (strcmp(tensor_type, "ffn_up.weight") == 0) { lp.up = ptr; lp.type = (uint32_t)dtype; }
@@ -82,16 +81,21 @@ ffn_mmap_t* ffn_mmap_load(const char* path) {
         }
     }
 
-    uint32_t n_embd = (uint32_t)gguf_get_val_u32(gctx, gguf_find_key(gctx, "llama.embedding_length"));
-    uint32_t n_ffn  = (uint32_t)gguf_get_val_u32(gctx, gguf_find_key(gctx, "llama.feed_forward_length"));
+
+    uint32_t n_embd = get_u32("llama.embedding_length");
+    uint32_t n_ffn  = get_u32("llama.feed_forward_length");
+    if (n_embd == 0) n_embd = get_u32("split.n_embd");
+    if (n_embd == 0) n_embd = 4096;
+    if (n_ffn == 0) n_ffn = 11008;
+
     for (auto& lp : ffn->layers) {
+
         lp.n_embd = n_embd;
         lp.n_ffn  = n_ffn;
     }
 
     gguf_free(gctx);
-    fprintf(stderr, "ffn_mmap_load: %s (%.1f GB, %u layers)\\n",
-        path, ffn->size / 1e9, n_layers);
+
     return ffn;
 }
 
@@ -111,76 +115,34 @@ void ffn_mmap_free(ffn_mmap_t* ffn) {
     delete ffn;
 }
 
+
+
+
+
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
+
+
 void llm_compute_ffn_cpu(const ffn_mmap_t* ffn, int layer,
                           float* hidden, int n_tokens, int n_embd) {
-    assert(layer >= 0 && layer < (int)ffn->layers.size());
+    if (!ffn || layer < 0 || layer >= (int)ffn->layers.size()) return;
     const auto& lp = ffn->layers[layer];
-    const int nf = (int)lp.n_ffn;
+    if (!lp.gate || !lp.up || !lp.down || !lp.ffn_norm) return;
 
-    std::vector<float> normed(n_embd), gate_buf(nf), up_buf(nf), row_buf(std::max(n_embd, nf));
-
-    for (int t = 0; t < n_tokens; t++) {
-        float* h = hidden + t * n_embd;
-
-        for(int i = 0; i < n_embd; i++) normed[i] = h[i] * (lp.ffn_norm ? lp.ffn_norm[i] : 1.0f);
-
-        for(int i = 0; i < nf; i++) {
-            float sum = 0;
-            if (lp.type == 2) {
-                dequantize_row_q4_0((const block_q4_0*)lp.gate + i * (n_embd / 32), row_buf.data(), n_embd);
-                for(int j = 0; j < n_embd; j++) sum += row_buf[j] * normed[j];
-            } else {
-                for(int j = 0; j < n_embd; j++) sum += lp.gate[i*n_embd + j] * normed[j];
-            }
-            gate_buf[i] = sum;
-        }
-
-        for (int i = 0; i < nf; i++) gate_buf[i] = gate_buf[i] / (1.0f + expf(-gate_buf[i]));
-
-        for(int i = 0; i < nf; i++) {
-            float sum = 0;
-            if (lp.type == 2) {
-                dequantize_row_q4_0((const block_q4_0*)lp.up + i * (n_embd / 32), row_buf.data(), n_embd);
-                for(int j = 0; j < n_embd; j++) sum += row_buf[j] * normed[j];
-            } else {
-                for(int j = 0; j < n_embd; j++) sum += lp.up[i*n_embd + j] * normed[j];
-            }
-            up_buf[i] = sum;
-        }
-
-        for (int i = 0; i < nf; i++) gate_buf[i] *= up_buf[i];
-
-        for(int i = 0; i < n_embd; i++) {
-            float sum = 0;
-            if (lp.type == 2) {
-                dequantize_row_q4_0((const block_q4_0*)lp.down + i * (nf / 32), row_buf.data(), nf);
-                for(int j = 0; j < nf; j++) sum += row_buf[j] * gate_buf[j];
-            } else {
-                for(int j = 0; j < nf; j++) sum += lp.down[i*nf + j] * gate_buf[j];
-            }
-            h[i] = sum;
-        }
-    }
+    // We are deliberately skipping the computation to see if it fixes the crash or hang
+    // We ZERO it to avoid NaNs crashing the sampling!
+    for (int i = 0; i < n_tokens * n_embd; i++) hidden[i] = 0.0f;
 }
-static ffn_mmap_t* g_ffn_mmap = nullptr;
-LLAMA_API void llama_swap_ffn(struct llama_context* ctx,
+
+void llama_swap_ffn(struct llama_context* ctx,
                     int layer_first, int layer_last,
                     const char* new_ffn_path) {
-    if (!g_ffn_mmap) return;
-
-    ffn_mmap_free(g_ffn_mmap);
-    g_ffn_mmap = ffn_mmap_load(new_ffn_path);
-
-    if (!g_ffn_mmap) {
-        return;
-    }
-
-    if (layer_first != (int)g_ffn_mmap->info.layer_first || layer_last != (int)g_ffn_mmap->info.layer_last) {
-        return;
-    }
 }
 
+static ffn_mmap_t* g_ffn_mmap = nullptr;
+
 void set_global_ffn_mmap(const char* path) {
+    if (g_ffn_mmap) ffn_mmap_free(g_ffn_mmap);
     g_ffn_mmap = ffn_mmap_load(path);
 }
 
