@@ -1228,6 +1228,11 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         data.prompt += data.generation_prompt;
     }
 
+    data.message_spans = common_chat_split_by_role(data.prompt, {
+        { "user",      "<|turn>user\n"  },
+        { "assistant", "<|turn>model\n" },
+    });
+
     data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
     data.supports_thinking  = true;
     data.thinking_start_tag = "<|channel>thought";
@@ -2440,6 +2445,17 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         struct autoparser::autoparser autoparser;
         autoparser.analyze_template(tmpl);
         auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, autoparser);
+
+        if (auto_params.prompt.find("<|im_start|>user\n") != std::string::npos &&
+            auto_params.prompt.find("<|im_end|>") != std::string::npos) {
+            auto_params.message_spans = common_chat_split_by_role(auto_params.prompt, {
+                { "system",    "<|im_start|>system\n" },
+                { "user",      "<|im_start|>user\n" },
+                { "assistant", "<|im_start|>assistant\n" },
+                { "tool",      "<|im_start|>tool\n" },
+            });
+        }
+
         auto_params.supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
         if (auto_params.supports_thinking) {
             auto_params.thinking_start_tag = trim_whitespace(autoparser.reasoning.start);
