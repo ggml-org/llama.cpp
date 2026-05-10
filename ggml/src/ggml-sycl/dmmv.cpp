@@ -1478,6 +1478,87 @@ static void dequantize_mul_mat_vec_q6_K_sycl_reorder(const void *vx, const float
         });
 }
 
+#include "turbo-quants.hpp"
+
+template <typename block_t, float (*dequantize_fn)(const block_t *, int)>
+static void k_mul_mat_vec_tq(const void * __restrict__ vx, const float * __restrict__ vy, float * __restrict__ dst,
+                             const int ncols, const int nrows, const sycl::nd_item<3> & item_ct1) {
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+
+    if (row >= nrows) {
+        return;
+    }
+
+    const int blocks_per_row = ncols / 32;
+    const block_t * x_row = (const block_t *) vx + row * blocks_per_row;
+
+    float tmp = 0.0f;
+
+    for (int i = item_ct1.get_local_id(2); i < ncols; i += item_ct1.get_local_range(2)) {
+        const int ib = i / 32;
+        const int j  = i % 32;
+        tmp += dequantize_fn(&x_row[ib], j) * vy[i];
+    }
+
+    tmp = warp_reduce_sum(tmp, item_ct1);
+
+    if (item_ct1.get_local_id(2) == 0) {
+        dst[row] = tmp;
+    }
+}
+
+static void k_tq_prerotate_activation(
+        const float * __restrict__ src,
+        float       * __restrict__ dst,
+        const int n_elements,
+        const sycl::nd_item<3> & item_ct1) {
+
+    auto sg = item_ct1.get_sub_group();
+    const int sg_size = sg.get_local_range()[0];
+    const int lane = sg.get_local_linear_id();
+    
+    const int block_idx = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+    const int offset = block_idx * 32 + lane;
+    if (offset >= n_elements) return;
+
+    float val = src[offset];
+    val *= TQ_SIGNS[lane];
+
+    // Dynamic Subgroup WHT
+    #pragma unroll
+    for (int step = 1; step < sg_size; step <<= 1) {
+        float o = dpct::permute_sub_group_by_xor(sg, val, step, sg_size);
+        val = (lane & step) ? (o - val) : (val + o);
+    }
+    val *= (float)(1.0f / sycl::sqrt((float)sg_size));
+    dst[offset] = val;
+}
+
+static void tq_prerotate_activation_sycl(const float * src, float * dst, const int n_elements, dpct::queue_ptr stream) {
+    const int n_blocks = (n_elements + 31) / 32;
+    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_blocks) * sycl::range<3>(1, 1, 32), sycl::range<3>(1, 1, 32)), [=](sycl::nd_item<3> item_ct1) {
+        k_tq_prerotate_activation(src, dst, n_elements, item_ct1);
+    });
+}
+
+static void dequantize_mul_mat_vec_tq4_1s_sycl(const void * vx, const float * y, float * dst, const int ncols, const int nrows, dpct::queue_ptr stream) {
+    const sycl::range<3> block_dims(1, 1, WARP_SIZE);
+    const sycl::range<3> block_nums(1, 1, nrows);
+
+    stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
+        k_mul_mat_vec_tq<block_tq4_1s, dequantize_tq4_1s>(vx, y, dst, ncols, nrows, item_ct1);
+    });
+}
+
+static void dequantize_mul_mat_vec_tq3_1s_sycl(const void * vx, const float * y, float * dst, const int ncols, const int nrows, dpct::queue_ptr stream) {
+    const sycl::range<3> block_dims(1, 1, WARP_SIZE);
+    const sycl::range<3> block_nums(1, 1, nrows);
+
+    stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
+        k_mul_mat_vec_tq<block_tq3_1s, dequantize_tq3_1s>(vx, y, dst, ncols, nrows, item_ct1);
+    });
+}
+
 void ggml_sycl_op_dequantize_mul_mat_vec(
     ggml_backend_sycl_context & ctx,
     const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
@@ -1560,6 +1641,18 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 dequantize_mul_mat_vec_q6_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             } else {
                 dequantize_mul_mat_vec_q6_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            }
+            break;
+        case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ4_1S:
+            {
+                ggml_sycl_pool_alloc<float> src1_rot(ctx.pool(), src1_ncols * ne00);
+                tq_prerotate_activation_sycl(src1_ddf_i, src1_rot.get(), src1_ncols * ne00, stream);
+                if (src0->type == GGML_TYPE_TQ3_1S) {
+                    dequantize_mul_mat_vec_tq3_1s_sycl(src0_dd_i, src1_rot.get(), dst_dd_i, ne00, row_diff, stream);
+                } else {
+                    dequantize_mul_mat_vec_tq4_1s_sycl(src0_dd_i, src1_rot.get(), dst_dd_i, ne00, row_diff, stream);
+                }
             }
             break;
         case GGML_TYPE_F16:

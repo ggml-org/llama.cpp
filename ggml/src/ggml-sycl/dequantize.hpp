@@ -15,6 +15,7 @@
 
 #include "common.hpp"
 #include "convert.hpp"
+#include "turbo-quants.hpp"
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
 typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
@@ -177,6 +178,30 @@ static __dpct_inline__ void dequantize_q8_0(const void *vx, const int64_t ib,
     v.x() *= d;
     v.y() *= d;
 #endif // GGML_SYCL_F16
+}
+
+static __dpct_inline__ void dequantize_turbo2_0(const void *vx, const int64_t ib,
+                                                const int iqs, dfloat2 &v) {
+    const block_turbo2_0 * x = (const block_turbo2_0 *) vx;
+    const float norm = (float)x[ib].norm;
+    v.x() = dequantize_turbo2_0(&x[ib], iqs + 0, norm);
+    v.y() = dequantize_turbo2_0(&x[ib], iqs + 1, norm);
+}
+
+static __dpct_inline__ void dequantize_turbo3_0(const void *vx, const int64_t ib,
+                                                const int iqs, dfloat2 &v) {
+    const block_turbo3_0 * x = (const block_turbo3_0 *) vx;
+    const float norm = (float)x[ib].norm;
+    v.x() = dequantize_turbo3_0(&x[ib], iqs + 0, norm);
+    v.y() = dequantize_turbo3_0(&x[ib], iqs + 1, norm);
+}
+
+static __dpct_inline__ void dequantize_turbo4_0(const void *vx, const int64_t ib,
+                                                const int iqs, dfloat2 &v) {
+    const block_turbo4_0 * x = (const block_turbo4_0 *) vx;
+    const float norm = (float)x[ib].norm;
+    v.x() = dequantize_turbo4_0(&x[ib], iqs + 0, norm);
+    v.y() = dequantize_turbo4_0(&x[ib], iqs + 1, norm);
 }
 
 template<typename dst_t>
