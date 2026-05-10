@@ -1160,6 +1160,7 @@ common_init_result::common_init_result(common_params & params) :
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
+    common_fit_context_profile fit_context_profile = {};
     if (params.fit_params) {
         LOG_INF("%s: fitting params to device memory ...\n", __func__);
         LOG_INF("%s: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n", __func__);
@@ -1168,7 +1169,8 @@ common_init_result::common_init_result(common_params & params) :
             params.tensor_buft_overrides.data(),
             params.fit_params_target.data(),
             params.fit_params_min_ctx,
-            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR,
+            &fit_context_profile);
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
@@ -1245,6 +1247,13 @@ common_init_result::common_init_result(common_params & params) :
     if (params.sampling.backend_sampling) {
         cparams.samplers   = pimpl->samplers_seq_config.data();
         cparams.n_samplers = pimpl->samplers_seq_config.size();
+    }
+
+    if (params.fit_params) {
+        common_fit_context_after_model_load(model, &cparams, &fit_context_profile);
+        if (cparams.n_ctx != 0) {
+            params.n_ctx = static_cast<int32_t>(cparams.n_ctx);
+        }
     }
 
     llama_context * lctx = llama_init_from_model(model, cparams);
