@@ -1,7 +1,8 @@
 #include "models.h"
 
 void llama_model_llama::load_arch_hparams(llama_model_loader & ml) {
-    const auto n_vocab = vocab.n_tokens();
+    uint32_t n_vocab = 0;
+    ml.get_key(LLM_KV_VOCAB_SIZE, n_vocab, false) || ml.get_arr_n(LLM_KV_TOKENIZER_LIST, n_vocab, false);
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 

@@ -1,7 +1,8 @@
 #include "models.h"
 
 void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
-    const auto n_vocab = vocab.n_tokens();
+    uint32_t n_vocab = 0;
+    ml.get_key(LLM_KV_VOCAB_SIZE, n_vocab, false) || ml.get_arr_n(LLM_KV_TOKENIZER_LIST, n_vocab, false);
 
     // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B, Kanana-2-30B-A3B
     const bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26 || (hparams.n_layer == 48 && n_vocab == 128256));
