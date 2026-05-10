@@ -203,6 +203,7 @@ struct tensor_metadata {
     std::string     remapped_imatrix_name;
     bool            allows_quantization;
     bool            requires_imatrix;
+    bool            write_nvfp4_scales = false;
 };
 
 //
@@ -802,6 +803,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q1_0: return GGML_TYPE_Q1_0;
 
         case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return GGML_TYPE_MXFP4;
+        case LLAMA_FTYPE_MOSTLY_NVFP4:     return GGML_TYPE_NVFP4;
 
         // K-quants
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:
@@ -848,6 +850,42 @@ static void init_quantize_state_counters(quantize_state_impl & qs, std::vector<t
         }
     }
     qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer;
+}
+
+//
+// NVFP4 scale tensor helpers
+//
+
+static void add_f32_scalar_tensor(struct gguf_context * ctx, const char * name) {
+    struct ggml_init_params iparams = {
+        /*.mem_size   =*/ ggml_tensor_overhead(),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+    struct ggml_context * gctx = ggml_init(iparams);
+    struct ggml_tensor * t = ggml_new_tensor_1d(gctx, GGML_TYPE_F32, 1);
+    ggml_set_name(t, name);
+    gguf_add_tensor(ctx, t);
+    ggml_free(gctx);
+}
+
+static void add_nvfp4_scale_tensors(struct gguf_context * ctx, const char * weight_name) {
+    std::string base(weight_name);
+
+    auto pos = base.rfind(".weight");
+    std::string scale_name = (pos != std::string::npos)
+        ? base.substr(0, pos) + ".scale"
+        : base + ".scale";
+    std::string input_scale_name = (pos != std::string::npos)
+        ? base.substr(0, pos) + ".input_scale"
+        : base + ".input_scale";
+
+    if (gguf_find_tensor(ctx, scale_name.c_str()) == -1) {
+        add_f32_scalar_tensor(ctx, scale_name.c_str());
+    }
+    if (gguf_find_tensor(ctx, input_scale_name.c_str()) == -1) {
+        add_f32_scalar_tensor(ctx, input_scale_name.c_str());
+    }
 }
 
 //
@@ -1037,6 +1075,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
 
         metadata[i].requires_imatrix = tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);
+
+        if (metadata[i].target_type == GGML_TYPE_NVFP4 &&
+            strstr(tensor->name, ".experts.") == nullptr) {
+            add_nvfp4_scale_tensors(ctx_outs[i_split].get(), tensor->name);
+            metadata[i].write_nvfp4_scales = true;
+        }
 
         if (params->imatrix) {
             metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped);
@@ -1260,6 +1304,28 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             fout.write((const char *) new_data, new_size);
             zeros(fout, GGML_PAD(new_size, align) - new_size);
         } // no --dry-run
+
+        if (!params->dry_run && tm.write_nvfp4_scales) {
+            const float scale_val = 1.0f;
+            const size_t scale_size = sizeof(float);
+
+            std::string base(tm.name);
+            auto pos = base.rfind(".weight");
+            std::string scale_name = (pos != std::string::npos)
+                ? base.substr(0, pos) + ".scale"
+                : base + ".scale";
+            std::string input_scale_name = (pos != std::string::npos)
+                ? base.substr(0, pos) + ".input_scale"
+                : base + ".input_scale";
+
+            gguf_set_tensor_data(ctx_outs[cur_split].get(), scale_name.c_str(), &scale_val);
+            fout.write((const char *) &scale_val, scale_size);
+            zeros(fout, GGML_PAD(scale_size, align) - scale_size);
+
+            gguf_set_tensor_data(ctx_outs[cur_split].get(), input_scale_name.c_str(), &scale_val);
+            fout.write((const char *) &scale_val, scale_size);
+            zeros(fout, GGML_PAD(scale_size, align) - scale_size);
+        }
     } // main loop
 
     if (!params->dry_run) {
