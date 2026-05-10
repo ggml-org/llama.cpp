@@ -226,19 +226,19 @@ class EvalState:
 
         self.correct = sum(1 for c in self.task_states.get("cases", {}).values() if c.get("correct", False))
 
-    def print_progress(self, task_state: TaskState, total_tasks: int, correct_count: int = 0):
-        answer_display = task_state.answer if task_state.answer else "N/A"
-        tokens_display = str(task_state.tokens) if task_state.tokens is not None else "N/A"
-        tps_display = f"{task_state.tps_gen:.1f}" if task_state.tps_gen is not None else "N/A"
-        t_gen_display = f"{task_state.t_gen_ms/1000:.1f}" if task_state.t_gen_ms is not None else "N/A"
-        success_ratio = correct_count / self.processed if self.processed > 0 else 0.0
+    def print_progress(self, task_state: TaskState, total_tasks: int, n_correct: int = 0):
+        display_answer = task_state.answer if task_state.answer else "N/A"
+        display_tokens = str(task_state.tokens) if task_state.tokens is not None else "N/A"
+        display_tps = f"{task_state.tps_gen:.1f}" if task_state.tps_gen is not None else "N/A"
+        display_t_gen = f"{task_state.t_gen_ms/1000:.1f}" if task_state.t_gen_ms is not None else "N/A"
+        success_ratio = n_correct / self.processed if self.processed > 0 else 0.0
         first_line = task_state.question_text.split('\n')[0]
         truncated_question = first_line[:43]
         if len(first_line) > 43:
             truncated_question += "..."
         else:
             truncated_question = truncated_question.ljust(43) + "..."
-        print(f"{self.processed:3}/{total_tasks:3}  {task_state.task_id:<20} {self.dataset_type.upper()}   {truncated_question:<40}    {task_state.expected:<10} {answer_display:<10} {tokens_display:<6} {tps_display:<6} {t_gen_display:<8} {'✓' if task_state.correct else '✗'}  [{correct_count:3}/{self.processed:3}, {success_ratio:.3f}]")
+        print(f"{self.processed:3}/{total_tasks:3}  {task_state.task_id:<20} {self.dataset_type.upper()}   {truncated_question:<40}    {task_state.expected:<10} {display_answer:<10} {display_tokens:<6} {display_tps:<6} {display_t_gen:<8} {'✓' if task_state.correct else '✗'}  [{n_correct:3}/{self.processed:3}, {success_ratio:.3f}]")
 
     def print_summary(self):
         if self.total == 0:
@@ -299,11 +299,11 @@ class EvalState:
 
         cases = all_cases
         completed = {tid: c for tid, c in cases.items() if c.get("status") == "ok"}
-        correct_count = sum(1 for c in completed.values() if c.get("correct", False))
-        incorrect_count = len(completed) - correct_count
-        pending_count = len(tasks_to_save) - len(completed)
-        accuracy = correct_count / len(completed) * 100 if completed else 0.0
-        ci_lower, ci_upper = wilson_interval(correct_count, len(completed)) if completed else (0.0, 1.0)
+        n_correct = sum(1 for c in completed.values() if c.get("correct", False))
+        n_incorrect = len(completed) - n_correct
+        n_pending = len(tasks_to_save) - len(completed)
+        accuracy = n_correct / len(completed) * 100 if completed else 0.0
+        ci_lower, ci_upper = wilson_interval(n_correct, len(completed)) if completed else (0.0, 1.0)
 
         sampling_parts = []
         for k, v in self.sampling_config.items():
@@ -340,9 +340,9 @@ class EvalState:
             t_gen_str = f"{t_gen_ms/1000:.1f}" if t_gen_ms is not None else ""
             reasoning_content = case.get("reasoning_content", "") or ""
 
-            response_escaped = self._escape_html(response)
-            prompt_escaped = self._escape_html(prompt)
-            reasoning_escaped = self._escape_html(reasoning_content)
+            escaped_response = self._escape_html(response)
+            escaped_prompt = self._escape_html(prompt)
+            escaped_reasoning = self._escape_html(reasoning_content)
             grader_log_str = self._escape_html(json.dumps(grader_log, indent=2))
 
             rows.append(f"""<tr class="task-row" onclick="toggleDetails('{task_id}')">
@@ -358,11 +358,11 @@ class EvalState:
                 <td colspan="7">
                     <div class="details-content">
                         <h4>Prompt</h4>
-                        <pre>{prompt_escaped}</pre>
+                        <pre>{escaped_prompt}</pre>
                         <h4 onclick="toggleReasoning('{task_id}')" style="cursor:pointer">Reasoning &#9654;</h4>
-                        <pre id="reasoning-{task_id}" style="display:none">{reasoning_escaped}</pre>
+                        <pre id="reasoning-{task_id}" style="display:none">{escaped_reasoning}</pre>
                         <h4>Response</h4>
-                        <pre>{response_escaped}</pre>
+                        <pre>{escaped_response}</pre>
                         <h4>Grader Log</h4>
                         <pre>{grader_log_str}</pre>
                     </div>
@@ -407,9 +407,9 @@ class EvalState:
             <tr><td>Dataset</td><td>{self.dataset_type}</td></tr>
             <tr><td>Total Tasks</td><td>{len(tasks_to_save)}</td></tr>
             <tr><td>Completed</td><td>{len(completed)}</td></tr>
-            <tr><td>Correct</td><td class="correct">{correct_count}</td></tr>
-            <tr><td>Incorrect</td><td class="incorrect">{incorrect_count}</td></tr>
-            <tr><td>Pending</td><td class="pending">{pending_count}</td></tr>
+            <tr><td>Correct</td><td class="correct">{n_correct}</td></tr>
+            <tr><td>Incorrect</td><td class="incorrect">{n_incorrect}</td></tr>
+            <tr><td>Pending</td><td class="pending">{n_pending}</td></tr>
             <tr><td>Accuracy</td><td>{accuracy:.1f}% [{ci_lower*100:.1f}%, {ci_upper*100:.1f}%]</td></tr>
             <tr><td>Total Time</td><td>{self.total_time:.1f}s</td></tr>
             <tr><td>Sampling</td><td>{sampling_str}</td></tr>
@@ -1049,7 +1049,7 @@ class Processor:
         print(f"Sampling: temp={eval_state.sampling_config.get('temperature', 'skip')}, top-k={eval_state.sampling_config.get('top_k', 'skip')}, top-p={eval_state.sampling_config.get('top_p', 'skip')}, min-p={eval_state.sampling_config.get('min_p', 'skip')}")
         print()
 
-        correct_count = 0
+        n_correct = 0
 
         with ThreadPoolExecutor(max_workers=self.threads) as executor:
             futures = {
@@ -1062,12 +1062,12 @@ class Processor:
                 task_state = future.result()
                 eval_state.processed += 1
                 if task_state.correct:
-                    correct_count += 1
+                    n_correct += 1
                 elapsed = time.time() - start_time
                 eval_state.total_time += elapsed
                 session_time += elapsed
                 start_time = time.time()
-                eval_state.print_progress(task_state, total_tasks, correct_count)
+                eval_state.print_progress(task_state, total_tasks, n_correct)
 
                 if verbose:
                     print(f"\nCase {eval_state.processed}: {task_state.correct}")
