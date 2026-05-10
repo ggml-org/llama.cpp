@@ -53,6 +53,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <mutex>
 #include <future>
 #include <thread>
+#include <regex>
 
 #if defined(_MSC_VER)
 # define NOMINMAX 1
@@ -630,6 +631,7 @@ struct vk_device_struct {
     bool subgroup_ballot;
     bool subgroup_clustered;
     bool subgroup_vote;
+    bool subgroups_gcn_enabled;
     bool multi_add;
     bool shader_int64;
     bool buffer_device_address;
@@ -4199,7 +4201,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     }
     uint32_t rm_iq = 2 * rm_kq;
 
-    const bool use_subgroups = device->subgroup_arithmetic && device->architecture != vk_device_architecture::AMD_GCN;
+    const bool use_subgroups = device->subgroup_arithmetic && (device->architecture != vk_device_architecture::AMD_GCN || device->subgroups_gcn_enabled);
     // Ensure a subgroup size >= 16 is available
     const bool use_subgroups16 = use_subgroups && subgroup_min_size_16;
 
@@ -5105,6 +5107,15 @@ static vk_device ggml_vk_get_device(size_t idx) {
         if (!device->support_async) {
             GGML_LOG_DEBUG("ggml_vulkan: WARNING: Async execution disabled on certain Intel devices.\n");
         }
+
+        // Enable subgroup operations on AMD GCN 5.0/5.1 gpus
+        const static std::regex s_gcn_regex("^.*Radeon.*(VII|Vega).*$");
+        device->subgroups_gcn_enabled = (device->vendor_id != VK_VENDOR_ID_AMD ||
+                                         std::regex_match(std::string(device->properties.deviceName.data()), s_gcn_regex));
+        if (device->subgroups_gcn_enabled) {
+            GGML_LOG_DEBUG("ggml_vulkan: subgroup operations enabled on AMD GCN GPU: %s\n", device->properties.deviceName.data());
+        }
+
 
         const char* GGML_VK_FORCE_MAX_ALLOCATION_SIZE = getenv("GGML_VK_FORCE_MAX_ALLOCATION_SIZE");
 
