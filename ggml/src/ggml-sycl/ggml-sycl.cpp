@@ -3663,6 +3663,11 @@ static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_
 }
 
 static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    // TQ1_0 / TQ2_0 have no native mul_mat_vec_q8_1 kernel; route them through the
+    // dequantize -> FP16 fallback path instead of crashing in the MMVQ dispatch.
+    if (src0->type == GGML_TYPE_TQ1_0 || src0->type == GGML_TYPE_TQ2_0) {
+        return false;
+    }
     return ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
            src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
 }

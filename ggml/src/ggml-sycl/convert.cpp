@@ -338,6 +338,40 @@ static void dequantize_row_iq1_m_sycl(const void *vx, dst_t *y, const int64_t k,
 }
 
 template <typename dst_t>
+static void dequantize_row_tq2_0_sycl(const void * vx, dst_t * y, const int64_t k,
+                                      dpct::queue_ptr stream) {
+    const int64_t nb = k / QK_K;
+    {
+        dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});
+
+        stream->submit([&](sycl::handler &cgh) {
+            cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 32),
+                                               sycl::range<3>(1, 1, 32)),
+                             [=](sycl::nd_item<3> item_ct1) {
+                                 dequantize_block_tq2_0(vx, y, item_ct1);
+                             });
+        });
+    }
+}
+
+template <typename dst_t>
+static void dequantize_row_tq1_0_sycl(const void * vx, dst_t * y, const int64_t k,
+                                      dpct::queue_ptr stream) {
+    const int64_t nb = k / QK_K;
+    {
+        dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});
+
+        stream->submit([&](sycl::handler &cgh) {
+            cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 32),
+                                               sycl::range<3>(1, 1, 32)),
+                             [=](sycl::nd_item<3> item_ct1) {
+                                 dequantize_block_tq1_0(vx, y, item_ct1);
+                             });
+        });
+    }
+}
+
+template <typename dst_t>
 static void dequantize_row_iq2_xxs_sycl(const void *vx, dst_t *y, const int64_t k,
                                         dpct::queue_ptr stream) {
     const int64_t nb = k / QK_K;
@@ -668,6 +702,10 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
             return dequantize_row_iq4_xs_sycl;
         case GGML_TYPE_IQ4_NL:
             return dequantize_row_iq4_nl_sycl;
+        case GGML_TYPE_TQ1_0:
+            return dequantize_row_tq1_0_sycl;
+        case GGML_TYPE_TQ2_0:
+            return dequantize_row_tq2_0_sycl;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_sycl;
         case GGML_TYPE_NVFP4:
@@ -743,6 +781,10 @@ to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
             return dequantize_row_iq4_xs_sycl;
         case GGML_TYPE_IQ4_NL:
             return dequantize_row_iq4_nl_sycl;
+        case GGML_TYPE_TQ1_0:
+            return dequantize_row_tq1_0_sycl;
+        case GGML_TYPE_TQ2_0:
+            return dequantize_row_tq2_0_sycl;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_sycl;
         case GGML_TYPE_NVFP4:

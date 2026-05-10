@@ -823,6 +823,93 @@ dequantize_block_iq1_m(const void *__restrict__ vx, dst_t *__restrict__ yy,
 
 template <typename dst_t>
 __dpct_inline__ static void
+dequantize_block_tq2_0(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                       const sycl::nd_item<3> & item_ct1) {
+
+    const int64_t i = item_ct1.get_group(2);
+    const block_tq2_0 * x = (const block_tq2_0 *) vx;
+
+    const int64_t tid = item_ct1.get_local_id(2);  // 0..31
+    const float d = (float) x[i].d;
+
+    // 256 outputs per block, 32 threads, 8 outputs/thread.
+    // Thread tid handles outputs at indices {tid + g*32 : g = 0..7}.
+    // For output g*32+tid: source byte qs[(g/4)*32 + tid], shift (g%4)*2, code in {0,1,2,3}.
+    dst_t * y = yy + i * QK_K + tid;
+#pragma unroll
+    for (int g = 0; g < 8; ++g) {
+        const int jq = ((g >> 2) << 5) | tid;
+        const int sh = (g & 3) << 1;
+        const int code = (int) ((x[i].qs[jq] >> sh) & 0x3);
+        y[g * 32] = (dst_t) ((float) (code - 1) * d);
+    }
+}
+
+template <typename dst_t>
+__dpct_inline__ static void
+dequantize_block_tq1_0(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                       const sycl::nd_item<3> & item_ct1) {
+
+    const int64_t i = item_ct1.get_group(2);
+    const block_tq1_0 * x = (const block_tq1_0 *) vx;
+
+    const int64_t tid = item_ct1.get_local_id(2);  // 0..31
+    const float d = (float) x[i].d;
+
+    // Per QK_K=256 block, three output regions (matches CPU dequantize_row_tq1_0):
+    //   A: out [  0, 160) -- byte qs[m]    , m=tid    , n in 0..4
+    //   B: out [160, 240) -- byte qs[32+m] , m=0..15  , n in 0..4
+    //   C: out [240, 256) -- byte qh[j]    , j=0..3   , n in 0..3
+    // Encoding: q = (byte * pow3[n]) & 0xFF; xi = (q * 3) >> 8; value = (xi - 1) * d, xi in {0,1,2}.
+    // Each thread handles 8 outputs at indices {tid + g*32 : g = 0..7}.
+
+    const uint16_t pow3[5] = { 1, 3, 9, 27, 81 };
+
+    auto decode = [&](const uint8_t byte, const int n) -> int {
+        const uint8_t q = (uint8_t) ((uint16_t) byte * pow3[n]);  // 8-bit truncation matches CPU ref
+        return (int) (((uint16_t) q * 3) >> 8) - 1;               // result in {-1, 0, +1}
+    };
+
+    dst_t * y = yy + i * QK_K;
+
+    // g = 0..4: region A, out = g*32 + tid, byte = qs[tid], n = g.
+#pragma unroll
+    for (int g = 0; g < 5; ++g) {
+        const int xi = decode(x[i].qs[tid], g);
+        y[g * 32 + tid] = (dst_t) ((float) xi * d);
+    }
+
+    // g = 5: out = 160..191 (region B); n = 0 (tid<16) or 1 (tid>=16); m = tid % 16.
+    {
+        const int n  = (tid < 16) ? 0 : 1;
+        const int m  = (int) (tid & 15);
+        const int xi = decode(x[i].qs[32 + m], n);
+        y[160 + tid] = (dst_t) ((float) xi * d);
+    }
+    // g = 6: out = 192..223 (region B); n = 2 (tid<16) or 3.
+    {
+        const int n  = (tid < 16) ? 2 : 3;
+        const int m  = (int) (tid & 15);
+        const int xi = decode(x[i].qs[32 + m], n);
+        y[192 + tid] = (dst_t) ((float) xi * d);
+    }
+    // g = 7: out = 224..255; tid<16 region B n=4, tid>=16 region C.
+    {
+        int xi;
+        if (tid < 16) {
+            xi = decode(x[i].qs[32 + tid], 4);
+        } else {
+            const int local = (int) (tid - 16);  // 0..15
+            const int n     = local >> 2;        // 0..3
+            const int j     = local & 3;         // 0..3
+            xi = decode(x[i].qh[j], n);
+        }
+        y[224 + tid] = (dst_t) ((float) xi * d);
+    }
+}
+
+template <typename dst_t>
+__dpct_inline__ static void
 dequantize_block_iq4_nl(const void *__restrict__ vx, dst_t *__restrict__ yy,
                         const sycl::nd_item<3> &item_ct1) {
 
