@@ -84,6 +84,23 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
 
     if (tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_I32) {
         ggml_backend_tensor_set(tensor, data.data(), 0, nels * sizeof(float));
+    } else if (tensor->type == GGML_TYPE_MXFP6_E2M3) {
+        GGML_ASSERT(tensor->ne[0] % ggml_blck_size(tensor->type) == 0);
+        // Test tensors are quantized per row and put into the mxfp6 tile layout
+        std::vector<uint8_t> dataq(ggml_nbytes(tensor));
+        constexpr size_t mxfp6_header_size = 32;
+        const float weight_scale = 1.0f;
+        const float input_scale  = 0.0f;
+        memcpy(dataq.data() + 0, &weight_scale, sizeof(weight_scale));
+        memcpy(dataq.data() + 4, &input_scale,  sizeof(input_scale));
+        for (int64_t i3 = 0; i3 < tensor->ne[3]; ++i3) {
+            for (int64_t i2 = 0; i2 < tensor->ne[2]; ++i2) {
+                const float * src = data.data() + (i3 * tensor->ne[2] + i2) * tensor->ne[1] * tensor->ne[0];
+                void * dst = dataq.data() + mxfp6_header_size + i3 * tensor->nb[3] + i2 * tensor->nb[2];
+                ggml_quantize_chunk(tensor->type, src, dst, 0, tensor->ne[1], tensor->ne[0], nullptr);
+            }
+        }
+        ggml_backend_tensor_set(tensor, dataq.data(), 0, dataq.size());
     } else if (ggml_is_quantized(tensor->type) || tensor->type == GGML_TYPE_F16 || tensor->type == GGML_TYPE_BF16) {
         GGML_ASSERT(nels % ggml_blck_size(tensor->type) == 0);
 
@@ -7623,6 +7640,7 @@ static const ggml_type other_types[] = {
     GGML_TYPE_Q5_0, GGML_TYPE_Q5_1,
     GGML_TYPE_Q8_0,
     GGML_TYPE_Q1_0,
+    GGML_TYPE_MXFP6_E2M3,
     GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
     GGML_TYPE_Q5_K,
     GGML_TYPE_Q6_K,

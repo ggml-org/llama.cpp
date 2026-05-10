@@ -83,6 +83,12 @@ typedef sycl::half2 ggml_half2;
 #endif
 #endif // __cplusplus
 
+#if defined(_MSC_VER)
+#define GGML_ALIGN(N) __declspec(align(N))
+#else
+#define GGML_ALIGN(N) __attribute__((aligned(N)))
+#endif
+
 // QK = number of values after dequantization
 // QK_K = super-block size
 
@@ -207,6 +213,46 @@ typedef struct {
     uint8_t qs[QK_MXFP4/2];
 } block_mxfp4;
 static_assert(sizeof(block_mxfp4) == sizeof(uint8_t) + QK_MXFP4/2, "wrong mxfp4 block size/padding");
+
+#define QK_MXFP6 64
+#define QK_MXFP6_SUB 32
+#define QK_MXFP6_PACKED_BYTES 24
+#define MXFP6_TILE_ROWS 16
+#define MXFP6_TILE_FRAGS 2
+#define MXFP6_TILE_LANES 32
+#define MXFP6_TILE_PAYLOADS 3
+#define MXFP6_TILE_BYTES 832
+#define MXFP6_ROW_BYTES (MXFP6_TILE_BYTES / MXFP6_TILE_ROWS)
+
+typedef struct GGML_ALIGN(16) {
+    uint32_t lane[MXFP6_TILE_LANES][MXFP6_TILE_PAYLOADS];
+    uint8_t  scale[MXFP6_TILE_LANES];
+} tile_mxfp6_frag;
+
+typedef struct GGML_ALIGN(16) {
+    tile_mxfp6_frag frag[MXFP6_TILE_FRAGS];
+} tile_mxfp6;
+struct ggml_tensor;
+
+typedef struct {
+    const struct ggml_tensor * tensor;
+    const void               * tile;
+    int64_t                    row;
+    int64_t                    channel;
+} ggml_tile_to_row_ref;
+
+typedef struct GGML_ALIGN(16) {
+    float         weight_scale;
+    float         input_scale;
+    const float * weight_scales;
+    const float * input_scales;
+#if !defined(__cplusplus)
+    tile_mxfp6    tiles[];
+#endif
+} tensor_mxfp6;
+#define MXFP6_HEADER_OFFSET sizeof(tensor_mxfp6) // the tensorscales offset the tiles
+static_assert(sizeof(tile_mxfp6_frag) == MXFP6_TILE_BYTES / MXFP6_TILE_FRAGS, "wrong mxfp6 tile fragment size/padding");
+static_assert(sizeof(tile_mxfp6) == MXFP6_TILE_BYTES, "wrong mxfp6 tile size/padding");
 
 #define QK_NVFP4 64
 #define QK_NVFP4_SUB 16  // sub-block size for per-group scales
@@ -1115,6 +1161,18 @@ GGML_TABLE_END()
 // ref: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 GGML_TABLE_BEGIN(int8_t, kvalues_mxfp4, 16)
     0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12,
+GGML_TABLE_END()
+
+// e2m3 values multiplied by 8.
+GGML_TABLE_BEGIN(int8_t, kvalues_mxfp6_e2m3, 64)
+     0,   1,   2,   3,   4,   5,   6,   7,
+     8,   9,  10,  11,  12,  13,  14,  15,
+    16,  18,  20,  22,  24,  26,  28,  30,
+    32,  36,  40,  44,  48,  52,  56,  60,
+     0,  -1,  -2,  -3,  -4,  -5,  -6,  -7,
+    -8,  -9, -10, -11, -12, -13, -14, -15,
+   -16, -18, -20, -22, -24, -26, -28, -30,
+   -32, -36, -40, -44, -48, -52, -56, -60,
 GGML_TABLE_END()
 
 #define NGRID_IQ1S 2048

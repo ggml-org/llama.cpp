@@ -342,6 +342,117 @@ void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RE
         }
     }
 }
+static void quantize_mxfp6_k32_ref(const float * GGML_RESTRICT x, tile_mxfp6_frag * GGML_RESTRICT tile, int row, uint8_t * GGML_RESTRICT block) {
+    float amax = 0.0f;
+    for (int i = 0; i < QK_MXFP6_SUB; ++i) {
+        if (isfinite(x[i])) {
+            amax = fmaxf(amax, fabsf(x[i]));
+        }
+    }
+
+    int e = !(amax > 0.0f) || !isfinite(amax) ? 127 : (int) ceilf(log2f(amax / 7.5f)) + 127;
+    if (e < 0) {
+        e = 0;
+    } else if (e > 254) {
+        e = 254;
+    }
+
+    const int scale_lane = ((row & 7) * 4) + (row >> 3);
+    if (tile != NULL) {
+        tile->scale[scale_lane] = (uint8_t) e;
+    }
+    if (block != NULL) {
+        block[0] = (uint8_t) e;
+    }
+
+    const float scale = ggml_mxfp6_e2m3_ue8m0_to_fp32((uint8_t) e);
+    const float inv_scale = scale > 0.0f ? 1.0f / scale : 0.0f;
+
+    for (int pack = 0; pack < QK_MXFP6_SUB / 4; ++pack) {
+        uint32_t packed = 0;
+        for (int j = 0; j < 4; ++j) {
+            const float v = x[4 * pack + j];
+            uint8_t q = 0;
+            if (isfinite(v) && v != 0.0f && inv_scale > 0.0f) {
+                const float ax = fabsf(v) * inv_scale * 8.0f;
+                int best = 0;
+                float best_err = fabsf(ax);
+                for (int i = 1; i < 32; ++i) {
+                    const float err = fabsf(ax - (float) kvalues_mxfp6_e2m3[i]);
+                    if (err < best_err) {
+                        best = i;
+                        best_err = err;
+                    }
+                }
+                q = (v < 0.0f ? 0x20 : 0x00) | (uint8_t) best;
+            }
+            packed |= (uint32_t) q << (6 * j);
+        }
+
+        if (block != NULL) {
+            block[1 + 3 * pack] = (uint8_t) (packed >>  0);
+            block[2 + 3 * pack] = (uint8_t) (packed >>  8);
+            block[3 + 3 * pack] = (uint8_t) (packed >> 16);
+        }
+
+        if (tile != NULL) {
+            uint32_t * GGML_RESTRICT lane = tile->lane[((row & 7) * 4) + (pack & 3)];
+            if (row & 8) {
+                if (pack & 4) {
+                    lane[2] |= packed << 8;
+                } else {
+                    lane[0] |= (packed & 0x000000FFu) << 24;
+                    lane[1] |= packed >> 8;
+                }
+            } else {
+                if (pack & 4) {
+                    lane[1] |= (packed & 0x0000FFFFu) << 16;
+                    lane[2] |= packed >> 16;
+                } else {
+                    lane[0] |= packed;
+                }
+            }
+        }
+    }
+}
+
+void quantize_row_mxfp6_e2m3_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_MXFP6 == 0);
+    uint8_t * GGML_RESTRICT y = (uint8_t *) vy;
+    const int64_t nb = k / QK_MXFP6;
+    for (int64_t i = 0; i < nb; ++i) {
+        uint8_t * GGML_RESTRICT dst = y + i * MXFP6_ROW_BYTES;
+        quantize_mxfp6_k32_ref(x + i * QK_MXFP6 + 0 * QK_MXFP6_SUB, NULL, 0, dst +  0);
+        quantize_mxfp6_k32_ref(x + i * QK_MXFP6 + 1 * QK_MXFP6_SUB, NULL, 0, dst + 25);
+        memset(dst + 50, 0, MXFP6_ROW_BYTES - 50);
+    }
+}
+
+size_t quantize_mxfp6_e2m3(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * imatrix) {
+    GGML_UNUSED(imatrix);
+    GGML_ASSERT(n_per_row % QK_MXFP6 == 0);
+
+    const int64_t tiles_per_row_group = n_per_row / QK_MXFP6;
+    tile_mxfp6 * GGML_RESTRICT out = (tile_mxfp6 *) dst;
+
+    for (int64_t row_group = 0; row_group < nrow; row_group += MXFP6_TILE_ROWS) {
+        for (int64_t tile_col = 0; tile_col < tiles_per_row_group; ++tile_col) {
+            tile_mxfp6 * GGML_RESTRICT tile = out + (row_group / MXFP6_TILE_ROWS) * tiles_per_row_group + tile_col;
+            memset(tile, 0, sizeof(*tile));
+            for (int part = 0; part < MXFP6_TILE_FRAGS; ++part) {
+                memset(tile->frag[part].scale, 0x7F, sizeof(tile->frag[part].scale));
+            }
+
+            for (int row = 0; row < MXFP6_TILE_ROWS && row_group + row < nrow; ++row) {
+                const float * src_row = src + (row_group + row) * n_per_row + tile_col * QK_MXFP6;
+                quantize_mxfp6_k32_ref(src_row + 0 * QK_MXFP6_SUB, &tile->frag[0], row, NULL);
+                quantize_mxfp6_k32_ref(src_row + 1 * QK_MXFP6_SUB, &tile->frag[1], row, NULL);
+            }
+        }
+    }
+
+    return GGML_PAD(nrow, MXFP6_TILE_ROWS) * ggml_row_size(GGML_TYPE_MXFP6_E2M3, n_per_row);
+}
 
 void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK_NVFP4;
@@ -526,6 +637,101 @@ void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_REST
             y[i*qk + j + qk/2] = x1*d;
         }
     }
+}
+
+static void mxfp6_e2m3_tile_to_f32(const void * GGML_RESTRICT vx, int row, float scale, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_MXFP6 == 0);
+
+    const tile_mxfp6 * GGML_RESTRICT x = (const tile_mxfp6 *) vx;
+    const int row_in_tile = row & (MXFP6_TILE_ROWS - 1);
+    const int nb = k / QK_MXFP6;
+
+    for (int i = 0; i < nb; ++i) {
+        float * GGML_RESTRICT yb = y + i * QK_MXFP6;
+
+        for (int part = 0; part < MXFP6_TILE_FRAGS; ++part) {
+            const tile_mxfp6_frag * GGML_RESTRICT xf = &x[i].frag[part];
+            const int scale_lane = ((row_in_tile & 7) * 4) + (row_in_tile >> 3);
+            const float d = ggml_mxfp6_e2m3_ue8m0_to_fp32(xf->scale[scale_lane]) * (1.0f / 8.0f);
+            float * GGML_RESTRICT dst = yb + part * QK_MXFP6_SUB;
+
+            for (int pack = 0; pack < QK_MXFP6_SUB / 4; ++pack, dst += 4) {
+                const int lane = ((row_in_tile & 7) * 4) + (pack & 3);
+                const uint32_t v0 = xf->lane[lane][0];
+                const uint32_t v1 = xf->lane[lane][1];
+                const uint32_t v2 = xf->lane[lane][2];
+                const uint32_t packed = (row_in_tile & 8) ?
+                    ((pack & 4) ? (v2 >> 8) : ((v0 >> 24) | (v1 << 8))) :
+                    ((pack & 4) ? ((v1 >> 16) | (v2 << 16)) : v0);
+
+                dst[0] = d * (float) kvalues_mxfp6_e2m3[(packed >>  0) & 0x3F];
+                dst[1] = d * (float) kvalues_mxfp6_e2m3[(packed >>  6) & 0x3F];
+                dst[2] = d * (float) kvalues_mxfp6_e2m3[(packed >> 12) & 0x3F];
+                dst[3] = d * (float) kvalues_mxfp6_e2m3[(packed >> 18) & 0x3F];
+            }
+        }
+    }
+
+    if (scale != 1.0f) {
+        for (int64_t i = 0; i < k; ++i) {
+            y[i] *= scale;
+        }
+    }
+}
+
+static void mxfp6_e2m3_row_to_f32(const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_MXFP6 == 0);
+
+    typedef struct {
+        uint8_t scale;
+        uint8_t packed[QK_MXFP6_PACKED_BYTES];
+    } mxfp6_k32_ref;
+    typedef struct {
+        mxfp6_k32_ref part[MXFP6_TILE_FRAGS];
+        uint8_t       pad[MXFP6_ROW_BYTES - MXFP6_TILE_FRAGS * sizeof(mxfp6_k32_ref)];
+    } mxfp6_row_ref;
+
+    const mxfp6_row_ref * GGML_RESTRICT x = (const mxfp6_row_ref *) vx;
+    const int nb = k / QK_MXFP6;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        float * GGML_RESTRICT yb = y + ib * QK_MXFP6;
+
+        for (int part = 0; part < MXFP6_TILE_FRAGS; ++part) {
+            const mxfp6_k32_ref * GGML_RESTRICT xp = &x[ib].part[part];
+            const float d = ggml_mxfp6_e2m3_ue8m0_to_fp32(xp->scale) * (1.0f / 8.0f);
+            float * GGML_RESTRICT dst = yb + part * QK_MXFP6_SUB;
+
+            for (int pack = 0; pack < QK_MXFP6_SUB / 4; ++pack, dst += 4) {
+                const uint8_t * GGML_RESTRICT p = xp->packed + 3 * pack;
+                const uint32_t packed = ((uint32_t) p[0] <<  0) |
+                                        ((uint32_t) p[1] <<  8) |
+                                        ((uint32_t) p[2] << 16);
+
+                dst[0] = d * (float) kvalues_mxfp6_e2m3[(packed >>  0) & 0x3F];
+                dst[1] = d * (float) kvalues_mxfp6_e2m3[(packed >>  6) & 0x3F];
+                dst[2] = d * (float) kvalues_mxfp6_e2m3[(packed >> 12) & 0x3F];
+                dst[3] = d * (float) kvalues_mxfp6_e2m3[(packed >> 18) & 0x3F];
+            }
+        }
+    }
+}
+
+void dequantize_row_mxfp6_e2m3(const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_MXFP6 == 0);
+
+    mxfp6_e2m3_row_to_f32(vx, y, k);
+}
+
+void dequantize_row_mxfp6_e2m3_tile(const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_MXFP6 == 0);
+
+    const ggml_tile_to_row_ref * ref = (const ggml_tile_to_row_ref *) vx;
+    const tensor_mxfp6 * tensor = (const tensor_mxfp6 *) ref->tensor->data;
+    float scale = tensor != NULL && tensor->weight_scales != NULL ? tensor->weight_scales[ref->channel] :
+                  tensor != NULL ? tensor->weight_scale : 1.0f;
+    scale = scale > 0.0f ? scale : 1.0f;
+    mxfp6_e2m3_tile_to_f32(ref->tile, ref->row, scale, y, k);
 }
 
 void dequantize_row_nvfp4(const block_nvfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
@@ -5484,6 +5690,23 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_MXFP4:
             {
                 VALIDATE_ROW_DATA_E_E8M0_IMPL(block_mxfp4, data, nb);
+            } break;
+        case GGML_TYPE_MXFP6_E2M3:
+            {
+                if (nbytes >= MXFP6_HEADER_OFFSET && (nbytes - MXFP6_HEADER_OFFSET) % sizeof(tile_mxfp6) == 0) {
+                    const tile_mxfp6 * t = (const tile_mxfp6 *) ((const char *) data + MXFP6_HEADER_OFFSET);
+                    const size_t nt = (nbytes - MXFP6_HEADER_OFFSET) / sizeof(tile_mxfp6);
+                    for (size_t i = 0; i < nt; ++i) {
+                        for (int frag = 0; frag < MXFP6_TILE_FRAGS; ++frag) {
+                            for (int lane = 0; lane < MXFP6_TILE_LANES; ++lane) {
+                                if (t[i].frag[frag].scale[lane] == 0xFF) {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                }
+                GGML_UNUSED(nb);
             } break;
         case GGML_TYPE_NVFP4:
             {
