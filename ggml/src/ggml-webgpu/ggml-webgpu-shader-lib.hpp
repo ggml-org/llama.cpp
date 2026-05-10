@@ -494,6 +494,22 @@ struct ggml_webgpu_binary_pipeline_key_hash {
     }
 };
 
+/* Add_Id */
+
+struct ggml_webgpu_add_id_pipeline_key {
+    bool inplace;
+
+    bool operator==(const ggml_webgpu_add_id_pipeline_key & other) const { return inplace == other.inplace; }
+};
+
+struct ggml_webgpu_add_id_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_add_id_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        return seed;
+    }
+};
+
 /** Unary **/
 
 struct ggml_webgpu_unary_pipeline_key {
@@ -1032,7 +1048,9 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<ggml_webgpu_pad_pipeline_key, webgpu_pipeline, ggml_webgpu_pad_pipeline_key_hash>
         pad_pipelines;              // circular/non-circular
     std::unordered_map<ggml_webgpu_binary_pipeline_key, webgpu_pipeline, ggml_webgpu_binary_pipeline_key_hash>
-        binary_pipelines;           // type/op/inplace/overlap
+        binary_pipelines;           // type/op/inplace/overlap/src_overlap
+    std::unordered_map<ggml_webgpu_add_id_pipeline_key, webgpu_pipeline, ggml_webgpu_add_id_pipeline_key_hash>
+        add_id_pipelines;           // inplace
     std::unordered_map<ggml_webgpu_concat_pipeline_key, webgpu_pipeline, ggml_webgpu_concat_pipeline_key_hash>
         concat_pipelines;           // type
     std::unordered_map<ggml_webgpu_repeat_pipeline_key, webgpu_pipeline, ggml_webgpu_repeat_pipeline_key_hash>
@@ -1407,6 +1425,7 @@ class ggml_webgpu_shader_lib {
                         case GGML_TYPE_IQ3_S:
                         case GGML_TYPE_IQ1_S:
                         case GGML_TYPE_IQ4_NL:
+                        case GGML_TYPE_MXFP4:
                             {
                                 // Quantized types using u32 buffers for portability.
                                 defines.push_back("SRC_TYPE=u32");
@@ -1425,6 +1444,7 @@ class ggml_webgpu_shader_lib {
                     defines.push_back(type_upper + "_SCALE_MIN");
                     defines.push_back(type_upper + "_TABLES");
                     defines.push_back(type_upper + "_GRID");
+                    defines.push_back(type_upper + "_LUT");
 
                     variant += "_";
                     variant += type_str;
@@ -1434,7 +1454,7 @@ class ggml_webgpu_shader_lib {
                     if (key.src_type == GGML_TYPE_Q1_0) {
                         defines.push_back("BLOCK_SIZE=128u");
                     } else if ((key.src_type >= GGML_TYPE_Q4_0 && key.src_type <= GGML_TYPE_Q8_1) ||
-                               key.src_type == GGML_TYPE_IQ4_NL) {
+                               key.src_type == GGML_TYPE_IQ4_NL || key.src_type == GGML_TYPE_MXFP4) {
                         defines.push_back("BLOCK_SIZE=32u");
                     } else if (key.src_type >= GGML_TYPE_Q2_K) {
                         defines.push_back("BLOCK_SIZE=256u");
@@ -1748,6 +1768,9 @@ class ggml_webgpu_shader_lib {
                             defines.push_back(type_upper + "_GRID");
                             defines.push_back(type_upper + "_TABLES");
                             break;
+                        case GGML_TYPE_MXFP4:
+                            defines.push_back(type_upper + "_LUT");
+                            break;
                         default:
                             break;
                     }
@@ -1881,6 +1904,9 @@ class ggml_webgpu_shader_lib {
                         case GGML_TYPE_IQ3_S:
                             defines.push_back(type_upper + "_GRID");
                             defines.push_back(type_upper + "_TABLES");
+                            break;
+                        case GGML_TYPE_MXFP4:
+                            defines.push_back(type_upper + "_LUT");
                             break;
                         default:
                             break;
@@ -2016,6 +2042,7 @@ class ggml_webgpu_shader_lib {
                         case GGML_TYPE_IQ3_S:
                         case GGML_TYPE_IQ1_S:
                         case GGML_TYPE_IQ4_NL:
+                        case GGML_TYPE_MXFP4:
                             {
                                 // Quantized types using u32 buffers for portability.
                                 defines.push_back("SRC0_TYPE=u32");
@@ -2143,6 +2170,9 @@ class ggml_webgpu_shader_lib {
                             defines.push_back(type_upper + "_GRID");
                             defines.push_back(type_upper + "_TABLES");
                             break;
+                        case GGML_TYPE_MXFP4:
+                            defines.push_back(type_upper + "_LUT");
+                            break;
                         default:
                             break;
                     }
@@ -2259,6 +2289,9 @@ class ggml_webgpu_shader_lib {
                         case GGML_TYPE_IQ3_XXS:
                             defines.push_back(type_upper + "_GRID");
                             defines.push_back(type_upper + "_TABLES");
+                            break;
+                        case GGML_TYPE_MXFP4:
+                            defines.push_back(type_upper + "_LUT");
                             break;
                         default:
                             break;
@@ -2475,6 +2508,37 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = pipeline_decisions;
         binary_pipelines[key]    = pipeline;
         return binary_pipelines[key];
+    }
+
+    webgpu_pipeline get_add_id_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_add_id_pipeline_key key = {};
+        key.inplace                         = ggml_webgpu_tensor_equal(context.src0, context.dst);
+
+        auto it = add_id_pipelines.find(key);
+        if (it != add_id_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant    = "add_id";
+        const char *             shader_src = wgsl_add_id;
+
+        if (key.inplace) {
+            defines.push_back("INPLACE");
+            variant += "_inplace";
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed              = preprocessor.preprocess(shader_src, defines);
+        auto pipeline_decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        pipeline_decisions->wg_size = context.max_wg_size;
+        pipeline_decisions->inplace = key.inplace;
+
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = pipeline_decisions;
+        add_id_pipelines[key]    = pipeline;
+        return pipeline;
     }
 
     webgpu_pipeline get_concat_pipeline(const ggml_webgpu_shader_lib_context & context) {
