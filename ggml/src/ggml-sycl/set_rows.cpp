@@ -1,5 +1,6 @@
 #include "set_rows.hpp"
 #include "cpy.hpp"
+#include "turbo-quants.hpp"
 
 namespace utils {
 template<typename T>
@@ -14,6 +15,136 @@ convert (const char* src, char* dst) {
     auto src_val = *reinterpret_cast<const TIn*>(src);
     auto dst_val = sycl::vec<TIn, 1>(src_val).template convert<TOut, sycl::rounding_mode::automatic>()[0];
    *reinterpret_cast<TOut*>(dst) = dst_val;
+}
+
+template <typename idx_t, int GROUP_SIZE, typename block_t, int QK, void (*quantize_fn)(float, block_t *, const sycl::nd_item<1> &), uint8_t (*nearest_centroid_fn)(float), const float * CENTROIDS>
+static void k_set_rows_turbo_generic(
+        const float * __restrict__ src0,
+        const idx_t * __restrict__ src1,
+        block_t * __restrict__ dst,
+        const int64_t ne00,
+        const int64_t n_indices,
+        const int64_t s1,
+        const sycl::nd_item<1> &item_ct1,
+        float *shared_mem) {
+
+    const int j = item_ct1.get_local_id(0);
+    const int sg_id = item_ct1.get_sub_group().get_group_id()[0];
+    const int n_sg = item_ct1.get_sub_group().get_group_range()[0];
+
+    // Total groups = (n_indices) * n_groups_per_row
+    const int64_t n_groups_per_row = ne00 / GROUP_SIZE;
+    const int64_t g = item_ct1.get_group(0);
+    
+    if (g >= n_indices * n_groups_per_row) return;
+
+    const int64_t i_row = g / n_groups_per_row;
+    const int64_t i_grp = g % n_groups_per_row;
+
+    const idx_t dst_row = src1[i_row];
+    const float * src_row = src0 + i_row * ne00;
+    
+    block_t * blk_base = (block_t *)((char *)dst + dst_row*s1) + i_grp * (GROUP_SIZE / QK);
+
+    float *x = shared_mem;
+    x[j] = src_row[i_grp * GROUP_SIZE + j];
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+
+    float v = x[j];
+    float v2 = v * v;
+    auto sg = item_ct1.get_sub_group();
+    v2 = sycl::reduce_over_group(sg, v2, sycl::plus<>());
+    
+    float *warp_accum = x + 128; 
+    if (sg.get_local_id()[0] == 0) {
+        warp_accum[sg_id] = v2;
+    }
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+
+    float grp_norm;
+    if (j == 0) {
+        float total = 0.0f;
+        for (int w = 0; w < n_sg; w++) total += warp_accum[w];
+        warp_accum[0] = total; 
+    }
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+    grp_norm = sycl::sqrt(warp_accum[0]);
+    const float inv_norm = (grp_norm > 1e-10f) ? 1.0f / grp_norm : 0.0f;
+
+    v *= inv_norm;
+    v *= TURBO_WHT_SIGNS1[j];
+    
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+    turbo_wht<128>(v, item_ct1, x);
+    v *= TURBO_WHT_SIGNS2[j];
+    v *= (float)(1.0f / sycl::sqrt(128.0f));
+
+    block_t * blk = blk_base + (j / QK);
+    quantize_fn(v, blk, item_ct1);
+
+    const uint8_t idx = nearest_centroid_fn(v);
+    const float c = CENTROIDS[idx];
+    float rc = c * c;
+    rc = sycl::reduce_over_group(sg, rc, sycl::plus<>());
+    if (sg.get_local_id()[0] == 0) {
+        warp_accum[sg_id] = rc;
+    }
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+
+    float recon_norm;
+    if (j == 0) {
+        float total = 0.0f;
+        for (int w = 0; w < n_sg; w++) total += warp_accum[w];
+        warp_accum[0] = total;
+    }
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+    recon_norm = sycl::sqrt(warp_accum[0]);
+    const float corrected_norm = (recon_norm > 1e-10f) ? grp_norm / recon_norm : grp_norm;
+
+    const int elem_in_block = j % QK;
+    if (elem_in_block == 0) blk->norm = (sycl::half)corrected_norm;
+}
+
+template <typename idx_t, typename block_t, int QK, void (*quantize_fn)(float, block_t *, const sycl::nd_item<1> &), uint8_t (*nearest_centroid_fn)(float), const float * CENTROIDS>
+static void set_rows_sycl_turbo(
+        const float * __restrict__ src0,
+        const idx_t * __restrict__ src1,
+        block_t * __restrict__ dst,
+        const int64_t ne00,
+        const int64_t ne01,
+        const int64_t ne02,
+        const int64_t ne03,
+        const int64_t ne11,
+        const int64_t ne12,
+        const int64_t ne13,
+        const int64_t s01,
+        const int64_t s02,
+        const int64_t s03,
+        const int64_t s10,
+        const int64_t s11,
+        const int64_t s12,
+        const int64_t s1,
+        const int64_t s2,
+        const int64_t s3,
+        queue_ptr stream) {
+
+    const int64_t n_groups_per_row = ne00 / 128;
+    const int64_t n_indices = ne11; 
+    
+    const int64_t grid_size = n_indices * n_groups_per_row;
+    const int block_size = 128;
+
+    stream->submit([&](sycl::handler &h) {
+        sycl::local_accessor<float, 1> shared_mem(sycl::range<1>(128 + 32), h);
+        h.parallel_for(sycl::nd_range<1>(grid_size * block_size, block_size), [=](sycl::nd_item<1> item_ct1) {
+            k_set_rows_turbo_generic<idx_t, 128, block_t, QK, quantize_fn, nearest_centroid_fn, CENTROIDS>(
+                src0, src1, dst,
+                ne00, n_indices, s1,
+                item_ct1,
+                shared_mem.get_multi_ptr<sycl::access::decorated::no>().get()
+            );
+        });
+    });
 }
 
 template <typename TIdx, typename blockType, int qk, cpy_kernel_t cpyblck>
@@ -210,6 +341,39 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             break;
         case GGML_TYPE_IQ4_NL:
             set_rows_sycl_q<TIdx, block_iq4_nl, QK4_NL, cpy_blck_f32_iq4_nl>(src0_d, src1_d, (block_iq4_nl *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_TURBO2_0:
+            set_rows_sycl_turbo<TIdx, block_turbo2_0, QK_TURBO2, quantize_turbo2_0<1>, turbo_nearest_centroid_2bit, TURBO_CENTROIDS_2BIT>(
+                (const float *)src0_d, src1_d, (block_turbo2_0 *)dst->data,
+                ne00, ne01, ne02, ne03,
+                ne11, ne12, ne13,
+                nb01, nb02, nb03,
+                nb10, nb11, nb12,
+                nb1, nb2, nb3,
+                stream
+            );
+            break;
+        case GGML_TYPE_TURBO3_0:
+            set_rows_sycl_turbo<TIdx, block_turbo3_0, QK_TURBO3, quantize_turbo3_0<1>, turbo_nearest_centroid_3bit, TURBO_CENTROIDS_3BIT>(
+                (const float *)src0_d, src1_d, (block_turbo3_0 *)dst->data,
+                ne00, ne01, ne02, ne03,
+                ne11, ne12, ne13,
+                nb01, nb02, nb03,
+                nb10, nb11, nb12,
+                nb1, nb2, nb3,
+                stream
+            );
+            break;
+        case GGML_TYPE_TURBO4_0:
+            set_rows_sycl_turbo<TIdx, block_turbo4_0, QK_TURBO4, quantize_turbo4_0<1>, turbo_nearest_centroid_4bit, TURBO_CENTROIDS_4BIT>(
+                (const float *)src0_d, src1_d, (block_turbo4_0 *)dst->data,
+                ne00, ne01, ne02, ne03,
+                ne11, ne12, ne13,
+                nb01, nb02, nb03,
+                nb10, nb11, nb12,
+                nb1, nb2, nb3,
+                stream
+            );
             break;
 
         default:

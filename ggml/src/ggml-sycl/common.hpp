@@ -432,21 +432,23 @@ struct ggml_backend_sycl_context {
 
 static __dpct_inline__ float warp_reduce_sum(float x,
     const sycl::nd_item<3>& item_ct1) {
+    auto sg = item_ct1.get_sub_group();
+    const int sg_size = sg.get_local_range()[0];
 #pragma unroll
-    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        x += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), x, mask);
+    for (int mask = sg_size / 2; mask > 0; mask >>= 1) {
+        x += dpct::permute_sub_group_by_xor(sg, x, mask, sg_size);
     }
     return x;
 }
 
 static __dpct_inline__ sycl::float2
 warp_reduce_sum(sycl::float2 a, const sycl::nd_item<3>& item_ct1) {
+    auto sg = item_ct1.get_sub_group();
+    const int sg_size = sg.get_local_range()[0];
 #pragma unroll
-    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        a.x() += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), a.x(),
-            mask);
-        a.y() += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), a.y(),
-            mask);
+    for (int mask = sg_size / 2; mask > 0; mask >>= 1) {
+        a.x() += dpct::permute_sub_group_by_xor(sg, a.x(), mask, sg_size);
+        a.y() += dpct::permute_sub_group_by_xor(sg, a.y(), mask, sg_size);
     }
     return a;
 }

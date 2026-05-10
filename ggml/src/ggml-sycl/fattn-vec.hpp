@@ -10,6 +10,7 @@
 #include "common.hpp"
 #include "ggml.h"
 #include "fattn-common.hpp"
+#include "turbo-wht.hpp"
 #include <cmath>
 #include <float.h>
 
@@ -99,7 +100,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
     constexpr int nthreads_KQ_q = (D/4 < warp_size ? D/4 : warp_size);
     constexpr int nthreads_V_q  = (D/4 < warp_size ? D/4 : warp_size);
 
-    constexpr int nthreads    = ggml_sycl_fattn_vec_get_nthreads_device();
+    constexpr int nthreads    = (ggml_sycl_fattn_vec_get_nthreads_device() > D ? ggml_sycl_fattn_vec_get_nthreads_device() : D);
     constexpr int nthreads_KQ = type_K == GGML_TYPE_F16 ? 128 / cpy_nb : nthreads_KQ_q;
     constexpr int nthreads_V  = type_V == GGML_TYPE_F16 ? 128 / cpy_nb : nthreads_V_q;
 
@@ -110,7 +111,8 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
     constexpr int V_cols_per_iter   = warp_size / nthreads_V;
 
     constexpr vec_dot_KQ_t vec_dot_KQ = get_vec_dot_KQ<type_K, D, nthreads_KQ, warp_size>();
-    constexpr bool Q_q8_1 = type_K != GGML_TYPE_F16;
+    constexpr bool K_is_turbo = (type_K == GGML_TYPE_TURBO3_0 || type_K == GGML_TYPE_TURBO2_0 || type_K == GGML_TYPE_TURBO4_0);
+    constexpr bool Q_q8_1 = type_K != GGML_TYPE_F16 && !K_is_turbo;
 #ifdef GGML_SYCL_F16
     constexpr dequantize_V_t dequantize_V = get_dequantize_V<type_V, sycl::half, V_rows_per_thread>();
 #else
@@ -244,46 +246,111 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
         const sycl::half2 scale_h2 = sycl::half2(scale, scale);
 #pragma unroll
         for (int j = 0; j < ncols; ++j) {
-            const sycl::float2 * Q_j = (const sycl::float2 *) (Q + j * nb01);
+            if constexpr (K_is_turbo) {
 #pragma unroll
-            for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ*cpy_ne) {
-                const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) :
-                                                               item_ct1.get_local_id(2) % nthreads_KQ) *
-                                       cpy_ne;
-
-                sycl::float2 tmp[cpy_ne] = {
-                    { 0.0f, 0.0f }
-                };
-                if (ncols == 1 || ic0 + j < int(ne01.z())) {
-                    ggml_sycl_memcpy_1<cpy_nb>(tmp,            &Q_j[i]);
-                    ggml_sycl_memcpy_1<cpy_nb>(tmp + cpy_ne/2, &Q_j[i + cpy_ne/2]);
+                for (int i = tid; i < D; i += nthreads) {
+                    float val = (ncols == 1 || ic0 + j < int(ne01.z())) ? ((const float *)(Q + j*nb01))[i] : 0.0f;
+                    if constexpr (D == 64) val *= TURBO_WHT_SIGNS1_64[i];
+                    else                  val *= TURBO_WHT_SIGNS1[i];
+                    KQ[j*D + i] = (dfloat)val;
                 }
+            } else {
+                const sycl::float2 * Q_j = (const sycl::float2 *) (Q + j * nb01);
 #pragma unroll
-                for (int i1 = 0; i1 < cpy_ne; ++i1) {
-                    Q_reg[j][i0 / nthreads_KQ + i1] = sycl::half2(tmp[i1].x(), tmp[i1].y());
+                for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ*cpy_ne) {
+                    const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) :
+                                                                   item_ct1.get_local_id(2) % nthreads_KQ) *
+                                           cpy_ne;
+
+                    sycl::float2 tmp[cpy_ne] = {
+                        { 0.0f, 0.0f }
+                    };
+                    if (ncols == 1 || ic0 + j < int(ne01.z())) {
+                        ggml_sycl_memcpy_1<cpy_nb>(tmp,            &Q_j[i]);
+                        ggml_sycl_memcpy_1<cpy_nb>(tmp + cpy_ne/2, &Q_j[i + cpy_ne/2]);
+                    }
+#pragma unroll
+                    for (int i1 = 0; i1 < cpy_ne; ++i1) {
+                        Q_reg[j][i0 / nthreads_KQ + i1] = sycl::half2(tmp[i1].x(), tmp[i1].y()) * scale_h2;
+                    }
                 }
             }
+        }
+
+        if constexpr (K_is_turbo) {
+            item_ct1.barrier(sycl::access::fence_space::local_space);
+            for (int j = 0; j < ncols; ++j) {
+                if (tid < D) {
+                    dfloat val = KQ[j*D + tid];
+                    turbo_wht<D>(val, item_ct1, (dfloat*)KQ + j*D);
+                    if constexpr (D == 64) val *= (dfloat)TURBO_WHT_SIGNS2_64[tid];
+                    else                  val *= (dfloat)TURBO_WHT_SIGNS2[tid];
+                    val *= (dfloat)(1.0f / sqrtf((float)D));
+                    KQ[j*D + tid] = val;
+                }
+            }
+            item_ct1.barrier(sycl::access::fence_space::local_space);
+            for (int j = 0; j < ncols; ++j) {
+                const sycl::half2 * Q_rotated = (const sycl::half2 *) &KQ[j * D];
 #pragma unroll
-            for (int k = 0; k < (D/2)/nthreads_KQ; ++k) {
-                Q_reg[j][k] *= scale_h2;
+                for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ) {
+                    const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) :
+                                                                   item_ct1.get_local_id(2) % nthreads_KQ);
+                    Q_reg[j][i0 / nthreads_KQ] = Q_rotated[i] * scale_h2;
+                }
             }
         }
 #else
 #pragma unroll
         for (int j = 0; j < ncols; ++j) {
-            const sycl::float2 * Q_j = (const sycl::float2 *) (Q + j*nb01);
+            if constexpr (K_is_turbo) {
+                for (int i = tid; i < D; i += nthreads) {
+                    float val = (ncols == 1 || ic0 + j < int(ne01.z())) ? ((const float *)(Q + j*nb01))[i] : 0.0f;
+                    if constexpr (D == 64) val *= TURBO_WHT_SIGNS1_64[i];
+                    else                  val *= TURBO_WHT_SIGNS1[i];
+                    KQ[j*D + i] = (dfloat)val;
+                }
+            } else {
+                const sycl::float2 * Q_j = (const sycl::float2 *) (Q + j*nb01);
 #pragma unroll
-            for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ*cpy_ne) {
-                const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) : item_ct1.get_local_id(2) % nthreads_KQ)*cpy_ne;
-                if (ncols == 1 || ic0 + j < int(ne01.z())) {
-                    ggml_sycl_memcpy_1<cpy_nb>(&Q_reg[j][i0/nthreads_KQ],            &Q_j[i]);
-                    ggml_sycl_memcpy_1<cpy_nb>(&Q_reg[j][i0/nthreads_KQ + cpy_ne/2], &Q_j[i + cpy_ne/2]);
+                for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ*cpy_ne) {
+                    const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) : item_ct1.get_local_id(2) % nthreads_KQ)*cpy_ne;
+                    if (ncols == 1 || ic0 + j < int(ne01.z())) {
+                        ggml_sycl_memcpy_1<cpy_nb>(&Q_reg[j][i0/nthreads_KQ],            &Q_j[i]);
+                        ggml_sycl_memcpy_1<cpy_nb>(&Q_reg[j][i0/nthreads_KQ + cpy_ne/2], &Q_j[i + cpy_ne/2]);
+                    }
+                }
+#pragma unroll
+                for (int k = 0; k < (D/2)/nthreads_KQ; ++k) {
+                    Q_reg[j][k].x() *= scale;
+                    Q_reg[j][k].y() *= scale;
                 }
             }
+        }
+
+        if constexpr (K_is_turbo) {
+            item_ct1.barrier(sycl::access::fence_space::local_space);
+            for (int j = 0; j < ncols; ++j) {
+                if (tid < D) {
+                    dfloat val = KQ[j*D + tid];
+                    turbo_wht<D>(val, item_ct1, (dfloat*)KQ + j*D);
+                    if constexpr (D == 64) val *= (dfloat)TURBO_WHT_SIGNS2_64[tid];
+                    else                  val *= (dfloat)TURBO_WHT_SIGNS2[tid];
+                    val *= (dfloat)(1.0f / sqrtf((float)D));
+                    KQ[j*D + tid] = val;
+                }
+            }
+            item_ct1.barrier(sycl::access::fence_space::local_space);
+            for (int j = 0; j < ncols; ++j) {
+                const sycl::float2 * Q_rotated = (const sycl::float2 *) &KQ[j * D];
 #pragma unroll
-            for (int k = 0; k < (D/2)/nthreads_KQ; ++k) {
-                Q_reg[j][k].x() *= scale;
-                Q_reg[j][k].y() *= scale;
+                for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ) {
+                    const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) :
+                                                                   item_ct1.get_local_id(2) % nthreads_KQ);
+                    Q_reg[j][i0 / nthreads_KQ] = Q_rotated[i];
+                    Q_reg[j][i0 / nthreads_KQ].x() *= scale;
+                    Q_reg[j][i0 / nthreads_KQ].y() *= scale;
+                }
             }
         }
 #endif // GGML_SYCL_F16
@@ -370,7 +437,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 #endif // GGML_SYCL_F16
         }
 
-        sycl::group_barrier(sycl::ext::oneapi::this_work_item::get_sub_group());
+        item_ct1.barrier(sycl::access::fence_space::local_space);
 
 #pragma unroll
         for (int k0 = 0; k0 < warp_size; k0 += V_cols_per_iter) {
@@ -642,6 +709,7 @@ void ggml_sycl_flash_attn_ext_vec_case(ggml_backend_sycl_context & ctx, ggml_ten
     extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q5_0); \
     extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q5_1); \
     extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q8_0); \
+    extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_TURBO3_0); \
 
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_F16)
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_Q4_0)
@@ -649,6 +717,7 @@ EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_Q4_1)
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_Q5_0)
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_Q5_1)
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_Q8_0)
+EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_TURBO3_0)
 
 EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_F16)
 EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_Q4_0)
@@ -656,6 +725,7 @@ EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_Q4_1)
 EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_Q5_0)
 EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_Q5_1)
 EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_Q8_0)
+EXTERN_DECL_FATTN_VEC_CASES(128, GGML_TYPE_TURBO3_0)
 
 EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_F16)
 EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_Q4_0)
@@ -663,6 +733,7 @@ EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_Q4_1)
 EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_Q5_0)
 EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_Q5_1)
 EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_Q8_0)
+EXTERN_DECL_FATTN_VEC_CASES(256, GGML_TYPE_TURBO3_0)
 
 EXTERN_DECL_FATTN_VEC_CASES(512, GGML_TYPE_F16)
 EXTERN_DECL_FATTN_VEC_CASES(512, GGML_TYPE_Q4_0)
@@ -670,5 +741,6 @@ EXTERN_DECL_FATTN_VEC_CASES(512, GGML_TYPE_Q4_1)
 EXTERN_DECL_FATTN_VEC_CASES(512, GGML_TYPE_Q5_0)
 EXTERN_DECL_FATTN_VEC_CASES(512, GGML_TYPE_Q5_1)
 EXTERN_DECL_FATTN_VEC_CASES(512, GGML_TYPE_Q8_0)
+EXTERN_DECL_FATTN_VEC_CASES(512, GGML_TYPE_TURBO3_0)
 
 #endif // GGML_SYCL_FATTN_VEC_HPP
