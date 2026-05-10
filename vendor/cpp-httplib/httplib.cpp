@@ -8980,10 +8980,22 @@ ssize_t ChunkedDecoder::read_payload(char *buf, size_t len,
     stream_line_reader lr(strm, line_buf, sizeof(line_buf));
     if (!lr.getline()) { return -1; }
 
-    char *endptr = nullptr;
-    unsigned long chunk_len = std::strtoul(lr.ptr(), &endptr, 16);
-    if (endptr == lr.ptr()) { return -1; }
-    if (chunk_len == ULONG_MAX) { return -1; }
+    // RFC 9112 §7.1: chunk-size = 1*HEXDIG
+    const char *p = lr.ptr();
+    int v = 0;
+    if (!is_hex(*p, v)) { return -1; }
+
+    size_t chunk_len = 0;
+    constexpr size_t chunk_len_max = (std::numeric_limits<size_t>::max)();
+    for (; is_hex(*p, v); ++p) {
+      if (chunk_len > (chunk_len_max >> 4)) { return -1; }
+      chunk_len = (chunk_len << 4) | static_cast<size_t>(v);
+    }
+
+    while (is_space_or_tab(*p)) {
+      ++p;
+    }
+    if (*p != '\0' && *p != ';' && *p != '\r' && *p != '\n') { return -1; }
 
     if (chunk_len == 0) {
       chunk_remaining = 0;
@@ -8993,7 +9005,7 @@ ssize_t ChunkedDecoder::read_payload(char *buf, size_t len,
       return 0;
     }
 
-    chunk_remaining = static_cast<size_t>(chunk_len);
+    chunk_remaining = chunk_len;
     last_chunk_total = chunk_remaining;
     last_chunk_offset = 0;
   }
