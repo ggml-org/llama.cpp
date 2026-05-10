@@ -1193,6 +1193,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         void * new_data;
         size_t new_size;
+        float  nvfp4_scale_val = 1.0f;
 
         if (params->dry_run) {
             // the --dry-run option calculates the final quantization size without quantizing
@@ -1291,6 +1292,32 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
                 }
                 LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
+
+                if (new_type == GGML_TYPE_NVFP4) {
+                    const int64_t nvfp4_row_size = ggml_row_size(GGML_TYPE_NVFP4, n_per_row);
+                    const ggml_type_traits * nvfp4_traits = ggml_get_type_traits(GGML_TYPE_NVFP4);
+
+                    std::vector<float> dequant_buf(nelements);
+
+                    for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
+                        for (int64_t i02 = 0; i02 < nrows; ++i02) {
+                            const void * row = (const char *)new_data
+                                + i03 * nrows * nvfp4_row_size
+                                + i02 * nvfp4_row_size;
+                            nvfp4_traits->to_float(row,
+                                dequant_buf.data() + i03 * nelements_matrix + i02 * n_per_row,
+                                n_per_row);
+                        }
+                    }
+
+                    double sum_prod = 0.0;
+                    double sum_sq   = 0.0;
+                    for (int64_t i = 0; i < nelements; ++i) {
+                        sum_prod += (double)f32_data[i] * (double)dequant_buf[i];
+                        sum_sq   += (double)dequant_buf[i] * (double)dequant_buf[i];
+                    }
+                    nvfp4_scale_val = (sum_sq > 1e-10) ? (float)(sum_prod / sum_sq) : 1.0f;
+                }
             }
             total_size_org += tensor_size;
             total_size_new += new_size;
@@ -1306,7 +1333,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         } // no --dry-run
 
         if (!params->dry_run && tm.write_nvfp4_scales) {
-            const float scale_val = 1.0f;
+            const float scale_val = nvfp4_scale_val;
             const size_t scale_size = sizeof(float);
 
             std::string base(tm.name);
