@@ -123,6 +123,7 @@ class TaskState:
     correct: bool = False
     status: str = "pending"
     tokens: Optional[int] = None
+    tps_gen: Optional[float] = None
     reasoning_content: Optional[str] = None
 
 
@@ -200,6 +201,7 @@ class EvalState:
         correct: bool,
         status: str,
         tokens: Optional[int] = None,
+        tps_gen: Optional[float] = None,
         reasoning_content: Optional[str] = None
     ):
         if "cases" not in self.task_states:
@@ -215,6 +217,7 @@ class EvalState:
             "correct": correct,
             "status": status,
             "tokens": tokens,
+            "tps_gen": tps_gen,
             "reasoning_content": reasoning_content
         }
 
@@ -223,6 +226,7 @@ class EvalState:
     def print_progress(self, task_state: TaskState, total_tasks: int, correct_count: int = 0):
         answer_display = task_state.answer if task_state.answer else "N/A"
         tokens_display = str(task_state.tokens) if task_state.tokens is not None else "N/A"
+        tps_display = f"{task_state.tps_gen:.1f}" if task_state.tps_gen is not None else "N/A"
         success_ratio = correct_count / self.processed if self.processed > 0 else 0.0
         first_line = task_state.question_text.split('\n')[0]
         truncated_question = first_line[:43]
@@ -230,7 +234,7 @@ class EvalState:
             truncated_question += "..."
         else:
             truncated_question = truncated_question.ljust(43) + "..."
-        print(f"{self.processed:3}/{total_tasks:3}  {task_state.task_id:<20} {self.dataset_type.upper()}   {truncated_question:<40}    {task_state.expected:<10} {answer_display:<10} {tokens_display:<6} {'✓' if task_state.correct else '✗'}  [{correct_count:3}/{self.processed:3}, {success_ratio:.3f}]")
+        print(f"{self.processed:3}/{total_tasks:3}  {task_state.task_id:<20} {self.dataset_type.upper()}   {truncated_question:<40}    {task_state.expected:<10} {answer_display:<10} {tokens_display:<6} {tps_display:<6} {'✓' if task_state.correct else '✗'}  [{correct_count:3}/{self.processed:3}, {success_ratio:.3f}]")
 
     def print_summary(self):
         if self.total == 0:
@@ -262,6 +266,7 @@ class EvalState:
                     "correct": False,
                     "status": "pending",
                     "tokens": None,
+                    "tps_gen": None,
                     "reasoning_content": None
                 }
 
@@ -324,6 +329,8 @@ class EvalState:
 
             tokens = case.get("tokens")
             tokens_str = str(tokens) if tokens is not None else ""
+            tps_gen = case.get("tps_gen")
+            tps_str = f"{tps_gen:.1f}" if tps_gen is not None else ""
             reasoning_content = case.get("reasoning_content", "") or ""
 
             response_escaped = self._escape_html(response)
@@ -337,9 +344,10 @@ class EvalState:
                 <td>{self._escape_html(expected)}</td>
                 <td>{self._escape_html(answer)}</td>
                 <td>{tokens_str}</td>
+                <td>{tps_str}</td>
             </tr>
             <tr id="details-{task_id}" class="details-row">
-                <td colspan="5">
+                <td colspan="6">
                     <div class="details-content">
                         <h4>Prompt</h4>
                         <pre>{prompt_escaped}</pre>
@@ -407,6 +415,7 @@ class EvalState:
                 <th>Gold</th>
                 <th>Extracted</th>
                 <th>Tokens</th>
+                <th>T/s</th>
             </tr>
         </thead>
         <tbody>
@@ -497,7 +506,7 @@ class EvalState:
         tasks_to_show = self.all_tasks if self.all_tasks else self.tasks
         print()
         print("Tasks:")
-        print("  Task ID             Dataset  Prompt (first 40 chars)                        Expected    Answer       Tokens  Status")
+        print("  Task ID             Dataset  Prompt (first 40 chars)                        Expected    Answer       Tokens  T/s     Status")
         for i, task_id in tasks_to_show:
             question, prompt, expected = self.get_case(i)
             case = cases.get(task_id, {})
@@ -505,6 +514,8 @@ class EvalState:
             answer = case.get("answer", "N/A") if status == "ok" else "N/A"
             tokens = case.get("tokens")
             tokens_str = str(tokens) if tokens is not None else "N/A"
+            tps_gen = case.get("tps_gen")
+            tps_str = f"{tps_gen:.1f}" if tps_gen is not None else "N/A"
             is_correct = case.get("correct", False) if status == "ok" else False
             symbol = "✓ " if is_correct else ("✗ " if status == "ok" else "")
             first_line = question.split('\n')[0]
@@ -513,7 +524,7 @@ class EvalState:
                 question_trunc += "..."
             else:
                 question_trunc = question_trunc.ljust(43) + "..."
-            print(f"  {task_id:<20} {self.dataset_type.upper()}   {question_trunc:<40}    {expected:<10} {answer:<10} {tokens_str:<6} {symbol}{status}")
+            print(f"  {task_id:<20} {self.dataset_type.upper()}   {question_trunc:<40}    {expected:<10} {answer:<10} {tokens_str:<6} {tps_str:<6} {symbol}{status}")
         print()
 
     def print_existing_summary(self):
@@ -937,7 +948,7 @@ class Processor:
         self.threads = threads
         self.n_predict = n_predict
 
-    def _make_request(self, eval_state: EvalState, prompt: str) -> Tuple[Dict[str, Any], int, str]:
+    def _make_request(self, eval_state: EvalState, prompt: str) -> Tuple[Dict[str, Any], int, Optional[float], str]:
         url = f"{self.server_url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
         data = {
@@ -958,8 +969,10 @@ class Processor:
         response.raise_for_status()
         result = response.json()
         tokens = result.get("usage", {}).get("completion_tokens", 0)
+        timings = result.get("timings", {})
+        tps_gen = timings.get("predicted_per_second") if timings else None
         finish_reason = result.get("choices", [{}])[0].get("finish_reason", "stop")
-        return result, tokens, finish_reason
+        return result, tokens, tps_gen, finish_reason
 
     def _process_single_case(self, eval_state: EvalState, i: int, task_id: str) -> TaskState:
         question_text, prompt, expected = eval_state.get_case(i)
@@ -972,16 +985,17 @@ class Processor:
         )
 
         try:
-            response, tokens, finish_reason = self._make_request(eval_state, prompt)
+            response, tokens, tps_gen, finish_reason = self._make_request(eval_state, prompt)
             result = response["choices"][0]["message"]["content"]
             reasoning_content = response["choices"][0].get("message", {}).get("reasoning_content")
             task_state.response = result
             task_state.tokens = tokens
+            task_state.tps_gen = tps_gen
             task_state.reasoning_content = reasoning_content
 
             if finish_reason != "stop":
                 task_state.status = f"error: finish_reason={finish_reason}"
-                eval_state.add_result(task_id, prompt, expected, result, None, {"finish_reason": finish_reason}, False, task_state.status, tokens, reasoning_content)
+                eval_state.add_result(task_id, prompt, expected, result, None, {"finish_reason": finish_reason}, False, task_state.status, tokens, tps_gen, reasoning_content)
                 eval_state.dump()
                 return task_state
 
@@ -1000,7 +1014,7 @@ class Processor:
             task_state.grader_log = grader_log
             task_state.status = "ok"
 
-            eval_state.add_result(task_id, prompt, expected, result, answer, grader_log, is_correct, "ok", tokens, reasoning_content)
+            eval_state.add_result(task_id, prompt, expected, result, answer, grader_log, is_correct, "ok", tokens, tps_gen, reasoning_content)
 
             eval_state.dump()
 
