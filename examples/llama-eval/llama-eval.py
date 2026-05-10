@@ -143,11 +143,13 @@ class EvalState:
         self,
         dataset_type: str,
         sampling_config: Dict[str, Any],
-        output_file: Path = Path("llama-eval-state.json")
+        output_file: Path = Path("llama-eval-state.json"),
+        model_name: Optional[str] = None
     ):
         self.dataset_type = dataset_type
         self.sampling_config = sampling_config
         self.output_file = output_file
+        self.model_name = model_name
         self.dataset: Optional[BaseDataset] = None
         self.tasks: List[Tuple[int, str]] = []
         self.all_tasks: List[Tuple[int, str]] = []
@@ -294,6 +296,7 @@ class EvalState:
         ci_lower, ci_upper = self.accuracy_ci()
         data = {
             "id": self.dataset_type,
+            "model_name": self.model_name,
             "tasks": [tid for _, tid in tasks_to_save],
             "task_states": {
                 "total": self.total,
@@ -424,6 +427,7 @@ class EvalState:
     <div class="summary">
         <table class="summary-table">
             <tr><td>Dataset</td><td>{self.dataset_type}</td></tr>
+            <tr><td>Model</td><td>{self.model_name or 'N/A'}</td></tr>
             <tr><td>Total Tasks</td><td>{len(tasks_to_save)}</td></tr>
             <tr><td>Completed</td><td>{len(completed)}</td></tr>
             <tr><td>Correct</td><td class="correct">{n_correct}</td></tr>
@@ -486,7 +490,8 @@ class EvalState:
         eval_state = cls(
             dataset_type=data["id"],
             sampling_config=data["sampling_config"],
-            output_file=path
+            output_file=path,
+            model_name=data.get("model_name")
         )
         eval_state.load_dataset()
 
@@ -1325,6 +1330,11 @@ def main():
         print(f"Loading existing eval state from {args.output}")
         eval_state = EvalState.load(args.output)
 
+        # Verify model matches
+        if eval_state.model_name is not None and args.model != eval_state.model_name:
+            print(f"Error: Model mismatch. State has '{eval_state.model_name}', but --model is '{args.model}'")
+            sys.exit(1)
+
         eval_state.print_all_tasks()
         eval_state.print_existing_summary()
 
@@ -1387,7 +1397,8 @@ def main():
         eval_state = EvalState(
             dataset_type=args.dataset,
             sampling_config=sampling_config,
-            output_file=args.output
+            output_file=args.output,
+            model_name=args.model
         )
         eval_state.load_dataset(seed=args.seed)
         eval_state.setup_tasks(n_cases=args.n_cases, seed=args.seed)
