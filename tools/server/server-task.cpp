@@ -2033,12 +2033,12 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
 }
 
 bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx, int32_t id_slot) {
-    const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
+    int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
     float sim_best    = float(lcp_best) / tokens_new.size();
 
-    SRV_WRN(" - looking for better prompt, base f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+    SRV_WRN(" - looking for better prompt, base lcp = %d, f_keep = %.3f, sim = %.3f\n", lcp_best, f_keep_best, sim_best);
 
     auto it_best = states.end();
 
@@ -2054,7 +2054,16 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             continue;
         }
 
-        if (f_keep_best < f_keep_cur && sim_best < sim_cur) {
+        // Prioritize absolute prefix reuse length. This helps promote a newly
+        // joined static prefix (e.g. after truncate-middle) over older cache entries
+        // that keep more of their own state but match fewer request tokens.
+        const bool better_match =
+            lcp_cur > lcp_best ||
+            (lcp_cur == lcp_best && sim_cur > sim_best) ||
+            (lcp_cur == lcp_best && sim_cur == sim_best && f_keep_cur > f_keep_best);
+
+        if (better_match) {
+            lcp_best    = lcp_cur;
             f_keep_best = f_keep_cur;
             sim_best    = sim_cur;
 
@@ -2063,7 +2072,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     }
 
     if (it_best != states.end()) {
-        SRV_WRN(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+        SRV_WRN(" - found better prompt with lcp = %d, f_keep = %.3f, sim = %.3f\n", lcp_best, f_keep_best, sim_best);
 
         const size_t size = it_best->data.size();
         const size_t n = llama_state_seq_set_data_ext(ctx, it_best->data.data(), size, id_slot, 0);
