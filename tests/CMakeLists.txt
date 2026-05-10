@@ -198,6 +198,20 @@ llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURC
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
+
+if (GGML_SYCL)
+    add_executable(test-sycl-turbo test-sycl-turbo.cpp)
+    target_link_libraries(test-sycl-turbo PRIVATE llama-common ggml-sycl)
+    add_test(NAME test-sycl-turbo COMMAND test-sycl-turbo)
+
+    add_executable(test-stress-context test-stress-context.cpp)
+    target_link_libraries(test-stress-context PRIVATE llama-common ggml-sycl)
+    add_test(NAME test-stress-context COMMAND test-stress-context)
+
+    add_executable(test-sycl-fuzz test-sycl-fuzz.cpp)
+    target_link_libraries(test-sycl-fuzz PRIVATE llama-common ggml-sycl)
+    add_test(NAME test-sycl-fuzz COMMAND test-sycl-fuzz)
+endif()
 llama_build_and_test(
     test-peg-parser.cpp
     peg-parser/simple-tokenize.cpp
