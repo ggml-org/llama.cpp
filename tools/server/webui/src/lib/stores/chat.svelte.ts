@@ -87,11 +87,9 @@ class ChatStore {
 		{ content: string; extras?: DatabaseMessageExtra[] }
 	>();
 
-	get chatWidthClasses(): { class: string } {
+	get chatWidthClasses(): string {
 		const currentConfig = config();
-		return currentConfig.autoChatWidth
-			? { class: AUTO_WIDTH_CLASSES }
-			: { class: DEFAULT_WIDTH_CLASS };
+		return currentConfig.autoChatWidth ? AUTO_WIDTH_CLASSES : DEFAULT_WIDTH_CLASS;
 	}
 
 	private setChatLoading(convId: string, loading: boolean): void {

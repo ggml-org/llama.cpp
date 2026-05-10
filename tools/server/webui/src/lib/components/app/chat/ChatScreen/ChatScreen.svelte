@@ -79,7 +79,7 @@
 	let activeErrorDialog = $derived(errorDialog());
 	let isServerLoading = $derived(serverLoading());
 	let hasPropsError = $derived(!!serverError());
-	let widthClasses = $derived(chatWidthClasses());
+	let widthClass = $derived(chatWidthClasses());
 
 	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
 
@@ -369,7 +369,7 @@
 	>
 		<div class="flex grow flex-col pt-14">
 			{#if !isEmpty}
-				<div class="w-full {widthClasses.class} mx-auto">
+				<div class="w-full {widthClass} mx-auto">
 					<ChatMessages
 						messages={activeMessages()}
 						onUserAction={() => {
@@ -387,7 +387,7 @@
 			>
 				{#if isEmpty}
 					<div
-						class="mb-8 {widthClasses.class} mx-auto px-4 text-center"
+						class="mb-8 {widthClass} mx-auto px-4 text-center"
 						use:fadeInView={{ duration: 300 }}
 					>
 						<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
@@ -406,7 +406,7 @@
 
 				{#if hasPropsError}
 					<div
-						class="pointer-events-auto mx-auto mb-4 {widthClasses.class} px-1"
+						class="pointer-events-auto mx-auto mb-4 {widthClass} px-1"
 						use:fadeInView={{ y: 10, duration: 250 }}
 					>
 						<Alert.Root variant="destructive">
@@ -427,9 +427,7 @@
 					</div>
 				{/if}
 
-				<div
-					class="conversation-chat-form {widthClasses.class} pointer-events-auto mx-auto rounded-t-3xl"
-				>
+				<div class="conversation-chat-form {widthClass} pointer-events-auto mx-auto rounded-t-3xl">
 					<ChatScreenForm
 						disabled={hasPropsError || isEditing()}
 						{initialMessage}
