@@ -617,6 +617,40 @@ task_params server_task::params_from_json_cmpl(
         throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");
     }
 
+    const auto message_spans = json_value(data, "message_spans", json::array());
+    if (message_spans.is_array()) {
+        int32_t last_user_pos = -1;
+
+        for (const auto & span : message_spans) {
+            const std::string role = json_value(span, "role", std::string());
+            const int32_t pos      = json_value(span, "pos", -1);
+            const int32_t len      = json_value(span, "len", -1);
+
+/*            SRV_INF("message_span: role=%s, pos=%d, len=%d\n",
+                    role.c_str(), pos, len);*/
+
+            if (role == "user") {
+                last_user_pos = pos;
+            }
+        }
+
+        const std::string prompt = json_value(data, "prompt", std::string());
+
+        if (last_user_pos >= 0) {
+            const std::string prompt = json_value(data, "prompt", std::string());
+
+            if ((size_t) last_user_pos <= prompt.size()) {
+                const std::string prefix = prompt.substr(0, (size_t) last_user_pos);
+                const auto prefix_tokens = common_tokenize(vocab, prefix, true, true);
+
+                SRV_INF("message_spans: last user boundary: byte_pos=%d, token_pos=%zu\n",
+                        last_user_pos, prefix_tokens.size());
+
+                params.checkpoint_before_last_user_token = (int32_t) prefix_tokens.size();
+            }
+        }
+    }
+
     return params;
 }
 

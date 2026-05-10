@@ -89,6 +89,8 @@ struct task_params {
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
+
+    int32_t checkpoint_before_last_user_token = -1;
 };
 
 // struct for tracking the state of a task (e.g., for streaming)
