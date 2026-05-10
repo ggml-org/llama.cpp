@@ -1,0 +1,31 @@
+[environment]
+extra-paths = ["./gguf-py", "./examples/model-conversion/scripts", "./tools/server/tests", "./scripts/snapdragon/qdc/tests"]
+python-version = "3.10"
+
+[rules]
+deprecated = "warn"
+
+[src]
+exclude = [
+    "./tools/mtmd/legacy-models/**",
+]
+
+[[overrides]]
+include = [
+    "./tools/server/tests/**",
+    "./scripts/snapdragon/qdc/tests/**",
+]
+
+[overrides.rules]
+unresolved-reference = "ignore"
+unresolved-import = "ignore"
+unresolved-attribute = "ignore"
+
+[[overrides]]
+include = [
+    "./examples/pydantic_models_to_grammar.py",
+]
+
+[overrides.rules]
+unsupported-operator = "ignore"
+not-subscriptable = "ignore"

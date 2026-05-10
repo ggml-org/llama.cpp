@@ -1,0 +1,116 @@
+name: CI (snapdragon)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/build-and-test-snapdragon.yml'
+      - 'ggml/include/ggml-hexagon.h'
+      - 'ggml/src/ggml-hexagon/**'
+      - 'docs/backend/snapdragon/**'
+      - 'scripts/snapdragon/**'
+      - 'CMakePresets.json'
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/build-and-test-snapdragon.yml'
+      - 'ggml/include/ggml-hexagon.h'
+      - 'ggml/src/ggml-hexagon/**'
+      - 'docs/backend/snapdragon/**'
+      - 'scripts/snapdragon/**'
+      - 'CMakePresets.json'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  android-ndk-snapdragon:
+    runs-on: ubuntu-latest
+    container:
+      image: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.3'
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          lfs: false
+
+      - name: Build Llama.CPP for Snapdragon Android
+        id: build_llama_cpp_snapdragon_android
+        run: |
+          cp docs/backend/snapdragon/CMakeUserPresets.json .
+          cmake --preset arm64-android-snapdragon-release -B build
+          cmake --build build
+          cmake --install build --prefix pkg-snapdragon/llama.cpp
+
+      - name: Upload Llama.CPP Snapdragon Android Build Artifact
+        if: ${{ always() && steps.build_llama_cpp_snapdragon_android.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-cpp-android-arm64-snapdragon
+          path: pkg-snapdragon/llama.cpp
+
+  test-snapdragon-qdc:
+    name: Test on QDC Android Device (${{ matrix.device }})
+    needs: [android-ndk-snapdragon]
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [SM8750, SM8650, SM8850]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: llama-cpp-android-arm64-snapdragon
+          path: pkg-snapdragon/llama.cpp
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip
+
+      - name: Install QDC SDK wheel
+        run: |
+          curl -fSL -o qdc_sdk.zip https://softwarecenter.qualcomm.com/api/download/software/tools/Qualcomm_Device_Cloud_SDK/All/0.2.3/qualcomm_device_cloud_sdk-0.2.3.zip
+          unzip qdc_sdk.zip -d qdc_sdk
+          pip install qdc_sdk/qualcomm_device_cloud_sdk-0.2.3-py3-none-any.whl
+
+      - name: Check QDC API key
+        id: check_secret
+        env:
+          QDC_API_KEY: ${{ secrets.QDC_API_KEY }}
+        run: echo "has-qdc-key=${{ env.QDC_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Run QDC tests (${{ matrix.device }})
+        if: steps.check_secret.outputs.has-qdc-key == 'true'
+        run: |
+          python scripts/snapdragon/qdc/run_qdc_jobs.py \
+              --test       all \
+              --pkg-dir    pkg-snapdragon/llama.cpp \
+              --model-url  "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf" \
+              --device     ${{ matrix.device }}
+        env:
+          QDC_API_KEY: ${{ secrets.QDC_API_KEY }}
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf pkg-snapdragon qdc_sdk qdc_sdk.zip

@@ -460,6 +460,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
         if(NOT GGML_CPU_ALL_VARIANTS)
             set(MARCH_STR "rv64gc")
+            if (GGML_RVV)
+                string(APPEND MARCH_STR "v")
+            endif()
+
             if (GGML_RV_ZFH)
                 string(APPEND MARCH_STR "_zfh")
             endif()
@@ -467,7 +471,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             if (GGML_XTHEADVECTOR)
                 string(APPEND MARCH_STR "_xtheadvector")
             elseif (GGML_RVV)
-                string(APPEND MARCH_STR "_v")
                 if (GGML_RV_ZVFH)
                     string(APPEND MARCH_STR "_zvfh")
                 endif()
@@ -475,12 +478,21 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                     string(APPEND MARCH_STR "_zvfbfwma")
                 endif()
             endif()
+
             if (GGML_RV_ZICBOP)
                 string(APPEND MARCH_STR "_zicbop")
             endif()
             if (GGML_RV_ZIHINTPAUSE)
                 string(APPEND MARCH_STR "_zihintpause")
             endif()
+            if (GGML_CPU_RISCV64_SPACEMIT)
+                # `xsmtvdotii' is only required for GCC >= 15.
+                if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
+                    CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 15)
+                    string(APPEND MARCH_STR "_xsmtvdotii")
+                endif()
+            endif()
+
             list(APPEND ARCH_FLAGS "-march=${MARCH_STR}" -mabi=lp64d)
         else()
             # Begin with the lowest baseline
@@ -566,28 +578,40 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # Fetch KleidiAI sources:
         include(FetchContent)
-        set(KLEIDIAI_COMMIT_TAG "v1.22.0")
-        set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/archive/refs/tags/${KLEIDIAI_COMMIT_TAG}.tar.gz")
-        set(KLEIDIAI_ARCHIVE_MD5  "54049037570ab0ee0a0d126b2ba5ece1")
+        set(KLEIDIAI_COMMIT_TAG "v1.24.0")
+        set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/releases/download/${KLEIDIAI_COMMIT_TAG}/kleidiai-${KLEIDIAI_COMMIT_TAG}-src.tar.gz")
+        set(KLEIDIAI_RELEASE_ARCHIVE_MD5  "2f02ebe29573d45813e671eb304f2a00")
 
-        if (POLICY CMP0135)
-            cmake_policy(SET CMP0135 NEW)
+        set(KLEIDIAI_FETCH_ARGS
+            URL ${KLEIDIAI_DOWNLOAD_URL}
+            URL_HASH MD5=${KLEIDIAI_RELEASE_ARCHIVE_MD5}
+        )
+        if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+            list(APPEND KLEIDIAI_FETCH_ARGS DOWNLOAD_EXTRACT_TIMESTAMP NEW)
         endif()
 
-        # TODO: Use FetchContent_MakeAvailable with EXCLUDE_FROM_ALL after bumping minimum CMake version to 3.28+
-        # Using FetchContent_Populate instead to avoid EXCLUDE_FROM_ALL which requires CMake 3.28
-        FetchContent_Declare(KleidiAI_Download
-            URL ${KLEIDIAI_DOWNLOAD_URL}
-            DOWNLOAD_EXTRACT_TIMESTAMP NEW
-            URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5})
+        if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
+            FetchContent_Declare(KleidiAI_Download
+                ${KLEIDIAI_FETCH_ARGS}
+                EXCLUDE_FROM_ALL
+            )
 
-        FetchContent_GetProperties(KleidiAI_Download
-            SOURCE_DIR  KLEIDIAI_SRC
-            POPULATED   KLEIDIAI_POPULATED)
-
-        if (NOT KLEIDIAI_POPULATED)
-            FetchContent_Populate(KleidiAI_Download)
+            FetchContent_MakeAvailable(KleidiAI_Download)
             FetchContent_GetProperties(KleidiAI_Download SOURCE_DIR KLEIDIAI_SRC)
+        else()
+            FetchContent_Declare(KleidiAI_Download
+                ${KLEIDIAI_FETCH_ARGS}
+            )
+
+            FetchContent_GetProperties(KleidiAI_Download
+                SOURCE_DIR KLEIDIAI_SRC
+                POPULATED KLEIDIAI_POPULATED
+            )
+
+            if (NOT KLEIDIAI_POPULATED)
+                FetchContent_Populate(KleidiAI_Download)
+                FetchContent_GetProperties(KleidiAI_Download SOURCE_DIR KLEIDIAI_SRC)
+            endif()
         endif()
 
         add_compile_definitions(GGML_USE_CPU_KLEIDIAI)

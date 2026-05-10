@@ -112,11 +112,11 @@ class Tensor:
         (n_dims, name_len, dtype) = struct.unpack('<3I', data[offset:offset + 12])
         assert n_dims >= 0 and n_dims <= 4, f'Invalid tensor dimensions {n_dims}'
         assert name_len < 4096, 'Absurd tensor name length'
-        quant = gguf.GGML_QUANT_SIZES.get(dtype)
+        self.dtype = gguf.GGMLQuantizationType(dtype)
+        quant = gguf.GGML_QUANT_SIZES.get(self.dtype)
         assert quant is not None, 'Unknown tensor type'
         (blksize, tysize) = quant
         offset += 12
-        self.dtype= gguf.GGMLQuantizationType(dtype)
         self.dims = struct.unpack(f'<{n_dims}I', data[offset:offset + (4 * n_dims)])
         offset += 4 * n_dims
         self.name = bytes(data[offset:offset + name_len])

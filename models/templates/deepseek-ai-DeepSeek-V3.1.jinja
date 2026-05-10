@@ -28,25 +28,25 @@
     {%- set ns.is_last_user = true -%}{{'<｜User｜>' + message['content']}}
   {%- endif -%}
   {%- if message['role'] == 'assistant' and message['tool_calls'] -%}
-    {%- if ns.is_last_user -%}{{'<｜Assistant｜></think>'}}
+    {%- if ns.is_last_user -%}{{'<｜Assistant｜><think></think>'}}
     {%- endif -%}
     {%- set ns.is_last_user = false -%}
     {%- set ns.is_first = false -%}
     {%- set ns.is_tool = false -%}
     {%- for tool in message['tool_calls'] -%}
       {%- if not ns.is_first -%}
-        {%- if not message['content'] -%}{{'<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>'+ tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] + '<｜tool▁call▁end｜>'}}
-          {%- else -%}{{message['content'] + '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] + '<｜tool▁call▁end｜>'}}
+        {%- if not message['content'] -%}{{'<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>'+ tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] | tojson + '<｜tool▁call▁end｜>'}}
+          {%- else -%}{{message['content'] + '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] | tojson + '<｜tool▁call▁end｜>'}}
         {%- endif -%}
         {%- set ns.is_first = true -%}
-        {%- else -%}{{'<｜tool▁call▁begin｜>'+ tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] + '<｜tool▁call▁end｜>'}}
+        {%- else -%}{{'<｜tool▁call▁begin｜>'+ tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] | tojson + '<｜tool▁call▁end｜>'}}
       {%- endif -%}
     {%- endfor -%}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}
   {%- endif -%}
   {%- if message['role'] == 'assistant' and not message['tool_calls'] -%}
     {%- if ns.is_last_user -%}{{'<｜Assistant｜>'}}
       {%- if message['prefix'] is defined and message['prefix'] and thinking -%}{{'<think>'}}
-        {%- else -%}{{'</think>'}}
+        {%- else -%}{{'<think></think>'}}
       {%- endif -%}
     {%- endif -%}
     {%- set ns.is_last_user = false -%}
@@ -65,7 +65,7 @@
   {%- endif -%}
 {%- endfor -%}
 {%- if add_generation_prompt and ns.is_last_user and not ns.is_tool -%}{{'<｜Assistant｜>'}}
-  {%- if not thinking -%}{{'</think>'}}
-    {%- else -%}{{'<think>'}}
+  {%- if not thinking -%}{{'<think></think>'}}
+  {%- else -%}{{'<think>'}}
   {%- endif -%}
 {%- endif %}

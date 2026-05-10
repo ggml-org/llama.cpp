@@ -4,6 +4,7 @@
 #include "common.h"
 #include "jinja/caps.h"
 #include "peg-parser.h"
+#include "nlohmann/json.hpp"
 
 #include <chrono>
 #include <optional>
@@ -50,7 +51,7 @@ namespace autoparser {
 // High-level params for parser generation
 // ============================================================================
 
-struct templates_params {
+struct generation_params {
     json                                  messages;
     json                                  tools;
     common_chat_tool_choice               tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
@@ -62,6 +63,7 @@ struct templates_params {
     bool                                  add_generation_prompt = false;
     bool                                  enable_thinking       = true;
     std::chrono::system_clock::time_point now                   = std::chrono::system_clock::now();
+    std::string                           generation_prompt;
     json                                  extra_context;
     bool                                  add_bos       = false;
     bool                                  add_eos       = false;
@@ -77,11 +79,7 @@ struct templates_params {
 // Reasoning handling mode (derived from R1-R3 comparisons)
 enum class reasoning_mode {
     NONE,           // No reasoning markers detected
-    TAG_BASED,      // Standard tag-based: <think>...</think>
-    DELIMITER,      // Delimiter-based: [BEGIN FINAL RESPONSE] (reasoning ends at delimiter)
-    FORCED_OPEN,    // Template ends with open reasoning tag (empty start, non-empty end)
-    FORCED_CLOSED,  // Template ends with open reasoning tag on enabled thinking but
-                    // with both opened and closed tag for disabled thinking
+    TAG_BASED,      // Tag-based: <think>...</think> (start can be empty for delimiter-style)
     TOOLS_ONLY      // Only reason on tool calls, not on normal content
 };
 
@@ -91,12 +89,6 @@ inline std::ostream & operator<<(std::ostream & os, const reasoning_mode & mode)
             return os << "NONE";
         case reasoning_mode::TAG_BASED:
             return os << "TAG_BASED";
-        case reasoning_mode::DELIMITER:
-            return os << "DELIMITER";
-        case reasoning_mode::FORCED_OPEN:
-            return os << "FORCED_OPEN";
-        case reasoning_mode::FORCED_CLOSED:
-            return os << "FORCED_CLOSED";
         case reasoning_mode::TOOLS_ONLY:
             return os << "TOOLS_ONLY";
         default:
@@ -184,7 +176,6 @@ struct tool_format_analysis {
 
     bool fun_name_is_key = false;       // In JSON format function name is JSON key, i.e. { "<funname>": { ... arguments ... } }
     bool tools_array_wrapped = false;   // Tool calls wrapped in JSON array [...]
-    bool uses_python_dicts = false;     // Tool call args use Python dict format (single-quoted strings)
 
     std::string              function_field = "function";
     std::string              name_field     = "name";
@@ -222,15 +213,17 @@ struct tool_id_analysis {
 // ============================================================================
 
 struct analyze_content;
+struct analyze_reasoning;
 
 struct parser_build_context {
     common_chat_peg_builder & p;
-    const templates_params &          inputs;
+    const generation_params &         inputs;
     common_peg_parser                 reasoning_parser;
     bool                              extracting_reasoning = false;
+    const analyze_reasoning *         reasoning            = nullptr;
     const analyze_content *           content              = nullptr;
 
-    parser_build_context(common_chat_peg_builder & p, const templates_params & inputs);
+    parser_build_context(common_chat_peg_builder & p, const generation_params & inputs);
 };
 
 // ============================================================================
@@ -260,6 +253,7 @@ struct analyze_reasoning : analyze_base {
 
     analyze_reasoning() = default;
     analyze_reasoning(const common_chat_template & tmpl, bool supports_tools);
+    analyze_reasoning(std::string start_, std::string end_) : start(std::move(start_)), end(std::move(end_)) {}
 
     common_peg_parser build_parser(parser_build_context & ctx) const override;
 
@@ -314,18 +308,22 @@ struct analyze_tools : analyze_base {
 
   private:
     // Extract tool calling 'haystack' for further analysis and delegate further analysis based on format
-    void analyze_tool_calls(const analyze_reasoning & reasoning);
+    void analyze_tool_calls(const analyze_reasoning & reasoning, bool supports_parallel_tool_calls);
 
     // Analyze format based on position of function and argument name in needle
     void analyze_tool_call_format(const std::string &       haystack,
                                   const std::string &       fun_name_needle,
                                   const std::string &       arg_name_needle,
-                                  const analyze_reasoning & reasoning);
+                                  const analyze_reasoning & reasoning,
+                                  bool                      supports_parallel_tool_calls);
 
     // Analyze specifics of JSON native format (entire tool call is a JSON object)
     void analyze_tool_call_format_json_native(const std::string & clean_haystack,
                                               const std::string & fun_name_needle,
                                               const std::string & arg_name_needle);
+
+    // Check if parallel calls in JSON native format array wrapped or tag wrapped
+    void analyze_json_native_parallel_calls();
 
     // Analyze specifics of non-JSON native format (tags for function name or for function name and arguments)
     void analyze_tool_call_format_non_json(const std::string & clean_haystack,
@@ -359,6 +357,13 @@ struct analyze_tools : analyze_base {
     common_peg_parser build_tool_parser_json_native(parser_build_context & ctx) const;
     common_peg_parser build_tool_parser_tag_json(parser_build_context & ctx) const;
     common_peg_parser build_tool_parser_tag_tagged(parser_build_context & ctx) const;
+
+    // Shared helper: builds func_parser from open+call_id+args, handling atomic wrapping and close.
+    // atomic_peek: if present, used as the peek expression in the third atomicity branch.
+    common_peg_parser build_func_parser(common_chat_peg_builder & p, const std::string & name,
+                                        const common_peg_parser & call_id_section, bool have_call_id,
+                                        const common_peg_parser & args,
+                                        std::optional<common_peg_parser> atomic_peek) const;
 };
 
 // ============================================================================
@@ -381,7 +386,7 @@ struct autoparser {
     void analyze_template(const common_chat_template & tmpl);
 
     // Build the PEG parser for this template
-    common_peg_arena build_parser(const templates_params & inputs) const;
+    common_peg_arena build_parser(const generation_params & inputs) const;
 
   private:
     // Collect tokens from entire analysis to preserve
@@ -395,10 +400,10 @@ struct autoparser {
 class peg_generator {
   public:
     static common_chat_params generate_parser(const common_chat_template &    tmpl,
-                                              const struct templates_params & inputs);
+                                              const struct generation_params & inputs);
 
     static common_chat_params generate_parser(const common_chat_template &    tmpl,
-                                              const struct templates_params & inputs,
+                                              const struct generation_params & inputs,
                                               const autoparser &              autoparser);
 };
 

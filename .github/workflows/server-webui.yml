@@ -1,4 +1,3 @@
-# Server WebUI build and tests
 name: Server WebUI
 
 on:
@@ -11,10 +10,20 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/server-webui.yml', 'tools/server/webui/**.*', 'tools/server/tests/**.*', 'tools/server/public/**']
+    paths: [
+      '.github/workflows/server-webui.yml',
+      'tools/server/webui/**.*',
+      'tools/server/tests/**.*',
+      'tools/server/public/**'
+    ]
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['.github/workflows/server-webui.yml', 'tools/server/webui/**.*', 'tools/server/tests/**.*', 'tools/server/public/**']
+    paths: [
+      '.github/workflows/server-webui.yml',
+      'tools/server/webui/**.*',
+      'tools/server/tests/**.*',
+      'tools/server/public/**'
+    ]
 
 env:
   LLAMA_LOG_COLORS: 1
@@ -29,7 +38,7 @@ concurrency:
 jobs:
   webui-check:
     name: WebUI Checks
-    runs-on: ubuntu-latest
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     continue-on-error: true
     steps:
       - name: Checkout code

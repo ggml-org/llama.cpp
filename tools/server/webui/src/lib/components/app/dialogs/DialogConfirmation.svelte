@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import type { Component } from 'svelte';
+	import type { Component, Snippet } from 'svelte';
 	import { KeyboardKey } from '$lib/enums';
 
 	interface Props {
@@ -14,6 +14,7 @@
 		onConfirm: () => void;
 		onCancel: () => void;
 		onKeydown?: (event: KeyboardEvent) => void;
+		children?: Snippet;
 	}
 
 	let {
@@ -26,12 +27,14 @@
 		icon,
 		onConfirm,
 		onCancel,
-		onKeydown
+		onKeydown,
+		children
 	}: Props = $props();
 
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
+
 			onConfirm();
 		}
 		onKeydown?.(event);
@@ -50,6 +53,7 @@
 			<AlertDialog.Title class="flex items-center gap-2">
 				{#if icon}
 					{@const IconComponent = icon}
+
 					<IconComponent class="h-5 w-5 {variant === 'destructive' ? 'text-destructive' : ''}" />
 				{/if}
 				{title}
@@ -59,6 +63,10 @@
 				{description}
 			</AlertDialog.Description>
 		</AlertDialog.Header>
+
+		{#if children}
+			{@render children()}
+		{/if}
 
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={onCancel}>{cancelText}</AlertDialog.Cancel>

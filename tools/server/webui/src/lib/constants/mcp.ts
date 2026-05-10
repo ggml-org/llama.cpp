@@ -13,7 +13,9 @@ export const MCP_ALLOWED_ICON_MIME_TYPES = new Set([
 	MimeTypeImage.JPEG,
 	MimeTypeImage.JPG,
 	MimeTypeImage.SVG,
-	MimeTypeImage.WEBP
+	MimeTypeImage.WEBP,
+	MimeTypeImage.ICO,
+	MimeTypeImage.ICO_MICROSOFT
 ]);
 
 /**
@@ -40,13 +42,33 @@ export const MCP_RECONNECT_MAX_DELAY = 30000;
 export const MCP_RECONNECT_ATTEMPT_TIMEOUT_MS = 15_000;
 
 /** Maximum number of MCP server avatars to display in the chat form */
-export const MAX_DISPLAYED_MCP_AVATARS = 3;
+export const MAX_DISPLAYED_MCP_AVATARS = 4;
 
 /** Expected count when two theme-less icons represent a light/dark pair */
 export const EXPECTED_THEMED_ICON_PAIR_COUNT = 2;
 
 /** CORS proxy URL query parameter name */
 export const CORS_PROXY_URL_PARAM = 'url';
+
+/** Number of trailing characters to keep visible when partially redacting mcp-session-id */
+export const MCP_SESSION_ID_VISIBLE_CHARS = 5;
+
+/** Partial-redaction rules for MCP headers: header name -> visible trailing chars */
+export const MCP_PARTIAL_REDACT_HEADERS = new Map<string, number>([
+	['mcp-session-id', MCP_SESSION_ID_VISIBLE_CHARS]
+]);
+
+/** Header names whose values should be redacted in diagnostic logs */
+export const REDACTED_HEADERS = new Set([
+	'authorization',
+	'api-key',
+	'cookie',
+	'mcp-session-id',
+	'proxy-authorization',
+	'set-cookie',
+	'x-auth-token',
+	'x-api-key'
+]);
 
 /** Human-readable labels for MCP transport types */
 export const MCP_TRANSPORT_LABELS: Record<MCPTransportType, string> = {

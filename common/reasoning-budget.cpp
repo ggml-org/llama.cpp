@@ -115,11 +115,27 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
             break;
         }
         case REASONING_BUDGET_FORCING:
-            // force_pos is advanced in apply(), not here.
-            // This ensures the first forced token isn't skipped when the sampler
-            // is initialized directly in FORCING state (e.g. COUNTING + budget=0)
+            ctx->force_pos++;
+            if (ctx->force_pos >= ctx->forced_tokens.size()) {
+                ctx->state = REASONING_BUDGET_DONE;
+                LOG_INF("reasoning-budget: forced sequence complete, done\n");
+            }
             break;
         case REASONING_BUDGET_DONE:
+            // Re-arm on a new start tag: some models emit multiple <think> blocks
+            // per response, and each should get a fresh budget window.
+            if (ctx->start_matcher.advance(token)) {
+                ctx->state = REASONING_BUDGET_COUNTING;
+                ctx->remaining = ctx->budget;
+                ctx->end_matcher.reset();
+                LOG_INF("reasoning-budget: re-activated on new start tag, budget=%d tokens\n", ctx->budget);
+
+                if (ctx->remaining <= 0) {
+                    ctx->state = REASONING_BUDGET_FORCING;
+                    ctx->force_pos = 0;
+                    LOG_INF("reasoning-budget: budget=0, forcing immediately\n");
+                }
+            }
             break;
     }
 }
@@ -144,14 +160,6 @@ static void common_reasoning_budget_apply(struct llama_sampler * smpl, llama_tok
             cur_p->data[i].logit = -INFINITY;
         }
     }
-
-    // advance to next forced token (done here rather than in accept so that
-    // the first forced token isn't skipped when starting in FORCING state)
-    ctx->force_pos++;
-    if (ctx->force_pos >= ctx->forced_tokens.size()) {
-        ctx->state = REASONING_BUDGET_DONE;
-        LOG_INF("reasoning-budget: forced sequence complete, done\n");
-    }
 }
 
 static void common_reasoning_budget_reset(struct llama_sampler * smpl) {
@@ -163,9 +171,15 @@ static void common_reasoning_budget_reset(struct llama_sampler * smpl) {
     ctx->force_pos = 0;
 }
 
+// forward declaration for use in clone
+static struct llama_sampler * common_reasoning_budget_init_state(
+        const struct llama_vocab * vocab, const std::vector<llama_token> & start_tokens,
+        const std::vector<llama_token> & end_tokens, const std::vector<llama_token> & forced_tokens,
+        int32_t budget, common_reasoning_budget_state initial_state);
+
 static struct llama_sampler * common_reasoning_budget_clone(const struct llama_sampler * smpl) {
     const auto * ctx = (const common_reasoning_budget_ctx *) smpl->ctx;
-    return common_reasoning_budget_init(
+    return common_reasoning_budget_init_state(
         ctx->vocab,
         ctx->start_matcher.tokens,
         ctx->end_matcher.tokens,
@@ -191,13 +205,13 @@ static struct llama_sampler_i common_reasoning_budget_i = {
     /* .backend_set_input = */ nullptr,
 };
 
-struct llama_sampler * common_reasoning_budget_init(
-        const struct llama_vocab       * vocab,
-        const std::vector<llama_token> & start_tokens,
-        const std::vector<llama_token> & end_tokens,
-        const std::vector<llama_token> & forced_tokens,
-        int32_t                          budget,
-        common_reasoning_budget_state    initial_state) {
+static struct llama_sampler * common_reasoning_budget_init_state(
+        const struct llama_vocab             * vocab,
+        const std::vector<llama_token>       & start_tokens,
+        const std::vector<llama_token>       & end_tokens,
+        const std::vector<llama_token>       & forced_tokens,
+        int32_t                                budget,
+        common_reasoning_budget_state          initial_state) {
     // promote COUNTING with budget <= 0 to FORCING
     if (initial_state == REASONING_BUDGET_COUNTING && budget <= 0) {
         initial_state = REASONING_BUDGET_FORCING;
@@ -216,4 +230,21 @@ struct llama_sampler * common_reasoning_budget_init(
             /* .force_pos     = */ 0,
         }
     );
+}
+
+struct llama_sampler * common_reasoning_budget_init(
+        const struct llama_vocab       * vocab,
+        const std::vector<llama_token> & start_tokens,
+        const std::vector<llama_token> & end_tokens,
+        const std::vector<llama_token> & forced_tokens,
+        int32_t                          budget,
+        common_reasoning_budget_state    initial_state) {
+    return common_reasoning_budget_init_state(vocab, start_tokens, end_tokens, forced_tokens, budget, initial_state);
+}
+
+common_reasoning_budget_state common_reasoning_budget_get_state(const struct llama_sampler * smpl) {
+    if (!smpl) {
+        return REASONING_BUDGET_IDLE;
+    }
+    return ((const common_reasoning_budget_ctx *)smpl->ctx)->state;
 }

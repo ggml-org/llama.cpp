@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
 
 #include "hvx-base.h"
 #include "hvx-floor.h"
@@ -16,8 +17,8 @@
 #define EXP_LOGN2   (0x3F317218)  // ln(2)   = 0.6931471805
 #define EXP_LOG2E   (0x3FB8AA3B)  // log2(e) = 1/ln(2) = 1.4426950408
 #define EXP_ONE     (0x3f800000)  // 1.0
-#define EXP_RANGE_R (0x41a00000)  // 20.0
-#define EXP_RANGE_L (0xc1a00000)  // -20.0
+#define EXP_RANGE_R (0x42B17218)  // ln(FLT_MAX) approx = 88.7228
+#define EXP_RANGE_L (0xC2B00000)  // -88.0 (approx log(FLT_MIN))
 
 static inline HVX_Vector hvx_vec_exp_f32(HVX_Vector in_vec) {
     HVX_Vector z_qf32_v;
@@ -47,12 +48,12 @@ static inline HVX_Vector hvx_vec_exp_f32(HVX_Vector in_vec) {
 
     HVX_Vector temp_v = in_vec;
 
-    // Clamp inputs to (-20.0, 20.0)
+    // Clamp inputs to (-88.0, 88.0) to avoid overflow/underflow
     HVX_VectorPred pred_cap_right = Q6_Q_vcmp_gt_VsfVsf(in_vec, Q6_V_vsplat_R(EXP_RANGE_R));
     HVX_VectorPred pred_cap_left  = Q6_Q_vcmp_gt_VsfVsf(Q6_V_vsplat_R(EXP_RANGE_L), in_vec);
 
     in_vec = Q6_V_vmux_QVV(pred_cap_right, Q6_V_vsplat_R(EXP_RANGE_R), temp_v);
-    in_vec = Q6_V_vmux_QVV(pred_cap_left, Q6_V_vsplat_R(EXP_RANGE_L), temp_v);
+    in_vec = Q6_V_vmux_QVV(pred_cap_left, Q6_V_vsplat_R(EXP_RANGE_L), in_vec);
 
     epsilon_v = Q6_Vqf32_vmpy_VsfVsf(log2e, in_vec);
     epsilon_v = Q6_Vsf_equals_Vqf32(epsilon_v);
@@ -69,11 +70,11 @@ static inline HVX_Vector hvx_vec_exp_f32(HVX_Vector in_vec) {
     // normalize before every QFloat's vmpy
     x_qf32_v  = Q6_Vqf32_vadd_Vqf32Vsf(x_qf32_v, zero_v);
 
+    x_v = Q6_Vsf_equals_Vqf32(x_qf32_v);
+
     // z = x * x;
     z_qf32_v = Q6_Vqf32_vmpy_Vqf32Vqf32(x_qf32_v, x_qf32_v);
     z_qf32_v = Q6_Vqf32_vadd_Vqf32Vsf(z_qf32_v, zero_v);
-
-    x_v = Q6_Vsf_equals_Vqf32(x_qf32_v);
 
     // y = E4 + E5 * x;
     E_const = Q6_V_vsplat_R(EXP_COEFF_5);
@@ -145,7 +146,7 @@ static inline HVX_Vector hvx_vec_exp_f32_guard(HVX_Vector in_vec, HVX_Vector max
     return Q6_V_vmux_QVV(pred0, inf, out);
 }
 
-static inline void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems, bool negate) {
+static inline void hvx_exp_f32(uint8_t * restrict dst, const uint8_t * restrict src, const int num_elems, bool negate) {
     int left_over       = num_elems & (VLEN_FP32 - 1);
     int num_elems_whole = num_elems - left_over;
 
@@ -162,7 +163,7 @@ static inline void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict 
     HVX_Vector vec_out = Q6_V_vzero();
 
     static const float kInf    = INFINITY;
-    static const float kMaxExp = 88.02f;  // log(INF)
+    static const float kMaxExp = 88.7228f;
 
     const HVX_Vector max_exp = hvx_vec_splat_f32(kMaxExp);
     const HVX_Vector inf     = hvx_vec_splat_f32(kInf);

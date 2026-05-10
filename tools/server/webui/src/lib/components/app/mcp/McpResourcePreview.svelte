@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { FileText, Loader2, AlertCircle, Download } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
 		isImageMimeType,
@@ -71,7 +70,7 @@
 	}
 </script>
 
-<div class={cn('flex flex-col gap-3', className)}>
+<div class={['flex flex-col gap-3', className]}>
 	{#if !resource}
 		<div class="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
 			<FileText class="h-8 w-8 opacity-50" />

@@ -102,7 +102,7 @@ std::string regex_to_reversed_partial_regex(const std::string & pattern) {
                 auto is_star = *it == '*';
                 ++it;
                 if (is_star) {
-                    if (*it == '?') {
+                    if (it != end && *it == '?') {
                         ++it;
                     }
                 }

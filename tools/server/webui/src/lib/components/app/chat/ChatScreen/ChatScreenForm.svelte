@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
-	import { ChatFormHelperText, ChatForm } from '$lib/components/app';
+	import { page } from '$app/state';
+	import { ChatForm } from '$lib/components/app';
 	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
+	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
 	interface Props {
 		class?: string;
@@ -14,7 +16,6 @@
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
 		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
-		showHelperText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 	}
 
@@ -28,37 +29,32 @@
 		onSend,
 		onStop,
 		onSystemPromptAdd,
-		showHelperText = true,
 		uploadedFiles = $bindable([])
 	}: Props = $props();
 
 	let chatFormRef: ChatForm | undefined = $state(undefined);
+	let chatId = $derived(page.params.id as string | undefined);
+	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let message = $derived(initialMessage);
 	let previousIsLoading = $derived(isLoading);
 	let previousInitialMessage = $derived(initialMessage);
+	let widthClasses = $derived(chatWidthClasses());
 
-	// Sync message when initialMessage prop changes (e.g., after draft restoration)
-	$effect(() => {
-		if (initialMessage !== previousInitialMessage) {
-			message = initialMessage;
-			previousInitialMessage = initialMessage;
-		}
+	const { clearDraft } = useDraftMessages({
+		getChatId: () => chatId,
+		getMessage: () => message,
+		getFiles: () => uploadedFiles,
+		setMessage: (m) => (message = m),
+		setFiles: (f) => (uploadedFiles = f),
+		getInitialMessage: () => initialMessage
 	});
 
-	function handleSystemPromptClick() {
-		onSystemPromptAdd?.({ message, files: uploadedFiles });
+	function handleFilesAdd(files: File[]) {
+		onFileUpload?.(files);
 	}
 
-	let widthClasses = $derived(chatWidthClasses());
-	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
-
 	async function handleSubmit() {
-		if (
-			(!message.trim() && uploadedFiles.length === 0) ||
-			disabled ||
-			isLoading ||
-			hasLoadingAttachments
-		)
+		if ((!message.trim() && uploadedFiles.length === 0) || disabled || hasLoadingAttachments)
 			return;
 
 		if (!chatFormRef?.checkModelSelected()) return;
@@ -68,6 +64,7 @@
 
 		message = '';
 		uploadedFiles = [];
+		clearDraft();
 
 		chatFormRef?.resetTextareaHeight();
 
@@ -79,8 +76,8 @@
 		}
 	}
 
-	function handleFilesAdd(files: File[]) {
-		onFileUpload?.(files);
+	function handleSystemPromptClick() {
+		onSystemPromptAdd?.({ message, files: uploadedFiles });
 	}
 
 	function handleUploadedFileRemove(fileId: string) {
@@ -91,8 +88,17 @@
 		setTimeout(() => chatFormRef?.focus(), 10);
 	});
 
-	afterNavigate(() => {
-		setTimeout(() => chatFormRef?.focus(), 10);
+	afterNavigate((navigation) => {
+		if (navigation?.from != null) {
+			setTimeout(() => chatFormRef?.focus(), 10);
+		}
+	});
+
+	$effect(() => {
+		if (initialMessage !== previousInitialMessage) {
+			message = initialMessage;
+			previousInitialMessage = initialMessage;
+		}
 	});
 
 	$effect(() => {
@@ -120,5 +126,3 @@
 		onUploadedFileRemove={handleUploadedFileRemove}
 	/>
 </div>
-
-<ChatFormHelperText show={showHelperText} />

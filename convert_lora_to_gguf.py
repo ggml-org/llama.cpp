@@ -128,6 +128,12 @@ class LoraTorchTensor:
         assert dim is None
         return self.shape
 
+    def contiguous(self) -> LoraTorchTensor:
+        return LoraTorchTensor(
+            self._lora_A.contiguous(),
+            self._lora_B.contiguous(),
+        )
+
     def reshape(self, *shape: int | tuple[int, ...]) -> LoraTorchTensor:
         if isinstance(shape[0], tuple):
             new_shape: tuple[int, ...] = shape[0]
@@ -193,10 +199,13 @@ class LoraTorchTensor:
             kwargs = {}
 
         if func is torch.permute:
+            assert len(args)
             return type(args[0]).permute(*args, **kwargs)
         elif func is torch.reshape:
+            assert len(args)
             return type(args[0]).reshape(*args, **kwargs)
         elif func is torch.stack:
+            assert len(args)
             assert isinstance(args[0], Sequence)
             dim = kwargs.get("dim", 0)
             assert dim == 0
@@ -205,6 +214,7 @@ class LoraTorchTensor:
                 torch.stack([b._lora_B for b in args[0]], dim),
             )
         elif func is torch.cat:
+            assert len(args)
             assert isinstance(args[0], Sequence)
             dim = kwargs.get("dim", 0)
             assert dim == 0
@@ -356,7 +366,7 @@ if __name__ == '__main__':
             logger.error(f"Model {hparams['architectures'][0]} is not supported")
             sys.exit(1)
 
-        class LoraModel(model_class):
+        class LoraModel(model_class):  # ty: ignore[unsupported-base]
             model_arch = model_class.model_arch
 
             lora_alpha: float
@@ -392,7 +402,7 @@ if __name__ == '__main__':
                     # the invocation string includes the "<|start_of_turn|>"
                     # token, but the adapters themselves were trained to
                     # activate _after_ that first token, so we drop it here.
-                    alora_invocation_tokens = tokenizer(invocation_string)["input_ids"][1:]
+                    alora_invocation_tokens = tokenizer(invocation_string)["input_ids"][1:]  # ty: ignore[call-non-callable]
                 if alora_invocation_tokens:
                     logger.debug("GGUF KV: %s = %s", gguf.Keys.Adapter.ALORA_INVOCATION_TOKENS, alora_invocation_tokens)
                     self.gguf_writer.add_key_value(

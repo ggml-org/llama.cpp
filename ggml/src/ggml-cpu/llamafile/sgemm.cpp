@@ -180,43 +180,48 @@ inline float32x4_t madd(float32x4_t a, float32x4_t b, float32x4_t c) {
 }
 #endif
 
-#if defined(__riscv_zvfh)
-template <>
-inline vfloat32m1_t madd(vfloat16mf2_t a, vfloat16mf2_t b, vfloat32m1_t c) {
-    return __riscv_vfwmacc_vv_f32m1(c, a, b, __riscv_vsetvlmax_e32m1());
-}
-inline vfloat32m2_t madd(vfloat16m1_t a, vfloat16m1_t b, vfloat32m2_t c) {
-    return __riscv_vfwmacc_vv_f32m2(c, a, b, __riscv_vsetvlmax_e32m2());
-}
-inline vfloat32m4_t madd(vfloat16m2_t a, vfloat16m2_t b, vfloat32m4_t c) {
-    return __riscv_vfwmacc_vv_f32m4(c, a, b, __riscv_vsetvlmax_e32m4());
-}
-inline vfloat32m8_t madd(vfloat16m4_t a, vfloat16m4_t b, vfloat32m8_t c) {
-    return __riscv_vfwmacc_vv_f32m8(c, a, b, __riscv_vsetvlmax_e32m8());
-}
-inline vfloat32m1_t madd(vfloat32m1_t a, vfloat32m1_t b, vfloat32m1_t c) {
+#if defined(__riscv_v_intrinsic)
+template <> inline vfloat32m1_t madd(vfloat32m1_t a, vfloat32m1_t b, vfloat32m1_t c) {
     return __riscv_vfmacc_vv_f32m1(c, a, b, __riscv_vsetvlmax_e32m1());
 }
-inline vfloat32m2_t madd(vfloat32m2_t a, vfloat32m2_t b, vfloat32m2_t c) {
+template <> inline vfloat32m2_t madd(vfloat32m2_t a, vfloat32m2_t b, vfloat32m2_t c) {
     return __riscv_vfmacc_vv_f32m2(c, a, b, __riscv_vsetvlmax_e32m2());
 }
-inline vfloat32m4_t madd(vfloat32m4_t a, vfloat32m4_t b, vfloat32m4_t c) {
+template <> inline vfloat32m4_t madd(vfloat32m4_t a, vfloat32m4_t b, vfloat32m4_t c) {
     return __riscv_vfmacc_vv_f32m4(c, a, b, __riscv_vsetvlmax_e32m4());
 }
-inline vfloat32m8_t madd(vfloat32m8_t a, vfloat32m8_t b, vfloat32m8_t c) {
+template <> inline vfloat32m8_t madd(vfloat32m8_t a, vfloat32m8_t b, vfloat32m8_t c) {
     return __riscv_vfmacc_vv_f32m8(c, a, b, __riscv_vsetvlmax_e32m8());
 }
 #endif
 
+#if defined(__riscv_zvfh)
+template <> inline vfloat32m1_t madd(vfloat16mf2_t a, vfloat16mf2_t b, vfloat32m1_t c) {
+    return __riscv_vfwmacc_vv_f32m1(c, a, b, __riscv_vsetvlmax_e32m1());
+}
+template <> inline vfloat32m2_t madd(vfloat16m1_t a, vfloat16m1_t b, vfloat32m2_t c) {
+    return __riscv_vfwmacc_vv_f32m2(c, a, b, __riscv_vsetvlmax_e32m2());
+}
+template <> inline vfloat32m4_t madd(vfloat16m2_t a, vfloat16m2_t b, vfloat32m4_t c) {
+    return __riscv_vfwmacc_vv_f32m4(c, a, b, __riscv_vsetvlmax_e32m4());
+}
+template <> inline vfloat32m8_t madd(vfloat16m4_t a, vfloat16m4_t b, vfloat32m8_t c) {
+    return __riscv_vfwmacc_vv_f32m8(c, a, b, __riscv_vsetvlmax_e32m8());
+}
+#endif
+
 #if defined(__riscv_zvfbfwma)
-inline vfloat32m1_t madd(vbfloat16mf2_t a, vbfloat16mf2_t b, vfloat32m1_t c) {
+template <> inline vfloat32m1_t madd(vbfloat16mf2_t a, vbfloat16mf2_t b, vfloat32m1_t c) {
     return __riscv_vfwmaccbf16_vv_f32m1(c, a, b, __riscv_vsetvlmax_e32m1());
 }
-inline vfloat32m2_t madd(vbfloat16m1_t a, vbfloat16m1_t b, vfloat32m2_t c) {
+template <> inline vfloat32m2_t madd(vbfloat16m1_t a, vbfloat16m1_t b, vfloat32m2_t c) {
     return __riscv_vfwmaccbf16_vv_f32m2(c, a, b, __riscv_vsetvlmax_e32m2());
 }
-inline vfloat32m4_t madd(vbfloat16m2_t a, vbfloat16m2_t b, vfloat32m4_t c) {
+template <> inline vfloat32m4_t madd(vbfloat16m2_t a, vbfloat16m2_t b, vfloat32m4_t c) {
     return __riscv_vfwmaccbf16_vv_f32m4(c, a, b, __riscv_vsetvlmax_e32m4());
+}
+template <> inline vfloat32m8_t madd(vbfloat16m4_t a, vbfloat16m4_t b, vfloat32m8_t c) {
+    return __riscv_vfwmaccbf16_vv_f32m8(c, a, b, __riscv_vsetvlmax_e32m8());
 }
 #endif
 
@@ -272,7 +277,7 @@ inline float hsum(__m512 x) {
 }
 #endif // __AVX512F__
 
-#if defined(__riscv_zvfh)
+#if defined(__riscv_v_intrinsic)
 inline float hsum(vfloat32m1_t x) {
     return __riscv_vfmv_f_s_f32m1_f32(
         __riscv_vfredusum_vs_f32m1_f32m1(x, __riscv_vfmv_v_f_f32m1(0, 1), __riscv_vsetvlmax_e32m1()));
@@ -379,19 +384,7 @@ template <> inline __m256bh load(const float *p) {
 }
 #endif
 
-#if defined(__riscv_zvfh)
-template <> inline vfloat16mf2_t load(const ggml_fp16_t *p) {
-    return __riscv_vle16_v_f16mf2(reinterpret_cast<const _Float16 *>(p), __riscv_vsetvlmax_e16mf2());
-}
-template <> inline vfloat16m1_t load(const ggml_fp16_t *p) {
-    return __riscv_vle16_v_f16m1(reinterpret_cast<const _Float16 *>(p), __riscv_vsetvlmax_e16m1());
-}
-template <> inline vfloat16m2_t load(const ggml_fp16_t *p) {
-    return __riscv_vle16_v_f16m2(reinterpret_cast<const _Float16 *>(p), __riscv_vsetvlmax_e16m2());
-}
-template <> inline vfloat16m4_t load(const ggml_fp16_t *p) {
-    return __riscv_vle16_v_f16m4(reinterpret_cast<const _Float16 *>(p), __riscv_vsetvlmax_e16m4());
-}
+#if defined(__riscv_v_intrinsic)
 template <> inline vfloat32m1_t load(const float *p) {
     return __riscv_vle32_v_f32m1(p, __riscv_vsetvlmax_e32m1());
 }
@@ -406,6 +399,21 @@ template <> inline vfloat32m8_t load(const float *p) {
 }
 #endif
 
+#if defined(__riscv_zvfh)
+template <> inline vfloat16mf2_t load(const ggml_fp16_t *p) {
+    return __riscv_vle16_v_f16mf2(reinterpret_cast<const _Float16 *>(p), __riscv_vsetvlmax_e16mf2());
+}
+template <> inline vfloat16m1_t load(const ggml_fp16_t *p) {
+    return __riscv_vle16_v_f16m1(reinterpret_cast<const _Float16 *>(p), __riscv_vsetvlmax_e16m1());
+}
+template <> inline vfloat16m2_t load(const ggml_fp16_t *p) {
+    return __riscv_vle16_v_f16m2(reinterpret_cast<const _Float16 *>(p), __riscv_vsetvlmax_e16m2());
+}
+template <> inline vfloat16m4_t load(const ggml_fp16_t *p) {
+    return __riscv_vle16_v_f16m4(reinterpret_cast<const _Float16 *>(p), __riscv_vsetvlmax_e16m4());
+}
+#endif
+
 #if defined(__riscv_zvfbfwma)
 template <> inline vbfloat16mf2_t load(const ggml_bf16_t *p) {
     return __riscv_vle16_v_bf16mf2(reinterpret_cast<const __bf16*>(p), __riscv_vsetvlmax_e16mf2());
@@ -416,23 +424,14 @@ template <> inline vbfloat16m1_t load(const ggml_bf16_t *p) {
 template <> inline vbfloat16m2_t load(const ggml_bf16_t *p) {
     return __riscv_vle16_v_bf16m2(reinterpret_cast<const __bf16*>(p), __riscv_vsetvlmax_e16m2());
 }
+template <> inline vbfloat16m4_t load(const ggml_bf16_t *p) {
+    return __riscv_vle16_v_bf16m4(reinterpret_cast<const __bf16*>(p), __riscv_vsetvlmax_e16m4());
+}
 #endif
 
-#if defined(__riscv_zvfh)
+#if defined(__riscv_v_intrinsic)
 template <typename T> T set_zero();
 
-template <> inline vfloat16mf2_t set_zero() {
-    return __riscv_vfmv_v_f_f16mf2(0, __riscv_vsetvlmax_e16mf2());
-}
-template <> inline vfloat16m1_t set_zero() {
-    return __riscv_vfmv_v_f_f16m1(0, __riscv_vsetvlmax_e16m1());
-}
-template <> inline vfloat16m2_t set_zero() {
-    return __riscv_vfmv_v_f_f16m2(0, __riscv_vsetvlmax_e16m2());
-}
-template <> inline vfloat16m4_t set_zero() {
-    return __riscv_vfmv_v_f_f16m4(0, __riscv_vsetvlmax_e16m4());
-}
 template <> inline vfloat32m1_t set_zero() {
     return __riscv_vfmv_v_f_f32m1(0.0f, __riscv_vsetvlmax_e32m1());
 }
@@ -449,14 +448,22 @@ template <> inline vfloat32m8_t set_zero() {
 
 #if defined(__riscv_v_intrinsic)
 template <typename T> size_t vlmax() {
-    if constexpr (std::is_same_v<T, vfloat16mf2_t>) { return  __riscv_vsetvlmax_e16mf2(); }
-    else if constexpr (std::is_same_v<T, vfloat16m1_t>) { return  __riscv_vsetvlmax_e16m1(); }
-    else if constexpr (std::is_same_v<T, vfloat16m2_t>) { return  __riscv_vsetvlmax_e16m2(); }
-    else if constexpr (std::is_same_v<T, vfloat16m4_t>) { return  __riscv_vsetvlmax_e16m4(); }
-    else if constexpr (std::is_same_v<T, vfloat32m1_t>) { return  __riscv_vsetvlmax_e32m1(); }
+    if constexpr (std::is_same_v<T, vfloat32m1_t>) { return  __riscv_vsetvlmax_e32m1(); }
     else if constexpr (std::is_same_v<T, vfloat32m2_t>) { return  __riscv_vsetvlmax_e32m2(); }
     else if constexpr (std::is_same_v<T, vfloat32m4_t>) { return  __riscv_vsetvlmax_e32m4(); }
     else if constexpr (std::is_same_v<T, vfloat32m8_t>) { return  __riscv_vsetvlmax_e32m8(); }
+    #if defined (__riscv_zvfh)
+    else if constexpr (std::is_same_v<T, vfloat16mf2_t>) { return  __riscv_vsetvlmax_e16mf2(); }
+    else if constexpr (std::is_same_v<T, vfloat16m1_t>) { return  __riscv_vsetvlmax_e16m1(); }
+    else if constexpr (std::is_same_v<T, vfloat16m2_t>) { return  __riscv_vsetvlmax_e16m2(); }
+    else if constexpr (std::is_same_v<T, vfloat16m4_t>) { return  __riscv_vsetvlmax_e16m4(); }
+    #endif
+    #if defined (__riscv_zvfbfwma)
+    else if constexpr (std::is_same_v<T, vbfloat16mf2_t>) { return  __riscv_vsetvlmax_e16mf2(); }
+    else if constexpr (std::is_same_v<T, vbfloat16m1_t>) { return  __riscv_vsetvlmax_e16m1(); }
+    else if constexpr (std::is_same_v<T, vbfloat16m2_t>) { return  __riscv_vsetvlmax_e16m2(); }
+    else if constexpr (std::is_same_v<T, vbfloat16m4_t>) { return  __riscv_vsetvlmax_e16m4(); }
+    #endif
     return 0;
 }
 #endif
@@ -2314,6 +2321,9 @@ class tinyBLAS_Q0_PPC {
     }
 
     void matmul(int64_t m, int64_t n) {
+    #if defined(_AIX) || defined(__BIG_ENDIAN__)
+        mnpack(0, m, 0, n);
+    #else
         const int64_t mc = 64;
         const int64_t kc = 64;
         int64_t nc = 64;
@@ -2327,7 +2337,6 @@ class tinyBLAS_Q0_PPC {
         } else {
             n_aligned = (n / 64) * 64;
         }
-
         if (n_aligned > 0) {
             if (n_aligned % 64 == 0)      nc = 64;
             else if (n_aligned == n)      nc = n;
@@ -2345,6 +2354,7 @@ class tinyBLAS_Q0_PPC {
         } else {
             mnpack(0, m, 0, n);
         }
+    #endif
     }
 
   private:
@@ -3184,16 +3194,21 @@ class tinyBLAS_PPC {
     }
 
     void matmul(int64_t m, int64_t n) {
+    #if defined(_AIX) || defined(__BIG_ENDIAN__)
+        mnpack(0, m, 0, n);
+    #else
         int64_t mc = 256; int64_t nc = 256; int64_t kc = 256;
         if (m % mc == 0 && n % nc == 0 && k % kc == 0) {
             matmul_tiled(m, n, mc, nc, kc);
         } else {
             mnpack(0, m, 0, n);
         }
+    #endif
     }
 
   private:
 
+    __attribute__((always_inline))
     inline void save_acc(acc_t * ACC, int64_t ii, int64_t jj) {
         vec_t vec_C[4];
         __builtin_mma_disassemble_acc(vec_C, ACC);
@@ -3204,6 +3219,7 @@ class tinyBLAS_PPC {
         }
     }
 
+    __attribute__((always_inline))
     inline void add_save_acc(acc_t * ACC, int64_t ii, int64_t jj) {
         vec_t vec_C[4];
         __builtin_mma_disassemble_acc(vec_C, ACC);
@@ -3738,7 +3754,7 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
             params->ith, params->nth};
         tb.matmul(m, n);
         return true;
-#elif defined(__riscv_zvfh)
+#elif defined(__riscv_v_intrinsic)
     #if LMUL == 1
         tinyBLAS_RVV<vfloat32m1_t, vfloat32m1_t, float, float, float> tb{ params,
             k, (const float *)A, lda,
@@ -3802,23 +3818,25 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
             return true;
         }
 #elif defined(__riscv_zvfbfwma)
-        #if LMUL == 1
-            tinyBLAS_RVV<vfloat32m1_t, vbfloat16mf2_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params,
-                k, (const ggml_bf16_t *)A, lda,
-                (const ggml_bf16_t *)B, ldb,
-                (float *)C, ldc};
-        #elif LMUL == 2
-            tinyBLAS_RVV<vfloat32m2_t, vbfloat16m1_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params,
-                k, (const ggml_bf16_t *)A, lda,
-                (const ggml_bf16_t *)B, ldb,
-                (float *)C, ldc};
-        #else // LMUL = 4
-            tinyBLAS_RVV<vfloat32m4_t, vbfloat16m2_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params,
-                k, (const ggml_bf16_t *)A, lda,
-                (const ggml_bf16_t *)B, ldb,
-                (float *)C, ldc};
-        #endif
-            return tb.matmul(m, n);
+        if (Btype == GGML_TYPE_BF16) {
+            #if LMUL == 1
+                tinyBLAS_RVV<vfloat32m1_t, vbfloat16mf2_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params,
+                    k, (const ggml_bf16_t *)A, lda,
+                    (const ggml_bf16_t *)B, ldb,
+                    (float *)C, ldc};
+            #elif LMUL == 2
+                tinyBLAS_RVV<vfloat32m2_t, vbfloat16m1_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params,
+                    k, (const ggml_bf16_t *)A, lda,
+                    (const ggml_bf16_t *)B, ldb,
+                    (float *)C, ldc};
+            #else // LMUL = 4
+                tinyBLAS_RVV<vfloat32m4_t, vbfloat16m2_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params,
+                    k, (const ggml_bf16_t *)A, lda,
+                    (const ggml_bf16_t *)B, ldb,
+                    (float *)C, ldc};
+            #endif
+                return tb.matmul(m, n);
+        }
 #endif
         return false;
     }

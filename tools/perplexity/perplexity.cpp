@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "fit.h"
 #include "log.h"
 #include "llama.h"
 
@@ -2012,11 +2013,11 @@ int main(int argc, char ** argv) {
     params.n_ctx = 512;
     params.escape = false;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {
         return 1;
     }
-
-    common_init();
 
     const int32_t n_ctx = params.n_ctx;
 
@@ -2049,8 +2050,13 @@ int main(int argc, char ** argv) {
     auto * model = llama_init->model();
     auto * ctx   = llama_init->context();
 
-    if (model == NULL) {
+    if (model == nullptr) {
         LOG_ERR("%s: unable to load model\n", __func__);
+        return 1;
+    }
+
+    if (ctx == nullptr) {
+        LOG_ERR("%s: failed to create context\n", __func__);
         return 1;
     }
 
@@ -2082,7 +2088,7 @@ int main(int argc, char ** argv) {
 
     LOG("\n");
     llama_perf_context_print(ctx);
-    llama_memory_breakdown_print(ctx);
+    common_memory_breakdown_print(ctx);
 
     llama_backend_free();
 

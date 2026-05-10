@@ -135,7 +135,7 @@ def test_completion_stream_with_openai_library_stops():
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     res = client.completions.create(
         model="davinci-002",
-        prompt="System: You are helpfull assistant.\nAssistant:\nHey! How could I help?\nUser:\nTell me a joke.\nAssistant:\n",
+        prompt="System: You are helpful assistant.\nAssistant:\nHey! How could I help?\nUser:\nTell me a joke.\nAssistant:\n",
         stop=["User:\n", "Assistant:\n"],
         max_tokens=200,
         stream=True,
@@ -563,7 +563,7 @@ def test_cancel_request():
     except requests.exceptions.ReadTimeout:
         pass # expected
     # make sure the slot is free
-    time.sleep(1) # wait for HTTP_POLLING_SECONDS
+    time.sleep(2)
     res = server.make_request("GET", "/slots")
     assert res.body[0]["is_processing"] == False
 

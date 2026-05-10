@@ -416,15 +416,30 @@ private:
                     i++;
                 } else if (c == '(') {
                     i++;
-                    if (i < length) {
-                        if (sub_pattern[i] == '?') {
+                    if (i < length && sub_pattern[i] == '?') {
+                        if (i + 1 < length && sub_pattern[i + 1] == ':') {
+                            i += 2; // skip "?:" for non-capturing group, treat as regular group
+                        } else {
+                            // lookahead/lookbehind (?=, ?!, ?<=, ?<!) - not supported
                             _warnings.push_back("Unsupported pattern syntax");
+                            // skip to matching ')' to avoid UB on empty seq
+                            int depth = 1;
+                            while (i < length && depth > 0) {
+                                if (sub_pattern[i] == '\\' && i + 1 < length) {
+                                    i += 2; // skip escaped character
+                                } else {
+                                    if (sub_pattern[i] == '(') depth++;
+                                    else if (sub_pattern[i] == ')') depth--;
+                                    i++;
+                                }
+                            }
+                            continue;
                         }
                     }
                     seq.emplace_back("(" + to_rule(transform()) + ")", false);
                 } else if (c == ')') {
                     i++;
-                    if (start > 0 && sub_pattern[start - 1] != '(') {
+                    if (start > 0 && sub_pattern[start - 1] != '(' && (start < 2 || sub_pattern[start - 2] != '?' || sub_pattern[start - 1] != ':')) {
                         _errors.push_back("Unbalanced parentheses");
                     }
                     return join_seq();

@@ -25,6 +25,7 @@
 
 	function handleOpenChange(nextOpen: boolean) {
 		open = nextOpen;
+
 		onOpenChange?.(nextOpen);
 	}
 </script>
@@ -37,7 +38,7 @@
 			<iframe
 				bind:this={iframeRef}
 				title="Preview {language}"
-				sandbox="allow-scripts allow-same-origin"
+				sandbox="allow-scripts"
 				class="code-preview-iframe"
 			></iframe>
 
@@ -46,6 +47,7 @@
 				aria-label="Close preview"
 			>
 				<XIcon />
+
 				<span class="sr-only">Close preview</span>
 			</DialogPrimitive.Close>
 		</DialogPrimitive.Content>

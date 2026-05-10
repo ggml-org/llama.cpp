@@ -1,4 +1,6 @@
 import { getContext, setContext } from 'svelte';
+import { CONTEXT_KEY_MESSAGE_EDIT } from '$lib/constants';
+import { MessageRole } from '$lib/enums';
 
 export interface MessageEditState {
 	readonly isEditing: boolean;
@@ -8,6 +10,10 @@ export interface MessageEditState {
 	readonly originalContent: string;
 	readonly originalExtras: DatabaseMessageExtra[];
 	readonly showSaveOnlyOption: boolean;
+	readonly showBranchAfterEditOption: boolean;
+	readonly shouldBranchAfterEdit: boolean;
+	readonly messageRole: MessageRole;
+	readonly rawEditContent?: string;
 }
 
 export interface MessageEditActions {
@@ -20,9 +26,15 @@ export interface MessageEditActions {
 	startEdit: () => void;
 }
 
-export type MessageEditContext = MessageEditState & MessageEditActions;
+export interface AssistantEditActions {
+	setShouldBranchAfterEdit: (value: boolean) => void;
+}
 
-const MESSAGE_EDIT_KEY = Symbol.for('chat-message-edit');
+export type MessageEditContext = MessageEditState &
+	MessageEditActions &
+	Partial<AssistantEditActions>;
+
+const MESSAGE_EDIT_KEY = Symbol.for(CONTEXT_KEY_MESSAGE_EDIT);
 
 /**
  * Sets the message edit context. Call this in the parent component (ChatMessage.svelte).
