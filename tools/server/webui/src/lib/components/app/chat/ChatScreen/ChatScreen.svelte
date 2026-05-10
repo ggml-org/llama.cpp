@@ -27,7 +27,7 @@
 		isEditing,
 		getAddFilesHandler,
 		activeProcessingState,
-        chatWidthClasses
+		chatWidthClasses
 	} from '$lib/stores/chat.svelte';
 	import {
 		conversationsStore,
@@ -386,7 +386,10 @@
 					: 'sticky bottom-4'} right-4 left-4 mt-auto pt-16 transition-all duration-200"
 			>
 				{#if isEmpty}
-					<div class="mb-8 {widthClasses.class} mx-auto px-4 text-center" use:fadeInView={{ duration: 300 }}>
+					<div
+						class="mb-8 {widthClasses.class} mx-auto px-4 text-center"
+						use:fadeInView={{ duration: 300 }}
+					>
 						<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
 
 						<p class="text-muted-foreground md:text-lg">
@@ -424,7 +427,9 @@
 					</div>
 				{/if}
 
-				<div class="conversation-chat-form {widthClasses.class} mx-auto pointer-events-auto rounded-t-3xl">
+				<div
+					class="conversation-chat-form {widthClasses.class} pointer-events-auto mx-auto rounded-t-3xl"
+				>
 					<ChatScreenForm
 						disabled={hasPropsError || isEditing()}
 						{initialMessage}
