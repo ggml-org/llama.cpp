@@ -269,49 +269,50 @@ class EvalState:
             print(f"{'='*60}")
 
     def dump(self):
-        tasks_to_save = self.all_tasks if self.all_tasks else self.tasks
-        all_cases = {}
-        for i, task_id in tasks_to_save:
-            question_text, prompt, expected = self.get_case(i)
-            if task_id in self.task_states.get("cases", {}):
-                all_cases[task_id] = self.task_states["cases"][task_id]
-            else:
-                all_cases[task_id] = {
-                    "task_id": task_id,
-                    "prompt": prompt,
-                    "expected": expected,
-                    "question_text": question_text,
-                    "response": None,
-                    "answer": None,
-                    "grader_log": {},
-                    "correct": False,
-                    "status": "pending",
-                    "tokens": None,
-                    "tps_gen": None,
-                    "t_gen_ms": None,
-                    "reasoning_content": None,
-                    "server_name": None
-                }
+        with self._lock:
+            tasks_to_save = self.all_tasks if self.all_tasks else self.tasks
+            all_cases = {}
+            for i, task_id in tasks_to_save:
+                question_text, prompt, expected = self.get_case(i)
+                if task_id in self.task_states.get("cases", {}):
+                    all_cases[task_id] = self.task_states["cases"][task_id]
+                else:
+                    all_cases[task_id] = {
+                        "task_id": task_id,
+                        "prompt": prompt,
+                        "expected": expected,
+                        "question_text": question_text,
+                        "response": None,
+                        "answer": None,
+                        "grader_log": {},
+                        "correct": False,
+                        "status": "pending",
+                        "tokens": None,
+                        "tps_gen": None,
+                        "t_gen_ms": None,
+                        "reasoning_content": None,
+                        "server_name": None
+                    }
 
-        ci_lower, ci_upper = self.accuracy_ci()
-        data = {
-            "id": self.dataset_type,
-            "model_name": self.model_name,
-            "tasks": [tid for _, tid in tasks_to_save],
-            "task_states": {
-                "total": self.total,
-                "correct": self.correct,
-                "total_time": self.total_time,
-                "ci_lower": ci_lower,
-                "ci_upper": ci_upper,
-                "cases": all_cases,
-            },
-            "sampling_config": self.sampling_config
-        }
-        with open(self.output_file, "w") as f:
-            json.dump(data, f, indent=2)
+            ci_lower, ci_upper = self.accuracy_ci()
+            data = {
+                "id": self.dataset_type,
+                "model_name": self.model_name,
+                "tasks": [tid for _, tid in tasks_to_save],
+                "task_states": {
+                    "total": self.total,
+                    "correct": self.correct,
+                    "total_time": self.total_time,
+                    "ci_lower": ci_lower,
+                    "ci_upper": ci_upper,
+                    "cases": all_cases,
+                },
+                "sampling_config": self.sampling_config
+            }
+            with open(self.output_file, "w") as f:
+                json.dump(data, f, indent=2)
 
-        self.dump_html(tasks_to_save, all_cases)
+            self.dump_html(tasks_to_save, all_cases)
 
     def dump_html(self, tasks_to_save: List[Tuple[int, str]], all_cases: Dict[str, Any]):
         html_file = Path(str(self.output_file) + ".html")
