@@ -1286,6 +1286,23 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
     explicit ggml_sycl_pool_leg(queue_ptr qptr_, int device_) : device(device_), qptr(qptr_) {}
 
     ~ggml_sycl_pool_leg() {
+#ifdef DEBUG_SYCL_POOL
+        int    n_cached    = 0;
+        size_t bytes_cached = 0;
+        for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
+            if (buffer_pool[i].ptr != nullptr) {
+                ++n_cached;
+                bytes_cached += buffer_pool[i].size;
+            }
+        }
+        GGML_LOG_INFO("%s: %d buffers, cached = %.2f MiB\n", __func__,
+                      n_cached, bytes_cached / 1024.0 / 1024.0);
+        const auto slots = format_slots_in_alloc_order();
+        if (!slots.empty()) {
+            GGML_LOG_INFO("%s: slots MiB: %s\n", __func__, slots.c_str());
+        }
+#endif
+
         for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
             ggml_sycl_buffer & b = buffer_pool[i];
             if (b.ptr != nullptr) {
@@ -1295,6 +1312,26 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
         }
         GGML_ASSERT(pool_size == 0);
     }
+
+#ifdef DEBUG_SYCL_POOL
+    std::string format_slots_in_alloc_order() const {
+        std::string line;
+        char buf[32];
+        bool first = true;
+        for (int i = 0; i < MAX_SYCL_BUFFERS; ++i) {
+            if (buffer_pool[i].ptr == nullptr) {
+                continue;
+            }
+            if (!first) {
+                line += '/';
+            }
+            first = false;
+            snprintf(buf, sizeof(buf), "%.2f", buffer_pool[i].size / 1024.0 / 1024.0);
+            line += buf;
+        }
+        return line;
+    }
+#endif
 
     void * alloc(size_t size, size_t * actual_size) override {
 #ifdef DEBUG_sycl_MALLOC
@@ -1457,6 +1494,10 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(q
     //     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_vmm(device));
     // }
    return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_leg(qptr, device));
+}
+
+std::unique_ptr<ggml_sycl_fattn_kv_buffers> ggml_backend_sycl_context::new_fattn_kv_buffers(queue_ptr qptr, int device) {
+    return std::unique_ptr<ggml_sycl_fattn_kv_buffers>(new ggml_sycl_fattn_kv_buffers(qptr, device));
 }
 
 // TBD pool with virtual memory management
@@ -3303,6 +3344,7 @@ inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
         case GGML_TYPE_Q8_0:
             return true;
         case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
             return !g_ggml_sycl_prioritize_dmmv;
         default:
@@ -3325,6 +3367,7 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
             return true;
         default:
@@ -3541,6 +3584,54 @@ static bool reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, d
     return true;
 }
 
+static bool reorder_qw_q5_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
+    GGML_ASSERT(size % sizeof(block_q5_K) == 0);
+    GGML_ASSERT(offset % sizeof(block_q5_K) == 0);
+
+    const int nblocks = size / sizeof(block_q5_K);
+
+    sycl_reorder_temp_buffer tmp(stream, size);
+    if (!tmp) {
+        GGML_LOG_WARN("%s: failed to allocate %zu bytes for reorder temp buffer, skipping reorder\n", __func__, size);
+        return false;
+    }
+    uint8_t * tmp_buf = static_cast<uint8_t *>(tmp.ptr);
+
+    sycl::event copy_event;
+    SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
+    if (!g_ggml_sycl_use_async_mem_op) {
+        copy_event.wait();
+    }
+
+    auto * qs_ptr     = data_device;
+    auto * qh_ptr     = qs_ptr + (QK_K / 2) * nblocks;
+    auto * scales_ptr = qh_ptr + (QK_K / 8) * nblocks;
+    auto * dm_ptr     = (sycl::half2 *) (scales_ptr + K_SCALE_SIZE * nblocks);
+
+    auto reorder_event = stream->parallel_for(nblocks, [=](auto i) {
+        const block_q5_K * x  = (const block_q5_K *) tmp_buf;
+        const int          ib = i;
+
+        for (int j = 0; j < QK_K / 2; ++j) {
+            qs_ptr[ib * (QK_K / 2) + j] = x[ib].qs[j];
+        }
+
+        for (int j = 0; j < QK_K / 8; ++j) {
+            qh_ptr[ib * (QK_K / 8) + j] = x[ib].qh[j];
+        }
+
+        for (int j = 0; j < K_SCALE_SIZE; ++j) {
+            scales_ptr[ib * K_SCALE_SIZE + j] = x[ib].scales[j];
+        }
+
+        dm_ptr[ib] = x[ib].dm;
+    });
+    if (!g_ggml_sycl_use_async_mem_op) {
+        reorder_event.wait_and_throw();
+    }
+    return true;
+}
+
 static bool reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
     GGML_ASSERT(size % sizeof(block_q6_K) == 0);
     GGML_ASSERT(offset % sizeof(block_q6_K) == 0);
@@ -3607,6 +3698,8 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
             return reorder_qw_q8_0(data_device, ncols, nrows, size, 0, stream);
         case GGML_TYPE_Q4_K:
             return reorder_qw_q4_k(data_device, size, 0, stream);
+        case GGML_TYPE_Q5_K:
+            return reorder_qw_q5_k(data_device, size, 0, stream);
         case GGML_TYPE_Q6_K:
             return reorder_qw_q6_k(data_device, size, 0, stream);
         default:
@@ -4922,6 +5015,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             {
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F16:
+                    case GGML_TYPE_BF16:
                     case GGML_TYPE_F32:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:
@@ -5104,11 +5198,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_ACC:
             return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
         case GGML_OP_PAD:
-            // TODO: add circular padding support for syscl, see https://github.com/ggml-org/llama.cpp/pull/16985
             if (ggml_get_op_params_i32(op, 8) != 0) {
                 return false;
             }
-            return ggml_is_contiguous(op->src[0]);
+            return true;
         case GGML_OP_LEAKY_RELU:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_RWKV_WKV6:

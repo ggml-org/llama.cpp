@@ -542,6 +542,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_SIGMOID:
         case HTP_OP_UNARY_NEG:
         case HTP_OP_UNARY_EXP:
+        case HTP_OP_L2_NORM:
             return op_unary(octx);
 
         case HTP_OP_UNARY_SILU:
@@ -592,6 +593,9 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_SOLVE_TRI:
             return op_solve_tri(octx);
+
+        case HTP_OP_GATED_DELTA_NET:
+            return op_gated_delta_net(octx);
 
         case HTP_OP_INVALID:
             break;
