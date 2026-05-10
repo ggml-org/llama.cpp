@@ -145,11 +145,6 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
     const char *src1_base = (const char *) params->src1.data;
     char       *dst_base  = (char *) params->dst.data;
 
-#ifdef BUILD_FOR_UBERKERNEL
-    // evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
-    // et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     if ((M % TILE_M) != 0) return 0;
     if ((K % TILE_K) != 0) return 0;
 

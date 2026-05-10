@@ -110,16 +110,6 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     const char * v_data   = (const char *) v->data;
     char * dst_data       = (char *) dst->data;
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(q->data, tensor_bytes(q));
-    evict_region_past_l2(k->data, tensor_bytes(k));
-    evict_region_past_l2(v->data, tensor_bytes(v));
-    if (mask) {
-        evict_region_past_l2(mask->data, tensor_bytes(mask));
-    }
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     const int k_type = k->type;
     const int v_type = v->type;
     const int64_t k_nb0 = k->nb[0];

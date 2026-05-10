@@ -55,11 +55,6 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     const char* src1_base = (const char*)params->src1.data;
     char*       dst_base  = (char*)params->dst.data;
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     setup_cache_scp();
 #if CACHEOP_MAX > 0 || REP_RATE > 0
     ucache_control(1, REP_RATE, CACHEOP_MAX);

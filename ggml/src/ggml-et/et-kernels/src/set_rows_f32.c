@@ -144,14 +144,6 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
         return -1; // Null data pointer
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    // et_barrier(ET_BARRIER_GLOBAL);
-    evict_region_past_l2(src0_data, tensor_bytes(src0));
-    evict_region_past_l2(src1_data, tensor_bytes(src1));
-    et_barrier(ET_BARRIER_GLOBAL);
-    // FENCE;
-#endif
-
     const int64_t ne00 = src0->ne[0];  // Source columns (row width)
     const int64_t ne01 = src0->ne[1];  // Source rows (number of rows to write)
     const int64_t ne02 = src0->ne[2];  // Source batch dimension

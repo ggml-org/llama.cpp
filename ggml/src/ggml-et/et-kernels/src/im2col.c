@@ -55,12 +55,6 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
         return -1;
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    evict_region_past_l2(src1->data, tensor_bytes(src1));
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     if (!((dst->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) ||
           (dst->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32)))) {
         return -1;

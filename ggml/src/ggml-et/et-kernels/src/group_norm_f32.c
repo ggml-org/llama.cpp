@@ -57,11 +57,6 @@ int entry_point(struct ggml_et_group_norm_params * params, void * env) {
         return -1;
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     const int32_t n_groups = params->n_groups;
     const float eps = params->eps;
 

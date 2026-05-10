@@ -70,11 +70,6 @@ int entry_point(struct ggml_et_set_params * params, void * env) {
         return -1;
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src1->data, tensor_bytes(src1));
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     const int64_t ne10 = src1->ne[0];
     const int64_t ne11 = src1->ne[1];
     const int64_t ne12 = src1->ne[2];

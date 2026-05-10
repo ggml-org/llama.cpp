@@ -49,10 +49,6 @@ int entry_point(struct ggml_et_sum_rows_params* params, void* env) {
         return -1;
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
 
     const int64_t ne00 = src0->ne[0];  // Row length (to be summed)
     const int64_t ne01 = src0->ne[1];

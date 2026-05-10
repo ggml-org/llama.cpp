@@ -49,11 +49,6 @@ int entry_point(struct ggml_et_sqr_params* params, void* env) {
         return -1; // Null data pointer
     }
 
-#ifdef BUILD_FOR_UBERKERNEL
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
-    et_barrier(ET_BARRIER_GLOBAL);
-#endif
-
     // Both src and dst are contiguous F32: flatten and distribute by cache lines
     const int64_t total_elements = dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3];
     const int64_t elements_per_cacheline = 16;  // 64 bytes / 4 bytes per float
