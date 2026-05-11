@@ -43,11 +43,11 @@ The following releases are verified and recommended:
 
 ### Ubuntu 24.04
 
-The release packages for Ubuntu 24.04 x64 (FP32/FP16) only include the binary files of the llama.cpp SYCL backend. They require the target machine to have pre-installed Intel GPU drivers and oneAPI packages that are the same version as the build package. To get the version and installation info, refer to release.yml: ubuntu-24-sycl -> Download & Install oneAPI.
+The release packages for Ubuntu 24.04 x64 (FP32/FP16) only include the binary files of the llama.cpp SYCL backend. They require the target machine to have pre-installed Intel GPU drivers and oneAPI packages that are the same version as the build package. To get the version and installation info, refer to [.github/workflows/release.yml#L713](../../.github/workflows/release.yml#L713): ubuntu-24-sycl -> Download & Install oneAPI.
 
-It is recommended to use them with Intel Docker.
+It is recommended to use them with [Intel Docker](https://hub.docker.com/r/intel/deep-learning-essentials).
 
-The packages for FP32 and FP16 would have different accuracy and performance on LLMs. Please choose it acording to the test result.
+The packages for FP32 and FP16 would have different accuracy and performance on LLMs. Please choose it according to the test result.
 
 ## News
 
@@ -190,7 +190,7 @@ docker run -it --rm -v "/path/to/models:/models" --device /dev/dri/renderD128:/d
 
   - **Intel GPU**
 
-Intel data center GPUs drivers installation guide and download page can be found here: [Get intel dGPU Drivers](https://dgpu-docs.intel.com/driver/installation.html#ubuntu-install-steps).
+Intel data center GPUs drivers installation guide and download page can be found here: [Get Intel dGPU Drivers](https://dgpu-docs.intel.com/driver/installation.html#ubuntu-install-steps).
 
 *Note*: for client GPUs *(iGPU & Arc A-Series)*, please refer to the [client iGPU driver installation](https://dgpu-docs.intel.com/driver/client/overview.html).
 
@@ -240,7 +240,7 @@ Please follow the instructions for downloading and installing the Toolkit for Li
 
 Following guidelines/code snippets assume the default installation values. Otherwise, please make sure the necessary changes are reflected where applicable.
 
-Upon a successful installation, SYCL is enabled for the available intel devices, along with relevant libraries such as oneAPI oneDNN for Intel GPUs.
+Upon a successful installation, SYCL is enabled for the available Intel devices, along with relevant libraries such as oneAPI oneDNN for Intel GPUs.
 
 |Verified release|
 |-|
@@ -319,7 +319,7 @@ Similar to the native `sycl-ls`, available SYCL devices can be queried as follow
 ./build/bin/llama-ls-sycl-device
 ```
 
-This command will only display the selected backend that is supported by SYCL. The default backend is level_zero. For example, in a system with 2 *intel GPU* it would look like the following:
+This command will only display the selected backend that is supported by SYCL. The default backend is level_zero. For example, in a system with 2 *Intel GPU* it would look like the following:
 ```
 found 2 SYCL devices:
 
@@ -465,7 +465,7 @@ In the oneAPI command line, run the following to print the available SYCL device
 sycl-ls.exe
 ```
 
-There should be one or more *level-zero* GPU devices displayed as **[ext_oneapi_level_zero:gpu]**. Below is example of such output detecting an *intel Iris Xe* GPU as a Level-zero SYCL device:
+There should be one or more *level-zero* GPU devices displayed as **[ext_oneapi_level_zero:gpu]**. Below is example of such output detecting an *Intel Iris Xe* GPU as a Level-zero SYCL device:
 
 Output (example):
 ```
@@ -731,7 +731,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 |-------------------|------------------|---------------------------------------------------------------------------------------------------------------------------|
 | GGML_SYCL_DEBUG   | 0 (default) or 1 | Enable log function by macro: GGML_SYCL_DEBUG                                                                             |
 | GGML_SYCL_ENABLE_FLASH_ATTN | 1 (default) or 0| Enable Flash-Attention. It can reduce memory usage. The performance impact depends on the LLM.|
-| GGML_SYCL_DISABLE_OPT | 0 (default) or 1 | Disable optimize features for Intel GPUs. (Recommended to 1 for intel devices older than Gen 10) |
+| GGML_SYCL_DISABLE_OPT | 0 (default) or 1 | Disable optimize features for Intel GPUs. (Recommended to 1 for Intel devices older than Gen 10) |
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because SYCL Graph is still on development, no better performance. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
@@ -773,8 +773,8 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
 
 - `Split-mode:[row]` is not supported.
 
-- Missed the AOT (Ahead-of-Time) in buiding.
-  - Good: build quickly, smaller size of binary file.
+- Missed the AOT (Ahead-of-Time) in building.
+  - Good: Builds quickly, smaller size of binary file.
   - Bad: The startup is slow (JIT) in first time, but subsequent performance is unaffected.
 
 ## Q&A
