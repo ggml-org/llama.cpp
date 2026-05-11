@@ -370,6 +370,96 @@ kernel void kernel_restore_block_q4_1_noshuffle(
     }
 }
 
+kernel void kernel_convert_block_q4_1_trans4_ns(
+    __global struct block_q4_1 * src0,
+    __global uint * dst_q,
+    __global half * dst_d,
+    __global half * dst_m,
+    uint ne00,
+    uint ne01
+) {
+    uint i00 = get_global_id(1);
+    uint i01 = get_global_id(0);
+    uint i02 = get_global_id(2);
+
+    uint ne00_blk = ne00 / QK4_1;
+    uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
+    uint dst_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
+
+    global struct block_q4_1 * b = src0 + src_blk_offset;
+    dst_d[dst_blk_offset] = b->d;
+    dst_m[dst_blk_offset] = b->m;
+
+    // extract quantization and unshuffle
+    ushort8 pre_block = ((global ushort8 *)(&(b->qs[0])))[0];
+
+    ushort8 post_block = (ushort8)(0);
+
+    uchar * pre_block_ptr = (uchar *)(&pre_block);
+    uchar * post_block_ptr = (uchar *)(&post_block);
+
+    for (int i = 0; i < QK4_1 / 4; ++i) {
+        uchar x0 = pre_block_ptr[2*i + 0];
+        uchar x1 = pre_block_ptr[2*i + 1];
+
+        post_block_ptr[i + 0        ] = convert_uchar(x0 & 0x0F) | convert_uchar((x1 & 0x0F) << 4);
+        post_block_ptr[i + QK4_1 / 4] = convert_uchar((x0 & 0xF0) >> 4) | convert_uchar(x1 & 0xF0);
+    }
+
+    uint4 q_block = as_uint4(post_block);
+
+    uint offset = i02 * ne00_blk * ne01 * 4 + i00 * ne01 * 4 + i01;
+    dst_q[offset] = q_block.x;
+    dst_q[offset + ne01] = q_block.y;
+    dst_q[offset + ne01 * 2] = q_block.z;
+    dst_q[offset + ne01 * 3] = q_block.w;
+}
+
+kernel void kernel_restore_block_q4_1_trans4_ns(
+    __global uint * src_q,
+    __global half * src_d,
+    __global half * src_m,
+    __global struct block_q4_1 * dst0,
+    uint ne00,
+    uint ne01
+) {
+    int i00 = get_global_id(1);
+    uint i01 = get_global_id(0);
+    uint i02 = get_global_id(2);
+
+    uint ne00_blk = ne00 / QK4_1;
+    uint dst_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
+    uint src_dm_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
+
+    __global struct block_q4_1 * b = dst0 + dst_blk_offset;
+    b->d = src_d[src_dm_offset];
+    b->m = src_m[src_dm_offset];
+
+    // collect transposed quantization parts for a block
+    uint src_q_offset = i02 * ne00_blk * ne01 * 4 + i00 * ne01 * 4 + i01;
+    uint4 q_block;
+    q_block.x = src_q[src_q_offset];
+    q_block.y = src_q[src_q_offset + ne01];
+    q_block.z = src_q[src_q_offset + ne01 * 2];
+    q_block.w = src_q[src_q_offset + ne01 * 3];
+
+    ushort8 post_block = as_ushort8(q_block);
+    ushort8 pre_block = (ushort8)(0);
+
+    uchar * pre_block_ptr = (uchar *)(&pre_block);
+    uchar * post_block_ptr = (uchar *)(&post_block);
+
+    for (int i = 0; i < QK4_0 / 4; ++i) {
+        uchar x0 = post_block_ptr[i + 0];
+        uchar x1 = post_block_ptr[i + QK4_0 / 4];
+
+        pre_block_ptr[2 * i + 0] = convert_uchar(x0 & 0x0F) | convert_uchar((x1 & 0x0F) << 4);
+        pre_block_ptr[2 * i + 1] = convert_uchar((x0 & 0xF0) >> 4) | convert_uchar(x1 & 0xF0);
+    }
+
+    ((__global ushort8 *)(&(b->qs[0])))[0] = pre_block;
+}
+
 //------------------------------------------------------------------------------
 // block_mxfp4
 //------------------------------------------------------------------------------
