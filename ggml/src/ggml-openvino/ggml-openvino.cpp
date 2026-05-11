@@ -841,6 +841,13 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         }
         break;
     }
+    case GGML_OP_SUM_ROWS: {
+        // if the input is PERMUTE skip
+        if (op->src[0]->op == GGML_OP_PERMUTE) {
+            return true;
+        }
+         break;
+    }
     case GGML_OP_FLASH_ATTN_EXT: {
         if (op->src[4] != nullptr) {
             // GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with sinks\n");
@@ -986,6 +993,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
                                                  GGML_OP_FLASH_ATTN_EXT,
                                                  GGML_OP_CPY,
                                                  GGML_OP_L2_NORM,
+                                                 GGML_OP_SUM_ROWS,
                                                  GGML_OP_PAD,
                                                  GGML_OP_SSM_CONV,
                                                  GGML_OP_GATED_DELTA_NET,

@@ -1260,6 +1260,7 @@ std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
         {GGML_OP_ROPE,            "GGML_OP_ROPE"           },
         {GGML_OP_SCALE,           "GGML_OP_SCALE"          },
         {GGML_OP_SOFT_MAX,        "GGML_OP_SOFT_MAX"       },
+        {GGML_OP_SUM_ROWS,        "GGML_OP_SUM_ROWS"       },
         {GGML_OP_SUB,             "GGML_OP_SUB"            },
         {GGML_OP_TRANSPOSE,       "GGML_OP_TRANSPOSE"      },
         {GGML_OP_VIEW,            "GGML_OP_VIEW"           },

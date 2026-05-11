@@ -19,6 +19,7 @@ GGML_OP_CONVERTER(translate_reshape);
 GGML_OP_CONVERTER(translate_rms_norm);
 GGML_OP_CONVERTER(translate_norm);
 GGML_OP_CONVERTER(translate_l2_norm);
+GGML_OP_CONVERTER(translate_sum_rows);
 GGML_OP_CONVERTER(translate_rope);
 GGML_OP_CONVERTER(translate_scale);
 GGML_OP_CONVERTER(translate_unary_silu);
