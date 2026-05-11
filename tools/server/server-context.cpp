@@ -833,6 +833,16 @@ private:
 
             auto mparams_mtp = common_model_params_to_llama(params_base);
             mparams_mtp.override_arch = mtp_arch;
+            // The MTP arch registers tensors near both the start (tok_embd)
+            // and the end (output, nextn.*) of the GGUF. With mmap-backed
+            // buffers, the backend allocates a buffer spanning the full
+            // [first, last) tensor-offset range — for Qwen 3.6 27B that
+            // ends up covering nearly the entire file, allocating a
+            // ~model-sized Metal duplicate of the main model and OOMing
+            // Apple Silicon devices with tight working sets (notably
+            // Apple10 / M4-class). Force non-mmap allocation so the MTP
+            // buffer is sized to the registered tensors only.
+            mparams_mtp.use_mmap = false;
 
             model_mtp.reset(llama_model_load_from_file(params_base.model.path.c_str(), mparams_mtp));
             if (model_mtp == nullptr) {
