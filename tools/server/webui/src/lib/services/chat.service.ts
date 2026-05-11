@@ -76,7 +76,7 @@ export class ChatService {
 	 */
 
 	/**
-	 * Sends a chat completion request to the llama.cpp server.
+	 * Sends a chat completion request to the llama-server.
 	 * Supports both streaming and non-streaming responses with comprehensive parameter configuration.
 	 * Automatically converts database messages with attachments to the appropriate API format.
 	 *

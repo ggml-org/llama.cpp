@@ -125,7 +125,7 @@
 </script>
 
 <svelte:head>
-	<title>{activeConversation()?.name || 'Chat'} - llama.cpp</title>
+	<title>{activeConversation()?.name || 'Chat'} - {import.meta.env.VITE_PUBLIC_APP_NAME}</title>
 </svelte:head>
 
 <DialogModelNotAvailable
