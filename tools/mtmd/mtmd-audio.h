@@ -103,6 +103,12 @@ struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
 
   private:
     mtmd_audio_cache cache;
+
+    static void worker_thread(int ith, const float * window_func, int window_size,
+                              const std::vector<float> & samples, int n_samples,
+                              int frame_size, int frame_step, int n_threads,
+                              int n_fft_bins,
+                              const mtmd_audio_cache & cache, mtmd_audio_mel & mel);
 };
 
 //

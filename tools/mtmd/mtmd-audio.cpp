@@ -842,7 +842,7 @@ bool mtmd_audio_preprocessor_gemma4a::preprocess(const float *                 s
 // mtmd_audio_preprocessor_parakeet implementation
 //
 
-static void log_mel_spectrogram_parakeet_worker_thread(
+void mtmd_audio_preprocessor_parakeet::worker_thread(
                              int   ith,
                      const float * window_func,
                              int   window_size,
@@ -851,13 +851,13 @@ static void log_mel_spectrogram_parakeet_worker_thread(
                              int   frame_size,
                              int   frame_step,
                              int   n_threads,
-             const filter_params & params,
+                             int   n_fft_bins,
           const mtmd_audio_cache & cache,
                   mtmd_audio_mel & mel) {
     std::vector<float> fft_in(frame_size * 2, 0.0);
     std::vector<float> fft_out(frame_size * 2 * 2 * 2);
 
-    int n_fb = params.n_fft_bins;
+    int n_fb = n_fft_bins;
     int i = ith;
 
     GGML_ASSERT(n_fb == 1 + (frame_size / 2));
@@ -975,7 +975,7 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
     const int n_threads = 4;
 
     if (n_threads == 1) {
-        log_mel_spectrogram_parakeet_worker_thread(0,
+        worker_thread(0,
                 window_func,
                 window_size,
                 samples_padded,
@@ -983,14 +983,14 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
                 frame_size,
                 frame_step,
                 1,
-                params,
+                params.n_fft_bins,
                 cache,
                 out_full);
     } else {
         std::vector<std::thread> workers(n_threads - 1);
         for (int iw = 0; iw < n_threads - 1; ++iw) {
             workers[iw] = std::thread(
-                log_mel_spectrogram_parakeet_worker_thread, iw + 1,
+                worker_thread, iw + 1,
                 window_func,
                 window_size,
                 std::cref(samples_padded),
@@ -998,13 +998,13 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
                 frame_size,
                 frame_step,
                 n_threads,
-                std::cref(params),
+                params.n_fft_bins,
                 std::cref(cache),
                 std::ref(out_full)
             );
         }
 
-        log_mel_spectrogram_parakeet_worker_thread(0,
+        worker_thread(0,
                 window_func,
                 window_size,
                 samples_padded,
@@ -1012,7 +1012,7 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
                 frame_size,
                 frame_step,
                 n_threads,
-                params,
+                params.n_fft_bins,
                 cache,
                 out_full);
 
