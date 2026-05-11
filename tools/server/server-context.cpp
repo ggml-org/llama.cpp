@@ -2939,8 +2939,11 @@ private:
                     const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
 
                     // only create a checkpoint at the boundary before the latest user input
-                    if (checkpoint_before_last_user_token >= 0) {
-                        if (slot.prompt.n_tokens() - n_tokens_cur != checkpoint_before_last_user_token) {
+                    if (do_checkpoint && checkpoint_before_last_user_token >= 0) {
+                        const int32_t checkpoint_token = slot.prompt.n_tokens() - n_tokens_cur;
+                        if (checkpoint_token != checkpoint_before_last_user_token) {
+                            SLT_INF(slot, "skip checkpoint at %d, expected boundary before user input = %d\n",
+                                    checkpoint_token, checkpoint_before_last_user_token);
                             do_checkpoint = false;
                         }
                     }

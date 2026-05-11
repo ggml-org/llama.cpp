@@ -624,10 +624,6 @@ task_params server_task::params_from_json_cmpl(
         for (const auto & span : message_spans) {
             const std::string role = json_value(span, "role", std::string());
             const int32_t pos      = json_value(span, "pos", -1);
-            const int32_t len      = json_value(span, "len", -1);
-
-/*            SRV_INF("message_span: role=%s, pos=%d, len=%d\n",
-                    role.c_str(), pos, len);*/
 
             if (role == "user") {
                 last_user_pos = pos;
