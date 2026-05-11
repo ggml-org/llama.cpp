@@ -622,16 +622,14 @@ void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
 }
 
 template <int block_size>
-static __global__ void rms_norm_mul_q8_1_f32(
-        const float * __restrict__ x,
-        const float * __restrict__ weight,
-        block_q8_1  * __restrict__ dst,
-        const int     ncols,
-        const int64_t stride_row,
-        const int64_t stride_channel,
-        const int64_t stride_sample,
-        const float   eps) {
-
+static __global__ void rms_norm_mul_q8_1_f32(const float * __restrict__ x,
+                                             const float * __restrict__ weight,
+                                             block_q8_1 * __restrict__ dst,
+                                             const int     ncols,
+                                             const int64_t stride_row,
+                                             const int64_t stride_channel,
+                                             const int64_t stride_sample,
+                                             const float   eps) {
     const int nrows     = gridDim.x;
     const int nchannels = gridDim.y;
 
@@ -640,8 +638,8 @@ static __global__ void rms_norm_mul_q8_1_f32(
     const int sample  = blockIdx.z;
     const int tid     = threadIdx.x;
 
-    x   += sample*stride_sample + channel*stride_channel + row*stride_row;
-    dst += ((sample*nchannels + channel)*nrows + row) * (ncols / QK8_1);
+    x += sample * stride_sample + channel * stride_channel + row * stride_row;
+    dst += ((sample * nchannels + channel) * nrows + row) * (ncols / QK8_1);
 
     float partial_sum_sq = 0.0f;
     for (int col = tid; col < ncols; col += block_size) {
@@ -650,8 +648,8 @@ static __global__ void rms_norm_mul_q8_1_f32(
     }
 
     extern __shared__ float s_sum[];
-    float sum_sq = block_reduce<block_reduce_method::SUM, block_size>(partial_sum_sq, s_sum);
-    const float scale = rsqrtf(sum_sq / ncols + eps);
+    float                   sum_sq = block_reduce<block_reduce_method::SUM, block_size>(partial_sum_sq, s_sum);
+    const float             scale  = rsqrtf(sum_sq / ncols + eps);
 
     const int warp_id    = tid / WARP_SIZE;
     const int lane_id    = tid % WARP_SIZE;
@@ -679,14 +677,16 @@ static __global__ void rms_norm_mul_q8_1_f32(
     }
 }
 
-void ggml_cuda_op_rms_norm_mul_q8_1(ggml_backend_cuda_context & ctx, ggml_tensor * rms_norm_node, ggml_tensor * mul_node) {
+void ggml_cuda_op_rms_norm_mul_q8_1(ggml_backend_cuda_context & ctx,
+                                    ggml_tensor *               rms_norm_node,
+                                    ggml_tensor *               mul_node) {
     const ggml_tensor * src    = rms_norm_node->src[0];
     const ggml_tensor * weight = (mul_node->src[0] == rms_norm_node) ? mul_node->src[1] : mul_node->src[0];
 
     const float * src_d    = (const float *) src->data;
     const float * weight_d = (const float *) weight->data;
 
-    block_q8_1 * dst_d = (block_q8_1 *) mul_node->data;
+    block_q8_1 * dst_d  = (block_q8_1 *) mul_node->data;
     cudaStream_t stream = ctx.stream();
 
     float eps;
@@ -698,7 +698,7 @@ void ggml_cuda_op_rms_norm_mul_q8_1(ggml_backend_cuda_context & ctx, ggml_tensor
     const int64_t ne03 = src->ne[3];
 
     GGML_ASSERT(ne00 % QK8_1 == 0);
-    GGML_ASSERT(src->nb[0]    == sizeof(float));
+    GGML_ASSERT(src->nb[0] == sizeof(float));
     GGML_ASSERT(weight->ne[0] == ne00 && weight->ne[1] == 1 && weight->ne[2] == 1 && weight->ne[3] == 1);
     GGML_ASSERT(weight->nb[0] == sizeof(float));
 
@@ -708,11 +708,11 @@ void ggml_cuda_op_rms_norm_mul_q8_1(ggml_backend_cuda_context & ctx, ggml_tensor
 
     const dim3 blocks_num(ne01, ne02, ne03);
     if (ne00 < 1024) {
-        rms_norm_mul_q8_1_f32<256><<<blocks_num, dim3(256), 32*sizeof(float), stream>>>(
-            src_d, weight_d, dst_d, ne00, s01, s02, s03, eps);
+        rms_norm_mul_q8_1_f32<256>
+            <<<blocks_num, dim3(256), 32 * sizeof(float), stream>>>(src_d, weight_d, dst_d, ne00, s01, s02, s03, eps);
     } else {
-        rms_norm_mul_q8_1_f32<1024><<<blocks_num, dim3(1024), 32*sizeof(float), stream>>>(
-            src_d, weight_d, dst_d, ne00, s01, s02, s03, eps);
+        rms_norm_mul_q8_1_f32<1024>
+            <<<blocks_num, dim3(1024), 32 * sizeof(float), stream>>>(src_d, weight_d, dst_d, ne00, s01, s02, s03, eps);
     }
 }
 

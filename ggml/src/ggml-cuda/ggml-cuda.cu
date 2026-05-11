@@ -2344,12 +2344,13 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
     return use_mul_mat_vec_f;
 }
 
-static inline bool ggml_cuda_mmvq_eligible(
-        const ggml_tensor * src0, const ggml_tensor * src1,
-        const ggml_tensor * dst,  const bool bad_padding_clear) {
+static inline bool ggml_cuda_mmvq_eligible(const ggml_tensor * src0,
+                                           const ggml_tensor * src1,
+                                           const ggml_tensor * dst,
+                                           const bool          bad_padding_clear) {
     return ggml_is_quantized(src0->type) && !bad_padding_clear &&
-           (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_Q8_1) &&
-           dst->type == GGML_TYPE_F32 && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+           (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_Q8_1) && dst->type == GGML_TYPE_F32 &&
+           src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
 }
 
 static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
@@ -3530,8 +3531,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 
         //rms norm only supports F32; Q8_1 mul output is only valid for the 2-op fusion
         const bool mul_q8_1_ok = (ops.size() == 2) && (mul->type == GGML_TYPE_Q8_1);
-        if (mul->src[0]->type != GGML_TYPE_F32 ||
-            mul->src[1]->type != GGML_TYPE_F32 ||
+        if (mul->src[0]->type != GGML_TYPE_F32 || mul->src[1]->type != GGML_TYPE_F32 ||
             (mul->type != GGML_TYPE_F32 && !mul_q8_1_ok)) {
             return false;
         }
@@ -4361,30 +4361,50 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
         ggml_tensor * rms = cgraph->nodes[i];
         ggml_tensor * mul = cgraph->nodes[i + 1];
 
-        if (rms->op   != GGML_OP_RMS_NORM)  continue;
-        if (mul->op   != GGML_OP_MUL)       continue;
-        if (mul->type != GGML_TYPE_F32)      continue;
-        if (mul->src[0] != rms && mul->src[1] != rms) continue;
+        if (rms->op != GGML_OP_RMS_NORM) {
+            continue;
+        }
+        if (mul->op != GGML_OP_MUL) {
+            continue;
+        }
+        if (mul->type != GGML_TYPE_F32) {
+            continue;
+        }
+        if (mul->src[0] != rms && mul->src[1] != rms) {
+            continue;
+        }
 
-        if (mul->ne[0] % MATRIX_ROW_PADDING != 0) continue;
-        if (mul->ne[0] % QK8_1 != 0)              continue;
+        if (mul->ne[0] % MATRIX_ROW_PADDING != 0) {
+            continue;
+        }
+        if (mul->ne[0] % QK8_1 != 0) {
+            continue;
+        }
 
         const int32_t mul_use_count = ggml_node_get_use_count(cgraph, i + 1);
-        if (mul_use_count == 0) continue;
+        if (mul_use_count == 0) {
+            continue;
+        }
         int  found    = 0;
         bool all_mmvq = true;
 
         for (int j = i + 2; j < cgraph->n_nodes && found < mul_use_count && all_mmvq; j++) {
             ggml_tensor * cand = cgraph->nodes[j];
-            if (cand->src[0] != mul && cand->src[1] != mul) continue;
+            if (cand->src[0] != mul && cand->src[1] != mul) {
+                continue;
+            }
             found++;
-            const bool is_mmvq_op     = cand->op == GGML_OP_MUL_MAT || cand->op == GGML_OP_MUL_MAT_ID;
-            const bool src0_quantized = cand->src[0] && ggml_is_quantized(cand->src[0]->type);
-            const int64_t batch       = (cand->op == GGML_OP_MUL_MAT_ID) ? cand->ne[2] : cand->ne[1];
-            if (!is_mmvq_op || !src0_quantized || batch > MMVQ_MAX_BATCH_SIZE) all_mmvq = false;
+            const bool    is_mmvq_op     = cand->op == GGML_OP_MUL_MAT || cand->op == GGML_OP_MUL_MAT_ID;
+            const bool    src0_quantized = cand->src[0] && ggml_is_quantized(cand->src[0]->type);
+            const int64_t batch          = (cand->op == GGML_OP_MUL_MAT_ID) ? cand->ne[2] : cand->ne[1];
+            if (!is_mmvq_op || !src0_quantized || batch > MMVQ_MAX_BATCH_SIZE) {
+                all_mmvq = false;
+            }
         }
 
-        if (!all_mmvq || found != mul_use_count) continue;
+        if (!all_mmvq || found != mul_use_count) {
+            continue;
+        }
 
         mul->type  = GGML_TYPE_Q8_1;
         mul->nb[0] = ggml_type_size(GGML_TYPE_Q8_1);
