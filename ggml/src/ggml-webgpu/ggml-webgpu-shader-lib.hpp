@@ -543,23 +543,12 @@ struct ggml_webgpu_flash_attn_pipeline_key {
     bool      has_sinks;
     bool      uses_logit_softcap;
     uint32_t  path;
-    uint32_t  q_tile;
-    uint32_t  kv_tile;
-    uint32_t  wg_size;
-    uint32_t  min_subgroup_size;
-    uint32_t  max_subgroup_size;
-    uint32_t  sg_mat_m;
-    uint32_t  sg_mat_n;
-    uint32_t  sg_mat_k;
 
     bool operator==(const ggml_webgpu_flash_attn_pipeline_key & other) const {
         return q_type == other.q_type && kv_type == other.kv_type && dst_type == other.dst_type &&
                head_dim_qk == other.head_dim_qk && head_dim_v == other.head_dim_v && kv_direct == other.kv_direct &&
                kv_overlap == other.kv_overlap && has_mask == other.has_mask && has_sinks == other.has_sinks &&
-               uses_logit_softcap == other.uses_logit_softcap && path == other.path && q_tile == other.q_tile &&
-               kv_tile == other.kv_tile && wg_size == other.wg_size && min_subgroup_size == other.min_subgroup_size &&
-               max_subgroup_size == other.max_subgroup_size && sg_mat_m == other.sg_mat_m &&
-               sg_mat_n == other.sg_mat_n && sg_mat_k == other.sg_mat_k;
+               uses_logit_softcap == other.uses_logit_softcap && path == other.path;
     }
 };
 
@@ -577,14 +566,6 @@ struct ggml_webgpu_flash_attn_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.has_sinks);
         ggml_webgpu_hash_combine(seed, key.uses_logit_softcap);
         ggml_webgpu_hash_combine(seed, key.path);
-        ggml_webgpu_hash_combine(seed, key.q_tile);
-        ggml_webgpu_hash_combine(seed, key.kv_tile);
-        ggml_webgpu_hash_combine(seed, key.wg_size);
-        ggml_webgpu_hash_combine(seed, key.min_subgroup_size);
-        ggml_webgpu_hash_combine(seed, key.max_subgroup_size);
-        ggml_webgpu_hash_combine(seed, key.sg_mat_m);
-        ggml_webgpu_hash_combine(seed, key.sg_mat_n);
-        ggml_webgpu_hash_combine(seed, key.sg_mat_k);
         return seed;
     }
 };
@@ -660,14 +641,6 @@ inline ggml_webgpu_flash_attn_pipeline_key ggml_webgpu_flash_attn_make_pipeline_
     key.has_mask                            = has_mask;
     key.has_sinks                           = has_sinks;
     key.uses_logit_softcap                  = ggml_get_op_params_f32(context.dst, 2) != 0.0f;
-    key.q_tile                              = decisions.q_tile;
-    key.kv_tile                             = decisions.kv_tile;
-    key.wg_size                             = decisions.wg_size;
-    key.min_subgroup_size                   = ggml_webgpu_effective_min_subgroup_size(context);
-    key.max_subgroup_size                   = ggml_webgpu_effective_max_subgroup_size(context);
-    key.sg_mat_m                            = context.sg_mat_m;
-    key.sg_mat_n                            = context.sg_mat_n;
-    key.sg_mat_k                            = context.sg_mat_k;
     key.path                                = decisions.path;
     return key;
 }
