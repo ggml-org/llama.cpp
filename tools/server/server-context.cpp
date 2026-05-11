@@ -1839,13 +1839,34 @@ private:
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
-            // make room for the new checkpoint, if needed
-            const auto & cur = slot.prompt.checkpoints.front();
+            auto & checkpoints = slot.prompt.checkpoints;
 
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                    cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.data.size() / 1024 / 1024);
+            auto erase_it = checkpoints.begin();
 
-            slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
+            if (checkpoints.size() >= 3) {
+                auto prev = checkpoints.begin();
+                auto it   = prev; ++it;
+                auto next = it;   ++next;
+
+                erase_it = it;
+                llama_pos best_gap = next->n_tokens - prev->n_tokens;
+
+                for (; next != checkpoints.end(); ++prev, ++it, ++next) {
+                    const llama_pos gap = next->n_tokens - prev->n_tokens;
+
+                    if (gap < best_gap) {
+                        best_gap = gap;
+                        erase_it = it;
+                    }
+                }
+            }
+
+            const auto & old = *erase_it;
+
+            SLT_WRN(slot, "erasing redundant context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                    old.pos_min, old.pos_max, old.n_tokens, (float) old.data.size() / 1024 / 1024);
+
+            checkpoints.erase(erase_it);
         }
 
         auto & cur = slot.prompt.checkpoints.emplace_back();
