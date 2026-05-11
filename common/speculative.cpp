@@ -806,8 +806,9 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
 
 struct common_speculative_state_ngram_cache : public common_speculative_state {
     uint16_t n_draft;
-    bool save_dynamic;
-    bool save_static;
+
+    const std::string lookup_cache_static;
+    const std::string lookup_cache_dynamic;
 
     common_ngram_cache ngram_cache_context;
     common_ngram_cache ngram_cache_dynamic;
@@ -817,32 +818,41 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
 
     common_speculative_state_ngram_cache(
             const enum common_speculative_type type,
-            const std::string & path_static,
-            const std::string & path_dynamic,
             uint16_t            n_draft,
-            bool                save_dynamic,
-            bool                save_static)
+            const std::string & lookup_cache_static,
+            const std::string & lookup_cache_dynamic)
         : common_speculative_state(type)
         , n_draft(n_draft)
-        , save_dynamic(save_dynamic)
-        , save_static(save_static)
+        , lookup_cache_static(lookup_cache_static)
+        , lookup_cache_dynamic(lookup_cache_dynamic)
     {
-        if (!path_static.empty()) {
+        if (!lookup_cache_static.empty()) {
             try {
-                ngram_cache_static = common_ngram_cache_load(path_static);
+                ngram_cache_static = common_ngram_cache_load(lookup_cache_static);
             } catch (...) {
-                LOG_ERR("failed to open static lookup cache: %s", path_static.c_str());
+                LOG_ERR("failed to open static lookup cache: %s", lookup_cache_static.c_str());
                 GGML_ABORT("Couldn't read static lookup cache");
             }
         }
 
-        if (!path_dynamic.empty()) {
+        if (!lookup_cache_dynamic.empty()) {
             try {
-                ngram_cache_dynamic = common_ngram_cache_load(path_dynamic);
+                ngram_cache_dynamic = common_ngram_cache_load(lookup_cache_dynamic);
             } catch (...) {
-                LOG_ERR("failed to open dynamic lookup cache: %s", path_dynamic.c_str());
+                LOG_ERR("failed to open dynamic lookup cache: %s", lookup_cache_dynamic.c_str());
                 GGML_ABORT("Couldn't read dynamic lookup cache");
             }
+        }
+    }
+
+    ~common_speculative_state_ngram_cache() override {
+        if (!lookup_cache_static.empty()) {
+            common_ngram_cache_merge(ngram_cache_static, ngram_cache_context);
+            common_ngram_cache_save(ngram_cache_static, lookup_cache_static);
+        }
+        if (!lookup_cache_dynamic.empty()) {
+            common_ngram_cache_merge(ngram_cache_dynamic, ngram_cache_context);
+            common_ngram_cache_save(ngram_cache_dynamic, lookup_cache_dynamic);
         }
     }
 
@@ -922,16 +932,13 @@ static common_ngram_map get_common_ngram_map(
     return common_ngram_map(size_key, size_value, key_only, min_hits);
 }
 
-static common_speculative_state_ngram_cache create_state_ngram_cache(
-        const std::string & path_static, const std::string & path_dynamic,
-        const common_speculative_config & config) {
-    uint16_t n_draft = 8; // TODO get from config?
+static common_speculative_state_ngram_cache create_state_ngram_cache(const common_speculative_config & config) {
 
-    // TODO bool param in common/common.h to set save_static/save_dynamic?
-    bool save_static = false;
-    bool save_dynamic = false;
-
-    common_speculative_state_ngram_cache state(config.type, path_static, path_dynamic, n_draft, save_static, save_dynamic);
+    common_speculative_state_ngram_cache state(
+            config.type,
+            config.params.ngram_cache.n_draft,
+            config.params.ngram_cache.lookup_cache_static,
+            config.params.ngram_cache.lookup_cache_dynamic);
 
     return state;
 }
@@ -1089,7 +1096,7 @@ common_speculative * common_speculative_init(
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE: {
-                auto state = create_state_ngram_cache(params.ngram_cache.lookup_cache_static, params.ngram_cache.lookup_cache_dynamic, config);
+                auto state = create_state_ngram_cache(config);
                 impls.push_back(std::make_unique<common_speculative_state_ngram_cache>(state));
                 break;
             }
