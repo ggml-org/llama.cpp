@@ -726,6 +726,10 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
         cell_ranges.emplace_back(cell_range_begin, size);
     }
 
+    if (flags % LLAMA_STATE_SEQ_FLAGS_ON_DEVICE && cell_ranges.size() > 1) {
+        GGML_ABORT("cannot save/load multiple ranges of cells to/from device memory\n");
+    }
+
     // DEBUG CHECK: Sum of cell counts in ranges should equal the total cell count
     uint32_t cell_count_check = 0;
     for (const auto & range : cell_ranges) {
@@ -784,7 +788,7 @@ void llama_memory_recurrent::state_write_data(llama_io_write_i & io, const std::
     const uint32_t n_layer = hparams.n_layer;
 
     io.write(&s_trans, sizeof(s_trans));
-    io.write(&n_layer,   sizeof(n_layer));
+    io.write(&n_layer, sizeof(n_layer));
 
     // Iterate and write all the R tensors first, each row is a cell
     // Get whole range at a time

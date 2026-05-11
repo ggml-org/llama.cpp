@@ -62,6 +62,12 @@ def test_router_chat_completion_stream(model: str, success: bool):
         assert content == ""
 
 
+def _get_model_ids(is_reload: bool) -> set[str]:
+    res = server.make_request("GET", "/models" + ("?reload=1" if is_reload else ""))
+    assert res.status_code == 200
+    return {item["id"] for item in res.body.get("data", [])}
+
+
 def _get_model_status(model_id: str) -> str:
     res = server.make_request("GET", "/models")
     assert res.status_code == 200
@@ -205,3 +211,45 @@ def test_router_api_key_required():
     )
     assert authed.status_code == 200
     assert "error" not in authed.body
+
+
+def test_router_reload_models():
+    """POST /models/reload re-reads the INI preset and updates the model list."""
+    global server
+
+    preset_path = os.path.join(TMP_DIR, "test_reload.ini")
+
+    # Initial preset: two models
+    with open(preset_path, "w") as f:
+        f.write(
+            "[model-reload-a]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+            "\n"
+            "[model-reload-b]\n"
+            "hf-repo = ggml-org/test-model-stories260K-infill\n"
+        )
+
+    server.models_preset = preset_path
+    server.start()
+
+    ids = _get_model_ids(is_reload=False)
+    assert "model-reload-a" in ids
+    assert "model-reload-b" in ids
+
+    # Updated preset: remove a, keep b unchanged, add c
+    with open(preset_path, "w") as f:
+        f.write(
+            "[model-reload-b]\n"
+            "hf-repo = ggml-org/test-model-stories260K-infill\n"
+            "\n"
+            "[model-reload-c]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+        )
+
+    try:
+        ids = _get_model_ids(is_reload=True)
+        assert "model-reload-a" not in ids, "removed model should no longer appear"
+        assert "model-reload-b" in ids, "unchanged model should still appear"
+        assert "model-reload-c" in ids, "newly added model should appear"
+    finally:
+        os.remove(preset_path)

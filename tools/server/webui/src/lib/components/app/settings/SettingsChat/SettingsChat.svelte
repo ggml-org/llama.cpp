@@ -1,11 +1,11 @@
 <script lang="ts">
-	import SettingsChatFooter from './SettingsChatFooter.svelte';
-	import SettingsChatFields from './SettingsChatFields.svelte';
-	import SettingsChatToolsTab from './SettingsChatToolsTab.svelte';
-	import SettingsChatImportExportTab from './SettingsChatImportExportTab.svelte';
 	import {
 		SettingsChatDesktopSidebar,
-		SettingsChatMobileHeader
+		SettingsChatFields,
+		SettingsChatImportExportTab,
+		SettingsChatMobileHeader,
+		SettingsChatToolsTab,
+		SettingsFooter
 	} from '$lib/components/app/settings';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
@@ -15,6 +15,7 @@
 		SETTINGS_SECTION_TITLES,
 		type SettingsSection
 	} from '$lib/constants';
+	import { RouterService } from '$lib/services/router.service';
 	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui';
 	import { fade } from 'svelte/transition';
@@ -22,7 +23,8 @@
 	import { page } from '$app/state';
 	import { setChatSettingsConfigContext } from '$lib/contexts';
 	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
-
+	import { modelsStore } from '$lib/stores/models.svelte';
+	import { isRouterMode } from '$lib/stores/server.svelte';
 	interface Props {
 		initialSection?: string;
 		getSectionHref?: (section: SettingsSection) => string;
@@ -33,13 +35,29 @@
 	let activeSlug = $derived(
 		initialSection ?? (page.params as Record<string, string | undefined>).section ?? 'general'
 	);
+
 	let currentSection = $derived(
 		SETTINGS_CHAT_SECTIONS.find((section) => section.slug === activeSlug) ||
 			SETTINGS_CHAT_SECTIONS[0]
 	);
+
 	let localConfig: SettingsConfigType = $state({ ...config() });
 
 	let mobileHeader: { updateCarousel: () => void } | undefined;
+
+	let fetchInitiated = false;
+
+	$effect(() => {
+		if (isRouterMode() && currentSection.fields && !fetchInitiated) {
+			fetchInitiated = true;
+
+			void modelsStore
+				.fetch()
+				.then(() => modelsStore.fetchRouterModels())
+				.then(() => modelsStore.fetchModalitiesForLoadedModels())
+				.then(() => modelsStore.ensureFirstModelSelected());
+		}
+	});
 
 	function handleThemeChange(newTheme: string) {
 		localConfig.theme = newTheme;
@@ -110,13 +128,15 @@
 		<SettingsChatDesktopSidebar
 			sections={SETTINGS_CHAT_SECTIONS}
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
-			getHref={getSectionHref ?? ((section: SettingsSection) => `#/settings/chat/${section.slug}`)}
+			getHref={getSectionHref ??
+				((section: SettingsSection) => RouterService.settings(section.slug))}
 		/>
 
 		<SettingsChatMobileHeader
 			sections={SETTINGS_CHAT_SECTIONS}
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
-			getHref={getSectionHref ?? ((section: SettingsSection) => `#/settings/chat/${section.slug}`)}
+			getHref={getSectionHref ??
+				((section: SettingsSection) => RouterService.settings(section.slug))}
 			bind:this={mobileHeader}
 		/>
 
@@ -149,7 +169,7 @@
 				</div>
 			</div>
 
-			<SettingsChatFooter onReset={handleReset} onSave={handleSave} />
+			<SettingsFooter onReset={handleReset} onSave={handleSave} />
 		</div>
 	</div>
 </div>
