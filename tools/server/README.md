@@ -1043,16 +1043,23 @@ If query param `?fail_on_no_slot=1` is set, this endpoint will respond with stat
 
 This endpoint is only accessible if `--metrics` is set.
 
-Available metrics:
-- `llamacpp:prompt_tokens_total`: Number of prompt tokens processed.
-- `llamacpp:tokens_predicted_total`: Number of generation tokens processed.
-- `llamacpp:prompt_tokens_seconds`: Average prompt throughput in tokens/s.
-- `llamacpp:predicted_tokens_seconds`: Average generation throughput in tokens/s.
-- `llamacpp:kv_cache_usage_ratio`: KV-cache usage. `1` means 100 percent usage.
-- `llamacpp:kv_cache_tokens`: KV-cache tokens.
-- `llamacpp:requests_processing`: Number of requests processing.
-- `llamacpp:requests_deferred`: Number of requests deferred.
-- `llamacpp:n_tokens_max`: High watermark of the context size observed.
+In *router mode* the query param `?model={model_id}` has to be set. This endpoint will respond with status code 400 `model name is missing from the request` if not set.
+
+#### Available metrics
+
+| Metric | Type | Description |
+| ------ | ---------------------- | ----------- |
+| `llamacpp:prompt_tokens_total` | Counter | Number of prompt tokens processed. |
+| `llamacpp:prompt_seconds_total` | Counter | Prompt process time in seconds. |
+| `llamacpp:prompt_tokens_seconds` | Gauge | Average prompt throughput in tokens/s. |
+| `llamacpp:tokens_predicted_total` | Counter | Number of generation tokens processed. |
+| `llamacpp:tokens_predicted_seconds_total` | Counter | Predict process time in seconds. |
+| `llamacpp:predicted_tokens_seconds` | Gauge | Average generation throughput in tokens/s. |
+| `llamacpp:requests_processing` | Gauge | Number of requests processing. |
+| `llamacpp:requests_deferred` | Gauge | Number of requests deferred. |
+| `llamacpp:n_tokens_max` | Counter | High watermark of the context size observed. |
+| `llamacpp:n_decode_total` | Counter | Total Number of llama_decode() calls. |
+| `llamacpp:n_busy_slots_per_decode` | Gauge | Average number of busy slots per llama_decode() call. |
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 
