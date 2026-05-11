@@ -3192,7 +3192,13 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
     ggml_backend_buffer_t buf_src = src->view_src ? src->view_src->buffer : src->buffer;
     ggml_backend_buffer_t buf_dst = dst->view_src ? dst->view_src->buffer : dst->buffer;
 
-    //enables async copies from CPU to CUDA, instead of only CUDA-to-CUDA
+    // Enables async copies from CPU to CUDA, instead of only CUDA-to-CUDA
+    // Excluding this path for HIP and MUSA as a precaution.
+    // According to the summary in https://github.com/ggml-org/llama.cpp/pull/20793#issuecomment-4275794315, this change is not beneficial for hip anyways.
+    // Additionally, there is a lot of anectodal evidence that hip/musa stream behavior might not always 1:1 match CUDA behavior.
+    // e.g. https://github.com/ROCm/rocm-systems/issues/5109
+    // It thus makes sense to exclude this path for HIP and MUSA. This PR was not aimed these backends, the majority of testing happened on CUDA.
+    // This can be revisited in the future if enabling copy_from_host benefits hip/MUSA, and if the PR author can extensively test on these backends.
 #if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
     const bool copy_from_host = false;
 #else
