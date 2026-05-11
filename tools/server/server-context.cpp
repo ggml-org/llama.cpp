@@ -57,6 +57,11 @@ struct server_slot {
     llama_context * ctx_tgt = nullptr;
     llama_context * ctx_dft = nullptr;
 
+    // True when this slot's speculative impl is MTP (ctx_dft is the MTP head).
+    // MTP needs every prefill position to carry logits=1 so the streaming
+    // hook in common_speculative_state_mtp::process() can read t_h_pre_norm.
+    bool is_mtp_enabled = false;
+
     // multimodal
     mtmd_context * mctx = nullptr;
 
@@ -237,8 +242,20 @@ struct server_slot {
                 (ggml_time_us() - t_start) / 1000.0, n_text, (int) prompt.tokens.size());
     }
 
+    bool is_mtp() const { return is_mtp_enabled; }
+
+    // The trunk needs to emit logits at every prefill position when either:
+    //  - the task asked for embeddings, or
+    //  - MTP is enabled for this slot (the streaming hook in process() reads
+    //    h_pre_norm at every prompt position).
+    bool need_embd() const {
+        GGML_ASSERT(task);
+        return task->need_embd() || is_mtp();
+    }
+
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
     // also we cannot split if the pooling would require any past tokens
+    // (MTP supports splitting — uses task->need_embd() not need_embd())
     bool can_split() const {
         GGML_ASSERT(task);
 
@@ -745,6 +762,53 @@ private:
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
+        } else if (params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) {
+            // MTP head lives in the *target* GGUF — load it as a sibling model
+            // with override_arch and feed it through the existing ctx_dft slot.
+            char trunk_arch[64] = {0};
+            llama_model_meta_val_str(model_tgt, "general.architecture", trunk_arch, sizeof(trunk_arch));
+
+            const char * mtp_arch = nullptr;
+            if (std::string(trunk_arch) == "qwen35") {
+                mtp_arch = "qwen35_mtp";
+            } else if (std::string(trunk_arch) == "qwen35moe") {
+                mtp_arch = "qwen35moe_mtp";
+            } else {
+                SRV_ERR("MTP not supported for trunk architecture '%s'\n", trunk_arch);
+                return false;
+            }
+
+            if (params_base.n_parallel > 1) {
+                SRV_ERR("MTP currently supports only n_parallel=1; got %d\n", params_base.n_parallel);
+                return false;
+            }
+
+            SRV_INF("loading MTP head from '%s' (override_arch=%s)\n",
+                    params_base.model.path.c_str(), mtp_arch);
+
+            auto mparams_mtp = common_model_params_to_llama(params_base);
+            mparams_mtp.override_arch = mtp_arch;
+
+            model_dft.reset(llama_model_load_from_file(params_base.model.path.c_str(), mparams_mtp));
+            if (model_dft == nullptr) {
+                SRV_ERR("failed to load MTP head from '%s'\n", params_base.model.path.c_str());
+                return false;
+            }
+
+            auto cparams_mtp = common_context_params_to_llama(params_base);
+            cparams_mtp.n_ctx     = llama_n_ctx_seq(ctx_tgt);
+            cparams_mtp.n_seq_max = 1;
+
+            ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams_mtp));
+            if (ctx_dft == nullptr) {
+                SRV_ERR("%s", "failed to create MTP context\n");
+                return false;
+            }
+
+            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
+
+            params_base.speculative.draft.ctx_tgt = ctx_tgt;
+            params_base.speculative.draft.ctx_dft = ctx_dft.get();
         }
 
         std::string & mmproj_path = params_base.mmproj.path;
@@ -855,6 +919,7 @@ private:
             slot.ctx_tgt = ctx_tgt;
             slot.ctx_dft = ctx_dft.get();
             slot.spec    = spec.get();
+            slot.is_mtp_enabled = (params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) && (ctx_dft != nullptr);
             slot.n_ctx   = n_ctx_slot;
 
             slot.mctx                   = mctx;
@@ -2716,12 +2781,14 @@ private:
                             break;
                         }
 
-                        // embedding requires all tokens in the batch to be output
+                        // embedding requires all tokens in the batch to be output;
+                        // MTP also wants logits at every prompt position so the
+                        // streaming hook can mirror t_h_pre_norm into ctx_dft.
                         common_batch_add(batch,
                             cur_tok,
                             slot.prompt.tokens.pos_next(),
                             { slot.id },
-                            slot.task->need_embd());
+                            slot.need_embd());
                         slot.prompt.tokens.push_back(cur_tok);
 
                         slot.n_prompt_tokens_processed++;
@@ -2838,7 +2905,7 @@ private:
                 slot_batched->lora[alora_disabled_id].scale = alora_scale;
             }
 
-            llama_set_embeddings(ctx_tgt, slot_batched->task->need_embd());
+            llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
         }
 
         if (batch.n_tokens == 0) {
