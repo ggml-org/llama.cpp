@@ -65,7 +65,7 @@ if (LLAMA_BUILD_WEBUI)
     endif()
 
     # Priority 2: Try to download from Hugging Face Bucket if local not available
-    if(NOT WEBUI_SOURCE_DIR AND LLAMA_USE_PREBUILD_WEBUI)
+    if(NOT WEBUI_SOURCE_DIR AND LLAMA_USE_PREBUILT_WEBUI)
         # Determine version tag for HF Bucket
         # Only release tags (b<number> format) have webui assets uploaded
         if(DEFINED ENV{LLAMA_BUILD_TAG})
