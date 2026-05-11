@@ -187,33 +187,41 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
     bool compute_forward(struct ggml_compute_params * params, struct ggml_tensor * op) override {
         switch (op->op) {
             case GGML_OP_MUL_MAT:
-                if (op->src[0]->type == GGML_TYPE_Q2_K ||   //
-                    op->src[0]->type == GGML_TYPE_Q3_K ||   //
-                    op->src[0]->type == GGML_TYPE_Q4_0 ||   //
-                    op->src[0]->type == GGML_TYPE_Q4_1 ||   //
-                    op->src[0]->type == GGML_TYPE_Q4_K ||   //
-                    op->src[0]->type == GGML_TYPE_Q6_K ||   //
-                    op->src[0]->type == GGML_TYPE_Q8_0 ||   //
-                    op->src[0]->type == GGML_TYPE_MXFP4 ||  //
-                    op->src[0]->type == GGML_TYPE_Q5_1 ||   //
-                    op->src[0]->type == GGML_TYPE_Q5_K) {
-                    forward_mul_mat(params, op);
-                    return true;
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_Q2_K:
+                    case GGML_TYPE_Q3_K:
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q4_K:
+                    case GGML_TYPE_Q6_K:
+                    case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q5_K:
+                        //case GGML_TYPE_MXFP4:
+                        forward_mul_mat(params, op);
+                        return true;
+                    default:
+                        // GGML_ABORT("fatal error: unsupported type for src0 in MUL_MAT");
+                        return false;
                 }
                 break;
             case GGML_OP_MUL_MAT_ID:
-                if (op->src[0]->type == GGML_TYPE_Q2_K ||   //
-                    op->src[0]->type == GGML_TYPE_Q3_K ||   //
-                    op->src[0]->type == GGML_TYPE_Q4_0 ||   //
-                    op->src[0]->type == GGML_TYPE_Q4_1 ||   //
-                    op->src[0]->type == GGML_TYPE_Q4_K ||   //
-                    op->src[0]->type == GGML_TYPE_Q6_K ||   //
-                    op->src[0]->type == GGML_TYPE_Q8_0 ||   //
-                    op->src[0]->type == GGML_TYPE_MXFP4 ||  //
-                    op->src[0]->type == GGML_TYPE_Q5_1 ||   //
-                    op->src[0]->type == GGML_TYPE_Q5_K) {
-                    forward_mul_mat_id(params, op);
-                    return true;
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_Q2_K:
+                    case GGML_TYPE_Q3_K:
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q4_K:
+                    case GGML_TYPE_Q6_K:
+                    case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q5_K:
+                        //case GGML_TYPE_MXFP4:
+                        forward_mul_mat_id(params, op);
+                        return true;
+                    default:
+                        // GGML_ABORT("fatal error: unsupported type for src0 in MUL_MAT_ID");
+                        return false;
                 }
                 break;
             default:
@@ -307,15 +315,15 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
             quantize_a_row_i8  = spacemit_kernels::ime1::quantize_a_row_i8;
             quantize_a_4row_i8 = spacemit_kernels::ime1::quantize_a_4row_i8;
 
-            if constexpr (std::is_same_v<BLOC_TYPE, block_q6_K>) {
-            } else {
+            if constexpr (std::is_same_v<BLOC_TYPE, block_q4_0> || std::is_same_v<BLOC_TYPE, block_q4_1> ||
+                          std::is_same_v<BLOC_TYPE, block_q4_K>) {
                 gemm_kernel     = spacemit_kernels::ime1::gemm_kernel_i8i4;
                 set_kernel_impl = true;
             }
         }
 #endif
         if (!set_kernel_impl) {
-            throw std::runtime_error("fatal error: set_kernel_impl");
+            GGML_ABORT("no kernel implementation found for the block type");
         }
 
         const size_t a_k_blks = spacemit_kernels::div_round_up(gemm_k, a_blk_len);
@@ -325,7 +333,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
         const size_t gemm_workspace_size = GGML_PAD(gemm_m * row_stride_a, alignof(int64_t));
 
         if (ith == 0 && params->wsize < gemm_workspace_size) {
-            throw std::runtime_error("wsize less than gemm_workspace_size");
+            GGML_ABORT("wsize less than gemm_workspace_size");
         }
 
         uintptr_t ws_ptr = reinterpret_cast<uintptr_t>(params->wdata);
@@ -617,15 +625,15 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
         if (!set_kernel_impl && (global_spine_env_info.use_ime1)) {
             quantize_a_row_i8 = spacemit_kernels::ime1::quantize_a_row_i8;
 
-            if constexpr (std::is_same_v<BLOC_TYPE, block_q6_K>) {
-            } else {
+            if constexpr (std::is_same_v<BLOC_TYPE, block_q4_0> || std::is_same_v<BLOC_TYPE, block_q4_1> ||
+                          std::is_same_v<BLOC_TYPE, block_q4_K>) {
                 gemm_kernel     = spacemit_kernels::ime1::gemm_kernel_i8i4;
                 set_kernel_impl = true;
             }
         }
 #endif
         if (!set_kernel_impl) {
-            throw std::runtime_error("fatal error: set_kernel_impl");
+            GGML_ABORT("no kernel implementation found for the block type");
         }
 
         const size_t a_k_blks = spacemit_kernels::div_round_up(ne10, a_blk_len);
@@ -976,73 +984,89 @@ class tensor_traits_common : public tensor_traits_base {
     bool compute_forward(struct ggml_compute_params * params, struct ggml_tensor * op) override {
         switch (op->op) {
             case GGML_OP_NORM:
-                spacemit_kernels::rvv::forward_norm_f32(params, op);
-                return true;
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_F32:
+                        spacemit_kernels::rvv::forward_norm_f32(params, op);
+                        return true;
+                    default:
+                        {
+                            GGML_ABORT("fatal error");
+                        }
+                }
             case GGML_OP_RMS_NORM:
-                spacemit_kernels::rvv::forward_rms_norm_f32(params, op);
-                return true;
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_F32:
+                        spacemit_kernels::rvv::forward_rms_norm_f32(params, op);
+                        return true;
+                    default:
+                        {
+                            GGML_ABORT("fatal error");
+                        }
+                }
             case GGML_OP_ADD:
-                if (op->src[0]->type == GGML_TYPE_F32) {
-                    spacemit_kernels::rvv::forward_binary<GGML_OP_ADD, float>(params, op);
-                    return true;
-                } else if (op->src[1]->type == GGML_TYPE_F16) {
-                    spacemit_kernels::rvv::forward_binary<GGML_OP_ADD, _Float16>(params, op);
-                    return true;
-                } else {
-                    ggml_compute_forward_add(params, op);
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_F32:
+                        spacemit_kernels::rvv::forward_binary<GGML_OP_ADD, float>(params, op);
+                        return true;
+                    case GGML_TYPE_F16:
+                        spacemit_kernels::rvv::forward_binary<GGML_OP_ADD, _Float16>(params, op);
+                        return true;
+                    default:
+                        ggml_compute_forward_add(params, op);
+                        return true;
                 }
-                break;
             case GGML_OP_SUB:
-                if (op->src[0]->type == GGML_TYPE_F32) {
-                    spacemit_kernels::rvv::forward_binary<GGML_OP_SUB, float>(params, op);
-                    return true;
-                } else if (op->src[1]->type == GGML_TYPE_F16) {
-                    spacemit_kernels::rvv::forward_binary<GGML_OP_SUB, _Float16>(params, op);
-                    return true;
-                } else {
-                    ggml_compute_forward_sub(params, op);
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_F32:
+                        spacemit_kernels::rvv::forward_binary<GGML_OP_SUB, float>(params, op);
+                        return true;
+                    case GGML_TYPE_F16:
+                        spacemit_kernels::rvv::forward_binary<GGML_OP_SUB, _Float16>(params, op);
+                        return true;
+                    default:
+                        ggml_compute_forward_sub(params, op);
+                        return true;
                 }
-                break;
             case GGML_OP_MUL:
-                if (op->src[0]->type == GGML_TYPE_F32) {
-                    spacemit_kernels::rvv::forward_binary<GGML_OP_MUL, float>(params, op);
-                    return true;
-                } else if (op->src[1]->type == GGML_TYPE_F16) {
-                    spacemit_kernels::rvv::forward_binary<GGML_OP_MUL, _Float16>(params, op);
-                    return true;
-                } else {
-                    ggml_compute_forward_mul(params, op);
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_F32:
+                        spacemit_kernels::rvv::forward_binary<GGML_OP_MUL, float>(params, op);
+                        return true;
+                    case GGML_TYPE_F16:
+                        spacemit_kernels::rvv::forward_binary<GGML_OP_MUL, _Float16>(params, op);
+                        return true;
+                    default:
+                        ggml_compute_forward_mul(params, op);
+                        return true;
                 }
-                break;
             case GGML_OP_DIV:
-                if (op->src[0]->type == GGML_TYPE_F32) {
-                    spacemit_kernels::rvv::forward_binary<GGML_OP_DIV, float>(params, op);
-                    return true;
-                } else if (op->src[1]->type == GGML_TYPE_F16) {
-                    spacemit_kernels::rvv::forward_binary<GGML_OP_DIV, _Float16>(params, op);
-                    return true;
-                } else {
-                    ggml_compute_forward_div(params, op);
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_F32:
+                        spacemit_kernels::rvv::forward_binary<GGML_OP_DIV, float>(params, op);
+                        return true;
+                    case GGML_TYPE_F16:
+                        spacemit_kernels::rvv::forward_binary<GGML_OP_DIV, _Float16>(params, op);
+                        return true;
+                    default:
+                        ggml_compute_forward_div(params, op);
+                        return true;
                 }
-                break;
             case GGML_OP_FLASH_ATTN_EXT:
                 {
                     forward_flash_attn_ext_f16(params, op);
                     return true;
                 }
-                break;
             case GGML_OP_CONT:
                 {
-                    if (op->type == op->src[0]->type && op->nb[0] != op->src[0]->nb[0] &&
-                        op->nb[0] == op->src[0]->nb[1] &&
-                        op->ne[3] * op->ne[2] * op->nb[2] ==
-                            op->src[0]->ne[3] * op->src[0]->ne[2] * op->src[0]->nb[2]) {
+                    const ggml_tensor * src0 = op->src[0];
+                    if (op->type == src0->type && op->nb[0] != src0->nb[0] && op->nb[0] == src0->nb[1] &&
+                        op->ne[3] * op->ne[2] * op->nb[2] == src0->ne[3] * src0->ne[2] * src0->nb[2]) {
                         spacemit_kernels::rvv::forward_cont_with_permute(params, op);
                     } else {
                         ggml_compute_forward_cont(params, op);
                     }
+                    return true;
                 }
-                return true;
             case GGML_OP_CPY:
                 {
                     const ggml_tensor * src0 = op->src[0];
@@ -1052,29 +1076,42 @@ class tensor_traits_common : public tensor_traits_base {
                     } else {
                         ggml_compute_forward_cpy(params, op);
                     }
+                    return true;
                 }
-                return true;
             case GGML_OP_REPEAT:
                 {
-                    bool rows_equal         = ggml_nrows(op->src[0]) == ggml_nrows(op);
-                    bool broadcast_or_equal = op->src[0]->ne[0] == 1 || op->src[0]->ne[0] == op->ne[0];
-                    if (rows_equal && broadcast_or_equal && op->src[0]->type == GGML_TYPE_F32) {
-                        spacemit_kernels::rvv::forward_repeat_nrows<int32_t>(params, op);
-                    } else if (rows_equal && broadcast_or_equal && op->src[0]->type == GGML_TYPE_F16) {
-                        spacemit_kernels::rvv::forward_repeat_nrows<int16_t>(params, op);
-                    } else if (op->src[0]->ne[1] == 1 && op->src[0]->ne[0] == op->ne[0]) {
-                        if (op->src[0]->type == GGML_TYPE_F32) {
-                            spacemit_kernels::rvv::forward_repeat_dim1<int32_t>(params, op);
-                        } else if (op->src[0]->type == GGML_TYPE_F16) {
-                            spacemit_kernels::rvv::forward_repeat_dim1<int16_t>(params, op);
-                        } else {
-                            ggml_compute_forward_repeat(params, op);
+                    const bool rows_equal         = ggml_nrows(op->src[0]) == ggml_nrows(op);
+                    const bool broadcast_or_equal = op->src[0]->ne[0] == 1 || op->src[0]->ne[0] == op->ne[0];
+
+                    if (rows_equal && broadcast_or_equal) {
+                        switch (op->src[0]->type) {
+                            case GGML_TYPE_F32:
+                                spacemit_kernels::rvv::forward_repeat_nrows<int32_t>(params, op);
+                                return true;
+                            case GGML_TYPE_F16:
+                                spacemit_kernels::rvv::forward_repeat_nrows<int16_t>(params, op);
+                                return true;
+                            default:
+                                break;
                         }
-                    } else {
-                        ggml_compute_forward_repeat(params, op);
                     }
+
+                    if (op->src[0]->ne[1] == 1 && op->src[0]->ne[0] == op->ne[0]) {
+                        switch (op->src[0]->type) {
+                            case GGML_TYPE_F32:
+                                spacemit_kernels::rvv::forward_repeat_dim1<int32_t>(params, op);
+                                return true;
+                            case GGML_TYPE_F16:
+                                spacemit_kernels::rvv::forward_repeat_dim1<int16_t>(params, op);
+                                return true;
+                            default:
+                                break;
+                        }
+                    }
+
+                    ggml_compute_forward_repeat(params, op);
+                    return true;
                 }
-                return true;
             case GGML_OP_SUM_ROWS:
                 {
                     if (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) {
@@ -1086,27 +1123,42 @@ class tensor_traits_common : public tensor_traits_base {
                 return true;
             case GGML_OP_GET_ROWS:
                 {
-                    if (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) {
-                        spacemit_kernels::rvv::forward_get_rows<int32_t>(params, op);
-                    } else if (op->src[0]->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16) {
-                        spacemit_kernels::rvv::forward_get_rows<int16_t>(params, op);
-                    } else {
-                        ggml_compute_forward_get_rows(params, op);
+                    if (op->src[0]->type == op->type) {
+                        switch (op->src[0]->type) {
+                            case GGML_TYPE_F32:
+                                spacemit_kernels::rvv::forward_get_rows<int32_t>(params, op);
+                                return true;
+                            case GGML_TYPE_F16:
+                                spacemit_kernels::rvv::forward_get_rows<int16_t>(params, op);
+                                return true;
+                            default:
+                                break;
+                        }
                     }
+
+                    ggml_compute_forward_get_rows(params, op);
                 }
                 return true;
             case GGML_OP_CONCAT:
                 {
                     const int32_t dim = ggml_get_op_params_i32(op, 0);
-                    if (dim == 0 && op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) {
-                        spacemit_kernels::rvv::forward_concat<int32_t>(params, op);
-                    } else if (dim == 0 && op->src[0]->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16) {
-                        spacemit_kernels::rvv::forward_concat<int16_t>(params, op);
-                    } else {
-                        ggml_compute_forward_concat(params, op);
+                    if (dim == 0 && op->type == op->src[0]->type) {
+                        switch (op->src[0]->type) {
+                            case GGML_TYPE_F32:
+                                spacemit_kernels::rvv::forward_concat<int32_t>(params, op);
+                                return true;
+                            case GGML_TYPE_F16:
+                                spacemit_kernels::rvv::forward_concat<int16_t>(params, op);
+                                return true;
+                            default:
+                                break;
+                        }
                     }
+
+                    ggml_compute_forward_concat(params, op);
                 }
                 return true;
+            // TODO For GGML_OP_GATED_DELTA_NET
             // case GGML_OP_GATED_DELTA_NET:
             //     return true;
             default:
@@ -1221,118 +1273,141 @@ static const tensor_traits<block_q5_0, 32, 32>  q5_0_32x32_q8_0;
 // Impl By RVV
 static const tensor_traits_common               rvv_impl;
 
-struct backend_buffer_context {
-    void * base{ nullptr };
-};
-
 }  // namespace ggml::cpu::riscv64_spacemit
 
 static const ggml::cpu::tensor_traits * ggml_riscv64_spacemit_get_optimal_repack_type(const struct ggml_tensor * cur) {
-    if (cur->type == GGML_TYPE_Q2_K) {
+    switch (cur->type) {
+        case GGML_TYPE_Q2_K:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q2_k_32x256_q8_0;
-        }
+                if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q2_k_32x256_q8_0;
+                }
 #endif
-
-    } else if (cur->type == GGML_TYPE_Q3_K) {
+            }
+            break;
+        case GGML_TYPE_Q3_K:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q3_k_32x256_q8_0;
-        }
+                if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q3_k_32x256_q8_0;
+                }
 #endif
-
-    } else if (cur->type == GGML_TYPE_Q4_0) {
+            }
+            break;
+        case GGML_TYPE_Q4_0:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        if (cur->ne[1] % 32 == 0 && cur->ne[0] % 256 == 0 &&
-            (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q4_0_32x256_q8_0;
-        }
+                if (cur->ne[1] % 32 == 0 && cur->ne[0] % 256 == 0 &&
+                    (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q4_0_32x256_q8_0;
+                }
 
-        if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q4_0_32x32_q8_0;
-        }
+                if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q4_0_32x32_q8_0;
+                }
 #endif
 
 #if defined(RISCV64_SPACEMIT_IME1)
-        if (cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
-            return &ggml::cpu::riscv64_spacemit::q4_0_16x32_q8_0;
-        }
+                if (cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
+                    return &ggml::cpu::riscv64_spacemit::q4_0_16x32_q8_0;
+                }
 #endif
-
-    } else if (cur->type == GGML_TYPE_Q4_1) {
+            }
+            break;
+        case GGML_TYPE_Q4_1:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        // TODO
-        // if (cur->ne[1] % 32 == 0 && cur->ne[0] % 256 == 0 &&
-        //     (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-        //     return &ggml::cpu::riscv64_spacemit::q4_1_32x256_q8_0;
-        // }
+                // TODO
+                // if (cur->ne[1] % 32 == 0 && cur->ne[0] % 256 == 0 &&
+                //     (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                //     return &ggml::cpu::riscv64_spacemit::q4_1_32x256_q8_0;
+                // }
 
-        if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q4_1_32x32_q8_0;
-        }
+                if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q4_1_32x32_q8_0;
+                }
 #endif
 
 #if defined(RISCV64_SPACEMIT_IME1)
-        if (cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
-            return &ggml::cpu::riscv64_spacemit::q4_1_16x32_q8_0;
-        }
+                if (cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
+                    return &ggml::cpu::riscv64_spacemit::q4_1_16x32_q8_0;
+                }
 #endif
-
-    } else if (cur->type == GGML_TYPE_Q4_K) {
+            }
+            break;
+        case GGML_TYPE_Q4_K:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q4_k_32x32_q8_0;
-        }
+                if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q4_k_32x32_q8_0;
+                }
 #endif
 
 #if defined(RISCV64_SPACEMIT_IME1)
-        if (cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
-            return &ggml::cpu::riscv64_spacemit::q4_k_16x32_q8_0;
-        }
+                if (cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
+                    return &ggml::cpu::riscv64_spacemit::q4_k_16x32_q8_0;
+                }
 #endif
-
-    } else if (cur->type == GGML_TYPE_Q6_K) {
+            }
+            break;
+        case GGML_TYPE_Q6_K:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        if ((ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q6_k_32x32_q8_0;
-        }
+                if ((ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q6_k_32x32_q8_0;
+                }
 #endif
-
-    } else if (cur->type == GGML_TYPE_Q8_0) {
+            }
+            break;
+        case GGML_TYPE_Q8_0:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        if ((ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q8_0_32x32_q8_0;
-        }
+                if ((ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q8_0_32x32_q8_0;
+                }
 #endif
-
-    } else if (cur->type == GGML_TYPE_MXFP4) {
+            }
+            break;
+        case GGML_TYPE_MXFP4:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        // TODO
-        // if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-        //     return &ggml::cpu::riscv64_spacemit::mxfp4_32x32_q8_0;
-        // }
+                // TODO
+                // if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                //     return &ggml::cpu::riscv64_spacemit::mxfp4_32x32_q8_0;
+                // }
 #endif
-
-    } else if (cur->type == GGML_TYPE_Q5_K) {
+            }
+            break;
+        case GGML_TYPE_Q5_K:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q5_k_32x32_q8_0;
-        }
+                if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q5_k_32x32_q8_0;
+                }
 #endif
-
-    } else if (cur->type == GGML_TYPE_Q5_1) {
+            }
+            break;
+        case GGML_TYPE_Q5_1:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q5_1_32x32_q8_0;
-        }
+                if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q5_1_32x32_q8_0;
+                }
 #endif
-    } else if (cur->type == GGML_TYPE_Q5_0) {
+            }
+            break;
+        case GGML_TYPE_Q5_0:
+            {
 #if defined(RISCV64_SPACEMIT_IME2)
-        if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-            return &ggml::cpu::riscv64_spacemit::q5_0_32x32_q8_0;
-        }
+                if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q5_0_32x32_q8_0;
+                }
 #endif
+            }
+            break;
+        default:
+            break;
     }
 
     return nullptr;
@@ -1351,22 +1426,20 @@ static enum ggml_status ggml_backend_riscv64_spacemit_buffer_init_tensor(ggml_ba
 static void ggml_backend_riscv64_spacemit_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(buffer);
 
-    auto * ctx = static_cast<ggml::cpu::riscv64_spacemit::backend_buffer_context *>(buffer->context);
-    if (ctx == nullptr) {
+    void * base = buffer->context;
+    if (base == nullptr) {
         return;
     }
 
-    ggml::cpu::riscv64_spacemit::spine_mem_pool_free(ctx->base);
-    delete ctx;
+    ggml::cpu::riscv64_spacemit::spine_mem_pool_free(base);
 }
 
 static void * ggml_backend_riscv64_spacemit_buffer_get_base(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(buffer);
 
-    auto * ctx = static_cast<ggml::cpu::riscv64_spacemit::backend_buffer_context *>(buffer->context);
-    GGML_ASSERT(ctx != nullptr);
-    GGML_ASSERT(ctx->base != nullptr);
-    return ctx->base;
+    void * base = buffer->context;
+    GGML_ASSERT(base != nullptr);
+    return base;
 }
 
 static void ggml_backend_riscv64_spacemit_buffer_memset_tensor(ggml_backend_buffer_t buffer,
@@ -1383,10 +1456,9 @@ static void ggml_backend_riscv64_spacemit_buffer_memset_tensor(ggml_backend_buff
 static void ggml_backend_riscv64_spacemit_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     GGML_ASSERT(buffer);
 
-    auto * ctx = static_cast<ggml::cpu::riscv64_spacemit::backend_buffer_context *>(buffer->context);
-    GGML_ASSERT(ctx != nullptr);
-    GGML_ASSERT(ctx->base != nullptr);
-    memset(ctx->base, value, buffer->size);
+    void * base = buffer->context;
+    GGML_ASSERT(base != nullptr);
+    memset(base, value, buffer->size);
 }
 
 static void ggml_backend_riscv64_spacemit_buffer_set_tensor(ggml_backend_buffer_t buffer,
@@ -1428,19 +1500,12 @@ static const char * ggml_backend_cpu_riscv64_spacemit_buffer_type_get_name(ggml_
 
 static ggml_backend_buffer_t ggml_backend_cpu_riscv64_spacemit_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
                                                                                         size_t size) {
-    auto * ctx = new (std::nothrow) ggml::cpu::riscv64_spacemit::backend_buffer_context;
-    if (ctx == nullptr) {
-        GGML_LOG_ERROR("%s: failed to allocate backend buffer context\n", __func__);
+    void * base = ggml::cpu::riscv64_spacemit::spine_mem_pool_alloc(size, 64);
+    if (base == nullptr) {
         return nullptr;
     }
 
-    ctx->base = ggml::cpu::riscv64_spacemit::spine_mem_pool_alloc(size, 64);
-    if (ctx->base == nullptr) {
-        delete ctx;
-        return nullptr;
-    }
-
-    return ggml_backend_buffer_init(buft, ggml_backend_riscv64_spacemit_buffer_i, ctx, size);
+    return ggml_backend_buffer_init(buft, ggml_backend_riscv64_spacemit_buffer_i, base, size);
 }
 
 static size_t ggml_backend_cpu_riscv64_spacemit_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
@@ -1466,76 +1531,87 @@ static size_t ggml_backend_cpu_riscv64_spacemit_nbytes(ggml_backend_buffer_type_
         }
     } else {
         nbytes = tensor->ne[0] * tensor->nb[0] / blck_size;
-        if (tensor->type == GGML_TYPE_Q4_K) {
-            GGML_ASSERT(nbytes % sizeof(block_q4_K) == 0);
-            nbytes = (nbytes / sizeof(block_q4_K)) * sizeof(block_q4_1) * 8;
-            for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q4_K)) * sizeof(block_q4_1) * 8;
-            }
-        } else if (tensor->type == GGML_TYPE_Q6_K) {
-            GGML_ASSERT(nbytes % sizeof(block_q6_K) == 0);
-            nbytes = (nbytes / sizeof(block_q6_K)) * sizeof(block_q8_0) * 8;
-            for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q6_K)) * sizeof(block_q8_0) * 8;
-            }
-            if (tensor->ne[1] % 32 != 0) {
-                nbytes += (32 - tensor->ne[1] % 32) * (tensor->nb[1] / sizeof(block_q6_K)) * sizeof(block_q8_0) * 8;
-            }
-        } else if (tensor->type == GGML_TYPE_Q8_0) {
-            GGML_ASSERT(nbytes % sizeof(block_q8_0) == 0);
-            nbytes = (nbytes / sizeof(block_q8_0)) * sizeof(block_q8_0);
-            for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q8_0)) * sizeof(block_q8_0);
-            }
-            if (tensor->ne[1] % 32 != 0) {
-                nbytes += (32 - tensor->ne[1] % 32) * (tensor->nb[1] / sizeof(block_q8_0)) * sizeof(block_q8_0);
-            }
-        } else if (tensor->type == GGML_TYPE_Q2_K) {
-            GGML_ASSERT(nbytes % sizeof(block_q2_K) == 0);
-            nbytes = (nbytes / sizeof(block_q2_K)) * sizeof(spacemit_kernels::nrow_block_q2_k<1>);
-            for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q2_K)) *
-                          sizeof(spacemit_kernels::nrow_block_q2_k<1>);
-            }
-        } else if (tensor->type == GGML_TYPE_Q3_K) {
-            GGML_ASSERT(nbytes % sizeof(block_q3_K) == 0);
-            nbytes = (nbytes / sizeof(block_q3_K)) * sizeof(spacemit_kernels::nrow_block_q3_k<1>);
-            for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q3_K)) *
-                          sizeof(spacemit_kernels::nrow_block_q3_k<1>);
-            }
-        } else if (tensor->type == GGML_TYPE_MXFP4) {
-            GGML_ASSERT(nbytes % sizeof(block_mxfp4) == 0);
-            nbytes = (nbytes / sizeof(block_mxfp4)) * sizeof(spacemit_kernels::nrow_block_mxfp4<1>);
-            for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_mxfp4)) *
-                          sizeof(spacemit_kernels::nrow_block_mxfp4<1>);
-            }
-        } else if (tensor->type == GGML_TYPE_Q5_K) {
-            GGML_ASSERT(nbytes % sizeof(block_q5_K) == 0);
-            nbytes = (nbytes / sizeof(block_q5_K)) * sizeof(spacemit_kernels::nrow_block_q5_1<1>) * 8;
-            for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q5_K)) *
-                          sizeof(spacemit_kernels::nrow_block_q5_1<1>) * 8;
-            }
-        } else if (tensor->type == GGML_TYPE_Q5_1) {
-            GGML_ASSERT(nbytes % sizeof(block_q5_1) == 0);
-            nbytes = (nbytes / sizeof(block_q5_1)) * sizeof(spacemit_kernels::nrow_block_q5_1<1>);
-            for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q5_1)) *
-                          sizeof(spacemit_kernels::nrow_block_q5_1<1>);
-            }
-        } else if (tensor->type == GGML_TYPE_Q5_0) {
-            GGML_ASSERT(nbytes % sizeof(block_q5_0) == 0);
-            nbytes = (nbytes / sizeof(block_q5_0)) * sizeof(spacemit_kernels::nrow_block_q5_0<1>);
-            for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q5_0)) *
-                          sizeof(spacemit_kernels::nrow_block_q5_0<1>);
-            }
-        } else {
-            for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                nbytes += (tensor->ne[i] - 1) * tensor->nb[i];
-            }
+        switch (tensor->type) {
+            case GGML_TYPE_Q4_K:
+                GGML_ASSERT(nbytes % sizeof(block_q4_K) == 0);
+                nbytes = (nbytes / sizeof(block_q4_K)) * sizeof(block_q4_1) * 8;
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q4_K)) * sizeof(block_q4_1) * 8;
+                }
+                break;
+            case GGML_TYPE_Q6_K:
+                GGML_ASSERT(nbytes % sizeof(block_q6_K) == 0);
+                nbytes = (nbytes / sizeof(block_q6_K)) * sizeof(block_q8_0) * 8;
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q6_K)) * sizeof(block_q8_0) * 8;
+                }
+                if (tensor->ne[1] % 32 != 0) {
+                    nbytes += (32 - tensor->ne[1] % 32) * (tensor->nb[1] / sizeof(block_q6_K)) * sizeof(block_q8_0) * 8;
+                }
+                break;
+            case GGML_TYPE_Q8_0:
+                GGML_ASSERT(nbytes % sizeof(block_q8_0) == 0);
+                nbytes = (nbytes / sizeof(block_q8_0)) * sizeof(block_q8_0);
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q8_0)) * sizeof(block_q8_0);
+                }
+                if (tensor->ne[1] % 32 != 0) {
+                    nbytes += (32 - tensor->ne[1] % 32) * (tensor->nb[1] / sizeof(block_q8_0)) * sizeof(block_q8_0);
+                }
+                break;
+            case GGML_TYPE_Q2_K:
+                GGML_ASSERT(nbytes % sizeof(block_q2_K) == 0);
+                nbytes = (nbytes / sizeof(block_q2_K)) * sizeof(spacemit_kernels::nrow_block_q2_k<1>);
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q2_K)) *
+                              sizeof(spacemit_kernels::nrow_block_q2_k<1>);
+                }
+                break;
+            case GGML_TYPE_Q3_K:
+                GGML_ASSERT(nbytes % sizeof(block_q3_K) == 0);
+                nbytes = (nbytes / sizeof(block_q3_K)) * sizeof(spacemit_kernels::nrow_block_q3_k<1>);
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q3_K)) *
+                              sizeof(spacemit_kernels::nrow_block_q3_k<1>);
+                }
+                break;
+            case GGML_TYPE_MXFP4:
+                GGML_ASSERT(nbytes % sizeof(block_mxfp4) == 0);
+                nbytes = (nbytes / sizeof(block_mxfp4)) * sizeof(spacemit_kernels::nrow_block_mxfp4<1>);
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_mxfp4)) *
+                              sizeof(spacemit_kernels::nrow_block_mxfp4<1>);
+                }
+                break;
+            case GGML_TYPE_Q5_K:
+                GGML_ASSERT(nbytes % sizeof(block_q5_K) == 0);
+                nbytes = (nbytes / sizeof(block_q5_K)) * sizeof(spacemit_kernels::nrow_block_q5_1<1>) * 8;
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q5_K)) *
+                              sizeof(spacemit_kernels::nrow_block_q5_1<1>) * 8;
+                }
+                break;
+            case GGML_TYPE_Q5_1:
+                GGML_ASSERT(nbytes % sizeof(block_q5_1) == 0);
+                nbytes = (nbytes / sizeof(block_q5_1)) * sizeof(spacemit_kernels::nrow_block_q5_1<1>);
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q5_1)) *
+                              sizeof(spacemit_kernels::nrow_block_q5_1<1>);
+                }
+                break;
+            case GGML_TYPE_Q5_0:
+                GGML_ASSERT(nbytes % sizeof(block_q5_0) == 0);
+                nbytes = (nbytes / sizeof(block_q5_0)) * sizeof(spacemit_kernels::nrow_block_q5_0<1>);
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q5_0)) *
+                              sizeof(spacemit_kernels::nrow_block_q5_0<1>);
+                }
+                break;
+            default:
+                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                    nbytes += (tensor->ne[i] - 1) * tensor->nb[i];
+                }
+                break;
         }
     }
 
