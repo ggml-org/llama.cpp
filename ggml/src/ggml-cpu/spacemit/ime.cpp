@@ -121,11 +121,11 @@ template <typename BLOC_TYPE> constexpr bool block_type_has_zp() {
 
 class tensor_traits_base : public ggml::cpu::tensor_traits {
   public:
-    virtual int repack(struct ggml_tensor * t, const void * data, size_t data_size) = 0;
+    virtual int repack(ggml_tensor * t, const void * data, size_t data_size) = 0;
 };
 
 template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_traits : public tensor_traits_base {
-    bool work_size(int /* n_threads */, const struct ggml_tensor * op, size_t & size) override {
+    bool work_size(int /* n_threads */, const ggml_tensor * op, size_t & size) override {
         switch (op->op) {
             case GGML_OP_MUL_MAT:
                 {
@@ -184,7 +184,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
         return false;
     }
 
-    bool compute_forward(struct ggml_compute_params * params, struct ggml_tensor * op) override {
+    bool compute_forward(ggml_compute_params * params, ggml_tensor * op) override {
         switch (op->op) {
             case GGML_OP_MUL_MAT:
                 switch (op->src[0]->type) {
@@ -250,16 +250,16 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
         const float * feature = (const float *) src1->data;
         float *       output  = (float *) dst->data;
 
-        const size_t gemm_m = ne11 * ne12 * ne13;
-        const size_t gemm_k = ne10;
-        const size_t gemm_n = ne01;
+        const int64_t gemm_m = ne11 * ne12 * ne13;
+        const int64_t gemm_k = ne10;
+        const int64_t gemm_n = ne01;
 
         spacemit_kernels::quantize_a_row_def       quantize_a_row_i8;
         spacemit_kernels::quantize_a_row_def       quantize_a_4row_i8;
         spacemit_kernels::gemm_kernel_quantize_def gemm_kernel;
         bool                                       set_kernel_impl = false;
 
-        size_t block_stride_a = spacemit_kernels::q8_blk_size(a_blk_len);
+        int64_t block_stride_a = spacemit_kernels::q8_blk_size(a_blk_len);
 
 #if defined(RISCV64_SPACEMIT_IME2)
         if (!set_kernel_impl && (global_spine_env_info.use_ime2)) {
@@ -326,11 +326,11 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
             GGML_ABORT("no kernel implementation found for the block type");
         }
 
-        const size_t a_k_blks = spacemit_kernels::div_round_up(gemm_k, a_blk_len);
-        const size_t b_k_blks = spacemit_kernels::div_round_up(gemm_k, b_blk_len);
+        const int64_t a_k_blks = spacemit_kernels::div_round_up(gemm_k, a_blk_len);
+        const int64_t b_k_blks = spacemit_kernels::div_round_up(gemm_k, b_blk_len);
 
-        const size_t row_stride_a        = a_k_blks * block_stride_a;
-        const size_t gemm_workspace_size = GGML_PAD(gemm_m * row_stride_a, alignof(int64_t));
+        const int64_t row_stride_a        = a_k_blks * block_stride_a;
+        const int64_t gemm_workspace_size = GGML_PAD(gemm_m * row_stride_a, alignof(int64_t));
 
         if (ith == 0 && params->wsize < gemm_workspace_size) {
             GGML_ABORT("wsize less than gemm_workspace_size");
@@ -338,21 +338,23 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
 
         uintptr_t ws_ptr = reinterpret_cast<uintptr_t>(params->wdata);
 
-        void *       tcm_buffer      = ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer;
-        const size_t tcm_buffer_size = ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer_size;
+        void *        tcm_buffer      = ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer;
+        const int64_t tcm_buffer_size = ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer_size;
 
         auto * quant_a_buffer = reinterpret_cast<uint8_t *>(ws_ptr);
 
-        constexpr size_t row_align = 4;
-        const size_t     row_blks  = spacemit_kernels::div_round_up(gemm_m, row_align);
+        constexpr int64_t row_align = 4;
+        const int64_t     row_blks  = spacemit_kernels::div_round_up(gemm_m, row_align);
 
-        const size_t row_stride_b      = b_k_blks * get_repacked_block_type_size<BLOC_TYPE, INTER_SIZE, NB_COLS>();
-        const size_t per_mb_rows_wsize = row_align * row_stride_a;
-        const size_t per_nb_cols_wsize = NB_COLS * row_stride_b;
+        const int64_t row_stride_b      = b_k_blks * get_repacked_block_type_size<BLOC_TYPE, INTER_SIZE, NB_COLS>();
+        const int64_t per_mb_rows_wsize = row_align * row_stride_a;
+        const int64_t per_nb_cols_wsize = NB_COLS * row_stride_b;
+
+        const int64_t barrier_idx = static_cast<int64_t>(ith / 2);
 
         GGML_ASSERT(global_spine_env_info.init_barrier != nullptr);
-        GGML_ASSERT((ith / 2) < spine_init_barrier_count);
-        spine_barrier_t * cur_barrier = &global_spine_env_info.init_barrier[ith / 2];
+        GGML_ASSERT(barrier_idx < spine_init_barrier_count);
+        spine_barrier_t * cur_barrier = &global_spine_env_info.init_barrier[barrier_idx];
 
         if (gemm_m == 1) {
             int task_per_thread = spacemit_kernels::div_round_up(a_k_blks, nth);
@@ -388,33 +390,31 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
 
         ggml_barrier(params->threadpool);
 
-        const size_t gemm_m_stride     = gemm_n / gemm_m > 64 ? gemm_m : 16;
-        const size_t gemm_m_blocked    = spacemit_kernels::div_round_up(gemm_m, gemm_m_stride);
-        const size_t max_gemm_n_stride = spacemit_kernels::div_round_up(gemm_n * gemm_m_blocked, nth);
+        const int64_t gemm_m_stride     = gemm_n / gemm_m > 64 ? gemm_m : 16;
+        const int64_t gemm_m_blocked    = spacemit_kernels::div_round_up(gemm_m, gemm_m_stride);
+        const int64_t max_gemm_n_stride = spacemit_kernels::div_round_up(gemm_n * gemm_m_blocked, nth);
 
-        size_t gemm_n_stride = gemm_n;
+        int64_t gemm_n_stride = gemm_n;
         if (max_gemm_n_stride < gemm_n) {
             gemm_n_stride =
                 std::min(gemm_n_stride, spacemit_kernels::div_round_up(max_gemm_n_stride, NB_COLS) * NB_COLS);
         }
 
         if (gemm_n_stride == gemm_n && tcm_buffer != nullptr && per_mb_rows_wsize <= tcm_buffer_size) {
-            for (size_t m_start = ith * row_align; m_start < gemm_m; m_start += row_align * nth) {
+            for (int64_t m_start = ith * row_align; m_start < gemm_m; m_start += row_align * nth) {
                 uint8_t * b_col    = reinterpret_cast<uint8_t *>(w_data);
                 uint8_t * b_col_zp = block_type_has_zp<BLOC_TYPE>() ? b_col : nullptr;
 
-                size_t m_row_real = std::min(gemm_m - m_start, row_align);
+                int64_t m_row_real = std::min(gemm_m - m_start, row_align);
 
                 spacemit_kernels::rvv::memcpy1d(tcm_buffer, quant_a_buffer + m_start * row_stride_a,
                                                 m_row_real * row_stride_a);
 
-                uint8_t * a_row = (uint8_t *) tcm_buffer;
+                int64_t n_blk_real = 0;
+                for (int64_t ni = 0; ni < gemm_n; ni += n_blk_real, b_col += n_blk_real * row_stride_b) {
+                    n_blk_real = std::min(gemm_n - ni, (int64_t) NB_COLS);
 
-                size_t n_blk_real = 0;
-                for (size_t ni = 0; ni < gemm_n; ni += n_blk_real, b_col += n_blk_real * row_stride_b) {
-                    n_blk_real = std::min(gemm_n - ni, (size_t) NB_COLS);
-
-                    uint8_t * a_row_ptr = a_row;
+                    uint8_t * a_row_ptr = (uint8_t *) tcm_buffer;
                     float *   c_blk     = output + m_start * gemm_n + ni;
 
                     int32_t rows_remaining = m_row_real;
@@ -439,14 +439,8 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
             }
             uint8_t * b_col_zp = block_type_has_zp<BLOC_TYPE>() ? b_col : nullptr;
 
-            size_t nb_threaded = NB_COLS;
-
-            if ((gemm_workspace_size + nb_threaded * row_stride_b) > tcm_buffer_size) {
-                nb_threaded = NB_COLS;
-            }
-
-            size_t ni      = ith * nb_threaded;
-            size_t nb_real = std::min(gemm_n - ni, (size_t) nb_threaded);
+            int64_t ni      = ith * NB_COLS;
+            int64_t nb_real = std::min(gemm_n - ni, NB_COLS);
 
             if (ith % 2 == 0 && nb_real > 0) {
                 spacemit_kernels::rvv::memcpy1d(b_col, reinterpret_cast<uint8_t *>(w_data) + ni * row_stride_b,
@@ -466,8 +460,8 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                                                 nb_real * row_stride_b);
             }
 
-            for (; ni < gemm_n; ni += nb_threaded * nth) {
-                int32_t rows_remaining = gemm_m;
+            for (; ni < gemm_n; ni += NB_COLS * nth) {
+                int64_t rows_remaining = gemm_m;
                 float * c_blk          = output + ni;
                 auto *  a_row_cur      = a_row;
 
@@ -489,49 +483,48 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                     spine_barrier_wait(cur_barrier);
                 }
 
-                size_t next_ni = ni + nb_threaded * nth;
+                const int64_t next_ni = ni + NB_COLS * nth;
                 if (next_ni < gemm_n) {
-                    nb_real = std::min(gemm_n - next_ni, (size_t) nb_threaded);
+                    nb_real = std::min(gemm_n - next_ni, NB_COLS);
                     spacemit_kernels::rvv::memcpy1d(b_col, reinterpret_cast<uint8_t *>(w_data) + next_ni * row_stride_b,
                                                     nb_real * row_stride_b);
                 }
             }
         } else {
-            const size_t task_count_m = spacemit_kernels::div_round_up(gemm_m, gemm_m_stride);
-            const size_t task_count_n = spacemit_kernels::div_round_up(gemm_n, gemm_n_stride);
+            const int64_t task_count_m = spacemit_kernels::div_round_up(gemm_m, gemm_m_stride);
+            const int64_t task_count_n = spacemit_kernels::div_round_up(gemm_n, gemm_n_stride);
 
-            int task_count      = task_count_m * task_count_n;
-            int task_per_thread = (task_count + nth - 1) / nth;
-            int start           = ith * task_per_thread;
-            int end             = std::min((ith + 1) * task_per_thread, task_count);
-            for (int compute_idx = start; compute_idx < end; compute_idx++) {
+            int64_t task_count      = task_count_m * task_count_n;
+            int64_t task_per_thread = (task_count + nth - 1) / nth;
+            int64_t start           = ith * task_per_thread;
+            int64_t end             = std::min((ith + 1) * task_per_thread, task_count);
+            for (int64_t compute_idx = start; compute_idx < end; compute_idx++) {
                 const auto tid_n = compute_idx / task_count_m;
                 const auto tid_m = compute_idx % task_count_m;
 
-                const size_t m_start = tid_m * gemm_m_stride;
-                const size_t m_count = std::min(gemm_m - m_start, (size_t) gemm_m_stride);
+                const int64_t m_start = tid_m * gemm_m_stride;
+                const int64_t m_count = std::min(gemm_m - m_start, (int64_t) gemm_m_stride);
 
-                const size_t n_start = tid_n * gemm_n_stride;
-                const size_t n_count = std::min(gemm_n - n_start, (size_t) gemm_n_stride);
+                const int64_t n_start = tid_n * gemm_n_stride;
+                const int64_t n_count = std::min(gemm_n - n_start, (int64_t) gemm_n_stride);
 
-                const size_t n_blk = m_count == 1 ? n_count : NB_COLS;
+                const int64_t n_blk = m_count == 1 ? n_count : NB_COLS;
 
                 uint8_t * b_col    = reinterpret_cast<uint8_t *>(w_data) + n_start * row_stride_b;
                 uint8_t * b_col_zp = block_type_has_zp<BLOC_TYPE>() ? b_col : nullptr;
 
-                size_t n_blk_real = 0;
-                for (size_t ni = 0; ni < n_count; ni += n_blk_real, b_col += n_blk_real * row_stride_b) {
+                int64_t n_blk_real = 0;
+                for (int64_t ni = 0; ni < n_count; ni += n_blk_real, b_col += n_blk_real * row_stride_b) {
                     n_blk_real = std::min(n_count - ni, n_blk);
 
                     uint8_t * a_row = quant_a_buffer + m_start * row_stride_a;
 
                     float * c_blk = output + m_start * gemm_n + n_start + ni;
 
-                    int32_t rows_remaining = m_count;
+                    int64_t rows_remaining = m_count;
 
-                    const size_t b_data_size  = n_blk_real * row_stride_b;
-                    uint8_t *    b_col_cur    = b_col;
-                    uint8_t *    b_col_zp_cur = b_col_zp;
+                    uint8_t * b_col_cur    = b_col;
+                    uint8_t * b_col_zp_cur = b_col_zp;
 
                     while (rows_remaining > 0) {
                         auto rows_handled = gemm_kernel(b_blk_len, a_row, b_col_cur, b_col_zp_cur, c_blk,
@@ -665,11 +658,11 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) *ne12 + (i1)]
 
-        int64_t *                 matrix_row_counts       = (int64_t *) (ws_ptr + gemm_workspace_size);
-        int32_t *                 valid_ep_count          = (int32_t *) (matrix_row_counts + n_as);
-        int32_t *                 valid_act_count         = (int32_t *) (valid_ep_count + 1);
-        int64_t *                 valid_matrix_row_counts = (int64_t *) (valid_act_count + 1);
-        struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *) (valid_matrix_row_counts + n_as);
+        int64_t *          matrix_row_counts       = (int64_t *) (ws_ptr + gemm_workspace_size);
+        int32_t *          valid_ep_count          = (int32_t *) (matrix_row_counts + n_as);
+        int32_t *          valid_act_count         = (int32_t *) (valid_ep_count + 1);
+        int64_t *          valid_matrix_row_counts = (int64_t *) (valid_act_count + 1);
+        mmid_row_mapping * matrix_rows             = (mmid_row_mapping *) (valid_matrix_row_counts + n_as);
 
         if (ith == 0) {
             // initialize matrix_row_counts
@@ -703,9 +696,11 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
             valid_act_count[0] = valid_act_count_t;
         }
 
+        const int64_t barrier_idx = static_cast<int64_t>(ith / 2);
+
         GGML_ASSERT(global_spine_env_info.init_barrier != nullptr);
-        GGML_ASSERT((ith / 2) < spine_init_barrier_count);
-        spine_barrier_t * cur_barrier = &global_spine_env_info.init_barrier[ith / 2];
+        GGML_ASSERT(barrier_idx < spine_init_barrier_count);
+        spine_barrier_t * cur_barrier = &global_spine_env_info.init_barrier[barrier_idx];
 
         ggml_barrier(params->threadpool);
 
@@ -732,16 +727,15 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
             valid_act_count_t == n_as && per_nb_cols_wsize <= tcm_buffer_size) {
             for (int64_t valid_id = ith; valid_id < valid_ep_count_t; valid_id += nth) {
                 const int64_t cur_a = valid_matrix_row_counts[valid_id];
-                const int64_t cne1  = matrix_row_counts[cur_a];
 
                 auto * src0_cur = (uint8_t *) src0->data + cur_a * expert_b_stride;
 
-                struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, 0);
-                const int               id          = row_mapping.i1;
-                const int64_t           i11         = id % ne11;
-                const int64_t           i12         = row_mapping.i2;
-                const int64_t           i1          = id;
-                const int64_t           i2          = i12;
+                mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, 0);
+                const int        id          = row_mapping.i1;
+                const int64_t    i11         = id % ne11;
+                const int64_t    i12         = row_mapping.i2;
+                const int64_t    i1          = id;
+                const int64_t    i2          = i12;
 
                 auto *  src1_col = quant_a_buffer + (i11 * nbw1 + i12 * nbw2);
                 float * c_blk    = (float *) ((char *) dst->data + (i1 * nb1 + i2 * nb2));
@@ -753,12 +747,6 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                     b_col = reinterpret_cast<uint8_t *>(tcm_buffer) + nbw1;
                 }
                 uint8_t * b_col_zp = block_type_has_zp<BLOC_TYPE>() ? b_col : nullptr;
-
-                size_t nb_threaded = NB_COLS;
-
-                if ((nbw1 + nb_threaded * row_stride_b) > tcm_buffer_size) {
-                    nb_threaded = NB_COLS;
-                }
 
                 if (ith % 2 == 0) {
                     spacemit_kernels::rvv::memcpy1d(b_col, reinterpret_cast<uint8_t *>(src0_cur), per_nb_cols_wsize);
@@ -778,8 +766,8 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                     spacemit_kernels::rvv::memcpy1d(b_col, reinterpret_cast<uint8_t *>(src0_cur), per_nb_cols_wsize);
                 }
 
-                size_t nb_real = std::min((size_t) ne01, (size_t) nb_threaded);
-                for (size_t ni = 0; ni < ne01; ni += nb_threaded) {
+                int64_t nb_real = std::min(ne01, NB_COLS);
+                for (int64_t ni = 0; ni < ne01; ni += NB_COLS) {
                     if (ith % 2 != 0) {
                         spine_barrier_wait(cur_barrier);
                     }
@@ -790,9 +778,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                         spine_barrier_wait(cur_barrier);
                     }
 
-                    size_t next_ni = ni + nb_threaded;
+                    const int64_t next_ni = ni + NB_COLS;
                     if (next_ni < ne01) {
-                        nb_real = std::min(ne01 - next_ni, (size_t) nb_threaded);
+                        nb_real = std::min(ne01 - next_ni, NB_COLS);
                         spacemit_kernels::rvv::memcpy1d(
                             b_col, reinterpret_cast<uint8_t *>(src0_cur) + next_ni * row_stride_b, per_nb_cols_wsize);
                     }
@@ -845,15 +833,12 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
 
                         int iir1 = ir1;
                         for (; iir1 < (ir1 + quant_a_tile_size); ++iir1) {
-                            struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, iir1);
+                            mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, iir1);
 
                             const int id = row_mapping.i1;  // selected expert index
 
                             const int64_t i11 = id % ne11;
                             const int64_t i12 = row_mapping.i2;  // row index in src1
-
-                            const int64_t i1 = id;               // selected expert index
-                            const int64_t i2 = i12;              // row
 
                             auto * src1_col = quant_a_buffer + (i11 * nbw1 + i12 * nbw2);
                             spacemit_kernels::rvv::memcpy1d(quant_a_tile_buffer, src1_col, nbw1);
@@ -865,8 +850,8 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
 
                         if (moe_gemm_kernel_m2 != nullptr) {
                             for (; iir1 < (ir1 + quant_a_tile_size - 1); iir1 += 2, quant_a_tile_buffer += 2 * nbw1) {
-                                struct mmid_row_mapping row_mapping_0 = MMID_MATRIX_ROW(cur_a, iir1);
-                                struct mmid_row_mapping row_mapping_1 = MMID_MATRIX_ROW(cur_a, iir1 + 1);
+                                mmid_row_mapping row_mapping_0 = MMID_MATRIX_ROW(cur_a, iir1);
+                                mmid_row_mapping row_mapping_1 = MMID_MATRIX_ROW(cur_a, iir1 + 1);
 
                                 src_workspaces[0] = quant_a_tile_buffer;
                                 src_workspaces[1] = quant_a_tile_buffer + nbw1;
@@ -884,7 +869,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                         }
 
                         for (; iir1 < (ir1 + quant_a_tile_size); iir1++, quant_a_tile_buffer += nbw1) {
-                            struct mmid_row_mapping row_mapping_0 = MMID_MATRIX_ROW(cur_a, iir1);
+                            mmid_row_mapping row_mapping_0 = MMID_MATRIX_ROW(cur_a, iir1);
 
                             gemm_kernel(
                                 b_blk_len, quant_a_tile_buffer, src0_cur, b_col_zp,
@@ -899,7 +884,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                     if (moe_gemm_kernel_m2 != nullptr) {
                         for (; ir1 < src1_cur_end - 1; ir1 += 2) {
                             for (int iir1 = 0; iir1 < 2; ++iir1) {
-                                struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, ir1 + iir1);
+                                mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, ir1 + iir1);
 
                                 const int id = row_mapping.i1;  // selected expert index
 
@@ -921,7 +906,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                     }
 
                     for (; ir1 < src1_cur_end; ir1++) {
-                        struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, ir1);
+                        mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, ir1);
 
                         const int id = row_mapping.i1;  // selected expert index
 
@@ -943,7 +928,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
 #undef MMID_MATRIX_ROW
     }
 
-    int repack(struct ggml_tensor * t, const void * data, size_t data_size) override {
+    int repack(ggml_tensor * t, const void * data, size_t data_size) override {
         GGML_LOG_DEBUG("%s: repack tensor %s with %s_%dx%d\n", __func__, t->name, ggml_type_name(t->type),
                        (int) NB_COLS, (int) INTER_SIZE);
         return ggml::cpu::riscv64_spacemit::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
@@ -951,7 +936,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
 };
 
 class tensor_traits_common : public tensor_traits_base {
-    bool work_size(int n_threads, const struct ggml_tensor * op, size_t & size) override {
+    bool work_size(int n_threads, const ggml_tensor * op, size_t & size) override {
         switch (op->op) {
             case GGML_OP_FLASH_ATTN_EXT:
                 {
@@ -981,7 +966,7 @@ class tensor_traits_common : public tensor_traits_base {
         return false;
     }
 
-    bool compute_forward(struct ggml_compute_params * params, struct ggml_tensor * op) override {
+    bool compute_forward(ggml_compute_params * params, ggml_tensor * op) override {
         switch (op->op) {
             case GGML_OP_NORM:
                 switch (op->src[0]->type) {
@@ -1246,7 +1231,7 @@ class tensor_traits_common : public tensor_traits_base {
         }
     }
 
-    int repack(struct ggml_tensor * t, const void * data, size_t data_size) override {
+    int repack(ggml_tensor * t, const void * data, size_t data_size) override {
         memcpy(t->data, data, data_size);
         return 0;
     }
@@ -1275,7 +1260,7 @@ static const tensor_traits_common               rvv_impl;
 
 }  // namespace ggml::cpu::riscv64_spacemit
 
-static const ggml::cpu::tensor_traits * ggml_riscv64_spacemit_get_optimal_repack_type(const struct ggml_tensor * cur) {
+static const ggml::cpu::tensor_traits * ggml_riscv64_spacemit_get_optimal_repack_type(const ggml_tensor * cur) {
     switch (cur->type) {
         case GGML_TYPE_Q2_K:
             {
@@ -1414,7 +1399,7 @@ static const ggml::cpu::tensor_traits * ggml_riscv64_spacemit_get_optimal_repack
 }
 
 static enum ggml_status ggml_backend_riscv64_spacemit_buffer_init_tensor(ggml_backend_buffer_t buffer,
-                                                                         struct ggml_tensor *  tensor) {
+                                                                         ggml_tensor *         tensor) {
     tensor->extra =
         (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_riscv64_spacemit_get_optimal_repack_type(tensor));
 
@@ -1443,7 +1428,7 @@ static void * ggml_backend_riscv64_spacemit_buffer_get_base(ggml_backend_buffer_
 }
 
 static void ggml_backend_riscv64_spacemit_buffer_memset_tensor(ggml_backend_buffer_t buffer,
-                                                               struct ggml_tensor *  tensor,
+                                                               ggml_tensor *         tensor,
                                                                uint8_t               value,
                                                                size_t                offset,
                                                                size_t                size) {
@@ -1462,7 +1447,7 @@ static void ggml_backend_riscv64_spacemit_buffer_clear(ggml_backend_buffer_t buf
 }
 
 static void ggml_backend_riscv64_spacemit_buffer_set_tensor(ggml_backend_buffer_t buffer,
-                                                            struct ggml_tensor *  tensor,
+                                                            ggml_tensor *         tensor,
                                                             const void *          data,
                                                             size_t                offset,
                                                             size_t                size) {
@@ -1478,7 +1463,7 @@ static void ggml_backend_riscv64_spacemit_buffer_set_tensor(ggml_backend_buffer_
     GGML_UNUSED(buffer);
 }
 
-static const struct ggml_backend_buffer_i ggml_backend_riscv64_spacemit_buffer_i = {
+static const ggml_backend_buffer_i ggml_backend_riscv64_spacemit_buffer_i = {
     /* .free_buffer     = */ ggml_backend_riscv64_spacemit_buffer_free_buffer,
     /* .get_base        = */ ggml_backend_riscv64_spacemit_buffer_get_base,
     /* .init_tensor     = */ ggml_backend_riscv64_spacemit_buffer_init_tensor,
@@ -1514,8 +1499,7 @@ static size_t ggml_backend_cpu_riscv64_spacemit_buffer_type_get_alignment(ggml_b
     GGML_UNUSED(buft);
 }
 
-static size_t ggml_backend_cpu_riscv64_spacemit_nbytes(ggml_backend_buffer_type_t buft,
-                                                       const struct ggml_tensor * tensor) {
+static size_t ggml_backend_cpu_riscv64_spacemit_nbytes(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         if (tensor->ne[i] <= 0) {
             return 0;
@@ -1622,7 +1606,7 @@ static size_t ggml_backend_cpu_riscv64_spacemit_nbytes(ggml_backend_buffer_type_
 namespace ggml::cpu::riscv64_spacemit {
 
 class extra_buffer_type : ggml::cpu::extra_buffer_type {
-    bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
+    bool supports_op(ggml_backend_dev_t, const ggml_tensor * op) override {
         switch (op->op) {
             case GGML_OP_MUL_MAT:
                 if (op->src[0]->buffer && (ggml_n_dims(op->src[0]) == 2) &&
@@ -1655,7 +1639,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
         return false;
     }
 
-    ggml::cpu::tensor_traits * get_tensor_traits(const struct ggml_tensor * op) override {
+    ggml::cpu::tensor_traits * get_tensor_traits(const ggml_tensor * op) override {
         switch (op->op) {
             case GGML_OP_MUL_MAT:
             case GGML_OP_MUL_MAT_ID:
@@ -1690,7 +1674,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
 }  // namespace ggml::cpu::riscv64_spacemit
 
 ggml_backend_buffer_type_t ggml_backend_cpu_riscv64_spacemit_buffer_type(void) {
-    static struct ggml_backend_buffer_type ggml_backend_cpu_buffer_type_riscv64_spacemit = {
+    static ggml_backend_buffer_type ggml_backend_cpu_buffer_type_riscv64_spacemit = {
   /* .iface    = */
         {
          /* .get_name         = */ ggml_backend_cpu_riscv64_spacemit_buffer_type_get_name,
@@ -1710,7 +1694,7 @@ ggml_backend_buffer_type_t ggml_backend_cpu_riscv64_spacemit_buffer_type(void) {
 }
 
 extern "C" {
-int bind_ai_thread() {
+static int bind_ai_thread() {
     int  fd, bytes;
     char str[32];
 
@@ -1743,14 +1727,13 @@ void ggml_backend_cpu_riscv64_spacemit_set_numa_thread_affinity(int thread_n) {
     if (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_tcm &&
         ggml::cpu::riscv64_spacemit::tls_context.cpu_id == -1) {
         CPU_ZERO(&(ggml::cpu::riscv64_spacemit::tls_context.cpuset));
-        pthread_t main_thread   = pthread_self();
-        auto      perfer_cpu_id = ggml::cpu::riscv64_spacemit::global_spine_env_info.perfer_core_ids[thread_n];
-        if (thread_n < ggml::cpu::riscv64_spacemit::global_spine_env_info.perfer_core_ids.size()) {
-            CPU_SET(perfer_cpu_id, &(ggml::cpu::riscv64_spacemit::tls_context.cpuset));
-        } else {
-            GGML_ABORT("thread_n %d exceeds perfer_core_ids size %zu\n", thread_n,
-                       ggml::cpu::riscv64_spacemit::global_spine_env_info.perfer_core_ids.size());
+        pthread_t    main_thread     = pthread_self();
+        const auto & perfer_core_ids = ggml::cpu::riscv64_spacemit::global_spine_env_info.perfer_core_ids;
+        if (thread_n < 0 || static_cast<size_t>(thread_n) >= perfer_core_ids.size()) {
+            GGML_ABORT("thread_n %d exceeds perfer_core_ids size %zu\n", thread_n, perfer_core_ids.size());
         }
+        auto perfer_cpu_id = perfer_core_ids[static_cast<size_t>(thread_n)];
+        CPU_SET(perfer_cpu_id, &(ggml::cpu::riscv64_spacemit::tls_context.cpuset));
         int s =
             pthread_setaffinity_np(main_thread, sizeof(cpu_set_t), &(ggml::cpu::riscv64_spacemit::tls_context.cpuset));
         if (s != 0) {

@@ -149,7 +149,7 @@ static block_q4_1x16 make_block_q4_1x16(block_q4_1 * in, unsigned int blck_size_
     return out;
 }
 
-static int repack_q4_0_to_q4_0_16_bl(struct ggml_tensor *       t,
+static int repack_q4_0_to_q4_0_16_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -184,7 +184,7 @@ static int repack_q4_0_to_q4_0_16_bl(struct ggml_tensor *       t,
     GGML_UNUSED(data_size);
 }
 
-static int repack_q4_1_to_q4_1_16_bl(struct ggml_tensor *       t,
+static int repack_q4_1_to_q4_1_16_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -232,7 +232,7 @@ static inline void get_scale_min_k4(int                           j,
     }
 }
 
-static int repack_q4_k_to_q4_1_16_bl(struct ggml_tensor *       t,
+static int repack_q4_k_to_q4_1_16_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -370,7 +370,7 @@ static block_q8_0x32 make_block_q8_0x32(block_q8_0 * in, unsigned int blck_size_
     return out;
 }
 
-static int repack_q2_k_to_q2_k_32_bl(struct ggml_tensor *       t,
+static int repack_q2_k_to_q2_k_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -449,7 +449,7 @@ static int repack_q2_k_to_q2_k_32_bl(struct ggml_tensor *       t,
     return 0;
 }
 
-static int repack_q3_k_to_q3_k_32_bl(struct ggml_tensor *       t,
+static int repack_q3_k_to_q3_k_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -554,7 +554,7 @@ static int repack_q3_k_to_q3_k_32_bl(struct ggml_tensor *       t,
     return 0;
 }
 
-static int repack_q4_0_to_q4_0_32_bl_ref(struct ggml_tensor *       t,
+static int repack_q4_0_to_q4_0_32_bl_ref(ggml_tensor *              t,
                                          int                        interleave_block,
                                          const void * GGML_RESTRICT data,
                                          size_t                     data_size) {
@@ -589,7 +589,7 @@ static int repack_q4_0_to_q4_0_32_bl_ref(struct ggml_tensor *       t,
     GGML_UNUSED(data_size);
 }
 
-static int repack_q4_0_to_q4_0_256_32_bl_ref(struct ggml_tensor *       t,
+static int repack_q4_0_to_q4_0_256_32_bl_ref(ggml_tensor *              t,
                                              int                        interleave_block,
                                              const void * GGML_RESTRICT data,
                                              size_t                     data_size) {
@@ -627,7 +627,7 @@ static int repack_q4_0_to_q4_0_256_32_bl_ref(struct ggml_tensor *       t,
     GGML_UNUSED(data_size);
 }
 
-static int repack_q4_0_to_q4_1_256_32_bl_ref(struct ggml_tensor *       t,
+static int repack_q4_0_to_q4_1_256_32_bl_ref(ggml_tensor *              t,
                                              int                        interleave_block,
                                              const void * GGML_RESTRICT data,
                                              size_t                     data_size) {
@@ -693,7 +693,7 @@ static int repack_q4_0_to_q4_1_256_32_bl_ref(struct ggml_tensor *       t,
 
 // RVV optimized version of repack_q4_0_to_q4_0_32_bl
 // Eliminates the intermediate dst_tmp buffer and vectorizes nibble repack.
-static int repack_q4_0_to_q4_0_32_bl(struct ggml_tensor *       t,
+static int repack_q4_0_to_q4_0_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -776,7 +776,7 @@ static int repack_q4_0_to_q4_0_32_bl(struct ggml_tensor *       t,
     GGML_UNUSED(data_size);
 }
 
-static int repack_q4_1_to_q4_1_32_bl_ref(struct ggml_tensor *       t,
+static int repack_q4_1_to_q4_1_32_bl_ref(ggml_tensor *              t,
                                          int                        interleave_block,
                                          const void * GGML_RESTRICT data,
                                          size_t                     data_size) {
@@ -813,7 +813,7 @@ static int repack_q4_1_to_q4_1_32_bl_ref(struct ggml_tensor *       t,
 
 // RVV optimized version of repack_q4_1_to_q4_1_32_bl
 // Eliminates the intermediate dst_tmp buffer and vectorizes nibble repack + zp computation.
-static int repack_q4_1_to_q4_1_32_bl(struct ggml_tensor *       t,
+static int repack_q4_1_to_q4_1_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -925,7 +925,7 @@ static int repack_q4_1_to_q4_1_32_bl(struct ggml_tensor *       t,
     GGML_UNUSED(data_size);
 }
 
-static int repack_q4_k_to_q4_1_32_bl(struct ggml_tensor *       t,
+static int repack_q4_k_to_q4_1_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -982,7 +982,7 @@ static int repack_q4_k_to_q4_1_32_bl(struct ggml_tensor *       t,
     GGML_UNUSED(data_size);
 }
 
-static int repack_q6_k_to_q8_0_32_bl_ref(struct ggml_tensor *       t,
+static int repack_q6_k_to_q8_0_32_bl_ref(ggml_tensor *              t,
                                          int                        interleave_block,
                                          const void * GGML_RESTRICT data,
                                          size_t                     data_size) {
@@ -1087,7 +1087,7 @@ static int repack_q6_k_to_q8_0_32_bl_ref(struct ggml_tensor *       t,
 // Vectorizes the Q6_K dequant -> requant pipeline using RVV intrinsics.
 // For each sub-block (bi), dequant 32 Q6_K values to int6 -> apply two sub-block scales ->
 // find max abs -> compute reflect_scale -> requant to int8 -> gather d with stride load.
-static int repack_q6_k_to_q8_0_32_bl(struct ggml_tensor *       t,
+static int repack_q6_k_to_q8_0_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -1268,7 +1268,7 @@ static int repack_q6_k_to_q8_0_32_bl(struct ggml_tensor *       t,
     GGML_UNUSED(data_size);
 }
 
-static int repack_q8_0_to_q8_0_32_bl_ref(struct ggml_tensor *       t,
+static int repack_q8_0_to_q8_0_32_bl_ref(ggml_tensor *              t,
                                          int                        interleave_block,
                                          const void * GGML_RESTRICT data,
                                          size_t                     data_size) {
@@ -1310,7 +1310,7 @@ static int repack_q8_0_to_q8_0_32_bl_ref(struct ggml_tensor *       t,
 
 // RVV optimized version of repack_q8_0_to_q8_0_32_bl
 // Eliminates the intermediate dst_tmp buffer and vectorizes scale gather + qs copy.
-static int repack_q8_0_to_q8_0_32_bl(struct ggml_tensor *       t,
+static int repack_q8_0_to_q8_0_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -1431,7 +1431,7 @@ static spacemit_kernels::nrow_block_mxfp4<32> make_block_mxfp4x32(spacemit_kerne
     return out;
 }
 
-static int repack_mxfp4_to_mxfp4_32_bl(struct ggml_tensor *       t,
+static int repack_mxfp4_to_mxfp4_32_bl(ggml_tensor *              t,
                                        int                        interleave_block,
                                        const void * GGML_RESTRICT data,
                                        size_t                     data_size) {
@@ -1529,7 +1529,7 @@ static spacemit_kernels::nrow_block_q5_0<32> make_block_q5_0x32(spacemit_kernels
     return out;
 }
 
-static int repack_q5_0_to_q5_0_32_bl(struct ggml_tensor *       t,
+static int repack_q5_0_to_q5_0_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -1566,7 +1566,7 @@ static int repack_q5_0_to_q5_0_32_bl(struct ggml_tensor *       t,
     return 0;
 }
 
-static int repack_q5_1_to_q5_1_32_bl(struct ggml_tensor *       t,
+static int repack_q5_1_to_q5_1_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -1622,7 +1622,7 @@ static int repack_q5_1_to_q5_1_32_bl(struct ggml_tensor *       t,
     return 0;
 }
 
-static int repack_q5_k_to_q5_1_32_bl(struct ggml_tensor *       t,
+static int repack_q5_k_to_q5_1_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
@@ -1702,30 +1702,29 @@ static int repack_q5_k_to_q5_1_32_bl(struct ggml_tensor *       t,
 
 namespace ggml::cpu::riscv64_spacemit {
 
-template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS>
-int repack(struct ggml_tensor *, const void *, size_t);
+template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> int repack(ggml_tensor *, const void *, size_t);
 
-template <> int repack<block_q4_0, 32, 16>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q4_0, 32, 16>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q4_0_to_q4_0_16_bl(t, 16, data, data_size);
 }
 
-template <> int repack<block_q4_1, 32, 16>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q4_1, 32, 16>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q4_1_to_q4_1_16_bl(t, 16, data, data_size);
 }
 
-template <> int repack<block_q4_K, 32, 16>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q4_K, 32, 16>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q4_k_to_q4_1_16_bl(t, 16, data, data_size);
 }
 
-template <> int repack<block_q2_K, 256, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q2_K, 256, 32>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q2_k_to_q2_k_32_bl(t, 32, data, data_size);
 }
 
-template <> int repack<block_q3_K, 256, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q3_K, 256, 32>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q3_k_to_q3_k_32_bl(t, 32, data, data_size);
 }
 
-template <> int repack<block_q4_0, 32, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q4_0, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
 #if 0
     return repack_q4_0_to_q4_0_32_bl_ref(t, 32, data, data_size);
 #else
@@ -1733,7 +1732,7 @@ template <> int repack<block_q4_0, 32, 32>(struct ggml_tensor * t, const void * 
 #endif
 }
 
-template <> int repack<block_q4_0, 256, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q4_0, 256, 32>(ggml_tensor * t, const void * data, size_t data_size) {
 #if 1
     return repack_q4_0_to_q4_0_256_32_bl_ref(t, 32, data, data_size);
 #else
@@ -1741,7 +1740,7 @@ template <> int repack<block_q4_0, 256, 32>(struct ggml_tensor * t, const void *
 #endif
 }
 
-template <> int repack<block_q4_1, 32, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q4_1, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
 #if 0
     return repack_q4_1_to_q4_1_32_bl_ref(t, 32, data, data_size);
 #else
@@ -1749,7 +1748,7 @@ template <> int repack<block_q4_1, 32, 32>(struct ggml_tensor * t, const void * 
 #endif
 }
 
-template <> int repack<block_q4_1, 256, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q4_1, 256, 32>(ggml_tensor * t, const void * data, size_t data_size) {
 #if 1
     return repack_q4_0_to_q4_1_256_32_bl_ref(t, 32, data, data_size);
 #else
@@ -1757,11 +1756,11 @@ template <> int repack<block_q4_1, 256, 32>(struct ggml_tensor * t, const void *
 #endif
 }
 
-template <> int repack<block_q4_K, 32, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q4_K, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q4_k_to_q4_1_32_bl(t, 32, data, data_size);
 }
 
-template <> int repack<block_q6_K, 32, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q6_K, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
 #if 1
     return repack_q6_k_to_q8_0_32_bl_ref(t, 32, data, data_size);
 #else
@@ -1769,7 +1768,7 @@ template <> int repack<block_q6_K, 32, 32>(struct ggml_tensor * t, const void * 
 #endif
 }
 
-template <> int repack<block_q8_0, 32, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q8_0, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
 #if 1
     return repack_q8_0_to_q8_0_32_bl_ref(t, 32, data, data_size);
 #else
@@ -1777,19 +1776,19 @@ template <> int repack<block_q8_0, 32, 32>(struct ggml_tensor * t, const void * 
 #endif
 }
 
-template <> int repack<block_mxfp4, 32, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_mxfp4, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_mxfp4_to_mxfp4_32_bl(t, 32, data, data_size);
 }
 
-template <> int repack<block_q5_0, 32, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q5_0, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q5_0_to_q5_0_32_bl(t, 32, data, data_size);
 }
 
-template <> int repack<block_q5_1, 32, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q5_1, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q5_1_to_q5_1_32_bl(t, 32, data, data_size);
 }
 
-template <> int repack<block_q5_K, 32, 32>(struct ggml_tensor * t, const void * data, size_t data_size) {
+template <> int repack<block_q5_K, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q5_k_to_q5_1_32_bl(t, 32, data, data_size);
 }
 
