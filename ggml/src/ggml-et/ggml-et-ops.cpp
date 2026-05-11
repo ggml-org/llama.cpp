@@ -887,7 +887,7 @@ bool ggml_et_op_mul_mat_id(ggml_backend_et_device_context* dev_ctx, const ggml_t
         node->src[1]->type == GGML_TYPE_F32 &&
         node->src[2]->type == GGML_TYPE_I32) {
 
-        kernel_name = "mul_mat_id_f32";
+        kernel_name = "mul_mat_id_Q8_0";
         src0_type_name = "Q8_0";
 
     } else if (node->type == GGML_TYPE_F32 &&
@@ -895,7 +895,7 @@ bool ggml_et_op_mul_mat_id(ggml_backend_et_device_context* dev_ctx, const ggml_t
                node->src[1]->type == GGML_TYPE_F32 &&
                node->src[2]->type == GGML_TYPE_I32) {
 
-        kernel_name = "mul_mat_id_f32";
+        kernel_name = "mul_mat_id_Q4_0";
         src0_type_name = "Q4_0";
 
     } else if (node->type == GGML_TYPE_F32 &&
