@@ -1971,10 +1971,12 @@ struct ggml_backend_vk_context {
 static void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
 
 static uint64_t vk_tensor_view_offset(const ggml_tensor * tensor) {
+    GGML_ASSERT(tensor->view_offs % ggml_type_size(tensor->type) == 0);
+    const size_t dev_view_offs = tensor->view_offs / ggml_type_size(tensor->type) * ggml_vk_device_type_size(tensor->type);
     if (tensor->view_src) {
-        return (uint8_t *) tensor->view_src->data - (uint8_t *) vk_ptr_base + tensor->view_offs;
+        return (uint8_t *) tensor->view_src->data - (uint8_t *) vk_ptr_base + dev_view_offs;
     }
-    return (uint8_t *) tensor->data - (uint8_t *) vk_ptr_base + tensor->view_offs;
+    return (uint8_t *) tensor->data - (uint8_t *) vk_ptr_base + dev_view_offs;
 }
 
 static uint32_t get_misalign_bytes(const ggml_backend_vk_context * ctx, const ggml_tensor * t)
@@ -6921,6 +6923,62 @@ static void ggml_vk_buffer_write(vk_buffer& dst, size_t offset, const void * src
     ggml_vk_buffer_write_2d(dst, offset, src, size, size, size, 1);
 }
 
+// view_offset is expected to be in device bytes, all other values in host/ggml bytes
+static void ggml_vk_buffer_write_2d_padded(vk_buffer& dst, size_t view_offset, size_t offset, const void * src, size_t spitch, size_t dpitch, size_t width, size_t height, ggml_type type) {
+    VK_LOG_DEBUG("ggml_vk_buffer_write_2d_padded(" << width << ", " << height << ")");
+
+    size_t host_block_size = ggml_type_size(type);
+    size_t device_block_size = ggml_vk_device_type_size(type);
+
+    if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
+        GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+
+        for (size_t i = 0; i < height; i++) {
+            size_t row_pos = 0;
+            while (row_pos < width) {
+                size_t host_bytes_write_pos = i * dpitch + offset + row_pos;
+                size_t block = host_bytes_write_pos / host_block_size;
+                size_t block_pos = host_bytes_write_pos % host_block_size;
+                size_t nbytes = std::min(width - row_pos, host_block_size - block_pos);
+                memcpy((uint8_t *) dst->ptr + view_offset + block * device_block_size + block_pos,
+                       (const uint8_t *) src + i * spitch + row_pos,
+                       nbytes);
+                row_pos += nbytes;
+            }
+        }
+    } else {
+        size_t dev_offset = offset / host_block_size * device_block_size + offset % host_block_size;
+        GGML_ASSERT(height == 1 || dpitch % host_block_size == 0);
+        size_t dev_stride = dpitch / host_block_size * device_block_size;
+
+        size_t dev_width = width / host_block_size * device_block_size + width % host_block_size;
+        uint8_t *hostbuf = (uint8_t *)ggml_vk_host_malloc(dst->device, height * dev_width + 2 * device_block_size);
+        size_t view_start_block_pos = offset % host_block_size;
+
+        for (size_t i = 0; i < height; i++) {
+            size_t row_pos = 0;
+            size_t start_block = (i * dpitch + offset) / host_block_size;
+            while (row_pos < width) {
+                size_t host_bytes_write_pos = i * dpitch + offset + row_pos;
+                size_t block = host_bytes_write_pos / host_block_size;
+                size_t block_pos = host_bytes_write_pos % host_block_size;
+                size_t nbytes = std::min(width - row_pos, host_block_size - block_pos);
+                memcpy((uint8_t *) hostbuf + i * dev_width + (block - start_block) * device_block_size + block_pos - view_start_block_pos,
+                       (const uint8_t *) src + i * spitch + row_pos,
+                       nbytes);
+                row_pos += nbytes;
+            }
+        }
+        ggml_vk_buffer_write_2d(dst, view_offset + dev_offset, hostbuf, dev_width, dev_stride, dev_width, height);
+        ggml_vk_host_free(dst->device, hostbuf);
+    }
+}
+
+static void ggml_vk_buffer_write_padded(vk_buffer& dst, size_t view_offset, size_t offset, const void * src, size_t size, ggml_type type) {
+    VK_LOG_DEBUG("ggml_vk_buffer_write_padded(" << size << ")");
+    ggml_vk_buffer_write_2d_padded(dst, view_offset, offset, src, size, size, size, 1, type);
+}
+
 static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size_t offset, void * dst, size_t spitch, size_t dpitch, size_t width, size_t height, bool sync_staging = false) {
     VK_LOG_DEBUG("ggml_vk_buffer_read_2d_async(offset=" << offset << ", width=" << width << ", height=" << height << ")");
     GGML_ASSERT(width > 0);
@@ -7035,6 +7093,62 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
 static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_t size) {
     VK_LOG_DEBUG("ggml_vk_buffer_read(" << src->buffer << ", " << offset << ", " << size << ")");
     ggml_vk_buffer_read_2d(src, offset, dst, size, size, size, 1);
+}
+
+// view_offset is expected to be in device bytes, all other values in host/ggml bytes
+static void ggml_vk_buffer_read_2d_padded(vk_buffer& src, size_t view_offset, size_t offset, void * dst, size_t spitch, size_t dpitch, size_t width, size_t height, ggml_type type) {
+    VK_LOG_DEBUG("ggml_vk_buffer_read_2d_padded(" << src->buffer << ", " << offset << ", " << width << ", " << height << ")");
+
+    size_t host_block_size = ggml_type_size(type);
+    size_t device_block_size = ggml_vk_device_type_size(type);
+
+    if (src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
+        GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+
+        for (size_t i = 0; i < height; i++) {
+            size_t row_pos = 0;
+            while (row_pos < width) {
+                size_t host_bytes_read_pos = i * spitch + offset + row_pos;
+                size_t block = host_bytes_read_pos / host_block_size;
+                size_t block_pos = host_bytes_read_pos % host_block_size;
+                size_t nbytes = std::min(width - row_pos, host_block_size - block_pos);
+                memcpy((uint8_t *) dst + i * dpitch + row_pos,
+                       (const uint8_t *) src->ptr + view_offset + block * device_block_size + block_pos,
+                       nbytes);
+                row_pos += nbytes;
+            }
+        }
+    } else {
+        size_t dev_offset = offset / host_block_size * device_block_size + offset % host_block_size;
+        GGML_ASSERT(height == 1 || spitch % host_block_size == 0);
+        size_t dev_stride = spitch / host_block_size * device_block_size;
+        size_t view_start_block_pos = offset % host_block_size;
+
+        size_t dev_width = width / host_block_size * device_block_size + width % host_block_size;
+        uint8_t *hostbuf = (uint8_t *)ggml_vk_host_malloc(src->device, height * dev_width + 2 * device_block_size);
+        ggml_vk_buffer_read_2d(src, view_offset + dev_offset, hostbuf, dev_stride, dev_width, dev_width, height);
+
+        for (size_t i = 0; i < height; i++) {
+            size_t row_pos = 0;
+            size_t start_block = (i * spitch + offset) / host_block_size;
+            while (row_pos < width) {
+                size_t host_bytes_read_pos = i * spitch + offset + row_pos;
+                size_t block = host_bytes_read_pos / host_block_size;
+                size_t block_pos = host_bytes_read_pos % host_block_size;
+                size_t nbytes = std::min(width - row_pos, host_block_size - block_pos);
+                memcpy((uint8_t *) dst + i * dpitch + row_pos,
+                       (const uint8_t *) hostbuf + i * dev_width + (block - start_block) * device_block_size + block_pos - view_start_block_pos,
+                       nbytes);
+                row_pos += nbytes;
+            }
+        }
+        ggml_vk_host_free(src->device, hostbuf);
+    }
+}
+
+static void ggml_vk_buffer_read_padded(vk_buffer& src, size_t view_offset, size_t offset, void * dst, size_t size, ggml_type type) {
+    VK_LOG_DEBUG("ggml_vk_buffer_read_padded(" << src->buffer << ", " << offset << ", " << size << ")");
+    ggml_vk_buffer_read_2d_padded(src, view_offset, offset, dst, size, size, size, 1, type);
 }
 
 static void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size) {
@@ -13598,7 +13712,11 @@ static void ggml_backend_vk_buffer_memset_tensor(ggml_backend_buffer_t buffer, g
     }
 
     uint32_t val32 = (uint32_t)value * 0x01010101;
-    ggml_vk_buffer_memset(buf, vk_tensor_view_offset(tensor) + offset, val32, size);
+    size_t device_offset = offset / ggml_type_size(tensor->type) * ggml_vk_device_type_size(tensor->type)
+        + offset % ggml_type_size(tensor->type);
+    size_t device_size = size / ggml_type_size(tensor->type) * ggml_vk_device_type_size(tensor->type)
+        + size % ggml_type_size(tensor->type);
+    ggml_vk_buffer_memset(buf, vk_tensor_view_offset(tensor) + device_offset, val32, device_size);
 }
 
 static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
@@ -13610,7 +13728,11 @@ static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml
         return;
     }
 
-    ggml_vk_buffer_write(buf, vk_tensor_view_offset(tensor) + offset, data, size);
+    if (ggml_nbytes(tensor) != ggml_vk_device_size(tensor)) {
+        ggml_vk_buffer_write_padded(buf, vk_tensor_view_offset(tensor), offset, data, size, tensor->type);
+    } else {
+        ggml_vk_buffer_write(buf, vk_tensor_view_offset(tensor) + offset, data, size);
+    }
 }
 
 static void ggml_backend_vk_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset,
@@ -13624,7 +13746,11 @@ static void ggml_backend_vk_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, g
         return;
     }
 
-    ggml_vk_buffer_write_2d(buf, vk_tensor_view_offset(tensor) + offset, data, stride_data, stride_tensor, size, n_copies);
+    if (ggml_nbytes(tensor) != ggml_vk_device_size(tensor)) {
+        ggml_vk_buffer_write_2d_padded(buf, vk_tensor_view_offset(tensor), offset, data, stride_data, stride_tensor, size, n_copies, tensor->type);
+    } else {
+        ggml_vk_buffer_write_2d(buf, vk_tensor_view_offset(tensor) + offset, data, stride_data, stride_tensor, size, n_copies);
+    }
 }
 
 static void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -13637,7 +13763,11 @@ static void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, cons
 
     vk_buffer buf = buf_ctx->dev_buffer;
 
-    ggml_vk_buffer_read(buf, vk_tensor_view_offset(tensor) + offset, data, size);
+    if (ggml_nbytes(tensor) != ggml_vk_device_size(tensor)) {
+        ggml_vk_buffer_read_padded(buf, vk_tensor_view_offset(tensor), offset, data, size, tensor->type);
+    } else {
+        ggml_vk_buffer_read(buf, vk_tensor_view_offset(tensor) + offset, data, size);
+    }
 }
 
 static void ggml_backend_vk_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset,
@@ -13652,7 +13782,11 @@ static void ggml_backend_vk_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, c
 
     vk_buffer buf = buf_ctx->dev_buffer;
 
-    ggml_vk_buffer_read_2d(buf, vk_tensor_view_offset(tensor) + offset, data, stride_tensor, stride_data, size, n_copies);
+    if (ggml_nbytes(tensor) != ggml_vk_device_size(tensor)) {
+        ggml_vk_buffer_read_2d_padded(buf, vk_tensor_view_offset(tensor), offset, data, stride_tensor, stride_data, size, n_copies, tensor->type);
+    } else {
+        ggml_vk_buffer_read_2d(buf, vk_tensor_view_offset(tensor) + offset, data, stride_tensor, stride_data, size, n_copies);
+    }
 }
 
 static bool ggml_backend_vk_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
@@ -13856,6 +13990,13 @@ static void ggml_backend_vk_set_tensor_2d_async(ggml_backend_t backend, ggml_ten
         return;
     }
 
+    if (ggml_nbytes(tensor) != ggml_vk_device_size(tensor)) {
+        ggml_vk_synchronize(ctx);
+        ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+        ggml_backend_vk_buffer_set_tensor_2d(buffer, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
+        return;
+    }
+
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)tensor->buffer->context;
 
     vk_context cpy_ctx;
@@ -13922,6 +14063,13 @@ static void ggml_backend_vk_get_tensor_2d_async(ggml_backend_t backend, const gg
     GGML_ASSERT((tensor->buffer->buft == ggml_backend_vk_get_default_buffer_type(backend) || tensor->buffer->buft == ggml_backend_vk_host_buffer_type()) && "unsupported buffer type");
 
     if (size == 0) {
+        return;
+    }
+
+    if (ggml_nbytes(tensor) != ggml_vk_device_size(tensor)) {
+        ggml_vk_synchronize(ctx);
+        ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+        ggml_backend_vk_buffer_get_tensor_2d(buffer, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
         return;
     }
 
