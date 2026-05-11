@@ -6,8 +6,14 @@
 #include <memory>
 #include <string>
 
+enum common_schema_dialect {
+    COMMON_SCHEMA_DIALECT_JSON,
+    COMMON_SCHEMA_DIALECT_GEMMA4
+};
+
 std::string json_schema_to_grammar(const nlohmann::ordered_json & schema,
-                                   bool force_gbnf = false);
+                                   bool force_gbnf = false,
+                                   common_schema_dialect dialect = COMMON_SCHEMA_DIALECT_JSON);
 
 class common_schema_converter;
 
@@ -36,6 +42,7 @@ struct common_grammar_builder {
 
 struct common_grammar_options {
     bool dotall = false;
+    common_schema_dialect dialect = COMMON_SCHEMA_DIALECT_JSON;
 };
 
 std::string gbnf_format_literal(const std::string & literal);

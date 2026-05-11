@@ -1792,6 +1792,16 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
     } else {
         // Collect rules reachable from root
         reachable_rules = collect_reachable_rules(*this, root_);
+        for (const auto & [name, id] : rules_) {
+            const auto & parser = parsers_.at(id);
+            if (auto rule = std::get_if<common_peg_rule_parser>(&parser)) {
+                if (rule->trigger) {
+                    reachable_rules.insert(name);
+                    auto add_rules = collect_reachable_rules(*this, id);
+                    reachable_rules.insert(add_rules.begin(), add_rules.end());
+                }
+            }
+        }
     }
 
     // Create GBNF rules for all reachable rules

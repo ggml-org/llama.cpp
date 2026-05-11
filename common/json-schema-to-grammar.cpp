@@ -315,6 +315,7 @@ private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
     std::function<json(const std::string &)> _fetch_json;
     bool _dotall;
+    common_schema_dialect _dialect;
     std::map<std::string, std::string> _rules;
     std::unordered_map<std::string, json> _refs;
     std::unordered_set<std::string> _refs_being_resolved;
@@ -654,7 +655,9 @@ private:
             std::string prop_rule_name = visit(prop_schema, name + (name.empty() ? "" : "-") + prop_name);
             prop_kv_rule_names[prop_name] = _add_rule(
                 name + (name.empty() ? "" : "-") + prop_name + "-kv",
-                format_literal(json(prop_name).dump()) + " space \":\" space " + prop_rule_name
+                (_dialect == COMMON_SCHEMA_DIALECT_GEMMA4
+                     ? format_literal(prop_name)
+                     : format_literal(json(prop_name).dump())) + " space \":\" space " + prop_rule_name
             );
             if (required.find(prop_name) != required.end()) {
                 required_props.push_back(prop_name);
@@ -752,8 +755,9 @@ private:
 public:
     common_schema_converter(
         const std::function<json(const std::string &)> & fetch_json,
-        bool dotall)
-          : _fetch_json(fetch_json), _dotall(dotall)
+        bool dotall,
+        common_schema_dialect dialect = COMMON_SCHEMA_DIALECT_JSON)
+          : _fetch_json(fetch_json), _dotall(dotall), _dialect(dialect)
     {
         _rules["space"] = SPACE_RULE;
     }
@@ -1001,6 +1005,9 @@ public:
             // Per JSON Schema semantics this is equivalent to {} and accepts any value.
             return _add_rule(rule_name, _add_primitive("value", PRIMITIVE_RULES.at("value")));
         }
+        if (_dialect == COMMON_SCHEMA_DIALECT_GEMMA4 && schema_type == "string") {
+            return _add_rule(rule_name == "root" ? "root" : rule_name, "gemma4-string");
+        }
         if (!schema_type.is_string() || PRIMITIVE_RULES.find(schema_type.get<std::string>()) == PRIMITIVE_RULES.end()) {
             _errors.push_back("Unrecognized schema: " + schema.dump());
             return "";
@@ -1155,7 +1162,7 @@ bool common_schema_info::resolves_to_string(const nlohmann::ordered_json & schem
     return check(schema);
 }
 
-std::string json_schema_to_grammar(const json & schema, bool force_gbnf) {
+std::string json_schema_to_grammar(const json & schema, bool force_gbnf, common_schema_dialect dialect) {
 #ifdef LLAMA_USE_LLGUIDANCE
     if (!force_gbnf) {
         return "%llguidance {}\nstart: %json " + schema.dump();
@@ -1163,15 +1170,17 @@ std::string json_schema_to_grammar(const json & schema, bool force_gbnf) {
 #else
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
+    common_grammar_options options;
+    options.dialect = dialect;
     return build_grammar([&](const common_grammar_builder & callbacks) {
         auto copy = schema;
         callbacks.resolve_refs(copy);
         callbacks.add_schema("", copy);
-    });
+    }, options);
 }
 
 std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options) {
-    common_schema_converter converter([&](const std::string &) { return json(); }, options.dotall);
+    common_schema_converter converter([&](const std::string &) { return json(); }, options.dotall, options.dialect);
     common_grammar_builder builder {
         /* .add_rule = */ [&](const std::string & name, const std::string & rule) {
             return converter._add_rule(name, rule);

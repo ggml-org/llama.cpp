@@ -1509,11 +1509,62 @@ static void test_resolves_to_string() {
     fprintf(stderr, "All resolves_to_string tests passed!\n");
 }
 
+static void test_gemma4_dialect() {
+    fprintf(stderr, "#\n# Testing JSON schema conversion (Gemma 4 Dialect)\n#\n");
+    auto test = [](const TestCase & tc) {
+        fprintf(stderr, "- %s\n", tc.name.c_str());
+        try {
+            tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true, COMMON_SCHEMA_DIALECT_GEMMA4));
+            tc.verify_status(SUCCESS);
+        } catch (const std::invalid_argument & ex) {
+            fprintf(stderr, "Error: %s\n", ex.what());
+            tc.verify_status(FAILURE);
+        }
+    };
+
+    test({
+        SUCCESS,
+        "gemma4 basic string",
+        R"""({
+            "type": "string"
+        })""",
+        R"""(
+            root ::= gemma4-string
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "gemma4 object with keys",
+        R"""({
+            "type": "object",
+            "properties": {
+                "absolutePath": { "type": "string" },
+                "startLine": { "type": "integer" }
+            },
+            "required": ["absolutePath"]
+        })""",
+        R"""(
+            absolutePath ::= gemma4-string
+            absolutePath-kv ::= "absolutePath" space ":" space absolutePath
+            integer ::= ("-"? integral-part) space
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            root ::= "{" space absolutePath-kv ( "," space ( startLine-kv ) )? "}" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            startLine-kv ::= "startLine" space ":" space integer
+        )"""
+    });
+
+    fprintf(stderr, "All Gemma 4 dialect tests passed!\n");
+}
+
 int main() {
     fprintf(stderr, "LLAMA_NODE_AVAILABLE = %s\n", getenv("LLAMA_NODE_AVAILABLE") ? "true" : "false");
     fprintf(stderr, "LLAMA_PYTHON_AVAILABLE = %s\n", getenv("LLAMA_PYTHON_AVAILABLE") ? "true" : "false");
 
     test_resolves_to_string();
+    test_gemma4_dialect();
 
     test_all("C++", [](const TestCase & tc) {
         try {
