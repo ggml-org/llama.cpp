@@ -710,7 +710,7 @@ class ModelBase:
                 self._repack_nvfp4(name, weight, scale, scale2, input_scale)
 
         # Flush any remaining experts (fallback if n_experts was unknown)
-        for bid, proj_type in expert_blocks.keys():
+        for bid, proj_type in list(expert_blocks.keys()):
             self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type)
 
         # Remove consumed tensors so get_tensors/modify_tensors won't see them
@@ -718,7 +718,7 @@ class ModelBase:
             self.model_tensors.pop(name, None)
 
         # Remove any remaining unused auxiliary tensors
-        for name in self.model_tensors.keys():
+        for name in list(self.model_tensors.keys()):
             if name.endswith((".k_scale", ".v_scale")):
                 del self.model_tensors[name]
 
@@ -1570,6 +1570,9 @@ class TextModel(ModelBase):
         if chkhsh == "862f827721df956049dff5ca81a57f29e575280bc622e290d3bf4e35eca29015":
             # ref: https://huggingface.co/codefuse-ai/F2LLM-v2-4B
             res = "f2llmv2"
+        if chkhsh == "62f6fb0a6fd5098caeabb19b07a5c1099cafc8b9c40eab6ea89ece4ec02fbc57":
+            # ref: https://huggingface.co/sarvamai/sarvam-30b
+            res = "sarvam-moe"
 
         if res is None:
             logger.warning("\n")
@@ -2173,7 +2176,8 @@ class MmprojModel(ModelBase):
             text_config = {
                 k: v for k, v in self.hparams.items() if k not in ["vision_encoder", "audio_encoder"]
             }
-            self.n_embd_text = text_config.get("hidden_dim", 0)
+            # mistral native params.json: "dim" is the text hidden size ("hidden_dim" is the FFN intermediate size)
+            self.n_embd_text = text_config.get("dim", 0)
 
         assert self.n_embd_text > 0, "n_embd not found in hparams"
 
@@ -3134,6 +3138,11 @@ class LlavaVisionModel(MmprojModel):
             assert self.hparams["norm_eps"] is not None, "norm_eps not found in params.json"
             if self.use_break_tok:
                 self.img_break_tok_id = self.find_vparam(["image_break_token_id"])
+
+                # params.json may ship -1 placeholders (Mistral Medium 3.5)
+                # resolve the real id from the bundled tokenizer in that case
+                if self.img_break_tok_id < 0:
+                    self.img_break_tok_id = self.get_mistral_token_id("[IMG_BREAK]")
         else:
             raise ValueError(f"Unsupported model type: {self.hparams['model_type']}")
         logger.info(f"Image break token id: {self.img_break_tok_id}")
@@ -3152,6 +3161,24 @@ class LlavaVisionModel(MmprojModel):
                 if token_data["content"] == token:
                     return int(token_data["id"])
         raise ValueError(f"Token '{token}' not found in tokenizer config.")
+
+    def get_mistral_token_id(self, token: str) -> int:
+        # mistral native format ships tekken.json or a versioned spm tokenizer
+        tekken_file = self.dir_model / "tekken.json"
+        if tekken_file.is_file():
+            with open(tekken_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for entry in data.get("special_tokens", []):
+                if entry.get("token_str") == token:
+                    return int(entry["rank"])
+        tokenizer_json_file = self.dir_model / "tokenizer.json"
+        if tokenizer_json_file.is_file():
+            with open(tokenizer_json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for entry in data.get("added_tokens", []):
+                if entry.get("content") == token:
+                    return int(entry["id"])
+        raise ValueError(f"Token '{token}' not found in mistral tokenizer files.")
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -7988,13 +8015,37 @@ class Gemma4Model(Gemma3Model):
         rope_freqs_full = torch.tensor(values, dtype=torch.float32)
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), rope_freqs_full)
 
+    def _generate_nvfp4_tensors(self):
+        # Gemma-4 stores a per-layer router.per_expert_scale ([n_expert]) that scales
+        # each expert's contribution. It's mathematically equivalent to a per-expert
+        # scalar on the down_proj output, which is exactly where ffn_down_exps_s is
+        # applied at inference. Fold it into each expert's NVFP4 weight_scale_2 so the
+        # existing NVFP4 path produces the right scales.
+        n_experts = self.find_hparam(["num_local_experts", "num_experts"], optional=True) or 0
+        for name in [n for n in self.model_tensors if n.endswith(".router.per_expert_scale")]:
+            bid_match = re.search(r"\.layers\.(\d+)\.", name)
+            if bid_match is None:
+                continue
+            bid = bid_match.group(1)
+            prefix = name[: name.index(f".layers.{bid}.") + len(f".layers.{bid}.")]
+            w2_targets = [f"{prefix}experts.{e}.down_proj.weight_scale_2" for e in range(n_experts)]
+            present = [w2 in self.model_tensors for w2 in w2_targets]
+            if not any(present):
+                continue
+            assert all(present), f"layer {bid}: partial NVFP4 quantization across experts"
+            r = self.model_tensors.pop(name)
+            for e, w2 in enumerate(w2_targets):
+                s = self.model_tensors[w2]
+                self.model_tensors[w2] = lambda s=s, r=r, i=e: s() * r()[i]
+        super()._generate_nvfp4_tensors()
+
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
 
         if name.endswith("per_dim_scale") or name.endswith("layer_scalar"):
             name = name + ".weight"
-        if ".experts." in name and not name.endswith(".weight"):
+        if ".experts." in name and not name.endswith((".weight", ".weight_scale", ".weight_scale_2", ".input_scale")):
             name += ".weight"
 
         return super().filter_tensors((name, gen))
@@ -11567,6 +11618,34 @@ class BailingMoeV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("SarvamMoEForCausalLM", "modeling_sarvam_moe.SarvamMoEForCausalLM")
+class SarvamMoEModel(BailingMoeV2Model):
+    model_arch = gguf.MODEL_ARCH.BAILINGMOE2
+    # Sarvam-MoE shares the BailingMoeV2 architecture; only differences:
+    #  - full rotary (no partial_rotary_factor)
+    #  - expert bias is zero-mean normalized at load time
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if (rope_dim := hparams.get("head_dim")) is None:
+            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+        # Override the partial-rotary value written by BailingMoeV2 with the full rotary dim
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.endswith(".expert_bias"):
+            # Sarvam normalizes expert bias to zero mean
+            inner = gen
+
+            def gen():
+                t = inner()
+                return t - t.mean()
+        return super().filter_tensors((name, gen))
+
+
 @ModelBase.register("GroveMoeForCausalLM", "modeling_grove_moe.GroveMoeForCausalLM")
 class GroveMoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GROVEMOE
@@ -13684,6 +13763,27 @@ class DotsOCRVisionModel(MmprojModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Sarashina2VisionForCausalLM")
+class Sarashina2VLTextModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.LLAMA
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.startswith("llm."):
+            name = name.replace("llm.", "", 1)
+        elif name.startswith("norm."):
+            return None
+        return super().filter_tensors((name, gen))
+
+
+@ModelBase.register("Sarashina2VisionForCausalLM")
+class Sarashina2VLVisionModel(Qwen2VLVisionModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.global_config['model_type'] = "qwen2_vl"
+
+
 ###### CONVERSION LOGIC ######
 
 
@@ -13940,7 +14040,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
     # For text conversion we route to a dedicated text-only class.
     # TODO: refactor this later to avoid adding exception here
-    if model_type == ModelType.TEXT and arch == "StepVLForConditionalGeneration":
+    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

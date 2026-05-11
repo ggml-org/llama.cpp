@@ -21,6 +21,7 @@
 
 import { browser } from '$app/environment';
 import { base } from '$app/paths';
+import { SETTINGS_KEYS } from '$lib/constants';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
@@ -556,13 +557,13 @@ class MCPStore {
 			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			useProxy: serverData.useProxy
 		};
-		settingsStore.updateConfig('mcpServers', JSON.stringify([...servers, newServer]));
+		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));
 	}
 
 	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
 		const servers = this.getServers();
 		settingsStore.updateConfig(
-			'mcpServers',
+			SETTINGS_KEYS.MCP_SERVERS,
 			JSON.stringify(
 				servers.map((server) => (server.id === id ? { ...server, ...updates } : server))
 			)
@@ -571,7 +572,10 @@ class MCPStore {
 
 	removeServer(id: string): void {
 		const servers = this.getServers();
-		settingsStore.updateConfig('mcpServers', JSON.stringify(servers.filter((s) => s.id !== id)));
+		settingsStore.updateConfig(
+			SETTINGS_KEYS.MCP_SERVERS,
+			JSON.stringify(servers.filter((s) => s.id !== id))
+		);
 		this.clearHealthCheck(id);
 	}
 

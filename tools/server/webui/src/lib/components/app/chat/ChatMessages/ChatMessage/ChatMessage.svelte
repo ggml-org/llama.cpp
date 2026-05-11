@@ -17,6 +17,7 @@
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { deriveAgenticSections } from '$lib/utils';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
 		class?: string;
@@ -182,7 +183,7 @@
 			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
-				goto(`#/`);
+				goto(ROUTES.START);
 			}
 
 			return;
@@ -205,7 +206,7 @@
 			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
-				goto(`#/`);
+				goto(ROUTES.START);
 			}
 		} else {
 			chatActions.delete(message);
@@ -271,7 +272,7 @@
 				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 				isEditing = false;
 				if (conversationDeleted) {
-					goto(`#/`);
+					goto(ROUTES.START);
 				}
 				return;
 			}

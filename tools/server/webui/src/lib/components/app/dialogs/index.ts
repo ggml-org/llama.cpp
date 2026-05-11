@@ -19,6 +19,37 @@
 export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
+ * **DialogExportSettings** - Settings export dialog with sensitive data warning
+ *
+ * Dialog for exporting settings with an option to include or exclude
+ * sensitive data (API keys, MCP server custom headers). Defaults to excluding
+ * sensitive data for security. User must explicitly opt-in to include them.
+ *
+ * **Architecture:**
+ * - Uses ShadCN AlertDialog
+ * - Checkbox to toggle sensitive data inclusion (defaults to false)
+ * - Warning icon and message when sensitive data is included
+ * - Destructive variant for the action button when exporting with sensitive data
+ *
+ * **Features:**
+ * - Secure default: sensitive data excluded by default
+ * - User must explicitly opt-in to include sensitive data
+ * - Visual warning (ShieldOff icon) when sensitive data is included
+ * - Different action text based on sensitive data state
+ *
+ * @example
+ * ```svelte
+ * <DialogExportSettings
+ *   bind:open={showExportSettings}
+ *   bind:includeSensitiveData
+ *   onConfirm={handleSettingsExport}
+ *   onCancel={() => showExportSettings = false}
+ * />
+ * ```
+ */
+export { default as DialogExportSettings } from './DialogExportSettings.svelte';
+
+/**
  *
  * CONFIRMATION DIALOGS
  *

@@ -12,6 +12,8 @@
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 	import { AttachmentMenuItemId } from '$lib/enums';
 	import { PencilRuler } from '@lucide/svelte';
+	import { ROUTES, SETTINGS_SECTION_SLUGS } from '$lib/constants/routes';
+	import { RouterService } from '$lib/services/router.service';
 
 	interface Props {
 		class?: string;
@@ -146,13 +148,16 @@
 
 				<div class="my-2 border-t"></div>
 
-				<a href="#/settings/mcp" class="flex items-center gap-3 px-3 py-2">
+				<a href={ROUTES.MCP_SERVERS} class="flex items-center gap-3 px-3 py-2">
 					<McpLogo class="inline h-4 w-4" />
 
 					<span class="text-sm">MCP Servers</span>
 				</a>
 
-				<a href="#/settings/chat/tools" class="flex items-center gap-3 px-3 py-2">
+				<a
+					href={RouterService.settings(SETTINGS_SECTION_SLUGS.TOOLS)}
+					class="flex items-center gap-3 px-3 py-2"
+				>
 					<PencilRuler class="inline h-4 w-4" />
 
 					<span class="text-sm">Tools</span>

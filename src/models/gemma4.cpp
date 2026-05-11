@@ -110,7 +110,13 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
             layer.ffn_post_norm_2 = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM_2, "weight", i), {n_embd}, 0);
 
             // MoE FFN
-            layer.ffn_gate_up_exps  = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS,  "weight", i), {n_embd, n_ff_exp * 2, n_expert}, 0);
+            layer.ffn_gate_up_exps  = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS,  "weight", i), {n_embd, n_ff_exp * 2, n_expert}, TENSOR_NOT_REQUIRED);
+
+            if (layer.ffn_gate_up_exps == nullptr) {
+                layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff_exp, n_expert}, 0);
+                layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff_exp, n_expert}, 0);
+            }
+
             layer.ffn_down_exps     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS,     "weight", i), {n_ff_exp, n_embd, n_expert}, 0);
 
             // per-expert scale will be loaded as down_exps_s at the end of the current switch case
@@ -286,8 +292,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
             cur_moe = build_moe_ffn(cur_moe,
                     nullptr, // gate_inp
-                    nullptr, // up_exps
-                    nullptr, // gate_exps
+                    model.layers[il].ffn_up_exps,
+                    model.layers[il].ffn_gate_exps,
                     model.layers[il].ffn_down_exps,
                     nullptr, // exp_probs_b (not used for gemma4)
                     n_expert, n_expert_used,
@@ -296,8 +302,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                     il, logits,
                     model.layers[il].ffn_gate_up_exps,
-                    nullptr, // up_exps_s
-                    nullptr, // gate_exps_s
+                    model.layers[il].ffn_up_exps_s,
+                    model.layers[il].ffn_gate_exps_s,
                     model.layers[il].ffn_down_exps_s);
             cur_moe = build_norm(cur_moe,
                     model.layers[il].ffn_post_norm_2, nullptr,
