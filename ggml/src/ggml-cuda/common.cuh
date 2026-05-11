@@ -269,10 +269,6 @@ static const char * cu_get_error_str(CUresult err) {
 #define FLASH_ATTN_AVAILABLE
 #endif // !defined(GGML_CUDA_NO_FA) && !(defined(GGML_USE_MUSA) && __MUSA_ARCH__ < 220)
 
-#if defined(TURING_MMA_AVAILABLE)
-#define LDMATRIX_TRANS_AVAILABLE
-#endif // defined(TURING_MMA_AVAILABLE)
-
 static bool fp16_available(const int cc) {
     return ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_PASCAL ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_PH1);
@@ -832,6 +828,18 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
     return static_cast<float>(raw / 2);
 #endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
 #endif // defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
+}
+
+static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_ue4m3(float x) {
+#if defined(BLACKWELL_MMA_AVAILABLE) // This is used for NVFP4 subblock scale quantizations only
+    if (!(x > 0.0f)) {
+        return 0;
+    }
+    const __nv_fp8_e4m3 xf(x);
+    return xf.__x;
+#else
+     NO_DEVICE_CODE; // Used only for NVFP4 Scales for Activations, only for Blackwell
+#endif // defined(BLACKWELL_MMA_AVAILABLE)
 }
 
 __device__ __forceinline__ uint8_t ggml_cuda_float_to_fp4_e2m1(float x, float e) {

@@ -2230,13 +2230,17 @@ llm_graph_cb llama_context::graph_get_cb() const {
 
 class llama_io_write_dummy : public llama_io_write_i {
 public:
-    llama_io_write_dummy() = default;
+    llama_io_write_dummy(bool skip_tensors) : skip_tensors(skip_tensors) {}
 
     void write(const void * /* src */, size_t size) override {
         size_written += size;
     }
 
-    void write_tensor(const ggml_tensor * /* tensor */, size_t /* offset */, size_t size) override {
+    void write_tensor(ggml_tensor * /* tensor */, size_t /* offset */, size_t size) override {
+        if (skip_tensors) {
+            return;
+        }
+
         size_written += size;
     }
 
@@ -2245,13 +2249,22 @@ public:
     }
 
 private:
+    const bool skip_tensors;
+
     size_t size_written = 0;
 };
 
-class llama_io_write_buffer : public llama_io_write_i {
+class llama_io_write_host : public llama_io_write_i {
 public:
-    llama_io_write_buffer(
+    llama_io_write_host(
             uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
+
+    ~llama_io_write_host() {
+        // TODO: add backend support to batch tensor_get? or some other way to speed this up
+        for (const auto & winfo : winfos) {
+            ggml_backend_tensor_get(winfo.tensor, winfo.ptr, winfo.offset, winfo.size);
+        }
+    }
 
     void write(const void * src, size_t size) override {
         if (size > buf_size) {
@@ -2263,11 +2276,14 @@ public:
         buf_size -= size;
     }
 
-    void write_tensor(const ggml_tensor * tensor, size_t offset, size_t size) override {
+    void write_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
         if (size > buf_size) {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
-        ggml_backend_tensor_get(tensor, ptr, offset, size);
+
+        // save the write for later during destruction
+        winfos.push_back({tensor, ptr, size, offset});
+
         ptr += size;
         size_written += size;
         buf_size -= size;
@@ -2281,25 +2297,48 @@ private:
     uint8_t * ptr;
     size_t buf_size = 0;
     size_t size_written = 0;
+
+    struct write_info {
+        ggml_tensor * tensor;
+        uint8_t * ptr;
+        size_t size;
+        size_t offset;
+    };
+    std::vector<write_info> winfos;
 };
 
-class llama_io_read_buffer : public llama_io_read_i {
+class llama_io_read_host : public llama_io_read_i {
 public:
-    llama_io_read_buffer(const uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
+    llama_io_read_host(const uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
 
-    const uint8_t * read(size_t size) override {
-        const uint8_t * base_ptr = ptr;
+    ~llama_io_read_host() {
+        // flush the reads
+        for (const auto & rinfo : rinfos) {
+            ggml_backend_tensor_set(rinfo.tensor, rinfo.ptr, rinfo.offset, rinfo.size);
+        }
+    }
+
+    void read(void * dst, size_t size) override {
         if (size > buf_size) {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
+        memcpy(dst, ptr, size);
         ptr += size;
         size_read += size;
         buf_size -= size;
-        return base_ptr;
     }
 
-    void read_to(void * dst, size_t size) override {
-        memcpy(dst, read(size), size);
+    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
+        if (size > buf_size) {
+            throw std::runtime_error("unexpectedly reached end of buffer");
+        }
+
+        // save for later during destruction
+        rinfos.push_back({tensor, ptr, size, offset});
+
+        ptr += size;
+        size_read += size;
+        buf_size -= size;
     }
 
     size_t n_bytes() override {
@@ -2310,6 +2349,14 @@ private:
     const uint8_t * ptr;
     size_t buf_size = 0;
     size_t size_read = 0;
+
+    struct read_info {
+        ggml_tensor * tensor;
+        const uint8_t * ptr;
+        size_t size;
+        size_t offset;
+    };
+    std::vector<read_info> rinfos;
 };
 
 class llama_io_write_file : public llama_io_write_i {
@@ -2321,7 +2368,7 @@ public:
         size_written += size;
     }
 
-    void write_tensor(const ggml_tensor * tensor, size_t offset, size_t size) override {
+    void write_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
         temp_buffer.resize(size);
         ggml_backend_tensor_get(tensor, temp_buffer.data(), offset, size);
         write(temp_buffer.data(), temp_buffer.size());
@@ -2341,15 +2388,15 @@ class llama_io_read_file : public llama_io_read_i {
 public:
     llama_io_read_file(llama_file * f) : file(f) {}
 
-    void read_to(void * dst, size_t size) override {
+    void read(void * dst, size_t size) override {
         file->read_raw(dst, size);
         size_read += size;
     }
 
-    const uint8_t * read(size_t size) override {
+    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
         temp_buffer.resize(size);
-        read_to(temp_buffer.data(), size);
-        return temp_buffer.data();
+        read(temp_buffer.data(), size);
+        ggml_backend_tensor_set(tensor, temp_buffer.data(), offset, size);
     }
 
     size_t n_bytes() override {
@@ -2362,8 +2409,229 @@ private:
     std::vector<uint8_t> temp_buffer;
 };
 
+class llama_io_write_device : public llama_io_write_i {
+public:
+    llama_io_write_device(uint8_t * p, size_t len, llama_memory_buffers & mbufs) : ptr(p), buf_size(len), mbufs(mbufs)  {
+    }
+
+    ~llama_io_write_device() {
+        llama_memory_buffers mbufs_new;
+
+        for (const auto & winfo : winfos) {
+            auto * buft = ggml_backend_buffer_get_type(winfo.tensor->buffer);
+
+            mbufs_new[buft].n_tensors++;
+            mbufs_new[buft].total_size += winfo.size;
+        }
+
+        for (auto & [buft, mbuf] : mbufs_new) {
+            ggml_init_params params = {
+                /*.mem_size   =*/ 2*mbuf.n_tensors*ggml_tensor_overhead(),
+                /*.mem_buffer =*/ NULL,
+                /*.no_alloc   =*/ true,
+            };
+
+            mbuf.ctx.reset(ggml_init(params));
+
+            mbuf.org.reserve(mbuf.n_tensors);
+            mbuf.cpy.reserve(mbuf.n_tensors);
+        }
+
+        for (const auto & winfo : winfos) {
+            auto * buft = ggml_backend_buffer_get_type(winfo.tensor->buffer);
+
+            const int64_t n = winfo.size/ggml_element_size(winfo.tensor);
+
+            auto & mbuf = mbufs_new[buft];
+
+            mbuf.org.push_back(ggml_view_1d      (mbuf.ctx.get(), winfo.tensor, n, winfo.offset));
+            mbuf.cpy.push_back(ggml_new_tensor_1d(mbuf.ctx.get(), winfo.tensor->type, n));
+        }
+
+        for (auto & [buft, mbuf] : mbufs_new) {
+            auto & mbuf_cur = mbufs[buft];
+
+            bool need_alloc = false;
+
+            need_alloc = need_alloc || (!mbuf_cur.buf);
+            need_alloc = need_alloc || (mbuf_cur.org.size() != mbuf.org.size());
+            need_alloc = need_alloc || (mbuf_cur.total_size != mbuf.total_size);
+
+            if (!need_alloc) {
+                for (size_t i = 0; i < mbuf_cur.org.size(); ++i) {
+                    auto * org0 = mbuf_cur.org[i];
+                    auto * org1 = mbuf.org[i];
+
+                    if (!ggml_are_same_shape(org0, org1)) {
+                        need_alloc = true;
+                        break;
+                    }
+
+                    if (org0->view_src != org1->view_src || org0->view_offs != org1->view_offs) {
+                        need_alloc = true;
+                        break;
+                    }
+                }
+            }
+
+            if (need_alloc) {
+                if (!mbuf_cur.buf || mbuf_cur.total_size != mbuf.total_size) {
+                    mbuf_cur = std::move(mbuf);
+
+                    mbuf_cur.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(mbuf_cur.ctx.get(), buft));
+
+                    LLAMA_LOG_INFO("%s: allocated '%s' buffer %.3f MiB\n", __func__, ggml_backend_buft_name(buft), mbuf.total_size/1024.0/1024.0);
+                } else {
+                    //LLAMA_LOG_INFO("%s: reallocating tensors in '%s' buffer %.3f MiB\n", __func__, ggml_backend_buft_name(buft), mbuf.total_size/1024.0/1024.0);
+
+                    // save the old buffer and allocate the new tensors in it
+                    auto buf = std::move(mbuf_cur.buf);
+
+                    mbuf_cur = std::move(mbuf);
+
+                    ggml_tallocr talloc = ggml_tallocr_new(buf.get());
+
+                    for (size_t i = 0; i < mbuf_cur.org.size(); ++i) {
+                        ggml_backend_view_init(mbuf_cur.org[i]);
+                        ggml_tallocr_alloc(&talloc, mbuf_cur.cpy[i]);
+                    }
+
+                    mbuf_cur.buf = std::move(buf);
+                }
+            }
+
+            for (size_t i = 0; i < mbuf_cur.org.size(); ++i) {
+                ggml_backend_tensor_copy(mbuf_cur.org[i], mbuf_cur.cpy[i]);
+            }
+        }
+    }
+
+    void write(const void * src, size_t size) override {
+        if (size > buf_size) {
+            throw std::runtime_error("unexpectedly reached end of buffer");
+        }
+        memcpy(ptr, src, size);
+        ptr += size;
+        size_written += size;
+        buf_size -= size;
+    }
+
+    void write_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
+        // save the write for later during destruction
+        winfos.push_back({tensor, ptr, size, offset});
+    }
+
+    size_t n_bytes() override {
+        return size_written;
+    }
+
+private:
+    uint8_t * ptr;
+    size_t buf_size = 0;
+    size_t size_written = 0;
+
+    struct write_info {
+        ggml_tensor * tensor;
+        uint8_t * ptr;
+        size_t size;
+        size_t offset;
+    };
+    std::vector<write_info> winfos;
+
+    llama_memory_buffers & mbufs;
+};
+
+class llama_io_read_device : public llama_io_read_i {
+public:
+    llama_io_read_device(const uint8_t * p, size_t len, const llama_memory_buffers & mbufs) : ptr(p), buf_size(len), mbufs(mbufs) {
+    }
+
+    ~llama_io_read_device() {
+        llama_memory_buffers mbufs_new;
+
+        for (const auto & rinfo : rinfos) {
+            auto * buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
+
+            mbufs_new[buft].n_tensors++;
+            mbufs_new[buft].total_size += rinfo.size;
+        }
+
+        for (auto & [buft, mbuf] : mbufs_new) {
+            ggml_init_params params = {
+                /*.mem_size   =*/ mbuf.n_tensors*ggml_tensor_overhead(),
+                /*.mem_buffer =*/ NULL,
+                /*.no_alloc   =*/ true,
+            };
+
+            mbuf.ctx.reset(ggml_init(params));
+
+            mbuf.org.reserve(mbuf.n_tensors);
+        }
+
+        for (const auto & rinfo : rinfos) {
+            auto * buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
+
+            const int64_t n = rinfo.size/ggml_element_size(rinfo.tensor);
+
+            auto & mbuf = mbufs_new[buft];
+
+            mbuf.org.push_back(ggml_view_1d(mbuf.ctx.get(), rinfo.tensor, n, rinfo.offset));
+
+            ggml_backend_view_init(mbuf.org.back());
+        }
+
+        for (auto & [buft, mbuf] : mbufs_new) {
+            const auto & mbuf_cur = mbufs.at(buft);
+
+            if (!mbuf_cur.buf || mbuf_cur.n_tensors != mbuf.n_tensors || mbuf_cur.total_size != mbuf.total_size) {
+                GGML_ABORT("%s: memory buffer mismatch\n", __func__);
+            }
+
+            for (size_t i = 0; i < mbuf_cur.org.size(); ++i) {
+                ggml_backend_tensor_copy(mbuf_cur.cpy[i], mbuf.org[i]);
+            }
+        }
+
+        GGML_ASSERT(buf_size == 0);
+    }
+
+    void read(void * dst, size_t size) override {
+        if (size > buf_size) {
+            throw std::runtime_error("unexpectedly reached end of buffer");
+        }
+        memcpy(dst, ptr, size);
+        ptr += size;
+        size_read += size;
+        buf_size -= size;
+    }
+
+    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
+        // save for later during destruction
+        rinfos.push_back({tensor, ptr, size, offset});
+    }
+
+    size_t n_bytes() override {
+        return size_read;
+    }
+
+private:
+    const uint8_t * ptr;
+    size_t buf_size = 0;
+    size_t size_read = 0;
+
+    struct read_info {
+        ggml_tensor * tensor;
+        const uint8_t * ptr;
+        size_t size;
+        size_t offset;
+    };
+    std::vector<read_info> rinfos;
+
+    const llama_memory_buffers & mbufs;
+};
+
 size_t llama_context::state_get_size() {
-    llama_io_write_dummy io;
+    llama_io_write_dummy io(false);
     try {
         return state_write_data(io);
     } catch (const std::exception & err) {
@@ -2373,7 +2641,7 @@ size_t llama_context::state_get_size() {
 }
 
 size_t llama_context::state_get_data(uint8_t * dst, size_t size) {
-    llama_io_write_buffer io(dst, size);
+    llama_io_write_host io(dst, size);
     try {
         return state_write_data(io);
     } catch (const std::exception & err) {
@@ -2383,7 +2651,7 @@ size_t llama_context::state_get_data(uint8_t * dst, size_t size) {
 }
 
 size_t llama_context::state_set_data(const uint8_t * src, size_t size) {
-    llama_io_read_buffer io(src, size);
+    llama_io_read_host io(src, size);
     try {
         return state_read_data(io);
     } catch (const std::exception & err) {
@@ -2392,9 +2660,14 @@ size_t llama_context::state_set_data(const uint8_t * src, size_t size) {
     }
 }
 
+static constexpr uint32_t io_magic = 0xaf143cd8;
+
 size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags) {
-    llama_io_write_dummy io;
+    llama_io_write_dummy io(flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
     try {
+        io.write(&io_magic, sizeof(io_magic));
+        io.write(&seq_id, sizeof(seq_id));
+
         return state_seq_write_data(io, seq_id, flags);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error getting state size: %s\n", __func__, err.what());
@@ -2403,9 +2676,18 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
 }
 
 size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags) {
-    llama_io_write_buffer io(dst, size);
+    std::unique_ptr<llama_io_write_i> io;
+    if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
+        io = std::make_unique<llama_io_write_device>(dst, size, mem_storage[seq_id]);
+    } else {
+        io = std::make_unique<llama_io_write_host>(dst, size);
+    }
+
     try {
-        return state_seq_write_data(io, seq_id, flags);
+        io->write(&io_magic, sizeof(io_magic));
+        io->write(&seq_id, sizeof(seq_id));
+
+        return state_seq_write_data(*io, seq_id, flags);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error saving state: %s\n", __func__, err.what());
         return 0;
@@ -2413,9 +2695,38 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
 }
 
 size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
-    llama_io_read_buffer io(src, size);
+    std::unique_ptr<llama_io_read_i> io;
+    if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
+        // create a temporary io to read the magic and the src seq_id
+        io = std::make_unique<llama_io_read_host>(src, size);
+
+        uint32_t magic_read;
+        io->read(&magic_read, sizeof(magic_read));
+        if (io_magic != magic_read) {
+            throw std::runtime_error("wrong sequence state magic");
+        }
+
+        llama_seq_id seq_id_read;
+        io->read(&seq_id_read, sizeof(seq_id_read));
+
+        GGML_ASSERT(mem_storage.find(seq_id_read) != mem_storage.end());
+
+        io = std::make_unique<llama_io_read_device>(src, size, mem_storage[seq_id_read]);
+    } else {
+        io = std::make_unique<llama_io_read_host>(src, size);
+    }
+
     try {
-        return state_seq_read_data(io, seq_id, flags);
+        uint32_t magic_read;
+        io->read(&magic_read, sizeof(magic_read));
+        if (io_magic != magic_read) {
+            throw std::runtime_error("wrong sequence state magic");
+        }
+
+        llama_seq_id seq_id_read;
+        io->read(&seq_id_read, sizeof(seq_id_read));
+
+        return state_seq_read_data(*io, seq_id, flags);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading state: %s\n", __func__, err.what());
         return 0;
@@ -2636,7 +2947,7 @@ void llama_context::perf_reset() {
     n_reused    = 0;
 }
 
-std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> llama_context::memory_breakdown() const {
+llama_memory_breakdown llama_context::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> ret;
     for (const auto & [buft, size] : model.memory_breakdown()) {
         ret[buft].model += size;
@@ -3406,7 +3717,6 @@ size_t llama_state_seq_get_data_ext(llama_context * ctx, uint8_t * dst, size_t s
 
     return ctx->state_seq_get_data(seq_id, dst, size, flags);
 }
-
 size_t llama_state_seq_set_data_ext(llama_context * ctx, const uint8_t * src, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags) {
     ctx->synchronize();
 
@@ -3493,142 +3803,6 @@ void llama_perf_context_reset(llama_context * ctx) {
     ctx->perf_reset();
 }
 
-void llama_memory_breakdown_print(const struct llama_context * ctx) {
-    const auto & devices = ctx->get_model().devices;
-
-    std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown = ctx->memory_breakdown();
-
-    std::vector<std::array<std::string, 9>> table_data;
-    table_data.reserve(devices.size());
-    const std::string template_header = "%s: | %s | %s   %s    %s   %s   %s   %s    %s |\n";
-    const std::string template_gpu    = "%s: | %s | %s = %s + (%s = %s + %s + %s) + %s |\n";
-    const std::string template_other  = "%s: | %s | %s   %s    %s = %s + %s + %s    %s |\n";
-
-    table_data.push_back({template_header, "memory breakdown [MiB]", "total", "free", "self", "model", "context", "compute", "unaccounted"});
-
-    constexpr size_t MiB = 1024 * 1024;
-    const std::vector<std::string> desc_prefixes_strip = {"NVIDIA ", "GeForce ", "Tesla ", "AMD ", "Radeon ", "Instinct "};
-
-    // track seen buffer types to avoid double counting:
-    std::set<ggml_backend_buffer_type_t> seen_buffer_types;
-
-    // accumulative memory breakdown for each device and for host:
-    std::vector<llama_memory_breakdown_data> mb_dev(devices.size());
-    llama_memory_breakdown_data              mb_host;
-
-    for (const auto & buft_mb : memory_breakdown) {
-        ggml_backend_buffer_type_t          buft = buft_mb.first;
-        const llama_memory_breakdown_data & mb   = buft_mb.second;
-        if (ggml_backend_buft_is_host(buft)) {
-            mb_host.model   += mb.model;
-            mb_host.context += mb.context;
-            mb_host.compute += mb.compute;
-            seen_buffer_types.insert(buft);
-            continue;
-        }
-        ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
-        if (dev) {
-            int i_dev = -1;
-            for (size_t i = 0; i < devices.size(); i++) {
-                if (devices[i].dev == dev) {
-                    i_dev = i;
-                    break;
-                }
-            }
-            if (i_dev != -1) {
-                mb_dev[i_dev].model   += mb.model;
-                mb_dev[i_dev].context += mb.context;
-                mb_dev[i_dev].compute += mb.compute;
-                seen_buffer_types.insert(buft);
-                continue;
-            }
-        }
-    }
-
-    // print memory breakdown for each device:
-    for (size_t i = 0; i < devices.size(); i++) {
-        ggml_backend_dev_t          dev = devices[i].dev;
-        llama_memory_breakdown_data mb  = mb_dev[i];
-
-        const std::string name = ggml_backend_dev_name(dev);
-        std::string desc = ggml_backend_dev_description(dev);
-        for (const std::string & prefix : desc_prefixes_strip) {
-            if (desc.length() >= prefix.length() && desc.substr(0, prefix.length()) == prefix) {
-                desc = desc.substr(prefix.length());
-            }
-        }
-
-        size_t free, total;
-        ggml_backend_dev_memory(dev, &free, &total);
-
-        const size_t self = mb.model + mb.context + mb.compute;
-        const size_t unaccounted = total - self - free;
-
-        table_data.push_back({
-            template_gpu,
-            "  - " + name + " (" + desc + ")",
-            std::to_string(total / MiB),
-            std::to_string(free / MiB),
-            std::to_string(self / MiB),
-            std::to_string(mb.model / MiB),
-            std::to_string(mb.context / MiB),
-            std::to_string(mb.compute / MiB),
-            std::to_string(unaccounted / MiB)});
-    }
-
-    // print memory breakdown for host:
-    {
-        const size_t self = mb_host.model + mb_host.context + mb_host.compute;
-        table_data.push_back({
-            template_other,
-            "  - Host",
-            "", // total
-            "", // free
-            std::to_string(self / MiB),
-            std::to_string(mb_host.model / MiB),
-            std::to_string(mb_host.context / MiB),
-            std::to_string(mb_host.compute / MiB),
-            ""}); // unaccounted
-    }
-
-    // print memory breakdown for all remaining buffer types:
-    for (const auto & buft_mb : memory_breakdown) {
-        ggml_backend_buffer_type_t          buft = buft_mb.first;
-        const llama_memory_breakdown_data & mb   = buft_mb.second;
-        if (seen_buffer_types.count(buft) == 1) {
-            continue;
-        }
-        const std::string name = ggml_backend_buft_name(buft);
-        const size_t self = mb.model + mb.context + mb.compute;
-        table_data.push_back({
-            template_other,
-            "  - " + name,
-            "", // total
-            "", // free
-            std::to_string(self / MiB),
-            std::to_string(mb.model / MiB),
-            std::to_string(mb.context / MiB),
-            std::to_string(mb.compute / MiB),
-            ""}); // unaccounted
-        seen_buffer_types.insert(buft);
-    }
-
-    for (size_t j = 1; j < table_data[0].size(); j++) {
-        size_t max_len = 0;
-        for (const auto & td : table_data) {
-            max_len = std::max(max_len, td[j].length());
-        }
-        for (auto & td : table_data) {
-            td[j].insert(j == 1 ? td[j].length() : 0, max_len - td[j].length(), ' ');
-        }
-    }
-    for (const auto & td : table_data) {
-        LLAMA_LOG_INFO(td[0].c_str(),
-            __func__, td[1].c_str(), td[2].c_str(), td[3].c_str(), td[4].c_str(), td[5].c_str(),
-            td[6].c_str(), td[7].c_str(), td[8].c_str());
-    }
-}
-
 //
 // training
 //
@@ -3658,4 +3832,12 @@ void llama_opt_epoch(
         idata_split,
         callback_train,
         callback_eval);
+}
+
+//
+// ext
+//
+
+llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx) {
+    return ctx->memory_breakdown();
 }

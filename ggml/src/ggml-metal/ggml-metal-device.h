@@ -102,6 +102,8 @@ ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev
 
 void ggml_metal_library_free(ggml_metal_library_t lib);
 
+ggml_metal_device_t ggml_metal_library_get_device(ggml_metal_library_t lib);
+
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline    (ggml_metal_library_t lib, const char * name);
 struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_metal_library_t lib, const char * base, const char * name, ggml_metal_cv_t cv);
 
@@ -280,6 +282,7 @@ bool   ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf);
 void   ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size);
 void   ggml_metal_buffer_set_tensor   (ggml_metal_buffer_t buf, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
 void   ggml_metal_buffer_get_tensor   (ggml_metal_buffer_t buf, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size);
+bool   ggml_metal_buffer_cpy_tensor   (ggml_metal_buffer_t buf, const struct ggml_tensor * src, struct ggml_tensor * dst);
 void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
 
 // finds the Metal buffer that contains the tensor data on the GPU device

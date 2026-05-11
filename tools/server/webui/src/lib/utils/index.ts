@@ -13,7 +13,7 @@ export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './a
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
-export { getAttachmentDisplayItems } from './attachment-display';
+export { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from './attachment-display';
 export { isTextFile, isImageFile, isPdfFile, isAudioFile } from './attachment-type';
 
 // Textarea utilities
@@ -39,7 +39,10 @@ export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } fr
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
 // CORS Proxy
-export { buildProxiedUrl, getProxiedUrlString, buildProxiedHeaders } from './cors-proxy';
+export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
+
+// URL utilities
+export { extractRootDomain, sanitizeExternalUrl } from './url';
 
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';
@@ -146,9 +149,6 @@ export { createBase64DataUrl } from './data-url';
 // Header utilities
 export { parseHeadersToArray, serializeHeaders } from './headers';
 
-// Favicon utilities
-export { getFaviconUrl } from './favicon';
-
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,
@@ -190,3 +190,6 @@ export {
 // Cryptography utilities
 
 export { uuid } from './uuid';
+
+// CSS utilities
+export { remToPx } from './css';

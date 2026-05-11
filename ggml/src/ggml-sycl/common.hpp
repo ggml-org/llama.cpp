@@ -25,8 +25,16 @@
 #include "presets.hpp"
 #include "type.hpp"
 #include "sycl_hw.hpp"
+#include "fattn-buffers.hpp"
 
 namespace syclexp = sycl::ext::oneapi::experimental;
+
+#if defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/oneapi/bfloat16.hpp>)
+    #include <sycl/ext/oneapi/bfloat16.hpp>
+    #ifndef GGML_SYCL_HAS_BF16
+        #define GGML_SYCL_HAS_BF16
+    #endif
+#endif
 
 #if GGML_SYCL_DNNL
 #include "dnnl.hpp"
@@ -217,7 +225,7 @@ struct sycl_device_info {
                        // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
     size_t  total_vram;
-    //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
+    sycl_hw_info hw_info;
     optimize_feature opt_feature;
 };
 
@@ -397,11 +405,15 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES];
     std::unordered_map<sycl::queue *, std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>>> scratchpad_map;
 
+    std::unique_ptr<ggml_sycl_fattn_kv_buffers> fattn_bufs[GGML_SYCL_MAX_DEVICES];
+
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_host(queue_ptr qptr, int device);
+
+    static std::unique_ptr<ggml_sycl_fattn_kv_buffers> new_fattn_kv_buffers(queue_ptr qptr, int device);
 
     ggml_sycl_pool & pool(int device) {
         if (pools[device] == nullptr) {
@@ -412,6 +424,17 @@ struct ggml_backend_sycl_context {
 
     ggml_sycl_pool & pool() {
         return pool(device);
+    }
+
+    ggml_sycl_fattn_kv_buffers & fattn_buffers(int device) {
+        if (fattn_bufs[device] == nullptr) {
+            fattn_bufs[device] = new_fattn_kv_buffers(stream(device, 0), device);
+        }
+        return *fattn_bufs[device];
+    }
+
+    ggml_sycl_fattn_kv_buffers & fattn_buffers() {
+        return fattn_buffers(device);
     }
 
 #ifdef GGML_SYCL_GRAPH

@@ -3,15 +3,16 @@
 #include "ggml-openvino/openvino/node_context.h"
 #include "ggml-openvino/openvino/utils.h"
 #include "input_model.h"
-#include "pass/eliminate_zp.h"
 #include "pass/mark_decompression_convert_constant_folding.h"
 #include "pass/squeeze_matmul.h"
+#include "rt_info/weightless_caching_attributes.hpp"
 
 #include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <memory>
 #include <openvino/core/node.hpp>
+#include <openvino/core/preprocess/pre_post_process.hpp>
 #include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
@@ -33,7 +34,6 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
-#include <openvino/core/preprocess/pre_post_process.hpp>
 
 namespace ov {
 namespace frontend {
@@ -240,6 +240,31 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     resulting_model = std::make_shared<Model>(results, used_params);
 
     apply_transformations(resulting_model);
+
+    // Set WeightlessCacheAttribute on large constants to avoid unnecessary memory copies
+    // in the NPUW plugin. Without this attribute, NPUW's LazyTensor constructor
+    // (lazy_tensor.cpp, op::Const::Const) will memcpy every constant "in case export
+    // occurs", doubling memory usage per compile_model call.
+    //
+    // The bin_offset field serves as a unique key (not a real file offset) — this is
+    // the same convention the GPU plugin uses for non-IR models (see
+    // Plugin::set_weightless_cache_attributes in intel_gpu/src/plugin/plugin.cpp).
+    // Each constant must have a distinct bin_offset, otherwise GPU's weightless cache
+    // import will map multiple constants to the same data.
+    //
+    // Small constants (< 16 elements) are excluded since they may be introduced by
+    // optimization patterns and the overhead is negligible.
+    size_t offset = 0;
+    for (auto & node : resulting_model->get_ordered_ops()) {
+        if (auto cnst = ov::as_type_ptr<ov::op::v0::Constant>(node);
+            cnst && cnst->get_byte_size() / cnst->get_element_type().size() >= 16) {
+            auto & rt_info = cnst->get_rt_info();
+            if (rt_info.find(ov::WeightlessCacheAttribute::get_type_info_static()) == rt_info.end()) {
+                rt_info[ov::WeightlessCacheAttribute::get_type_info_static()] =
+                    ov::WeightlessCacheAttribute(cnst->get_byte_size(), offset++, cnst->get_element_type());
+            }
+        }
+    }
     return resulting_model;
 }
 
@@ -257,7 +282,6 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
         }
 
         if (ggml_model_decoder->is_static()) {
-            manager.register_pass<pass::EliminateZeroPoints>();
             manager.register_pass<pass::SqueezeMatmul>();
         }
         manager.run_passes(model);

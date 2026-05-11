@@ -1245,6 +1245,12 @@ void ggml_compute_forward_mul_mat(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
+    const int32_t hint = ggml_get_op_params_i32(dst, 1);
+    if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref) {
+        ggml_compute_forward_fwht(params, dst);
+        return;
+    }
+
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int ith = params->ith;
@@ -2959,6 +2965,45 @@ struct ggml_cplan ggml_graph_plan(
     return cplan;
 }
 
+
+// Try to fuse the current node with subsequent nodes for better performance.
+// Returns the number of nodes skipped by fusion (>=1), or 0 if no fusion was applied.
+static bool ggml_cpu_disable_fusion = false;  // initialized once in ggml_cpu_init(), read-only afterwards
+
+static int ggml_cpu_try_fuse_ops(
+        const struct ggml_cgraph * cgraph,
+        const int node_n,
+        const struct ggml_compute_params * params,
+        const struct ggml_cplan * cplan) {
+
+    if (ggml_cpu_disable_fusion || cplan->use_ref) {
+        return 0;
+    }
+
+    struct ggml_tensor * node = cgraph->nodes[node_n];
+
+    if (node->op == GGML_OP_RMS_NORM) {
+        // RMS_NORM + MUL fusion
+        const enum ggml_op fuse_ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL };
+        if (ggml_can_fuse(cgraph, node_n, fuse_ops, 2)) {
+            struct ggml_tensor * mul_node = cgraph->nodes[node_n + 1];
+            const struct ggml_tensor * mul_w = (mul_node->src[0] == node)
+                ? mul_node->src[1] : mul_node->src[0];
+            if (node->src[0]->type  == GGML_TYPE_F32 &&
+                mul_node->type      == GGML_TYPE_F32 &&
+                mul_w->type         == GGML_TYPE_F32 &&
+                mul_w->ne[0]        == node->ne[0]   &&
+                mul_w->nb[0]        == sizeof(float)) {
+
+                ggml_compute_forward_rms_norm_mul_fused(params, node, mul_node);
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
@@ -2995,7 +3040,14 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             continue;
         }
 
-        ggml_compute_forward(&params, node);
+        // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
+        // Try fused ops, fall back to normal compute
+        const int n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan);
+        if (n_fused > 0) {
+            node_n += n_fused;
+        } else {
+            ggml_compute_forward(&params, node);
+        }
 
         if (state->ith == 0 && cplan->abort_callback &&
                 cplan->abort_callback(cplan->abort_callback_data)) {
@@ -3756,6 +3808,11 @@ void ggml_cpu_init(void) {
 #if defined(__riscv)
         ggml_init_riscv_arch_features();
 #endif
+
+        {
+            const char * env = getenv("GGML_CPU_DISABLE_FUSION");
+            ggml_cpu_disable_fusion = (env != NULL && atoi(env) == 1);
+        }
 
         is_first_call = false;
     }
