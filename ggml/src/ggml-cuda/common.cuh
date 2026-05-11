@@ -109,13 +109,17 @@
 #    define GGML_CUDA_USE_CUB
 #endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 
-#if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080 && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+#    define GGML_CUDA_USE_PDL
+#endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080 && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+
+#if defined(GGML_CUDA_USE_PDL)
 #   define GGML_CUDA_PDL_SYNC() cudaGridDependencySynchronize()
 #   define GGML_CUDA_PDL_LC()   cudaTriggerProgrammaticLaunchCompletion()
 #else
 #   define GGML_CUDA_PDL_SYNC()  // no-ops when PDL disabled on HIP/MUSA/pre-Hopper
 #   define GGML_CUDA_PDL_LC()
-#endif
+#endif // defined(GGML_CUDA_USE_PDL)
 
 #ifdef __CUDA_ARCH_LIST__
 constexpr bool ggml_cuda_has_arch_impl(int) {
@@ -220,11 +224,14 @@ struct ggml_cuda_pdl_config {
 template<typename Kernel, typename... Args>
 static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_kernel_launch_params & launch_params, Args&&... args) {
 #if defined(GGML_CUDA_USE_PDL)
+    static const bool disable_pdl = (getenv("GGML_CUDA_PDL") != nullptr);
+    if (!disable_pdl) {
         auto pdl_cfg = ggml_cuda_pdl_config(launch_params);
         CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, kernel, std::forward<Args>(args)... ));
-#else
-        kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(std::forward<Args>(args)... );
+        return;
+    }
 #endif //defined(GGML_CUDA_USE_PDL)
+    kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(std::forward<Args>(args)... );
 }
 
 #if CUDART_VERSION >= 12000 || defined(GGML_USE_MUSA)
