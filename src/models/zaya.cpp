@@ -45,29 +45,27 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-        // CCA projections (present on all layers)
-        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd_q}, 0);
-        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd_k}, 0);
+        // CCA attention layers (even indices only)
+        if (i % 2 == 0) {
+            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd_q}, 0);
+            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd_k}, 0);
 
-        // CCA: V = concat(val_proj1(x), val_proj2(x)) → {n_embd_k}
-        layer.cca_val_proj1 = create_tensor(tn(LLM_TENSOR_CCA_VAL_PROJ1, "weight", i),
-            {n_embd, n_embd_head}, 0);
-        layer.cca_val_proj2 = create_tensor(tn(LLM_TENSOR_CCA_VAL_PROJ2, "weight", i),
-            {n_embd, n_embd_head}, 0);
+            layer.cca_val_proj1 = create_tensor(tn(LLM_TENSOR_CCA_VAL_PROJ1, "weight", i),
+                {n_embd, n_embd_head}, 0);
+            layer.cca_val_proj2 = create_tensor(tn(LLM_TENSOR_CCA_VAL_PROJ2, "weight", i),
+                {n_embd, n_embd_head}, 0);
 
-        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_q, n_embd}, 0);
+            layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_q, n_embd}, 0);
 
-        // CCA conv_qk.0 (depthwise, causal)
-        layer.cca_conv_dw   = create_tensor(tn(LLM_TENSOR_CCA_CONV_DW, "weight", i), {d_conv, n_qk}, 0);
-        layer.cca_conv_dw_b = create_tensor(tn(LLM_TENSOR_CCA_CONV_DW_B, "bias", i), {n_qk}, TENSOR_NOT_REQUIRED);
+            layer.cca_conv_dw   = create_tensor(tn(LLM_TENSOR_CCA_CONV_DW, "weight", i), {d_conv, n_qk}, 0);
+            layer.cca_conv_dw_b = create_tensor(tn(LLM_TENSOR_CCA_CONV_DW_B, "bias", i), {n_qk}, TENSOR_NOT_REQUIRED);
 
-        // CCA conv_qk.1 (grouped, groups = n_groups)
-        layer.cca_conv_grp   = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "weight", i),
-            {d_conv, n_qk / n_groups, n_qk}, 0);
-        layer.cca_conv_grp_b = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "bias", i), {n_qk}, 0);
+            layer.cca_conv_grp   = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "weight", i),
+                {d_conv, n_qk / n_groups, n_qk}, 0);
+            layer.cca_conv_grp_b = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "bias", i), {n_qk}, 0);
 
-        // CCA per-KV-head temperature
-        layer.cca_k_scale = create_tensor(tn(LLM_TENSOR_CCA_K_SCALE, "weight", i), {n_head_kv}, 0);
+            layer.cca_k_scale = create_tensor(tn(LLM_TENSOR_CCA_K_SCALE, "weight", i), {n_head_kv}, 0);
+        }
 
         // Residual scaling
         layer.res_scale_hs   = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS, "weight", i), {n_embd}, 0);
@@ -101,7 +99,7 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
 
             // MoE experts (fused gate_up and down)
             create_tensor_gate_up_exps(layer, i, n_embd, n_ff, n_expert, 0);
-            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXP, "weight", i),
+            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i),
                 {n_ff, n_embd, n_expert}, 0);
         }
     }
@@ -167,30 +165,37 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             // conv_qk.0 (depthwise, causal)
             {
                 ggml_tensor * QK_t = ggml_cont(ctx0, ggml_transpose(ctx0, QK));
-                ggml_tensor * pad = ggml_new_tensor_2d(ctx0, QK_t->type, d_conv - 1, n_qk);
+                // ggml_ssm_conv requires 3D input: {1 + n_tokens, n_qk, 1}
+                // Use view_3d on the contiguous 2D tensor to add a batch dimension
+                QK_t = ggml_view_3d(ctx0, QK_t, n_tokens, n_qk, 1, QK_t->nb[1], QK_t->nb[1] * n_qk, 0);
+                ggml_tensor * pad = ggml_new_tensor_3d(ctx0, QK_t->type, d_conv - 1, n_qk, 1);
                 pad = ggml_scale(ctx0, pad, 0.0f);
                 ggml_tensor * QK_padded = ggml_concat(ctx0, pad, QK_t, 0);
 
                 QK = ggml_ssm_conv(ctx0, QK_padded, layer.cca_conv_dw);
+                // Reshape to 2D first, then apply bias to avoid 3D broadcasting
+                QK = ggml_reshape_2d(ctx0, QK, n_qk, n_tokens);
                 if (layer.cca_conv_dw_b) {
                     QK = ggml_add(ctx0, QK, layer.cca_conv_dw_b);
                 }
                 cb(QK, "QK_dw", il);
             }
 
-            // conv_qk.1 (grouped, causal)
+            // conv_qk.1 (grouped, causal) — operate on {n_tokens, n_qk} format
             {
-                ggml_tensor * pad = ggml_new_tensor_2d(ctx0, QK->type, d_conv - 1, n_qk);
+                ggml_tensor * QK_t = ggml_cont(ctx0, ggml_transpose(ctx0, QK));
+                ggml_tensor * pad = ggml_new_tensor_2d(ctx0, QK_t->type, d_conv - 1, n_qk);
                 pad = ggml_scale(ctx0, pad, 0.0f);
-                ggml_tensor * QK_padded = ggml_concat(ctx0, pad, QK, 0);
+                ggml_tensor * QK_padded = ggml_concat(ctx0, pad, QK_t, 0);
 
                 QK = ggml_conv_1d_grouped(ctx0, layer.cca_conv_grp, QK_padded, 1, 0, 1, n_groups);
+                // conv output is {OL, OC, N} -> reshape to {OC, OL}, then add bias
+                QK = ggml_reshape_2d(ctx0, QK, n_qk, n_tokens);
                 QK = ggml_add(ctx0, QK, layer.cca_conv_grp_b);
                 cb(QK, "QK_grp", il);
             }
 
-            // Transpose back to [n_qk, n_tokens]
-            QK = ggml_cont(ctx0, ggml_transpose(ctx0, QK));
+            // QK is now [n_qk, n_tokens]
 
             // Split Q_conv, K_conv
             ggml_tensor * Q_conv = ggml_view_2d(ctx0, QK, n_embd_q, n_tokens,
@@ -217,13 +222,16 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
 
             // Per-KV-head temperature scaling on K
             // Kcur: [n_embd_k=256, n_tokens], reshape to [n_embd_head, n_head_kv, n_tokens]
+            Kcur = ggml_cont(ctx0, Kcur);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             // cca_k_scale: [n_head_kv] → broadcast
             Kcur = ggml_mul(ctx0, Kcur, layer.cca_k_scale);
             cb(Kcur, "Kcur_scaled", il);
 
             // Reshape for attention
+            Qcur = ggml_cont(ctx0, Qcur);
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+            Vcur = ggml_cont(ctx0, Vcur);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
             // GQA attention
@@ -259,8 +267,9 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             cb(router_h, "router_logits", il);
 
             // Take only the first 16 logits (expert routing), ignore MOD skip (index 16)
-            ggml_tensor * gate_inp = ggml_view_2d(ctx0, router_h, n_expert, n_tokens,
-                router_h->nb[1], 0);
+            ggml_tensor * gate_inp = ggml_cont(ctx0,
+                ggml_view_2d(ctx0, router_h, n_expert, n_tokens,
+                    router_h->nb[1], 0));
             cb(gate_inp, "gate_inp", il);
 
             // MoE FFN with topk=1 (pass router logits as probs_in)

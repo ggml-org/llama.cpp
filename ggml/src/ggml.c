@@ -2018,9 +2018,9 @@ struct ggml_tensor * ggml_dup_inplace(
 
 static struct ggml_tensor * ggml_add_impl(
         struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        struct ggml_tensor  * b,
-        bool                  inplace) {
+        struct ggml_tensor * a,
+        struct ggml_tensor * b,
+        bool inplace) {
     GGML_ASSERT(ggml_can_repeat(b, a));
 
     struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);

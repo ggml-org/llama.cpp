@@ -1183,7 +1183,7 @@ class TextModel(ModelBase):
         if (local_rope_theta := self.rope_parameters.get("sliding_attention", {}).get("rope_theta")) is not None:
             self.gguf_writer.add_rope_freq_base_swa(local_rope_theta)
             logger.info(f"gguf: rope theta swa = {local_rope_theta}")
-        if (f_rms_eps := self.find_hparam(["rms_norm_eps", "norm_eps"], optional=True)) is not None:
+        if (f_rms_eps := self.find_hparam(["rms_norm_eps", "norm_eps", "norm_epsilon"], optional=True)) is not None:
             self.gguf_writer.add_layer_norm_rms_eps(f_rms_eps)
             logger.info(f"gguf: rms norm epsilon = {f_rms_eps}")
         if (f_norm_eps := self.find_hparam(["layer_norm_eps", "layer_norm_epsilon", "norm_epsilon"], optional=True)) is not None:
@@ -6463,6 +6463,13 @@ class ZayaModel(TextModel):
         super().__init__(*args, **kwargs)
         # Buffer for accumulating expert weights per layer
         self._experts: dict[int, dict[str, Tensor]] | None = {}
+        # Pre-load tokenizer to know the vocab count for embedding trimming
+        self._tokenizer_vocab_size: int | None = None
+        try:
+            from gguf.vocab import LlamaHfVocab
+            self._tokenizer_vocab_size = LlamaHfVocab(self.dir_model).vocab_size
+        except Exception:
+            pass
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -6472,8 +6479,9 @@ class ZayaModel(TextModel):
         n_ff = self.hparams.get("ffn_hidden_size", 4096) // 2
         self.gguf_writer.add_feed_forward_length(n_ff)
 
-        # ssm_d_conv = conv_qk kernel size
-        self.gguf_writer.add_ssm_conv_kernel(5)
+        # ssm_d_conv = conv_qk kernel size (cca_time0 = first depthwise conv kernel)
+        cca_time0 = self.hparams.get("cca_time0", 2)
+        self.gguf_writer.add_ssm_conv_kernel(cca_time0)
 
         # partial_rotary_factor -> n_rot
         head_dim = self.hparams.get("head_dim", 128)
@@ -6498,10 +6506,13 @@ class ZayaModel(TextModel):
         elif "o_proj" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_OUT, bid), data_torch
         elif "conv_qk.0" in name and name.endswith(".weight"):
+            # PyTorch: [n_qk, 1, kernel] (depthwise) -> ggml: {kernel, n_qk}
+            data_torch = data_torch.squeeze(1).contiguous()
             yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_DW, bid), data_torch
         elif "conv_qk.0" in name and name.endswith(".bias"):
             yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_DW_B, bid, suffix=".bias"), data_torch
         elif "conv_qk.1" in name and name.endswith(".weight"):
+            # PyTorch: [n_qk, in_ch_per_group, kernel] -> ggml: {kernel, in_ch_per_group, n_qk}
             yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_GRP, bid), data_torch
         elif "conv_qk.1" in name and name.endswith(".bias"):
             yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_GRP, bid, suffix=".bias"), data_torch
@@ -6543,6 +6554,9 @@ class ZayaModel(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Common tensors
         if name == "model.embed_tokens.weight":
+            # Trim embedding to match tokenizer vocab size if needed
+            if self._tokenizer_vocab_size is not None and data_torch.shape[0] > self._tokenizer_vocab_size:
+                data_torch = data_torch[:self._tokenizer_vocab_size]
             yield self.format_tensor_name(gguf.MODEL_TENSOR.TOKEN_EMBD), data_torch
             return
         if name == "model.final_norm.weight":
