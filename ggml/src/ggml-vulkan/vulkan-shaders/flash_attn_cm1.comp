@@ -14,6 +14,7 @@
 
 #include "types.glsl"
 #include "flash_attn_base.glsl"
+#include "flash_attn_dequant.glsl"
 
 // These need to be supported N,M values for a MatBc x MatBr x 16 coopmatmuladd
 const uint32_t MatBr = 16;
@@ -127,13 +128,9 @@ void main() {
     // mo_offset will point to the tile starting at row i*Br and col 0
     uint32_t mo_offset = mo_stride * i;
 
-#if BLOCK_SIZE > 1
-    uint32_t k_offset = (ik2*p.nb12 + ik3*p.nb13) / BLOCK_BYTE_SIZE;
-    uint32_t v_offset = (iv2*p.nb22 + iv3*p.nb23) / BLOCK_BYTE_SIZE;
-#else
-    uint32_t k_offset = (ik2*p.nb12 + ik3*p.nb13) / 2;
-    uint32_t v_offset = (iv2*p.nb22 + iv3*p.nb23) / 2;
-#endif
+    // FaBlockBytesK/V == 2 for f16 (sizeof f16) and == 16 for f32 (vec4) and == ggml block size for quants.
+    uint32_t k_offset = (ik2*p.nb12 + ik3*p.nb13) / FaBlockBytesK;
+    uint32_t v_offset = (iv2*p.nb22 + iv3*p.nb23) / FaBlockBytesV;
     uint32_t m_offset = gqa_iq1*KV;
     if (p.nem2 != 1 || p.nem3 != 1) {
         m_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 * KV;
@@ -227,14 +224,14 @@ void main() {
                 if (idx + gl_WorkGroupSize.x <= Bc * HSK_pad / 4 || c < Bc) {
                     f16vec4 K_Tf = f16vec4(0);
                     if ((!KV_bounds_check || j * Bc + c < KV) && (HSK == HSK_pad || d < HSK / 4)) {
-#if BLOCK_SIZE > 1
-                        uint coord = (j * Bc + c) * k_stride * BLOCK_SIZE + 4 * d;
-                        uint ib = coord / BLOCK_SIZE;
-                        uint iqs = (coord % BLOCK_SIZE);
-                        K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
-#else
-                        K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
-#endif
+                        if (USE_DECODE_K) {
+                            uint coord = (j * Bc + c) * k_stride * BLOCK_SIZE_K + 4 * d;
+                            uint ib = coord / BLOCK_SIZE_K;
+                            uint iqs = (coord % BLOCK_SIZE_K);
+                            K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
+                        } else {
+                            K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
+                        }
                     }
 
                     kvsh[c * kvsh_stride + d] = K_Tf;
@@ -256,47 +253,40 @@ void main() {
             // staged through a Bc * MatBr size staging buffer.
             // If K is not type f16, then it is always staged for dequantization.
             if (SHMEM_STAGING == 0) {
-#if BLOCK_SIZE == 1
-            if (KV_bounds_check || d * 16 + 16 > HSK) {
-#endif
-            barrier();
-            [[unroll]] for (uint32_t idx = 0; idx < Bc * MatBr / 4; idx += gl_WorkGroupSize.x) {
-                uint32_t col_vec = (idx + tid) % (MatBr / 4);
-                uint32_t row = (idx + tid) / (MatBr / 4);
-                if (idx + tid < Bc * MatBr / 4) {
-                    f16vec4 K_Tf = f16vec4(0);
-                    if ((!KV_bounds_check || j * Bc + row < KV) && (HSK == HSK_pad || d * 16 + col_vec * 4 < HSK)) {
-#if BLOCK_SIZE > 1
-                        uint coord = (j * Bc + row) * k_stride * BLOCK_SIZE + d * 16 + col_vec * 4;
-                        uint ib = coord / BLOCK_SIZE;
-                        uint iqs = (coord % BLOCK_SIZE);
-                        K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
-#else
-                        K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + row) * k_stride / 4 + d * 16 / 4 + col_vec]);
-#endif
+            // For quants we always need to dequant into kvsh; for f16 we can load
+            // directly from global memory when alignment / bounds allow it.
+            const bool stage_k = USE_DECODE_K || KV_bounds_check || d * 16 + 16 > HSK;
+            if (stage_k) {
+                barrier();
+                [[unroll]] for (uint32_t idx = 0; idx < Bc * MatBr / 4; idx += gl_WorkGroupSize.x) {
+                    uint32_t col_vec = (idx + tid) % (MatBr / 4);
+                    uint32_t row = (idx + tid) / (MatBr / 4);
+                    if (idx + tid < Bc * MatBr / 4) {
+                        f16vec4 K_Tf = f16vec4(0);
+                        if ((!KV_bounds_check || j * Bc + row < KV) && (HSK == HSK_pad || d * 16 + col_vec * 4 < HSK)) {
+                            if (USE_DECODE_K) {
+                                uint coord = (j * Bc + row) * k_stride * BLOCK_SIZE_K + d * 16 + col_vec * 4;
+                                uint ib = coord / BLOCK_SIZE_K;
+                                uint iqs = (coord % BLOCK_SIZE_K);
+                                K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
+                            } else {
+                                K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + row) * k_stride / 4 + d * 16 / 4 + col_vec]);
+                            }
+                        }
+
+                        kvsh[row * kvsh_stride + col_vec] = K_Tf;
                     }
-
-                    kvsh[row * kvsh_stride + col_vec] = K_Tf;
                 }
+                barrier();
             }
-            barrier();
-#if BLOCK_SIZE == 1
-            }
-#endif
 
-#if BLOCK_SIZE == 1
-            if (KV_bounds_check || d * 16 + 16 > HSK)
-#endif
-            {
+            if (stage_k) {
                 uint coord = (gl_SubgroupID * MatBc) * kvsh_stride;
                 coopMatLoad(KMat, kvsh, coord, kvsh_stride, gl_CooperativeMatrixLayoutRowMajor);
-            }
-#if BLOCK_SIZE == 1
-            else {
+            } else {
                 const uint coord = k_offset / 4 + (j * Bc + gl_SubgroupID * MatBc) * k_stride / 4 + d * 16 / 4;
                 coopMatLoad(KMat, data_kv4, coord, k_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
             }
-#endif
             } else {
                 uint coord = (gl_SubgroupID * MatBc) * kvsh_stride + d * 16 / 4;
                 coopMatLoad(KMat, kvsh, coord, kvsh_stride, gl_CooperativeMatrixLayoutRowMajor);
@@ -397,14 +387,14 @@ void main() {
                 if (idx + gl_WorkGroupSize.x <= Bc * HSV_pad / 4 || c < Bc) {
                     f16vec4 V_Tf = f16vec4(0);
                     if ((!KV_bounds_check || j * Bc + c < KV) && (HSV == HSV_pad || d < HSV / 4)) {
-#if BLOCK_SIZE > 1
-                        uint coord = (j * Bc + c) * v_stride * BLOCK_SIZE + 4 * d;
-                        uint ib = coord / BLOCK_SIZE;
-                        uint iqs = (coord % BLOCK_SIZE);
-                        V_Tf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
-#else
-                        V_Tf = f16vec4(data_vv4[v_offset / 4 + (j * Bc + c) * v_stride / 4 + d]);
-#endif
+                        if (USE_DECODE_V) {
+                            uint coord = (j * Bc + c) * v_stride * BLOCK_SIZE_V + 4 * d;
+                            uint ib = coord / BLOCK_SIZE_V;
+                            uint iqs = (coord % BLOCK_SIZE_V);
+                            V_Tf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
+                        } else {
+                            V_Tf = f16vec4(data_vv4[v_offset / 4 + (j * Bc + c) * v_stride / 4 + d]);
+                        }
                     }
 
                     kvsh[c * kvsh_stride + d] = V_Tf;
@@ -431,36 +421,33 @@ void main() {
             // staged through a Bc * MatBr size staging buffer.
             // If V is not type f16, then it is always staged for dequantization.
             if (SHMEM_STAGING == 0) {
-#if BLOCK_SIZE == 1
-            // For f16, only preload if not aligned
-            if (KV_bounds_check) {
-#endif
-            [[unroll]] for (uint32_t i = 0; i < v_loads_per_thread; ++i) {
-                const uint idx = i * gl_WorkGroupSize.x + tid;
-                const uint row = idx / v_cols;
-                const uint col = idx % v_cols;
+            // For quants we always preload via kvsh. For f16 we only preload when
+            // alignment / bounds force it (otherwise we coopMatLoad direct from data_vv4).
+            const bool stage_v = USE_DECODE_V || KV_bounds_check;
+            if (stage_v) {
+                [[unroll]] for (uint32_t i = 0; i < v_loads_per_thread; ++i) {
+                    const uint idx = i * gl_WorkGroupSize.x + tid;
+                    const uint row = idx / v_cols;
+                    const uint col = idx % v_cols;
 
-                const uint v_row = j * Bc + row;
-                const uint v_col = hsv_tile * MatBc * row_split + col * 4;
+                    const uint v_row = j * Bc + row;
+                    const uint v_col = hsv_tile * MatBc * row_split + col * 4;
 
-                const uint coord = v_row * v_stride * BLOCK_SIZE + v_col;
-                const uint ib = coord / BLOCK_SIZE;
-                const uint iqs = coord % BLOCK_SIZE;
+                    const uint coord = v_row * v_stride * BLOCK_SIZE_V + v_col;
+                    const uint ib = coord / BLOCK_SIZE_V;
+                    const uint iqs = coord % BLOCK_SIZE_V;
 
-                if (!KV_bounds_check || (v_row < KV && v_col < HSV)) {
-#if BLOCK_SIZE > 1
-                    kvsh[row * vsh_stride + col] = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
-#else
-                    kvsh[row * vsh_stride + col] = data_vv4[(v_offset + v_row * v_stride + v_col) / 4];
-#endif
-                } else {
-                    kvsh[row * vsh_stride + col] = f16vec4(0.0f);
+                    if (!KV_bounds_check || (v_row < KV && v_col < HSV)) {
+                        if (USE_DECODE_V) {
+                            kvsh[row * vsh_stride + col] = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
+                        } else {
+                            kvsh[row * vsh_stride + col] = data_vv4[(v_offset + v_row * v_stride + v_col) / 4];
+                        }
+                    } else {
+                        kvsh[row * vsh_stride + col] = f16vec4(0.0f);
+                    }
                 }
             }
-
-#if BLOCK_SIZE == 1
-            }
-#endif
             }
             barrier();
 
@@ -471,15 +458,12 @@ void main() {
                     coopMatLoad(KMat, Psh, bc_chunk * MatBc * psh_stride, psh_stride, gl_CooperativeMatrixLayoutColumnMajor);
 
                     if (SHMEM_STAGING == 0) {
-#if BLOCK_SIZE == 1
-                    if (!KV_bounds_check) {
+                    if (!USE_DECODE_V && !KV_bounds_check) {
                         // F16 values can be loaded directly from global memory
                         const uint v_tile_row = j * Bc + bc_chunk * MatBc;
                         const uint v_tile_offset = v_offset / 4 + v_tile_row * v_stride / 4 + hsv_offset / 4;
                         coopMatLoad(QMat, data_vv4, v_tile_offset, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
-                    } else
-#endif
-                    {
+                    } else {
                         const uint v_tile_offset = bc_chunk * MatBr * v_cols + gl_SubgroupID * (MatBc / 4);
                         coopMatLoad(QMat, kvsh, v_tile_offset, vsh_stride, gl_CooperativeMatrixLayoutRowMajor);
                     }

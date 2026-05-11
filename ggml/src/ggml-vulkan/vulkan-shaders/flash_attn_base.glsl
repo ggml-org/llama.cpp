@@ -87,176 +87,58 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 
 #define BINDING_IDX_K 0
 #define BINDING_IDX_V 1
-#if defined(DATA_A_F32)
-layout (binding = 1) readonly buffer K_PACKED {vec4 k_data_packed[];} k_packed;
-layout (binding = 2) readonly buffer V_PACKED {vec4 v_data_packed[];} v_packed;
-#elif defined(A_TYPE_PACKED16)
-layout (binding = 1) readonly buffer K_PACKED16 {A_TYPE_PACKED16 k_data_packed16[];} k_packed;
-layout (binding = 2) readonly buffer V_PACKED16 {A_TYPE_PACKED16 v_data_packed16[];} v_packed;
-#endif
 
-#if defined(A_TYPE_PACKED32)
-layout (binding = 1) readonly buffer K_PACKED32 {A_TYPE_PACKED32 k_data_packed32[];} k_packed32;
-layout (binding = 2) readonly buffer V_PACKED32 {A_TYPE_PACKED32 v_data_packed32[];} v_packed32;
-#endif
+// FaTypeK / FaTypeV spec constant values. These mirror enum ggml_type so the
+// host can pass the type directly. Keep in sync with ggml.h.
+#define FA_TYPE_F32   0u
+#define FA_TYPE_F16   1u
+#define FA_TYPE_Q4_0  2u
+#define FA_TYPE_Q4_1  3u
+#define FA_TYPE_Q5_0  6u
+#define FA_TYPE_Q5_1  7u
+#define FA_TYPE_Q8_0  8u
+#define FA_TYPE_Q1_0 41u
 
-#ifndef BLOCK_SIZE
-#define BLOCK_SIZE 1
-#endif
-
-#if defined(DATA_A_F32)
-#undef BLOCK_SIZE
-#define BLOCK_SIZE 4
-#define BLOCK_BYTE_SIZE 16
-
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    // iqs is currently always zero in the flash attention shaders
-    if (binding_idx == BINDING_IDX_K) {
-        return FLOAT_TYPEV4(k_packed.k_data_packed[a_offset + ib]);
-    } else {
-        return FLOAT_TYPEV4(v_packed.v_data_packed[a_offset + ib]);
+// Number of matrix elements per buffer block, derived from the K/V type spec
+// constant. F32 is treated as a vec4 "block" of 4 floats. F16 uses block size 1
+// and bypasses the dequant path entirely. Quants follow their ggml block sizes.
+uint fa_block_elems(uint ty) {
+    switch (ty) {
+        case FA_TYPE_F32:  return 4u;
+        case FA_TYPE_F16:  return 1u;
+        case FA_TYPE_Q4_0: return uint(QUANT_K_Q4_0);
+        case FA_TYPE_Q4_1: return uint(QUANT_K_Q4_1);
+        case FA_TYPE_Q5_0: return uint(QUANT_K_Q5_0);
+        case FA_TYPE_Q5_1: return uint(QUANT_K_Q5_1);
+        case FA_TYPE_Q8_0: return uint(QUANT_K_Q8_0);
+        case FA_TYPE_Q1_0: return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
+        default:           return 1u;
     }
 }
-#endif
 
-#if defined(DATA_A_Q4_0)
-#define BLOCK_BYTE_SIZE 18
-#elif defined(DATA_A_Q4_1)
-#define BLOCK_BYTE_SIZE 20
-#endif
-
-#if defined(DATA_A_Q4_0) || defined(DATA_A_Q4_1)
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    if (binding_idx == BINDING_IDX_K) {
-        uint vui_lo = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
-#ifdef DATA_A_Q4_1
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * nibbles + FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].m);
-#else
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * (nibbles - FLOAT_TYPE(8.0f));
-#endif
-    } else {
-        uint vui_lo = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
-#ifdef DATA_A_Q4_1
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * nibbles + FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].m);
-#else
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * (nibbles - FLOAT_TYPE(8.0f));
-#endif
+// QUANT_R_MMQ for FA-eligible K types. Q4_*/Q5_* store two nibbles per byte
+// (R==2); Q8_0 stores one byte per element (R==1). Used to derive the number
+// of int32s per 32-element block on the MMQ K path: ints_per_block == 8 / R.
+uint fa_quant_r_mmq(uint ty) {
+    switch (ty) {
+        case FA_TYPE_Q4_0: return uint(QUANT_R_Q4_0);
+        case FA_TYPE_Q4_1: return uint(QUANT_R_Q4_1);
+        case FA_TYPE_Q5_0: return uint(QUANT_R_Q5_0);
+        case FA_TYPE_Q5_1: return uint(QUANT_R_Q5_1);
+        case FA_TYPE_Q8_0: return uint(QUANT_R_Q8_0);
+        default:           return 1u;
     }
 }
-#endif
 
-#if defined(DATA_A_Q5_0)
-#define BLOCK_BYTE_SIZE 22
-#elif defined(DATA_A_Q5_1)
-#define BLOCK_BYTE_SIZE 24
-#endif
-
-#if defined(DATA_A_Q5_0) || defined(DATA_A_Q5_1)
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    if (binding_idx == BINDING_IDX_K) {
-        uint vui_lo = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-#ifdef DATA_A_Q5_1
-        uint qh = k_packed.k_data_packed16[a_offset + ib].qh;
-#else
-        uint qh = uint(k_packed.k_data_packed16[a_offset + ib].qh[0]) | (uint(k_packed.k_data_packed16[a_offset + ib].qh[1]) << 16);
-#endif
-        FLOAT_TYPEV4 hb = FLOAT_TYPEV4((qh >> iqs) & 1, (qh >> (iqs + 1)) & 1, (qh >> (iqs + 2)) & 1, (qh >> (iqs + 3)) & 1) * FLOAT_TYPE(16.0f);
-
-        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
-#ifdef DATA_A_Q5_1
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * (nibbles + hb) + FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].m);
-#else
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * (nibbles + hb - FLOAT_TYPE(16.0f));
-#endif
-    } else {
-        uint vui_lo = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-#ifdef DATA_A_Q5_1
-        uint qh = v_packed.v_data_packed16[a_offset + ib].qh;
-#else
-        uint qh = uint(v_packed.v_data_packed16[a_offset + ib].qh[0]) | (uint(v_packed.v_data_packed16[a_offset + ib].qh[1]) << 16);
-#endif
-        FLOAT_TYPEV4 hb = FLOAT_TYPEV4((qh >> iqs) & 1, (qh >> (iqs + 1)) & 1, (qh >> (iqs + 2)) & 1, (qh >> (iqs + 3)) & 1) * FLOAT_TYPE(16.0f);
-
-        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
-#ifdef DATA_A_Q5_1
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * (nibbles + hb) + FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].m);
-#else
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * (nibbles + hb - FLOAT_TYPE(16.0f));
-#endif
-    }
-}
-#endif
-
-
-#if defined(DATA_A_IQ4_NL)
-#define BLOCK_BYTE_SIZE 18
-
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    if (binding_idx == BINDING_IDX_K) {
-        uint vui_lo = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * FLOAT_TYPEV4(
-            kvalues_iq4nl[vui_lo & 0xF],
-            kvalues_iq4nl[(vui_lo >> 8) & 0xF],
-            kvalues_iq4nl[vui_hi & 0xF],
-            kvalues_iq4nl[(vui_hi >> 8) & 0xF]);
-    } else {
-        uint vui_lo = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * FLOAT_TYPEV4(
-            kvalues_iq4nl[vui_lo & 0xF],
-            kvalues_iq4nl[(vui_lo >> 8) & 0xF],
-            kvalues_iq4nl[vui_hi & 0xF],
-            kvalues_iq4nl[(vui_hi >> 8) & 0xF]);
-    }
-}
-#endif
-#if defined(DATA_A_Q8_0)
-#define BLOCK_BYTE_SIZE 34
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    if (binding_idx == BINDING_IDX_K) {
-        const i8vec2 v0 = unpack8(int32_t(k_packed.k_data_packed16[a_offset + ib].qs[iqs / 2])).xy; // vec4 used due to #12147
-        const i8vec2 v1 = unpack8(int32_t(k_packed.k_data_packed16[a_offset + ib].qs[iqs / 2 + 1])).xy;
-
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * FLOAT_TYPEV4(v0.x, v0.y, v1.x, v1.y);
-    } else {
-        const i8vec2 v0 = unpack8(int32_t(v_packed.v_data_packed16[a_offset + ib].qs[iqs / 2])).xy; // vec4 used due to #12147
-        const i8vec2 v1 = unpack8(int32_t(v_packed.v_data_packed16[a_offset + ib].qs[iqs / 2 + 1])).xy;
-
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * FLOAT_TYPEV4(v0.x, v0.y, v1.x, v1.y);
-    }
-}
-#endif
+// These can't be `const` globals because GLSL forbids function calls in global
+// const initializers, even when the spec constants would let the driver fold
+// them. Macros expand at the use site and fold after specialization.
+#define BLOCK_SIZE_K fa_block_elems(FaTypeK)
+#define BLOCK_SIZE_V fa_block_elems(FaTypeV)
+// F16 reads f16 elements directly from the binding; everything else routes
+// through dequantize4 / the MMQ helpers to unpack from the packed block layout.
+#define USE_DECODE_K (FaTypeK != FA_TYPE_F16)
+#define USE_DECODE_V (FaTypeV != FA_TYPE_F16)
 
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 
