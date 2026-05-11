@@ -622,10 +622,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         for (auto & seq_breaker : params.sampling.dry_sequence_breakers) {
             string_process_escapes(seq_breaker);
         }
-        for (auto & pair : params.speculative.draft.replacements) {
-            string_process_escapes(pair.first);
-            string_process_escapes(pair.second);
-        }
     }
 
     if (!params.kv_overrides.empty()) {
@@ -3519,13 +3515,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_P_MIN"));
     add_opt(common_arg(
-        {"--spec-draft-ctx-size", "-cd", "--ctx-size-draft"}, "N",
-        string_format("size of the prompt context for the draft model (default: %d, 0 = loaded from model)", params.speculative.draft.n_ctx),
-        [](common_params & params, int value) {
-            params.speculative.draft.n_ctx = value;
-        }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_CTX_SIZE"));
-    add_opt(common_arg(
         {"--spec-draft-device", "-devd", "--device-draft"}, "<dev1,dev2,..>",
         "comma-separated list of devices to use for offloading the draft model (none = don't offload)\n"
         "use --list-devices to see a list of available devices",
@@ -3561,32 +3550,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
     add_opt(common_arg(
-        {"--spec-draft-replace", "--spec-replace"}, "TARGET", "DRAFT",
-        "translate the string in TARGET into DRAFT if the draft model and main model are not compatible",
-        [](common_params & params, const std::string & tgt, const std::string & dft) {
-            params.speculative.draft.replacements.push_back({ tgt, dft });
-        }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
-    add_opt(common_arg(
-        {"--spec-type"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]",
+        {"--spec-type"}, common_speculative_all_types_str(),
         string_format("type of speculative decoding to use when no draft model is provided (default: %s)\n",
-            common_speculative_type_to_str(params.speculative.type).c_str()),
+            common_speculative_type_name_str(params.speculative.types).c_str()),
         [](common_params & params, const std::string & value) {
-            if (value == "none") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
-            } else if (value == "ngram-cache") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_CACHE;
-            } else if (value == "ngram-simple") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE;
-            } else if (value == "ngram-map-k") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K;
-            } else if (value == "ngram-map-k4v") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
-            } else if (value == "ngram-mod") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
-            } else {
-                throw std::invalid_argument("unknown speculative decoding type without draft model");
-            }
+            const auto enabled_types = string_split<std::string>(value, ',');
+            params.speculative.types = common_speculative_types_from_names(enabled_types);
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
     add_opt(common_arg(
@@ -4075,7 +4044,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--spec-default"},
         string_format("enable default speculative decoding config"),
         [](common_params & params) {
-            params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
+            params.speculative.types = { COMMON_SPECULATIVE_TYPE_NGRAM_MOD };
             params.speculative.ngram_mod.n_match = 24;
             params.speculative.ngram_mod.n_min = 48;
             params.speculative.ngram_mod.n_max = 64;
