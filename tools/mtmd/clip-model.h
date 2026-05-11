@@ -99,6 +99,12 @@ struct clip_hparams {
     int32_t audio_proj_downsample_rate = 0;
     int32_t audio_proj_head_count      = 0;
 
+    // qwen3a preprocessor
+    int32_t downsample_hidden_size = 0;
+    int32_t n_window = 0;
+    int32_t n_window_infer = 0;
+    int32_t conv_chunksize = 0;
+
     // audio-to-mel preprocessor params
     int32_t audio_chunk_len   = -1; // in seconds
     int32_t audio_sample_rate = -1;

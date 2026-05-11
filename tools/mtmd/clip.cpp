@@ -1443,7 +1443,6 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_ULTRAVOX:
                 case PROJECTOR_TYPE_QWEN2A:
-                case PROJECTOR_TYPE_QWEN3A:
                 case PROJECTOR_TYPE_GLMA:
                 case PROJECTOR_TYPE_VOXTRAL:
                 case PROJECTOR_TYPE_MERALION:
@@ -1463,6 +1462,17 @@ struct clip_model_loader {
                         hparams.audio_n_fft        = 400;
                         hparams.audio_window_len   = 400;
                         hparams.audio_hop_len      = 160;
+                    } break;
+                case PROJECTOR_TYPE_QWEN3A:
+                    {
+                        hparams.audio_sample_rate  = 16000;
+                        hparams.audio_n_fft        = 400;
+                        hparams.audio_window_len   = 400;
+                        hparams.audio_hop_len      = 160;
+                        hparams.downsample_hidden_size = 480;
+                        hparams.n_window               = 50;
+                        hparams.n_window_infer         = 800;
+                        hparams.conv_chunksize         = 500;
                     } break;
                 case PROJECTOR_TYPE_PADDLEOCR:
                     {
@@ -3197,12 +3207,25 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_QWEN3A:
             {
-                // 3x stride-2 conv2d: each step is floor((n-1)/2)+1
-                int n = img->nx;
-                n = (n - 1) / 2 + 1;
-                n = (n - 1) / 2 + 1;
-                n = (n - 1) / 2 + 1;
-                n_patches = n;
+                // Encoder splits input into conv sub-chunks of n_window*2 frames,
+                // applies 3x Conv2d(stride=2, padding=1) per sub-chunk, and
+                // concatenates. Total tokens = sum of per-sub-chunk tokens.
+                const int n_frames = img->nx;
+                const auto & hp = ctx->model.hparams;
+                const int conv_chunk_frames = hp.n_window > 0
+                    ? hp.n_window * 2
+                    : n_frames;
+                const int n_sub_chunks = (n_frames + conv_chunk_frames - 1) / conv_chunk_frames;
+                int total = 0;
+                for (int i = 0; i < n_sub_chunks; i++) {
+                    int f = std::min(conv_chunk_frames, n_frames - i * conv_chunk_frames);
+                    int t = f;
+                    t = (t - 1) / 2 + 1;  // after conv2d_1
+                    t = (t - 1) / 2 + 1;  // after conv2d_2
+                    t = (t - 1) / 2 + 1;  // after conv2d_3
+                    total += t;
+                }
+                n_patches = total;
             } break;
         case PROJECTOR_TYPE_GLMA:
             {
@@ -4164,7 +4187,6 @@ bool clip_has_whisper_encoder(const struct clip_ctx * ctx) {
     switch (ctx->proj_type()) {
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_QWEN2A:
-        case PROJECTOR_TYPE_QWEN3A:
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_MERALION:

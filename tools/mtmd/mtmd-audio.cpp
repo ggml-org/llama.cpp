@@ -610,6 +610,102 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
 }
 
 //
+// mtmd_audio_preprocessor_qwen3a
+//
+
+void mtmd_audio_preprocessor_qwen3a::initialize() {
+    cache.fill_sin_cos_table(hparams.audio_n_fft);
+    cache.fill_hann_window(hparams.audio_window_len, true);
+    cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+}
+
+bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 samples,
+                                                 size_t                        n_samples,
+                                                 std::vector<mtmd_audio_mel> & output) {
+    if (n_samples == 0) {
+        // empty audio
+        return false;
+    }
+
+    const size_t n_samples_orig = n_samples; // save original length before padding
+    std::vector<float> smpl;
+    size_t min_samples = (size_t) hparams.audio_n_fft + (size_t) hparams.audio_hop_len;
+    if (n_samples < min_samples) {
+        smpl.resize(min_samples, 0.0f);
+        std::memcpy(smpl.data(), samples, n_samples * sizeof(float));
+        samples   = smpl.data();
+        n_samples = smpl.size();
+    }
+
+    filter_params params;
+    params.n_mel            = hparams.n_mel_bins;
+    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    params.hann_window_size = hparams.audio_window_len;
+    params.hop_length       = hparams.audio_hop_len;
+    params.sample_rate      = hparams.audio_sample_rate;
+    params.center_padding   = false;
+    params.preemph          = 0.0f;  // disabled
+    params.use_natural_log  = false;
+    params.norm_per_feature = false;
+
+    // make sure the cache is initialized
+    GGML_ASSERT(!cache.sin_vals.empty());
+    GGML_ASSERT(!cache.cos_vals.empty());
+    GGML_ASSERT(!cache.filters.data.empty());
+
+    mtmd_audio_mel out_full;
+    bool           ok = log_mel_spectrogram(samples, n_samples,
+                                            4,  // n_threads
+                                            params, cache, out_full);
+    if (!ok) {
+        return false;
+    }
+
+    // The cgraph in clip.cpp only accepts 3000 frames each, we need to split the mel
+    // we always expect the mel to have 3000 silent frames at the end
+    if (DEBUG) {
+        printf("output: n_mel = %d, n_len = %d\n", out_full.n_mel, out_full.n_len);
+    }
+
+        // qwen3a: chunk real audio frames into inference-window-sized blocks.
+        // Each inference window contains multiple conv sub-chunks that share attention
+        // via a block-diagonal mask in the encoder. The encoder splits the window
+        // into conv sub-chunks of n_window*2 frames internally.
+        const int conv_chunk_frames = hparams.n_window * 2;  // 100 for 0.6B
+        const int chunks_per_window = hparams.n_window_infer > 0
+            ? hparams.n_window_infer / conv_chunk_frames      // 800/100 = 8
+            : 1;
+        const int frames_per_chunk = conv_chunk_frames * chunks_per_window;  // 800
+
+        // Only chunk real audio frames (not the 30s silence padding from mel computation)
+        const int n_real_frames = std::min(
+            (int)(n_samples_orig / params.hop_length) + 1,
+            out_full.n_len);
+
+        if (DEBUG) {
+            printf("chunked mode: frames_per_chunk = %d, n_real_frames = %d\n",
+                   frames_per_chunk, n_real_frames);
+         }
+        for (int off = 0; off < n_real_frames; off += frames_per_chunk) {
+            int n_len = std::min(frames_per_chunk, n_real_frames - off);
+
+            mtmd_audio_mel out_chunk;
+            out_chunk.n_len     = n_len;
+            out_chunk.n_mel     = out_full.n_mel;
+            out_chunk.n_len_org = n_len;
+            out_chunk.data.reserve(out_chunk.n_mel * out_chunk.n_len);
+
+            for (int i = 0; i < out_full.n_mel; i++) {
+                auto src = out_full.data.begin() + i * out_full.n_len + off;
+                out_chunk.data.insert(out_chunk.data.end(), src, src + n_len);
+            }
+            output.push_back(std::move(out_chunk));
+        }
+
+    return true;
+}
+
+//
 // mtmd_audio_preprocessor_conformer
 //
 
