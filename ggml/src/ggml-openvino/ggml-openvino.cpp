@@ -979,6 +979,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
                                                  GGML_OP_DIV,
                                                  GGML_OP_MUL,
                                                  GGML_OP_MUL_MAT,
+                                                 GGML_OP_MUL_MAT_ID,
                                                  GGML_OP_VIEW,
                                                  GGML_OP_CONT,
                                                  GGML_OP_RESHAPE,

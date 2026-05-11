@@ -26,6 +26,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_GET_ROWS",        op::translate_get_rows                         },
         {"GGML_OP_MUL",             op::translate_1to1_match_2_inputs<v1::Multiply>},
         {"GGML_OP_MUL_MAT",         op::translate_mulmat                           },
+        {"GGML_OP_MUL_MAT_ID",      op::translate_mul_mat_id                       },
         {"GGML_OP_PERMUTE",         op::translate_permute                          },
         {"GGML_OP_RESHAPE",         op::translate_reshape                          },
         {"GGML_OP_RMS_NORM",        op::translate_rms_norm                         },

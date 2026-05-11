@@ -1253,6 +1253,7 @@ std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
         {GGML_OP_GET_ROWS,        "GGML_OP_GET_ROWS"       },
         {GGML_OP_MUL,             "GGML_OP_MUL"            },
         {GGML_OP_MUL_MAT,         "GGML_OP_MUL_MAT"        },
+        {GGML_OP_MUL_MAT_ID,      "GGML_OP_MUL_MAT_ID"     },
         {GGML_OP_PERMUTE,         "GGML_OP_PERMUTE"        },
         {GGML_OP_RESHAPE,         "GGML_OP_RESHAPE"        },
         {GGML_OP_RMS_NORM,        "GGML_OP_RMS_NORM"       },
