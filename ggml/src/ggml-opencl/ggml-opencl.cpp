@@ -543,7 +543,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mat_f16_f32_tiled;
     cl_kernel kernel_adreno_xmem_pack_src_f32;
     cl_kernel kernel_adreno_xmem_prepack_weight_f16;
-    cl_kernel kernel_adreno_xmem_gemm_os8_f16_f32;
+    cl_kernel kernel_gemm_xmem_f16_f32_os8;
     cl_kernel kernel_adreno_xmem_store_dst_f32;
     cl_kernel kernel_mul_mm_f16_f32_kqv;
     cl_kernel kernel_mul_mm_f16_f32_kq;
@@ -1560,14 +1560,14 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
     }
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-    // adreno_xmem_gemm_f16_f32
+    // gemm_xmem_f16_f32_os8
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
-            #include "adreno_xmem_gemm_f16_f32.cl.h"
+            #include "gemm_xmem_f16_f32_os8.cl.h"
         };
 #else
-        const std::string kernel_src = read_file("adreno_xmem_gemm_f16_f32.cl");
+        const std::string kernel_src = read_file("gemm_xmem_f16_f32_os8.cl");
 #endif
         cl_program prog =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
@@ -1576,8 +1576,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             clCreateKernel(prog, "adreno_xmem_pack_src_f32", &err), err));
         CL_CHECK((backend_ctx->kernel_adreno_xmem_prepack_weight_f16 =
             clCreateKernel(prog, "adreno_xmem_prepack_weight_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_adreno_xmem_gemm_os8_f16_f32 =
-            clCreateKernel(prog, "adreno_xmem_gemm_os8_f16_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemm_xmem_f16_f32_os8 =
+            clCreateKernel(prog, "kernel_gemm_xmem_f16_f32_os8", &err), err));
         CL_CHECK((backend_ctx->kernel_adreno_xmem_store_dst_f32 =
             clCreateKernel(prog, "adreno_xmem_store_dst_f32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
@@ -10035,7 +10035,7 @@ static void ggml_cl_mul_mat_f16_f32_adreno_xmem(
     };
     backend_ctx->enqueue_ndrange_kernel(pack_src, 2, pack_src_gws, pack_src_lws, dst);
 
-    cl_kernel gemm = backend_ctx->kernel_adreno_xmem_gemm_os8_f16_f32;
+    cl_kernel gemm = backend_ctx->kernel_gemm_xmem_f16_f32_os8;
     CL_CHECK(clSetKernelArg(gemm, 0, sizeof(cl_mem), &weights));
     CL_CHECK(clSetKernelArg(gemm, 1, sizeof(cl_mem), &backend_ctx->prealloc_adreno_xmem_const.buffer));
     CL_CHECK(clSetKernelArg(gemm, 2, sizeof(cl_mem), &src_img));

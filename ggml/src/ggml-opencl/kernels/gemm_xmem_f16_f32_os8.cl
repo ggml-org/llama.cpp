@@ -90,7 +90,7 @@ __kernel void adreno_xmem_prepack_weight_f16(
 }
 
 __attribute__((qcom_max_concurrent_subgroups(12)))
-__kernel void adreno_xmem_gemm_os8_f16_f32(
+__kernel void kernel_gemm_xmem_f16_f32_os8(
     __constant half8 * weights_buffer __attribute__((sub_group_uniform)),
     __constant half8 * xmem_buffer __attribute__((max_constant_size((6144)))),
     __read_only image2d_t src_img,
