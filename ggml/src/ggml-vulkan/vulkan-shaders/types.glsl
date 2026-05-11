@@ -280,6 +280,7 @@ struct block_q3_K
     uint8_t qs[QUANT_K_Q3_K/4];
     uint8_t scales[12];
     float16_t d;
+    uint16_t _pad;
 };
 
 struct block_q3_K_packed16
@@ -288,6 +289,7 @@ struct block_q3_K_packed16
     uint16_t qs[QUANT_K_Q3_K/4/2];
     uint16_t scales[12/2];
     float16_t d;
+    uint16_t _pad;
 };
 
 #if defined(DATA_A_Q3_K)
@@ -383,6 +385,7 @@ struct block_q6_K
     uint8_t qh[QUANT_K_Q6_K/4];
     int8_t scales[QUANT_K_Q6_K/16];
     float16_t d;
+    uint16_t _pad;
 };
 
 struct block_q6_K_packed16
@@ -391,6 +394,7 @@ struct block_q6_K_packed16
     uint16_t qh[QUANT_K_Q6_K/4/2];
     int16_t scales[QUANT_K_Q6_K/16/2];
     float16_t d;
+    uint16_t _pad;
 };
 
 #if defined(DATA_A_Q6_K)

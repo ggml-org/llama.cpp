@@ -984,6 +984,9 @@ typedef std::vector<vk_submission> vk_sequence;
 
 static size_t ggml_vk_device_type_size(ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q6_K:
+            return ggml_type_size(type) + 2;
         default: return ggml_type_size(type);
     }
 }
