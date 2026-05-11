@@ -59,6 +59,9 @@ extern "C" {
         void         (*clear)        (ggml_backend_buffer_t buffer, uint8_t value);
         // (optional) reset any internal state due to tensor initialization, such as tensor extras
         void         (*reset)        (ggml_backend_buffer_t buffer);
+        // (optional) borrow the buffer for direct host access
+        void *       (*borrow)       (ggml_backend_buffer_t buffer);
+        void         (*release)      (ggml_backend_buffer_t buffer, void * ptr);
     };
 
     struct ggml_backend_buffer {
@@ -236,6 +239,9 @@ extern "C" {
     // Optional: obtain a score for the backend based on the system configuration
     // Higher scores are preferred, 0 means the backend is not supported in the current system
     typedef int                (*ggml_backend_score_t)(void);
+
+    void * ggml_backend_tensor_try_borrow(ggml_backend_t backend, struct ggml_tensor * tensor);
+    void   ggml_backend_tensor_release(struct ggml_tensor * tensor, void * ptr);
 
 #ifdef GGML_BACKEND_DL
 #    ifdef __cplusplus

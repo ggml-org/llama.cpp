@@ -13772,6 +13772,22 @@ static void ggml_backend_vk_buffer_clear(ggml_backend_buffer_t buffer, uint8_t v
     ggml_vk_buffer_memset(ctx->dev_buffer, 0, value, buffer->size);
 }
 
+static void * ggml_backend_vk_buffer_borrow(ggml_backend_buffer_t buffer) {
+    ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)buffer->context;
+    vk_buffer buf = buf_ctx->dev_buffer;
+
+    if (!(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+        return nullptr;
+    }
+
+    return buf->ptr;
+}
+
+static void ggml_backend_vk_buffer_release(ggml_backend_buffer_t buffer, void * ptr) {
+    GGML_UNUSED(buffer);
+    GGML_UNUSED(ptr);
+}
+
 static ggml_backend_buffer_i ggml_backend_vk_buffer_interface = {
     /* .free_buffer     = */ ggml_backend_vk_buffer_free_buffer,
     /* .get_base        = */ ggml_backend_vk_buffer_get_base,
@@ -13784,6 +13800,8 @@ static ggml_backend_buffer_i ggml_backend_vk_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_vk_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_vk_buffer_clear,
     /* .reset           = */ NULL,
+    /* .borrow          = */ ggml_backend_vk_buffer_borrow,
+    /* .release         = */ ggml_backend_vk_buffer_release,
 };
 
 // vk buffer type
@@ -13854,6 +13872,15 @@ static void ggml_backend_vk_host_buffer_free_buffer(ggml_backend_buffer_t buffer
     ggml_vk_host_free(vk_instance.devices[0], buffer->context);
 }
 
+static void * ggml_backend_vk_host_buffer_borrow(ggml_backend_buffer_t buffer) {
+    return ggml_backend_buffer_get_base(buffer);
+}
+
+static void ggml_backend_vk_host_buffer_release(ggml_backend_buffer_t buffer, void * ptr) {
+    GGML_UNUSED(buffer);
+    GGML_UNUSED(ptr);
+}
+
 static ggml_backend_buffer_t ggml_backend_vk_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     VK_LOG_MEMORY("ggml_backend_vk_host_buffer_type_alloc_buffer(" << size << ")");
 
@@ -13870,6 +13897,8 @@ static ggml_backend_buffer_t ggml_backend_vk_host_buffer_type_alloc_buffer(ggml_
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
     buffer->buft = buft;
     buffer->iface.free_buffer = ggml_backend_vk_host_buffer_free_buffer;
+    buffer->iface.borrow = ggml_backend_vk_host_buffer_borrow;
+    buffer->iface.release = ggml_backend_vk_host_buffer_release;
 
     return buffer;
 

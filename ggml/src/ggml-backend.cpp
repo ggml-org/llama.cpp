@@ -411,6 +411,34 @@ void ggml_backend_tensor_memset(struct ggml_tensor * tensor, uint8_t value, size
     buf->iface.memset_tensor(buf, tensor, value, offset, size);
 }
 
+void * ggml_backend_tensor_try_borrow(ggml_backend_t backend, struct ggml_tensor * tensor) {
+    GGML_ASSERT(backend);
+    GGML_ASSERT(tensor);
+    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    GGML_ASSERT(buf != NULL && "tensor buffer not set");
+
+    if (buf->iface.borrow) {
+        ggml_backend_synchronize(backend);
+        void * base = buf->iface.borrow(buf);
+        if (base) {
+            return (char *)base + tensor->view_offs;
+        }
+    }
+    return NULL;
+}
+
+// Note: tensor is used here only to resolve buf. If a future backend's release needs the tensor
+// rather than just the buffer, this signature may need to be revisited.
+void ggml_backend_tensor_release(struct ggml_tensor * tensor, void * ptr) {
+    GGML_ASSERT(tensor);
+    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    GGML_ASSERT(buf != NULL && "tensor buffer not set");
+
+    if (buf->iface.release) {
+        buf->iface.release(buf, ptr);
+    }
+}
+
 void ggml_backend_synchronize(ggml_backend_t backend) {
     GGML_ASSERT(backend);
     if (backend->iface.synchronize == NULL) {
@@ -702,6 +730,8 @@ static const struct ggml_backend_buffer_i ggml_backend_multi_buffer_i = {
     /* .cpy_tensor      = */ NULL,
     /* .clear           = */ ggml_backend_multi_buffer_clear,
     /* .reset           = */ NULL,
+    /* .borrow          = */ NULL,
+    /* .release         = */ NULL,
 };
 
 ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers) {
@@ -2276,6 +2306,8 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
     /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_cpu_buffer_clear,
     /* .reset           = */ NULL,
+    /* .borrow          = */ NULL,
+    /* .release         = */ NULL,
 };
 
 static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
@@ -2290,6 +2322,8 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
     /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_cpu_buffer_clear,
     /* .reset           = */ NULL,
+    /* .borrow          = */ NULL,
+    /* .release         = */ NULL,
 };
 
 // CPU backend buffer type

@@ -1423,6 +1423,8 @@ static const ggml_backend_buffer_i ggml_backend_meta_buffer_iface = {
     /* .cpy_tensor      = */ nullptr,
     /* .clear           = */ ggml_backend_meta_buffer_clear,
     /* .reset           = */ ggml_backend_meta_buffer_reset,
+    /* .borrow          = */ nullptr,
+    /* .release         = */ nullptr,
 };
 
 bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf) {
