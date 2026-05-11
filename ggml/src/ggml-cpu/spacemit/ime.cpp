@@ -1506,100 +1506,77 @@ static size_t ggml_backend_cpu_riscv64_spacemit_nbytes(ggml_backend_buffer_type_
         }
     }
 
-    size_t       nbytes;
+    GGML_UNUSED(buft);
+
+    const auto plain_nbytes = [&]() {
+        size_t total = ggml_type_size(tensor->type);
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            total += (tensor->ne[i] - 1) * tensor->nb[i];
+        }
+        return total;
+    };
+
     const size_t blck_size = ggml_blck_size(tensor->type);
     if (blck_size == 1) {
-        nbytes = ggml_type_size(tensor->type);
-        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-            nbytes += (tensor->ne[i] - 1) * tensor->nb[i];
-        }
-    } else {
-        nbytes = tensor->ne[0] * tensor->nb[0] / blck_size;
-        switch (tensor->type) {
-            case GGML_TYPE_Q4_K:
-                GGML_ASSERT(nbytes % sizeof(block_q4_K) == 0);
-                nbytes = (nbytes / sizeof(block_q4_K)) * sizeof(block_q4_1) * 8;
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q4_K)) * sizeof(block_q4_1) * 8;
-                }
-                break;
-            case GGML_TYPE_Q6_K:
-                GGML_ASSERT(nbytes % sizeof(block_q6_K) == 0);
-                nbytes = (nbytes / sizeof(block_q6_K)) * sizeof(block_q8_0) * 8;
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q6_K)) * sizeof(block_q8_0) * 8;
-                }
-                if (tensor->ne[1] % 32 != 0) {
-                    nbytes += (32 - tensor->ne[1] % 32) * (tensor->nb[1] / sizeof(block_q6_K)) * sizeof(block_q8_0) * 8;
-                }
-                break;
-            case GGML_TYPE_Q8_0:
-                GGML_ASSERT(nbytes % sizeof(block_q8_0) == 0);
-                nbytes = (nbytes / sizeof(block_q8_0)) * sizeof(block_q8_0);
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q8_0)) * sizeof(block_q8_0);
-                }
-                if (tensor->ne[1] % 32 != 0) {
-                    nbytes += (32 - tensor->ne[1] % 32) * (tensor->nb[1] / sizeof(block_q8_0)) * sizeof(block_q8_0);
-                }
-                break;
-            case GGML_TYPE_Q2_K:
-                GGML_ASSERT(nbytes % sizeof(block_q2_K) == 0);
-                nbytes = (nbytes / sizeof(block_q2_K)) * sizeof(spacemit_kernels::nrow_block_q2_k<1>);
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q2_K)) *
-                              sizeof(spacemit_kernels::nrow_block_q2_k<1>);
-                }
-                break;
-            case GGML_TYPE_Q3_K:
-                GGML_ASSERT(nbytes % sizeof(block_q3_K) == 0);
-                nbytes = (nbytes / sizeof(block_q3_K)) * sizeof(spacemit_kernels::nrow_block_q3_k<1>);
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q3_K)) *
-                              sizeof(spacemit_kernels::nrow_block_q3_k<1>);
-                }
-                break;
-            case GGML_TYPE_MXFP4:
-                GGML_ASSERT(nbytes % sizeof(block_mxfp4) == 0);
-                nbytes = (nbytes / sizeof(block_mxfp4)) * sizeof(spacemit_kernels::nrow_block_mxfp4<1>);
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_mxfp4)) *
-                              sizeof(spacemit_kernels::nrow_block_mxfp4<1>);
-                }
-                break;
-            case GGML_TYPE_Q5_K:
-                GGML_ASSERT(nbytes % sizeof(block_q5_K) == 0);
-                nbytes = (nbytes / sizeof(block_q5_K)) * sizeof(spacemit_kernels::nrow_block_q5_1<1>) * 8;
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q5_K)) *
-                              sizeof(spacemit_kernels::nrow_block_q5_1<1>) * 8;
-                }
-                break;
-            case GGML_TYPE_Q5_1:
-                GGML_ASSERT(nbytes % sizeof(block_q5_1) == 0);
-                nbytes = (nbytes / sizeof(block_q5_1)) * sizeof(spacemit_kernels::nrow_block_q5_1<1>);
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q5_1)) *
-                              sizeof(spacemit_kernels::nrow_block_q5_1<1>);
-                }
-                break;
-            case GGML_TYPE_Q5_0:
-                GGML_ASSERT(nbytes % sizeof(block_q5_0) == 0);
-                nbytes = (nbytes / sizeof(block_q5_0)) * sizeof(spacemit_kernels::nrow_block_q5_0<1>);
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    nbytes += (tensor->ne[i] - 1) * (tensor->nb[i] / sizeof(block_q5_0)) *
-                              sizeof(spacemit_kernels::nrow_block_q5_0<1>);
-                }
-                break;
-            default:
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    nbytes += (tensor->ne[i] - 1) * tensor->nb[i];
-                }
-                break;
-        }
+        return plain_nbytes();
     }
 
-    GGML_UNUSED(buft);
+    const size_t row_nbytes = tensor->ne[0] * tensor->nb[0] / blck_size;
+
+    const auto add_strided_nbytes = [&](size_t total, size_t src_block_size, size_t dst_block_size) {
+        for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+            total += (tensor->ne[i] - 1) * (tensor->nb[i] / src_block_size) * dst_block_size;
+        }
+        return total;
+    };
+
+    const auto remap_block_nbytes = [&](size_t src_block_size, size_t dst_block_size, int64_t padded_rows = 0) {
+        GGML_ASSERT(row_nbytes % src_block_size == 0);
+
+        size_t total =
+            add_strided_nbytes((row_nbytes / src_block_size) * dst_block_size, src_block_size, dst_block_size);
+
+        if (padded_rows > 0 && tensor->ne[1] % padded_rows != 0) {
+            total += (padded_rows - tensor->ne[1] % padded_rows) * (tensor->nb[1] / src_block_size) * dst_block_size;
+        }
+
+        return total;
+    };
+
+    size_t nbytes = row_nbytes;
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_K:
+            nbytes = remap_block_nbytes(sizeof(block_q4_K), sizeof(block_q4_1) * 8);
+            break;
+        case GGML_TYPE_Q6_K:
+            nbytes = remap_block_nbytes(sizeof(block_q6_K), sizeof(block_q8_0) * 8, 32);
+            break;
+        case GGML_TYPE_Q8_0:
+            nbytes = remap_block_nbytes(sizeof(block_q8_0), sizeof(block_q8_0), 32);
+            break;
+        case GGML_TYPE_Q2_K:
+            nbytes = remap_block_nbytes(sizeof(block_q2_K), sizeof(spacemit_kernels::nrow_block_q2_k<1>));
+            break;
+        case GGML_TYPE_Q3_K:
+            nbytes = remap_block_nbytes(sizeof(block_q3_K), sizeof(spacemit_kernels::nrow_block_q3_k<1>));
+            break;
+        case GGML_TYPE_MXFP4:
+            nbytes = remap_block_nbytes(sizeof(block_mxfp4), sizeof(spacemit_kernels::nrow_block_mxfp4<1>));
+            break;
+        case GGML_TYPE_Q5_K:
+            nbytes = remap_block_nbytes(sizeof(block_q5_K), sizeof(spacemit_kernels::nrow_block_q5_1<1>) * 8);
+            break;
+        case GGML_TYPE_Q5_1:
+            nbytes = remap_block_nbytes(sizeof(block_q5_1), sizeof(spacemit_kernels::nrow_block_q5_1<1>));
+            break;
+        case GGML_TYPE_Q5_0:
+            nbytes = remap_block_nbytes(sizeof(block_q5_0), sizeof(spacemit_kernels::nrow_block_q5_0<1>));
+            break;
+        default:
+            nbytes = add_strided_nbytes(row_nbytes, 1, 1);
+            break;
+    }
+
     return nbytes;
 }
 
