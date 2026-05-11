@@ -798,7 +798,8 @@ private:
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
-        } else if (params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) {
+        } else if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
+                             COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end()) {
             // MTP head lives in the *target* GGUF — load it as a sibling model
             // with override_arch and feed it through the existing ctx_dft slot.
             char trunk_arch[64] = {0};
@@ -811,11 +812,6 @@ private:
                 mtp_arch = "qwen35moe_mtp";
             } else {
                 SRV_ERR("MTP not supported for trunk architecture '%s'\n", trunk_arch);
-                return false;
-            }
-
-            if (params_base.n_parallel > 1) {
-                SRV_ERR("MTP currently supports only n_parallel=1; got %d\n", params_base.n_parallel);
                 return false;
             }
 
@@ -832,8 +828,6 @@ private:
             }
 
             auto cparams_mtp = common_context_params_to_llama(params_base);
-            cparams_mtp.n_ctx     = llama_n_ctx_seq(ctx_tgt);
-            cparams_mtp.n_seq_max = 1;
 
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams_mtp));
             if (ctx_dft == nullptr) {
@@ -951,7 +945,9 @@ private:
             slot.ctx_tgt = ctx_tgt;
             slot.ctx_dft = ctx_dft.get();
             slot.spec    = spec.get();
-            slot.is_mtp_enabled = (params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) && (ctx_dft != nullptr);
+            slot.is_mtp_enabled = (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
+                                             COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end())
+                                  && (ctx_dft != nullptr);
             slot.n_ctx   = n_ctx_slot;
 
             slot.mctx                   = mctx;
