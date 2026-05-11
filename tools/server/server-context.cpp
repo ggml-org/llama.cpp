@@ -2446,6 +2446,50 @@ private:
                             const auto pos_min_thold = std::max(0, pos_next - n_swa);
 
                             if (n_past > 0 && n_past < slot.prompt.n_tokens()) {
+                                // FULL-removal memory (compressed-KV / SWA-only / recurrent) cannot
+                                // report a meaningful pos_min for partial-prefix matches. Instead, look
+                                // up the most recent context checkpoint with n_tokens <= n_past and
+                                // restore that, then replay the suffix.
+                                if (slot.ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
+                                    const int64_t max_checkpoint_tokens = n_past == slot.task->n_tokens()
+                                        ? std::max<int64_t>(0, (int64_t) n_past - 1)
+                                        : n_past;
+
+                                    SLT_WRN(slot, "FULL-only memory requires checkpoint rollback, n_past = %d, cached = %d, max_checkpoint_tokens = %" PRId64 "\n",
+                                            n_past, slot.prompt.n_tokens(), max_checkpoint_tokens);
+
+                                    const auto it = std::find_if(
+                                        slot.prompt.checkpoints.rbegin(),
+                                        slot.prompt.checkpoints.rend(),
+                                        [max_checkpoint_tokens](const auto & cur) {
+                                            return cur.n_tokens <= max_checkpoint_tokens;
+                                        }
+                                    );
+
+                                    bool do_reset = it == slot.prompt.checkpoints.rend();
+
+                                    if (!do_reset) {
+                                        const size_t checkpoint_size = it->data.size();
+                                        const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+                                        if (n != checkpoint_size) {
+                                            SLT_ERR(slot, "failed to restore FULL-only context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                                                    it->pos_min, it->pos_max, it->n_tokens, (float) checkpoint_size / 1024 / 1024);
+                                            do_reset = true;
+                                        } else {
+                                            n_past = (int) std::min<int64_t>(it->n_tokens, n_past);
+                                            pos_next = slot.prompt.tokens.pos_next(n_past);
+                                            SLT_WRN(slot, "restored FULL-only context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n",
+                                                    it->pos_min, it->pos_max, it->n_tokens, n_past, (float) checkpoint_size / 1024 / 1024);
+                                        }
+                                    }
+
+                                    if (do_reset) {
+                                        SLT_WRN(slot, "%s", "forcing full prompt re-processing: no suitable FULL-only checkpoint was available\n");
+                                        pos_next = 0;
+                                        n_past = 0;
+                                    }
+                                } else {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
                                 if (pos_min == -1) {
                                     SLT_ERR(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min);
@@ -2535,13 +2579,18 @@ private:
                                         n_past = 0;
                                     }
                                 }
+                                } // end of else (non-FULL memory path)
                             }
 
                             {
-                                // erase any checkpoints with pos_max > pos_next
+                                // erase any checkpoints that are no longer reachable.
+                                // FULL-only memory keys on n_tokens; SWA/normal memory keys on pos_max.
                                 for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
                                     const auto & cur = *it;
-                                    if (cur.pos_max > pos_next) {
+                                    const bool invalidated = slot.ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL
+                                        ? cur.n_tokens > n_past
+                                        : cur.pos_max > pos_next;
+                                    if (invalidated) {
                                         SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.data.size() / 1024 / 1024);
                                         it = slot.prompt.checkpoints.erase(it);
                                     } else {
