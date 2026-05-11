@@ -40,8 +40,10 @@ OutputVector translate_permute(const NodeContext & context) {
     std::vector<int64_t> perm_values{0, 2, 1, 3};
     const int32_t* op_params = context.get_output_op_params();
     if (op_params != nullptr) {
-        for (size_t i = 0; i < perm_values.size(); ++i) {
-            perm_values[i] = static_cast<int64_t>(perm_values.size() - 1 - op_params[perm_values.size() - 1 - i]);
+        for (size_t input_axis = 0; input_axis < perm_values.size(); ++input_axis) {
+            const size_t output_axis = static_cast<size_t>(op_params[input_axis]);
+            perm_values[perm_values.size() - 1 - output_axis] =
+                static_cast<int64_t>(perm_values.size() - 1 - input_axis);
         }
     }
     auto perm = ov::op::v0::Constant::create(ov::element::i64, {4}, perm_values);
