@@ -1,0 +1,76 @@
+name: CI (virtgpu)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/build-virtgpu.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-virtgpu.yml',
+      'ggml/src/ggml-virtgpu/**'
+    ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ubuntu-24-virtgpu:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-24-virtgpu
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libdrm-dev pkg-config libssl-dev
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DGGML_VIRTGPU=ON \
+            -DGGML_VIRTGPU_BACKEND=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Verify Libraries
+        id: verify_libs
+        run: |
+          # Check VirtGPU frontend library
+          if [ -f "build/ggml/src/libggml-virtgpu.so" ]; then
+            echo "✓ libggml-virtgpu.so found"
+          else
+            echo "✗ libggml-virtgpu.so not found"
+            exit 1
+          fi
+
+          # Check VirtGPU backend library
+          if [ -f "build/ggml/src/ggml-virtgpu/backend/libggml-virtgpu-backend.so" ]; then
+            echo "✓ libggml-virtgpu-backend.so found"
+          else
+            echo "✗ libggml-virtgpu-backend.so not found"
+            exit 1
+          fi
