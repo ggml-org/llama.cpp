@@ -5108,7 +5108,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
             GGML_LOG_DEBUG("ggml_vulkan: WARNING: Async execution disabled on certain Intel devices.\n");
         }
 
-        // Enable subgroup operations on AMD GCN 5.0/5.1 gpus
+        // Enable subgroup operations on AMD GCN 5.0/5.1 GPUs
         const static std::regex s_gcn_regex("^.*Radeon.*(VII|Vega).*$");
         device->subgroups_gcn_enabled = (device->vendor_id == VK_VENDOR_ID_AMD &&
                                          std::regex_match(std::string(device->properties.deviceName.data()), s_gcn_regex));
