@@ -778,11 +778,6 @@ private:
                 return false;
             }
 
-            if (params_base.n_parallel > 1) {
-                SRV_ERR("MTP currently supports only n_parallel=1; got %d\n", params_base.n_parallel);
-                return false;
-            }
-
             SRV_INF("loading MTP head from '%s' (override_arch=%s)\n",
                     params_base.model.path.c_str(), mtp_arch);
 
