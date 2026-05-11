@@ -453,15 +453,10 @@ struct common_params {
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
-<<<<<<< feature/parallel-loading
     int32_t n_parallel_load = -1; // max parallel jobs for model loading (-1 = all GPUs, 1 = sequential)
 
-    struct cpu_params cpuparams;
-    struct cpu_params cpuparams_batch;
-=======
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
->>>>>>> master
 
     ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data                 = nullptr;
