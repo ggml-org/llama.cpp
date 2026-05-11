@@ -50,9 +50,10 @@ struct Params {
 @group(0) @binding(PARAMS_BINDING)
 var<uniform> params: Params;
 
-fn erf_approx(x: f32) -> f32 {
-    let s = select(-1.0, 1.0, x >= 0.0);
-    let ax = abs(x);
+fn erf_approx(x: TYPE) -> TYPE {
+    let x_f32 = f32(x);
+    let s = select(-1.0, 1.0, x_f32 >= 0.0);
+    let ax = abs(x_f32);
 
     let t = 1.0 / (1.0 + 0.3275911 * ax);
 
@@ -61,13 +62,13 @@ fn erf_approx(x: f32) -> f32 {
             - 0.284496736) * t + 0.254829592) * t) *
         exp(-ax * ax);
 
-    return s * y;
+    return TYPE(s * y);
 }
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.ne) {
-      return;
+        return;
     }
     var i = gid.x;
     let ne2 = params.ne2;
@@ -85,15 +86,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i1 = i / ne0;
     let i0 = i % ne0;
 
-    let src_idx = i0 * params.stride_src0 + i1 * params.stride_src1 +
-                  i2 * params.stride_src2 + i3 * params.stride_src3;
+    let src_idx = i0 * params.stride_src0 + i1 * params.stride_src1 + i2 * params.stride_src2 + i3 * params.stride_src3;
 
 #ifdef ABS
     let res = abs(src[params.offset_src + src_idx]);
 #endif
 #ifdef SGN
-    let res = select(TYPE(select(0.0, -1.0, src[params.offset_src + src_idx] < 0.0)), TYPE(1.0),
-                     src[params.offset_src + src_idx] > 0.0);
+    let res = select(TYPE(select(0.0, -1.0, src[params.offset_src + src_idx] < 0.0)), TYPE(1.0), src[params.offset_src + src_idx] > 0.0);
 #endif
 #ifdef NEG
     let res = -src[params.offset_src + src_idx];
@@ -108,8 +107,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = select(0.0, src[params.offset_src + src_idx], src[params.offset_src + src_idx] > 0.0);
 #endif
 #ifdef ELU
-    let res = select(exp(src[params.offset_src + src_idx]) - 1.0, src[params.offset_src + src_idx],
-                     src[params.offset_src + src_idx] > 0.0);
+    let res = select(exp(src[params.offset_src + src_idx]) - 1.0, src[params.offset_src + src_idx], src[params.offset_src + src_idx] > 0.0);
 #endif
 #ifdef HARDSIGMOID
     let res = min(1.0, max(0.0, (src[params.offset_src + src_idx] + 3.0) / 6.0));
@@ -134,8 +132,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = TYPE(params.fill_val);
 #endif
 #ifdef HARDSWISH
-    let res = src[params.offset_src + src_idx] *
-              min(1.0, max(0.0, (src[params.offset_src + src_idx] + 3.0) / 6.0));
+    let res = src[params.offset_src + src_idx] * min(1.0, max(0.0, (src[params.offset_src + src_idx] + 3.0) / 6.0));
 #endif
 #ifdef GELU
     let res = 0.5 * src[params.offset_src + src_idx] * (1.0 + tanh(0.7978845608 * (src[params.offset_src + src_idx] + 0.044715 * src[params.offset_src + src_idx] * src[params.offset_src + src_idx] * src[params.offset_src + src_idx])));
