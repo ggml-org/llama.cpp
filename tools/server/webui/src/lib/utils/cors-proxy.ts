@@ -20,10 +20,16 @@ export function buildProxiedUrl(targetUrl: string): URL {
 }
 
 /**
- * Get a proxied URL string for use in fetch requests.
- * @param targetUrl - The original URL to proxy
- * @returns Proxied URL as string
+ * Wrap original headers for proxying through the CORS proxy. This avoids issues with duplicated llama.cpp-specific and target headers when using the CORS proxy.
+ * @param headers - The original headers to be proxied to target
+ * @returns List of "wrapped" headers to be sent to the CORS proxy
  */
-export function getProxiedUrlString(targetUrl: string): string {
-	return buildProxiedUrl(targetUrl).href;
+export function buildProxiedHeaders(headers: Record<string, string>): Record<string, string> {
+	const proxiedHeaders: Record<string, string> = {};
+
+	for (const [key, value] of Object.entries(headers)) {
+		proxiedHeaders[`x-proxy-header-${key}`] = value;
+	}
+
+	return proxiedHeaders;
 }

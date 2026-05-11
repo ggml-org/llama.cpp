@@ -12,11 +12,13 @@ export interface DatabaseConversation {
 	lastModified: number;
 	name: string;
 	mcpServerOverrides?: McpServerOverride[];
+	forkedFromConversationId?: string;
 }
 
 export interface DatabaseMessageExtraAudioFile {
 	type: AttachmentType.AUDIO;
 	name: string;
+	size?: number;
 	base64Data: string;
 	mimeType: string;
 }
@@ -24,6 +26,7 @@ export interface DatabaseMessageExtraAudioFile {
 export interface DatabaseMessageExtraImageFile {
 	type: AttachmentType.IMAGE;
 	name: string;
+	size?: number;
 	base64Url: string;
 }
 
@@ -34,6 +37,7 @@ export interface DatabaseMessageExtraImageFile {
 export interface DatabaseMessageExtraLegacyContext {
 	type: AttachmentType.LEGACY_CONTEXT;
 	name: string;
+	size?: number;
 	content: string;
 }
 
@@ -41,6 +45,7 @@ export interface DatabaseMessageExtraPdfFile {
 	type: AttachmentType.PDF;
 	base64Data: string;
 	name: string;
+	size?: number;
 	content: string;
 	images?: string[];
 	processedAsImages: boolean;
@@ -49,12 +54,14 @@ export interface DatabaseMessageExtraPdfFile {
 export interface DatabaseMessageExtraTextFile {
 	type: AttachmentType.TEXT;
 	name: string;
+	size?: number;
 	content: string;
 }
 
 export interface DatabaseMessageExtraMcpPrompt {
 	type: AttachmentType.MCP_PROMPT;
 	name: string;
+	size?: number;
 	serverName: string;
 	promptName: string;
 	content: string;
@@ -64,6 +71,7 @@ export interface DatabaseMessageExtraMcpPrompt {
 export interface DatabaseMessageExtraMcpResource {
 	type: AttachmentType.MCP_RESOURCE;
 	name: string;
+	size?: number;
 	uri: string;
 	serverName: string;
 	content: string;
@@ -91,6 +99,8 @@ export interface DatabaseMessage {
 	 * @deprecated - left for backward compatibility
 	 */
 	thinking?: string;
+	/** Reasoning content produced by the model (separate from visible content) */
+	reasoningContent?: string;
 	/** Serialized JSON array of tool calls made by assistant messages */
 	toolCalls?: string;
 	/** Tool call ID for tool result messages (role: 'tool') */

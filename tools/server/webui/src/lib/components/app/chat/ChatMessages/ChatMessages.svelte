@@ -1,21 +1,38 @@
 <script lang="ts">
-	import { ChatMessage } from '$lib/components/app';
+	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import {
+		chatPendingMessageContent,
+		chatPendingMessageExtras,
+		chatClearPendingMessage,
+		chatInjectPendingMessage
+	} from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { copyToClipboard, formatMessageForClipboard, getMessageSiblings } from '$lib/utils';
+	import {
+		agenticPendingSteeringMessageContent,
+		agenticPendingSteeringMessageExtras,
+		agenticClearSteeringMessage,
+		agenticInjectSteeringMessage
+	} from '$lib/stores/agentic.svelte';
+	import {
+		copyToClipboard,
+		formatMessageForClipboard,
+		getMessageSiblings,
+		hasAgenticContent
+	} from '$lib/utils';
 
 	interface Props {
-		class?: string;
 		messages?: DatabaseMessage[];
 		onUserAction?: () => void;
 	}
 
-	let { class: className, messages = [], onUserAction }: Props = $props();
+	let { messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
+
 	const currentConfig = config();
 
 	setChatActionsContext({
@@ -78,6 +95,13 @@
 			onUserAction?.();
 			await chatStore.continueAssistantMessage(message.id);
 			refreshAllMessages();
+		},
+
+		forkConversation: async (
+			message: DatabaseMessage,
+			options: { name: string; includeAttachments: boolean }
+		) => {
+			await conversationsStore.forkConversation(message.id, options);
 		}
 	});
 
@@ -111,42 +135,114 @@
 			? messages
 			: messages.filter((msg) => msg.type !== MessageRole.SYSTEM);
 
-		let lastAssistantIndex = -1;
+		// Build display entries, grouping agentic sessions into single entries.
+		// An agentic session = assistant(with tool_calls) → tool → assistant → tool → ... → assistant(final)
+		const result: Array<{
+			message: DatabaseMessage;
+			toolMessages: DatabaseMessage[];
+			isLastAssistantMessage: boolean;
+			siblingInfo: ChatMessageSiblingInfo;
+		}> = [];
 
-		for (let i = filteredMessages.length - 1; i >= 0; i--) {
-			if (filteredMessages[i].role === MessageRole.ASSISTANT) {
-				lastAssistantIndex = i;
+		for (let i = 0; i < filteredMessages.length; i++) {
+			const msg = filteredMessages[i];
 
+			// Skip tool messages - they're grouped with preceding assistant
+			if (msg.role === MessageRole.TOOL) continue;
+
+			const toolMessages: DatabaseMessage[] = [];
+			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg)) {
+				let j = i + 1;
+
+				while (j < filteredMessages.length) {
+					const next = filteredMessages[j];
+
+					if (next.role === MessageRole.TOOL) {
+						toolMessages.push(next);
+
+						j++;
+					} else if (next.role === MessageRole.ASSISTANT) {
+						toolMessages.push(next);
+
+						j++;
+					} else {
+						break;
+					}
+				}
+
+				i = j - 1;
+			} else if (msg.role === MessageRole.ASSISTANT) {
+				let j = i + 1;
+
+				while (j < filteredMessages.length && filteredMessages[j].role === MessageRole.TOOL) {
+					toolMessages.push(filteredMessages[j]);
+					j++;
+				}
+			}
+
+			const siblingInfo = getMessageSiblings(allConversationMessages, msg.id);
+
+			result.push({
+				message: msg,
+				toolMessages,
+				isLastAssistantMessage: false,
+				siblingInfo: siblingInfo || {
+					message: msg,
+					siblingIds: [msg.id],
+					currentIndex: 0,
+					totalSiblings: 1
+				}
+			});
+		}
+
+		// Mark the last assistant message
+		for (let i = result.length - 1; i >= 0; i--) {
+			if (result[i].message.role === MessageRole.ASSISTANT) {
+				result[i].isLastAssistantMessage = true;
 				break;
 			}
 		}
 
-		return filteredMessages.map((message, index) => {
-			const siblingInfo = getMessageSiblings(allConversationMessages, message.id);
-			const isLastAssistantMessage =
-				message.role === MessageRole.ASSISTANT && index === lastAssistantIndex;
-
-			return {
-				message,
-				isLastAssistantMessage,
-				siblingInfo: siblingInfo || {
-					message,
-					siblingIds: [message.id],
-					currentIndex: 0,
-					totalSiblings: 1
-				}
-			};
-		});
+		return result;
 	});
 </script>
 
-<div class="flex h-full flex-col space-y-10 pt-24 {className}" style="height: auto; ">
-	{#each displayMessages as { message, isLastAssistantMessage, siblingInfo } (message.id)}
-		<ChatMessage
-			class="mx-auto w-full max-w-[48rem]"
-			{message}
-			{isLastAssistantMessage}
-			{siblingInfo}
+{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
+	<ChatMessage
+		class="mx-auto mt-12 w-full max-w-[48rem]"
+		{message}
+		{toolMessages}
+		{isLastAssistantMessage}
+		{siblingInfo}
+	/>
+{/each}
+
+{#if activeConversation() && agenticPendingSteeringMessageContent(activeConversation()!.id)}
+	{@const convId = activeConversation()!.id}
+	{@const pendingContent = agenticPendingSteeringMessageContent(convId)}
+
+	{#if pendingContent}
+		<ChatMessageUserPending
+			class="mx-auto mt-12 w-full max-w-[48rem]"
+			content={pendingContent}
+			extras={agenticPendingSteeringMessageExtras(convId)}
+			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+			onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
+			onDelete={() => agenticClearSteeringMessage(convId)}
 		/>
-	{/each}
-</div>
+	{/if}
+{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}
+	{@const convId = activeConversation()!.id}
+	{@const pendingContent = chatPendingMessageContent(convId)}
+
+	{#if pendingContent}
+		<ChatMessageUserPending
+			class="mx-auto mt-12 w-full max-w-[48rem]"
+			content={pendingContent}
+			extras={chatPendingMessageExtras(convId)}
+			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+			onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
+			onDelete={() => chatClearPendingMessage(convId)}
+		/>
+	{/if}
+{/if}

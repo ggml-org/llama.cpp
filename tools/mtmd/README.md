@@ -49,6 +49,7 @@ For the following models, you can use `convert_hf_to_gguf.py` with `--mmproj` fl
 - Qwen 2 VL and Qwen 2.5 VL (from [Qwen](https://huggingface.co/Qwen))
 - [Mistral Small 3.1 24B](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503)
 - InternVL 2.5 and InternVL 3 from [OpenGVLab](https://huggingface.co/OpenGVLab) (note: we don't support conversion of `InternVL3-*-hf` model, only non-HF version is supported ; `InternLM2Model` **text** model is not supported)
+- [MiniCPM-V 4.6](https://huggingface.co/openbmb/MiniCPM-V-4_6) ; See the guide [here](../../docs/multimodal/minicpmv4.6.md) - requires the standard `transformers` v5.7.0+ checkpoint
 
 For older models, please refer to the relevant guide for instructions on how to obtain or create them:
 
@@ -60,4 +61,7 @@ NOTE: conversion scripts are located under `tools/mtmd/legacy-models`
 - [MiniCPM-V 2.5](../../docs/multimodal/minicpmv2.5.md)
 - [MiniCPM-V 2.6](../../docs/multimodal/minicpmv2.6.md)
 - [MiniCPM-o 2.6](../../docs/multimodal/minicpmo2.6.md)
+- [MiniCPM-V 4.0](../../docs/multimodal/minicpmv4.0.md)
+- [MiniCPM-o 4.0](../../docs/multimodal/minicpmo4.0.md)
+- [MiniCPM-V 4.5](../../docs/multimodal/minicpmv4.5.md)
 - [IBM Granite Vision](../../docs/multimodal/granitevision.md)

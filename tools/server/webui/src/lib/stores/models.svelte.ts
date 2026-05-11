@@ -1,14 +1,16 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 import { ServerModelStatus, ModelModality } from '$lib/enums';
-import { ModelsService, PropsService } from '$lib/services';
+import { ModelsService } from '$lib/services/models.service';
+import { PropsService } from '$lib/services/props.service';
 import { serverStore } from '$lib/stores/server.svelte';
 import { TTLCache } from '$lib/utils';
 import {
 	MODEL_PROPS_CACHE_TTL_MS,
 	MODEL_PROPS_CACHE_MAX_ENTRIES,
-	FAVOURITE_MODELS_LOCALSTORAGE_KEY
+	FAVORITE_MODELS_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 
 /**
  * modelsStore - Reactive store for model management in both MODEL and ROUTER modes
@@ -54,10 +56,14 @@ class ModelsStore {
 	selectedModelId = $state<string | null>(null);
 	selectedModelName = $state<string | null>(null);
 
+	// dedup concurrent fetch() callers, all awaiters share the same inflight promise
+	// without this, ?model=<name> URL handler raced an in-progress fetch and saw an empty list
+	private inflightFetch: Promise<void> | null = null;
+
 	private modelUsage = $state<Map<string, SvelteSet<string>>>(new Map());
 	private modelLoadingStates = new SvelteMap<string, boolean>();
 
-	favouriteModelIds = $state<Set<string>>(this.loadFavouritesFromStorage());
+	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 
 	/**
 	 * Model-specific props cache with TTL
@@ -90,7 +96,11 @@ class ModelsStore {
 
 	get loadedModelIds(): string[] {
 		return this.routerModels
-			.filter((m) => m.status.value === ServerModelStatus.LOADED)
+			.filter(
+				(m) =>
+					m.status.value === ServerModelStatus.LOADED ||
+					m.status.value === ServerModelStatus.SLEEPING
+			)
 			.map((m) => m.id);
 	}
 
@@ -215,7 +225,11 @@ class ModelsStore {
 
 	isModelLoaded(modelId: string): boolean {
 		const model = this.routerModels.find((m) => m.id === modelId);
-		return model?.status.value === ServerModelStatus.LOADED || false;
+		return (
+			model?.status.value === ServerModelStatus.LOADED ||
+			model?.status.value === ServerModelStatus.SLEEPING ||
+			false
+		);
 	}
 
 	isModelOperationInProgress(modelId: string): boolean {
@@ -249,9 +263,18 @@ class ModelsStore {
 	 * Also fetches modalities for MODEL mode (single model)
 	 */
 	async fetch(force = false): Promise<void> {
-		if (this.loading) return;
+		if (this.inflightFetch) return this.inflightFetch;
 		if (this.models.length > 0 && !force) return;
 
+		this.inflightFetch = this.runFetch();
+		try {
+			await this.inflightFetch;
+		} finally {
+			this.inflightFetch = null;
+		}
+	}
+
+	private async runFetch(): Promise<void> {
 		this.loading = true;
 		this.error = null;
 
@@ -400,6 +423,103 @@ class ModelsStore {
 		} catch (error) {
 			console.warn('Failed to fetch modalities for loaded models:', error);
 		}
+	}
+
+	/**
+	 * Gets the model name from the last assistant message in the active conversation.
+	 * Iterates backward through messages to find the most recent message with a model.
+	 * Used by both the chat page and settings page to maintain model consistency.
+	 * @returns The model name or null if not found
+	 */
+	getModelFromLastAssistantResponse(): string | null {
+		const messages = conversationsStore.activeMessages;
+		if (!messages || messages.length === 0) return null;
+
+		// Iterate backward to find the last message with a model
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].model) {
+				return messages[i].model;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Auto-selects the model from the last assistant response if available and loaded.
+	 * Returns true if a model was selected, false otherwise.
+	 * This is used by the chat page to maintain model consistency across page navigation.
+	 */
+	async selectModelFromLastAssistantResponse(): Promise<boolean> {
+		const lastModel = this.getModelFromLastAssistantResponse();
+		if (!lastModel) return false;
+
+		// Skip if already selected
+		if (this.selectedModelName === lastModel) return false;
+
+		const matchingModel = this.models.find((option) => option.model === lastModel);
+		if (!matchingModel) return false;
+
+		if (!this.isModelLoaded(lastModel)) {
+			console.log('[modelsStore] last assistant model not loaded:', lastModel);
+			return false;
+		}
+
+		try {
+			await this.selectModelById(matchingModel.id);
+			console.log(`[modelsStore] Automatically selected model: ${lastModel} from last message`);
+			return true;
+		} catch (error) {
+			console.warn('[modelsStore] Failed to automatically select model from last message:', error);
+			return false;
+		}
+	}
+
+	/**
+	 * Auto-selects the first available model if none is selected, and fetches its props.
+	 * Prioritizes:
+	 * 1. Model from active conversation's last assistant response (if loaded)
+	 * 2. Model from active conversation's last assistant response (if not loaded)
+	 * 3. First loaded model (not from active conversation)
+	 * 4. First available model
+	 * This is used to ensure default values are populated in settings pages.
+	 */
+	async ensureFirstModelSelected(): Promise<void> {
+		if (this.selectedModelName) return;
+
+		// Filter models that are visible in webui
+		const availableModels = this.models.filter((option) => {
+			const modelProps = this.getModelProps(option.model);
+			return modelProps?.webui !== false;
+		});
+
+		if (availableModels.length === 0) return;
+
+		// Try to select model from last assistant response first
+		const lastModel = this.getModelFromLastAssistantResponse();
+		if (lastModel) {
+			const lastModelOption = availableModels.find((m) => m.model === lastModel);
+			if (lastModelOption) {
+				await this.selectModelById(lastModelOption.id);
+				if (this.isModelLoaded(lastModel)) {
+					await this.fetchModelProps(lastModel);
+				}
+				return;
+			}
+		}
+
+		// Try to find a loaded model first
+		const loadedModel = availableModels.find((m) => this.isModelLoaded(m.model));
+		if (loadedModel) {
+			await this.selectModelById(loadedModel.id);
+			await this.fetchModelProps(loadedModel.model);
+			return;
+		}
+
+		// Fall back to the first available model
+		const firstModel = availableModels[0];
+		await this.selectModelById(firstModel.id);
+		// Don't fetch props for unloaded models (will fail in ROUTER mode)
 	}
 
 	/**
@@ -621,17 +741,17 @@ class ModelsStore {
 	/**
 	 *
 	 *
-	 * Favourites
+	 * Favorites
 	 *
 	 *
 	 */
 
-	isFavourite(modelId: string): boolean {
-		return this.favouriteModelIds.has(modelId);
+	isFavorite(modelId: string): boolean {
+		return this.favoriteModelIds.has(modelId);
 	}
 
-	toggleFavourite(modelId: string): void {
-		const next = new SvelteSet(this.favouriteModelIds);
+	toggleFavorite(modelId: string): void {
+		const next = new SvelteSet(this.favoriteModelIds);
 
 		if (next.has(modelId)) {
 			next.delete(modelId);
@@ -639,22 +759,22 @@ class ModelsStore {
 			next.add(modelId);
 		}
 
-		this.favouriteModelIds = next;
+		this.favoriteModelIds = next;
 
 		try {
-			localStorage.setItem(FAVOURITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
+			localStorage.setItem(FAVORITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
 		} catch {
-			toast.error('Failed to save favourite models to local storage');
+			toast.error('Failed to save favorite models to local storage');
 		}
 	}
 
-	private loadFavouritesFromStorage(): Set<string> {
+	private loadFavoritesFromStorage(): Set<string> {
 		try {
-			const raw = localStorage.getItem(FAVOURITE_MODELS_LOCALSTORAGE_KEY);
+			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
 
 			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
 		} catch {
-			toast.error('Failed to load favourite models from local storage');
+			toast.error('Failed to load favorite models from local storage');
 
 			return new Set();
 		}
@@ -713,4 +833,4 @@ export const loadingModelIds = () => modelsStore.loadingModelIds;
 export const propsCacheVersion = () => modelsStore.propsCacheVersion;
 export const singleModelName = () => modelsStore.singleModelName;
 export const selectedModelContextSize = () => modelsStore.selectedModelContextSize;
-export const favouriteModelIds = () => modelsStore.favouriteModelIds;
+export const favoriteModelIds = () => modelsStore.favoriteModelIds;

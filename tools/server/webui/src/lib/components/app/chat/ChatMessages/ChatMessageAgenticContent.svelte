@@ -1,47 +1,113 @@
 <script lang="ts">
+	import { Wrench, Loader2, Brain } from '@lucide/svelte';
 	import {
 		ChatMessageStatistics,
 		CollapsibleContentBlock,
 		MarkdownContent,
-		SyntaxHighlightedCode
+		SyntaxHighlightedCode,
+		ChatMessageActionCardPermissionRequest,
+		ChatMessageActionCardContinueRequest
 	} from '$lib/components/app';
+
+	import {
+		AgenticSectionType,
+		ChatMessageStatsView,
+		FileTypeText,
+		ToolPermissionDecision
+	} from '$lib/enums';
+	import type {
+		ChatMessageAgenticTimings,
+		ChatMessageAgenticTurnStats,
+		DatabaseMessage
+	} from '$lib/types';
+	import {
+		deriveAgenticSections,
+		formatJsonPretty,
+		parseToolResultWithImages,
+		type AgenticSection,
+		type ToolResultLine
+	} from '$lib/utils';
+	import {
+		agenticPendingPermissionRequest,
+		agenticResolvePermission,
+		agenticPendingContinueRequest,
+		agenticResolveContinue
+	} from '$lib/stores/agentic.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { Wrench, Loader2, AlertTriangle, Brain } from '@lucide/svelte';
-	import { AgenticSectionType, AttachmentType, FileTypeText } from '$lib/enums';
-	import { formatJsonPretty } from '$lib/utils';
-	import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
-	import { parseAgenticContent, type AgenticSection } from '$lib/utils';
-	import type { DatabaseMessage, DatabaseMessageExtraImageFile } from '$lib/types/database';
-	import type { ChatMessageAgenticTimings, ChatMessageAgenticTurnStats } from '$lib/types/chat';
-	import { ChatMessageStatsView } from '$lib/enums';
 
 	interface Props {
-		message?: DatabaseMessage;
-		content: string;
+		message: DatabaseMessage;
+		toolMessages?: DatabaseMessage[];
 		isStreaming?: boolean;
+		isLastAssistantMessage?: boolean;
 		highlightTurns?: boolean;
 	}
 
-	type ToolResultLine = {
-		text: string;
-		image?: DatabaseMessageExtraImageFile;
-	};
-
-	let { content, message, isStreaming = false, highlightTurns = false }: Props = $props();
+	let {
+		message,
+		toolMessages = [],
+		isStreaming = false,
+		isLastAssistantMessage = false,
+		highlightTurns = false
+	}: Props = $props();
 
 	let expandedStates: Record<number, boolean> = $state({});
 
-	const sections = $derived(parseAgenticContent(content));
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
 
-	// Parse toolResults with images only when sections or message.extra change
+	let permissionDismissed = $state(false);
+
+	const pendingPermission = $derived(
+		isStreaming && isLastAssistantMessage ? agenticPendingPermissionRequest(message.convId) : null
+	);
+
+	// Reset dismissed when pendingPermission changes (new request or cleared)
+	let prevPendingRef: typeof pendingPermission = null;
+	$effect(() => {
+		if (pendingPermission !== prevPendingRef) {
+			prevPendingRef = pendingPermission;
+			if (pendingPermission) {
+				permissionDismissed = false;
+			}
+		}
+	});
+
+	function handlePermission(decision: ToolPermissionDecision) {
+		permissionDismissed = true;
+		agenticResolvePermission(message.convId, decision);
+	}
+
+	let continueDismissed = $state(false);
+
+	const pendingContinue = $derived(
+		isStreaming && isLastAssistantMessage ? agenticPendingContinueRequest(message.convId) : false
+	);
+
+	let prevContinueRef = false;
+	$effect(() => {
+		if (pendingContinue !== prevContinueRef) {
+			prevContinueRef = pendingContinue;
+			if (pendingContinue) {
+				continueDismissed = false;
+			}
+		}
+	});
+
+	function handleContinue(shouldContinue: boolean) {
+		continueDismissed = true;
+		agenticResolveContinue(message.convId, shouldContinue);
+	}
+
+	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
+
+	// Parse tool results with images
 	const sectionsParsed = $derived(
 		sections.map((section) => ({
 			...section,
 			parsedLines: section.toolResult
-				? parseToolResultWithImages(section.toolResult, message?.extra)
-				: []
+				? parseToolResultWithImages(section.toolResult, section.toolResultExtras || message?.extra)
+				: ([] as ToolResultLine[])
 		}))
 	);
 
@@ -107,26 +173,6 @@
 		expandedStates[index] = !currentState;
 	}
 
-	function parseToolResultWithImages(
-		toolResult: string,
-		extras?: DatabaseMessage['extra']
-	): ToolResultLine[] {
-		const lines = toolResult.split(NEWLINE_SEPARATOR);
-
-		return lines.map((line) => {
-			const match = line.match(ATTACHMENT_SAVED_REGEX);
-			if (!match || !extras) return { text: line };
-
-			const attachmentName = match[1];
-			const image = extras.find(
-				(e): e is DatabaseMessageExtraImageFile =>
-					e.type === AttachmentType.IMAGE && e.name === attachmentName
-			);
-
-			return { text: line, image };
-		});
-	}
-
 	function buildTurnAgenticTimings(stats: ChatMessageAgenticTurnStats): ChatMessageAgenticTimings {
 		return {
 			turns: 1,
@@ -144,9 +190,8 @@
 			<MarkdownContent content={section.content} attachments={message?.extra} />
 		</div>
 	{:else if section.type === AgenticSectionType.TOOL_CALL_STREAMING}
-		{@const streamingIcon = isStreaming ? Loader2 : AlertTriangle}
-		{@const streamingIconClass = isStreaming ? 'h-4 w-4 animate-spin' : 'h-4 w-4 text-yellow-500'}
-		{@const streamingSubtitle = isStreaming ? '' : 'incomplete'}
+		{@const streamingIcon = isStreaming ? Loader2 : Loader2}
+		{@const streamingIconClass = isStreaming ? 'h-4 w-4 animate-spin' : 'h-4 w-4'}
 
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
@@ -154,7 +199,7 @@
 			icon={streamingIcon}
 			iconClass={streamingIconClass}
 			title={section.toolName || 'Tool call'}
-			subtitle={streamingSubtitle}
+			subtitle={isStreaming ? '' : 'incomplete'}
 			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
 		>
@@ -222,7 +267,11 @@
 						<Loader2 class="h-3 w-3 animate-spin" />
 					{/if}
 				</div>
-				{#if section.toolResult}
+				{#if isPending}
+					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
+						Waiting for result...
+					</div>
+				{:else if section.toolResult}
 					<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
 						{#each section.parsedLines as line, i (i)}
 							<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">{line.text}</div>
@@ -236,10 +285,8 @@
 							{/if}
 						{/each}
 					</div>
-				{:else if isPending}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
-						Waiting for result...
-					</div>
+				{:else}
+					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">No output</div>
 				{/if}
 			</div>
 		</CollapsibleContentBlock>
@@ -309,6 +356,18 @@
 		{#each sectionsParsed as section, index (index)}
 			{@render renderSection(section, index)}
 		{/each}
+	{/if}
+
+	{#if pendingPermission && !permissionDismissed}
+		<ChatMessageActionCardPermissionRequest
+			toolName={pendingPermission.toolName}
+			serverLabel={pendingPermission.serverLabel}
+			onDecision={handlePermission}
+		/>
+	{/if}
+
+	{#if pendingContinue && !continueDismissed}
+		<ChatMessageActionCardContinueRequest onDecision={handleContinue} />
 	{/if}
 </div>
 

@@ -7,15 +7,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifndef restrict
-#  define restrict __restrict
-#endif
+#include "htp-ops.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-struct htp_context;  // forward declaration
 
 typedef struct {
     float        *dst;
@@ -64,6 +60,9 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx,
                                       const uint8_t *permuted_weight,
                                       int m, int k, int n,
                                       int weight_type);
+
+// HMX flash attention
+int hmx_flash_attn_ext(struct htp_ops_context * octx);
 
 #ifdef __cplusplus
 }
