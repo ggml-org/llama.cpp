@@ -236,31 +236,22 @@ bool server_http_context::init(const common_params & params) {
         return false;
     };
 
-    auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
+    auto middleware_server_state = [this](const httplib::Request & /*req*/, httplib::Response & res) {
         bool ready = is_ready.load();
         if (!ready) {
-#ifdef LLAMA_BUILD_WEBUI
-            auto tmp = string_split<std::string>(req.path, '.');
-            if (req.path == "/" || tmp.back() == "html") {
-                res.status = 503;
-                res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
-            } else
-#endif
-            {
-                // no endpoints is allowed to be accessed when the server is not ready
-                // this is to prevent any data races or inconsistent states
-                res.status = 503;
-                res.set_content(
-                    safe_json_to_str(json {
-                        {"error", {
-                            {"message", "Loading model"},
-                            {"type", "unavailable_error"},
-                            {"code", 503}
-                        }}
-                    }),
-                    "application/json; charset=utf-8"
-                );
-            }
+            // no endpoints is allowed to be accessed when the server is not ready
+            // this is to prevent any data races or inconsistent states
+            res.status = 503;
+            res.set_content(
+                safe_json_to_str(json {
+                    {"error", {
+                        {"message", "Loading model"},
+                        {"type", "unavailable_error"},
+                        {"code", 503}
+                    }}
+                }),
+                "application/json; charset=utf-8"
+            );
             return false;
         }
         return true;

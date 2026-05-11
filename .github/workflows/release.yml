@@ -34,8 +34,14 @@ concurrency:
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+  # Tag for HF Bucket webui download (will be set during release)
+  LLAMA_BUILD_TAG: ${{ github.ref_name }}
 
 jobs:
+  webui-build:
+    name: Build WebUI
+    uses: ./.github/workflows/webui-build.yml
+
   macOS-cpu:
     strategy:
       matrix:
