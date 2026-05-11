@@ -4356,7 +4356,6 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
 
     // Change mul->type F32→Q8_1 when all downstream consumers are MMVQ-eligible.
     // gallocr then allocates Q8_1-sized memory; try_fuse dispatches the Q8_1 kernel.
-    // Uses a plain forward scan — no heap allocations.
     for (int i = 0; i + 1 < cgraph->n_nodes; i++) {
         ggml_tensor * rms = cgraph->nodes[i];
         ggml_tensor * mul = cgraph->nodes[i + 1];

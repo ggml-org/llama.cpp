@@ -622,7 +622,7 @@ void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
 }
 
 template <int block_size>
-static __global__ void rms_norm_mul_q8_1_f32(const float * __restrict__ x,
+static __global__ __launch_bounds__(block_size) void rms_norm_mul_q8_1_f32(const float * __restrict__ x,
                                              const float * __restrict__ weight,
                                              block_q8_1 * __restrict__ dst,
                                              const int     ncols,
