@@ -5545,13 +5545,70 @@ class _Qwen35MRopeMixin:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
 
+class _Qwen35MtpMixin:
+    """Shared MTP wiring for Qwen3.5/3.6 text variants. The HF config carries
+    the MTP block under `mtp_num_hidden_layers` and the tensors under
+    `mtp.*`; we extend block_count, emit the nextn metadata key, and remap
+    `mtp.*` to the standard layer-indexed nextn naming so the existing
+    tensor_map handles them."""
+
+    # Class-level annotations so the type checker understands the attributes
+    # available on the concrete subclasses in the MRO
+    hparams: dict[str, Any]
+    model_arch: gguf.MODEL_ARCH
+    gguf_writer: gguf.GGUFWriter
+    block_count: int
+    tensor_map: gguf.TensorNameMap
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("mtp_num_hidden_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
+            self.gguf_writer.add_nextn_predict_layers(n)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Multimodal Qwen3.5/3.6 wrap the text model under `model.language_model.*`.
+        if name.startswith("model.language_model."):
+            name = "model." + name[len("model.language_model."):]
+        elif name.startswith("language_model."):
+            name = name[len("language_model."):]
+
+        # Remap MTP block tensors to llama.cpp's layer-indexed nextn naming.
+        # HF: mtp.layers.0.*  (transformer block at MTP slot 0)
+        #     mtp.fc / mtp.pre_fc_norm_embedding / mtp.pre_fc_norm_hidden / mtp.norm
+        if name.startswith("mtp."):
+            n_layer = self.hparams["num_hidden_layers"]
+            if name.find("layers.") != -1:
+                assert bid is not None
+                name = name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + n_layer}")
+            else:
+                remapper = {
+                    "mtp.fc":                    "model.layers.{bid}.eh_proj",
+                    "mtp.pre_fc_norm_embedding": "model.layers.{bid}.enorm",
+                    "mtp.pre_fc_norm_hidden":    "model.layers.{bid}.hnorm",
+                    "mtp.norm":                  "model.layers.{bid}.shared_head.norm",
+                }
+                stem   = Path(name).stem
+                suffix = Path(name).suffix
+                tmpl   = remapper[stem] + suffix
+                for b in range(n_layer, self.block_count):
+                    yield from super().modify_tensors(data_torch, tmpl.format(bid=b), b)  # ty: ignore[unresolved-attribute]
+                return
+
+        yield from super().modify_tensors(data_torch, name, bid)  # ty: ignore[unresolved-attribute]
+
+
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
-class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
+class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
-class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
+class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
 
