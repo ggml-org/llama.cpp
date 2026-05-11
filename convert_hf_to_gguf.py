@@ -3141,7 +3141,7 @@ class LlavaVisionModel(MmprojModel):
 
                 # params.json may ship -1 placeholders (Mistral Medium 3.5)
                 # resolve the real id from the bundled tokenizer in that case
-                if self.img_break_tok_id <= 0:
+                if self.img_break_tok_id < 0:
                     self.img_break_tok_id = self.get_mistral_token_id("[IMG_BREAK]")
         else:
             raise ValueError(f"Unsupported model type: {self.hparams['model_type']}")
