@@ -40,14 +40,16 @@ set(TARGET_SRCS
     server-models.h
 )
 
-# Option to specify custom HF bucket for webui (defaults to llama-webui)
-option(LLAMA_WEBUI_HF_BUCKET "Hugging Face bucket name for prebuilt webui assets" "llama-webui")
+# Option to specify custom HF bucket for webui (defaults to llama-ui)
+# Usage: cmake -B build -DLLAMA_WEBUI_HF_BUCKET=llama-ui
+set(LLAMA_WEBUI_HF_BUCKET "llama-ui" CACHE STRING "Hugging Face bucket name for prebuilt webui assets")
 
 if (LLAMA_BUILD_WEBUI)
     set(PUBLIC_ASSETS
         index.html
         bundle.js
         bundle.css
+        loading.html
     )
 
     # Determine source of webui assets (priority: local > HF Bucket)
@@ -65,31 +67,36 @@ if (LLAMA_BUILD_WEBUI)
     # Priority 2: Try to download from Hugging Face Bucket if local not available
     if(NOT WEBUI_SOURCE_DIR AND LLAMA_USE_PREBUILD_WEBUI)
         # Determine version tag for HF Bucket
-        # Use LLAMA_BUILD_TAG env var if set, otherwise try to get from git, otherwise use "latest"
+        # Only release tags (b<number> format) have webui assets uploaded
         if(DEFINED ENV{LLAMA_BUILD_TAG})
             set(HF_WEBUI_VERSION "$ENV{LLAMA_BUILD_TAG}")
+            message(STATUS "WebUI: using LLAMA_BUILD_TAG=${HF_WEBUI_VERSION}")
         elseif(EXISTS "${CMAKE_SOURCE_DIR}/.git")
             execute_process(
-                COMMAND git describe --tags --abbrev=0 2>/dev/null || echo "latest"
+                COMMAND bash -c "git describe --tags --abbrev=0 2>/dev/null || echo ''"
                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 OUTPUT_VARIABLE HF_WEBUI_VERSION
                 OUTPUT_STRIP_TRAILING_WHITESPACE
             )
-        else()
-            set(HF_WEBUI_VERSION "latest")
         endif()
+
+        # Skip HF Bucket if no version tag available
+        if("${HF_WEBUI_VERSION}" STREQUAL "")
+            message(WARNING "WebUI: no version tag available (set LLAMA_BUILD_TAG env var or create a git tag)")
+        else()
 
         # Hugging Face Buckets URL format
         set(HF_BUCKET_URL "https://huggingface.co/buckets/ggml-org/${LLAMA_WEBUI_HF_BUCKET}/resolve/${HF_WEBUI_VERSION}")
 
-        # Create download directory
-        set(WEBUI_DOWNLOAD_DIR "${CMAKE_CURRENT_BINARY_DIR}/webui-download")
+        # Download to source tree's public directory for persistence
+        # This way subsequent builds use the local files without re-downloading
+        set(WEBUI_DOWNLOAD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/public")
         file(MAKE_DIRECTORY "${WEBUI_DOWNLOAD_DIR}")
 
         # Download each asset
         set(ALL_DOWNLOADS_SUCCESS TRUE)
         foreach(asset ${PUBLIC_ASSETS})
-            set(download_url "${HF_BUCKET_URL}/${asset}")
+            set(download_url "${HF_BUCKET_URL}/${asset}?download=true")
             set(download_path "${WEBUI_DOWNLOAD_DIR}/${asset}")
 
             message(STATUS "WebUI: downloading ${asset} from ${HF_BUCKET_URL}")
@@ -97,7 +104,6 @@ if (LLAMA_BUILD_WEBUI)
             file(
                 DOWNLOAD "${download_url}" "${download_path}"
                 STATUS download_status
-                EXPECTED_HASH SHA256=IGNORE
                 TIMEOUT 60
             )
 
@@ -120,6 +126,7 @@ if (LLAMA_BUILD_WEBUI)
         else()
             message(WARNING "WebUI: HF Bucket download failed, no local build available")
         endif()
+        endif()  # Close: if(HF_WEBUI_VERSION not empty)
     endif()
 
     # Process assets from the determined source
