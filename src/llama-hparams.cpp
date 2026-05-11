@@ -229,6 +229,12 @@ uint32_t llama_hparams::n_embd_head_v_mla() const {
 }
 
 bool llama_hparams::has_kv(uint32_t il) const {
+    if (kv_only_nextn) {
+        // MTP head: only the trailing nextn_predict_layers blocks own a KV cache;
+        // the leading trunk blocks are not executed in this graph.
+        return nextn_predict_layers > 0 && il >= (n_layer - nextn_predict_layers);
+    }
+
     if (n_layer_kv_from_start >= 0) {
         if (il < (uint32_t) n_layer_kv_from_start) {
             return true;

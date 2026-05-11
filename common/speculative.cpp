@@ -3,6 +3,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "llama.h"
+#include "../src/llama-ext.h" // staging API: llama_set_embeddings_pre_norm / llama_get_embeddings_pre_norm_ith (used by MTP)
 #include "log.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
@@ -23,6 +24,7 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
     COMMON_SPECULATIVE_TYPE_DRAFT,
     COMMON_SPECULATIVE_TYPE_EAGLE3,
+    COMMON_SPECULATIVE_TYPE_MTP,
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
@@ -34,6 +36,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
     {"eagle3",        COMMON_SPECULATIVE_TYPE_EAGLE3},
+    {"mtp",           COMMON_SPECULATIVE_TYPE_MTP},
     {"ngram_simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram_map_k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -372,6 +375,330 @@ struct common_speculative_state_eagle3 : public common_speculative_impl {
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/) override {
         // noop
+    }
+};
+
+struct common_speculative_state_mtp : public common_speculative_impl {
+    common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
+
+    llama_batch batch;
+
+    std::vector<common_sampler_ptr> smpls;
+
+    int32_t n_embd = 0;
+
+    // Per-sequence cross-batch carryover: pair (h_p, x_{p+1}) at MTP pos p+1.
+    // The last h-row of one process() call needs the first token of the NEXT
+    // call to pair with, so it's stashed here until that next call fires.
+    std::vector<std::vector<float>> pending_h;   // [n_seq][n_embd]
+    std::vector<llama_pos>          pending_pos; // [n_seq]
+
+    std::vector<uint16_t> last_n_drafted;
+    std::vector<int32_t>  last_n_accepted;
+
+    // Number of trunk output rows produced by the most recent process() call.
+    // Used by draft() for the first AR step (when last_n_accepted is -1) to
+    // pick the last prefill row out of ctx_tgt's pre-norm buffer.
+    std::vector<int32_t>  last_trunk_n_outputs;
+
+    common_speculative_state_mtp(const common_params_speculative & params, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_MTP, n_seq)
+        , params(params.draft)
+    {
+        GGML_ASSERT(n_seq == 1 && "MTP currently supports only single-sequence speculation");
+
+        auto * ctx_tgt = this->params.ctx_tgt;
+        auto * ctx_dft = this->params.ctx_dft;
+        GGML_ASSERT(ctx_tgt && ctx_dft && "MTP requires ctx_tgt and ctx_dft to be set");
+
+        n_embd = llama_model_n_embd(llama_get_model(ctx_dft));
+
+        const int32_t n_ub = (int32_t) llama_n_ubatch(ctx_dft);
+        batch = llama_batch_init(/*n_tokens=*/ n_ub, /*embd=*/ n_embd, /*n_seq_max=*/ 1);
+        // llama_batch_init allocates only one of token/embd; MTP needs both.
+        // TODO: fix, how to call without malloc
+        batch.token = (llama_token *) malloc(sizeof(llama_token) * n_ub);
+
+        smpls.resize(n_seq);
+        for (auto & s : smpls) {
+            common_params_sampling sparams;
+            sparams.no_perf  = false;
+            sparams.top_k    = 1;
+            sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+            s.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
+        }
+
+        llama_set_embeddings_pre_norm(ctx_tgt, true);
+        llama_set_embeddings_pre_norm(ctx_dft, true);
+
+        pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
+        pending_pos.assign(n_seq, -1);
+
+        last_n_drafted.assign(n_seq, 0);
+        last_n_accepted.assign(n_seq, -1);
+        last_trunk_n_outputs.assign(n_seq, 0);
+    }
+
+    ~common_speculative_state_mtp() override {
+        if (batch.token != nullptr) {
+            free(batch.token);
+            batch.token = nullptr;
+        }
+        llama_batch_free(batch);
+    }
+
+    void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
+        GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < pending_pos.size());
+
+        last_n_accepted[seq_id] = -1;
+        last_n_drafted [seq_id] = 0;
+        pending_pos    [seq_id] = -1;
+
+        const int32_t N = (int32_t) prompt.size();
+        if (N <= 0) {
+            return;
+        }
+        auto * ctx_dft = this->params.ctx_dft;
+        const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
+        if (pos_max < N - 1) {
+            LOG_WRN("%s: ctx_dft pos_max=%d < N-1=%d — "
+                    "process() hook may not have run on every prefill ubatch "
+                    "(need_embd / logits=1 on every prompt position?). "
+                    "Drafts may degrade.\n",
+                    __func__, (int) pos_max, N - 1);
+        }
+    }
+
+    bool process(const llama_batch & batch_in) override {
+        if (batch_in.n_tokens <= 0) {
+            return true;
+        }
+
+        // Single-seq for now (asserted in ctor). Future: bucket by seq_id.
+        const llama_seq_id seq_id = 0;
+
+        // TODO: how to make it work with vision tokens?
+        if (batch_in.token == nullptr || batch_in.embd != nullptr) {
+            pending_pos[seq_id] = -1;
+            return true;
+        }
+
+        auto * ctx_tgt = this->params.ctx_tgt;
+        auto * ctx_dft = this->params.ctx_dft;
+
+        const int32_t   n_rows    = batch_in.n_tokens;
+        const llama_pos pos_start = batch_in.pos[0];
+
+        const llama_pos pos_max_dft = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
+        if (pos_start <= pos_max_dft) {
+            return true;
+        }
+
+        // Stale pending: discard if the new batch doesn't start one past it.
+        const bool pending_continues =
+            pending_pos[seq_id] >= 0 && pending_pos[seq_id] + 1 == pos_start;
+        if (pending_pos[seq_id] >= 0 && !pending_continues) {
+            pending_pos[seq_id] = -1;
+        }
+
+        // Build a paired hook batch:
+        //   row 0           = (pending_h, batch_in.token[0]) at pos_start          if pending_continues
+        //   rows 1..n_rows-1 = (h_k from this batch, batch_in.token[k+1]) at pos[k+1]
+        // The last h-row (h_{n_rows-1}) is stashed as the new pending and is *not*
+        // decoded this call — it waits for the next batch's first token to pair.
+        const size_t row_bytes = (size_t) n_embd * sizeof(float);
+
+        common_batch_clear(batch);
+        int out_idx = 0;
+
+        auto add_pair = [&](const float * h_row, llama_token tok, llama_pos pos) {
+            std::memcpy(batch.embd + (size_t) out_idx * n_embd, h_row, row_bytes);
+            batch.token   [out_idx]    = tok;
+            batch.pos     [out_idx]    = pos;
+            batch.n_seq_id[out_idx]    = 1;
+            batch.seq_id  [out_idx][0] = seq_id;
+            batch.logits  [out_idx]    = 0;
+            ++out_idx;
+        };
+
+        if (pending_continues) {
+            add_pair(pending_h[seq_id].data(), batch_in.token[0], pos_start);
+        }
+
+        // TODO: is there is a fast way to build this batch?
+        for (int k = 0; k + 1 < n_rows; ++k) {
+            if (batch_in.logits[k] == 0) {
+                LOG_WRN("%s: batch_in.logits[%d] == 0 (need_embd / logits=1 missing on prefill); stopping hook at this row\n",
+                        __func__, k);
+                break;
+            }
+            const float * h_k = llama_get_embeddings_pre_norm_ith(ctx_tgt, k);
+            if (h_k == nullptr) {
+                LOG_WRN("%s: ctx_tgt has no pre-norm row at i=%d; stopping hook\n", __func__, k);
+                break;
+            }
+            add_pair(h_k, batch_in.token[k + 1], batch_in.pos[k + 1]);
+        }
+
+        if (out_idx > 0) {
+            batch.n_tokens = out_idx;
+            const int32_t rc = llama_decode(ctx_dft, batch);
+            if (rc != 0) {
+                LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (pos=%d, n=%d)\n",
+                        __func__, (int) rc, (int) pos_start, out_idx);
+                return false;
+            }
+        }
+
+        // last_n_accepted < 0) can find the last pre-norm row of this batch.
+        // We assume every batch position has logits=1 (server sets need_embd
+        // for MTP slots) → n_outputs == n_tokens.
+        last_trunk_n_outputs[seq_id] = n_rows;
+
+        // Stash the last h-row (h_{n_rows-1}) as the new pending for the next
+        // process() call's first token to pair with.
+        if (batch_in.logits[n_rows - 1] != 0) {
+            const float * h_last = llama_get_embeddings_pre_norm_ith(ctx_tgt, n_rows - 1);
+            if (h_last != nullptr) {
+                std::memcpy(pending_h[seq_id].data(), h_last, row_bytes);
+                pending_pos[seq_id] = batch_in.pos[n_rows - 1];
+            } else {
+                pending_pos[seq_id] = -1;
+            }
+        } else {
+            // No trunk output at the tail — can't carry over.
+            pending_pos[seq_id] = -1;
+        }
+
+        return true;
+    }
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        // Single-seq for now (asserted in ctor). Future: iterate over dparams.
+        const llama_seq_id seq_id = 0;
+        if ((size_t) seq_id >= dparams.size()) {
+            return;
+        }
+        auto & dp = dparams[seq_id];
+        if (!dp.drafting) {
+            return;
+        }
+
+        auto * ctx_tgt = this->params.ctx_tgt;
+        auto * ctx_dft = this->params.ctx_dft;
+        auto * smpl    = smpls[seq_id].get();
+
+        GGML_ASSERT(dp.result != nullptr);
+        auto & draft_tokens = *dp.result;
+        draft_tokens.clear();
+
+        if (last_n_drafted[seq_id] > 0) {
+            const int32_t n_to_drop = (int32_t) last_n_drafted[seq_id] - 1;
+            if (n_to_drop > 0) {
+                const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
+                if (pos_max >= 0) {
+                    const llama_pos drop_from = pos_max - n_to_drop + 1;
+                    llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, drop_from, -1);
+                }
+            }
+            last_n_drafted[seq_id]  = 0;
+            last_n_accepted[seq_id] = 0;
+        }
+
+        // Effective draft length: min(global cap, per-sequence override).
+        int32_t n_max = std::max(1, params.n_max);
+        if (dp.n_max > 0) {
+            n_max = std::min(n_max, dp.n_max);
+        }
+
+        const size_t row_bytes = (size_t) n_embd * sizeof(float);
+
+        common_sampler_reset(smpl);
+
+        llama_token cond_tok = dp.id_last;
+        llama_pos   pos      = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1;
+
+        for (int32_t k = 0; k < n_max; ++k) {
+            const float * h_row = nullptr;
+
+            if (k == 0) {
+                // Condition on the trunk's pre-norm row.
+                int32_t row_idx;
+                if (last_n_accepted[seq_id] < 0) {
+                    // First draft after begin(): use the last prefill row.
+                    row_idx = last_trunk_n_outputs[seq_id] - 1;
+                } else {
+                    // After accept(n_accepted): row of the next conditioning
+                    // position in the trunk's verify batch.
+                    row_idx = last_n_accepted[seq_id];
+                }
+                if (row_idx < 0) {
+                    LOG_WRN("%s: no trunk pre-norm row available (row_idx=%d); stopping chain\n",
+                            __func__, row_idx);
+                    break;
+                }
+                h_row = llama_get_embeddings_pre_norm_ith(ctx_tgt, row_idx);
+            } else {
+                // AR step: condition on the MTP head's own pre-norm row from
+                // the just-completed single-token decode. n_outputs=1 there,
+                // so the row is at batch position 0.
+                h_row = llama_get_embeddings_pre_norm_ith(ctx_dft, 0);
+            }
+
+            if (h_row == nullptr) {
+                LOG_WRN("%s: missing pre-norm row at k=%d; stopping chain\n", __func__, k);
+                break;
+            }
+
+            // 1-token batch carrying both (token, h_pre_norm).
+            common_batch_clear(batch);
+            std::memcpy(batch.embd, h_row, row_bytes);
+            batch.token   [0]    = cond_tok;
+            batch.pos     [0]    = pos;
+            batch.n_seq_id[0]    = 1;
+            batch.seq_id  [0][0] = seq_id;
+            batch.logits  [0]    = 1; // need logits for sampling
+            batch.n_tokens       = 1;
+
+            const int32_t rc = llama_decode(ctx_dft, batch);
+            if (rc != 0) {
+                LOG_WRN("%s: llama_decode(ctx_dft) failed rc=%d at k=%d; stopping chain\n",
+                        __func__, rc, k);
+                break;
+            }
+
+            const llama_token best = common_sampler_sample(smpl, ctx_dft, 0);
+            common_sampler_accept(smpl, best, /*is_generated=*/ false);
+            draft_tokens.push_back(best);
+            cond_tok = best;
+            ++pos;
+        }
+
+        last_n_drafted[seq_id] = (uint16_t) draft_tokens.size();
+    }
+
+    void accept(llama_seq_id seq_id, uint16_t n_accepted) override {
+        GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < last_n_drafted.size());
+
+        auto * ctx_dft = this->params.ctx_dft;
+
+        const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
+        const int32_t   n_drafted_last = (int32_t) last_n_drafted[seq_id];
+
+        const int32_t n_to_drop = std::max(0, n_drafted_last - (int32_t) n_accepted - 1);
+
+        if (pos_max < 0) {
+            last_n_accepted[seq_id] = (int32_t) n_accepted;
+            return;
+        }
+
+        if (n_to_drop > 0) {
+            const llama_pos drop_from = pos_max - n_to_drop + 1;
+            llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, drop_from, -1);
+        }
+
+        last_n_drafted [seq_id] = 0;
+        last_n_accepted[seq_id] = (int32_t) n_accepted;
     }
 };
 
@@ -818,6 +1145,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
         case COMMON_SPECULATIVE_TYPE_DRAFT:         return "draft";
         case COMMON_SPECULATIVE_TYPE_EAGLE3:        return "eagle3";
+        case COMMON_SPECULATIVE_TYPE_MTP:           return "mtp";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram_simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram_map_k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram_map_k4v";
@@ -843,6 +1171,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     {
         bool has_draft = !params.draft.mparams.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
+        bool has_mtp = (params.type == COMMON_SPECULATIVE_TYPE_MTP) && params.draft.ctx_dft != nullptr;
 
         bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
         bool has_ngram_simple  = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
@@ -875,6 +1204,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_draft_eagle3) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_EAGLE3, params));
         }
+        if (has_mtp) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_MTP, params));
+        }
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
@@ -890,6 +1222,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             }
             case COMMON_SPECULATIVE_TYPE_EAGLE3: {
                 impls.push_back(std::make_unique<common_speculative_state_eagle3>(config.params, n_seq));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_MTP: {
+                impls.push_back(std::make_unique<common_speculative_state_mtp>(config.params, n_seq));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
