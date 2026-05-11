@@ -223,22 +223,16 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
             switch (src0->type) {
                 case GGML_TYPE_Q8_0: {
                     const block_q8_0* q8_row = (const block_q8_0*)expert_row_base;
-                    for (int64_t kb = 0; kb < K_blocks; kb++) {
-                        const float* b_col_ptr = (const float*)((const char*)src1_data +
-                                                               (kb * block_size) * sizeof(float) +
-                                                               col_idx * nb11 + batch_idx * nb12);
-                        sum += compute_block_dot_product_q8_0(&q8_row[kb], b_col_ptr);
-                    }
+                    const float* b_col_base = (const float*)((const char*)src1_data +
+                                                           col_idx * nb11 + batch_idx * nb12);
+                    sum += compute_row_dot_q8_0(q8_row, b_col_base, K_blocks);
                     break;
                 }
                 case GGML_TYPE_Q4_0: {
                     const block_q4_0* q4_row = (const block_q4_0*)expert_row_base;
-                    for (int64_t kb = 0; kb < K_blocks; kb++) {
-                        const float* b_col_ptr = (const float*)((const char*)src1_data +
-                                                               (kb * block_size) * sizeof(float) +
-                                                               col_idx * nb11 + batch_idx * nb12);
-                        sum += compute_block_dot_product_q4_0(&q4_row[kb], b_col_ptr);
-                    }
+                    const float* b_col_base = (const float*)((const char*)src1_data +
+                                                           col_idx * nb11 + batch_idx * nb12);
+                    sum += compute_row_dot_q4_0(q4_row, b_col_base, K_blocks);
                     break;
                 }
                 case GGML_TYPE_F16: {
