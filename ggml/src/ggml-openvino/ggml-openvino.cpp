@@ -808,6 +808,45 @@ static bool is_supported_flash_attn_pattern(const ggml_tensor * op) {
     return true;
 }
 
+static bool checked_mul_size(size_t a, size_t b, size_t & out) {
+    if (a == 0 || b == 0) {
+        out = 0;
+        return true;
+    }
+    if (a > SIZE_MAX / b) {
+        return false;
+    }
+    out = a * b;
+    return true;
+}
+
+static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
+    const ggml_tensor * as = op->src[0];
+    const ggml_tensor * ids = op->src[2];
+    if (as == nullptr || ids == nullptr) {
+        return true;
+    }
+
+    // The current OpenVINO translation materializes selected expert weights with
+    // shape [n_tokens, n_used, rows, k]. Skip cases that would create a very
+    // large temporary on GPU and let the scheduler fall back instead.
+    size_t tmp_elems = 1;
+    if (!checked_mul_size(tmp_elems, static_cast<size_t>(ids->ne[1]), tmp_elems) ||
+        !checked_mul_size(tmp_elems, static_cast<size_t>(ids->ne[0]), tmp_elems) ||
+        !checked_mul_size(tmp_elems, static_cast<size_t>(as->ne[1]), tmp_elems) ||
+        !checked_mul_size(tmp_elems, static_cast<size_t>(as->ne[0]), tmp_elems)) {
+        return true;
+    }
+
+    size_t tmp_bytes = 0;
+    if (!checked_mul_size(tmp_elems, sizeof(float), tmp_bytes)) {
+        return true;
+    }
+
+    static constexpr size_t mul_mat_id_tmp_limit = 1ULL << 30; // 1 GiB
+    return tmp_bytes > mul_mat_id_tmp_limit;
+}
+
 static bool is_op_unsupported_case(const ggml_tensor * op) {
     switch (op->op) {
     case GGML_OP_GET_ROWS:
@@ -903,6 +942,12 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             return true;
         }
         if (op->src[0]->op == GGML_OP_VIEW && op->src[1]->op == GGML_OP_VIEW) {
+            return true;
+        }
+        break;
+    }
+    case GGML_OP_MUL_MAT_ID: {
+        if (mul_mat_id_requires_large_tmp(op)) {
             return true;
         }
         break;
