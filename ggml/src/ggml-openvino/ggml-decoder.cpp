@@ -1268,6 +1268,7 @@ std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
         {GGML_OP_CPY,             "GGML_OP_CPY"            },
         {GGML_OP_FLASH_ATTN_EXT,  "GGML_OP_FLASH_ATTN_EXT" },
         {GGML_OP_L2_NORM,         "GGML_OP_L2_NORM"        },
+        {GGML_OP_CLAMP,           "GGML_OP_CLAMP"          },
         {GGML_OP_PAD,             "GGML_OP_PAD"            },
         {GGML_OP_SSM_CONV,        "GGML_OP_SSM_CONV"       },
         {GGML_OP_GATED_DELTA_NET, "GGML_OP_GATED_DELTA_NET"},
