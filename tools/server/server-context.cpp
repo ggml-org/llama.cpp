@@ -2867,7 +2867,7 @@ private:
 
                         // stop the prompt batch exactly before the latest user input, so a checkpoint
                         // can be created at the conversation boundary
-                        if (checkpoint_before_last_user_token >= 0 &&
+                        if (checkpoint_before_last_user_token > 0 &&
                             slot.prompt.n_tokens() == checkpoint_before_last_user_token) {
                             SLT_INF(slot, "checkpoint before user input reached: ending prompt batch at prompt_n_tokens = %d\n",
                                     slot.prompt.n_tokens());
@@ -2939,7 +2939,7 @@ private:
                     const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
 
                     // only create a checkpoint at the boundary before the latest user input
-                    if (do_checkpoint && checkpoint_before_last_user_token >= 0) {
+                    if (do_checkpoint && checkpoint_before_last_user_token > 0) {
                         const int32_t checkpoint_token = slot.prompt.n_tokens() - n_tokens_cur;
                         if (checkpoint_token != checkpoint_before_last_user_token) {
                             SLT_INF(slot, "skip checkpoint at %d, expected boundary before user input = %d\n",

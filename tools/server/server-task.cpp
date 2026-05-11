@@ -630,8 +630,6 @@ task_params server_task::params_from_json_cmpl(
             }
         }
 
-        const std::string prompt = json_value(data, "prompt", std::string());
-
         if (last_user_pos >= 0) {
             const std::string prompt = json_value(data, "prompt", std::string());
 
