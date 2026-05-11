@@ -43,6 +43,9 @@ jobs:
     uses: ./.github/workflows/webui-build.yml
 
   macOS-cpu:
+    needs:
+      - webui-build
+
     strategy:
       matrix:
         include:
@@ -60,9 +63,6 @@ jobs:
             # Metal is disabled on x64 due to intermittent failures with Github runners not having a GPU:
             # https://github.com/ggml-org/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
             defines: "-DGGML_METAL=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3"
-
-    needs:
-      - webui-build
 
     runs-on: ${{ matrix.os }}
 
@@ -115,6 +115,9 @@ jobs:
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
 
   ubuntu-cpu:
+    needs:
+      - webui-build
+
     strategy:
       matrix:
         include:
@@ -123,8 +126,7 @@ jobs:
           - build: 'arm64'
             os: ubuntu-24.04-arm
           - build: 's390x'
-    needs:
-      - webui-build
+            os: ubuntu-24.04-s390x
 
     runs-on: ${{ matrix.os }}
 
@@ -140,8 +142,6 @@ jobs:
         with:
           name: webui-build
           path: tools/server/public/
-
-      - name: Dependencies
 
       - name: ccache
         if: ${{ matrix.build != 's390x' }}
@@ -193,6 +193,9 @@ jobs:
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   ubuntu-vulkan:
+    needs:
+      - webui-build
+
     strategy:
       matrix:
         include:
@@ -200,9 +203,6 @@ jobs:
             os: ubuntu-22.04
           - build: 'arm64'
             os: ubuntu-24.04-arm
-
-    needs:
-      - webui-build
 
     runs-on: ${{ matrix.os }}
 
@@ -269,6 +269,7 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
+  android-arm64:
     needs:
       - webui-build
 
@@ -289,10 +290,6 @@ jobs:
         with:
           name: webui-build
           path: tools/server/public/
-
-      - name: ccache
-        with:
-          fetch-depth: 0
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -350,6 +347,7 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz
           name: llama-bin-android-arm64.tar.gz
 
+  ubuntu-24-openvino:
     needs:
       - webui-build
 
@@ -463,6 +461,11 @@ jobs:
           path: tools/server/public/
 
       - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: windows-latest-cpu-${{ matrix.arch }}
+          variant: ccache
+          evict-old-files: 1d
 
       - name: Install Ninja
         run: |
@@ -494,6 +497,7 @@ jobs:
           path: llama-bin-win-cpu-${{ matrix.arch }}.zip
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
 
+  windows:
     needs:
       - webui-build
 
@@ -525,9 +529,6 @@ jobs:
         with:
           name: webui-build
           path: tools/server/public/
-
-      - name: ccache
-        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -580,6 +581,14 @@ jobs:
         id: pack_artifacts
         run: |
           7z a -snl llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\${{ matrix.target }}.dll
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
+          name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
+
+  windows-cuda:
     needs:
       - webui-build
 
@@ -601,6 +610,7 @@ jobs:
           path: tools/server/public/
 
       - name: Install ccache
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -650,6 +660,15 @@ jobs:
           robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
           robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
           robocopy "${{env.CUDA_PATH}}\bin\x64" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip $dst\*
+
+      - name: Upload Cuda runtime
+        uses: actions/upload-artifact@v6
+        with:
+          path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
+          name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
+
+  windows-sycl:
     needs:
       - webui-build
 
@@ -696,9 +715,6 @@ jobs:
         with:
           name: webui-build
           path: tools/server/public/
-
-      - name: ccache
-        uses: actions/checkout@v6
 
       - name: Use oneAPI Installation Cache
         uses: actions/cache@v5
@@ -779,6 +795,7 @@ jobs:
           path: llama-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
 
+  ubuntu-24-sycl:
     needs:
       - webui-build
 
@@ -835,7 +852,8 @@ jobs:
           name: webui-build
           path: tools/server/public/
 
-      - name: ccache
+      - name: Use oneAPI Installation Cache
+        uses: actions/cache@v5
         id: cache-sycl
         with:
           path: ${{ env.ONEAPI_ROOT }}
@@ -887,9 +905,7 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
           name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
-    needs:
-      - webui-build
-
+  ubuntu-22-rocm:
     runs-on: ubuntu-22.04
 
     strategy:
@@ -906,13 +922,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download WebUI build artifact
-        uses: actions/download-artifact@v7
-        with:
-          name: webui-build
-          path: tools/server/public/
-
       - name: Free up disk space
+        uses: ggml-org/free-disk-space@v1.3.1
         with:
           tool-cache: true
 
@@ -997,9 +1008,7 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
-    needs:
-      - webui-build
-
+  windows-hip:
     runs-on: windows-2022
 
     env:
@@ -1016,13 +1025,11 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Download WebUI build artifact
-        uses: actions/download-artifact@v7
-        with:
-          name: webui-build
-          path: tools/server/public/
-
       - name: Grab rocWMMA package
+        id: grab_rocwmma
+        run: |
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2.1/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70201-81~24.04_amd64.deb"
+          7z x rocwmma.deb
           7z x data.tar
 
       - name: Cache ROCm Installation
@@ -1107,9 +1114,7 @@ jobs:
           path: llama-bin-win-hip-${{ matrix.name }}-x64.zip
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
-    needs:
-      - webui-build
-
+  ios-xcode-build:
     runs-on: macos-15
 
     steps:
@@ -1118,13 +1123,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download WebUI build artifact
-        uses: actions/download-artifact@v7
-        with:
-          name: webui-build
-          path: tools/server/public/
-
       - name: Setup Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Build
+        id: cmake_build
+        run: |
           sysctl -a
           cmake -B build -G Xcode \
             -DGGML_METAL_USE_BF16=ON \
@@ -1164,9 +1169,8 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
           name: llama-${{ steps.tag.outputs.name }}-xcframework.zip
 
-    needs:
-      - webui-build
 
+  openEuler-cann:
     strategy:
       matrix:
         include:
@@ -1191,17 +1195,6 @@ jobs:
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Download WebUI build artifact
-        uses: actions/download-artifact@v7
-        with:
-          name: webui-build
-          path: tools/server/public/
-
-      - name: Free up disk space
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -1278,6 +1271,7 @@ jobs:
     runs-on: ubuntu-slim
 
     needs:
+      - webui-build
       - windows
       - windows-cpu
       - windows-cuda
@@ -1418,47 +1412,3 @@ jobs:
                 });
               }
             }
-  webui:
-    name: Publish WebUI Static Output
-    runs-on: ubuntu-latest
-    if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-
-    env:
-      HF_BUCKET_NAME: ${{ vars.HF_BUCKET_WEBUI_STATIC_OUTPUT }}
-
-    needs:
-      - webui-build
-
-    steps:
-      - name: Download WebUI build artifact
-        uses: actions/download-artifact@v7
-        with:
-          name: webui-build
-          path: tools/server/public/
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
-      - name: Install Hugging Face Hub CLI
-        run: pip install -U huggingface_hub
-
-      - name: Authenticate with Hugging Face
-        run: hf auth login --token ${{ secrets.HUGGINGFACE_HUB_TOKEN }}
-
-      - name: Sync built files to Hugging Face bucket
-        run: |
-          # Upload the built files to the Hugging Face bucket under the release version
-          hf buckets sync tools/server/public hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/${{ steps.tag.outputs.name }} --delete --quiet
-
-      - name: Verify upload
-        run: |
-          # List the files in the bucket to verify the upload
-          hf buckets list hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/${{ steps.tag.outputs.name }} -R -h
-
-      - name: Clean up root-level files
-        run: |
-          # Clean up any old root-level files from previous non-versioned deployments
-          hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/index.html --yes 2>/dev/null || true
-          hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/bundle.js --yes 2>/dev/null || true
-          hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/bundle.css --yes 2>/dev/null || true
