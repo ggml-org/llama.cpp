@@ -89,12 +89,16 @@ inline float mm_block_q_4_0_dot_y_flat(
 #define N_DST 8
 #define N_SIMDGROUP 1
 #define N_SIMDWIDTH 64
+#else
+#define N_DST 8
+#define N_SIMDGROUP 1
+#define N_SIMDWIDTH 32
 #endif
 //
 // This variant performs 1d blocking with 8x output.
 // Eeach simdgroup outputs 8 values on `n0` dim (row in the output matrix).
 //
-inline void mul_mat_q_n_f32_1d_8x_flat(
+void mul_mat_q_n_f32_1d_8x_flat(
         global uchar * src0_q,
         global half  * src0_d,
         global float * src1,

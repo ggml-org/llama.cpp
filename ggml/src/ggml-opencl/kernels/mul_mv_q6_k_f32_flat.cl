@@ -92,6 +92,10 @@ inline float block_q_6_K_dot_y_flat(
 #define N_DST 4
 #define N_SIMDGROUP 2
 #define N_SIMDWIDTH 64
+#else
+#define N_DST 1
+#define N_SIMDGROUP 1
+#define N_SIMDWIDTH 32
 #endif
 
 #define BLOCK_STRIDE (N_SIMDWIDTH/16) // number of blocks each subgroup processes

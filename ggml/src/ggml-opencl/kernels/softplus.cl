@@ -38,7 +38,7 @@ kernel void kernel_softplus_f16(
     dst  = (global half*)((global char*)dst + offsetd);
 
     const float x = convert_float(src0[get_global_id(0)]);
-    dst[get_global_id(0)] = convert_half_rte((x > 20.0f) ? x : log(1.0f + exp(x)));
+    dst[get_global_id(0)] = convert_half((x > 20.0f) ? x : log(1.0f + exp(x)));
 }
 
 kernel void kernel_softplus_f16_4(
@@ -51,7 +51,7 @@ kernel void kernel_softplus_f16_4(
     dst  = (global half4*)((global char*)dst + offsetd);
 
     const float4 x = convert_float4(src0[get_global_id(0)]);
-    dst[get_global_id(0)] = convert_half4_rte((x > 20.0f) ? x : log(1.0f + exp(x)));
+    dst[get_global_id(0)] = convert_half4((x > 20.0f) ? x : log(1.0f + exp(x)));
 }
 
 kernel void kernel_softplus_f32_nc(
@@ -111,6 +111,6 @@ kernel void kernel_softplus_f16_nc(
         global       half * hy = (global       half *)(dst  + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
         const float x = convert_float(*hx);
-        *hy = convert_half_rte((x > 20.0f) ? x : log(1.0f + exp(x)));
+        *hy = convert_half((x > 20.0f) ? x : log(1.0f + exp(x)));
     }
 }

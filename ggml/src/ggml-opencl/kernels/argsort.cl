@@ -43,8 +43,8 @@ kernel void kernel_argsort_f32_i32(
         return;
     }
 
-    src0 = (global char  *)((global char *)src0 + offset0);
-    dst  = (global float *)((global char *)dst  + offsetd);
+    src0 = (global float  *)((global char *)src0 + offset0);
+    dst  = (global int *)((global char *)dst  + offsetd);
 
     global float * x_row = src0 + row * ne00;
 
