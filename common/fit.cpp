@@ -154,9 +154,6 @@ static void common_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
-    if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
-        throw common_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
-    }
     constexpr int64_t MiB = 1024*1024;
     typedef std::vector<llama_device_memory_data> dmds_t;
     const llama_model_params default_mparams = llama_model_default_params();
@@ -501,8 +498,13 @@ static void common_params_fit_impl(
         return ret;
     };
 
+    // The meta backend cannot run graphs where part of a layer lives on CPU and the rest on the meta device.
+    // Restrict tensor mode to whole-layer CPU offload via n_gpu_layers only, 
+    // skipping the MoE-specific partial-layer overflow patterns.
+    const bool moe_partial_offload_ok = hp_nex > 0 && mparams->split_mode != LLAMA_SPLIT_MODE_TENSOR;
+
     int64_t global_surplus_cpu_moe = 0;
-    if (hp_nex > 0) {
+    if (moe_partial_offload_ok) {
         const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate_up|gate)_(ch|)exps"; // matches all MoE tensors
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
         tensor_buft_overrides[0] = {pattern_moe_all.c_str(), cpu_buft};
@@ -568,7 +570,7 @@ static void common_params_fit_impl(
 
         std::vector<ngl_t> ngl_per_device_high = ngl_per_device;
         ngl_per_device_high[id].n_layer = n_unassigned;
-        if (hp_nex > 0) {
+        if (moe_partial_offload_ok) {
             ngl_per_device_high[id].n_part = size_t(id) < nd - 1 ? ngl_per_device_high[id].n_layer : ngl_per_device_high[id].n_layer - 1;
         }
         if (ngl_per_device_high[id].n_layer > 0) {
@@ -584,7 +586,7 @@ static void common_params_fit_impl(
 
                     std::vector<ngl_t> ngl_per_device_test = ngl_per_device;
                     ngl_per_device_test[id].n_layer += step_size;
-                    if (hp_nex) {
+                    if (moe_partial_offload_ok) {
                         ngl_per_device_test[id].n_part += size_t(id) == nd - 1 && ngl_per_device_test[id].n_part == 0 ?
                             step_size - 1 : step_size; // the first layer is the output layer which must always be full
                     }
@@ -614,7 +616,7 @@ static void common_params_fit_impl(
             "%s:   - %s: %2" PRIu32 " layers, %6" PRId64 " MiB used, %6" PRId64 " MiB free\n",
             __func__, dev_names[id].c_str(), ngl_per_device[id].n_layer, mem[id]/MiB, projected_margin/MiB);
     }
-    if (hp_nex == 0 || global_surplus_cpu_moe <= 0) {
+    if (!moe_partial_offload_ok || global_surplus_cpu_moe <= 0) {
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
         return;
     }
