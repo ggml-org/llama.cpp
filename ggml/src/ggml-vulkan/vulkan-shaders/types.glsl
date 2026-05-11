@@ -292,11 +292,21 @@ struct block_q3_K_packed16
     uint16_t _pad;
 };
 
+struct block_q3_K_packed32
+{
+    uint32_t hmask[QUANT_K_Q3_K/8/4];
+    uint32_t qs[QUANT_K_Q3_K/4/4];
+    uint32_t scales[12/4];
+    float16_t d;
+    uint16_t _pad;
+};
+
 #if defined(DATA_A_Q3_K)
 #define QUANT_K QUANT_K_Q3_K
 #define QUANT_R 1
 #define A_TYPE block_q3_K
 #define A_TYPE_PACKED16 block_q3_K_packed16
+#define A_TYPE_PACKED32 block_q3_K_packed32
 #define DATA_A_QUANT_K
 #endif
 
@@ -397,11 +407,21 @@ struct block_q6_K_packed16
     uint16_t _pad;
 };
 
+struct block_q6_K_packed32
+{
+    uint32_t ql[QUANT_K_Q6_K/2/4];
+    uint32_t qh[QUANT_K_Q6_K/4/4];
+    int32_t scales[QUANT_K_Q6_K/16/4];
+    float16_t d;
+    uint16_t _pad;
+};
+
 #if defined(DATA_A_Q6_K)
 #define QUANT_K QUANT_K_Q6_K
 #define QUANT_R 1
 #define A_TYPE block_q6_K
 #define A_TYPE_PACKED16 block_q6_K_packed16
+#define A_TYPE_PACKED32 block_q6_K_packed32
 #define DATA_A_QUANT_K
 #endif
 
