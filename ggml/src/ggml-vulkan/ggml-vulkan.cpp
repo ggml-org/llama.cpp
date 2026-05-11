@@ -5109,7 +5109,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         }
 
         // Enable subgroup operations on AMD GCN 5.0/5.1 GPUs
-        const static std::regex s_gcn_regex("^.*Radeon.*(VII|Vega).*$");
+        const static std::regex s_gcn_regex("^.*(Radeon.*(VII|Vega)|Instinct.*MI(25|50|60)).*$");
         device->subgroups_gcn_enabled = (device->vendor_id == VK_VENDOR_ID_AMD &&
                                          std::regex_match(std::string(device->properties.deviceName.data()), s_gcn_regex));
         if (device->subgroups_gcn_enabled) {
