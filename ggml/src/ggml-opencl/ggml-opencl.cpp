@@ -544,6 +544,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_convert_block_q4_0, kernel_restore_block_q4_0;
     cl_kernel kernel_convert_block_q4_0_trans4_ns, kernel_restore_block_q4_0_trans4_ns;
     cl_kernel kernel_convert_block_q4_1, kernel_restore_block_q4_1;
+    cl_kernel kernel_convert_block_q4_1_trans4_ns, kernel_restore_block_q4_1_trans4_ns;
     cl_kernel kernel_convert_block_mxfp4, kernel_convert_block_mxfp4_trans, kernel_restore_block_mxfp4, kernel_restore_block_mxfp4_trans;
     cl_kernel kernel_convert_block_mxfp4_trans4_ns, kernel_restore_block_mxfp4_trans4_ns;
     cl_kernel kernel_convert_block_q8_0, kernel_restore_block_q8_0, kernel_restore_block_q8_0_trans;
@@ -602,6 +603,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_ssm_conv_f32_f32, kernel_ssm_conv_f32_f32_4;
     cl_kernel kernel_timestep_embedding;
     cl_kernel kernel_gemv_moe_q4_0_f32_ns, kernel_gemm_moe_q4_0_f32_ns;
+    cl_kernel kernel_gemv_moe_q4_1_f32_ns, kernel_gemm_moe_q4_1_f32_ns;
     cl_kernel kernel_gemv_moe_mxfp4_f32, kernel_gemm_moe_mxfp4_f32;
     cl_kernel kernel_gemv_moe_mxfp4_f32_ns, kernel_gemm_moe_mxfp4_f32_ns;
     cl_kernel kernel_moe_reorder_b;
@@ -958,6 +960,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         CL_CHECK((backend_ctx->kernel_restore_block_q4_1_noshuffle = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_q4_1_noshuffle", &err), err));
         CL_CHECK((backend_ctx->kernel_convert_block_q4_1  = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_q4_1", &err), err));
         CL_CHECK((backend_ctx->kernel_restore_block_q4_1  = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_q4_1", &err), err));
+        CL_CHECK((backend_ctx->kernel_convert_block_q4_1_trans4_ns = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_q4_1_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->kernel_restore_block_q4_1_trans4_ns = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_q4_1_trans4_ns", &err), err));
         CL_CHECK((backend_ctx->kernel_convert_block_mxfp4 = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_mxfp4", &err), err));
         CL_CHECK((backend_ctx->kernel_convert_block_mxfp4_trans = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_mxfp4_trans", &err), err));
         CL_CHECK((backend_ctx->kernel_convert_block_mxfp4_trans4_ns = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_mxfp4_trans4_ns", &err), err));
@@ -2856,6 +2860,38 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             " -cl-mad-enable "
             " -cl-fast-relaxed-math";
 
+    // gemv_moe_q4_1_f32_ns
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemv_moe_q4_1_f32_ns.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemv_moe_q4_1_f32_ns.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), CL_moe_compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_gemv_moe_q4_1_f32_ns = clCreateKernel(prog, "kernel_gemv_moe_q4_1_f32_ns", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+    }
+
+    // gemm_moe_q4_1_f32_ns
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q4_1_f32_ns.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q4_1_f32_ns.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), CL_moe_compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_gemm_moe_q4_1_f32_ns = clCreateKernel(prog, "kernel_gemm_moe_q4_1_f32_ns", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+    }
+
     // gemv_moe_mxfp4_f32
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
@@ -3749,11 +3785,14 @@ struct ggml_tensor_extra_cl_q4_1 {
             CL_CHECK(clReleaseMemObject(m));
             m = nullptr;
         }
+        if (q_img != nullptr) {
+            CL_CHECK(clReleaseMemObject(q_img));
+            q_img = nullptr;
+        }
         // Currently, q_img and d_img are only initialized when SMALL_ALLOC is
         // enabled. They point to the images in ggml_backend_opencl_buffer_context.
         // So, there is no need to release them here.
         // TODO: initialize them for non SMALL_PATH path, or remove them.
-        q_img = nullptr;
         d_img = nullptr;
         m_img = nullptr;
         size_q = 0;
@@ -4189,6 +4228,35 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
     return GGML_STATUS_SUCCESS;
 }
 
+// The optimized gemm and gemv kernels are used for large matrices without batch.
+// tensor is the quantized weights matrix.
+inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    int64_t threshold_ne0 = 512;
+    int64_t threshold_ne1 = 512;
+    if (!backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) &&
+         backend_ctx->adreno_cl_compiler_version.type != DX) {
+        threshold_ne0 = 128;
+        threshold_ne1 = 128;
+    }
+    return tensor->ne[0] >= threshold_ne0 && tensor->ne[1] >= threshold_ne1 &&
+            tensor->ne[2] == 1 && tensor->ne[3] == 1;
+}
+
+inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    GGML_UNUSED(backend_ctx);
+    int ne01 = tensor->ne[1];
+    return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 64 == 0);
+}
+
+inline bool enable_adreno_trans_weight(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+
+    bool adreno_kernel = use_adreno_kernels(backend_ctx, tensor);
+
+    size_t elem_num = tensor->ne[0] * tensor->ne[1] * tensor->ne[2] * tensor->ne[3];
+
+    return ((elem_num < 128 * 1024 * 1024) && adreno_kernel);  // max element num: 2**27
+}
+
 static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     ggml_backend_opencl_device_context * dev_ctx     = (ggml_backend_opencl_device_context *)dev->context;
     ggml_backend_opencl_context *        backend_ctx = dev_ctx->backend_ctx;
@@ -4385,6 +4453,18 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                     return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
                 }
             }
+            // q4_0, q8_0 and mxfp4 have general MUL_MAT_ID support,
+            // the quantizations here currently do not - they are only supported by Adreno with certain shapes
+            if (op->src[0]->type == GGML_TYPE_Q4_1) {
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+                if (op->src[1]->type == GGML_TYPE_F32) {
+                    return use_adreno_moe_kernels(backend_ctx, op->src[0])
+                        && ggml_is_contiguous(op->src[0])
+                        && ggml_is_contiguous(op->src[1]);
+                }
+#endif
+                return false;
+            }
             return false;
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:
@@ -4553,6 +4633,12 @@ struct ggml_backend_opencl_buffer_context {
             delete e;
         }
         for (ggml_tensor_extra_cl_q4_0 * e : temp_tensor_extras_q4_0_in_use) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_q4_1 * e : temp_tensor_extras_q4_1) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_q4_1 * e : temp_tensor_extras_q4_1_in_use) {
             delete e;
         }
         for (ggml_tensor_extra_cl_mxfp4 * e : temp_tensor_extras_mxfp4) {
@@ -4868,35 +4954,6 @@ static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buff
     return GGML_STATUS_SUCCESS;
 }
 
-// The optimized gemm and gemv kernels are used for large matrices without batch.
-// tensor is the quantized weights matrix.
-inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-    int64_t threshold_ne0 = 512;
-    int64_t threshold_ne1 = 512;
-    if (!backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) &&
-         backend_ctx->adreno_cl_compiler_version.type != DX) {
-        threshold_ne0 = 128;
-        threshold_ne1 = 128;
-    }
-    return tensor->ne[0] >= threshold_ne0 && tensor->ne[1] >= threshold_ne1 &&
-            tensor->ne[2] == 1 && tensor->ne[3] == 1;
-}
-
-inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-    GGML_UNUSED(backend_ctx);
-    int ne01 = tensor->ne[1];
-    return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 64 == 0);
-}
-
-inline bool enable_adreno_trans_weight(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-
-    bool adreno_kernel = use_adreno_kernels(backend_ctx, tensor);
-
-    size_t elem_num = tensor->ne[0] * tensor->ne[1] * tensor->ne[2] * tensor->ne[3];
-
-    return ((elem_num < 128 * 1024 * 1024) && adreno_kernel);  // max element num: 2**27
-}
-
 static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(buffer->buft->device);
 
@@ -5097,15 +5154,54 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
         CL_CHECK(err);
 
-    #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        // Adreno moe q4_1 kernel needs special transpose and unshuffling
+        if (use_adreno_moe_kernels(backend_ctx, tensor)) {
+            cl_kernel kernel = backend_ctx->kernel_convert_block_q4_1_trans4_ns;
+
+            int ne00 = tensor->ne[0];
+            int ne01 = tensor->ne[1];
+            int ne02 = tensor->ne[2];
+            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
+            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->q));
+            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->d));
+            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &extra->m));
+            CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int), &ne00));
+            CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int), &ne01));
+
+            size_t global_work_size[3] = {static_cast<size_t>(((ne01 + 63) / 64) * 64), static_cast<size_t>(ne00 / 32), static_cast<size_t>(ne02)};
+            size_t local_work_size[3] = {64, 2, 1};
+
+            cl_event evt;
+            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+            CL_CHECK(clWaitForEvents(1, &evt));
+            CL_CHECK(clReleaseMemObject(data_device));
+
+            // Create image for Q
+            cl_image_format img_format_q = {CL_R, CL_UNSIGNED_INT32};
+            cl_image_desc img_desc_q = {
+                CL_MEM_OBJECT_IMAGE1D_BUFFER,
+                static_cast<size_t>(ggml_nelements(tensor) / 8),
+                0, 0, 0, 0, 0, 0, 0,
+                { extra->q }
+            };
+            extra->q_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_format_q, &img_desc_q, NULL, &err);
+            tensor->extra = extra;
+
+            return;
+        }
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
+
+        // normal q4_1 repack
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         cl_kernel kernel = backend_ctx->kernel_convert_block_q4_1;
 
         if (use_adreno_kernels(backend_ctx, tensor)) {
             kernel = backend_ctx->kernel_convert_block_q4_1_noshuffle;
         }
-    #else
+#else
         cl_kernel kernel = backend_ctx->kernel_convert_block_q4_1;
-    #endif // GGML_OPENCL_USE_ADRENO_KERNELS
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->q));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->d));
@@ -5862,6 +5958,36 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
         ggml_tensor_extra_cl_q4_1 * extra = (ggml_tensor_extra_cl_q4_1 *)tensor->extra;
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        if (use_adreno_moe_kernels(backend_ctx, tensor)) {
+            cl_int err;
+            cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
+                ggml_nbytes(tensor), NULL, &err);
+            CL_CHECK(err);
+            cl_kernel kernel = backend_ctx->kernel_restore_block_q4_1_trans4_ns;
+
+            int ne00 = tensor->ne[0];
+            int ne01 = tensor->ne[1];
+            int ne02 = tensor->ne[2];
+            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
+            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->d));
+            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->m));
+            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &data_device));
+            CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_int), &ne00));
+            CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_int), &ne01));
+
+            size_t global_work_size[3] = {static_cast<size_t>(((ne01 + 63) / 64) * 64), static_cast<size_t>(ne00 / 32), static_cast<size_t>(ne02)};
+            size_t local_work_size[3] = {64, 2, 1};
+
+            cl_event evt;
+            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
+                global_work_size, local_work_size, 0, NULL, &evt));
+            CL_CHECK(clWaitForEvents(1, &evt));
+            CL_CHECK(clEnqueueReadBuffer(
+                queue, data_device, CL_TRUE, offset,
+                size, data, 0, NULL, NULL));
+            CL_CHECK(clReleaseMemObject(data_device));
+            return;
+        }
         if (use_adreno_kernels(backend_ctx, tensor)) {
             static ggml_cl_buffer buf_trans_q;
             static ggml_cl_buffer buf_trans_m;
@@ -12862,6 +12988,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
 #ifdef GGML_OPENCL_SOA_Q
     ggml_tensor_extra_cl_q4_0 * extra0_q4_0 = (ggml_tensor_extra_cl_q4_0 *)src0->extra;
+    ggml_tensor_extra_cl_q4_1 * extra0_q4_1 = (ggml_tensor_extra_cl_q4_1 *)src0->extra;
     ggml_tensor_extra_cl_mxfp4 * extra0_mxfp4 = (ggml_tensor_extra_cl_mxfp4 *)src0->extra;
     ggml_tensor_extra_cl_q8_0 * extra0_q8_0 = (ggml_tensor_extra_cl_q8_0 *)src0->extra;
 #endif
@@ -13130,6 +13257,179 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
             CL_CHECK(clSetKernelArg(kernel, 24, sizeof(int),      &r3));
 
             break;
+        }
+        case GGML_TYPE_Q4_1: {
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+            if (use_adreno_moe_kernels(backend_ctx, src0)) {
+                cl_int status;
+
+                size_t local_size[3] = {64, 2, 1};
+                size_t global_size[3] = {64, 2, 1};
+
+                if (ne12 == 1) { // for gemv
+                    kernel = backend_ctx->kernel_gemv_moe_q4_1_f32_ns;
+
+                    cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
+
+                    // create a sub_buffer for src2
+                    cl_buffer_region region;
+                    region.origin = offset2;
+                    region.size = ne20 * ne21 * sizeof(int);
+                    buf_src2 = clCreateSubBuffer(extra2->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
+                    CL_CHECK(status);
+
+                    // set thread grid
+                    global_size[0] = static_cast<size_t>(ne01);
+                    global_size[1] = 4;
+                    global_size[2] = static_cast<size_t>(ne20);
+                    local_size[1] = 4;
+
+                    // create a sub_buffer for src1
+                    region.origin = offset1;
+                    region.size = ne10 * ne11 * ne12 * sizeof(float);
+                    src1_sub_buffer = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
+                    CL_CHECK(status);
+
+                    // create image for src1
+                    cl_image_format image_format_buf_src1 = {CL_RGBA, CL_FLOAT};
+                    cl_image_desc image_desc_buf_src1 = {CL_MEM_OBJECT_IMAGE1D_BUFFER, static_cast<size_t>(ne10 * ne11 * ne12 / 4), 0,0,0,0,0,0,0, {src1_sub_buffer}};
+                    buf_src1_image = clCreateImage(backend_ctx->context, CL_MEM_READ_ONLY, &image_format_buf_src1, &image_desc_buf_src1, NULL, &status);
+                    CL_CHECK(status);
+
+                    // Set kernel args
+                    int arg_idx = 0;
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &extra0_q4_1->q));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &extra0_q4_1->d));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &extra0_q4_1->m));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &buf_src1_image));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &buf_src2));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &extrad->data_device));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_ulong),  &offsetd));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(int),       &ne00));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(int),       &ne01));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(int),       &ne11));
+
+                    // launch kernel
+                    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_size, local_size, dst);
+
+                    // deallocate sub buffers and images
+                    CL_CHECK(clReleaseMemObject(src1_sub_buffer));
+                    CL_CHECK(clReleaseMemObject(buf_src1_image));
+                    CL_CHECK(clReleaseMemObject(buf_src2));
+
+                } else { // for gemm
+                    kernel = backend_ctx->kernel_gemm_moe_q4_1_f32_ns;
+
+                    if (strstr(src0->name, "as") != NULL) {
+                        moe_router_reoerder(backend, src2, ne20);
+                    }
+
+                    cl_mem sub_buf_src1_pre, buf_src1_reordered, image_src1_reordered, sub_buf_dst, buf_dst_image;
+                    cl_mem buf_src2, buf_src2_emap;
+
+                    cl_buffer_region region;
+                    region.origin = 0;
+                    region.size = sizeof(int) * max_post_router_tile * n_tile_size;
+                    buf_src2 = clCreateSubBuffer(backend_ctx->prealloc_post_router.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
+                    CL_CHECK(status);
+
+                    region.origin = 0;
+                    region.size = sizeof(short) * max_post_router_tile;
+                    buf_src2_emap = clCreateSubBuffer(backend_ctx->prealloc_emap.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
+                    CL_CHECK(status);
+
+                    // Reorder activations
+                    // create a sub_buffer for src1
+                    region.origin = offset1;
+                    region.size = ne10 * ne11 * ne12 * sizeof(float);
+                    sub_buf_src1_pre = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
+                    CL_CHECK(status);
+
+                    // Create image for reordered src1
+                    // Use pre-allocated placeholder
+                    region.origin = 0;
+                    region.size = ne00 * max_post_router_tile * n_tile_size * sizeof(float);
+                    backend_ctx->prealloc_act_trans.allocate(backend_ctx->context, region.size);
+                    buf_src1_reordered = clCreateSubBuffer(
+                        backend_ctx->prealloc_act_trans.buffer,
+                        0,
+                        CL_BUFFER_CREATE_TYPE_REGION,
+                        &region,
+                        &status);
+                    CL_CHECK(status);
+                    cl_image_format image_format_buf_src1;
+                    cl_image_desc image_desc_buf_src1;
+                    image_format_buf_src1 = {CL_RGBA, CL_FLOAT};
+                    image_desc_buf_src1 = {CL_MEM_OBJECT_IMAGE1D_BUFFER, static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size / 4), 0,0,0,0,0,0,0, {buf_src1_reordered}};
+                    image_src1_reordered = clCreateImage(backend_ctx->context, CL_MEM_READ_ONLY, &image_format_buf_src1, &image_desc_buf_src1, NULL, &status);
+                    CL_CHECK(status);
+
+                    unsigned short map_ratio = ne20 / ne11;
+                    GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
+                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
+                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
+                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
+                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
+                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
+                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
+                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
+
+                    size_t reorder_b_local_size[3] = {256, 1, 1};
+                    size_t reorder_b_global_size[3] = {static_cast<size_t>(((ne00 / 4) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
+
+                    // Dispatch reorder kernel
+                    backend_ctx->enqueue_ndrange_kernel(backend_ctx->kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
+
+                    // MoE kernel prepare
+                    // Create sub buffer for dst
+                    region.origin = offsetd;
+                    region.size = ne0 * ne1 * ne2 * sizeof(float);
+                    sub_buf_dst = clCreateSubBuffer(
+                        extrad->data_device,
+                        0,
+                        CL_BUFFER_CREATE_TYPE_REGION,
+                        &region,
+                        &status);
+                    CL_CHECK(status);
+                    // Create image for dst
+                    cl_image_format image_format_buf_dst = {CL_R, CL_FLOAT};
+                    cl_image_desc image_desc_buf_dst = {CL_MEM_OBJECT_IMAGE1D_BUFFER, static_cast<size_t>(ne0 * ne1 * ne2), 0,0,0,0,0,0,0, {sub_buf_dst}};
+                    buf_dst_image = clCreateImage(backend_ctx->context, CL_MEM_WRITE_ONLY, &image_format_buf_dst, &image_desc_buf_dst, NULL, &status);
+                    CL_CHECK(status);
+
+                    // Set kernel args
+                    int arg_idx = 0;
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &extra0_q4_1->q_img));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &extra0_q4_1->d));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &extra0_q4_1->m));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &image_src1_reordered));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &buf_src2));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &buf_src2_emap));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &buf_dst_image));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem),    &(backend_ctx->prealloc_total_tiles.buffer)));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(int),       &ne00));
+                    CL_CHECK(clSetKernelArg(kernel, arg_idx++, sizeof(int),       &ne01));
+
+                    // set thread grid
+                    global_size[1] = static_cast<size_t>((ne01 + 63) / 64);
+                    global_size[2] = static_cast<size_t>(max_post_router_tile);
+                    local_size[1] = 1;
+                    local_size[2] = 1;
+
+                    // Dispatch kernel
+                    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_size, local_size, dst);
+
+                    clReleaseMemObject(sub_buf_src1_pre);
+                    clReleaseMemObject(buf_src1_reordered);
+                    clReleaseMemObject(image_src1_reordered);
+                    clReleaseMemObject(buf_src2);
+                    clReleaseMemObject(buf_src2_emap);
+                    clReleaseMemObject(sub_buf_dst);
+                    clReleaseMemObject(buf_dst_image);
+                }
+                return;
+            }
+#endif //GGML_OPENCL_USE_ADRENO_KERNELS
         }
         case GGML_TYPE_Q8_0: {
 #ifdef GGML_OPENCL_SOA_Q
