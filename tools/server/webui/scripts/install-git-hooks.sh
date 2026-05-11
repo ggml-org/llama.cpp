@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script to install pre-commit hook for webui
-# Pre-commit: formats, checks, and builds (but does not stage build output)
+# Pre-commit: formats, checks, and builds webui
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 PRE_COMMIT_HOOK="$REPO_ROOT/.git/hooks/pre-commit"
