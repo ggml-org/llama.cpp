@@ -1284,6 +1284,7 @@ std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
         {GGML_UNARY_OP_GELU,        "GGML_UNARY_OP_GELU"       },
         {GGML_UNARY_OP_GELU_QUICK,  "GGML_UNARY_OP_GELU_QUICK" },
         {GGML_UNARY_OP_SILU,        "GGML_UNARY_OP_SILU"       },
+        {GGML_UNARY_OP_SOFTPLUS,    "GGML_UNARY_OP_SOFTPLUS"   },
         {GGML_UNARY_OP_HARDSWISH,   "GGML_UNARY_OP_HARDSWISH"  },
         {GGML_UNARY_OP_HARDSIGMOID, "GGML_UNARY_OP_HARDSIGMOID"},
         {GGML_UNARY_OP_EXP,         "GGML_UNARY_OP_EXP"        },

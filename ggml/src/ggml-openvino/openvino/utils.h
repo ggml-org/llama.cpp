@@ -87,7 +87,8 @@ OutputVector translate_1to1_match_2_inputs(const NodeContext& context) {
 template <typename T>
 OutputVector translate_1to1_match_1_input(const NodeContext& context) {
     num_inputs_check(context, 1, 1);
-    auto res = std::make_shared<T>(context.get_input(0));
+    auto input = process_view_input_new(context, 0);
+    auto res = std::make_shared<T>(input);
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 }  // namespace op
