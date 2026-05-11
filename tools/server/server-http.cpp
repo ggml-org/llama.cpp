@@ -238,6 +238,7 @@ bool server_http_context::init(const common_params & params) {
     };
 
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
+        (void)req; // suppress unused parameter warning when LLAMA_BUILD_WEBUI is not defined
         bool ready = is_ready.load();
         if (!ready) {
 #ifdef LLAMA_BUILD_WEBUI
