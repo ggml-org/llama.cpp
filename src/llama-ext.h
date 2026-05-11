@@ -88,3 +88,19 @@ LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i);
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
+
+//
+// pre-norm embeddings (hidden state before the final output norm)
+//
+
+// mirrors:
+// LLAMA_API void llama_set_embeddings(struct llama_context * ctx, bool embeddings);
+LLAMA_API void llama_set_embeddings_pre_norm(struct llama_context * ctx, bool value);
+
+// mirrors:
+// LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
+LLAMA_API float * llama_get_embeddings_pre_norm(struct llama_context * ctx);
+
+// mirrors:
+// LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);
+LLAMA_API float * llama_get_embeddings_pre_norm_ith(struct llama_context * ctx, int32_t i);

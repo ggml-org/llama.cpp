@@ -406,6 +406,9 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_DEEPSEEK2OCR) {
         return false;
     }
+    if (arch == LLM_ARCH_QWEN35_MTP || arch == LLM_ARCH_QWEN35MOE_MTP) {
+        return false; // MTP-only arch; requires a sibling trunk model and cannot run standalone.
+    }
 
     // FIXME some models are segfaulting with WebGPU:
 #ifdef GGML_USE_WEBGPU
