@@ -107,6 +107,9 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
         case GGML_TYPE_Q8_0:
             block_size = QK8_0;
             break;
+        case GGML_TYPE_Q4_0:
+            block_size = QK4_0;
+            break;
         case GGML_TYPE_F16:
             block_size = QK_F16;
             break;
@@ -141,7 +144,7 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
     // Verify K dimension alignment for quantization
     // Q8_0 requires strict alignment (quantized data must be block-aligned)
     // F32 and F16 can handle partial blocks with scalar remainders
-    if (src0->type == GGML_TYPE_Q8_0 && K % block_size != 0) {
+    if ((src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q4_0) && K % block_size != 0) {
         return -1; // Q8_0 requires K to be multiple of block_size
     }
 
@@ -149,6 +152,8 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
     size_t expected_element_size_src0;
     if (src0->type == GGML_TYPE_Q8_0) {
         expected_element_size_src0 = sizeof(block_q8_0);
+    } else if (src0->type == GGML_TYPE_Q4_0) {
+        expected_element_size_src0 = sizeof(block_q4_0);
     } else if (src0->type == GGML_TYPE_F16) {
         expected_element_size_src0 = sizeof(uint16_t);
     } else if (src0->type == GGML_TYPE_F32) {
@@ -223,6 +228,16 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
                                                                (kb * block_size) * sizeof(float) +
                                                                col_idx * nb11 + batch_idx * nb12);
                         sum += compute_block_dot_product_q8_0(&q8_row[kb], b_col_ptr);
+                    }
+                    break;
+                }
+                case GGML_TYPE_Q4_0: {
+                    const block_q4_0* q4_row = (const block_q4_0*)expert_row_base;
+                    for (int64_t kb = 0; kb < K_blocks; kb++) {
+                        const float* b_col_ptr = (const float*)((const char*)src1_data +
+                                                               (kb * block_size) * sizeof(float) +
+                                                               col_idx * nb11 + batch_idx * nb12);
+                        sum += compute_block_dot_product_q4_0(&q4_row[kb], b_col_ptr);
                     }
                     break;
                 }

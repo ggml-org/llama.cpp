@@ -731,6 +731,13 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
     const char* src0_type_name;
 
     if (node->type == GGML_TYPE_F32 &&
+        node->src[0]->type == GGML_TYPE_Q4_0 &&
+        node->src[1]->type == GGML_TYPE_F32) {
+
+        kernel_name = "mul_mat_Q4_0";
+        src0_type_name = "Q4_0";
+
+    } else if (node->type == GGML_TYPE_F32 &&
         node->src[0]->type == GGML_TYPE_Q8_0 &&
         node->src[1]->type == GGML_TYPE_F32) {
 
@@ -874,7 +881,7 @@ bool ggml_et_op_mul_mat_id(ggml_backend_et_device_context* dev_ctx, const ggml_t
     const char* kernel_name;
     const char* src0_type_name;
 
-    // Support Q8_0/F16/F32 x F32 -> F32 matrix multiplication with expert selection
+    // Support Q8_0/Q4_0/F16/F32 x F32 -> F32 matrix multiplication with expert selection
     if (node->type == GGML_TYPE_F32 &&
         node->src[0]->type == GGML_TYPE_Q8_0 &&
         node->src[1]->type == GGML_TYPE_F32 &&
@@ -882,6 +889,14 @@ bool ggml_et_op_mul_mat_id(ggml_backend_et_device_context* dev_ctx, const ggml_t
 
         kernel_name = "mul_mat_id_f32";
         src0_type_name = "Q8_0";
+
+    } else if (node->type == GGML_TYPE_F32 &&
+               node->src[0]->type == GGML_TYPE_Q4_0 &&
+               node->src[1]->type == GGML_TYPE_F32 &&
+               node->src[2]->type == GGML_TYPE_I32) {
+
+        kernel_name = "mul_mat_id_f32";
+        src0_type_name = "Q4_0";
 
     } else if (node->type == GGML_TYPE_F32 &&
                node->src[0]->type == GGML_TYPE_F16 &&
