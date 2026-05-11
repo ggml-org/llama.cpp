@@ -19,6 +19,8 @@
             "CMAKE_PREFIX_PATH":  "$env{OPENCL_SDK_ROOT}",
             "HEXAGON_SDK_ROOT":   "$env{HEXAGON_SDK_ROOT}",
             "HEXAGON_TOOLS_ROOT": "$env{HEXAGON_TOOLS_ROOT}",
+            "OpenCL_LIBRARY":    "$env{OpenCL_LIBRARY}",
+            "OpenCL_INCLUDE_DIR": "$env{OpenCL_INCLUDE_DIR}",
             "PREBUILT_LIB_DIR": "android_aarch64",
             "GGML_OPENMP":      "OFF",
             "GGML_LLAMAFILE":   "OFF",
