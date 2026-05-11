@@ -49,6 +49,9 @@
 #   define N_THREADS std::thread::hardware_concurrency()
 #endif
 
+static int64_t g_perf_duration_usec = 1000000; // default: 1 second in microseconds
+static int     g_n_threads   = -1; // -1 means use backend default (N_THREADS)
+
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
     std::vector<float> data(nels);
@@ -1195,6 +1198,10 @@ struct test_case {
     virtual bool run_whole_graph() { return false; }
     virtual std::vector<ggml_tensor *> fusion_test_nodes() { return {}; }
 
+    // Number of trailing graph nodes for perf benchmarking, default 1.
+    // Override in multi-op tests (e.g. rms_norm+mul returns 2)
+    virtual int perf_group_size() { return 1; }
+
     ggml_cgraph * gf = nullptr;
     ggml_cgraph * gb = nullptr;
 
@@ -1504,48 +1511,66 @@ struct test_case {
             return false;
         }
 
+        const int group_size = perf_group_size();
+        const int n_nodes    = ggml_graph_n_nodes(gf);
+        GGML_ASSERT(group_size >= 1 && group_size <= n_nodes);
+
+        // calculate per-run memory size and flops
+        size_t   per_run_size  = 0;
+        uint64_t per_run_flops = 0;
+        bool     all_have_flops = true;
+        for (int i = n_nodes - group_size; i < n_nodes; i++) {
+            ggml_tensor * node = ggml_graph_node(gf, i);
+            if (!ggml_is_view_op(node->op)) {
+                per_run_size += op_size(node);
+                if (op_flops(node) == 0) {
+                    all_have_flops = false;
+                }
+                per_run_flops += op_flops(node);
+            }
+        }
+        // if any non-view node in the group lacks flops, fall back to memory-based measurement
+        if (!all_have_flops) {
+            per_run_flops = 0;
+        }
+
         // determine number of runs
         int n_runs;
         bool is_cpu = ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
-        if (op_flops(out) > 0) {
+        int64_t max_additional_runs = (ggml_graph_size(gf) - n_nodes) / group_size;
+        if (per_run_flops > 0) {
             // based on flops
             const uint64_t GFLOP = 1000 * 1000 * 1000;
             const uint64_t target_flops_cpu =   8ULL * GFLOP;
             const uint64_t target_flops_gpu = 100ULL * GFLOP;
             uint64_t target_flops = is_cpu ? target_flops_cpu : target_flops_gpu;
-            n_runs = (int)std::min<int64_t>(ggml_graph_size(gf) - ggml_graph_n_nodes(gf), target_flops / op_flops(out)) + 1;
+            n_runs = (int)std::min<int64_t>(max_additional_runs, target_flops / per_run_flops) + 1;
         } else {
             // based on memory size
             const size_t GB = 1ULL << 30;
             const size_t target_size_cpu =  8 * GB;
             const size_t target_size_gpu = 32 * GB;
             size_t target_size = is_cpu ? target_size_cpu : target_size_gpu;
-            n_runs = (int)std::min<int64_t>(ggml_graph_size(gf) - ggml_graph_n_nodes(gf), target_size / op_size(out)) + 1;
+            n_runs = (int)std::min<int64_t>(max_additional_runs, per_run_size > 0 ? (int64_t)(target_size / per_run_size) : 1) + 1;
         }
 
-        // duplicate the op
+        // duplicate only the effective group nodes for each additional run
         for (int i = 1; i < n_runs; i++) {
-            ggml_graph_add_node(gf, out);
+            for (int j = n_nodes - group_size; j < n_nodes; j++) {
+                ggml_graph_add_node(gf, ggml_graph_node(gf, j));
+            }
         }
 
         // calculate memory
-        size_t mem = n_runs * op_size(out);
-        auto tensor_op_size = [](ggml_tensor * t) {
-            size_t size = ggml_nbytes(t);
-            // add source tensors
-            for (int i = 0; i < GGML_MAX_SRC; i++) {
-                if (t->src[i] != NULL) {
-                    size += ggml_nbytes(t->src[i]);
-                }
+        // setup nodes (before the group) run once per compute call; add their size once
+        size_t setup_size = 0;
+        for (int i = 0; i < n_nodes - group_size; i++) {
+            ggml_tensor * node = ggml_graph_node(gf, i);
+            if (!ggml_is_view_op(node->op)) {
+                setup_size += op_size(node);
             }
-            return size;
-        };
-        for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
-            if (ggml_is_view_op(ggml_graph_node(gf, i)->op) || ggml_graph_node(gf, i) == out) {
-                continue;
-            }
-            mem += tensor_op_size(ggml_graph_node(gf, i));
         }
+        size_t mem = n_runs * per_run_size + setup_size;
 
         // run
         int64_t total_time_us = 0;
@@ -1563,14 +1588,14 @@ struct test_case {
             total_time_us += end_time - start_time;
             total_mem += mem;
             total_runs += n_runs;
-        } while (total_time_us < 1000*1000); // run for at least 1 second
+        } while (total_time_us < g_perf_duration_usec); // run for at least the configured perf duration
 
         // Create test result
         double avg_time_us      = (double) total_time_us / total_runs;
-        double calculated_flops = (op_flops(out) > 0) ? (op_flops(out) * total_runs) / (total_time_us / 1e6) : 0.0;
+        double calculated_flops = (per_run_flops > 0) ? (per_run_flops * total_runs) / (total_time_us / 1e6) : 0.0;
         double calculated_bandwidth =
-            (op_flops(out) == 0) ? total_mem / (total_time_us / 1e6) / 1024.0 / 1024.0 / 1024.0 : 0.0;
-        size_t calculated_memory_kb = op_size(out) / 1024;
+            (per_run_flops == 0) ? total_mem / (total_time_us / 1e6) / 1024.0 / 1024.0 / 1024.0 : 0.0;
+        size_t calculated_memory_kb = per_run_size / 1024;
 
         test_result result(ggml_backend_name(backend), current_op_name, vars(), "perf", true, true, "", avg_time_us,
                            calculated_flops, calculated_bandwidth, calculated_memory_kb, total_runs);
@@ -3443,6 +3468,66 @@ struct test_rms_norm_mul_add : public test_case {
             a = ggml_add(ctx, ggml_add(ctx, a, b), c);
         }
         ggml_tensor * out = ggml_add(ctx, ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b), c);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -10.f, 10.f);
+        }
+    }
+
+    float grad_eps() override {
+        return 1.0f;
+    }
+
+    bool grad_precise() override {
+        return true;
+    }
+};
+
+// GGML_OP_RMS_NORM + GGML_OP_MUL (fused operation)
+struct test_rms_norm_mul : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    const float eps;
+    const bool broadcast;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RMS_NORM_MUL";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR4(type, ne, eps, broadcast);
+    }
+
+    int perf_group_size() override { return 2; }
+
+    test_rms_norm_mul(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {64, 5, 4, 3},
+            float eps = 1e-6f, bool broadcast = false)
+        : type(type), ne(ne), eps(eps), broadcast(broadcast) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // broadcast only on dims 1-3, dim0 must match for fusion
+        std::array<int64_t, 4> broadcast_dims = {ne[0], ne[1]*3, ne[2]*3, ne[3]*4};
+
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, broadcast ? broadcast_dims.data() : ne.data());
+        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+        ggml_set_param(b);
+        ggml_set_name(b, "b");
+
+        // Use a and b early, so we don't end up with an OP_NONE between rms_norm and mul
+        a = ggml_add(ctx, a, b);
+        ggml_tensor * out = ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b);
         ggml_set_name(out, "out");
 
         return out;
@@ -9292,6 +9377,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 1024, 1)); // 4h PP-1024
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
 
+    // RMS_NORM + MUL fused
+    for (auto hidden_size : {128, 1024, 4096}) {
+        for (auto broadcast : {false, true}) {
+            test_cases.emplace_back(new test_rms_norm_mul(GGML_TYPE_F32, { hidden_size, 1, 1, 1 }, 1e-6f,  broadcast));
+            test_cases.emplace_back(new test_rms_norm_mul(GGML_TYPE_F32, { hidden_size, 64, 1, 1 }, 1e-6f, broadcast));
+            test_cases.emplace_back(new test_rms_norm_mul(GGML_TYPE_F32, { hidden_size, 512, 1, 1 }, 1e-6f, broadcast));
+        }
+    }
+
     return test_cases;
 }
 
@@ -9575,7 +9669,7 @@ static void show_test_coverage() {
 
 static void usage(char ** argv) {
     printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops]", argv[0]);
-    printf(" [--show-coverage] [--test-file <path>]\n");
+    printf(" [--show-coverage] [--test-file <path>] [--perf-duration <seconds>] [--threads <n>]\n");
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
@@ -9587,6 +9681,8 @@ static void usage(char ** argv) {
     printf("    --list-ops lists all available GGML operations\n");
     printf("    --show-coverage shows test coverage\n");
     printf("    --test-file reads test operators from a test file generated by llama-export-graph-ops\n");
+    printf("    --perf-duration sets perf mode minimum run duration in seconds (default: 1)\n");
+    printf("    --threads sets backend n_threads (default: from backend)\n");
 }
 
 int main(int argc, char ** argv) {
@@ -9650,6 +9746,31 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--perf-duration") == 0) {
+            if (i + 1 < argc) {
+                int perf_sec = atoi(argv[++i]);
+                if (perf_sec <= 0) {
+                    fprintf(stderr, "error: --perf-duration must be a positive integer (seconds)\n");
+                    usage(argv);
+                    return 1;
+                }
+                g_perf_duration_usec = (int64_t)perf_sec * 1000000LL;
+            } else {
+                usage(argv);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--threads") == 0 || strcmp(argv[i], "-t") == 0) {
+            if (i + 1 < argc) {
+                g_n_threads = atoi(argv[++i]);
+                if (g_n_threads <= 0) {
+                    fprintf(stderr, "error: --threads must be a positive integer\n");
+                    usage(argv);
+                    return 1;
+                }
+            } else {
+                usage(argv);
+                return 1;
+            }
         } else {
             usage(argv);
             return 1;
@@ -9693,7 +9814,8 @@ int main(int argc, char ** argv) {
         auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
         if (ggml_backend_set_n_threads_fn) {
             // TODO: better value for n_threads
-            ggml_backend_set_n_threads_fn(backend, N_THREADS);
+            const int n_threads_to_use = (g_n_threads > 0) ? g_n_threads : (int) N_THREADS;
+            ggml_backend_set_n_threads_fn(backend, n_threads_to_use);
         }
 
         size_t free, total;  // NOLINT
