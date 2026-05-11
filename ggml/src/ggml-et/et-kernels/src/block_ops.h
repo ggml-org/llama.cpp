@@ -18,6 +18,76 @@ inline void __attribute__((always_inline)) excl_mode(uint64_t val)
     __asm__ __volatile__("csrw 0x7d3, %[csr_enc]\n" : : [csr_enc] "r"(val) : "x31");
 }
 
+
+static inline float compute_block_dot_product_q4_0(const block_q4_0* a_block, const float* b_col_start) {
+    // Set mask register to enable all 8 vector elements
+    unsigned long temp_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));  // Save current mask
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");           // Enable all 8 elements
+
+    // Use f10 as accumulator, init to 0
+    __asm__ volatile("fbci.ps f10, 0" ::: "f10");
+
+    static const int32_t gather_pattern[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    __asm__ volatile("flw.ps f31, %[gather]\n" : : [gather] "m"(*(const int32_t(*)[8])gather_pattern) : "f31");
+
+    // Process 32 elements in 2 chunks of 16 elements (8 bytes) each
+    for (int chunk = 0; chunk < 2; chunk++) {
+        int offset_a = chunk * 8;
+        int offset_b_low  = chunk * 8;            // Activations for lower nibbles
+        int offset_b_high = chunk * 8 + 16;       // Activations for upper nibbles (16 elements later)
+
+        __asm__ volatile(
+            "fgb.ps f11, f31(%[a_ptr])\n"            // Gather 8 bytes (16 packed q4_0 weights)
+
+            // 1. Extract & Multiply Lower Nibbles
+            "fandi.pi f12, f11, 15\n"                // Mask lower 4 bits (x & 0xF)
+            "faddi.pi f12, f12, -8\n"                // GGML offset to signed: (x & 0xF) - 8
+            "fcvt.ps.pw f12, f12, rne\n"             // Convert INT32 to FP32
+            "flw.ps f13, 0(%[b_low])\n"              // Load 8 B values (floats)
+            "fmadd.ps f10, f12, f13, f10, rne\n"     // acc += A_low * B_low
+
+            // 2. Extract & Multiply Upper Nibbles
+            "fsrli.pi f14, f11, 4\n"                 // Shift upper 4 bits down
+            "fandi.pi f14, f14, 15\n"                // Mask new lower 4 bits
+            "faddi.pi f14, f14, -8\n"                // GGML offset to signed
+            "fcvt.ps.pw f14, f14, rne\n"             // Convert INT32 to FP32
+            "flw.ps f15, 0(%[b_high])\n"             // Load next 8 B values (floats)
+            "fmadd.ps f10, f14, f15, f10, rne\n"     // acc += A_high * B_high
+            :
+            : [a_ptr]  "r"(&a_block->qs[offset_a]),
+              [b_low]  "r"(&b_col_start[offset_b_low]),
+              [b_high] "r"(&b_col_start[offset_b_high])
+            // Note: f10 is explicitly NOT listed in the clobbers here to ensure the compiler
+            // preserves the running sum across C loop iterations safely.
+            : "f11", "f12", "f13", "f14", "f15"
+        );
+    }
+
+    // Horizontal sum: reduce f10 into a single scalar
+    float final_sum;
+    __asm__ __volatile__ (
+        // Pairwise sum within each 128-bit half
+        "fswizz.ps f1, f10, 0xB1 \n\t"             // Swaps: e0<->e1 and e2<->e3
+        "fadd.ps   f2, f10, f1, rne \n\t"
+        // Complete the sum for each 128-bit half
+        "fswizz.ps f3, f2, 0x4E \n\t"              // Swaps: e0,e1 <-> e2,e3
+        "fadd.ps   f4, f2, f3, rne \n\t"
+        // Sum across the two 128b halfs
+        "fmvz.x.ps t0, f4, 4 \n\t"
+        "fbcx.ps   f5, t0 \n\t"
+        "fadd.ps   %[vout], f4, f5, rne \n\t"
+        : [vout] "=f" (final_sum)
+        :: "t0", "f1", "f2", "f3", "f4", "f5", "f10"
+    );
+
+    // Restore original mask
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
+
+    const float scale = fp16_to_fp32(a_block->d);
+    return final_sum * scale;
+}
+
 // Compute dot product between dequantized q8_0 block and f32 column vector
 // Vectorized: processes 8 elements at a time using ET vector instructions
 // Block size: 32 int8 values (QK8_0)
@@ -795,3 +865,259 @@ static inline float compute_block_dot_product_f32(const float* a_block, const fl
 }
 
 #endif // BLOCK_OPS_H
+
+static inline void __attribute__((always_inline))
+q4_dot_reset(void) {
+    __asm__ volatile("fbci.pi f20, 0" ::: "f20");
+}
+
+static inline void __attribute__((always_inline))
+q4_dot_tile(const block_q4_0* q_row, const float* b_col, int64_t n_blocks) {
+    const int32_t gather_pattern[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    __asm__ volatile("flw.ps f31, %[g]\n" : : [g] "m"(*(const int32_t(*)[8])gather_pattern) : "f31");
+
+    for (int64_t kb = 0; kb < n_blocks; kb++) {
+        const block_q4_0* blk = q_row + kb;
+        const float* b_ptr = b_col + (kb << 5);
+
+        __asm__ volatile(
+            "fbci.pi     f10, 0\n"
+
+            "fgb.ps      f11, f31(%[a_ptr0])\n"
+            "fandi.pi    f12, f11, 15\n"
+            "faddi.pi    f12, f12, -8\n"
+            "fcvt.ps.pw  f12, f12, rne\n"
+            "flw.ps      f13, %[b_low0]\n"
+            "fmadd.ps    f10, f12, f13, f10, rne\n"
+
+            "fsrli.pi    f14, f11, 4\n"
+            "fandi.pi    f14, f14, 15\n"
+            "faddi.pi    f14, f14, -8\n"
+            "fcvt.ps.pw  f14, f14, rne\n"
+            "flw.ps      f15, %[b_high0]\n"
+            "fmadd.ps    f10, f14, f15, f10, rne\n"
+
+            "fgb.ps      f11, f31(%[a_ptr1])\n"
+            "fandi.pi    f12, f11, 15\n"
+            "faddi.pi    f12, f12, -8\n"
+            "fcvt.ps.pw  f12, f12, rne\n"
+            "flw.ps      f13, %[b_low1]\n"
+            "fmadd.ps    f10, f12, f13, f10, rne\n"
+
+            "fsrli.pi    f14, f11, 4\n"
+            "fandi.pi    f14, f14, 15\n"
+            "faddi.pi    f14, f14, -8\n"
+            "fcvt.ps.pw  f14, f14, rne\n"
+            "flw.ps      f15, %[b_high1]\n"
+            "fmadd.ps    f10, f14, f15, f10, rne\n"
+            :
+            : [a_ptr0]  "r"(&blk->qs[0]),
+              [b_low0]  "m"(*(const float(*)[8])&b_ptr[0]),
+              [b_high0] "m"(*(const float(*)[8])&b_ptr[16]),
+              [a_ptr1]  "r"(&blk->qs[8]),
+              [b_low1]  "m"(*(const float(*)[8])&b_ptr[8]),
+              [b_high1] "m"(*(const float(*)[8])&b_ptr[24])
+            : "f10", "f11", "f12", "f13", "f14", "f15"
+        );
+
+        uint32_t scale_raw = (uint32_t)blk->d;
+        __asm__ volatile(
+            "fbcx.ps f15, %[sb]\n"
+            "fcvt.ps.f16 f15, f15\n"
+            "fmadd.ps f20, f10, f15, f20\n"
+            :
+            : [sb] "r"(scale_raw)
+            : "f15", "f20"
+        );
+    }
+}
+
+static inline float __attribute__((always_inline))
+q4_dot_reduce(void) {
+    float result;
+    __asm__ __volatile__ (
+        "fswizz.ps f1, f20, 0xB1 \n\t"
+        "fadd.ps   f2, f20, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t"
+        "fadd.ps   f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t"
+        "fbcx.ps   f5, t0 \n\t"
+        "fadd.ps   %[vout], f4, f5, rne \n\t"
+        : [vout] "=f" (result)
+        :: "t0", "f1", "f2", "f3", "f4", "f5"
+    );
+    return result;
+}
+
+static inline float compute_row_dot_q4_0(const block_q4_0* q_row,
+                                         const float* b_col,
+                                         int64_t K_blocks) {
+    unsigned long saved_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+    q4_dot_reset();
+    q4_dot_tile(q_row, b_col, K_blocks);
+    float result = q4_dot_reduce();
+    __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));
+    return result;
+}
+
+typedef struct {
+    unsigned long saved_mask;
+} q4_dot_state;
+
+static inline void q4_dot_begin(q4_dot_state* state) {
+    __asm__ volatile("mova.x.m %0" : "=r"(state->saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+}
+
+static inline void q4_dot_end(const q4_dot_state* state) {
+    __asm__ volatile("mova.m.x %0" :: "r"(state->saved_mask));
+}
+
+static inline float q4_dot_compute(const block_q4_0* q_row,
+                                   const float* b_col,
+                                   int64_t K_blocks) {
+    q4_dot_reset();
+    q4_dot_tile(q_row, b_col, K_blocks);
+    return q4_dot_reduce();
+}
+
+static inline void q4_dot_compute_x2_aligned(const block_q4_0* q_row0,
+                                             const block_q4_0* q_row1,
+                                             const float* b_col,
+                                             int64_t K_blocks,
+                                             float* out0,
+                                             float* out1) {
+    const int32_t gather_pattern[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    __asm__ volatile(
+        "flw.ps f31, %[g]\n"
+        :
+        : [g] "m"(*(const int32_t(*)[8])gather_pattern)
+        : "f31"
+    );
+    __asm__ volatile(
+        "fbci.pi f20, 0\n"
+        "fbci.pi f21, 0\n"
+        ::: "f20", "f21"
+    );
+
+    for (int64_t kb = 0; kb < K_blocks; kb++) {
+        const block_q4_0* blk0 = q_row0 + kb;
+        const block_q4_0* blk1 = q_row1 + kb;
+        const float* b_ptr = b_col + (kb << 5);
+
+        __asm__ volatile(
+            "fbci.pi     f10, 0\n"
+            "fbci.pi     f16, 0\n"
+
+            "flw.ps      f13, %[b_low0]\n"
+            "flw.ps      f15, %[b_high0]\n"
+
+            "fgb.ps      f11, f31(%[a_ptr0_0])\n"
+            "fgb.ps      f17, f31(%[a_ptr1_0])\n"
+
+            "fandi.pi    f12, f11, 15\n"
+            "faddi.pi    f12, f12, -8\n"
+            "fcvt.ps.pw  f12, f12, rne\n"
+            "fmadd.ps    f10, f12, f13, f10, rne\n"
+
+            "fandi.pi    f18, f17, 15\n"
+            "faddi.pi    f18, f18, -8\n"
+            "fcvt.ps.pw  f18, f18, rne\n"
+            "fmadd.ps    f16, f18, f13, f16, rne\n"
+
+            "fsrli.pi    f14, f11, 4\n"
+            "fandi.pi    f14, f14, 15\n"
+            "faddi.pi    f14, f14, -8\n"
+            "fcvt.ps.pw  f14, f14, rne\n"
+            "fmadd.ps    f10, f14, f15, f10, rne\n"
+
+            "fsrli.pi    f19, f17, 4\n"
+            "fandi.pi    f19, f19, 15\n"
+            "faddi.pi    f19, f19, -8\n"
+            "fcvt.ps.pw  f19, f19, rne\n"
+            "fmadd.ps    f16, f19, f15, f16, rne\n"
+
+            "flw.ps      f13, %[b_low1]\n"
+            "flw.ps      f15, %[b_high1]\n"
+
+            "fgb.ps      f11, f31(%[a_ptr0_1])\n"
+            "fgb.ps      f17, f31(%[a_ptr1_1])\n"
+
+            "fandi.pi    f12, f11, 15\n"
+            "faddi.pi    f12, f12, -8\n"
+            "fcvt.ps.pw  f12, f12, rne\n"
+            "fmadd.ps    f10, f12, f13, f10, rne\n"
+
+            "fandi.pi    f18, f17, 15\n"
+            "faddi.pi    f18, f18, -8\n"
+            "fcvt.ps.pw  f18, f18, rne\n"
+            "fmadd.ps    f16, f18, f13, f16, rne\n"
+
+            "fsrli.pi    f14, f11, 4\n"
+            "fandi.pi    f14, f14, 15\n"
+            "faddi.pi    f14, f14, -8\n"
+            "fcvt.ps.pw  f14, f14, rne\n"
+            "fmadd.ps    f10, f14, f15, f10, rne\n"
+
+            "fsrli.pi    f19, f17, 4\n"
+            "fandi.pi    f19, f19, 15\n"
+            "faddi.pi    f19, f19, -8\n"
+            "fcvt.ps.pw  f19, f19, rne\n"
+            "fmadd.ps    f16, f19, f15, f16, rne\n"
+            :
+            : [a_ptr0_0] "r"(&blk0->qs[0]),
+              [a_ptr0_1] "r"(&blk0->qs[8]),
+              [a_ptr1_0] "r"(&blk1->qs[0]),
+              [a_ptr1_1] "r"(&blk1->qs[8]),
+              [b_low0]   "m"(*(const float(*)[8])&b_ptr[0]),
+              [b_high0]  "m"(*(const float(*)[8])&b_ptr[16]),
+              [b_low1]   "m"(*(const float(*)[8])&b_ptr[8]),
+              [b_high1]  "m"(*(const float(*)[8])&b_ptr[24])
+            : "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19"
+        );
+
+        const uint32_t scale_raw0 = (uint32_t)blk0->d;
+        const uint32_t scale_raw1 = (uint32_t)blk1->d;
+        __asm__ volatile(
+            "fbcx.ps     f24, %[s0]\n"
+            "fcvt.ps.f16 f24, f24\n"
+            "fmadd.ps    f20, f10, f24, f20\n"
+            "fbcx.ps     f25, %[s1]\n"
+            "fcvt.ps.f16 f25, f25\n"
+            "fmadd.ps    f21, f16, f25, f21\n"
+            :
+            : [s0] "r"(scale_raw0),
+              [s1] "r"(scale_raw1)
+            : "f20", "f21", "f24", "f25"
+        );
+    }
+
+    float result0, result1;
+    __asm__ __volatile__ (
+        "fswizz.ps f1, f20, 0xB1 \n\t"
+        "fadd.ps   f2, f20, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t"
+        "fadd.ps   f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t"
+        "fbcx.ps   f5, t0 \n\t"
+        "fadd.ps   %[vout], f4, f5, rne \n\t"
+        : [vout] "=f" (result0)
+        :: "t0", "f1", "f2", "f3", "f4", "f5"
+    );
+    __asm__ __volatile__ (
+        "fswizz.ps f1, f21, 0xB1 \n\t"
+        "fadd.ps   f2, f21, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t"
+        "fadd.ps   f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t"
+        "fbcx.ps   f5, t0 \n\t"
+        "fadd.ps   %[vout], f4, f5, rne \n\t"
+        : [vout] "=f" (result1)
+        :: "t0", "f1", "f2", "f3", "f4", "f5"
+    );
+
+    *out0 = result0;
+    *out1 = result1;
+}
