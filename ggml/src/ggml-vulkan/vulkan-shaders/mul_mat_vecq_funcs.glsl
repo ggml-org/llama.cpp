@@ -45,7 +45,7 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
 }
 
 FLOAT_TYPE mul_q8_1_hf(const int32_t q_sum, const float da, const f16vec2 dsb, const int32_t sum_divisor) {
-    return FLOAT_TYPE(da * float(float16_t(q_sum) * dsb.x - float16_t(8 / sum_divisor) * dsb.y));
+    return FLOAT_TYPE(da * (float(q_sum) * dsb.x - float16_t(8 / sum_divisor) * dsb.y));
 }
 #endif
 
