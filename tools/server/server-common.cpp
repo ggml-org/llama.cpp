@@ -1082,6 +1082,14 @@ json oaicompat_chat_params_parse(
             throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
         }
 
+        // reject reasoning prefill on channel based templates that do not expose explicit thinking tags
+        if (!last_message.reasoning_content.empty() && inputs.enable_thinking) {
+            auto probe_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
+            if (probe_params.supports_thinking && probe_params.thinking_end_tag.empty()) {
+                throw std::invalid_argument("Assistant prefill with reasoning_content is not supported yet for this template.");
+            }
+        }
+
         inputs.add_generation_prompt = true;
     }
     inputs.force_pure_content = opt.force_pure_content;
