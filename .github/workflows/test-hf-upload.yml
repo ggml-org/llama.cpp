@@ -12,14 +12,7 @@ jobs:
 
   publish-webui:
     name: Publish WebUI to Hugging Face Bucket
-    runs-on: ubuntu-latest
-    environment: release
-    permissions:
-      contents: write
-
-    needs:
-      - webui-build
-
+    needs: webui-build
     uses: ./.github/workflows/webui-publish.yml
     with:
       version_tag: ${{ github.ref_name }}
