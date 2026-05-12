@@ -1,0 +1,413 @@
+=== SMEM M5 Benchmark: smem ===
+Model: Qwen3.5-35B-A3B-Q8_0.gguf
+Date: Sat Mar 28 22:02:19 CDT 2026
+
+--- turbo3 @ short ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x104fbb670 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x104fbb5f0 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: loaded in 7.366 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |           tg128 |         18.39 ± 0.76 |
+
+build: 13afec1 (178)
+
+--- turbo3 @ 8192 ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x101ee3e50 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x101ee3dd0 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: loaded in 0.009 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |         pp16384 |     1337.26 ± 261.92 |
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |          pp8192 |     1442.03 ± 393.22 |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |           tg128 |        40.38 ± 18.10 |
+
+build: 13afec1 (178)
+
+--- turbo3 @ 32768 ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x105a3f890 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x105a3e710 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: turbo3/4 SMEM pre-dequant enabled
+ggml_metal_library_init: loaded in 0.010 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |           tg128 |         58.20 ± 8.75 |
+
+build: 13afec1 (178)
+
+--- turbo3 @ 16384 ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x103d7b200 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x103d7b180 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: loaded in 0.009 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |         pp16384 |       792.76 ± 57.30 |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |           tg128 |         16.47 ± 1.39 |
+
+build: 13afec1 (178)
+
+--- turbo3 @ 32768 ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x104dc31e0 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x104dc3160 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: loaded in 0.009 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |         pp32768 |      806.43 ± 177.53 |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |           tg128 |         16.19 ± 1.11 |
+
+build: 13afec1 (178)
+
+--- turbo4 @ short ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x105ccfa30 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x105cce8b0 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: turbo3/4 SMEM pre-dequant enabled
+ggml_metal_library_init: loaded in 0.008 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |           tg128 |         16.93 ± 0.97 |
+
+build: 13afec1 (178)
+
+--- turbo4 @ 8192 ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x10561bc80 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x10561ab00 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: turbo3/4 SMEM pre-dequant enabled
+ggml_metal_library_init: loaded in 0.008 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |          pp8192 |       942.18 ± 77.19 |
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |         pp32768 |      941.24 ± 180.34 |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |           tg128 |        44.84 ± 18.74 |
+
+build: 13afec1 (178)
+
+--- turbo4 @ 16384 ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x1038a3d70 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x1038a2bf0 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: turbo3/4 SMEM pre-dequant enabled
+ggml_metal_library_init: loaded in 0.008 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo3 | turbo3 |  1 |           tg128 |         61.97 ± 9.79 |
+
+build: 13afec1 (178)
+
+--- turbo4 @ short ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x10170b580 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x10170b500 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: loaded in 0.008 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |           tg128 |         17.82 ± 0.64 |
+
+build: 13afec1 (178)
+
+--- turbo4 @ 8192 ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x103dab490 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x103dab410 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: loaded in 0.009 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |         pp16384 |     1187.08 ± 274.35 |
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |          pp8192 |     1098.56 ± 217.82 |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |           tg128 |        50.13 ± 12.92 |
+
+build: 13afec1 (178)
+
+--- turbo4 @ 32768 ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x105f20300 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x105f1f180 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: turbo3/4 SMEM pre-dequant enabled
+ggml_metal_library_init: loaded in 0.008 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |           tg128 |         58.25 ± 4.07 |
+
+build: 13afec1 (178)
+
+--- turbo4 @ 16384 ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x10588f220 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x10588f1a0 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: loaded in 0.008 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |         pp16384 |       755.20 ± 28.45 |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |           tg128 |         15.58 ± 1.31 |
+
+build: 13afec1 (178)
+
+--- turbo4 @ 32768 ---
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x1018533e0 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x101853360 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: turbo3 sparse V dequant enabled
+ggml_metal_library_init: loaded in 0.009 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 115448.73 MB
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |         pp32768 |      732.00 ± 172.10 |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |           tg128 |         16.29 ± 1.78 |
+
+build: 13afec1 (178)
+
+SKIP: q8_0 + smem (q8_0 unaffected by SMEM)
+SKIP: q8_0 + smem (q8_0 unaffected by SMEM)
+SKIP: q8_0 + smem (q8_0 unaffected by SMEM)
+SKIP: q8_0 + smem (q8_0 unaffected by SMEM)
+=== Done: smem ===
+| model                          |       size |     params | backend    | threads | type_k | type_v | fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -----: | -: | --------------: | -------------------: |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |         pp32768 |     1018.88 ± 235.19 |
+| qwen35moe 35B.A3B Q8_0         |  34.36 GiB |    34.66 B | MTL,BLAS   |       1 | turbo4 | turbo4 |  1 |           tg128 |         81.62 ± 0.05 |
+
+build: 13afec1 (178)
+
+SKIP: q8_0 + smem (q8_0 unaffected by SMEM)
+SKIP: q8_0 + smem (q8_0 unaffected by SMEM)
+SKIP: q8_0 + smem (q8_0 unaffected by SMEM)
+SKIP: q8_0 + smem (q8_0 unaffected by SMEM)
+=== Done: smem ===

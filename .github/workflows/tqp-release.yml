@@ -1,0 +1,109 @@
+name: TurboQuant+ Release
+
+on:
+  push:
+    tags:
+      - 'tqp-v*'
+
+env:
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON"
+
+jobs:
+  macos-metal:
+    runs-on: macos-14
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        run: |
+          cmake -B build \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Pack
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf turboquant-plus-${{ github.ref_name }}-macos-arm64-metal.tar.gz \
+            -s ",./,turboquant-plus-${{ github.ref_name }}/," -C ./build/bin .
+
+      - name: Upload
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-arm64-metal
+          path: turboquant-plus-${{ github.ref_name }}-macos-arm64-metal.tar.gz
+
+  windows-cuda:
+    runs-on: windows-2022
+
+    strategy:
+      matrix:
+        cuda: ['12.4']
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Install Cuda Toolkit
+        uses: ./.github/actions/windows-setup-cuda
+        with:
+          cuda_version: ${{ matrix.cuda }}
+
+      - name: Install Ninja
+        run: choco install ninja
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CUDA=ON ^
+            -DGGML_CUDA_FA_ALL_QUANTS=ON ^
+            ${{ env.CMAKE_ARGS }}
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS%
+
+      - name: Pack
+        run: |
+          cp LICENSE ./build/bin/Release/
+          $dst='.\build\bin\Release\'
+          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\bin\x64" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a turboquant-plus-${{ github.ref_name }}-windows-x64-cuda${{ matrix.cuda }}.zip .\build\bin\Release\*
+
+      - name: Upload
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-x64-cuda${{ matrix.cuda }}
+          path: turboquant-plus-${{ github.ref_name }}-windows-x64-cuda${{ matrix.cuda }}.zip
+
+  release:
+    needs: [macos-metal, windows-cuda]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: ./release
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: TurboQuant+ ${{ github.ref_name }}
+          files: ./release/*
+          draft: false
+          prerelease: false

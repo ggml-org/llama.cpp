@@ -12,6 +12,10 @@
 #include <cfloat>
 #include <cmath>
 
+extern "C" {
+GGML_API int turbo3_cpu_wht_group_size;
+}
+
 // ggml_compute_forward_dup
 
 static void ggml_compute_forward_dup_same_cont(
@@ -679,6 +683,8 @@ void ggml_compute_forward_add(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ4_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -1130,6 +1136,8 @@ void ggml_compute_forward_add1(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ4_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -1260,6 +1268,8 @@ void ggml_compute_forward_acc(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ4_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -4395,6 +4405,8 @@ void ggml_compute_forward_out_prod(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ4_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -4672,6 +4684,8 @@ void ggml_compute_forward_set(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ4_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -4896,6 +4910,8 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ4_1S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -4977,6 +4993,13 @@ static void ggml_compute_forward_set_rows_f32(
     const int64_t ir1 = std::min(ir0 + dr, nr);
 
     ggml_from_float_t const from_float = ggml_get_type_traits_cpu(dst->type)->from_float;
+
+    // For turbo types: communicate WHT group size to the quantize function via global
+    if (dst->type == GGML_TYPE_TURBO3_0 || dst->type == GGML_TYPE_TURBO4_0 || dst->type == GGML_TYPE_TURBO2_0) {
+        int gs = 0;
+        memcpy(&gs, dst->op_params, sizeof(int));
+        turbo3_cpu_wht_group_size = (gs == 64 || gs == 128) ? gs : 0;
+    }
 
     for (int64_t i03 = 0; i03 < ne03; ++i03) {
         for (int64_t i02 = 0; i02 < ne02; ++i02) {
@@ -5622,6 +5645,11 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ4_1S:
+        case GGML_TYPE_TURBO2_0:
+        case GGML_TYPE_TURBO3_0:
+        case GGML_TYPE_TURBO4_0:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ3_XXS:
@@ -10658,6 +10686,104 @@ void ggml_compute_forward_gated_delta_net(
             {
                 GGML_ABORT("fatal error");
             }
+    }
+}
+
+// ggml_compute_forward_turbo_wht
+
+// WHT sign arrays (must match Metal shader turbo_wht_signs1/2)
+static const float turbo_wht_s1[128] = {-1,1,1,-1,-1,1,-1,1,-1,-1,1,1,1,1,1,1,1,-1,1,-1,1,-1,-1,1,1,1,-1,1,1,-1,-1,-1,-1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,1,1,1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,-1,1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,1,1,-1,-1,1,1,-1,1,1,-1,1,-1,-1,1,1,-1,1,-1,1,-1,1,1,1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1};
+static const float turbo_wht_s2[128] = {1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,-1,1,1,1,1,1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1};
+
+static void ggml_compute_forward_turbo_wht_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src = dst->src[0];
+    const ggml_tensor * scale_tensor = dst->src[1];  // InnerQ scale_inv (may be NULL)
+    const float * src_data = (const float *) src->data;
+    float * dst_data = (float *) dst->data;
+    const float * scale_inv = scale_tensor ? (const float *) scale_tensor->data : NULL;
+
+    int direction;
+    int group_size;
+    memcpy(&direction, dst->op_params + 0, sizeof(int));
+    memcpy(&group_size, dst->op_params + sizeof(int), sizeof(int));
+
+    const int64_t head_dim        = src->ne[0];
+    const int64_t n_heads         = ggml_nelements(src) / head_dim;
+    const int64_t groups_per_head = head_dim / group_size;
+    const int     tail_size       = (int)(head_dim % group_size);
+    const int64_t n_groups        = groups_per_head * n_heads;
+
+    const float inv_sqrt = 1.0f / sqrtf((float)group_size);
+
+    // Parallel over groups
+    const int64_t ith = params->ith;
+    const int64_t nth = params->nth;
+    const int64_t grp_start = (n_groups * ith) / nth;
+    const int64_t grp_end = (n_groups * (ith + 1)) / nth;
+
+    // Select sign arrays: for 64-group, use first 64 elements of the 128-element arrays
+    const float * s_first = (direction == 0) ? turbo_wht_s1 : turbo_wht_s2;
+    const float * s_second = (direction == 0) ? turbo_wht_s2 : turbo_wht_s1;
+
+    for (int64_t g = grp_start; g < grp_end; g++) {
+        const int64_t head_idx    = g / groups_per_head;
+        const int64_t grp_in_head = g % groups_per_head;
+        const int64_t base        = head_idx * head_dim + grp_in_head * group_size;
+
+        float x[128];  // max group_size
+        const float * in = src_data + base;
+
+        // InnerQ forward: apply scale_inv BEFORE signs+WHT (for Q pre-rotation)
+        if (direction == 0 && scale_inv != NULL) {
+            for (int i = 0; i < group_size; i++) x[i] = in[i] * scale_inv[i % group_size];
+        } else {
+            for (int i = 0; i < group_size; i++) x[i] = in[i];
+        }
+
+        // Apply first signs
+        for (int i = 0; i < group_size; i++) x[i] *= s_first[i];
+
+        // WHT butterfly (log2(group_size) stages)
+        for (int h = 1; h < group_size; h *= 2) {
+            for (int i = 0; i < group_size; i += h * 2) {
+                for (int j = i; j < i + h; j++) {
+                    float a = x[j], b = x[j + h];
+                    x[j] = a + b;
+                    x[j + h] = a - b;
+                }
+            }
+        }
+
+        // Normalize + second signs
+        float * out = dst_data + base;
+        for (int i = 0; i < group_size; i++) {
+            float val = x[i] * inv_sqrt * s_second[i];
+            // InnerQ inverse: apply scale_inv AFTER WHT+signs (for V un-rotation)
+            if (direction == 1 && scale_inv != NULL) {
+                val *= scale_inv[i % group_size];
+            }
+            out[i] = val;
+        }
+    }
+
+    // Copy tail elements unchanged (identity pass-through)
+    if (tail_size > 0 && ith == 0) {
+        const int64_t tail_offset = groups_per_head * group_size;
+        for (int64_t h = 0; h < n_heads; h++) {
+            const int64_t base = h * head_dim + tail_offset;
+            memcpy(dst_data + base, src_data + base, tail_size * sizeof(float));
+        }
+    }
+}
+
+void ggml_compute_forward_turbo_wht(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32: ggml_compute_forward_turbo_wht_f32(params, dst); break;
+        default: GGML_ABORT("fatal error");
     }
 }
 

@@ -68,6 +68,8 @@ const std::vector<std::string> type_names = {
     "mxfp4",
     "nvfp4",
     "bf16",
+    "turbo3_0",
+    "tq4_1s",
 };
 
 enum MatMulIdType {
@@ -563,6 +565,11 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         if (tname == "bf16") {
             continue;
         }
+        // TQ4_1S uses a specialized mul_mat_vec shader for small N and
+        // the dequant+f16 matmul fallback for large N. No dedicated mul_mm needed.
+        if (tname == "tq4_1s") {
+            continue;
+        }
 
         std::string data_a_key = "DATA_A_" + to_uppercase(tname);
         // For unaligned, load one at a time for f32/f16, or two at a time for quants
@@ -641,15 +648,41 @@ void process_shaders() {
                 fa_base_dict["ACC_TYPE_MAX"] = "float16_t(65504.0)";
             }
 
-            if (fp16) {
+            for (const auto& tname : type_names) {
+                if (tname == "bf16") continue;
+                // TQ4_1S is a weight-only format; flash attention isn't defined for it.
+                if (tname == "tq4_1s") continue;
+
+                if (fp16) {
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
                 string_to_spv("flash_attn_f32_f16", "flash_attn_cm2.comp",
                     merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, true, f16acc);
 #endif
-
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
-                string_to_spv("flash_attn_f32_f16", "flash_attn_cm1.comp",
-                    merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}), fp16, true, false, f16acc);
+                if (tname == "f16") {
+                    string_to_spv("flash_attn_f32_f16_" + tname, "flash_attn_cm1.comp",
+                        merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}), fp16, true, false, f16acc);
+                } else if (tname == "q4_0" || tname == "q4_1" || tname == "q5_0" || tname == "q5_1" || tname == "iq4_nl" || tname == "q8_0" || tname == "f32" || tname == "turbo3_0") {
+                    std::string data_a_key = "DATA_A_" + to_uppercase(tname);
+                    string_to_spv("flash_attn_f32_f16_" + tname, "flash_attn_cm1.comp",
+                        merge_maps(fa_base_dict, {{data_a_key, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"BLOCK_SIZE", "QUANT_K_"+to_uppercase(tname)}, {"COOPMAT", "1"}}), fp16, true, false, f16acc);
+                }
+#endif
+                }
+
+                if (tname == "f16") {
+                    string_to_spv("flash_attn_f32_f16_" + tname, "flash_attn.comp",
+                        merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, false, f16acc);
+                } else if (tname == "q4_0" || tname == "q4_1" || tname == "q5_0" || tname == "q5_1" || tname == "iq4_nl" || tname == "q8_0" || tname == "f32" || tname == "turbo3_0") {
+                    std::string data_a_key = "DATA_A_" + to_uppercase(tname);
+                    string_to_spv("flash_attn_f32_f16_" + tname, "flash_attn.comp",
+                        merge_maps(fa_base_dict, {{data_a_key, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"BLOCK_SIZE", "QUANT_K_"+to_uppercase(tname) }}), fp16, false, false, f16acc);
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+                    // MMQ path has no turbo3_0 code path; skip.
+                    if (tname != "f32" && tname != "turbo3_0") {
+                        string_to_spv("flash_attn_f32_f16_" + tname, "flash_attn.comp",
+                            merge_maps(fa_base_dict, {{data_a_key, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"BLOCK_SIZE", "QUANT_K_"+to_uppercase(tname) }, {"MMQ", "1"}}), fp16, false, false, f16acc, "_int8");
+                    }
 #endif
             }
 
@@ -667,7 +700,7 @@ void process_shaders() {
     for (const auto& tname : type_names) {
         // mul mat vec
         std::string data_a_key = "DATA_A_" + to_uppercase(tname);
-        std::string shader = (string_ends_with(tname, "_k") || string_starts_with(tname, "iq1_") || string_starts_with(tname, "iq2_") || string_starts_with(tname, "iq3_")) ? "mul_mat_vec_" + tname + ".comp" : "mul_mat_vec.comp";
+        std::string shader = (string_ends_with(tname, "_k") || string_starts_with(tname, "iq1_") || string_starts_with(tname, "iq2_") || string_starts_with(tname, "iq3_") || tname == "tq4_1s") ? "mul_mat_vec_" + tname + ".comp" : "mul_mat_vec.comp";
 
         string_to_spv("mul_mat_vec_" + tname + "_f32_f32", shader, merge_maps(base_dict, {{data_a_key, "1"}, {"B_TYPE", "float"}, {"B_TYPEV2", "vec2"}, {"B_TYPEV4", "vec4"}, {"D_TYPE", "float"}}));
         string_to_spv("mul_mat_vec_" + tname + "_f16_f32", shader, merge_maps(base_dict, {{data_a_key, "1"}, {"B_TYPE", "float16_t"}, {"B_TYPEV2", "f16vec2"}, {"B_TYPEV4", "f16vec4"}, {"D_TYPE", "float"}}));
@@ -748,11 +781,18 @@ void process_shaders() {
         string_to_spv("cpy_f32_" + t, "copy_to_quant.comp", {{"DATA_A_" + to_uppercase(t), "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
         string_to_spv("cpy_" + t + "_f32", "copy_from_quant.comp", {{"DATA_A_" + to_uppercase(t), "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
     }
+    // turbo3_0 copy-from-quant only; copy-to-quant (cpy_f32_turbo3_0) omitted because the non-SET_ROWS quantize() path lacks the WHT transform
+    string_to_spv("cpy_turbo3_0_f32", "copy_from_quant.comp", {{"DATA_A_TURBO3_0", "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+    // tq4_1s copy-from-quant only; copy-to-quant requires WHT forward (handled in SET_ROWS path)
+    string_to_spv("cpy_tq4_1s_f32", "copy_from_quant.comp", {{"DATA_A_TQ4_1S", "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
 
-    for (std::string t : {"f32", "f16", "bf16", "q1_0", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "iq4_nl"}) {
+    for (std::string t : {"f32", "f16", "bf16", "q1_0", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "iq4_nl", "turbo2_0", "turbo3_0", "turbo4_0", "tq4_1s"}) {
         string_to_spv("set_rows_" + t + "_i32", "copy_to_quant.comp", {{"SET_ROWS", "1"}, {"DATA_A_" + to_uppercase(t), "1"}, {"B_TYPE", "uint"}, {"B_SIZE", "32"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
         string_to_spv("set_rows_" + t + "_i64", "copy_to_quant.comp", {{"SET_ROWS", "1"}, {"DATA_A_" + to_uppercase(t), "1"}, {"B_TYPE", "uvec2"}, {"B_SIZE", "64"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
     }
+
+    // TurboQuant WHT operation
+    string_to_spv("turbo_wht", "turbo_wht.comp", {});
 
     auto get_type_str = [](bool f16) {
         return f16 ? "float16_t" : "float";

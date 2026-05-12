@@ -1,0 +1,10 @@
+{
+  "model": "/tmp/qwen2.5-7b-instruct-q4_0.gguf",
+  "bench_args": "-p 512 -n 128 --cache-type-k turbo3 --cache-type-v turbo3",
+  "tg128": 236.0,
+  "pp512": 15000,
+  "ppl": 0,
+  "ppl_threshold": 0.1,
+  "ppl_file": "/mnt/ai/data/wikitext-2-raw/wiki.test.raw",
+  "target_file": "ggml/src/ggml-cuda/fattn-vec.cuh"
+}

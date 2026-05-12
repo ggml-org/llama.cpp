@@ -43,6 +43,12 @@
 #include <string.h>
 #include <fcntl.h>
 #include <io.h>
+#ifndef fileno
+#define fileno _fileno
+#endif
+#ifndef isatty
+#define isatty _isatty
+#endif
 #else
 #include <sys/ioctl.h>
 #include <sys/stat.h>

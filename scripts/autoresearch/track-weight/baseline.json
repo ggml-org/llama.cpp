@@ -1,0 +1,15 @@
+{
+  "model": "/tmp/qwen2.5-7b-instruct-tq4_1s.gguf",
+  "bench_args": "-p 0 -n 128",
+  "tg128": 69.2,
+  "ppl": 7.599,
+  "ppl_threshold": 0.1,
+  "ppl_file": "/mnt/ai/data/wikitext-2-raw/wiki.test.raw",
+  "target_file": "ggml/src/ggml-cuda/mmvq-tq.cu",
+  "no_convert": true,
+  "coherence_prompts": [
+    {"prompt": "What is the capital of France? One word.", "expect": "Paris"},
+    {"prompt": "What is 2+2? Just the number.", "expect": "4"},
+    {"prompt": "Who wrote Romeo and Juliet? One name.", "expect": "Shakespeare"}
+  ]
+}
