@@ -1,8 +1,8 @@
 #version 450
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
-#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_EXT_integer_dot_product : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
 
 #define MMQ
 #define B_TYPE block_q8_1_x4
@@ -25,7 +25,7 @@ uint a_offset, b_offset, d_offset;
 
 int32_t cache_b_qs[K_PER_ITER / 4];
 
-#if defined(DATA_A_Q4_0)
+#if defined(DATA_A_Q4_0) && defined(GL_EXT_shader_explicit_arithmetic_types_float16)
 #define CACHE_VEC_TYPE f16vec2
 #else
 #define CACHE_VEC_TYPE vec2
