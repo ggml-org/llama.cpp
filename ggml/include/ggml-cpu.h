@@ -28,22 +28,18 @@ extern "C" {
         void * profiling_context;
 
         // callback for recording a profile record from C code (set by backend when profiling)
-        // params: context, type, name, split_id, start_ns, end_ns, bytes, extra, ne_src0[4], ne_src1[4], ne_src2[4], type_src0, type_src1, type_src2, sub_op
-        void (*profiling_record_fn)(void *        context,
-                                    int           type,
-                                    const char *  name,
-                                    int           split_id,
-                                    uint64_t      start_ns,
-                                    uint64_t      end_ns,
-                                    uint64_t      bytes,
-                                    const char *  extra,
-                                    const int64_t ne_src0[4],
-                                    const int64_t ne_src1[4],
-                                    const int64_t ne_src2[4],
-                                    int           type_src0,
-                                    int           type_src1,
-                                    int           type_src2,
-                                    int           sub_op);
+        // The callback receives the full tensor node so it can extract all sources, types,
+        // op_params, and sub-op information directly.
+        // params: context, type, name, split_id, start_ns, end_ns, bytes, extra, node
+        void (*profiling_record_fn)(void *                     context,
+                                    int                        type,
+                                    const char *               name,
+                                    int                        split_id,
+                                    uint64_t                   start_ns,
+                                    uint64_t                   end_ns,
+                                    uint64_t                   bytes,
+                                    const char *               extra,
+                                    const struct ggml_tensor * node);
     };
 
     // numa strategies

@@ -134,7 +134,10 @@ def _compute_output_ne(op_id: int, ne0: list, ne1: list, ne2: list) -> list | No
     if op_id in (46, 25):  # SOFT_MAX, RMS_NORM
         return list(ne0)
     if op_id == 73:  # FLASH_ATTN_EXT
-        return [ne1[1], ne1[1], ne0[2], ne0[3]]
+        # Per ggml_flash_attn_ext: result.ne = { v->ne[0], q->ne[2], q->ne[1], q->ne[3] }
+        # When V was not captured (legacy records), fall back to hsk == hsv (q->ne[0]).
+        hsv = ne2[0] if (ne2 and ne2[0] > 0) else ne0[0]
+        return [hsv, ne0[2], ne0[1], ne0[3]]
     if op_id == 40:  # GET_ROWS
         return [ne0[0], ne1[1], ne1[2], ne1[3]]
     if op_id == 41:  # GET_ROWS_BACK
@@ -151,6 +154,10 @@ def _compute_output_ne(op_id: int, ne0: list, ne1: list, ne2: list) -> list | No
     return None
 
 
+GGML_MAX_SRC = 10
+GGML_MAX_OP_PARAMS_I32 = 16  # 64 bytes / sizeof(int32)
+
+
 @dataclass
 class ProfileRecord:
     type: int
@@ -161,13 +168,41 @@ class ProfileRecord:
     duration_ns: int
     bytes: int
     extra: Optional[str]
-    ne_src0: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
-    ne_src1: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
-    ne_src2: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
-    type_src0: int = -1
-    type_src1: int = -1
-    type_src2: int = -1
+    # Output tensor info
+    ne: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
+    out_type: int = -1
+    # Source tensors (variable length, up to GGML_MAX_SRC)
+    ne_src: list[list[int]] = field(default_factory=list)
+    nb_src: list[list[int]] = field(default_factory=list)
+    type_src: list[int] = field(default_factory=list)
+    # Operation parameters (16 int32, raw from ggml_tensor::op_params)
+    op_params: list[int] = field(default_factory=lambda: [0] * GGML_MAX_OP_PARAMS_I32)
     sub_op: int = -1
+
+    # --- Convenience accessors mirroring the old API ---
+    @property
+    def ne_src0(self) -> list[int]:
+        return self.ne_src[0] if len(self.ne_src) > 0 else [0, 0, 0, 0]
+
+    @property
+    def ne_src1(self) -> list[int]:
+        return self.ne_src[1] if len(self.ne_src) > 1 else [0, 0, 0, 0]
+
+    @property
+    def ne_src2(self) -> list[int]:
+        return self.ne_src[2] if len(self.ne_src) > 2 else [0, 0, 0, 0]
+
+    @property
+    def type_src0(self) -> int:
+        return self.type_src[0] if len(self.type_src) > 0 else -1
+
+    @property
+    def type_src1(self) -> int:
+        return self.type_src[1] if len(self.type_src) > 1 else -1
+
+    @property
+    def type_src2(self) -> int:
+        return self.type_src[2] if len(self.type_src) > 2 else -1
 
     @property
     def sub_op_name(self) -> str:
@@ -209,9 +244,7 @@ class ProfileRecord:
     def shape_str(self) -> str:
         """Human-readable tensor shapes, e.g. '[4096, 4096] x [4096, 1] x [8, 1]'."""
         parts = []
-        for ne, gt in [(self.ne_src0, self.type_src0),
-                        (self.ne_src1, self.type_src1),
-                        (self.ne_src2, self.type_src2)]:
+        for ne, gt in zip(self.ne_src, self.type_src):
             s = self._fmt_ne(ne)
             if s:
                 type_name = GGML_TYPE_NAMES.get(gt, None)
@@ -233,12 +266,13 @@ class ProfileRecord:
             "duration_ns": self.duration_ns,
             "bytes": self.bytes,
             "extra": self.extra,
-            "ne_src0": self.ne_src0,
-            "ne_src1": self.ne_src1,
-            "ne_src2": self.ne_src2,
-            "type_src0": self.type_src0,
-            "type_src1": self.type_src1,
-            "type_src2": self.type_src2,
+            "ne": self.ne,
+            "out_type": self.out_type,
+            "n_src": len(self.ne_src),
+            "ne_src": self.ne_src,
+            "nb_src": self.nb_src,
+            "type_src": self.type_src,
+            "op_params": self.op_params,
             "sub_op": self.sub_op,
         }
 
@@ -310,16 +344,69 @@ class ProfileData:
         records = []
         def _pad_ne(v):
             if isinstance(v, list) and len(v) < 4:
-                return v + [0] * (4 - len(v))
+                return list(v) + [0] * (4 - len(v))
             if not isinstance(v, list):
                 return [0, 0, 0, 0]
-            return v
+            return list(v)
+
+        def _load_sources(r) -> tuple[list[list[int]], list[list[int]], list[int]]:
+            """Read source tensor arrays, supporting both v3+ (arrays) and v2 (ne_src0/1/2) JSON."""
+            ne_list_raw = r.get("ne_src")
+            if isinstance(ne_list_raw, list):
+                # v3+ format
+                ne_src = [_pad_ne(x) for x in ne_list_raw]
+                nb_raw = r.get("nb_src", [])
+                if isinstance(nb_raw, list):
+                    nb_src = [_pad_ne(x) for x in nb_raw]
+                else:
+                    nb_src = []
+                while len(nb_src) < len(ne_src):
+                    nb_src.append([0, 0, 0, 0])
+                type_raw = r.get("type_src", [])
+                if isinstance(type_raw, list):
+                    type_src = [int(t) for t in type_raw]
+                else:
+                    type_src = []
+                while len(type_src) < len(ne_src):
+                    type_src.append(-1)
+                return ne_src, nb_src[:len(ne_src)], type_src[:len(ne_src)]
+
+            # Legacy v2 fallback
+            ne_src: list[list[int]] = []
+            type_src: list[int] = []
+            for i in range(3):
+                key_ne = f"ne_src{i}"
+                key_type = f"type_src{i}"
+                ne_v = r.get(key_ne)
+                if ne_v is None and i == 0:
+                    ne_v = r.get("ne")
+                if ne_v is None:
+                    break
+                ne_padded = _pad_ne(ne_v)
+                if all(v == 0 for v in ne_padded) and i > 0:
+                    break
+                ne_src.append(ne_padded)
+                type_src.append(int(r.get(key_type, -1)))
+            nb_src = [[0, 0, 0, 0] for _ in ne_src]
+            return ne_src, nb_src, type_src
+
+        def _load_op_params(r) -> list[int]:
+            raw = r.get("op_params")
+            if isinstance(raw, list):
+                ops = [int(x) for x in raw[:GGML_MAX_OP_PARAMS_I32]]
+                while len(ops) < GGML_MAX_OP_PARAMS_I32:
+                    ops.append(0)
+                return ops
+            return [0] * GGML_MAX_OP_PARAMS_I32
 
         for r in data.get("records", []):
-            # Support both old "ne" format and new "ne_src0"/"ne_src1" format
-            ne_src0 = _pad_ne(r.get("ne_src0", r.get("ne", [0, 0, 0, 0])))
-            ne_src1 = _pad_ne(r.get("ne_src1", [0, 0, 0, 0]))
-            ne_src2 = _pad_ne(r.get("ne_src2", [0, 0, 0, 0]))
+            ne_src, nb_src, type_src = _load_sources(r)
+
+            # v3+ records have a real "ne" (output shape).  Legacy v2 records did not —
+            # leave zero so export_graph_ops falls back to op-specific shape inference.
+            ne_raw = r.get("ne") if "ne_src" in r else None
+            ne_out = _pad_ne(ne_raw) if isinstance(ne_raw, list) and ne_raw else [0, 0, 0, 0]
+
             records.append(ProfileRecord(
                 type=r.get("type", 0),
                 name=r.get("name", "unknown"),
@@ -329,13 +416,13 @@ class ProfileData:
                 duration_ns=r.get("duration_ns", 0),
                 bytes=r.get("bytes", 0),
                 extra=r.get("extra"),
-                ne_src0=ne_src0,
-                ne_src1=ne_src1,
-                ne_src2=ne_src2,
-                type_src0=r.get("type_src0", -1),
-                type_src1=r.get("type_src1", -1),
-                type_src2=r.get("type_src2", -1),
-                sub_op=r.get("sub_op", -1),
+                ne=ne_out,
+                out_type=int(r.get("out_type", -1)),
+                ne_src=ne_src,
+                nb_src=nb_src,
+                type_src=type_src,
+                op_params=_load_op_params(r),
+                sub_op=int(r.get("sub_op", -1)),
             ))
 
         backends_raw = data.get("backends", [])
@@ -566,7 +653,12 @@ class ProfileData:
         print(f"Open chrome://tracing in Chrome/Edge and load this file.")
 
     def export_graph_ops(self, filepath: str | Path) -> None:
-        """Export operations in export-graph-ops format for test-backend-ops --test-file."""
+        """Export operations in export-graph-ops format for test-backend-ops --test-file.
+
+        Output line layout matches tests/export-graph-ops.cpp:
+            <op> <out_type> <ne[0..3]> <n_op_params> <op_params...> <n_sources>
+            (<src_type> <src_ne[0..3]> <src_nb[0..3]>)*  <name|-> [<backend>]
+        """
         seen: set[tuple] = set()
         lines: list[str] = []
 
@@ -585,41 +677,49 @@ class ProfileData:
             if op_id in _EXPORT_SKIP_OPS:
                 continue
 
-            ne0 = rec.ne_src0
-            ne1 = rec.ne_src1
-            ne2 = rec.ne_src2
+            # --- Build the source list directly from the captured arrays ---
+            sources: list[tuple[int, list[int], list[int]]] = []
+            for i in range(len(rec.ne_src)):
+                ne_i = rec.ne_src[i]
+                if not any(v != 0 for v in ne_i):
+                    continue
+                src_type = rec.type_src[i] if i < len(rec.type_src) and rec.type_src[i] >= 0 else 0
+                nb_i = rec.nb_src[i] if i < len(rec.nb_src) else [0, 0, 0, 0]
+                sources.append((src_type, list(ne_i), list(nb_i)))
 
-            type_src0 = rec.type_src0 if rec.type_src0 >= 0 else 0
-            type_src1 = rec.type_src1 if rec.type_src1 >= 0 else 0
-            type_src2 = rec.type_src2 if rec.type_src2 >= 0 else 0
+            # MUL_MAT_ID needs the ids tensor as src[2]; synthesize one if missing.
+            if op_id == 30 and len(sources) == 2:
+                sources.append((24, [sources[1][1][1], 1, 1, 1], [0, 0, 0, 0]))  # I32
 
-            sources: list[tuple[int, list, list]] = []
-            if any(v != 0 for v in ne0):
-                sources.append((type_src0, ne0, [0, 0, 0, 0]))
-            if any(v != 0 for v in ne1):
-                sources.append((type_src1, ne1, [0, 0, 0, 0]))
-
-            if op_id == 30:  # MUL_MAT_ID: ensure rows tensor (src2) is present
-                if len(sources) < 3 and any(v != 0 for v in ne2):
-                    sources.append((type_src2, ne2, [0, 0, 0, 0]))
-                elif len(sources) < 3 and len(sources) >= 2:
-                    sources.append((24, [sources[1][1][1], 1, 1, 1], [0, 0, 0, 0]))  # I32
-            elif any(v != 0 for v in ne2):
-                sources.append((type_src2, ne2, [0, 0, 0, 0]))
-
-            src_ne0 = sources[0][1] if len(sources) > 0 else [0, 0, 0, 0]
-            src_ne1 = sources[1][1] if len(sources) > 1 else [0, 0, 0, 0]
-            src_ne2 = sources[2][1] if len(sources) > 2 else [0, 0, 0, 0]
-
-            ne_out = _compute_output_ne(op_id, src_ne0, src_ne1, src_ne2)
-            if ne_out is None:
+            if not sources:
                 continue
 
-            op_params: list[int] = []
-            if op_id == 30 and len(sources) >= 2:  # MUL_MAT_ID
-                op_params.append(sources[1][1][1])
-            elif op_id in (86, 95) and rec.sub_op >= 0:  # UNARY, GLU
-                op_params.append(rec.sub_op)
+            # --- Output shape ---
+            if any(v != 0 for v in rec.ne):
+                ne_out = list(rec.ne)
+            else:
+                # Legacy records without captured output ne: fall back to op-specific formula.
+                src_ne0 = sources[0][1] if len(sources) > 0 else [0, 0, 0, 0]
+                src_ne1 = sources[1][1] if len(sources) > 1 else [0, 0, 0, 0]
+                src_ne2 = sources[2][1] if len(sources) > 2 else [0, 0, 0, 0]
+                computed = _compute_output_ne(op_id, src_ne0, src_ne1, src_ne2)
+                if computed is None:
+                    continue
+                ne_out = computed
+
+            # --- Output type ---
+            out_type = rec.out_type if rec.out_type >= 0 else 0
+
+            # --- op_params: emit the full 16-int32 block when captured. ---
+            if any(p != 0 for p in rec.op_params):
+                op_params = list(rec.op_params)
+            else:
+                # Legacy fallback synthesis (best-effort for v2 JSON files).
+                op_params = []
+                if op_id == 30 and len(sources) >= 2:  # MUL_MAT_ID
+                    op_params.append(sources[1][1][1])
+                elif op_id in (86, 95) and rec.sub_op >= 0:  # UNARY, GLU
+                    op_params.append(rec.sub_op)
 
             bname = ""
             if rec.backend_id in backend_by_id:
@@ -627,24 +727,26 @@ class ProfileData:
                 if not bname or bname == "unknown":
                     bname = backend_by_id[rec.backend_id].get("name", "")
 
-            key = (op_id, tuple(ne_out), tuple(op_params), tuple((s[0], tuple(s[1])) for s in sources), bname)
+            key = (op_id, out_type, tuple(ne_out), tuple(op_params),
+                   tuple((s[0], tuple(s[1]), tuple(s[2])) for s in sources), bname)
             if key in seen:
                 continue
             seen.add(key)
 
-            line = f"{op_id} 0 {ne_out[0]} {ne_out[1]} {ne_out[2]} {ne_out[3]} "
-            line += f"{len(op_params)}"
-            for p in op_params:
-                line += f" {p}"
-            line += f" {len(sources)}"
+            parts: list[str] = [str(op_id), str(out_type),
+                                str(ne_out[0]), str(ne_out[1]), str(ne_out[2]), str(ne_out[3])]
+            parts.append(str(len(op_params)))
+            parts.extend(str(p) for p in op_params)
+            parts.append(str(len(sources)))
             for src_type, src_ne, src_nb in sources:
-                line += f" {src_type} {src_ne[0]} {src_ne[1]} {src_ne[2]} {src_ne[3]} {src_nb[0]} {src_nb[1]} {src_nb[2]} {src_nb[3]}"
-            name = rec.name if rec.name else "-"
-            line += f" {name}"
+                parts.append(str(src_type))
+                parts.extend(str(v) for v in src_ne)
+                parts.extend(str(v) for v in src_nb)
+            parts.append(rec.name if rec.name else "-")
             if bname:
-                line += f" {bname}"
-            line += "\n"
-            lines.append(line)
+                parts.append(bname)
+
+            lines.append(" ".join(parts) + "\n")
 
         with open(filepath, "w") as f:
             f.writelines(lines)
