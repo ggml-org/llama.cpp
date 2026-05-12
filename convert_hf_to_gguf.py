@@ -1570,6 +1570,9 @@ class TextModel(ModelBase):
         if chkhsh == "862f827721df956049dff5ca81a57f29e575280bc622e290d3bf4e35eca29015":
             # ref: https://huggingface.co/codefuse-ai/F2LLM-v2-4B
             res = "f2llmv2"
+        if chkhsh == "62f6fb0a6fd5098caeabb19b07a5c1099cafc8b9c40eab6ea89ece4ec02fbc57":
+            # ref: https://huggingface.co/sarvamai/sarvam-30b
+            res = "sarvam-moe"
 
         if res is None:
             logger.warning("\n")
@@ -2173,7 +2176,8 @@ class MmprojModel(ModelBase):
             text_config = {
                 k: v for k, v in self.hparams.items() if k not in ["vision_encoder", "audio_encoder"]
             }
-            self.n_embd_text = text_config.get("hidden_dim", 0)
+            # mistral native params.json: "dim" is the text hidden size ("hidden_dim" is the FFN intermediate size)
+            self.n_embd_text = text_config.get("dim", 0)
 
         assert self.n_embd_text > 0, "n_embd not found in hparams"
 
@@ -3134,6 +3138,11 @@ class LlavaVisionModel(MmprojModel):
             assert self.hparams["norm_eps"] is not None, "norm_eps not found in params.json"
             if self.use_break_tok:
                 self.img_break_tok_id = self.find_vparam(["image_break_token_id"])
+
+                # params.json may ship -1 placeholders (Mistral Medium 3.5)
+                # resolve the real id from the bundled tokenizer in that case
+                if self.img_break_tok_id < 0:
+                    self.img_break_tok_id = self.get_mistral_token_id("[IMG_BREAK]")
         else:
             raise ValueError(f"Unsupported model type: {self.hparams['model_type']}")
         logger.info(f"Image break token id: {self.img_break_tok_id}")
@@ -3152,6 +3161,24 @@ class LlavaVisionModel(MmprojModel):
                 if token_data["content"] == token:
                     return int(token_data["id"])
         raise ValueError(f"Token '{token}' not found in tokenizer config.")
+
+    def get_mistral_token_id(self, token: str) -> int:
+        # mistral native format ships tekken.json or a versioned spm tokenizer
+        tekken_file = self.dir_model / "tekken.json"
+        if tekken_file.is_file():
+            with open(tekken_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for entry in data.get("special_tokens", []):
+                if entry.get("token_str") == token:
+                    return int(entry["rank"])
+        tokenizer_json_file = self.dir_model / "tokenizer.json"
+        if tokenizer_json_file.is_file():
+            with open(tokenizer_json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for entry in data.get("added_tokens", []):
+                if entry.get("content") == token:
+                    return int(entry["id"])
+        raise ValueError(f"Token '{token}' not found in mistral tokenizer files.")
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -11589,6 +11616,34 @@ class BailingMoeV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("SarvamMoEForCausalLM", "modeling_sarvam_moe.SarvamMoEForCausalLM")
+class SarvamMoEModel(BailingMoeV2Model):
+    model_arch = gguf.MODEL_ARCH.BAILINGMOE2
+    # Sarvam-MoE shares the BailingMoeV2 architecture; only differences:
+    #  - full rotary (no partial_rotary_factor)
+    #  - expert bias is zero-mean normalized at load time
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if (rope_dim := hparams.get("head_dim")) is None:
+            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+        # Override the partial-rotary value written by BailingMoeV2 with the full rotary dim
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.endswith(".expert_bias"):
+            # Sarvam normalizes expert bias to zero mean
+            inner = gen
+
+            def gen():
+                t = inner()
+                return t - t.mean()
+        return super().filter_tensors((name, gen))
 
 
 @ModelBase.register("GroveMoeForCausalLM", "modeling_grove_moe.GroveMoeForCausalLM")

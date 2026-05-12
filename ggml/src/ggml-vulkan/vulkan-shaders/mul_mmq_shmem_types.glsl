@@ -1,4 +1,13 @@
-#if defined(DATA_A_Q4_0)
+#if defined(FA_MMQ_MIXED)
+// Mixed-K flash attention MMQ: superset cache that fits Q4_0/Q4_1/Q5_0/Q5_1/Q8_0.
+// Q4_*/Q5_* only use qs[0..3] and (for Q5_*) qh. Q8_0 uses qs[0..7]. Single-scale
+// types (Q4_0/Q5_0/Q8_0) leave dm.y unused.
+struct block_a_cache {
+    int32_t qs[8];
+    uint32_t qh;
+    FLOAT_TYPEV2 dm;
+};
+#elif defined(DATA_A_Q4_0)
 #define QUANT_R_MMQ 2
 struct block_a_cache {
     uint32_t qs[16/4];

@@ -1161,12 +1161,11 @@ bool parse_header(const char *beg, const char *end, T fn) {
 
     if (!detail::fields::is_field_value(val)) { return false; }
 
-    if (case_ignore::equal(key, "Location") ||
-        case_ignore::equal(key, "Referer")) {
-      fn(key, val);
-    } else {
-      fn(key, decode_path_component(val));
-    }
+    // RFC 9110 §5.5: header field values are opaque octets and MUST NOT be
+    // percent-decoded by the recipient. Applications that need to interpret a
+    // value as a URI component should call httplib::decode_uri_component()
+    // (or decode_path_component()) explicitly.
+    fn(key, val);
 
     return true;
   }
@@ -6192,9 +6191,29 @@ ThreadPool::ThreadPool(size_t n, size_t max_n, size_t mqr)
 #endif
   max_thread_count_ = max_n == 0 ? n : max_n;
   threads_.reserve(base_thread_count_);
-  for (size_t i = 0; i < base_thread_count_; i++) {
-    threads_.emplace_back(std::thread([this]() { worker(false); }));
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+  try {
+#endif
+    for (size_t i = 0; i < base_thread_count_; i++) {
+      threads_.emplace_back(std::thread([this]() { worker(false); }));
+    }
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+  } catch (...) {
+    // If thread creation fails partway (e.g., pthread_create returns EAGAIN),
+    // signal the workers we already spawned to exit and join them so the
+    // vector destructor does not see joinable threads (which would call
+    // std::terminate). Then rethrow so the caller learns of the failure.
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      shutdown_ = true;
+    }
+    cond_.notify_all();
+    for (auto &t : threads_) {
+      if (t.joinable()) { t.join(); }
+    }
+    throw;
   }
+#endif
 }
 
 bool ThreadPool::enqueue(std::function<void()> fn) {
@@ -8980,10 +8999,22 @@ ssize_t ChunkedDecoder::read_payload(char *buf, size_t len,
     stream_line_reader lr(strm, line_buf, sizeof(line_buf));
     if (!lr.getline()) { return -1; }
 
-    char *endptr = nullptr;
-    unsigned long chunk_len = std::strtoul(lr.ptr(), &endptr, 16);
-    if (endptr == lr.ptr()) { return -1; }
-    if (chunk_len == ULONG_MAX) { return -1; }
+    // RFC 9112 §7.1: chunk-size = 1*HEXDIG
+    const char *p = lr.ptr();
+    int v = 0;
+    if (!is_hex(*p, v)) { return -1; }
+
+    size_t chunk_len = 0;
+    constexpr size_t chunk_len_max = (std::numeric_limits<size_t>::max)();
+    for (; is_hex(*p, v); ++p) {
+      if (chunk_len > (chunk_len_max >> 4)) { return -1; }
+      chunk_len = (chunk_len << 4) | static_cast<size_t>(v);
+    }
+
+    while (is_space_or_tab(*p)) {
+      ++p;
+    }
+    if (*p != '\0' && *p != ';' && *p != '\r' && *p != '\n') { return -1; }
 
     if (chunk_len == 0) {
       chunk_remaining = 0;
@@ -8993,7 +9024,7 @@ ssize_t ChunkedDecoder::read_payload(char *buf, size_t len,
       return 0;
     }
 
-    chunk_remaining = static_cast<size_t>(chunk_len);
+    chunk_remaining = chunk_len;
     last_chunk_total = chunk_remaining;
     last_chunk_offset = 0;
   }
