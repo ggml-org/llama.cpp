@@ -407,6 +407,8 @@ struct ggml_backend_opencl_context {
 
     cl_bool non_uniform_workgroups;
     size_t  image_max_buffer_size;
+    size_t  image2d_max_width;
+    size_t  image2d_max_height;
 
     cl_context context;
     cl_command_queue queue;
@@ -419,6 +421,11 @@ struct ggml_backend_opencl_context {
     // prealloc buffers for src0 and src1
     ggml_cl_buffer prealloc_src0;
     ggml_cl_buffer prealloc_src1;
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+    ggml_cl_buffer prealloc_adreno_xmem_const;
+    bool adreno_xmem_gemm_enabled = false;
+#endif
 
     // prealloc buffers for MoE router table preprocess
     bool toggle_reorder = false;
@@ -538,6 +545,10 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mat_f16_f32;
     cl_kernel kernel_mul_mat_f16_f32_l4;
     cl_kernel kernel_mul_mat_f16_f32_tiled;
+    cl_kernel kernel_adreno_xmem_pack_src_f32;
+    cl_kernel kernel_adreno_xmem_prepack_weight_f16;
+    cl_kernel kernel_gemm_xmem_f16_f32_os8;
+    cl_kernel kernel_adreno_xmem_store_dst_f32;
     cl_kernel kernel_mul_mm_f16_f32_kqv;
     cl_kernel kernel_mul_mm_f16_f32_kq;
     cl_kernel kernel_mul_mat_q4_0_f32, kernel_mul_mat_q4_0_f32_v;
@@ -1553,6 +1564,32 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_tiled = clCreateKernel(backend_ctx->program_mul_mat_f16_f32_tiled, "mul_mat_f16_f32", &err), err));
         GGML_LOG_CONT(".");
     }
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+    // gemm_xmem_f16_f32_os8
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_xmem_f16_f32_os8.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_xmem_f16_f32_os8.cl");
+#endif
+        cl_program prog =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_adreno_xmem_pack_src_f32 =
+            clCreateKernel(prog, "adreno_xmem_pack_src_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_adreno_xmem_prepack_weight_f16 =
+            clCreateKernel(prog, "adreno_xmem_prepack_weight_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemm_xmem_f16_f32_os8 =
+            clCreateKernel(prog, "kernel_gemm_xmem_f16_f32_os8", &err), err));
+        CL_CHECK((backend_ctx->kernel_adreno_xmem_store_dst_f32 =
+            clCreateKernel(prog, "adreno_xmem_store_dst_f32", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+    }
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
     // mul_mm_f32_f32_l4_lm
     {
@@ -3473,6 +3510,10 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     clGetDeviceInfo(device, CL_DEVICE_IMAGE_MAX_BUFFER_SIZE, sizeof(size_t), &backend_ctx->image_max_buffer_size, NULL);
     GGML_LOG_INFO("ggml_opencl: device max image buffer size (pixels): %lu\n", backend_ctx->image_max_buffer_size);
 
+    clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof(size_t), &backend_ctx->image2d_max_width, NULL);
+    clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof(size_t), &backend_ctx->image2d_max_height, NULL);
+    GGML_LOG_INFO("ggml_opencl: device max image2d size: %lu x %lu\n", backend_ctx->image2d_max_width, backend_ctx->image2d_max_height);
+
     clGetDeviceInfo(device, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), &backend_ctx->max_workgroup_size, NULL);
     GGML_LOG_INFO("ggml_opencl: device max workgroup size: %lu\n", backend_ctx->max_workgroup_size);
 
@@ -3509,6 +3550,16 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     GGML_LOG_INFO("ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)\n");
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+    backend_ctx->adreno_xmem_gemm_enabled = getenv("GGML_OPENCL_ADRENO_XMEM_GEMM") != nullptr &&
+                                             backend_ctx->gpu_family == GPU_FAMILY::ADRENO;
+    if (getenv("GGML_OPENCL_ADRENO_XMEM_GEMM") != nullptr) {
+        GGML_LOG_INFO("ggml_opencl: Adreno xmem F16xF32 GEMM %s\n",
+                      backend_ctx->adreno_xmem_gemm_enabled ?
+                      "enabled (temporary weight prepack)" : "requested but unsupported by this driver");
+    }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
     // determine whether to use large buffer for Adreno
@@ -9920,6 +9971,169 @@ static void ggml_cl_mul_mat_f16_f32_tiled(ggml_backend_t backend, const ggml_ten
     backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
 }
 
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+static bool ggml_cl_can_use_adreno_xmem_gemm_f16_f32(
+        const ggml_backend_opencl_context * backend_ctx,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        const ggml_tensor * dst) {
+    if (!backend_ctx->adreno_xmem_gemm_enabled) {
+        return false;
+    }
+    if (backend_ctx->gpu_family != GPU_FAMILY::ADRENO) {
+        return false;
+    }
+    if (src0->type != GGML_TYPE_F16 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+    if (src0->ne[2] != 1 || src0->ne[3] != 1 ||
+        src1->ne[2] != 1 || src1->ne[3] != 1 ||
+        dst->ne[2]  != 1 || dst->ne[3]  != 1) {
+        return false;
+    }
+    const int K = src0->ne[0];
+    const int M = src0->ne[1];
+    const int N = src1->ne[1];
+    if (src1->ne[0] != K || dst->ne[0] != M || dst->ne[1] != N) {
+        return false;
+    }
+    if (N <= 1 || M < 64 || N < 16 || K < 64) {
+        return false;
+    }
+    if ((K % 8) != 0) {
+        return false;
+    }
+    const int kpack = K / 4;
+    const int npack = CEIL_DIV(M, 4);
+    if (static_cast<size_t>(N) > backend_ctx->image2d_max_width ||
+        static_cast<size_t>(kpack) > backend_ctx->image2d_max_height) {
+        return false;
+    }
+    if (static_cast<size_t>(N) > backend_ctx->image2d_max_width ||
+        static_cast<size_t>(npack) > backend_ctx->image2d_max_height) {
+        return false;
+    }
+    return true;
+}
+
+static void ggml_cl_mul_mat_f16_f32_adreno_xmem(
+        ggml_backend_t backend,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        ggml_tensor * dst) {
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+
+    const cl_ulong offset0 = extra0->offset + src0->view_offs;
+    const cl_ulong offset1 = extra1->offset + src1->view_offs;
+    const cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    const int K = src0->ne[0];
+    const int M = src0->ne[1];
+    const int N = src1->ne[1];
+    const int kpack = K / 4;
+    const int npack = CEIL_DIV(M, 4);
+    const int os = 8;
+
+    const size_t xmem_bytes = 6144;
+    const size_t weight_bytes = static_cast<size_t>(kpack) * static_cast<size_t>(npack) * 4u * sizeof(cl_half4);
+
+    backend_ctx->prealloc_adreno_xmem_const.allocate(backend_ctx->context, xmem_bytes);
+
+    cl_int err = CL_SUCCESS;
+    cl_image_format fmt = {};
+    fmt.image_channel_order = CL_RGBA;
+    fmt.image_channel_data_type = CL_HALF_FLOAT;
+
+    cl_image_desc desc_src = {};
+    desc_src.image_type = CL_MEM_OBJECT_IMAGE2D;
+    desc_src.image_width = static_cast<size_t>(N);
+    desc_src.image_height = static_cast<size_t>(kpack);
+    cl_mem src_img = clCreateImage(backend_ctx->context, CL_MEM_READ_WRITE, &fmt, &desc_src, nullptr, &err);
+    CL_CHECK(err);
+
+    cl_image_desc desc_dst = {};
+    desc_dst.image_type = CL_MEM_OBJECT_IMAGE2D;
+    desc_dst.image_width = static_cast<size_t>(N);
+    desc_dst.image_height = static_cast<size_t>(npack);
+    cl_mem dst_img = clCreateImage(backend_ctx->context, CL_MEM_READ_WRITE, &fmt, &desc_dst, nullptr, &err);
+    CL_CHECK(err);
+
+    cl_mem weights = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, weight_bytes, nullptr, &err);
+    CL_CHECK(err);
+
+    cl_kernel prepack = backend_ctx->kernel_adreno_xmem_prepack_weight_f16;
+    CL_CHECK(clSetKernelArg(prepack, 0, sizeof(cl_mem),   &weights));
+    CL_CHECK(clSetKernelArg(prepack, 1, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(prepack, 2, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(prepack, 3, sizeof(int),      &K));
+    CL_CHECK(clSetKernelArg(prepack, 4, sizeof(int),      &M));
+    CL_CHECK(clSetKernelArg(prepack, 5, sizeof(int),      &kpack));
+    CL_CHECK(clSetKernelArg(prepack, 6, sizeof(int),      &npack));
+    CL_CHECK(clSetKernelArg(prepack, 7, sizeof(int),      &os));
+    size_t lws = 256;
+    size_t max_wg = backend_ctx->get_kernel_workgroup_size(prepack);
+    if (lws > max_wg) {
+        lws = max_wg;
+    }
+    size_t gws = CEIL_DIV(static_cast<size_t>(kpack) * static_cast<size_t>(npack), lws) * lws;
+    backend_ctx->enqueue_ndrange_kernel(prepack, 1, &gws, &lws, dst);
+
+    cl_kernel pack_src = backend_ctx->kernel_adreno_xmem_pack_src_f32;
+    CL_CHECK(clSetKernelArg(pack_src, 0, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(pack_src, 1, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(pack_src, 2, sizeof(cl_mem),   &src_img));
+    CL_CHECK(clSetKernelArg(pack_src, 3, sizeof(int),      &K));
+    CL_CHECK(clSetKernelArg(pack_src, 4, sizeof(int),      &N));
+    size_t pack_src_lws[2] = { 16, 16 };
+    size_t pack_src_gws[2] = {
+        CEIL_DIV(static_cast<size_t>(N), pack_src_lws[0])*pack_src_lws[0],
+        CEIL_DIV(static_cast<size_t>(kpack), pack_src_lws[1])*pack_src_lws[1]
+    };
+    backend_ctx->enqueue_ndrange_kernel(pack_src, 2, pack_src_gws, pack_src_lws, dst);
+
+    cl_kernel gemm = backend_ctx->kernel_gemm_xmem_f16_f32_os8;
+    CL_CHECK(clSetKernelArg(gemm, 0, sizeof(cl_mem), &weights));
+    CL_CHECK(clSetKernelArg(gemm, 1, sizeof(cl_mem), &backend_ctx->prealloc_adreno_xmem_const.buffer));
+    CL_CHECK(clSetKernelArg(gemm, 2, sizeof(cl_mem), &src_img));
+    CL_CHECK(clSetKernelArg(gemm, 3, sizeof(cl_mem), &dst_img));
+    CL_CHECK(clSetKernelArg(gemm, 4, sizeof(int),    &N));
+    CL_CHECK(clSetKernelArg(gemm, 5, sizeof(int),    &npack));
+    CL_CHECK(clSetKernelArg(gemm, 6, sizeof(int),    &kpack));
+    const size_t z_values = CEIL_DIV(static_cast<size_t>(npack), static_cast<size_t>(os));
+    size_t gemm_lws[3] = { 64, 1, 1 };
+    size_t gemm_gws[3] = {
+        z_values*gemm_lws[0],
+        CEIL_DIV(static_cast<size_t>(N), gemm_lws[0]),
+        1
+    };
+    backend_ctx->enqueue_ndrange_kernel(gemm, 3, gemm_gws, gemm_lws, dst);
+
+    cl_kernel store_dst = backend_ctx->kernel_adreno_xmem_store_dst_f32;
+    CL_CHECK(clSetKernelArg(store_dst, 0, sizeof(cl_mem),   &dst_img));
+    CL_CHECK(clSetKernelArg(store_dst, 1, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(store_dst, 2, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(store_dst, 3, sizeof(int),      &M));
+    CL_CHECK(clSetKernelArg(store_dst, 4, sizeof(int),      &N));
+    size_t store_lws[2] = { 16, 16 };
+    size_t store_gws[2] = {
+        CEIL_DIV(static_cast<size_t>(N), store_lws[0])*store_lws[0],
+        CEIL_DIV(static_cast<size_t>(npack), store_lws[1])*store_lws[1]
+    };
+    backend_ctx->enqueue_ndrange_kernel(store_dst, 2, store_gws, store_lws, dst);
+
+    CL_CHECK(clReleaseMemObject(weights));
+    CL_CHECK(clReleaseMemObject(dst_img));
+    CL_CHECK(clReleaseMemObject(src_img));
+}
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
+
 static void ggml_cl_conv_2d(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_TENSOR_BINARY_OP_LOCALS;
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
@@ -11681,6 +11895,12 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 return;
             }
             case GGML_TYPE_F16: {
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+                if (ggml_cl_can_use_adreno_xmem_gemm_f16_f32(backend_ctx, src0, src1, dst)) {
+                    ggml_cl_mul_mat_f16_f32_adreno_xmem(backend, src0, src1, dst);
+                    return;
+                }
+#endif
                 kernel = backend_ctx->kernel_mul_mm_f16_f32_l4_lm;
                 nth0 = 128; // calculated as (BM*BN)/(TM*TN)
 
