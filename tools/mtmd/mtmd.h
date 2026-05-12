@@ -244,6 +244,14 @@ MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
 // If this is not called, or NULL is supplied, everything is output on stderr.
 MTMD_API void mtmd_log_set(ggml_log_callback log_callback, void * user_data);
 
+// EXPERIMENTAL API to get mmproj's capabilities without initializing the full context
+// This is only intended to be used by llama-server, breaking changes is expected
+struct mtmd_caps {
+    bool inp_vision;
+    bool inp_audio;
+};
+MTMD_API struct mtmd_caps mtmd_get_cap_from_file(const char * mmproj_fname);
+
 /////////////////////////////////////////
 
 // test function, to be used in test-mtmd-c-api.c

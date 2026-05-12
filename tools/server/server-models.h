@@ -66,6 +66,7 @@ struct server_model_meta {
     json loaded_info; // info to be reflected via /v1/models endpoint
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
+    mtmd_caps multimodal; // multimodal capabilities
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -80,6 +81,7 @@ struct server_model_meta {
     }
 
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
+    void update_caps();
 };
 
 struct subprocess_s;

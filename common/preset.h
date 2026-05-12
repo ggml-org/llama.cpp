@@ -43,7 +43,8 @@ struct common_preset {
     void merge(const common_preset & other);
 
     // apply preset options to common_params
-    void apply_to_params(common_params & params) const;
+    // optionally specify handled_keys to only apply a subset of options (identified by their env), if empty, apply all options
+    void apply_to_params(common_params & params, const std::set<std::string> & handled_keys = std::set<std::string>()) const;
 };
 
 // interface for multiple presets in one file

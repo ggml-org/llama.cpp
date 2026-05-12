@@ -435,6 +435,25 @@ static bool parse_bool_value(const std::string & value) {
 // CLI argument parsing functions
 //
 
+void common_params_handle_models(common_params & params, llama_example curr_ex) {
+    auto res = common_params_handle_model(params.model, params.hf_token, params.offline);
+    if (params.no_mmproj) {
+        params.mmproj = {};
+    } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
+        // optionally, handle mmproj model when -hf is specified
+        params.mmproj = res.mmproj;
+    }
+    // only download mmproj if the current example is using it
+    for (const auto & ex : mmproj_examples) {
+        if (curr_ex == ex) {
+            common_params_handle_model(params.mmproj,    params.hf_token, params.offline);
+            break;
+        }
+    }
+    common_params_handle_model(params.speculative.draft.mparams, params.hf_token, params.offline);
+    common_params_handle_model(params.vocoder.model,             params.hf_token, params.offline);
+}
+
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
 
@@ -588,22 +607,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // handle model and download
     if (!skip_model_download) {
-        auto res = common_params_handle_model(params.model, params.hf_token, params.offline);
-        if (params.no_mmproj) {
-            params.mmproj = {};
-        } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
-            // optionally, handle mmproj model when -hf is specified
-            params.mmproj = res.mmproj;
-        }
-        // only download mmproj if the current example is using it
-        for (const auto & ex : mmproj_examples) {
-            if (ctx_arg.ex == ex) {
-                common_params_handle_model(params.mmproj,    params.hf_token, params.offline);
-                break;
-            }
-        }
-        common_params_handle_model(params.speculative.draft.mparams, params.hf_token, params.offline);
-        common_params_handle_model(params.vocoder.model,             params.hf_token, params.offline);
+        common_params_handle_models(params, ctx_arg.ex);
     }
 
     // model is required (except for server)
