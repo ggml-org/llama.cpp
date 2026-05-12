@@ -25,7 +25,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   android-ndk-snapdragon:
@@ -92,6 +92,7 @@ jobs:
     name: Test on QDC Device (${{ matrix.device }})
     needs: [android-ndk-snapdragon, linux-iot-snapdragon]
     runs-on: ubuntu-slim
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
