@@ -169,10 +169,10 @@ ggml_cgraph * clip_graph_mimovl::build() {
         cb(cur, "ffn_inp_normed", il);
 
         // SwiGLU MLP with biases
-        cur = build_ffn(cur, 
-            layer.ff_up_w,   layer.ff_up_b, 
-            layer.ff_gate_w, layer.ff_gate_b, 
-            layer.ff_down_w, layer.ff_down_b, 
+        cur = build_ffn(cur,
+            layer.ff_up_w,   layer.ff_up_b,
+            layer.ff_gate_w, layer.ff_gate_b,
+            layer.ff_down_w, layer.ff_down_b,
             hparams.ffn_op, il);
         cb(cur, "ffn_out", il);
 
