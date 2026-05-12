@@ -943,6 +943,10 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_GATED_DELTA_NET: {
+        if (ggml_openvino_get_device_name() == "GPU" && op->src[0]->ne[2] > 1) {
+            // CVS-186471
+            return true;
+        }
         if (op->src[0]->op == GGML_OP_PERMUTE) {
             return true;
         }
