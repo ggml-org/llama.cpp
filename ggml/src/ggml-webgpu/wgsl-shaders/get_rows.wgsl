@@ -652,6 +652,27 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 }
 #endif
 
+#ifdef MXFP4
+fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
+    let block_byte_base = (src_base + offset) * 17;
+    let eu8 = get_byte(load_u32_at_src(block_byte_base), 0);
+    let d = ldexp(1.0, i32(eu8) - 128);
+    for (var j: u32 = 0u; j < 4; j++) {
+        let q_byte_offset = block_byte_base + 1 + j * 4;
+        let q_packed = load_u32_at_src(q_byte_offset);
+        for (var k: u32 = 0; k < 4; k++) {
+            let q_byte = get_byte(q_packed, k);
+            let q_hi = f32(kvalues_mxfp4[(q_byte >> 4) & 0xF]) * d;
+            let q_lo = f32(kvalues_mxfp4[q_byte & 0xFu]) * d;
+            let dst_offset = dst_base + offset * 32 + j * 4 + k;
+            dst[dst_offset] = q_lo;
+            dst[dst_offset + 16u] = q_hi;
+        }
+    }
+}
+#endif
+
+
 @group(0) @binding(0)
 var<storage, read_write> src: array<SRC_TYPE>;
 

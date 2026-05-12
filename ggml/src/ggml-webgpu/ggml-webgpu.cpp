@@ -1411,8 +1411,6 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
                 case GGML_TYPE_Q3_K:
                 case GGML_TYPE_Q2_K:
                 case GGML_TYPE_Q1_0:
-                    use_fast = true;
-                    break;
                 case GGML_TYPE_IQ1_S:
                 case GGML_TYPE_IQ1_M:
                 case GGML_TYPE_IQ2_XXS:
@@ -1422,6 +1420,7 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
                 case GGML_TYPE_IQ3_S:
                 case GGML_TYPE_IQ4_NL:
                 case GGML_TYPE_IQ4_XS:
+                case GGML_TYPE_MXFP4:
                     use_fast = true;
                     break;
                 default:
@@ -2143,6 +2142,56 @@ static webgpu_encoded_op ggml_webgpu_binary_op(webgpu_context & ctx,
 
     uint32_t wg_x = CEIL_DIV(ne, decisions->wg_size);
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
+}
+
+static webgpu_encoded_op ggml_webgpu_add_id(webgpu_context & ctx,
+                                            ggml_tensor *    src0,
+                                            ggml_tensor *    src1,
+                                            ggml_tensor *    src2,
+                                            ggml_tensor *    dst) {
+    ggml_webgpu_shader_lib_context shader_lib_ctx = {};
+    shader_lib_ctx.src0                           = src0;
+    shader_lib_ctx.src1                           = src1;
+    shader_lib_ctx.src2                           = src2;
+    shader_lib_ctx.dst                            = dst;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+
+    webgpu_pipeline pipeline = ctx->shader_lib->get_add_id_pipeline(shader_lib_ctx);
+
+    auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
+
+    std::vector<uint32_t> params = {
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src2) / ggml_type_size(src2->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
+        (uint32_t) (src0->nb[1] / ggml_type_size(src0->type)),
+        (uint32_t) (src0->nb[2] / ggml_type_size(src0->type)),
+        (uint32_t) (src1->nb[1] / ggml_type_size(src1->type)),
+        (uint32_t) (src2->nb[0] / ggml_type_size(src2->type)),
+        (uint32_t) (src2->nb[1] / ggml_type_size(src2->type)),
+        (uint32_t) dst->ne[0],
+        (uint32_t) dst->ne[1],
+        (uint32_t) dst->ne[2],
+    };
+
+    std::vector<wgpu::BindGroupEntry> entries;
+
+    entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0));
+    entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, src1));
+    entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, src2));
+
+    if (!decisions->inplace) {
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 3, dst));
+    }
+
+    uint32_t       wg_x           = 1;
+    uint32_t       wg_y           = 1;
+    uint32_t       total_wg       = ggml_nrows(dst);
+    const uint32_t max_wg_per_dim = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
+    compute_2d_workgroups(total_wg, max_wg_per_dim, wg_x, wg_y);
+
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
 }
 
 static webgpu_encoded_op ggml_webgpu_concat(webgpu_context & ctx,
@@ -2918,6 +2967,8 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
         case GGML_OP_MUL:
         case GGML_OP_DIV:
             return ggml_webgpu_binary_op(ctx, src0, src1, node);
+        case GGML_OP_ADD_ID:
+            return ggml_webgpu_add_id(ctx, src0, src1, src2, node);
         case GGML_OP_CONCAT:
             return ggml_webgpu_concat(ctx, src0, src1, node);
         case GGML_OP_REPEAT:
@@ -3867,6 +3918,7 @@ static bool ggml_webgpu_supported_qtype(ggml_type type) {
         case GGML_TYPE_IQ1_M:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_MXFP4:
             return true;
         default:
             return false;
@@ -3904,6 +3956,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_DIV:
             supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type) &&
                           (src1->type == op->type);
+            break;
+        case GGML_OP_ADD_ID:
+            supports_op = src0->type == GGML_TYPE_F32;
             break;
         case GGML_OP_CONCAT:
             supports_op = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_I32);
@@ -3962,6 +4017,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                             case GGML_TYPE_IQ1_M:
                             case GGML_TYPE_IQ4_NL:
                             case GGML_TYPE_IQ4_XS:
+                            case GGML_TYPE_MXFP4:
                                 supports_op = true;
                                 break;
                             default:
@@ -4001,6 +4057,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                         case GGML_TYPE_IQ3_S:
                         case GGML_TYPE_IQ4_NL:
                         case GGML_TYPE_IQ4_XS:
+                        case GGML_TYPE_MXFP4:
                             supports_op = true;
                             break;
                         default:
