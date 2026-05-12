@@ -165,7 +165,70 @@ if (LLAMA_BUILD_WEBUI)
                 set(WEBUI_SOURCE_DIR "${WEBUI_DOWNLOAD_DIR}")
                 message(STATUS "WebUI: using prebuilt assets from HF Bucket (version: ${HF_WEBUI_VERSION})")
             else()
-                message(WARNING "WebUI: HF Bucket download failed, no local build available")
+                # Fallback: try the 'latest' directory on HF Bucket
+                set(HF_LATEST_URL "https://huggingface.co/buckets/ggml-org/${LLAMA_WEBUI_HF_BUCKET}/resolve/latest")
+                message(STATUS "WebUI: exact version not found, trying latest release from ${HF_LATEST_URL}")
+
+                set(ALL_DOWNLOADS_SUCCESS TRUE)
+                foreach(asset ${PUBLIC_ASSETS})
+                    set(download_url "${HF_LATEST_URL}/${asset}?download=true")
+                    set(download_path "${WEBUI_DOWNLOAD_DIR}/${asset}")
+
+                    message(STATUS "WebUI: downloading ${asset} from latest")
+
+                    file(
+                        DOWNLOAD "${download_url}" "${download_path}"
+                        STATUS download_status
+                        TIMEOUT 60
+                    )
+
+                    list(GET download_status 0 download_result)
+
+                    if(download_result EQUAL 0)
+                        message(STATUS "WebUI: downloaded ${asset} from latest")
+                    else()
+                        list(GET download_status 1 error_message)
+                        message(WARNING "WebUI: failed to download ${asset} from latest: ${error_message}")
+                        set(ALL_DOWNLOADS_SUCCESS FALSE)
+                        break()
+                    endif()
+                endforeach()
+
+                # Verify checksums if available
+                if(ALL_DOWNLOADS_SUCCESS)
+                    file(
+                        DOWNLOAD "${HF_LATEST_URL}/checksums.txt?download=true"
+                        "${WEBUI_DOWNLOAD_DIR}/checksums.txt"
+                        STATUS checksum_status
+                        TIMEOUT 30
+                    )
+                    list(GET checksum_status 0 checksum_result)
+                    if(checksum_result EQUAL 0)
+                        message(STATUS "WebUI: verifying checksums for latest release...")
+                        file(STRINGS "${WEBUI_DOWNLOAD_DIR}/checksums.txt" CHECKSUMS_CONTENT)
+                        foreach(asset ${PUBLIC_ASSETS})
+                            set(download_path "${WEBUI_DOWNLOAD_DIR}/${asset}")
+                            file(SHA256 "${asset}_hash" "${download_path}")
+                            string(TOUPPER "${${asset}_hash}" EXPECTED_HASH_UPPER)
+                            string(REGEX MATCH "${EXPECTED_HASH_UPPER}[ \\t]+${asset}" CHECKSUM_LINE "${CHECKSUMS_CONTENT}")
+                            if(NOT CHECKSUM_LINE)
+                                message(WARNING "WebUI: checksum verification failed for ${asset}")
+                                set(ALL_DOWNLOADS_SUCCESS FALSE)
+                            endif()
+                        endforeach()
+                        if(ALL_DOWNLOADS_SUCCESS)
+                            message(STATUS "WebUI: all checksums verified for latest release")
+                        endif()
+                    endif()
+                endif()
+
+                if(ALL_DOWNLOADS_SUCCESS)
+                    set(WEBUI_SOURCE "hf-bucket-latest")
+                    set(WEBUI_SOURCE_DIR "${WEBUI_DOWNLOAD_DIR}")
+                    message(STATUS "WebUI: using prebuilt assets from HF Bucket latest (version: ${HF_WEBUI_VERSION})")
+                else()
+                    message(WARNING "WebUI: HF Bucket download failed (both version and latest), no local build available")
+                endif()
             endif()
             endif()  # Close: if write test passed
         endif()  # Close: if(HF_WEBUI_VERSION not empty)

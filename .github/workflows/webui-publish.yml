@@ -41,10 +41,15 @@ jobs:
       - name: Authenticate with Hugging Face
         run: hf auth login --token ${{ secrets.hf_token }}
 
-      - name: Sync built files to Hugging Face bucket
+      - name: Sync built files to Hugging Face bucket (version tag)
         run: |
           # Upload the built files to the Hugging Face bucket under the release version
           hf buckets sync tools/server/public hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/${{ inputs.version_tag }} --delete --quiet
+
+      - name: Sync built files to Hugging Face bucket (latest)
+        run: |
+          # Also upload to the 'latest' directory for fallback downloads
+          hf buckets sync tools/server/public hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/latest --delete --quiet
 
       - name: Verify upload
         run: |
