@@ -9760,6 +9760,73 @@ class MimoV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("MiMoV2ForCausalLM")
+class MiMoV2VisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        hp = self.hparams_vision
+
+        hp["image_size"] = hp.get("image_size", 560)
+        hp["num_attention_heads"] = hp.get("num_heads", 32)
+        hp["num_hidden_layers"] = hp.get("depth", 28)
+
+        self.n_q_heads = int(hp["num_heads"])
+        self.num_kv_heads = int(hp.get("num_key_value_heads", 8))
+        self.head_dim = int(hp.get("qk_channels", 64))
+        self.spatial_merge_size = int(hp["spatial_merge_size"])
+        # MiMoV2 vision RMSNorm: HF uses getattr(config, "rms_norm_eps", 1e-6) and the
+        # field is absent from MiMo-V2.5's vision_config
+        self.rms_norm_eps = float(hp.get("rms_norm_eps", 1e-6))
+
+        # fullatt_block_indexes are also reflected in vit_window_attn_types as -1
+        self.fullatt_block_indexes = list(hp.get("fullatt_block_indexes") or [])
+        self.vit_window_attn_types = list(hp.get("vit_window_attn_types") or [])
+        self.visual_token_window_size = int(hp.get("visual_token_window_size", -1))
+        self.use_sink = bool(hp.get("use_sink", False))
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MIMOVL)
+        self.gguf_writer.add_vision_use_silu(True)
+        self.gguf_writer.add_vision_head_count_kv(self.num_kv_heads)
+        self.gguf_writer.add_vision_spatial_merge_size(self.spatial_merge_size)
+        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.WINDOW_SIZE, self.visual_token_window_size)
+        self.gguf_writer.add_vision_wa_pattern_mode(self.vit_window_attn_types)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.rms_norm_eps)
+        self.gguf_writer.add_vision_min_pixels(int(self.preprocessor_config["min_pixels"]))
+        self.gguf_writer.add_vision_max_pixels(int(self.preprocessor_config["max_pixels"]))
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # Sinks must be F32: any sink-style softmax/mask add in ggml requires
+        # F32, and we fold sinks into a host-built F32 mask at encode time.
+        if new_name.endswith(".attn_sinks"):
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        if not name.startswith("visual."):
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch, name, bid):
+        # Conv3D patch embed: split along the temporal axis (kt=2) into two Conv2D
+        # weights that the existing qwen2vl-style two-Conv2D path consumes.
+        if name == "visual.patch_embed.proj.weight":
+            _, _, kt, _, _ = data_torch.shape
+            if kt != 2:
+                raise ValueError(f"unexpected temporal_patch_size: {kt}")
+            embd_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH]
+            yield (embd_name + ".weight",   data_torch[:, :, 0, ...])
+            yield (embd_name + ".weight.1", data_torch[:, :, 1, ...])
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Step3p5ForCausalLM")
 class Step35Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STEP35
