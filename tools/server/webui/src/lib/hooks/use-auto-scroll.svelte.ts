@@ -3,6 +3,11 @@ import { AUTO_SCROLL_AT_BOTTOM_THRESHOLD, AUTO_SCROLL_INTERVAL } from '$lib/cons
 export interface AutoScrollOptions {
 	disabled?: boolean;
 	isColumnReverse?: boolean;
+	/**
+	 * Velocity threshold for scroll-based optimizations (pixels per frame)
+	 * Above this, scroll-velocity optimizations are triggered
+	 */
+	scrollVelocityThreshold?: number;
 }
 
 /**
@@ -26,10 +31,13 @@ export class AutoScrollController {
 	private _mutationObserver: MutationObserver | null = null;
 	private _rafPending = false;
 	private _observerEnabled = false;
+	private _scrollVelocityThreshold: number;
+	private _isScrollingFast = $state(false);
 
 	constructor(options: AutoScrollOptions = {}) {
 		this._disabled = options.disabled ?? false;
 		this._isColumnReverse = options.isColumnReverse ?? false;
+		this._scrollVelocityThreshold = options.scrollVelocityThreshold ?? 50;
 	}
 
 	get autoScrollEnabled(): boolean {
@@ -38,6 +46,14 @@ export class AutoScrollController {
 
 	get userScrolledUp(): boolean {
 		return this._userScrolledUp;
+	}
+
+	/**
+	 * Returns true if the user is scrolling rapidly (above velocity threshold).
+	 * Useful for disabling CSS transitions during aggressive scrolling.
+	 */
+	get isScrollingFast(): boolean {
+		return this._isScrollingFast;
 	}
 
 	/**
@@ -97,6 +113,10 @@ export class AutoScrollController {
 			this._autoScrollEnabled = true;
 		}
 
+		// Track scroll velocity for fast-scroll detection
+		const velocity = Math.abs(scrollTop - this._lastScrollTop);
+		this._isScrollingFast = velocity > this._scrollVelocityThreshold;
+
 		if (this._scrollTimeout) {
 			clearTimeout(this._scrollTimeout);
 		}
@@ -106,6 +126,8 @@ export class AutoScrollController {
 				this._userScrolledUp = false;
 				this._autoScrollEnabled = true;
 			}
+			// Reset fast-scroll state after settling
+			this._isScrollingFast = false;
 		}, AUTO_SCROLL_INTERVAL);
 
 		this._lastScrollTop = scrollTop;

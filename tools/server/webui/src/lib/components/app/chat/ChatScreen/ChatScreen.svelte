@@ -43,13 +43,14 @@
 	let { showCenteredEmpty = false } = $props();
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
+	let isScrollingFast = $derived(autoScroll.isScrollingFast);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let dragCounter = $state(0);
 	let isDragOver = $state(false);
 	let showFileErrorDialog = $state(false);
 	let uploadedFiles = $state<ChatUploadedFile[]>([]);
 
-	const autoScroll = createAutoScrollController({ isColumnReverse: true });
+	const autoScroll = createAutoScrollController();
 
 	let fileErrorData = $state<{
 		generallyUnsupported: File[];
@@ -357,7 +358,7 @@
 	<div
 		bind:this={chatScrollContainer}
 		aria-label="Chat interface with file drop zone"
-		class="flex h-full flex-col-reverse overflow-y-auto px-4 md:px-6"
+		class="flex h-full flex-col overflow-y-auto px-4 md:px-6"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
@@ -379,7 +380,10 @@
 			<div
 				class="pointer-events-none {isEmpty
 					? 'absolute bottom-[calc(50dvh-7rem)]'
-					: 'sticky bottom-4'} right-4 left-4 mt-auto pt-16 transition-all duration-200"
+					: 'sticky bottom-4'} right-4 left-4 mt-auto pt-16 {isScrollingFast
+					? ''
+					: 'transition-all duration-200'}"
+				style="will-change: transform; contain: layout style; overflow: visible;"
 			>
 				{#if isEmpty}
 					<div class="mb-8 px-4 text-center" use:fadeInView={{ duration: 300 }}>
