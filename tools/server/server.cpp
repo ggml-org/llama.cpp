@@ -10,6 +10,7 @@
 #include "fit.h"
 #include "llama.h"
 #include "log.h"
+#include "preset.h"
 
 #include <atomic>
 #include <clocale>
@@ -83,6 +84,28 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // apply the [*] section of --models-preset to params so that router-level
+    // options (prio, threads, host, etc.) set in the INI are honored by this
+    // process. CLI arguments keep the highest precedence.
+    if (!params.models_preset.empty()) {
+        try {
+            common_preset_context ctx_preset(LLAMA_EXAMPLE_SERVER);
+            common_preset global;
+            (void) ctx_preset.load_from_ini(params.models_preset, global);
+
+            std::map<common_arg, std::string> cli_overrides;
+            if (!common_params_to_map(argc, argv, LLAMA_EXAMPLE_SERVER, cli_overrides)) {
+                throw std::runtime_error("failed to collect CLI overrides");
+            }
+
+            global.apply_to_params(params, cli_overrides);
+        } catch (const std::exception & e) {
+            LOG_ERR("%s: failed to apply [*] preset from %s: %s\n",
+                    __func__, params.models_preset.c_str(), e.what());
+            return 1;
+        }
+    }
+
     // validate batch size for embeddings
     // embeddings require all tokens to be processed in a single ubatch
     // see https://github.com/ggml-org/llama.cpp/issues/12836
@@ -109,6 +132,10 @@ int main(int argc, char ** argv) {
 
     llama_backend_init();
     llama_numa_init(params.numa);
+
+    if (!set_process_priority(params.cpuparams.priority)) {
+        LOG_WRN("%s: failed to set process priority\n", __func__);
+    }
 
     LOG_INF("build_info: %s\n", llama_build_info());
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());

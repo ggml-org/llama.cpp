@@ -163,8 +163,12 @@ void common_preset::merge(const common_preset & other) {
     }
 }
 
-void common_preset::apply_to_params(common_params & params) const {
+void common_preset::apply_to_params(common_params & params,
+                                    const std::map<common_arg, std::string> & cli_overrides) const {
     for (const auto & [opt, val] : options) {
+        if (cli_overrides.find(opt) != cli_overrides.end()) {
+            continue; // CLI takes precedence over preset value
+        }
         // apply each option to params
         if (opt.handler_string) {
             opt.handler_string(params, val);
