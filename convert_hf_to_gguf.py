@@ -2865,8 +2865,12 @@ class LlamaModel(TextModel):
         # fix for SmolVLM2, missing `num_attention_heads` in config.json
         if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
-        hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
-        self.origin_hf_arch = hparams.get('architectures', [None])[0]
+        # Mistral consolidated format has no config.json; origin_hf_arch is HF-only.
+        if self.is_mistral_format:
+            self.origin_hf_arch = None
+        else:
+            hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
+            self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
     def set_vocab(self):
         if self.origin_hf_arch == "GlmasrModel":
@@ -13409,7 +13413,7 @@ class PixtralModel(LlavaVisionModel):
         self.gguf_writer.add_vision_use_silu(True)
 
         # spatial_merge_size
-        if self.find_vparam(["mm_projector_id"]) == "patch_merge":
+        if self.find_vparam(["mm_projector_id"], optional=True) == "patch_merge":
             self.gguf_writer.add_vision_spatial_merge_size(
                 self.find_vparam(["spatial_merge_size"])
             )
@@ -13417,8 +13421,12 @@ class PixtralModel(LlavaVisionModel):
     def map_tensor_name(self, name: str, try_suffixes: Sequence[str] = (".weight", ".bias")) -> str:
         if name == "vision_language_adapter.w_in.weight":
             return "mm.1.weight"
+        elif name == "vision_language_adapter.w_in.bias":
+            return "mm.1.bias"
         elif name == "vision_language_adapter.w_out.weight":
             return "mm.2.weight"
+        elif name == "vision_language_adapter.w_out.bias":
+            return "mm.2.bias"
         return super().map_tensor_name(name, try_suffixes)
 
 
