@@ -4260,11 +4260,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
         m_wg_denoms = { 64,  64, 1 };
         s_wg_denoms = { 32,  32, 1 };
 
-        if (device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == INTEL_XE2) {
-            // Xe2/Xe3 - bf16 warptile performance tuning
-            l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, 4, 4, 1, subgroup_size_8 };
-        }
-
         CREATE_MM(GGML_TYPE_BF16, pipeline_matmul_bf16, matmul_bf16, , wg_denoms, warptile, vk_mat_mat_push_constants, 3, , 0);
         CREATE_MM(GGML_TYPE_BF16, pipeline_matmul_id_bf16, matmul_id_bf16, , wg_denoms, warptile, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id, 0);
     }
@@ -5689,19 +5684,19 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->mul_mat_id_m[i] = true;
                 device->mul_mat_id_s[i] = true;
                 break;
-            case VK_VENDOR_ID_INTEL:
-                if (!device->coopmat_support || device->architecture != INTEL_XE2) {
-                    device->mul_mat_l[i] = false;
-                    device->mul_mat_id_l[i] = false;
-                } else {
-                    device->mul_mat_l[i] = true;  // if coopmat & XE2+, allow large matmul warptile config for Intel
-                    device->mul_mat_id_l[i] = true;
-                }
+            case VK_VENDOR_ID_INTEL: {
+                // Current Windows driver does not expose BF16 support.
+                // We only want to use l_warptile if coopmat is available and is Xe2+
+                const bool xe2_with_coopmat = device->coopmat_support && device->architecture == INTEL_XE2;
+                const bool use_l_warptile = (i == GGML_TYPE_BF16) ? (device->coopmat_bf16_support && xe2_with_coopmat) : xe2_with_coopmat;
+                device->mul_mat_l[i] = use_l_warptile;
+                device->mul_mat_id_l[i] = use_l_warptile;
                 device->mul_mat_m[i] = true;
                 device->mul_mat_s[i] = true;
                 device->mul_mat_id_m[i] = true;
                 device->mul_mat_id_s[i] = true;
                 break;
+            }
             case VK_VENDOR_ID_APPLE:
                 device->mul_mat_l[i] = false;
                 device->mul_mat_m[i] = true;
