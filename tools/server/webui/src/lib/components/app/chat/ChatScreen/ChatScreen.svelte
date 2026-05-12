@@ -322,6 +322,14 @@
 		}
 	});
 
+	function handleMessagesReady() {
+		if (!disableAutoScroll) {
+			requestAnimationFrame(() => {
+				autoScroll.scrollToBottom('instant');
+			});
+		}
+	}
+
 	onMount(() => {
 		autoScroll.startObserving();
 
@@ -334,12 +342,6 @@
 			initialMessage = pendingDraft.message;
 			uploadedFiles = pendingDraft.files;
 		}
-	});
-
-	afterNavigate(() => {
-		setTimeout(() => {
-			autoScroll.scrollToBottom('instant');
-		}, 100);
 	});
 
 	$effect(() => {
@@ -379,6 +381,7 @@
 						autoScroll.enable();
 						autoScroll.scrollToBottom();
 					}}
+					onMessagesReady={handleMessagesReady}
 				/>
 			{/if}
 
