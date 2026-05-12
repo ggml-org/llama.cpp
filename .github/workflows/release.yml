@@ -1419,9 +1419,6 @@ jobs:
     needs:
       - release
 
-    permissions:
-      contents: write
-
     uses: ./.github/workflows/webui-publish.yml
     with:
       version_tag: ${{ github.ref_name }}
