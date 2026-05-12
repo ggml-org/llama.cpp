@@ -3523,6 +3523,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     data);
             task.id_slot = json_value(data, "id_slot", -1);
 
+            // Disable checkpoint_before_last_user_token when the prompts contains media tokens
+            if (task.tokens.get_text_tokens().size() != task.tokens.size()) {
+                task.params.checkpoint_before_last_user_token = -1;
+            }
+
             // OAI-compat
             task.params.res_type          = res_type;
             task.params.oaicompat_cmpl_id = completion_id;
