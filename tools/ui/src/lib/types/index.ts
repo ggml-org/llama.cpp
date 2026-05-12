@@ -29,8 +29,7 @@ export type {
 	ApiRouterModelsStatusResponse,
 	ApiRouterModelsListResponse,
 	ApiRouterModelsUnloadRequest,
-	ApiRouterModelsUnloadResponse,
-	AudioInputFormat
+	ApiRouterModelsUnloadResponse
 } from './api';
 
 // Chat types
@@ -162,6 +161,3 @@ export type {
 
 // Tools types
 export type { ToolEntry, ToolGroup } from './tools';
-
-// Reasoning
-export type { ReasoningEffortLevel } from './reasoning';

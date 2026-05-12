@@ -33,3 +33,7 @@ export enum UrlProtocol {
 export enum HtmlInputType {
 	FILE = 'file'
 }
+
+export enum HtmlInputType {
+	FILE = 'file'
+}

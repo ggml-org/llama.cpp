@@ -106,7 +106,9 @@
 				]}
 				style="max-width: min(calc(100cqw - 10rem), 20rem)"
 			>
-				<Package class="h-3.5 w-3.5 shrink-0" />
+				<Package class="h-3.5 w-3.5" />
+
+				<ModelId modelId={currentModel} class="min-w-0" hideQuantization />
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
@@ -116,54 +118,51 @@
 
 		{#if ms.isRouter}
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<!-- prevent another nested button element -->
-						{#snippet child({ props })}
-							<DropdownMenu.Trigger
-								{...props}
-								class={[
-									`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-									!ms.isCurrentModelInCache
-										? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-										: forceForegroundText
-											? 'text-foreground'
-											: ms.isHighlightedCurrentModelActive
-												? 'text-foreground'
-												: 'text-foreground',
-									isOpen && 'text-foreground',
-									'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
-								]}
-								disabled={disabled || ms.updating}
-							>
-								<Package class="h-3.5 w-3.5 shrink-0" />
+				<DropdownMenu.Trigger
+					class={[
+						`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						!ms.isCurrentModelInCache
+							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+							: forceForegroundText
+								? 'text-foreground'
+								: ms.isHighlightedCurrentModelActive
+									? 'text-foreground'
+									: 'text-foreground',
+						isOpen && 'text-foreground',
+						'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
+					]}
+					disabled={disabled || ms.updating}
+				>
+					<Package class="h-3.5 w-3.5" />
 
-								{#if selectedOption}
+					{#if selectedOption}
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								<!-- prevent another nested button element -->
+								{#snippet child({ props })}
 									<ModelId
 										modelId={selectedOption.model}
 										class="min-w-0 overflow-hidden"
 										hideOrgName={false}
-										hideQuantization
+										{...props}
 									/>
-								{:else}
-									<span class="min-w-0 font-medium">Select model</span>
-								{/if}
+								{/snippet}
+							</Tooltip.Trigger>
 
-								{#if ms.updating || ms.isLoadingModel}
-									<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
-								{:else}
-									<ChevronDown class="h-3 w-3.5 shrink-0" />
-								{/if}
-							</DropdownMenu.Trigger>
-						{/snippet}
-					</Tooltip.Trigger>
-
-					{#if selectedOption}
-						<Tooltip.Content>
-							<p class="font-mono">{selectedOption.model}</p>
-						</Tooltip.Content>
+							<Tooltip.Content>
+								<p class="font-mono">{selectedOption.model}</p>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					{:else}
+						<span class="min-w-0 font-medium">Select model</span>
 					{/if}
-				</Tooltip.Root>
+
+					{#if ms.updating || ms.isLoadingModel}
+						<Loader2 class="h-3 w-3.5 animate-spin" />
+					{:else}
+						<ChevronDown class="h-3 w-3.5" />
+					{/if}
+				</DropdownMenu.Trigger>
 
 				<DropdownMenu.Content
 					align="end"
@@ -236,51 +235,48 @@
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
 		{:else}
-			<Tooltip.Root>
-				<Tooltip.Trigger>
-					<!-- prevent another nested button element -->
-					{#snippet child({ props })}
-						<button
-							{...props}
-							class={[
-								`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-								!ms.isCurrentModelInCache
-									? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-									: forceForegroundText
-										? 'text-foreground'
-										: ms.isHighlightedCurrentModelActive
-											? 'text-foreground'
-											: 'text-foreground',
-								isOpen && 'text-foreground'
-							]}
-							style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
-							onclick={() => ms.handleOpenChange(true)}
-							disabled={disabled || ms.updating}
-						>
-							<Package class="h-3.5 w-3.5 shrink-0" />
+			<button
+				class={[
+					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+					!ms.isCurrentModelInCache
+						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+						: forceForegroundText
+							? 'text-foreground'
+							: ms.isHighlightedCurrentModelActive
+								? 'text-foreground'
+								: 'text-foreground',
+					isOpen && 'text-foreground'
+				]}
+				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
+				onclick={() => ms.handleOpenChange(true)}
+				disabled={disabled || ms.updating}
+			>
+				<Package class="h-3.5 w-3.5" />
 
-							{#if selectedOption}
+				{#if selectedOption}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<!-- prevent another nested button element -->
+							{#snippet child({ props })}
 								<ModelId
 									modelId={selectedOption.model}
 									class="min-w-0 overflow-hidden"
 									hideOrgName={false}
-									hideQuantization
+									{...props}
 								/>
-							{/if}
+							{/snippet}
+						</Tooltip.Trigger>
 
-							{#if ms.updating}
-								<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
-							{/if}
-						</button>
-					{/snippet}
-				</Tooltip.Trigger>
-
-				{#if selectedOption}
-					<Tooltip.Content>
-						<p class="font-mono">{selectedOption.model}</p>
-					</Tooltip.Content>
+						<Tooltip.Content>
+							<p class="font-mono">{selectedOption.model}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
 				{/if}
-			</Tooltip.Root>
+
+				{#if ms.updating}
+					<Loader2 class="h-3 w-3.5 animate-spin" />
+				{/if}
+			</button>
 		{/if}
 	{/if}
 </div>

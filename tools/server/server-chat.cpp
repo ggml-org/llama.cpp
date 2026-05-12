@@ -257,10 +257,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         for (json resp_tool : response_body.at("tools")) {
             json chatcmpl_tool;
 
-            const std::string type = json_value(resp_tool, "type", std::string());
-            if (type != "function") {
-                // Non-function Responses tools have no Chat Completions equivalent.
-                SRV_WRN("unsupported Responses tool type '%s' skipped\n", type.c_str());
+            if (json_value(resp_tool, "type", std::string()) != "function") {
                 continue;
             }
             resp_tool.erase("type");

@@ -17,7 +17,7 @@
 	} from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
 	import { setMode } from 'mode-watcher';
-	import { ColorMode } from '$lib/enums/ui.enums';
+	import { ColorMode } from '$lib/enums/ui';
 	import { fade } from 'svelte/transition';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -75,13 +75,9 @@
 	}
 
 	function handleSave() {
-		if (
-			localConfig.customJson &&
-			typeof localConfig.customJson === 'string' &&
-			localConfig.customJson.trim()
-		) {
+		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
 			try {
-				JSON.parse(localConfig.customJson);
+				JSON.parse(localConfig.custom);
 			} catch (error) {
 				alert('Invalid JSON in custom parameters. Please check the format and try again.');
 				console.error(error);

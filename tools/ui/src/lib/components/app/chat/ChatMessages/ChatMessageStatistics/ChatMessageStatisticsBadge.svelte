@@ -21,16 +21,13 @@
 {#if tooltipLabel}
 	<Tooltip.Root>
 		<Tooltip.Trigger>
-			<!-- prevent another nested button element -->
-			{#snippet child({ props })}
-				<BadgeInfo {...props} class={className} onclick={handleClick}>
-					{#snippet icon()}
-						<IconComponent class="h-3 w-3" />
-					{/snippet}
+			<BadgeInfo class={className} onclick={handleClick}>
+				{#snippet icon()}
+					<IconComponent class="h-3 w-3" />
+				{/snippet}
 
-					{value}
-				</BadgeInfo>
-			{/snippet}
+				{value}
+			</BadgeInfo>
 		</Tooltip.Trigger>
 		<Tooltip.Content>
 			<p>{tooltipLabel}</p>

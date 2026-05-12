@@ -1,18 +1,22 @@
 <script lang="ts">
-	import { Plus, File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
+	import { Plus } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/components/ui/utils';
 	import {
 		ATTACHMENT_FILE_ITEMS,
+		ATTACHMENT_EXTRA_ITEMS,
+		ATTACHMENT_MCP_ITEMS,
 		ATTACHMENT_TOOLTIP_TEXT,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
+	import { AttachmentMenuItemId } from '$lib/enums';
 	import {
 		ChatFormActionAddToolsSubmenu,
 		ChatFormActionAddMcpServersSubmenu
 	} from '$lib/components/app';
+
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
 	interface Props {
@@ -93,87 +97,107 @@
 		</Tooltip.Root>
 
 		<DropdownMenu.Content align="start" class="w-48">
-			<DropdownMenu.Sub>
-				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-					<File class="h-4 w-4" />
+			{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
+				{@const enabled = attachmentMenu.isItemEnabled(item.enabledWhen)}
+				{#if enabled}
+					<DropdownMenu.Item
+						class="{item.class ?? ''} flex cursor-pointer items-center gap-2"
+						onclick={() => attachmentMenu.callbacks[item.action]()}
+					>
+						<item.icon class="h-4 w-4" />
 
-					<span>Add files</span>
-				</DropdownMenu.SubTrigger>
+						<span>{item.label}</span>
+					</DropdownMenu.Item>
+				{:else if item.disabledTooltip}
+					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+						<Tooltip.Trigger tabindex={-1}>
+							{#snippet child({ props })}
+								<div {...props} class="cursor-default">
+									<DropdownMenu.Item class="{item.class ?? ''} flex items-center gap-2" disabled>
+										<item.icon class="h-4 w-4" />
 
-				<DropdownMenu.SubContent class="w-48">
-					{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
-						{@const enabled = attachmentMenu.isItemEnabled(item.enabledWhen)}
-						{#if enabled}
+										<span>{item.label}</span>
+									</DropdownMenu.Item>
+								</div>
+							{/snippet}
+						</Tooltip.Trigger>
+
+						<Tooltip.Content side="right">
+							<p>{item.disabledTooltip}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+			{/each}
+
+			{#if !attachmentMenu.isItemEnabled('hasVisionModality')}
+				<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+					<Tooltip.Trigger>
+						{#snippet child({ props })}
 							<DropdownMenu.Item
-								class="{item.class ?? ''} flex cursor-pointer items-center gap-2"
-								onclick={() => attachmentMenu.callbacks[item.action]()}
+								{...props}
+								class="flex cursor-pointer items-center gap-2"
+								onclick={attachmentMenu.callbacks.onFileUpload}
 							>
-								<item.icon class="h-4 w-4" />
+								{@const pdfItem = ATTACHMENT_FILE_ITEMS.find(
+									(i) => i.id === AttachmentMenuItemId.PDF
+								)}
+								{#if pdfItem}
+									<pdfItem.icon class="h-4 w-4" />
 
-								<span>{item.label}</span>
+									<span>{pdfItem.label}</span>
+								{/if}
 							</DropdownMenu.Item>
-						{:else if item.disabledTooltip}
-							<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-								<Tooltip.Trigger tabindex={-1}>
-									{#snippet child({ props })}
-										<div {...props} class="cursor-default">
-											<DropdownMenu.Item
-												class="{item.class ?? ''} flex items-center gap-2"
-												disabled
-											>
-												<item.icon class="h-4 w-4" />
+						{/snippet}
+					</Tooltip.Trigger>
 
-												<span>{item.label}</span>
-											</DropdownMenu.Item>
-										</div>
-									{/snippet}
-								</Tooltip.Trigger>
+					<Tooltip.Content side="right">
+						<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
 
-								<Tooltip.Content side="right">
-									<p>{item.disabledTooltip}</p>
-								</Tooltip.Content>
-							</Tooltip.Root>
-						{/if}
-					{/each}
-				</DropdownMenu.SubContent>
-			</DropdownMenu.Sub>
+			<DropdownMenu.Separator />
 
-			<DropdownMenu.Item
-				class="flex cursor-pointer items-center gap-2"
-				onclick={onSystemPromptClick}
-			>
-				<MessageSquare class="h-4 w-4" />
+			{#each ATTACHMENT_EXTRA_ITEMS as item (item.id)}
+				{#if item.id === AttachmentMenuItemId.SYSTEM_MESSAGE}
+					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+						<Tooltip.Trigger>
+							{#snippet child({ props })}
+								<DropdownMenu.Item
+									{...props}
+									class="flex cursor-pointer items-center gap-2"
+									onclick={() => attachmentMenu.callbacks[item.action]()}
+								>
+									<item.icon class="h-4 w-4" />
 
-				<span>System Message</span>
-			</DropdownMenu.Item>
+									<span>{item.label}</span>
+								</DropdownMenu.Item>
+							{/snippet}
+						</Tooltip.Trigger>
+
+						<Tooltip.Content side="right">
+							<p>{attachmentMenu.getSystemMessageTooltip()}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+			{/each}
 
 			<ChatFormActionAddToolsSubmenu />
 
 			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
 
-			{#if hasMcpPromptsSupport}
-				<DropdownMenu.Separator />
+			{#each ATTACHMENT_MCP_ITEMS as item (item.id)}
+				{#if attachmentMenu.isItemVisible(item.visibleWhen)}
+					<DropdownMenu.Item
+						class="flex cursor-pointer items-center gap-2"
+						onclick={() => attachmentMenu.callbacks[item.action]()}
+					>
+						<item.icon class="h-4 w-4" />
 
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={onMcpPromptClick}
-				>
-					<Zap class="h-4 w-4" />
-
-					<span>MCP Prompt</span>
-				</DropdownMenu.Item>
-			{/if}
-
-			{#if hasMcpResourcesSupport}
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={onMcpResourcesClick}
-				>
-					<FolderOpen class="h-4 w-4" />
-
-					<span>MCP Resources</span>
-				</DropdownMenu.Item>
-			{/if}
+						<span>{item.label}</span>
+					</DropdownMenu.Item>
+				{/if}
+			{/each}
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>

@@ -79,9 +79,7 @@ export const ATTACHMENT_FILE_ITEMS: AttachmentMenuItem[] = [
 	}
 ];
 
-export const ATTACHMENT_EXTRA_ITEMS: AttachmentMenuItem[] = [];
-
-export const ATTACHMENT_PROMPT_ITEMS: AttachmentMenuItem[] = [
+export const ATTACHMENT_EXTRA_ITEMS: AttachmentMenuItem[] = [
 	{
 		id: AttachmentMenuItemId.SYSTEM_MESSAGE,
 		label: 'System Message',
@@ -89,7 +87,10 @@ export const ATTACHMENT_PROMPT_ITEMS: AttachmentMenuItem[] = [
 		enabledWhen: AttachmentItemEnabledWhen.ALWAYS,
 		hasEnabledTooltip: true,
 		action: AttachmentAction.SYSTEM_PROMPT_CLICK
-	},
+	}
+];
+
+export const ATTACHMENT_MCP_ITEMS: AttachmentMenuItem[] = [
 	{
 		id: AttachmentMenuItemId.MCP_PROMPT,
 		label: 'MCP Prompt',
@@ -97,10 +98,7 @@ export const ATTACHMENT_PROMPT_ITEMS: AttachmentMenuItem[] = [
 		enabledWhen: AttachmentItemEnabledWhen.ALWAYS,
 		action: AttachmentAction.MCP_PROMPT_CLICK,
 		visibleWhen: AttachmentItemVisibleWhen.HAS_MCP_PROMPTS_SUPPORT
-	}
-];
-
-export const ATTACHMENT_MCP_ITEMS: AttachmentMenuItem[] = [
+	},
 	{
 		id: AttachmentMenuItemId.MCP_RESOURCES,
 		label: 'MCP Resources',

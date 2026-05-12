@@ -149,7 +149,7 @@ task_result_state::task_result_state(const common_chat_parser_params & chat_pars
     , oai_resp_id("resp_" + random_string())
     , oai_resp_reasoning_id("rs_" + random_string())
     , oai_resp_message_id("msg_" + random_string()) {
-    if (chat_parser_params.is_continuation && !chat_parser_params.echo) {
+    if (!chat_parser_params.echo) {
         // initialize chat_msg to avoid emitting a delta containing the assistant prefill
         chat_msg = common_chat_parse("", true, chat_parser_params);
     }
@@ -307,8 +307,6 @@ task_params server_task::params_from_json_cmpl(
 
     params.speculative = defaults.speculative;
 
-    // TODO: to keep things simple, we disable speculative parameter adjustments for now
-#if 0
     // TODO: for now, be able to adjust only the draft-model based speculative parameters
     params.speculative.draft.n_min = json_value(data, "speculative.n_min", defaults.speculative.draft.n_min);
     params.speculative.draft.n_max = json_value(data, "speculative.n_max", defaults.speculative.draft.n_max);
@@ -318,6 +316,7 @@ task_params server_task::params_from_json_cmpl(
     params.speculative.draft.n_min = std::max(params.speculative.draft.n_min, 0);
     params.speculative.draft.n_max = std::max(params.speculative.draft.n_max, 0);
 
+#if 0
     // for debugging and research purposes
     params.speculative.type = common_speculative_type_from_name(json_value(data, "speculative.type", common_speculative_type_to_str(defaults.speculative.type)));
 
@@ -432,10 +431,6 @@ task_params server_task::params_from_json_cmpl(
         if (data.contains("chat_parser")) {
             params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
         }
-        if (data.contains("continue_final_message")) {
-            auto continuation = common_chat_continuation_parse(data.at("continue_final_message"));
-            params.chat_parser_params.is_continuation = continuation != COMMON_CHAT_CONTINUATION_NONE;
-        }
         params.chat_parser_params.echo = json_value(data, "echo", false);
     }
 
@@ -499,7 +494,6 @@ task_params server_task::params_from_json_cmpl(
         const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
         const auto message   = json_value(data, "reasoning_budget_message", std::string());
         params.sampling.reasoning_budget_tokens = budget;
-        params.sampling.reasoning_control = json_value(data, "reasoning_control", false);
 
         if (!start_tag.empty()) {
             params.sampling.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
@@ -578,9 +572,32 @@ task_params server_task::params_from_json_cmpl(
 
         params.sampling.ignore_eos = json_value(data, "ignore_eos", params_base.sampling.ignore_eos);
         if (params.sampling.ignore_eos) {
+            std::vector<llama_logit_bias> logit_bias_eog_local;
+            const auto * logit_bias_eog_src = &logit_bias_eog;
+
+            if (logit_bias_eog.empty()) {
+                for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); ++i) {
+                    if (llama_vocab_is_eog(vocab, i)) {
+                        logit_bias_eog_local.push_back({i, -INFINITY});
+                    }
+                }
+
+                const auto eos = llama_vocab_eos(vocab);
+                if (eos != LLAMA_TOKEN_NULL) {
+                    const auto eos_bias = std::find_if(
+                            logit_bias_eog_local.begin(),
+                            logit_bias_eog_local.end(),
+                            [eos](const llama_logit_bias & lb) { return lb.token == eos; });
+                    if (eos_bias == logit_bias_eog_local.end()) {
+                        logit_bias_eog_local.push_back({eos, -INFINITY});
+                    }
+                }
+
+                logit_bias_eog_src = &logit_bias_eog_local;
+            }
             params.sampling.logit_bias.insert(
                     params.sampling.logit_bias.end(),
-                    logit_bias_eog.begin(), logit_bias_eog.end());
+                    logit_bias_eog_src->begin(), logit_bias_eog_src->end());
         }
     }
 
@@ -1423,9 +1440,6 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
 
 json server_task_result_cmpl_partial::to_json() {
     GGML_ASSERT(is_updated && "update() must be called before to_json()");
-    if (is_begin) {
-        return nullptr; // simply signal to HTTP handler to send the headers and status code
-    }
     switch (res_type) {
         case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();
@@ -2008,7 +2022,7 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
         const int cur_lcp_len = it->tokens.get_common_prefix(prompt.tokens);
 
         if (cur_lcp_len == (int) prompt.tokens.size()) {
-            SRV_INF("%s", " - prompt is already in the cache, skipping\n");
+            SRV_WRN("%s", " - prompt is already in the cache, skipping\n");
             return nullptr;
         }
     }
@@ -2063,7 +2077,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
     float sim_best    = float(lcp_best) / tokens_new.size();
 
-    SRV_INF(" - looking for better prompt, base f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+    SRV_WRN(" - looking for better prompt, base f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
     auto it_best = states.end();
 
@@ -2088,7 +2102,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     }
 
     if (it_best != states.end()) {
-        SRV_INF(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+        SRV_WRN(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
         {
             auto & data = it_best->data.main;
@@ -2096,7 +2110,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             const size_t size = data.size();
             const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);
             if (n != size) {
-                SRV_ERR("failed to restore state with size %zu\n", size);
+                SRV_WRN("failed to restore state with size %zu\n", size);
 
                 return false;
             }
@@ -2165,11 +2179,11 @@ void server_prompt_cache::update() {
         }
     }
 
-    SRV_INF(" - cache state: %zu prompts, %.3f MiB (limits: %.3f MiB, %zu tokens, %zu est)\n",
+    SRV_WRN(" - cache state: %zu prompts, %.3f MiB (limits: %.3f MiB, %zu tokens, %zu est)\n",
             states.size(), size() / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0), limit_tokens, limit_tokens_cur);
 
     for (const auto & state : states) {
-        SRV_INF("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n",
+        SRV_WRN("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n",
                 (const void *)&state, state.n_tokens(), state.checkpoints.size(), state.size() / (1024.0 * 1024.0));
     }
 }

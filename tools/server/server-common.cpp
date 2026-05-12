@@ -713,10 +713,10 @@ static std::string fnv_hash(const uint8_t * data, size_t len) {
     return std::to_string(hash);
 }
 
-server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder) {
+server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
     mtmd::bitmaps bitmaps;
     for (auto & file : files) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder));
+        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
         if (!bmp.ptr) {
             throw std::runtime_error("Failed to load image or audio file");
         }
@@ -1110,16 +1110,6 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
-    llama_params["message_spans"] = json::array();
-
-    for (const auto & span : chat_params.message_spans) {
-        llama_params["message_spans"].push_back({
-            { "role", span.role },
-            { "pos",  span.pos  },
-            { "len",  span.len  },
-        });
-    }
-
     // Reasoning budget: pass parameters through to sampling layer
     {
         int reasoning_budget = opt.reasoning_budget;
@@ -1132,7 +1122,6 @@ json oaicompat_chat_params_parse(
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
             llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
             llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
-            llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
     }
 

@@ -222,6 +222,28 @@ Notes:
 - Keep weight-format and KV-cache experiments separate when benchmarking.
 - If you want the exact weight-format baseline, leave KV cache at the default types.
 
+## Native MTP Runtime
+
+For GGUFs that include native MTP tensors, use the speculative runtime shape below:
+
+```bash
+./build/bin/llama-server \
+  -m /path/to/model.gguf \
+  -ngl 99 -fa on -np 1 -c 2048 -b 32 -ub 32 \
+  --ctx-checkpoints 0 --checkpoint-every-n-tokens -1 \
+  --spec-type mtp --spec-draft-n-max 3 --spec-draft-ngl 99 \
+  -ctk q4_0 -ctv tq3_0 \
+  --cache-ram 0 \
+  --no-warmup --jinja \
+  --reasoning off --reasoning-budget 0 --reasoning-format deepseek \
+  --port 8090
+```
+
+Notes:
+- keep the same `-ctk q4_0 -ctv tq3_0` KV-cache shape used elsewhere in this fork
+- use `--ctx-checkpoints 0 --checkpoint-every-n-tokens -1` when the speculative path needs to avoid checkpoint pressure
+- `--spec-type mtp` is only for GGUFs that were built with MTP support
+
 ## Benchmark
 
 ```bash

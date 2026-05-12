@@ -66,6 +66,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const serverModel = $derived(singleModelName());
 
 	const currentModel = $derived(opts.currentModel());
+	const useGlobalSelection = $derived(opts.useGlobalSelection?.() ?? false);
 	const onModelChange = $derived(opts.onModelChange?.());
 
 	const isHighlightedCurrentModelActive = $derived.by(() => {
@@ -127,7 +128,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		if (onModelChange) {
 			const result = await onModelChange(option.id, option.model);
-
 			if (result === false) {
 				shouldCloseMenu = false;
 			}
@@ -142,14 +142,12 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 				const textarea = document.querySelector<HTMLTextAreaElement>(
 					'[data-slot="chat-form"] textarea'
 				);
-
 				textarea?.focus();
 			});
 		}
 
 		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
 			isLoadingModel = true;
-
 			modelsStore
 				.loadModel(option.model)
 				.catch((error) => console.error('Failed to load model:', error))
@@ -160,7 +158,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	function getDisplayOption(): ModelOption | undefined {
 		if (!isRouter) {
 			const displayModel = serverModel || currentModel;
-
 			if (displayModel) {
 				return {
 					id: serverModel ? 'current' : 'offline-current',
@@ -169,8 +166,12 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 					capabilities: []
 				};
 			}
-
 			return undefined;
+		}
+
+		if (useGlobalSelection && activeId) {
+			const selected = options.find((option) => option.id === activeId);
+			if (selected) return selected;
 		}
 
 		if (currentModel) {
@@ -182,7 +183,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 					capabilities: []
 				};
 			}
-
 			return options.find((option) => option.model === currentModel);
 		}
 
@@ -197,77 +197,57 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		get options() {
 			return options;
 		},
-
 		get loading() {
 			return loading;
 		},
-
 		get updating() {
 			return updating;
 		},
-
 		get activeId() {
 			return activeId;
 		},
-
 		get isRouter() {
 			return isRouter;
 		},
-
 		get serverModel() {
 			return serverModel;
 		},
-
 		get isHighlightedCurrentModelActive() {
 			return isHighlightedCurrentModelActive;
 		},
-
 		get isCurrentModelInCache() {
 			return isCurrentModelInCache;
 		},
-
 		get filteredOptions() {
 			return filteredOptions;
 		},
-
 		get groupedFilteredOptions() {
 			return groupedFilteredOptions;
 		},
-
 		get isLoadingModel() {
 			return isLoadingModel;
 		},
-
 		get searchTerm() {
 			return searchTerm;
 		},
-
 		get showModelDialog() {
 			return showModelDialog;
 		},
-
 		get infoModelId() {
 			return infoModelId;
 		},
-
 		setSearchTerm(value: string) {
 			searchTerm = value;
 		},
-
 		setShowModelDialog(value: boolean) {
 			showModelDialog = value;
 		},
-
 		handleInfoClick,
-
 		handleSelect,
-
 		handleOpenChange,
-
 		isFavorite(model: string) {
 			return modelsStore.favoriteModelIds.has(model);
 		},
-
 		getDisplayOption
 	};
 }

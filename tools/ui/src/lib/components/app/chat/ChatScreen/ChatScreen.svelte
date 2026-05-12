@@ -1,20 +1,20 @@
 <script lang="ts">
-	import { Trash2 } from '@lucide/svelte';
+	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatScreenForm,
 		ChatMessages,
 		ChatScreenDragOverlay,
 		ChatScreenProcessingInfo,
-		ChatScreenActionScrollDown,
 		DialogEmptyFileAlert,
 		DialogFileUploadError,
 		DialogChatError,
 		ServerLoadingSplash,
-		DialogConfirmation,
-		ChatScreenServerError
+		DialogConfirmation
 	} from '$lib/components/app';
+	import * as Alert from '$lib/components/ui/alert';
 	import { setProcessingInfoContext } from '$lib/contexts';
 	import { ErrorDialogType } from '$lib/enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
@@ -34,12 +34,11 @@
 		activeConversation
 	} from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { serverLoading, serverError, isRouterMode } from '$lib/stores/server.svelte';
+	import { serverLoading, serverError, serverStore, isRouterMode } from '$lib/stores/server.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
 	import { onMount } from 'svelte';
-	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -67,8 +66,6 @@
 	let showDeleteDialog = $state(false);
 
 	let showEmptyFileDialog = $state(false);
-
-	let processingInfoVisible = $state(false);
 
 	let emptyFileNames = $state<string[]>([]);
 
@@ -175,10 +172,6 @@
 		}
 
 		showDeleteDialog = false;
-	}
-
-	function handleProcessingInfoVisibility(visible: boolean) {
-		processingInfoVisible = visible;
 	}
 
 	function handleDragEnter(event: DragEvent) {
@@ -345,9 +338,7 @@
 	});
 
 	function handleMessagesReady() {
-		if (disableAutoScroll) return;
-
-		if (!autoScroll.userScrolledUp) {
+		if (!disableAutoScroll && !autoScroll.userScrolledUp) {
 			requestAnimationFrame(() => {
 				autoScroll.scrollToBottom('instant');
 			});
@@ -401,32 +392,59 @@
 			{#if !isEmpty}
 				<ChatMessages
 					messages={activeMessages()}
-					onMessagesReady={handleMessagesReady}
 					onUserAction={() => {
 						autoScroll.enable();
 						if (!autoScroll.userScrolledUp) {
 							autoScroll.scrollToBottom();
 						}
 					}}
+					onMessagesReady={handleMessagesReady}
 				/>
 			{/if}
 
 			<div
-				class={[
-					'pointer-events-none sticky right-4 left-4 mt-auto transition-all duration-200',
-					isEmpty ? 'bottom-[calc(50dvh-7rem)]' : 'bottom-4 pt-24 md:pt-32'
-				]}
+				class="pointer-events-none {isEmpty
+					? 'absolute bottom-[calc(50dvh-7rem)]'
+					: 'sticky bottom-4'} right-4 left-4 mt-auto pt-16 transition-all duration-200"
 			>
-				<ChatScreenGreeting {isEmpty} />
+				{#if isEmpty}
+					<div class="mb-8 px-4 text-center" use:fadeInView={{ duration: 300 }}>
+						<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
 
-				<ChatScreenActionScrollDown
-					container={chatScrollContainer}
-					hasProcessingInfoVisible={processingInfoVisible}
-				/>
+						<p class="text-muted-foreground md:text-lg">
+							{serverStore.props?.modalities?.audio
+								? 'Record audio, type a message '
+								: 'Type a message'} or upload files to get started
+						</p>
+					</div>
+				{/if}
 
-				<ChatScreenProcessingInfo onVisibilityChange={handleProcessingInfoVisibility} />
+				{#if page.params.id}
+					<ChatScreenProcessingInfo />
+				{/if}
 
-				<ChatScreenServerError />
+				{#if hasPropsError}
+					<div
+						class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1"
+						use:fadeInView={{ y: 10, duration: 250 }}
+					>
+						<Alert.Root variant="destructive">
+							<AlertTriangle class="h-4 w-4" />
+							<Alert.Title class="flex items-center justify-between">
+								<span>Server unavailable</span>
+								<button
+									onclick={() => serverStore.fetch()}
+									disabled={isServerLoading}
+									class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
+								>
+									<RefreshCw class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}" />
+									{isServerLoading ? 'Retrying...' : 'Retry'}
+								</button>
+							</Alert.Title>
+							<Alert.Description>{serverError()}</Alert.Description>
+						</Alert.Root>
+					</div>
+				{/if}
 
 				<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
 					<ChatScreenForm

@@ -152,7 +152,7 @@ extern "C" {
         //LLAMA_FTYPE_MOSTLY_Q4_0_8_8      = 35, // removed from gguf files, use Q4_0 and runtime repack
         LLAMA_FTYPE_MOSTLY_TQ1_0         = 36, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_TQ2_0         = 37, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_TQ3_0         = 40, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_TQ3_0         = 200, // except 1d tensors
         // 41-42 reserved for removed TurboQuant Q4 prototypes
         LLAMA_FTYPE_MOSTLY_TQ3_1S        = 43, // except 1d tensors
         // 44 reserved for removed TQ3_1S AP1 prototype
@@ -194,6 +194,11 @@ extern "C" {
         LLAMA_FLASH_ATTN_TYPE_ENABLED  = 1,
     };
 
+    enum llama_context_type {
+        LLAMA_CONTEXT_TYPE_DEFAULT = 0,
+        LLAMA_CONTEXT_TYPE_MTP     = 1,
+    };
+
     LLAMA_API const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_type);
 
     enum llama_split_mode {
@@ -201,11 +206,6 @@ extern "C" {
         LLAMA_SPLIT_MODE_LAYER  = 1, // split layers and KV across GPUs
         LLAMA_SPLIT_MODE_ROW    = 2, // split layers and KV across GPUs, use tensor parallelism if supported
         LLAMA_SPLIT_MODE_TENSOR = 3,
-    };
-
-    enum llama_context_type {
-        LLAMA_CONTEXT_TYPE_DEFAULT = 0,
-        LLAMA_CONTEXT_TYPE_MTP     = 1,
     };
 
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
@@ -320,6 +320,9 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        // override architecture from GGUF (e.g. load the MTP head of a Qwen3.5 GGUF as "qwen35_mtp")
+        const char * override_arch;
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool use_mmap;        // use mmap if possible
@@ -344,7 +347,6 @@ extern "C" {
         uint32_t n_ubatch;          // physical maximum batch size
         uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
         uint32_t n_rs_seq;          // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
-        uint32_t n_outputs_max;     // max outputs in a ubatch (0 = n_batch)
         int32_t  n_threads;         // number of threads to use for generation
         int32_t  n_threads_batch;   // number of threads to use for batch processing
 
@@ -880,8 +882,7 @@ extern "C" {
 // work only with partial states, such as SWA KV cache or recurrent cache (e.g. Mamba)
 #define LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY 1
 
-// Keeps the tensor data on device buffers (i.e. not accessible in host memory, but faster save/load).
-// Getting the state for a seq_id with this flag invalidates all prior states gotten for that seq_id with this flag.
+// keeps the tensor data on device buffers (i.e. not accessible in host memory, but faster save/load)
 #define LLAMA_STATE_SEQ_FLAGS_ON_DEVICE 2
 
     typedef uint32_t llama_state_seq_flags;
@@ -981,11 +982,7 @@ extern "C" {
 
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
-    //
-    // note: using this can cause extra graph reallocations because it changes the graph topology with MoE models,
-    //       so it is generally not recommended to use in practice. will be removed in the future
-    DEPRECATED(LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup),
-            "user code should do warmup runs manually [TAG_LLAMA_GRAPH_NO_WARMUP]");
+    LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
@@ -1039,6 +1036,7 @@ extern "C" {
     // Get the backend sampled token for the ith token.
     // Returns LLAMA_TOKEN_NULL if no token was sampled.
     LLAMA_API llama_token llama_get_sampled_token_ith(struct llama_context * ctx, int32_t i);
+    LLAMA_API llama_token llama_get_sampled_token_ith_nosync(struct llama_context * ctx, int32_t i);
 
     // Get the backend sampled probabilities for the ith token
     // The index matches llama_get_sampled_token_ith().

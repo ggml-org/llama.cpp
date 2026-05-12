@@ -89,14 +89,26 @@ LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * m
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
 
-// Set whether the context outputs nextn embeddings or not
+//
+// pre-norm embeddings (hidden state before the final output norm)
+//
+
+// Set whether the context outputs pre-norm embeddings or not
 // If masked == true,  output the embeddings only for the tokens with batch.logits != 0
 // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
-LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value, bool masked);
+LLAMA_API void llama_set_embeddings_pre_norm(struct llama_context * ctx, bool value, bool masked);
 
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
-LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);
+LLAMA_API float * llama_get_embeddings_pre_norm    (struct llama_context * ctx);
 
 // LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);
-LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
+LLAMA_API float * llama_get_embeddings_pre_norm_ith(struct llama_context * ctx, int32_t i);
+
+// Get the raw pre-norm embedding row by token row index from the last decode graph.
+// Unlike llama_get_embeddings_pre_norm_ith(), this does not resolve through output rows.
+LLAMA_API float * llama_get_embeddings_pre_norm_raw_ith(struct llama_context * ctx, int32_t i);
+
+LLAMA_API struct ggml_tensor * llama_context_get_t_h_pre_norm(struct llama_context * ctx);
+LLAMA_API struct ggml_tensor * llama_context_get_t_mtp_out(struct llama_context * ctx);
+LLAMA_API void llama_set_mtp(struct llama_context * ctx_target, struct llama_context * ctx_mtp);
