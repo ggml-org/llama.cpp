@@ -960,6 +960,18 @@ class Processor:
         self.model_name = model_name
         self.n_predict = n_predict
 
+    @staticmethod
+    def _check_server(server_config: ServerConfig) -> List[str]:
+        url = f"{server_config.url}/v1/models"
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            models = [m["id"] for m in response.json().get("data", [])]
+            return models
+        except Exception as e:
+            print(f"Error: Cannot reach server {server_config.name} ({server_config.url}): {e}", file=sys.stderr)
+            sys.exit(1)
+
     def _make_request(
         self, server_config: ServerConfig, eval_state: EvalState, prompt: str
     ) -> Tuple[Dict[str, Any], int, Optional[float], Optional[float], str]:
@@ -1077,15 +1089,15 @@ class Processor:
         eval_state.processed = 0
         start_time = time.time()
 
+        # Check servers and list models
+        server_models = [self._check_server(sc) for sc in self.server_configs]
+
         # Print server info
-        server_lines = [
-            f"  {i+1}. {sc.name} — {sc.url} ({sc.threads} threads)"
-            for i, sc in enumerate(self.server_configs)
-        ]
         print(f"\nProcessing {len(eval_state.tasks)} {eval_state.dataset_type.upper()} tasks ...")
         print(f"Servers ({len(self.server_configs)}):")
-        for line in server_lines:
-            print(line)
+        for i, sc in enumerate(self.server_configs):
+            models_str = ", ".join(server_models[i]) if server_models[i] else "(none)"
+            print(f"  {i+1}. {sc.name} — {sc.url} ({sc.threads} threads) [{models_str}]")
         print(f"Model: {self.model_name}")
         print(f"Grader: {self.grader.grader_type}")
         print(f"Sampling: temp={eval_state.sampling_config.get('temperature', 'skip')}, top-k={eval_state.sampling_config.get('top_k', 'skip')}, top-p={eval_state.sampling_config.get('top_p', 'skip')}, min-p={eval_state.sampling_config.get('min_p', 'skip')}")
