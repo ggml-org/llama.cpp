@@ -42,6 +42,8 @@
 
 	let { showCenteredEmpty = false } = $props();
 
+	const autoScroll = createAutoScrollController();
+
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
 	let isScrollingFast = $derived(autoScroll.isScrollingFast);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -49,8 +51,6 @@
 	let isDragOver = $state(false);
 	let showFileErrorDialog = $state(false);
 	let uploadedFiles = $state<ChatUploadedFile[]>([]);
-
-	const autoScroll = createAutoScrollController();
 
 	let fileErrorData = $state<{
 		generallyUnsupported: File[];
@@ -335,6 +335,12 @@
 			initialMessage = pendingDraft.message;
 			uploadedFiles = pendingDraft.files;
 		}
+	});
+
+	afterNavigate(() => {
+		setTimeout(() => {
+			autoScroll.scrollToBottom('instant');
+		}, 100);
 	});
 
 	$effect(() => {

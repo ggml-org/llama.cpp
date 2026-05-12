@@ -2,7 +2,6 @@ import { AUTO_SCROLL_AT_BOTTOM_THRESHOLD, AUTO_SCROLL_INTERVAL } from '$lib/cons
 
 export interface AutoScrollOptions {
 	disabled?: boolean;
-	isColumnReverse?: boolean;
 	/**
 	 * Velocity threshold for scroll-based optimizations (pixels per frame)
 	 * Above this, scroll-velocity optimizations are triggered
@@ -17,7 +16,6 @@ export interface AutoScrollOptions {
  * - Auto-scrolls to bottom during streaming/loading
  * - Stops auto-scroll when user manually scrolls up
  * - Resumes auto-scroll when user scrolls back to bottom
- * - Supports both normal and column-reverse scroll containers
  */
 export class AutoScrollController {
 	private _autoScrollEnabled = $state(true);
@@ -27,7 +25,6 @@ export class AutoScrollController {
 	private _scrollTimeout: ReturnType<typeof setTimeout> | undefined;
 	private _container: HTMLElement | undefined;
 	private _disabled: boolean;
-	private _isColumnReverse: boolean;
 	private _mutationObserver: MutationObserver | null = null;
 	private _rafPending = false;
 	private _observerEnabled = false;
@@ -36,7 +33,6 @@ export class AutoScrollController {
 
 	constructor(options: AutoScrollOptions = {}) {
 		this._disabled = options.disabled ?? false;
-		this._isColumnReverse = options.isColumnReverse ?? false;
 		this._scrollVelocityThreshold = options.scrollVelocityThreshold ?? 50;
 	}
 
@@ -89,20 +85,8 @@ export class AutoScrollController {
 		if (this._disabled || !this._container) return;
 
 		const { scrollTop, scrollHeight, clientHeight } = this._container;
-
-		let distanceFromBottom: number;
-		let isScrollingUp: boolean;
-
-		if (this._isColumnReverse) {
-			// column-reverse: scrollTop=0 at bottom, negative when scrolled up
-			distanceFromBottom = Math.abs(scrollTop);
-			isScrollingUp = scrollTop < this._lastScrollTop;
-		} else {
-			// normal: scrollTop=0 at top, increases when scrolled down
-			distanceFromBottom = scrollHeight - clientHeight - scrollTop;
-			isScrollingUp = scrollTop < this._lastScrollTop;
-		}
-
+		const distanceFromBottom = scrollHeight - clientHeight - scrollTop;
+		const isScrollingUp = scrollTop < this._lastScrollTop;
 		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
 
 		if (isScrollingUp && !isAtBottom) {
@@ -138,13 +122,7 @@ export class AutoScrollController {
 	 */
 	scrollToBottom(behavior: ScrollBehavior = 'smooth'): void {
 		if (this._disabled || !this._container) return;
-
-		if (this._isColumnReverse) {
-			// column-reverse: scrollTop=0 is the bottom
-			this._container.scrollTo({ top: 0, behavior });
-		} else {
-			this._container.scrollTo({ top: this._container.scrollHeight, behavior });
-		}
+		this._container.scrollTo({ top: this._container.scrollHeight, behavior });
 	}
 
 	/**
@@ -232,20 +210,13 @@ export class AutoScrollController {
 	private _doStartObserving(): void {
 		if (!this._container || this._mutationObserver) return;
 
-		const isReverse = this._isColumnReverse;
-
 		this._mutationObserver = new MutationObserver(() => {
 			if (!this._autoScrollEnabled || this._rafPending) return;
 			this._rafPending = true;
 			requestAnimationFrame(() => {
 				this._rafPending = false;
 				if (this._autoScrollEnabled && this._container) {
-					if (isReverse) {
-						// column-reverse: scrollTop=0 is the bottom
-						this._container.scrollTop = 0;
-					} else {
-						this._container.scrollTop = this._container.scrollHeight;
-					}
+					this._container.scrollTop = this._container.scrollHeight;
 				}
 			});
 		});
