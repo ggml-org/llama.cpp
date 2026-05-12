@@ -15,7 +15,7 @@ on:
 jobs:
   publish:
     name: Publish WebUI Static Output
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
 
     permissions:
       contents: read
