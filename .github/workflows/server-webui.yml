@@ -41,7 +41,7 @@ jobs:
   webui-checks:
     name: WebUI Checks
     needs: webui-build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -93,7 +93,7 @@ jobs:
   e2e-tests:
     name: E2E Tests
     needs: webui-build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
