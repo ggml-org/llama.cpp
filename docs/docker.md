@@ -140,3 +140,47 @@ docker run -v /path/to/models:/models local/llama.cpp:full-musa --run -m /models
 docker run -v /path/to/models:/models local/llama.cpp:light-musa -m /models/7B/ggml-model-q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 512 --n-gpu-layers 1
 docker run -v /path/to/models:/models local/llama.cpp:server-musa -m /models/7B/ggml-model-q4_0.gguf --port 8080 --host 0.0.0.0 -n 512 --n-gpu-layers 1
 ```
+
+## Docker With SYCL
+
+## Building Docker locally
+
+```bash
+docker build -t local/llama.cpp:full-intel --target full -f .devops/intel.Dockerfile .
+docker build -t local/llama.cpp:light-intel --target light -f .devops/intel.Dockerfile .
+docker build -t local/llama.cpp:server-intel --target server -f .devops/intel.Dockerfile .
+```
+
+You may want to pass in some different `ARGS`, depending on the SYCL environment supported by your container host, as well as the GPU architecture.
+
+The defaults are:
+
+- `GGML_SYCL_F16` set to `OFF`
+- `IGC_VERSION` set to `v2.30.1`
+- `IGC_VERSION_FULL` set to `2_2.30.1+20950`
+- `COMPUTE_RUNTIME_VERSION` set to `26.09.37435.1`
+- `COMPUTE_RUNTIME_VERSION_FULL` set to `26.09.37435.1-0`
+- `IGDGMM_VERSION` set to `22.9.0`
+
+The resulting images, are essentially the same as the non-SYCL images:
+
+1. `local/llama.cpp:full-intel`: This image includes both the `llama-cli` and `llama-completion` executables and the tools to convert LLaMA models into ggml and convert into 4-bit quantization.
+2. `local/llama.cpp:light-intel`: This image only includes the `llama-cli` and `llama-completion` executables.
+3. `local/llama.cpp:server-intel`: This image only includes the `llama-server` executable.
+
+## Usage
+
+After building locally, usage is similar to the non-SYCL examples, but you'll need to add the `--device` flag.
+
+```bash
+# First, find all the DRI cards
+ls -la /dev/dri
+# Then, pick the card that you want to use (here for e.g. /dev/dri/card0).
+docker run --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card0:/dev/dri/card0 -v /path/to/models:/models local/llama.cpp:full-intel -m /models/7B/ggml-model-q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 512 --n-gpu-layers 99
+docker run --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card0:/dev/dri/card0 -v /path/to/models:/models local/llama.cpp:light-intel -m /models/7B/ggml-model-q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 512 --n-gpu-layers 99
+docker run --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card0:/dev/dri/card0 -v /path/to/models:/models local/llama.cpp:server-intel -m /models/7B/ggml-model-q4_0.gguf --port 8080 --host 0.0.0.0 -n 512 --n-gpu-layers 99
+```
+
+*Notes:*
+- Docker has been tested successfully on native Linux. WSL support has not been verified yet.
+- You may need to install Intel GPU driver on the **host** machine *(Please refer to the [Linux configuration](./backend/SYCL.md#linux) for details)*.

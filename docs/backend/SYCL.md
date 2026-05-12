@@ -152,35 +152,7 @@ NA
 
 ## Docker
 
-The docker build option is currently limited to *Intel GPU* targets.
-
-### Build image
-
-```sh
-# Using FP32
-docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=OFF" --target light -f .devops/intel.Dockerfile .
-
-# Using FP16
-docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=ON" --target light -f .devops/intel.Dockerfile .
-```
-
-*Notes*:
-
-You can also use the `.devops/llama-server-intel.Dockerfile`, which builds the *"server"* alternative.
-Check the [documentation for Docker](../docker.md) to see the available images.
-
-### Run container
-
-```sh
-# First, find all the DRI cards
-ls -la /dev/dri
-# Then, pick the card that you want to use (here for e.g. /dev/dri/card1).
-docker run -it --rm -v "/path/to/models:/models" --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card0:/dev/dri/card0 llama-cpp-sycl -m /models/7B/ggml-model-q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33 -c 4096 -s 0
-```
-
-*Notes:*
-- Docker has been tested successfully on native Linux. WSL support has not been verified yet.
-- You may need to install Intel GPU driver on the **host** machine *(Please refer to the [Linux configuration](#linux) for details)*.
+Please refer to [Docker with SYCL](../docker.md#docker-with-sycl) for details.
 
 ## Linux
 
