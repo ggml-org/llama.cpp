@@ -299,30 +299,32 @@ class Keys:
         HAS_LLAVA_PROJECTOR   = "clip.has_llava_projector"
 
     class ClipVision:
-        PROJECTOR_TYPE      = "clip.vision.projector_type" # for mixed modality models
-        IMAGE_SIZE          = "clip.vision.image_size"
-        IMAGE_MIN_PIXELS    = "clip.vision.image_min_pixels"
-        IMAGE_MAX_PIXELS    = "clip.vision.image_max_pixels"
-        PREPROC_MIN_TILES   = "clip.vision.preproc_min_tiles"
-        PREPROC_MAX_TILES   = "clip.vision.preproc_max_tiles"
-        PREPROC_IMAGE_SIZE  = "clip.vision.preproc_image_size"
-        PATCH_SIZE          = "clip.vision.patch_size"
-        EMBEDDING_LENGTH    = "clip.vision.embedding_length"
-        FEED_FORWARD_LENGTH = "clip.vision.feed_forward_length"
-        PROJECTION_DIM      = "clip.vision.projection_dim"
-        BLOCK_COUNT         = "clip.vision.block_count"
-        IMAGE_MEAN          = "clip.vision.image_mean"
-        IMAGE_STD           = "clip.vision.image_std"
-        SPATIAL_MERGE_SIZE  = "clip.vision.spatial_merge_size"
-        USE_GELU            = "clip.use_gelu"
-        USE_SILU            = "clip.use_silu"
-        N_WA_PATTERN        = "clip.vision.n_wa_pattern" # used by qwen2.5vl
-        WA_LAYER_INDEXES    = "clip.vision.wa_layer_indexes" # used by youtuvl
-        IS_DEEPSTACK_LAYERS = "clip.vision.is_deepstack_layers"
-        WINDOW_SIZE         = "clip.vision.window_size"
+        PROJECTOR_TYPE        = "clip.vision.projector_type" # for mixed modality models
+        IMAGE_SIZE            = "clip.vision.image_size"
+        IMAGE_MIN_PIXELS      = "clip.vision.image_min_pixels"
+        IMAGE_MAX_PIXELS      = "clip.vision.image_max_pixels"
+        PREPROC_MIN_TILES     = "clip.vision.preproc_min_tiles"
+        PREPROC_MAX_TILES     = "clip.vision.preproc_max_tiles"
+        PREPROC_IMAGE_SIZE    = "clip.vision.preproc_image_size"
+        PATCH_SIZE            = "clip.vision.patch_size"
+        EMBEDDING_LENGTH      = "clip.vision.embedding_length"
+        FEED_FORWARD_LENGTH   = "clip.vision.feed_forward_length"
+        PROJECTION_DIM        = "clip.vision.projection_dim"
+        BLOCK_COUNT           = "clip.vision.block_count"
+        IMAGE_MEAN            = "clip.vision.image_mean"
+        IMAGE_STD             = "clip.vision.image_std"
+        SPATIAL_MERGE_SIZE    = "clip.vision.spatial_merge_size"
+        USE_GELU              = "clip.use_gelu"
+        USE_SILU              = "clip.use_silu"
+        N_WA_PATTERN          = "clip.vision.n_wa_pattern"     # used by qwen2.5vl
+        WA_LAYER_INDEXES      = "clip.vision.wa_layer_indexes" # used by youtuvl
+        WA_PATTERN_MODE       = "clip.vision.wa_pattern_mode"  # used by mimovl, per-layer -1/0/1
+        IS_DEEPSTACK_LAYERS   = "clip.vision.is_deepstack_layers"
+        WINDOW_SIZE           = "clip.vision.window_size"
 
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
+            HEAD_COUNT_KV   = "clip.vision.attention.head_count_kv" # used by mimovl (GQA)
             LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
 
         class Projector:
@@ -733,6 +735,7 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_ATTN_V         = auto()
     V_ENC_ATTN_O         = auto()
     V_ENC_ATTN_O_NORM    = auto()
+    V_ENC_ATTN_SINKS     = auto() # mimovl
     V_ENC_POST_ATTN_NORM = auto()
     V_ENC_FFN_UP         = auto()
     V_ENC_FFN_GATE       = auto()
@@ -1246,6 +1249,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_INPUT_NORM:          "v.blk.{bid}.ln1",
     MODEL_TENSOR.V_ENC_ATTN_O:              "v.blk.{bid}.attn_out",
     MODEL_TENSOR.V_ENC_ATTN_O_NORM:         "v.blk.{bid}.attn_out_norm",
+    MODEL_TENSOR.V_ENC_ATTN_SINKS:          "v.blk.{bid}.attn_sinks",
     MODEL_TENSOR.V_ENC_POST_ATTN_NORM:      "v.blk.{bid}.ln2",
     MODEL_TENSOR.V_ENC_FFN_UP:              "v.blk.{bid}.ffn_up",
     MODEL_TENSOR.V_ENC_FFN_GATE:            "v.blk.{bid}.ffn_gate",
@@ -1426,6 +1430,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_ATTN_V,
         MODEL_TENSOR.V_ENC_ATTN_O,
         MODEL_TENSOR.V_ENC_ATTN_O_NORM,
+        MODEL_TENSOR.V_ENC_ATTN_SINKS,
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM,
         MODEL_TENSOR.V_ENC_FFN_UP,
         MODEL_TENSOR.V_ENC_FFN_GATE,
@@ -4258,6 +4263,7 @@ class VisionProjectorType:
     HUNYUANVL      = "hunyuanvl"
     MINICPMV4_6    = "minicpmv4_6"
     GRANITE_SPEECH = "granite_speech"  # audio
+    MIMOVL         = "mimovl"
 
 
 # Items here are (block size, type size)

@@ -42,6 +42,7 @@ struct clip_hparams {
     int32_t n_ff = 0;
     int32_t projection_dim = 0;
     int32_t n_head = 0;
+    int32_t n_head_kv = 0;
     int32_t n_layer = 0;
     // idefics3
     int32_t n_merge = 0; // number of patch merges **per-side**
@@ -83,6 +84,7 @@ struct clip_hparams {
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
+    std::vector<int32_t> wa_pattern_mode; // mimovl: per-layer window-attention mode
 
     // deepseek-ocr (sam)
     int32_t sam_n_layer = 0;
@@ -165,6 +167,8 @@ struct clip_layer {
 
     ggml_tensor * o_w = nullptr;
     ggml_tensor * o_b = nullptr;
+
+    ggml_tensor * attn_sinks = nullptr;
 
     ggml_tensor * k_norm = nullptr;
     ggml_tensor * q_norm = nullptr;
