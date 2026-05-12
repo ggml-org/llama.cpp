@@ -76,30 +76,18 @@ if (LLAMA_BUILD_WEBUI)
 
     # Priority 2: Try to download from Hugging Face Bucket if local not available
     if(NOT WEBUI_SOURCE_DIR AND LLAMA_USE_PREBUILT_WEBUI)
-        # Determine version tag for HF Bucket
-        # Only release tags (b<number> format) have webui assets uploaded
-        if(DEFINED ENV{LLAMA_BUILD_TAG})
-            set(HF_WEBUI_VERSION "$ENV{LLAMA_BUILD_TAG}")
-            message(STATUS "WebUI: using LLAMA_BUILD_TAG=${HF_WEBUI_VERSION}")
-        elseif(EXISTS "${CMAKE_SOURCE_DIR}/.git")
-            execute_process(
-                COMMAND git describe --tags --abbrev=0
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-                OUTPUT_VARIABLE HF_WEBUI_VERSION
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_VARIABLE git_stderr
-            )
-            # Check if git describe failed (no tags, detached HEAD, etc.)
-            if("${HF_WEBUI_VERSION}" STREQUAL "")
-                message(STATUS "WebUI: git describe failed (${git_stderr}), using empty version")
-            endif()
+        # Determine version for HF Bucket using LLAMA_BUILD_NUMBER
+        if(DEFINED LLAMA_BUILD_NUMBER)
+            set(HF_WEBUI_VERSION "${LLAMA_BUILD_NUMBER}")
+            message(STATUS "WebUI: using LLAMA_BUILD_NUMBER=${HF_WEBUI_VERSION}")
+        else()
+            message(WARNING "WebUI: LLAMA_BUILD_NUMBER not defined, cannot download from HF Bucket")
         endif()
 
-        # Skip HF Bucket if no version tag available
+        # Skip HF Bucket if no version available
         if("${HF_WEBUI_VERSION}" STREQUAL "")
-            message(WARNING "WebUI: no version tag available (set LLAMA_BUILD_TAG env var or create a git tag)")
+            message(WARNING "WebUI: no version available (set LLAMA_BUILD_NUMBER)")
         else()
-
         # Hugging Face Buckets URL format
         set(HF_BUCKET_URL "https://huggingface.co/buckets/ggml-org/${LLAMA_WEBUI_HF_BUCKET}/resolve/${HF_WEBUI_VERSION}")
 
