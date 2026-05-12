@@ -1638,12 +1638,10 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_host(que
 
 std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device) {
 #if defined(GGML_SYCL_USE_VMM)
-        GGML_LOG_INFO("SYCL pool[%d]: VMM\n", device);
     if (!g_ggml_sycl_disable_vmm && ggml_sycl_info().devices[device].vmm) {
         return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_vmm(qptr, device));
     }
 #endif // defined(GGML_SYCL_USE_VMM)
-    GGML_LOG_INFO("SYCL pool[%d]: legacy\n", device);
     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_leg(qptr, device));
 }
 
