@@ -6551,6 +6551,16 @@ class ZayaModel(TextModel):
         elif "residual_bias" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES_B, bid, suffix=".bias"), data_torch
 
+    def _map_final_res_scale(self, name: str, data_torch: Tensor) -> Iterable[tuple[str, Tensor]]:
+        if "hidden_states_scale" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_HS_FINAL), data_torch
+        elif "hidden_states_bias" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_HS_B_FINAL, suffix=".bias"), data_torch
+        elif "residual_scale" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES_FINAL), data_torch
+        elif "residual_bias" in name:
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES_B_FINAL, suffix=".bias"), data_torch
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Common tensors
         if name == "model.embed_tokens.weight":
@@ -6561,6 +6571,9 @@ class ZayaModel(TextModel):
             return
         if name == "model.final_norm.weight":
             yield self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT_NORM), data_torch
+            return
+        if name.startswith("model.res_scale."):
+            yield from self._map_final_res_scale(name, data_torch)
             return
 
         # Block-level tensors
@@ -6599,7 +6612,7 @@ class ZayaModel(TextModel):
                 if len(self._experts[bid]) >= n_expert * 2:
                     for w_name, gguf_tensor, permute_dims in [
                         ("linear_fc1", gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, None),
-                        ("linear_fc2", gguf.MODEL_TENSOR.FFN_DOWN_EXP, (0, 2, 1)),
+                        ("linear_fc2", gguf.MODEL_TENSOR.FFN_DOWN_EXP, None),
                     ]:
                         datas: list[Tensor] = []
                         for xid in range(n_expert):

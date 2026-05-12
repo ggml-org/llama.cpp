@@ -458,6 +458,10 @@ enum llm_tensor {
     LLM_TENSOR_RES_SCALE_HS_B,      // zaya: hidden_states_bias
     LLM_TENSOR_RES_SCALE_RES,       // zaya: residual_scale
     LLM_TENSOR_RES_SCALE_RES_B,     // zaya: residual_bias
+    LLM_TENSOR_RES_SCALE_HS_FINAL,  // zaya: final hidden_states_scale
+    LLM_TENSOR_RES_SCALE_HS_B_FINAL,// zaya: final hidden_states_bias
+    LLM_TENSOR_RES_SCALE_RES_FINAL, // zaya: final residual_scale
+    LLM_TENSOR_RES_SCALE_RES_B_FINAL,// zaya: final residual_bias
     // ZAYA Router (MoE gating)
     LLM_TENSOR_ZAYA_ROUTER_DOWN,      // zaya: router down_proj weight
     LLM_TENSOR_ZAYA_ROUTER_DOWN_B,    // zaya: router down_proj bias

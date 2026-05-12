@@ -144,13 +144,6 @@ bool common_debug_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
     auto * cb_data = (common_debug_cb_user_data *) user_data;
     auto * pimpl = cb_data->pimpl.get();
 
-    const struct ggml_tensor * src0 = t->src[0];
-    const struct ggml_tensor * src1 = t->src[1];
-
-    if (ask) {
-        return true;  // Always retrieve data
-    }
-
     bool matches_filter = pimpl->tensor_filters.empty();
 
     if (!matches_filter) {
@@ -161,6 +154,13 @@ bool common_debug_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
             }
         }
     }
+
+    if (ask) {
+        return matches_filter;
+    }
+
+    const struct ggml_tensor * src0 = t->src[0];
+    const struct ggml_tensor * src1 = t->src[1];
 
     char src1_str[128] = { 0 };
     if (src1) {
