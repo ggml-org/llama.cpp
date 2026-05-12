@@ -10,11 +10,31 @@ jobs:
     name: Build WebUI
     uses: ./.github/workflows/webui-build.yml
 
+  get-tag:
+    name: Get Latest Upstream Tag
+    needs: webui-build
+    runs-on: ubuntu-latest
+    outputs:
+      version_tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Get latest upstream release tag
+        id: tag
+        run: |
+          TAG=$(curl -sL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest | jq -r '.tag_name // empty')
+          if [ -z "$TAG" ]; then
+            echo "Error: Could not fetch latest upstream tag"
+            exit 1
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Using upstream release tag: $TAG"
+
   publish-webui:
     name: Publish WebUI to Hugging Face Bucket
-    needs: webui-build
+    needs:
+      - webui-build
+      - get-tag
     uses: ./.github/workflows/webui-publish.yml
     with:
-      version_tag: ${{ github.ref_name }}
+      version_tag: ${{ needs.get-tag.outputs.version_tag }}
     secrets:
       hf_token: ${{ secrets.HF_TOKEN_WEBUI_STATIC_OUTPUT }}
