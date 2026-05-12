@@ -137,7 +137,8 @@ jobs:
               --test       all \
               --pkg-dir    pkg-snapdragon/llama.cpp \
               --model-url  "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf" \
-              --device     ${{ matrix.device }}
+              --device     ${{ matrix.device }} \
+              ${{ startsWith(matrix.device, 'QCS') && '--retries 2 --retry-delay 300' || '' }}
         env:
           QDC_API_KEY: ${{ secrets.QDC_API_KEY }}
 

@@ -90,6 +90,23 @@ backend_env() {
   esac
 }
 
+backend_log_name() {
+  case "$1" in
+    cpu) echo "cpu" ;;
+    gpu) echo "gpu" ;;
+    npu) echo "htp" ;;
+  esac
+}
+
+
+backend_device_name() {
+  case "$1" in
+    cpu) echo "none" ;;
+    gpu) echo "GPUOpenCL" ;;
+    npu) echo "HTP0" ;;
+  esac
+}
+
 # Append a diagnostic block when a per-case `timeout N` fires (rc=124). The
 # naked log file at that point usually just ends mid-OpenCL-init with no
 # stderr, which is hard to read in CI summaries.
@@ -105,11 +122,37 @@ note_timeout_if_triggered() {
   } >> "$log"
 }
 
+run_completion_case() {
+  local name=$1
+  local parts=($(backend_env "$name"))
+  local ndev=${parts[0]} device=${parts[1]}
+  local device_log_name=$(backend_device_name "$name")
+  local log="$LOG_DIR/llama_completion_${device_log_name}.log"
+  echo "=== [completion:$name] llama-cli --device $device (NDEV=$ndev) ==="
+  timeout 600 env GGML_HEXAGON_NDEV=$ndev ./bin/llama-cli \
+      -m "$MODEL_PATH" \
+      --device "$device" \
+      -ngl 99 \
+      --batch-size 128 \
+      -n 128 \
+      --seed 42 \
+      -p "What is the capital of France?" \
+      > "$log" 2>&1
+  local rc=$?
+  note_timeout_if_triggered "$rc" 600 "$log"
+  if [ $rc -eq 0 ]; then
+    xml_case_pass "tests.test_bench_posix" "test_llama_completion[$name]"
+  else
+    xml_case_fail "tests.test_bench_posix" "test_llama_completion[$name]" "$rc" "$log"
+  fi
+}
+
 run_bench_case() {
   local name=$1
   local parts=($(backend_env "$name"))
   local ndev=${parts[0]} device=${parts[1]}
-  local log="$LOG_DIR/llama_bench_${name}.log"
+  local log_suffix=$(backend_log_name "$name")
+  local log="$LOG_DIR/llama_bench_${log_suffix}.log"
   echo "=== [bench:$name] llama-bench --device $device (NDEV=$ndev) ==="
   timeout 600 env GGML_HEXAGON_NDEV=$ndev ./bin/llama-bench \
       -m "$MODEL_PATH" \
@@ -123,9 +166,9 @@ run_bench_case() {
   local rc=$?
   note_timeout_if_triggered "$rc" 600 "$log"
   if [ $rc -eq 0 ]; then
-    xml_case_pass bench "llama_bench_${name}"
+    xml_case_pass "tests.test_bench_posix" "test_llama_bench[$name]"
   else
-    xml_case_fail bench "llama_bench_${name}" "$rc" "$log"
+    xml_case_fail "tests.test_bench_posix" "test_llama_bench[$name]" "$rc" "$log"
   fi
 }
 
@@ -149,9 +192,9 @@ run_backend_ops_case() {
   local rc=$?
   note_timeout_if_triggered "$rc" 600 "$log"
   if [ $rc -eq 0 ]; then
-    xml_case_pass backend_ops "$dtype"
+    xml_case_pass "tests.test_backend_ops_posix" "test_backend_ops_htp0[$dtype]"
   else
-    xml_case_fail backend_ops "$dtype" "$rc" "$log"
+    xml_case_fail "tests.test_backend_ops_posix" "test_backend_ops_htp0[$dtype]" "$rc" "$log"
   fi
 }
 
@@ -159,12 +202,14 @@ xml_open
 
 case "{TEST_MODE}" in
   bench)
+    for b in cpu gpu npu; do run_completion_case "$b"; done
     for b in cpu gpu npu; do run_bench_case "$b"; done
     ;;
   backend-ops)
     for d in mxfp4 fp16 q4_0; do run_backend_ops_case "$d"; done
     ;;
   all)
+    for b in cpu gpu npu; do run_completion_case "$b"; done
     for b in cpu gpu npu; do run_bench_case "$b"; done
     for d in mxfp4 fp16 q4_0; do run_backend_ops_case "$d"; done
     ;;

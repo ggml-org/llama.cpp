@@ -75,8 +75,14 @@ LOG_UPLOAD_TIMEOUT   = 600
 CAPACITY_TIMEOUT     = 1800
 CAPACITY_POLL        = 60
 MAX_CONCURRENT_JOBS  = 5
+DEFAULT_RETRIES      = 0
+RETRY_DELAY          = 300
 TERMINAL_STATES     = {JobState.COMPLETED, JobState.CANCELED}
 NON_TERMINAL_STATES = {JobState.DISPATCHED, JobState.RUNNING, JobState.SETUP, JobState.SUBMITTED}
+
+class DeviceUnavailableError(Exception):
+    """Raised when the QDC device resource is not available (retryable)."""
+
 
 _SCRIPTS_DIR = Path(__file__).parent
 _TESTS_DIR = _SCRIPTS_DIR / "tests"
@@ -92,6 +98,7 @@ _EXCLUDED_LOGS = {
     "qdc_kernel_host-000.log",
     "qdc_LE_whole_host-000.log",
     "qdc_LE_kernel_host-000.log",
+    "script.log",
 }
 _NON_TERMINAL_STATE_VALUES = {s.value for s in NON_TERMINAL_STATES}
 
@@ -351,8 +358,8 @@ def wait_for_capacity(client, max_jobs: int = MAX_CONCURRENT_JOBS) -> None:
         )
         time.sleep(CAPACITY_POLL)
         elapsed += CAPACITY_POLL
-    log.warning(
-        "Capacity wait timed out after %ds; proceeding anyway", CAPACITY_TIMEOUT
+    raise TimeoutError(
+        f"Capacity wait timed out after {CAPACITY_TIMEOUT}s"
     )
 
 # ---------------------------------------------------------------------------
@@ -524,10 +531,73 @@ def parse_args() -> argparse.Namespace:
                    help="Test suite to run (default: bench)")
     p.add_argument("--job-timeout", type=int, default=JOB_TIMEOUT, metavar="SECONDS",
                    help=f"Max seconds to wait for job completion (default: {JOB_TIMEOUT})")
+    p.add_argument("--retries", type=int, default=DEFAULT_RETRIES, metavar="N",
+                   help="Number of retries when device is unavailable (default: 0)")
+    p.add_argument("--retry-delay", type=int, default=RETRY_DELAY, metavar="SECONDS",
+                   help=f"Seconds to wait between retries (default: {RETRY_DELAY})")
     args = p.parse_args()
     if args.test in ("bench", "all") and not args.model_url:
         p.error("--model-url is required when --test bench or --test all")
     return args
+
+
+def _submit_and_run_job(client, args, spec, target_id, artifact_id) -> JobResult:
+    """Submit a QDC job and wait for results.
+
+    Raises DeviceUnavailableError for transient device/resource issues that
+    are worth retrying. Returns JobResult for definitive outcomes (pass or
+    test failure).
+    """
+    try:
+        wait_for_capacity(client)
+    except TimeoutError:
+        raise DeviceUnavailableError("Capacity wait timed out — device busy")
+
+    job_name = spec.job_name_fmt.format(base="llama.cpp Hexagon tests")
+
+    job_id = qdc_api.submit_job(
+        public_api_client=client,
+        target_id=target_id,
+        job_name=job_name,
+        external_job_id=None,
+        job_type=JobType.AUTOMATED,
+        job_mode=JobMode.APPLICATION,
+        timeout=max(1, args.job_timeout // 60),
+        test_framework=spec.test_framework,
+        entry_script=spec.entry_script,
+        job_artifacts=[artifact_id],
+        monkey_events=None,
+        monkey_session_timeout=None,
+        job_parameters=[JobSubmissionParameter.WIFIENABLED],
+    )
+    if job_id is None:
+        raise DeviceUnavailableError("Job submission failed — device may be unavailable")
+    log.info("Job submitted: %s  (device=%s)", job_id, args.device)
+
+    try:
+        job_status = wait_for_job(client, job_id, timeout=args.job_timeout)
+    except TimeoutError as e:
+        raise DeviceUnavailableError(str(e))
+    log.info("Job %s finished: %s", job_id, job_status)
+
+    wait_for_log_upload(client, job_id)
+    tests, raw_logs, failure_details = fetch_logs_and_parse_tests(client, job_id)
+
+    job_ok = job_status == JobState.COMPLETED.value.lower()
+
+    if not job_ok and not tests:
+        raise DeviceUnavailableError(
+            f"Job did not complete (status={job_status}) and produced no test results"
+        )
+
+    passed = job_ok and all(tests.values()) if tests else job_ok
+    if spec.test_framework == TestFramework.BASH and not tests:
+        log.error("No test results recovered (state=%s). Script likely never ran.", job_status)
+        passed = False
+    if not passed:
+        log.error("Job did not complete successfully or tests failed (status=%s)", job_status)
+
+    return JobResult(passed=passed, tests=tests, raw_logs=raw_logs, failure_details=failure_details)
 
 
 def main() -> int:
@@ -574,50 +644,30 @@ def main() -> int:
         log.error("Artifact upload failed")
         return 1
 
-    wait_for_capacity(client)
-
-    job_name = spec.job_name_fmt.format(base="llama.cpp Hexagon tests")
-
-    job_id = qdc_api.submit_job(
-        public_api_client=client,
-        target_id=target_id,
-        job_name=job_name,
-        external_job_id=None,
-        job_type=JobType.AUTOMATED,
-        job_mode=JobMode.APPLICATION,
-        timeout=max(1, args.job_timeout // 60),
-        test_framework=spec.test_framework,
-        entry_script=spec.entry_script,
-        job_artifacts=[artifact_id],
-        monkey_events=None,
-        monkey_session_timeout=None,
-        job_parameters=[JobSubmissionParameter.WIFIENABLED],
-    )
-    if job_id is None:
-        log.error("Job submission failed")
+    max_attempts = 1 + args.retries
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = _submit_and_run_job(client, args, spec, target_id, artifact_id)
+            break
+        except DeviceUnavailableError as e:
+            if attempt < max_attempts:
+                log.warning(
+                    "Attempt %d/%d failed (device unavailable): %s — retrying in %ds",
+                    attempt, max_attempts, e, args.retry_delay,
+                )
+                time.sleep(args.retry_delay)
+            else:
+                log.error(
+                    "Attempt %d/%d failed (device unavailable): %s — no retries left",
+                    attempt, max_attempts, e,
+                )
+                write_summary(
+                    JobResult(passed=False, tests={}),
+                    title=f"QDC Device Unavailable ({args.device})",
+                )
+                return 1
+    else:
         return 1
-    log.info("Job submitted: %s  (device=%s)", job_id, args.device)
-
-    try:
-        job_status = wait_for_job(client, job_id, timeout=args.job_timeout)
-    except TimeoutError as e:
-        log.error("%s", e)
-        write_summary(JobResult(passed=False, tests={}), title=f"QDC Job Timed Out ({args.device})")
-        return 1
-    log.info("Job %s finished: %s", job_id, job_status)
-
-    wait_for_log_upload(client, job_id)
-    tests, raw_logs, failure_details = fetch_logs_and_parse_tests(client, job_id)
-
-    job_ok = job_status == JobState.COMPLETED.value.lower()
-    passed = job_ok and all(tests.values()) if tests else job_ok
-    if spec.test_framework == TestFramework.BASH and not tests:
-        log.error("No test results recovered (state=%s). Script likely never ran.", job_status)
-        passed = False
-    if not passed:
-        log.error("Job did not complete successfully or tests failed (status=%s)", job_status)
-
-    result = JobResult(passed=passed, tests=tests, raw_logs=raw_logs, failure_details=failure_details)
 
     if args.test == "backend-ops":
         title = f"Backend Ops — HTP0 ({args.device})"
@@ -627,7 +677,7 @@ def main() -> int:
         title = f"QDC Test Results ({args.device})"
     write_summary(result, title=title)
 
-    return 0 if passed else 1
+    return 0 if result.passed else 1
 
 
 if __name__ == "__main__":
