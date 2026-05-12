@@ -1412,3 +1412,18 @@ jobs:
                 });
               }
             }
+
+  webui-publish:
+    if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+
+    needs:
+      - release
+
+    permissions:
+      contents: write
+
+    uses: ./.github/workflows/webui-publish.yml
+    with:
+      version_tag: ${{ github.ref_name }}
+    secrets:
+      hf_token: ${{ secrets.HF_TOKEN_WEBUI_STATIC_OUTPUT }}

@@ -1,0 +1,27 @@
+name: Test HF Bucket Upload
+
+on:
+  push:
+    branches:
+      - allozaur/webui-build-strategy
+
+jobs:
+  webui-build:
+    name: Build WebUI
+    uses: ./.github/workflows/webui-build.yml
+
+  publish-webui:
+    name: Publish WebUI to Hugging Face Bucket
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+
+    needs:
+      - webui-build
+
+    uses: ./.github/workflows/webui-publish.yml
+    with:
+      version_tag: ${{ github.ref_name }}
+    secrets:
+      hf_token: ${{ secrets.HF_TOKEN_WEBUI_STATIC_OUTPUT }}
