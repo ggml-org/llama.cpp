@@ -49,7 +49,7 @@ gated_delta_net_cuda(const float * q,
     float         s_shard[rows_per_lane];
     // state is stored transposed: M[col][i] = S[i][col], row col is contiguous
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
 #pragma unroll
     for (int r = 0; r < rows_per_lane; r++) {
         const int i = r * warp_size + lane;

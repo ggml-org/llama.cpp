@@ -21,7 +21,7 @@ static __global__ void mul_mat_vec_f(
     int channel_y;
     int sample_dst;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     if constexpr (is_multi_token_id) {
         // Multi-token MUL_MAT_ID path, adding these in the normal path causes a perf regression for n_tokens=1 case
         token_idx  = blockIdx.z;
@@ -299,7 +299,7 @@ static __global__ void mul_mat_vec_f(
         static_assert(std::is_same_v<T, void>, "unsupported type");
     }
 
-    GGML_CUDA_PDL_LC();
+    ggml_cuda_pdl_lc();
 #pragma unroll
     for (int j = 0; j < ncols_dst; ++j) {
         sumf[j] = warp_reduce_sum<warp_size>(sumf[j]);

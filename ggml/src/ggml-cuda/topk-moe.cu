@@ -106,7 +106,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
         wt[i] = -INFINITY;
     }
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
 #pragma unroll
     for (int i = 0; i < n_experts; i += WARP_SIZE) {
         const int expert  = i + threadIdx.x;
@@ -159,7 +159,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
         output_weights[i] = 0.f;
     }
 
-    GGML_CUDA_PDL_LC();
+    ggml_cuda_pdl_lc();
     for (int k = 0; k < n_expert_used; k++) {
         float max_val    = wt[0];
         int   max_expert = threadIdx.x;

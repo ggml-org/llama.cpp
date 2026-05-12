@@ -15,7 +15,7 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE) concat_f32_cont
 
     const int64_t n = ne0 * ne1 * ne2;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     for (int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (int64_t) blockDim.x * gridDim.x) {
         if constexpr (dim == 0) {
             const int64_t row = i / ne0;

@@ -134,7 +134,7 @@ static __global__ void rope_neox(const T *            x,
                                  const float *        freq_factors,
                                  const int64_t *      row_indices,
                                  const int            set_rows_stride) {
-    GGML_CUDA_PDL_LC();
+    ggml_cuda_pdl_lc();
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne00) {
@@ -149,7 +149,7 @@ static __global__ void rope_neox(const T *            x,
 
     int       idst = i0 / 2 + i1 * s1  + i2 * s2  + i3 * s3;
     const int ix   = i0 / 2 + i1 * s01 + i2 * s02 + i3 * s03;
-    GGML_CUDA_PDL_SYNC(); // guards x, dst, pos, freq_factors, row_indices data access
+    ggml_cuda_pdl_sync(); // guards x, dst, pos, freq_factors, row_indices data access
 
     // Fusion optimization: ROPE + VIEW + SET_ROWS.
     // The rope output is viewed as a 1D tensor and offset based on a row index in row_indices.
@@ -218,7 +218,7 @@ static __global__ void rope_multi(const T *            x,
     int       idst = i0 / 2 + i1 * s1  + i2 * s2  + i3 * s3;
     const int ix   = i0 / 2 + i1 * s01 + i2 * s02 + i3 * s03;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     if (i0 >= n_dims) {
         dst[idst + i0/2 + 0] = x[ix + i0/2 + 0];
         dst[idst + i0/2 + 1] = x[ix + i0/2 + 1];
@@ -303,7 +303,7 @@ static __global__ void rope_vision(const T *            x,
     int       idst = i0 / 2 + i1 * s1  + i2 * s2  + i3 * s3;
     const int ix   = i0 / 2 + i1 * s01 + i2 * s02 + i3 * s03;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     const int sect_dims = sections.v[0] + sections.v[1];
     const int sec_w     = sections.v[1] + sections.v[0];
     const int sector    = (i0 / 2) % sect_dims;

@@ -629,7 +629,7 @@ static __global__ void flash_attn_mask_to_KV_max(
     const int tid      = threadIdx.x;
     const int sequence = blockIdx.y;
     const int jt       = blockIdx.x;
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
 
     mask += sequence*s33 + jt*ncols1*s31;
 
@@ -775,7 +775,7 @@ static __global__ void flash_attn_stream_k_fixup_general(
     const int jc    = j*ncols2 + c;
     const int tid   = threadIdx.x;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     const float * dst_fixup_data = ((const float *) dst_fixup) + gridDim.x*(2*2*ncols);
 
     const int kbc0      = int64_t(bidx0 + 0)*total_work / gridDim.x;
@@ -869,7 +869,7 @@ static __global__ void flash_attn_combine_results(
         const float2 * __restrict__ VKQ_meta,
         float * __restrict__ dst,
         const int parallel_blocks) {
-    GGML_CUDA_PDL_LC();
+    ggml_cuda_pdl_lc();
     // Dimension 0: threadIdx.x
     // Dimension 1: blockIdx.x
     // Dimension 2: blockIdx.y
@@ -893,7 +893,7 @@ static __global__ void flash_attn_combine_results(
     __builtin_assume(tid < D);
 
     extern __shared__ float2 meta[];
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     for (int i = tid; i < 2*parallel_blocks; i += D) {
         ((float *) meta)[i] = ((const float *)VKQ_meta) [i];
     }

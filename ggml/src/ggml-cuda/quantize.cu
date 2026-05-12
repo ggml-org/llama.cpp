@@ -7,7 +7,7 @@ static __global__ void quantize_q8_1(
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const uint32_t ne1, const uint3 ne2) {
     // aendk test, baseline is at 345.57 on maxq
-    GGML_CUDA_PDL_LC();
+    ggml_cuda_pdl_lc();
     const int64_t i0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i0 >= ne0) {
@@ -30,7 +30,7 @@ static __global__ void quantize_q8_1(
     const int64_t ib  = i_cont / QK8_1; // block index
     const int64_t iqs = i_cont % QK8_1; // quant index
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     const float xi = i0 < ne00 ? x[i03*s03 + i02*s02 + i01*s01 + i00] : 0.0f;
     float amax = fabsf(xi);
     float sum = xi;
@@ -199,7 +199,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
     const int64_t i2 = blockIdx.z % ne2;
     const int64_t i3 = blockIdx.z / ne2;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     const int64_t i01 = ids ? ids[i1] : i1;
     const int64_t i02 = i2;
     const int64_t i03 = i3;
@@ -292,7 +292,7 @@ static __global__ void quantize_mmq_q8_1(
     const int64_t i3 = blockIdx.z / ne2;
 
     const int64_t i00 = i0;
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     const int64_t i01 = ids ? ids[i1] : i1;
     const int64_t i02 = i2;
     const int64_t i03 = i3;

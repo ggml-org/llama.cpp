@@ -13,7 +13,7 @@ static __global__ void norm_f32(
     const int sample    = blockIdx.z;
     const int tid       = threadIdx.x;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
     dst += ((sample*nchannels + channel)*nrows + row)*ncols;
 
@@ -47,7 +47,7 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
 
     float tmp = 0.0f; // partial sum for thread in warp
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     for (int j = start; j < end; j += block_size) {
         tmp += x[j];
     }
@@ -97,7 +97,7 @@ static __global__ void rms_norm_f32(const float * x,
                                     const uint3   add_nrows_packed     = make_uint3(0, 0, 0),
                                     const uint3   add_nchannels_packed = make_uint3(0, 0, 0),
                                     const uint3   add_nsamples_packed  = make_uint3(0, 0, 0)) {
-    GGML_CUDA_PDL_LC();
+    ggml_cuda_pdl_lc();
     const int nrows     = gridDim.x;
     const int nchannels = gridDim.y;
 
@@ -127,7 +127,7 @@ static __global__ void rms_norm_f32(const float * x,
 
     float tmp = 0.0f; // partial sum for thread in warp
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     for (int col = tid; col < ncols; col += block_size) {
         const float xi = x[col];
         tmp += xi * xi;
@@ -160,7 +160,7 @@ static __global__ void rms_norm_back_f32(
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     grad += int64_t(row)*ncols;
     xf   += int64_t(row)*ncols;
     dst  += int64_t(row)*ncols;
@@ -258,7 +258,7 @@ static __global__ void l2_norm_f32(
 
     float tmp = 0.0f; // partial sum for thread in warp
 
-    GGML_CUDA_PDL_SYNC(); // needs to guard data access (except pointer arithmetic) for x, dst.
+    ggml_cuda_pdl_sync(); // needs to guard data access (except pointer arithmetic) for x, dst.
     for (int col = tid; col < ncols; col += block_size) {
         const float xi = x[col];
         tmp += xi * xi;
@@ -267,7 +267,7 @@ static __global__ void l2_norm_f32(
     // sum up partial sums
     extern __shared__ float s_sum[];
     tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);
-    GGML_CUDA_PDL_LC();
+    ggml_cuda_pdl_lc();
 
     // from https://pytorch.org/docs/stable/generated/torch.nn.functional.normalize.html
     const float scale = rsqrtf(fmaxf(tmp, eps * eps));

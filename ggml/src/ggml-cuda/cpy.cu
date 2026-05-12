@@ -16,7 +16,7 @@ static __global__ void cpy_scalar(const char * cx, char * cdst, const int64_t ne
                                   const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
                                   const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11,
                                   const int64_t nb12, const int64_t nb13) {
-    GGML_CUDA_PDL_LC();
+    ggml_cuda_pdl_lc();
     const int64_t i = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= ne) {
@@ -37,7 +37,7 @@ static __global__ void cpy_scalar(const char * cx, char * cdst, const int64_t ne
     const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
     const int64_t dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13 * nb13;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     cpy_1(cx + x_offset, cdst + dst_offset);
 }
 
@@ -61,7 +61,7 @@ static __global__ void cpy_scalar_transpose(const char * cx, char * cdst, const 
     __shared__ float tile[2][CUDA_CPY_TILE_DIM_2D][CUDA_CPY_TILE_DIM_2D+1];
     int cur_tile_buf = 0;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
 #pragma unroll
     for (int i = 0; i < CUDA_CPY_BLOCK_NM; ++i) {
 
@@ -145,7 +145,7 @@ static __global__ void cpy_f32_q(const char * cx, char * cdst, const int64_t ne,
     const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
     const int64_t dst_offset = (i10/qk)*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     cpy_blck(cx + x_offset, cdst + dst_offset);
 }
 
@@ -172,7 +172,7 @@ static __global__ void cpy_q_f32(const char * cx, char * cdst, const int64_t ne,
     const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
     const int64_t dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     cpy_blck(cx + x_offset, cdst + dst_offset);
 }
 
@@ -187,7 +187,7 @@ static __global__ void cpy_scalar_contiguous(const char * cx, char * cdst, const
     const src_t * x = (const src_t *) cx;
     dst_t *     dst = (dst_t *) cdst;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     dst[i] = ggml_cuda_cast<dst_t>(x[i]);
 }
 

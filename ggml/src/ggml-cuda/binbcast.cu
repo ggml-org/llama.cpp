@@ -55,7 +55,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
                                    const int              s12,
                                    const int              s13,
                                    src1_ptrs... src1s) {
-    GGML_CUDA_PDL_LC();
+    ggml_cuda_pdl_lc();
     const uint32_t i0s = blockDim.x * blockIdx.x + threadIdx.x;
     const uint32_t i1  = (blockDim.y * blockIdx.y + threadIdx.y);
     const uint32_t i2  = fastdiv((blockDim.z * blockIdx.z + threadIdx.z), ne3);
@@ -73,7 +73,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
     const size_t i_dst  =  i3*s3  +  i2*s2  +  i1*s1;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
     dst_t * dst_row = dst + i_dst;
 
@@ -141,7 +141,7 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
     const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
     const size_t i_dst  =  i3*s3  +  i2*s2  +  i1*s1;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
     dst_t * dst_row = dst + i_dst;
 
@@ -328,7 +328,7 @@ static __global__ void k_repeat_back(
     }
 
     T sum = 0;
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     for (int64_t i3 = tid3; i3 < ne03; i3 += ne3) {
         for (int64_t i2 = tid2; i2 < ne02; i2 += ne2) {
             for (int64_t i1 = tid1; i1 < ne01; i1 += ne1) {

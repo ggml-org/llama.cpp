@@ -11,7 +11,7 @@ static __global__ void k_get_rows(
         /*const size_t nb00,*/ const size_t nb01, const size_t nb02, const size_t nb03,
         const size_t s10, const size_t s11, const size_t s12/*, const size_t s13*/) {
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     for (int64_t z = blockIdx.z; z < ne11*ne12; z += gridDim.z) {
         for (int64_t i00 = 2*(blockIdx.y*blockDim.x + threadIdx.x); i00 < ne00; i00 += gridDim.y*blockDim.x) {
             // The x and y dimensions of the grid are swapped because the maximum allowed grid size for x is higher.
@@ -48,8 +48,8 @@ static __global__ void k_get_rows_float(
         /*const size_t nb00,*/ const size_t nb01, const size_t nb02, const size_t nb03,
         const size_t s10, const size_t s11, const size_t s12/*, const size_t s13*/) {
 
-    GGML_CUDA_PDL_LC();
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_lc();
+    ggml_cuda_pdl_sync();
     for (int64_t z = blockIdx.z; z < ne11*ne12; z += gridDim.z) {
         for (int64_t i00 = blockIdx.y*blockDim.x + threadIdx.x; i00 < ne00; i00 += gridDim.y*blockDim.x) {
             // The x and y dimensions of the grid are swapped because the maximum allowed grid size for x is higher.
@@ -84,7 +84,7 @@ static __global__ void k_get_rows_back_float(
 
     float sum = 0.0f;
 
-    GGML_CUDA_PDL_SYNC();
+    ggml_cuda_pdl_sync();
     for (int64_t i = 0; i < nrows_grad; ++i) {
         if (rows[i] != dst_row) {
             continue;

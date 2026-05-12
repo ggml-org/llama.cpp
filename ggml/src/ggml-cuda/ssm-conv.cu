@@ -7,7 +7,7 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
                                     const int src0_nb0, const int src0_nb1, const int src0_nb2, const int src1_nb1,
                                     float * __restrict__ dst, const int dst_nb0, const int dst_nb1, const int dst_nb2,
                                     const int64_t n_t) {
-    GGML_CUDA_PDL_LC();
+    ggml_cuda_pdl_lc();
     GGML_UNUSED(src0_nb0);
     const int tid  = threadIdx.x;
     const int bidx = blockIdx.x;
@@ -23,7 +23,7 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
     float x[d_conv] = { 0.0f };
     float w[d_conv] = { 0.0f };
 
-    GGML_CUDA_PDL_SYNC(); // needs to guard data access for src0, src1, dst.
+    ggml_cuda_pdl_sync(); // needs to guard data access for src0, src1, dst.
 #pragma unroll
     for (size_t j = 0; j < d_conv; j++) {
         w[j] = w_block[tid * stride_w + j];
