@@ -344,13 +344,13 @@ class EvalState:
 
             if status == "ok":
                 status_class = "correct" if is_correct else "incorrect"
-                status_text = "✓ Correct" if is_correct else "✗ Incorrect"
+                status_text = "✓" if is_correct else "✗"
             elif status == "pending":
                 status_class = "pending"
-                status_text = "Pending"
+                status_text = "–"
             else:
                 status_class = "error"
-                status_text = f"Error: {status}"
+                status_text = "!"
 
             tokens = case.get("tokens")
             tokens_str = str(tokens) if tokens is not None else ""
@@ -380,14 +380,10 @@ class EvalState:
             <tr id="details-{task_id}" class="details-row">
                 <td colspan="8">
                     <div class="details-content">
-                        <h4>Prompt</h4>
-                        <pre>{escaped_prompt}</pre>
-                        <h4 onclick="toggleReasoning('{task_id}')" style="cursor:pointer">Reasoning &#9654;</h4>
-                        <pre id="reasoning-{task_id}" style="display:none">{escaped_reasoning}</pre>
-                        <h4>Response</h4>
-                        <pre>{escaped_response}</pre>
-                        <h4>Grader Log</h4>
-                        <pre>{grader_log_str}</pre>
+                        <b>Prompt</b><pre>{escaped_prompt}</pre>
+                        <b>Response</b><pre>{escaped_response}</pre>
+                        {f'<b>Reasoning</b><pre>{escaped_reasoning}</pre>' if escaped_reasoning else ''}
+                        <b>Grader</b><pre>{grader_log_str}</pre>
                     </div>
                 </td>
             </tr>""")
@@ -395,57 +391,48 @@ class EvalState:
         rows_html = "\n".join(rows)
 
         html_content = f"""<!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Eval State - {self.dataset_type}</title>
-    <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 20px; background: #f5f5f5; }}
-        h1 {{ color: #333; }}
-        .summary {{ background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-        .summary-table {{ width: 100%; border-collapse: collapse; }}
-        .summary-table td {{ padding: 8px; border-bottom: 1px solid #eee; }}
-        .summary-table td:first-child {{ font-weight: bold; width: 200px; }}
-        .tasks-table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-        .tasks-table th {{ background: #333; color: white; padding: 12px; text-align: left; }}
-        .tasks-table td {{ padding: 10px; border-bottom: 1px solid #eee; }}
+<meta charset="UTF-8">
+<title>{self.dataset_type.upper()} Eval</title>
+<style>
+        body {{ font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #fff; color: #222; }}
+        .bar {{ padding: 8px 0; font-size: 14px; color: #555; }}
+        .bar span {{ margin-right: 20px; }}
+        .bar b {{ color: #222; }}
+        table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+        th {{ text-align: left; padding: 6px 8px; border-bottom: 2px solid #ccc; font-weight: 600; }}
+        td {{ padding: 4px 8px; border-bottom: 1px solid #eee; vertical-align: top; }}
         .task-row {{ cursor: pointer; }}
-        .task-row:hover {{ background: #f9f9f9; }}
-        .correct {{ color: #28a745; font-weight: bold; }}
-        .incorrect {{ color: #dc3545; font-weight: bold; }}
-        .pending {{ color: #6c757d; }}
-        .error {{ color: #ffc107; }}
+        .task-row:hover {{ background: #f5f5f5; }}
+        .correct {{ color: #1a7f37; }}
+        .incorrect {{ color: #cf222e; }}
+        .pending {{ color: #888; }}
+        .error {{ color: #9a6700; }}
         .details-row {{ display: none; }}
         .details-row.open {{ display: table-row; }}
-        .details-content {{ padding: 15px; background: #fafafa; }}
-        .details-content h4 {{ margin: 10px 0 5px; color: #555; }}
-        .details-content pre {{ background: #f0f0f0; padding: 10px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; margin: 0; }}
-    </style>
+        .details-content {{ padding: 8px 16px; background: #f6f8fa; font-size: 12px; }}
+        .details-content b {{ color: #555; }}
+        .details-content pre {{ background: #fff; border: 1px solid #e1e4e8; padding: 8px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; margin: 4px 0 8px; }}
+</style>
 </head>
 <body>
-    <h1>Eval State: {self.dataset_type.upper()}</h1>
-    <div class="summary">
-        <table class="summary-table">
-            <tr><td>Dataset</td><td>{self.dataset_type}</td></tr>
-            <tr><td>Model</td><td>{self.model_name or 'N/A'}</td></tr>
-            <tr><td>Total Tasks</td><td>{len(tasks_to_save)}</td></tr>
-            <tr><td>Completed</td><td>{len(completed)}</td></tr>
-            <tr><td>Correct</td><td class="correct">{n_correct}</td></tr>
-            <tr><td>Incorrect</td><td class="incorrect">{n_incorrect}</td></tr>
-            <tr><td>Pending</td><td class="pending">{n_pending}</td></tr>
-            <tr><td>Accuracy</td><td>{accuracy:.1f}% [{ci_lower*100:.1f}%, {ci_upper*100:.1f}%]</td></tr>
-            <tr><td>Total Time</td><td>{self.total_time:.1f}s</td></tr>
-            <tr><td>Sampling</td><td>{sampling_str}</td></tr>
-        </table>
+    <div class="bar">
+        <span><b>{self.dataset_type.upper()}</b></span>
+        <span>Model: {self.model_name or 'N/A'}</span>
+        <span>Accuracy: <b>{accuracy:.1f}%</b> [{ci_lower*100:.1f}%, {ci_upper*100:.1f}%]</span>
+        <span>Correct: <span class="correct">{n_correct}</span> / {len(completed)}</span>
+        <span>Pending: {n_pending}</span>
+        <span>Time: {self.total_time:.1f}s</span>
+        <span>Sampling: {sampling_str}</span>
     </div>
-    <table class="tasks-table">
+    <table>
         <thead>
             <tr>
-                <th>Task ID</th>
-                <th>Status</th>
+                <th>ID</th>
+                <th></th>
                 <th>Gold</th>
-                <th>Extracted</th>
+                <th>Answer</th>
                 <th>Tokens</th>
                 <th>T/s</th>
                 <th>Gen s</th>
@@ -457,18 +444,7 @@ class EvalState:
         </tbody>
     </table>
     <script>
-        function toggleDetails(taskId) {{
-            var row = document.getElementById('details-' + taskId);
-            row.classList.toggle('open');
-        }}
-        function toggleReasoning(taskId) {{
-            var el = document.getElementById('reasoning-' + taskId);
-            if (el.style.display === 'none') {{
-                el.style.display = 'block';
-            }} else {{
-                el.style.display = 'none';
-            }}
-        }}
+        function toggleDetails(id) {{ document.getElementById('details-'+id).classList.toggle('open'); }}
     </script>
 </body>
 </html>"""
