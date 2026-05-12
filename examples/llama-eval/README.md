@@ -18,8 +18,8 @@ python3 llama-eval.py \
 
 # Multiple servers (comma-separated URLs and thread counts)
 python3 llama-eval.py \
-  --server http://gpu1:8033,http://gpu2:8033 \
-  --server-name gpu1,gpu2 \
+  --server http://server1:8033,http://server2:8033 \
+  --server-name server1,server2 \
   --threads 16,16 \
   --dataset aime2025 --n_cases 240 \
   --grader-type regex
