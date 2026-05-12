@@ -45,7 +45,6 @@
 	const autoScroll = createAutoScrollController();
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
-	let isScrollingFast = $derived(autoScroll.isScrollingFast);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let dragCounter = $state(0);
 	let isDragOver = $state(false);
@@ -386,10 +385,7 @@
 			<div
 				class="pointer-events-none {isEmpty
 					? 'absolute bottom-[calc(50dvh-7rem)]'
-					: 'sticky bottom-4'} right-4 left-4 mt-auto pt-16 {isScrollingFast
-					? ''
-					: 'transition-all duration-200'}"
-				style="will-change: transform; contain: layout style; overflow: visible;"
+					: 'sticky bottom-4'} right-4 left-4 mt-auto pt-16 transition-all duration-200"
 			>
 				{#if isEmpty}
 					<div class="mb-8 px-4 text-center" use:fadeInView={{ duration: 300 }}>
