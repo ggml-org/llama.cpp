@@ -2,6 +2,7 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
+#include "ggml.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -36,6 +37,55 @@ uint64_t ggml_profiler_time_ns(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t) ts.tv_sec * 1000000000ULL + (uint64_t) ts.tv_nsec;
 #endif
+}
+
+//
+// Record helpers
+//
+
+void ggml_profile_record_from_tensor(ggml_profile_record * rec, const struct ggml_tensor * node) {
+    if (rec == NULL) {
+        return;
+    }
+
+    // Output tensor info
+    if (node != NULL) {
+        memcpy(rec->ne, node->ne, sizeof(rec->ne));
+        rec->out_type = (int) node->type;
+        memcpy(rec->op_params, node->op_params, sizeof(rec->op_params));
+    } else {
+        memset(rec->ne, 0, sizeof(rec->ne));
+        rec->out_type = -1;
+        memset(rec->op_params, 0, sizeof(rec->op_params));
+    }
+
+    // Sub-op (UNARY/GLU)
+    rec->sub_op = -1;
+    if (node != NULL) {
+        if (node->op == GGML_OP_UNARY) {
+            rec->sub_op = (int) ggml_get_unary_op(node);
+        } else if (node->op == GGML_OP_GLU) {
+            rec->sub_op = (int) ggml_get_glu_op(node);
+        }
+    }
+
+    // Source tensors
+    rec->n_src = 0;
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        const struct ggml_tensor * src = (node != NULL) ? node->src[i] : NULL;
+        if (src == NULL) {
+            memset(rec->ne_src[i], 0, sizeof(rec->ne_src[i]));
+            memset(rec->nb_src[i], 0, sizeof(rec->nb_src[i]));
+            rec->type_src[i] = -1;
+        } else {
+            memcpy(rec->ne_src[i], src->ne, sizeof(rec->ne_src[i]));
+            for (int d = 0; d < 4; d++) {
+                rec->nb_src[i][d] = (int64_t) src->nb[d];
+            }
+            rec->type_src[i] = (int) src->type;
+            rec->n_src = i + 1;
+        }
+    }
 }
 
 //
