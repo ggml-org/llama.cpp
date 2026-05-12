@@ -108,7 +108,7 @@ def test_n_predict_minus_2(endpoint: str, n_predict_key: str):
     if "timings" in res.body:
         n_predicted = res.body["timings"]["predicted_n"]
         assert res.body["truncated"] is True
-        assert res.body["stopped_limit"] is True
+        assert res.body["stop_type"] == "limit"
     else:
         n_predicted = res.body["usage"]["completion_tokens"]
     assert n_predicted == 248, f"n_predict=-2 should fill context (expected 248), got {n_predicted}"
@@ -126,5 +126,5 @@ def test_n_predict_minus_2_global():
     assert res.status_code == 200
     n_predicted = res.body["timings"]["predicted_n"]
     assert res.body["truncated"] is True
-    assert res.body["stopped_limit"] is True
+    assert res.body["stop_type"] == "limit"
     assert n_predicted == 248, f"global n_predict=-2 should fill context (expected 248), got {n_predicted}"
