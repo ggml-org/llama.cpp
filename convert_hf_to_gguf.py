@@ -5564,6 +5564,78 @@ class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 class MiniCPMV4_6TextModel(Qwen3_5TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
+    # Lock the chat_template default mode into the GGUF.
+    #
+    # Both MiniCPM-V 4.6 (instruct) and MiniCPM-V 4.6-Thinking ship a
+    # chat_template.jinja whose only meaningful difference is a header guard:
+    #
+    #     {%- if enable_thinking is not defined -%}
+    #         {%- set enable_thinking = false -%}   # 4.6 instruct
+    #         {%- set enable_thinking = true  -%}   # 4.6 thinking
+    #     {%- endif -%}
+    #
+    # The body then renders an empty `<think>\n\n</think>\n\n` block when
+    # `enable_thinking is false` and a leading `<think>\n` otherwise. The
+    # author's intent is therefore "instruct by default" for 4.6 and
+    # "thinking by default" for 4.6-Thinking.
+    #
+    # llama.cpp's runtime always injects `enable_thinking=true` into the
+    # jinja context (common/chat.cpp), so the `is not defined` guard is
+    # short-circuited and both models default to thinking, which is wrong
+    # for 4.6.
+    #
+    # We patch the guard at convert time by removing the `if not defined`
+    # wrapper. The remaining unconditional `set enable_thinking = X` runs
+    # at template top level and overrides whatever value llama.cpp injected,
+    # so the GGUF is hard-coded to the author's default. Side effect: the
+    # caller can no longer flip the mode via `--reasoning on/off` or
+    # `chat_template_kwargs.enable_thinking`. This is intentional: 4.6 and
+    # 4.6-Thinking are released as two separate GGUFs, one per mode.
+    _CHAT_TEMPLATE_GUARD_RE = re.compile(
+        r'\{%-?\s*if\s+enable_thinking\s+is\s+not\s+defined\s*-?%\}\s*'
+        r'\{%-?\s*set\s+enable_thinking\s*=\s*(true|false)\s*-?%\}\s*'
+        r'\{%-?\s*endif\s*-?%\}',
+        re.IGNORECASE,
+    )
+
+    def set_vocab(self):
+        super().set_vocab()
+
+        kv = self.gguf_writer.kv_data[0]
+        chat_template_field = kv.get(gguf.Keys.Tokenizer.CHAT_TEMPLATE)
+        if chat_template_field is None:
+            return
+
+        original_template = chat_template_field.value
+        if not isinstance(original_template, str):
+            return
+
+        match = self._CHAT_TEMPLATE_GUARD_RE.search(original_template)
+        if match is None:
+            logger.warning(
+                "MiniCPM-V 4.6: did not find the expected `{%% if enable_thinking is not "
+                "defined %%}` guard in chat_template; leaving the template unchanged. "
+                "The resulting GGUF may default to thinking mode under llama.cpp."
+            )
+            return
+
+        author_default = match.group(1).lower()
+        patched = self._CHAT_TEMPLATE_GUARD_RE.sub(
+            f'{{%- set enable_thinking = {author_default} -%}}',
+            original_template,
+            count=1,
+        )
+
+        if patched == original_template:
+            return
+
+        logger.info(
+            "MiniCPM-V 4.6: locking chat_template default enable_thinking=%s "
+            "(removed `is not defined` guard so the runtime cannot override).",
+            author_default,
+        )
+        self.gguf_writer.add_chat_template(patched)
+
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
