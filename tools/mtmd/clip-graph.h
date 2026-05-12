@@ -98,7 +98,8 @@ struct clip_graph {
             ggml_tensor * v_cur,
             ggml_tensor * kq_mask,
             float kq_scale,
-            int il) const;
+            int il,
+            ggml_tensor * sinks = nullptr) const;
 
     // implementation of the 2D RoPE without adding a new op in ggml
     // this is not efficient (use double the memory), but works on all backends
