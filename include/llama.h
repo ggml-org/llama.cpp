@@ -315,6 +315,9 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        // override architecture from GGUF (e.g. load the MTP head of a Qwen3.5 GGUF as "qwen35_mtp")
+        const char * override_arch;
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool use_mmap;        // use mmap if possible
@@ -515,27 +518,6 @@ extern "C" {
 
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);
-
-    enum llama_params_fit_status {
-        LLAMA_PARAMS_FIT_STATUS_SUCCESS = 0, // found allocations that are projected to fit
-        LLAMA_PARAMS_FIT_STATUS_FAILURE = 1, // could not find allocations that are projected to fit
-        LLAMA_PARAMS_FIT_STATUS_ERROR   = 2, // a hard error occurred, e.g. because no model could be found at the specified path
-    };
-
-    // fits mparams and cparams to free device memory (assumes system memory is unlimited)
-    //   - returns true if the parameters could be successfully modified to fit device memory
-    //   - this function is NOT thread safe because it modifies the global llama logger state
-    //   - only parameters that have the same value as in llama_default_model_params are modified
-    //     with the exception of the context size which is modified if and only if equal to 0
-    LLAMA_API enum llama_params_fit_status llama_params_fit(
-                                   const char   * path_model,
-                    struct llama_model_params   * mparams,
-                    struct llama_context_params * cparams,
-                                          float * tensor_split,          // writable buffer for tensor split, needs at least llama_max_devices elements
-        struct llama_model_tensor_buft_override * tensor_buft_overrides, // writable buffer for overrides, needs at least llama_max_tensor_buft_overrides elements
-                                         size_t * margins,               // margins of memory to leave per device in bytes
-                                       uint32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
-                            enum ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
 
     LLAMA_API int64_t llama_time_us(void);
 
@@ -884,11 +866,16 @@ extern "C" {
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
 
+#define LLAMA_STATE_SEQ_FLAGS_NONE 0
+
 // for backwards-compat
 #define LLAMA_STATE_SEQ_FLAGS_SWA_ONLY 1
 
 // work only with partial states, such as SWA KV cache or recurrent cache (e.g. Mamba)
 #define LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY 1
+
+// keeps the tensor data on device buffers (i.e. not accessible in host memory, but faster save/load)
+#define LLAMA_STATE_SEQ_FLAGS_ON_DEVICE 2
 
     typedef uint32_t llama_state_seq_flags;
 
@@ -1550,9 +1537,6 @@ extern "C" {
     LLAMA_API struct llama_perf_sampler_data llama_perf_sampler      (const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
-
-    // print a breakdown of per-device memory use via LLAMA_LOG:
-    LLAMA_API void llama_memory_breakdown_print(const struct llama_context * ctx);
 
     //
     // training

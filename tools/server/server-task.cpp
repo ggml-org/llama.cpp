@@ -1,5 +1,7 @@
 #include "server-task.h"
 
+#include "build-info.h"
+#include "server-chat.h"
 #include "chat.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"
@@ -74,13 +76,7 @@ json task_params::to_json(bool only_metrics) const {
             {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
             {"generation_prompt",         chat_parser_params.generation_prompt},
             {"samplers",                  samplers},
-            {"speculative.n_max",         speculative.n_max},
-            {"speculative.n_min",         speculative.n_min},
-            {"speculative.p_min",         speculative.p_min},
-            {"speculative.type",          common_speculative_type_to_str(speculative.type)},
-            {"speculative.ngram_size_n",  speculative.ngram_size_n},
-            {"speculative.ngram_size_m",  speculative.ngram_size_m},
-            {"speculative.ngram_m_hits",  speculative.ngram_min_hits},
+            {"speculative.types",         common_speculative_type_name_str(speculative.types)},
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
             {"backend_sampling",          sampling.backend_sampling},
@@ -137,13 +133,7 @@ json task_params::to_json(bool only_metrics) const {
         {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
         {"generation_prompt",         chat_parser_params.generation_prompt},
         {"samplers",                  samplers},
-        {"speculative.n_max",         speculative.n_max},
-        {"speculative.n_min",         speculative.n_min},
-        {"speculative.p_min",         speculative.p_min},
-        {"speculative.type",          common_speculative_type_to_str(speculative.type)},
-        {"speculative.ngram_size_n",  speculative.ngram_size_n},
-        {"speculative.ngram_size_m",  speculative.ngram_size_m},
-        {"speculative.ngram_m_hits",  speculative.ngram_min_hits},
+        {"speculative.types",         common_speculative_type_name_str(speculative.types)},
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
         {"backend_sampling",          sampling.backend_sampling},
@@ -161,7 +151,7 @@ common_chat_msg task_result_state::update_chat_msg(
         bool filter_tool_calls) {
     generated_text += text_added;
     auto msg_prv_copy = chat_msg;
-    SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
+    //SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
     auto new_msg = common_chat_parse(
         generated_text,
         is_partial,
@@ -268,6 +258,7 @@ task_params server_task::params_from_json_cmpl(
     params.n_indent         = json_value(data,       "n_indent",           defaults.n_indent);
     params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
+    params.n_discard        = std::max(0, params.n_discard);
     params.n_cmpl           = json_value(data,       "n_cmpl",             json_value(data, "n", 1));
     params.n_cache_reuse    = json_value(data,       "n_cache_reuse",      defaults.n_cache_reuse);
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
@@ -303,14 +294,19 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.backend_sampling   = json_value(data, "backend_sampling",    defaults.sampling.backend_sampling);
     params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
 
-    params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
-    params.speculative.n_max = json_value(data, "speculative.n_max", defaults.speculative.n_max);
-    params.speculative.p_min = json_value(data, "speculative.p_min", defaults.speculative.p_min);
+    params.speculative = defaults.speculative;
 
-    params.speculative.n_min = std::min(params.speculative.n_max, params.speculative.n_min);
-    params.speculative.n_min = std::max(params.speculative.n_min, 0);
-    params.speculative.n_max = std::max(params.speculative.n_max, 0);
+    // TODO: for now, be able to adjust only the draft-model based speculative parameters
+    params.speculative.draft.n_min = json_value(data, "speculative.n_min", defaults.speculative.draft.n_min);
+    params.speculative.draft.n_max = json_value(data, "speculative.n_max", defaults.speculative.draft.n_max);
+    params.speculative.draft.p_min = json_value(data, "speculative.p_min", defaults.speculative.draft.p_min);
 
+    params.speculative.draft.n_min = std::min(params.speculative.draft.n_max, params.speculative.draft.n_min);
+    params.speculative.draft.n_min = std::max(params.speculative.draft.n_min, 0);
+    params.speculative.draft.n_max = std::max(params.speculative.draft.n_max, 0);
+
+#if 0
+    // for debugging and research purposes
     params.speculative.type = common_speculative_type_from_name(json_value(data, "speculative.type", common_speculative_type_to_str(defaults.speculative.type)));
 
     params.speculative.ngram_size_n     = json_value(data, "speculative.ngram_size_n", defaults.speculative.ngram_size_n);
@@ -320,6 +316,7 @@ task_params server_task::params_from_json_cmpl(
     params.speculative.ngram_size_n     = std::max(std::min(1, (int) params.speculative.ngram_size_n),     1024);
     params.speculative.ngram_size_m     = std::max(std::min(1, (int) params.speculative.ngram_size_m),     1024);
     params.speculative.ngram_min_hits   = std::max(std::min(1, (int) params.speculative.ngram_min_hits),   1024);
+#endif
 
     // Use OpenAI API logprobs only if n_probs wasn't provided
     if (data.contains("logprobs") && params.sampling.n_probs == defaults.sampling.n_probs){
@@ -791,7 +788,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
         })},
         {"created",            t},
         {"model",              oaicompat_model},
-        {"system_fingerprint", build_info},
+        {"system_fingerprint", std::string(llama_build_info())},
         {"object",             "text_completion"},
         {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
@@ -839,7 +836,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         {"choices",            json::array({choice})},
         {"created",            t},
         {"model",              oaicompat_model},
-        {"system_fingerprint", build_info},
+        {"system_fingerprint", std::string(llama_build_info())},
         {"object",             "chat.completion"},
         {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
@@ -870,13 +867,13 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
                 json {
                     {"finish_reason", nullptr},
                     {"index", index},
-                    {"delta", common_chat_msg_diff_to_json_oaicompat(diff)},
+                    {"delta", server_chat_msg_diff_to_json_oaicompat(diff)},
                 },
             })},
             {"created", t},
             {"id", oaicompat_cmpl_id},
             {"model", oaicompat_model},
-            {"system_fingerprint", build_info},
+            {"system_fingerprint", std::string(llama_build_info())},
             {"object", "chat.completion.chunk"},
         });
     }
@@ -892,7 +889,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         {"created",            t},
         {"id",                 oaicompat_cmpl_id},
         {"model",              oaicompat_model},
-        {"system_fingerprint", build_info},
+        {"system_fingerprint", std::string(llama_build_info())},
         {"object",             "chat.completion.chunk"},
     });
 
@@ -904,7 +901,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
             {"created",            t},
             {"id",                 oaicompat_cmpl_id},
             {"model",              oaicompat_model},
-            {"system_fingerprint", build_info},
+            {"system_fingerprint", std::string(llama_build_info())},
             {"object",             "chat.completion.chunk"},
             {"usage",              usage_json_oaicompat()},
         });
@@ -1107,7 +1104,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
 json server_task_result_cmpl_final::to_json_oaicompat_asr() {
     json event = json {
         {"type",  "transcript.text.done"},
-        {"text",  content},
+        {"text",  oaicompat_msg.content},
         {"usage", json {
             {"type",         "tokens"},
             {"input_tokens",  n_prompt_tokens},
@@ -1469,7 +1466,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat() {
         })},
         {"created",            t},
         {"model",              oaicompat_model},
-        {"system_fingerprint", build_info},
+        {"system_fingerprint", std::string(llama_build_info())},
         {"object",             "text_completion"},
         {"id",                 oaicompat_cmpl_id}
     };
@@ -1506,7 +1503,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
             {"created", t},
             {"id", oaicompat_cmpl_id},
             {"model", oaicompat_model},
-            {"system_fingerprint", build_info},
+            {"system_fingerprint", std::string(llama_build_info())},
             {"object", "chat.completion.chunk"},
         });
     };
@@ -1519,7 +1516,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
     }
 
     for (const auto & diff : oaicompat_msg_diffs) {
-        add_delta(common_chat_msg_diff_to_json_oaicompat(diff));
+        add_delta(server_chat_msg_diff_to_json_oaicompat(diff));
     }
 
     if (!deltas.empty()) {
@@ -1984,7 +1981,7 @@ size_t server_prompt_cache::n_tokens() const {
     return res;
 }
 
-server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size) {
+server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
         const int cur_lcp_len = it->tokens.get_common_prefix(prompt.tokens);
@@ -2008,11 +2005,13 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
         }
     }
 
-    std::vector<uint8_t> state_data;
+    std::vector<uint8_t> state_data_tgt;
+    std::vector<uint8_t> state_data_dft;
 
     // check if we can allocate enough memory for the new state
     try {
-        state_data.resize(state_size);
+        state_data_tgt.resize(state_size_tgt);
+        state_data_dft.resize(state_size_dft);
     } catch (const std::bad_alloc & e) {
         SRV_ERR("failed to allocate memory for prompt cache state: %s\n", e.what());
 
@@ -2025,17 +2024,19 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
         return nullptr;
     }
 
-    auto & cur = states.emplace_back();
-    cur = {
+    states.push_back({
         /*.tokens      =*/ prompt.tokens.clone(),
-        /*.data        =*/ std::move(state_data),
+        /*.data        =*/ {
+            /*.main =*/ std::move(state_data_tgt),
+            /*.drft =*/ std::move(state_data_dft),
+        },
         /*.checkpoints =*/ prompt.checkpoints,
-    };
+    });
 
-    return &cur;
+    return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx, int32_t id_slot) {
+bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
@@ -2068,16 +2069,39 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     if (it_best != states.end()) {
         SRV_WRN(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
-        const size_t size = it_best->data.size();
-        const size_t n = llama_state_seq_set_data_ext(ctx, it_best->data.data(), size, id_slot, 0);
-        if (n != size) {
-            SRV_WRN("failed to restore state with size %zu\n", size);
+        {
+            auto & data = it_best->data.main;
 
-            return false;
+            const size_t size = data.size();
+            const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);
+            if (n != size) {
+                SRV_WRN("failed to restore state with size %zu\n", size);
+
+                return false;
+            }
+
+            data.clear();
+            data.shrink_to_fit();
         }
 
-        it_best->data.clear();
-        it_best->data.shrink_to_fit();
+        {
+            auto & data = it_best->data.drft;
+
+            if (!data.empty()) {
+                GGML_ASSERT(ctx_dft);
+
+                const size_t size = data.size();
+                const size_t n = llama_state_seq_set_data_ext(ctx_dft, data.data(), size, id_slot, 0);
+                if (n != size) {
+                    SRV_WRN("failed to restore state with size %zu\n", size);
+
+                    return false;
+                }
+
+                data.clear();
+                data.shrink_to_fit();
+            }
+        }
 
         prompt = std::move(*it_best);
 

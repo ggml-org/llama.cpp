@@ -36,7 +36,6 @@ export type {
 export type {
 	ChatUploadedFile,
 	ChatAttachmentDisplayItem,
-	ChatAttachmentPreviewItem,
 	ChatMessageSiblingInfo,
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
@@ -116,6 +115,7 @@ export type {
 	ServerStatus,
 	ToolCallParams,
 	ToolExecutionResult,
+	ServerBuiltinToolInfo,
 	Tool,
 	Prompt,
 	GetPromptResult,
@@ -149,5 +149,9 @@ export type {
 	AgenticFlowCallbacks,
 	AgenticFlowOptions,
 	AgenticFlowParams,
-	AgenticFlowResult
+	AgenticFlowResult,
+	SteeringMessage
 } from './agentic';
+
+// Tools types
+export type { ToolEntry, ToolGroup } from './tools';

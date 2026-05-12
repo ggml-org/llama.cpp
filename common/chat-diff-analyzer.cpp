@@ -296,7 +296,7 @@ void analyze_reasoning::compare_reasoning_presence() {
             return p.literal(reasoning_content) + p.space() + p.optional(p.tag("post", (p.marker() + p.space())) + p.rest());
         });
         auto parser_wrapped = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
-            return p.tag("pre", p.marker() + p.space()) + p.literal(reasoning_content) + p.space() + p.tag("post", (p.marker() + p.space())) + p.rest();
+            return p.tag("pre", p.marker() + p.space()) + p.literal(reasoning_content) + p.tag("post", (p.space() + p.marker() + p.space())) + p.rest();
         });
         // try the more aggressive parse first, if it fails, fall back to the delimiter one
         auto result = parser_wrapped.parse_anywhere_and_extract(comparison->output_B);
@@ -306,11 +306,11 @@ void analyze_reasoning::compare_reasoning_presence() {
         if (result.result.success()) {
             if (!result.tags["pre"].empty() && !result.tags["post"].empty()) {
                 mode = reasoning_mode::TAG_BASED;
-                start = trim_leading_whitespace(result.tags["pre"]);
-                end   = trim_trailing_whitespace(result.tags["post"]);
+                start = result.tags["pre"];
+                end   = result.tags["post"];
             } else if (!result.tags["post"].empty()) {
                 mode = reasoning_mode::TAG_BASED;
-                end = trim_trailing_whitespace(result.tags["post"]);
+                end = result.tags["post"];
             }
         }
     }
@@ -342,7 +342,7 @@ void analyze_reasoning::compare_thinking_enabled() {
     if (left_trimmed.empty() && !diff.right.empty()) {
         if (!right_trimmed.empty() && string_ends_with(comparison->output_B, right_trimmed)) {
             if (start.empty()) {
-                start = trim_leading_whitespace(diff.right);
+                start = diff.right;
                 mode  = reasoning_mode::TAG_BASED;
             }
         }
@@ -353,7 +353,7 @@ void analyze_reasoning::compare_thinking_enabled() {
                 if (seg.size() >= 2 && seg[seg.size() - 1].value == left_trimmed && seg[seg.size() - 2].type == segment_type::MARKER) {
                     start = seg[seg.size() - 2].value;
                 }
-                end = trim_trailing_whitespace(diff.left);
+                end = diff.left;
                 mode = reasoning_mode::TAG_BASED;
             }
         }
@@ -445,14 +445,14 @@ void analyze_reasoning::compare_reasoning_scope() {
         auto result = parser_wrapped.parse_anywhere_and_extract(comparison->output_B);
         if (result.result.success()) {
             start = result.tags["pre"];
-            end = trim_trailing_whitespace(result.tags["post"]);
+            end = result.tags["post"];
         } else {
             auto parser_delimiter = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
                 return p.literal(reasoning_content) + p.space() + p.optional(p.tag("post", (p.marker() + p.space())));
             });
             result = parser_delimiter.parse_anywhere_and_extract(comparison->output_B);
             if (result.result.success()) {
-                end = trim_trailing_whitespace(result.tags["post"]);
+                end = result.tags["post"];
             } else {
                 LOG_DBG(ANSI_ORANGE "%s: Unable to extract reasoning markers, falling back to reasoning = NONE\n" ANSI_RESET, __func__);
                 mode = reasoning_mode::NONE;
@@ -558,7 +558,7 @@ analyze_tools::analyze_tools(const common_chat_template & tmpl,
     : analyze_base(tmpl) {
     LOG_DBG(ANSI_ORANGE "Phase 3: Tool call analysis\n" ANSI_RESET);
 
-    analyze_tool_calls(reasoning);
+    analyze_tool_calls(reasoning, caps.supports_parallel_tool_calls);
 
     if (format.mode != tool_format::NONE && format.mode != tool_format::JSON_NATIVE) {
         if (caps.supports_parallel_tool_calls) {
@@ -577,7 +577,7 @@ analyze_tools::analyze_tools(const common_chat_template & tmpl,
     }
 }
 
-void analyze_tools::analyze_tool_calls(const analyze_reasoning & reasoning) {
+void analyze_tools::analyze_tool_calls(const analyze_reasoning & reasoning, bool supports_parallel_tool_calls) {
     json assistant_no_tools = json{
         { "role",    "assistant"   },
         { "content", ASSISTANT_MSG }
@@ -611,13 +611,14 @@ void analyze_tools::analyze_tool_calls(const analyze_reasoning & reasoning) {
         return;
     }
 
-    analyze_tool_call_format(tool_section, FUN_FIRST, ARG_FIRST, reasoning);
+    analyze_tool_call_format(tool_section, FUN_FIRST, ARG_FIRST, reasoning, supports_parallel_tool_calls);
 }
 
 void analyze_tools::analyze_tool_call_format(const std::string &       haystack,
                                              const std::string &       fun_name_needle,
                                              const std::string &       arg_name_needle,
-                                             const analyze_reasoning & reasoning) {
+                                             const analyze_reasoning & reasoning,
+                                             bool                      supports_parallel_tool_calls) {
     if (fun_name_needle.empty() || arg_name_needle.empty() || haystack.empty()) {
         return;
     }
@@ -660,12 +661,51 @@ void analyze_tools::analyze_tool_call_format(const std::string &       haystack,
 
     if (format.mode == tool_format::JSON_NATIVE) {
         analyze_tool_call_format_json_native(clean_haystack, fun_name_needle, arg_name_needle);
+        if (supports_parallel_tool_calls) {
+            analyze_json_native_parallel_calls();
+        }
     } else {
         analyze_tool_call_format_non_json(clean_haystack, fun_name_needle);
     }
     // always relax whitespace requirements on ending markers since they don't influence content
     format.section_end  = trim_whitespace(format.section_end);
     format.per_call_end = trim_whitespace(format.per_call_end);
+}
+
+void analyze_tools::analyze_json_native_parallel_calls() {
+    json assistant_one_tool = json{
+        { "role",       "assistant" },
+        { "content",    ""          },
+        { "tool_calls", json::array({ first_tool_call }) }
+    };
+
+    json assistant_two_tools = json{
+        { "role",       "assistant" },
+        { "content",    ""          },
+        { "tool_calls", json::array({ first_tool_call, second_tool_call }) }
+    };
+
+    template_params params;
+    params.messages              = json::array({ user_msg, assistant_one_tool });
+    params.tools                 = tools;
+    params.add_generation_prompt = false;
+    params.enable_thinking       = true;
+
+    auto comparison = compare_variants(
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_two_tools }); });
+
+    if (!comparison) {
+        LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET, __func__);
+        return;
+    }
+
+    std::string & second_call = comparison->diff.right;
+    if (!format.section_start.empty() && second_call.find(format.section_start) != std::string::npos) {
+        format.per_call_start = format.section_start;
+        format.per_call_end = format.section_end;
+        format.section_start.clear();
+        format.section_end.clear();
+    }
 }
 
 void analyze_tools::analyze_tool_call_format_json_native(const std::string & clean_haystack,
