@@ -29,6 +29,13 @@ jobs:
         run: npm run build
         working-directory: tools/server/webui
 
+      - name: Generate checksums
+        run: |
+          cd tools/server/public
+          for f in *; do
+            sha256sum "$f" | awk '{print $1, $2}' >> checksums.txt
+          done
+
       - name: Upload built webui
         uses: actions/upload-artifact@v6
         with:

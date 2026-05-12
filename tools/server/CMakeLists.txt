@@ -58,7 +58,17 @@ if (LLAMA_BUILD_WEBUI)
 
     # Priority 1: Check for local webui build output
     set(LOCAL_WEBUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/public")
-    if(EXISTS "${LOCAL_WEBUI_DIR}/index.html")
+
+    # Verify all required assets exist before declaring local source valid
+    set(ALL_ASSETS_PRESENT TRUE)
+    foreach(asset ${PUBLIC_ASSETS})
+        if(NOT EXISTS "${LOCAL_WEBUI_DIR}/${asset}")
+            set(ALL_ASSETS_PRESENT FALSE)
+            break()
+        endif()
+    endforeach()
+
+    if(ALL_ASSETS_PRESENT)
         set(WEBUI_SOURCE "local")
         set(WEBUI_SOURCE_DIR "${LOCAL_WEBUI_DIR}")
         message(STATUS "WebUI: using local build from ${WEBUI_SOURCE_DIR}")
@@ -73,11 +83,16 @@ if (LLAMA_BUILD_WEBUI)
             message(STATUS "WebUI: using LLAMA_BUILD_TAG=${HF_WEBUI_VERSION}")
         elseif(EXISTS "${CMAKE_SOURCE_DIR}/.git")
             execute_process(
-                COMMAND bash -c "git describe --tags --abbrev=0 2>/dev/null || echo ''"
+                COMMAND git describe --tags --abbrev=0
                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 OUTPUT_VARIABLE HF_WEBUI_VERSION
                 OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_VARIABLE git_stderr
             )
+            # Check if git describe failed (no tags, detached HEAD, etc.)
+            if("${HF_WEBUI_VERSION}" STREQUAL "")
+                message(STATUS "WebUI: git describe failed (${git_stderr}), using empty version")
+            endif()
         endif()
 
         # Skip HF Bucket if no version tag available
@@ -91,41 +106,80 @@ if (LLAMA_BUILD_WEBUI)
         # Download to source tree's public directory for persistence
         # This way subsequent builds use the local files without re-downloading
         set(WEBUI_DOWNLOAD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/public")
-        file(MAKE_DIRECTORY "${WEBUI_DOWNLOAD_DIR}")
 
-        # Download each asset
-        set(ALL_DOWNLOADS_SUCCESS TRUE)
-        foreach(asset ${PUBLIC_ASSETS})
-            set(download_url "${HF_BUCKET_URL}/${asset}?download=true")
-            set(download_path "${WEBUI_DOWNLOAD_DIR}/${asset}")
-
-            message(STATUS "WebUI: downloading ${asset} from ${HF_BUCKET_URL}")
-
-            file(
-                DOWNLOAD "${download_url}" "${download_path}"
-                STATUS download_status
-                TIMEOUT 60
-            )
-
-            list(GET download_status 0 download_result)
-
-            if(download_result EQUAL 0)
-                message(STATUS "WebUI: downloaded ${asset}")
-            else()
-                list(GET download_status 1 error_message)
-                message(WARNING "WebUI: failed to download ${asset}: ${error_message}")
-                set(ALL_DOWNLOADS_SUCCESS FALSE)
-                break()
-            endif()
-        endforeach()
-
-        if(ALL_DOWNLOADS_SUCCESS)
-            set(WEBUI_SOURCE "hf-bucket")
-            set(WEBUI_SOURCE_DIR "${WEBUI_DOWNLOAD_DIR}")
-            message(STATUS "WebUI: using prebuilt assets from HF Bucket (version: ${HF_WEBUI_VERSION})")
+        # Check if we can write to the source directory
+        file(WRITE "${WEBUI_DOWNLOAD_DIR}/.write_test" "test")
+        if(NOT EXISTS "${WEBUI_DOWNLOAD_DIR}/.write_test")
+            message(WARNING "WebUI: Cannot write to source directory (${WEBUI_DOWNLOAD_DIR}). "
+                          "Ensure it exists and is writable, or pre-populate with WebUI assets.")
         else()
-            message(WARNING "WebUI: HF Bucket download failed, no local build available")
-        endif()
+            file(REMOVE "${WEBUI_DOWNLOAD_DIR}/.write_test")
+
+            file(MAKE_DIRECTORY "${WEBUI_DOWNLOAD_DIR}")
+
+            # Download each asset
+            set(ALL_DOWNLOADS_SUCCESS TRUE)
+            foreach(asset ${PUBLIC_ASSETS})
+                set(download_url "${HF_BUCKET_URL}/${asset}?download=true")
+                set(download_path "${WEBUI_DOWNLOAD_DIR}/${asset}")
+
+                message(STATUS "WebUI: downloading ${asset} from ${HF_BUCKET_URL}")
+
+                file(
+                    DOWNLOAD "${download_url}" "${download_path}"
+                    STATUS download_status
+                    TIMEOUT 60
+                )
+
+                list(GET download_status 0 download_result)
+
+                if(download_result EQUAL 0)
+                    message(STATUS "WebUI: downloaded ${asset}")
+                else()
+                    list(GET download_status 1 error_message)
+                    message(WARNING "WebUI: failed to download ${asset}: ${error_message}")
+                    set(ALL_DOWNLOADS_SUCCESS FALSE)
+                    break()
+                endif()
+            endforeach()
+
+            # Verify checksums if available (supply-chain integrity)
+            if(ALL_DOWNLOADS_SUCCESS)
+                file(
+                    DOWNLOAD "${HF_BUCKET_URL}/checksums.txt?download=true"
+                    "${WEBUI_DOWNLOAD_DIR}/checksums.txt"
+                    STATUS checksum_status
+                    TIMEOUT 30
+                )
+                list(GET checksum_status 0 checksum_result)
+                if(checksum_result EQUAL 0)
+                    message(STATUS "WebUI: verifying checksums...")
+                    file(STRINGS "${WEBUI_DOWNLOAD_DIR}/checksums.txt" CHECKSUMS_CONTENT)
+                    foreach(asset ${PUBLIC_ASSETS})
+                        set(download_path "${WEBUI_DOWNLOAD_DIR}/${asset}")
+                        file(SHA256 "${asset}_hash" "${download_path}")
+                        # Format: "hash  filename" (space-separated)
+                        string(TOUPPER "${${asset}_hash}" EXPECTED_HASH_UPPER)
+                        string(REGEX MATCH "${EXPECTED_HASH_UPPER}[ \\t]+${asset}" CHECKSUM_LINE "${CHECKSUMS_CONTENT}")
+                        if(NOT CHECKSUM_LINE)
+                            message(WARNING "WebUI: checksum verification failed for ${asset}")
+                            set(ALL_DOWNLOADS_SUCCESS FALSE)
+                        endif()
+                    endforeach()
+                    if(ALL_DOWNLOADS_SUCCESS)
+                        message(STATUS "WebUI: all checksums verified")
+                    endif()
+                endif()
+            endif()
+
+            if(ALL_DOWNLOADS_SUCCESS)
+                set(WEBUI_SOURCE "hf-bucket")
+                set(WEBUI_SOURCE_DIR "${WEBUI_DOWNLOAD_DIR}")
+                message(STATUS "WebUI: using prebuilt assets from HF Bucket (version: ${HF_WEBUI_VERSION})")
+            else()
+                message(WARNING "WebUI: HF Bucket download failed, no local build available")
+            endif()
+            endif()  # Close: if write test passed
         endif()  # Close: if(HF_WEBUI_VERSION not empty)
     endif()
 
