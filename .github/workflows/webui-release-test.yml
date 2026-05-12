@@ -1,0 +1,95 @@
+name: WebUI Release Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_publish:
+        description: 'Also test publishing to HF Bucket (requires HF_TOKEN_TEST secret)'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches:
+      - allozaur/webui-build-strategy
+
+jobs:
+  webui-build:
+    name: Build WebUI
+    uses: ./.github/workflows/webui-build.yml
+
+  linux-build:
+    name: Linux x64 Build
+    needs: webui-build
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Download WebUI build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: webui-build
+          path: tools/server/public/
+
+      - name: Build
+        run: |
+          cmake -B build \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_FATAL_WARNINGS=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Pack
+        run: |
+          tar -czvf llama-test-bin-ubuntu-x64.tar.gz -C build/bin .
+
+      - name: Upload
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-test-bin-ubuntu-x64.tar.gz
+          name: llama-bin-ubuntu-x64-test
+
+  test-webui-publish:
+    name: Test WebUI Publish
+    needs: webui-build
+    runs-on: ubuntu-24.04-arm
+
+    # Only run if explicitly requested and secret is available
+    if: ${{ github.event.inputs.test_publish == 'true' && secrets.HF_TOKEN_TEST }}
+    permissions:
+      contents: read
+
+    env:
+      HF_BUCKET_NAME: ${{ vars.HF_BUCKET_WEBUI_STATIC_OUTPUT }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Download WebUI build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: webui-build
+          path: tools/server/public/
+
+      - name: Install Hugging Face Hub CLI
+        run: pip install -U huggingface_hub
+
+      - name: Authenticate with Hugging Face (test token)
+        run: hf auth login --token ${{ secrets.HF_TOKEN_TEST }}
+
+      - name: Test upload to test path
+        run: |
+          # Upload to a test path with the commit SHA
+          hf buckets sync tools/server/public hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/test-pr-${{ github.run_id }} --delete --quiet
+
+      - name: Verify upload
+        run: |
+          hf buckets list hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/test-pr-${{ github.run_id }} -R -h
