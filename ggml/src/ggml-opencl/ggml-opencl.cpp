@@ -6500,13 +6500,14 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
     if (tensor->type == GGML_TYPE_Q5_0) {
         ggml_tensor_extra_cl_q5_0 * extra = (ggml_tensor_extra_cl_q5_0 *)tensor->extra;
 
-        cl_int err;
-        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
-            ggml_nbytes(tensor), NULL, &err);
-        CL_CHECK(err);
-
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
+            cl_int err;
+            // TODO: use ggml_cl_buffer to manage this temporary buffer
+            cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
+                ggml_nbytes(tensor), NULL, &err);
+            CL_CHECK(err);
+
             cl_kernel kernel = backend_ctx->kernel_restore_block_q5_0_trans4_ns;
 
             int ne00 = tensor->ne[0];
@@ -6538,13 +6539,14 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
     if (tensor->type == GGML_TYPE_Q5_1) {
         ggml_tensor_extra_cl_q5_1 * extra = (ggml_tensor_extra_cl_q5_1 *)tensor->extra;
 
-        cl_int err;
-        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
-            ggml_nbytes(tensor), NULL, &err);
-        CL_CHECK(err);
-
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
+            cl_int err;
+            // TODO: use ggml_cl_buffer to manage this temporary buffer
+            cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
+                ggml_nbytes(tensor), NULL, &err);
+            CL_CHECK(err);
+
             cl_kernel kernel = backend_ctx->kernel_restore_block_q5_1_trans4_ns;
 
             int ne00 = tensor->ne[0];
@@ -14187,7 +14189,6 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     CL_CHECK(clReleaseMemObject(src1_sub_buffer));
                     CL_CHECK(clReleaseMemObject(buf_src1_image));
                     CL_CHECK(clReleaseMemObject(buf_src2));
-
                 } else { // for gemm
                     kernel = backend_ctx->kernel_gemm_moe_q5_1_f32_ns;
 
