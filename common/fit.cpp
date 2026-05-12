@@ -4,12 +4,11 @@
 
 #include "../src/llama-ext.h"
 
-#include <algorithm>
 #include <array>
 #include <cassert>
+#include <stdexcept>
 #include <cinttypes>
 #include <set>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -35,7 +34,8 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data(
         uint32_t & hp_ngl,
         uint32_t & hp_n_ctx_train,
         uint32_t & hp_n_expert,
-        ggml_log_level log_level) {
+        ggml_log_level log_level,
+        uint64_t * model_size = nullptr) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -73,6 +73,9 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data(
 
     const size_t nd = llama_model_n_devices(model);
     std::vector<llama_device_memory_data> ret(nd + 1);
+    if (model_size) {
+        *model_size = llama_model_size(model);
+    }
 
     llama_memory_breakdown memory_breakdown = llama_get_memory_breakdown(ctx);
 
@@ -88,13 +91,19 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data(
         if (!dev) {
             continue;
         }
-        for (size_t i = 0; i < nd; i++) {
+        size_t i = 0;
+        for (; i < nd; i++) {
             if (dev == llama_model_get_device(model, i)) {
                 ret[i].mb.model   += mb.model;
                 ret[i].mb.context += mb.context;
                 ret[i].mb.compute += mb.compute;
                 break;
             }
+        }
+        if (i == nd && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            ret.back().mb.model   += mb.model;
+            ret.back().mb.context += mb.context;
+            ret.back().mb.compute += mb.compute;
         }
     }
 
@@ -151,164 +160,10 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data(
     return ret;
 }
 
-static bool common_fit_uses_host_memory(const std::vector<ggml_backend_dev_t> & devs) {
-    return devs.empty() || (devs.size() == 1 && ggml_backend_dev_type(devs[0]) == GGML_BACKEND_DEVICE_TYPE_IGPU);
-}
-
-static int64_t common_fit_context_compute_total(const std::vector<llama_device_memory_data> & dmds, size_t nd) {
-    int64_t ret = static_cast<int64_t>(dmds.back().mb.context) + static_cast<int64_t>(dmds.back().mb.compute);
-    for (size_t id = 0; id < nd; ++id) {
-        ret += static_cast<int64_t>(dmds[id].mb.context) + static_cast<int64_t>(dmds[id].mb.compute);
-    }
-    return ret;
-}
-
-static void common_fit_record_context_profile(
-        common_fit_context_profile * p,
-        const std::vector<ggml_backend_dev_t> & devs,
-        const std::vector<llama_device_memory_data> & ref,
-        const std::vector<llama_device_memory_data> & min,
-        uint32_t n_ctx_ref,
-        uint32_t n_ctx_min,
-        size_t margin) {
-    if (!p) {
-        return;
-    }
-    *p = {};
-    if (!common_fit_uses_host_memory(devs) || n_ctx_ref <= n_ctx_min || ref.size() <= devs.size() || min.size() <= devs.size()) {
-        return;
-    }
-    const int64_t used_ref = common_fit_context_compute_total(ref, devs.size());
-    const int64_t used_min = common_fit_context_compute_total(min, devs.size());
-    if (used_ref <= used_min) {
-        return;
-    }
-    const int64_t delta_ctx = static_cast<int64_t>(n_ctx_ref - n_ctx_min);
-    const int64_t bytes_per_ctx = (used_ref - used_min + delta_ctx - 1) / delta_ctx;
-    if (bytes_per_ctx <= 0) {
-        return;
-    }
-    p->valid = true;
-    p->n_ctx_min = n_ctx_min;
-    p->n_ctx_ref = n_ctx_ref;
-    p->used_min = used_min;
-    p->bytes_per_ctx = bytes_per_ctx;
-    p->margin = margin;
-}
-
-static void common_fit_try_record_context_profile(
-        const char * path_model,
-        const llama_model_params * mparams,
-        const llama_context_params * cparams,
-        const std::vector<ggml_backend_dev_t> & devs,
-        const std::vector<llama_device_memory_data> & dmds_ref,
-        uint32_t hp_nct, ggml_log_level log_level, uint32_t n_ctx_min, size_t margin,
-        common_fit_context_profile * context_profile) {
-    if (!context_profile || cparams->n_ctx != 0 || !common_fit_uses_host_memory(devs) || hp_nct <= n_ctx_min) {
-        return;
-    }
-    const uint32_t n_ctx_ref = hp_nct;
-
-    try {
-        llama_context_params cparams_min = *cparams;
-        cparams_min.n_ctx = n_ctx_min;
-        std::vector<ggml_backend_dev_t> devs_min;
-        uint32_t hp_ngl_min = 0, hp_nct_min = 0, hp_nex_min = 0;
-        const std::vector<llama_device_memory_data> dmds_min = common_get_device_memory_data(
-                path_model, mparams, &cparams_min, devs_min, hp_ngl_min, hp_nct_min, hp_nex_min, log_level);
-        if (devs_min != devs) {
-            return;
-        }
-        common_fit_record_context_profile(context_profile, devs, dmds_ref, dmds_min, n_ctx_ref, n_ctx_min, margin);
-    } catch (const std::exception & e) {
-        LOG_WRN("%s: failed to profile post-load context memory: %s\n", __func__, e.what());
-    }
-}
-
-bool common_fit_context_after_model_load(
-        const struct llama_model * model, struct llama_context_params * cparams,
-        const common_fit_context_profile * p) {
-    constexpr int64_t MiB = 1024 * 1024;
-
-    if (!model || !cparams || !p || !p->valid || llama_model_n_devices(model) > 1) {
-        return false;
-    }
-    const size_t nd = llama_model_n_devices(model);
-    ggml_backend_dev_t dev = nd == 1 ? llama_model_get_device(model, 0) : nullptr;
-    if (dev && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_IGPU) {
-        return false;
-    }
-    const uint32_t cur = cparams->n_ctx == 0 ? p->n_ctx_ref : cparams->n_ctx;
-    if (cur <= p->n_ctx_min) {
-        return false;
-    }
-    size_t dev_free = 0;
-    size_t dev_total = 0;
-    if (dev) {
-        ggml_backend_dev_memory(dev, &dev_free, &dev_total);
-    }
-
-    ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    if (cpu_dev == nullptr) {
-        LOG_DBG("%s: post-load host-pressure fit skipped: no CPU backend found\n", __func__);
-        return false;
-    }
-
-    size_t host_free = 0;
-    size_t host_total = 0;
-    ggml_backend_dev_memory(cpu_dev, &host_free, &host_total);
-
-    if (dev && dev_free == 0) {
-        LOG_DBG("%s: post-load host-pressure fit skipped: "
-                "device_free=%" PRId64 "/%" PRId64 " MiB, host_free=%" PRId64 "/%" PRId64 " MiB\n",
-                __func__, static_cast<int64_t>(dev_free / MiB), static_cast<int64_t>(dev_total / MiB),
-                static_cast<int64_t>(host_free / MiB), static_cast<int64_t>(host_total / MiB));
-        return false;
-    }
-
-    const size_t margin = p->margin;
-    const size_t budget = dev ? std::min(dev_free, host_free) : host_free;
-
-    LOG_DBG("%s: post-load host-pressure fit: budget=%" PRId64 " MiB, "
-            "device_free=%" PRId64 "/%" PRId64 " MiB, host_free=%" PRId64 "/%" PRId64
-            " MiB, min_ctx_use=%" PRId64 " MiB, bytes_per_ctx=%" PRId64 "\n",
-            __func__, static_cast<int64_t>(budget / MiB),
-            static_cast<int64_t>(dev_free / MiB), static_cast<int64_t>(dev_total / MiB),
-            static_cast<int64_t>(host_free / MiB), static_cast<int64_t>(host_total / MiB),
-            p->used_min / MiB, p->bytes_per_ctx);
-
-    const uint64_t budget_after_margin = budget > margin ? static_cast<uint64_t>(budget - margin) : 0;
-    const uint64_t used_min            = static_cast<uint64_t>(p->used_min);
-    const uint64_t bytes_per_ctx       = static_cast<uint64_t>(p->bytes_per_ctx);
-
-    if (budget_after_margin <= used_min) {
-        cparams->n_ctx = p->n_ctx_min;
-        LOG_INF("%s: post-load host-pressure context reduced from %" PRIu32 " to %" PRIu32 "\n",
-                __func__, cur, cparams->n_ctx);
-        return true;
-    }
-
-    const uint64_t extra_ctx = (budget_after_margin - used_min) / bytes_per_ctx;
-    uint32_t target = static_cast<uint32_t>(std::min<uint64_t>(static_cast<uint64_t>(p->n_ctx_min) + extra_ctx, cur));
-    const uint32_t granularity = 256;
-    target = std::max(target - target % granularity, p->n_ctx_min);
-
-    if (target < cur) {
-        LOG_INF("%s: post-load host-pressure context reduced from %" PRIu32 " to %" PRIu32 "\n",
-                __func__, cur, target);
-        cparams->n_ctx = target;
-        return true;
-    }
-
-    LOG_DBG("%s: post-load host-pressure context kept at %" PRIu32 "\n", __func__, cur);
-    return false;
-}
-
 static void common_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level,
-        common_fit_context_profile * context_profile) {
+        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
     if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
         throw common_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
     }
@@ -324,8 +179,10 @@ static void common_params_fit_impl(
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LOG_TRC("%s: getting device memory data for initial parameters:\n", __func__);
-    const dmds_t dmds_full = common_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+    uint64_t model_size = 0;
+    const dmds_t dmds_full = common_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &model_size);
     const size_t nd = devs.size(); // number of devices
+    const bool is_single_igpu = nd == 1 && ggml_backend_dev_type(devs[0]) == GGML_BACKEND_DEVICE_TYPE_IGPU;
 
     std::vector<int64_t> margins; // this function uses int64_t rather than size_t for memory sizes to more conveniently handle deficits
     margins.reserve(nd);
@@ -361,6 +218,21 @@ static void common_params_fit_impl(
     std::vector<int64_t> projected_free_per_device;
     projected_free_per_device.reserve(nd);
 
+    auto projected_device_used = [&](const dmds_t & dmds, size_t id) -> int64_t {
+        // Account for host-side model/context/compute buffers when projecting device memory pressure.
+        if (!is_single_igpu) {
+            return dmds[id].mb.total();
+        }
+        const int64_t model = int64_t(dmds[0].mb.model) + int64_t(dmds.back().mb.model);
+        // Without mmap/direct I/O, loading can add transient host-side pressure.
+        // Needed because the exact post-load memory state is unavailable without a second fit pass.
+        const int64_t load_pressure = (!mparams->use_mmap && !mparams->use_direct_io) ? int64_t(model_size / 5) : 0;
+        const int64_t context_compute = int64_t(dmds[0].mb.context) + int64_t(dmds[0].mb.compute) +
+            int64_t(dmds.back().mb.context) + int64_t(dmds.back().mb.compute);
+        return std::max(int64_t(dmds[0].mb.model) + context_compute,
+                model + load_pressure + context_compute - int64_t(dmds_full.back().free) + int64_t(dmds_full[0].free));
+    };
+
     if (nd == 0) {
         sum_projected_used = dmds_full.back().mb.total();
         sum_free           = dmds_full.back().free;
@@ -368,8 +240,6 @@ static void common_params_fit_impl(
         LOG_INF("%s: projected to use %" PRId64 " MiB of host memory vs. %" PRId64 " MiB of free host memory\n",
             __func__, sum_projected_used/MiB, sum_free/MiB);
         if (sum_projected_free >= margins[0]) {
-            common_fit_try_record_context_profile(path_model, mparams, cparams, devs, dmds_full,
-                    hp_nct, log_level, n_ctx_min, static_cast<size_t>(margins[0]), context_profile);
             LOG_TRC("%s: will leave %" PRId64 " >= %" PRId64 " MiB of system memory, no changes needed\n",
                 __func__, sum_projected_free/MiB, margins[0]/MiB);
             return;
@@ -381,7 +251,7 @@ static void common_params_fit_impl(
         for (size_t id = 0; id < nd; id++) {
             const llama_device_memory_data & dmd = dmds_full[id];
 
-            const int64_t projected_used = dmd.mb.total();
+            const int64_t projected_used = projected_device_used(dmds_full, id);
             const int64_t projected_free = dmd.free - projected_used;
             projected_free_per_device.push_back(projected_free);
 
@@ -400,8 +270,6 @@ static void common_params_fit_impl(
             __func__, sum_projected_used/MiB, sum_free/MiB);
         if (nd == 1) {
             if (projected_free_per_device[0] >= margins[0]) {
-                common_fit_try_record_context_profile(path_model, mparams, cparams, devs, dmds_full,
-                        hp_nct, log_level, n_ctx_min, static_cast<size_t>(margins[0]), context_profile);
                 LOG_TRC("%s: will leave %" PRId64 " >= %" PRId64 " MiB of free device memory, no changes needed\n",
                     __func__, projected_free_per_device[0]/MiB, margins[0]/MiB);
                 return;
@@ -468,13 +336,9 @@ static void common_params_fit_impl(
                         sum_projected_used_min_ctx = dmds_min_ctx.back().mb.total();
                     } else {
                         for (size_t id = 0; id < nd; id++) {
-                            sum_projected_used_min_ctx += dmds_min_ctx[id].mb.total();
+                            sum_projected_used_min_ctx += projected_device_used(dmds_min_ctx, id);
                         }
                     }
-                    common_fit_record_context_profile(
-                        context_profile, devs, dmds_full, dmds_min_ctx, hp_nct, n_ctx_min,
-                        margins.empty() ? 0 : static_cast<size_t>(margins[0]));
-
                     if (sum_used_target > sum_projected_used_min_ctx) {
                         // linear interpolation between minimum and maximum context size:
                         cparams->n_ctx += (hp_nct - n_ctx_min) * (sum_used_target - sum_projected_used_min_ctx)
@@ -510,12 +374,6 @@ static void common_params_fit_impl(
     }
     if (nd == 0) {
         throw common_params_fit_exception("was unable to fit model into system memory by reducing context, abort");
-    }
-
-    // From here on, --fit may change model weight placement. Any context profile
-    // recorded with the initial placement would no longer match the final model.
-    if (context_profile) {
-        *context_profile = {};
     }
 
     if (mparams->n_gpu_layers != default_mparams.n_gpu_layers) {
@@ -659,13 +517,13 @@ static void common_params_fit_impl(
             const ngl_t & n = ngl_per_device[id];
             LOG_TRC(
                 "%s: id=%zu, n_layer=%2" PRIu32 ", n_part=%2" PRIu32 ", overflow_type=%d, mem=%6" PRId64 " MiB\n",
-                func_name, id, n.n_layer, n.n_part, int(n.overflow_type), dmd_nl[id].mb.total()/MiB);
+                func_name, id, n.n_layer, n.n_part, int(n.overflow_type), projected_device_used(dmd_nl, id)/MiB);
         }
 
         std::vector<int64_t> ret;
         ret.reserve(nd);
         for (size_t id = 0; id < nd; id++) {
-            ret.push_back(dmd_nl[id].mb.total());
+            ret.push_back(projected_device_used(dmd_nl, id));
         }
         return ret;
     };
@@ -684,7 +542,7 @@ static void common_params_fit_impl(
 
         for (size_t id = 0; id < nd; id++) {
             global_surplus_cpu_moe += dmds_cpu_moe[id].free;
-            global_surplus_cpu_moe -= int64_t(dmds_cpu_moe[id].mb.total()) + margins[id];
+            global_surplus_cpu_moe -= projected_device_used(dmds_cpu_moe, id) + margins[id];
         }
 
         if (global_surplus_cpu_moe > 0) {
@@ -940,16 +798,11 @@ enum common_params_fit_status common_fit_params(
         llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t * margins,
         uint32_t n_ctx_min,
-        ggml_log_level log_level,
-        common_fit_context_profile * context_profile) {
-    if (context_profile) {
-        *context_profile = {};
-    }
+        ggml_log_level log_level) {
     const int64_t t0_us = llama_time_us();
     common_params_fit_status status = COMMON_PARAMS_FIT_STATUS_SUCCESS;
     try {
-        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins,
-                n_ctx_min, log_level, context_profile);
+        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level);
         LOG_TRC("%s: successfully fit params to free device memory\n", __func__);
     } catch (const common_params_fit_exception & e) {
         LOG_WRN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
