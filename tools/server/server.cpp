@@ -204,6 +204,10 @@ int main(int argc, char ** argv) {
     // Save & load slots
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
+
+    // Google Cloud Platform (Vertex AI) compat
+    ctx_http.register_gcp_compat();
+
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
     if (params.webui_mcp_proxy) {
         SRV_WRN("%s", "-----------------\n");
@@ -334,7 +338,8 @@ int main(int argc, char ** argv) {
         // optionally, notify router server that this instance is ready
         std::thread monitor_thread;
         if (server_models::is_child_server()) {
-            monitor_thread = server_models::setup_child_server(shutdown_handler);
+            json model_info = routes.get_model_info();
+            monitor_thread = server_models::setup_child_server(shutdown_handler, model_info);
         }
 
         // this call blocks the main thread until queue_tasks.terminate() is called

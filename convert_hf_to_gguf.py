@@ -1570,6 +1570,9 @@ class TextModel(ModelBase):
         if chkhsh == "862f827721df956049dff5ca81a57f29e575280bc622e290d3bf4e35eca29015":
             # ref: https://huggingface.co/codefuse-ai/F2LLM-v2-4B
             res = "f2llmv2"
+        if chkhsh == "62f6fb0a6fd5098caeabb19b07a5c1099cafc8b9c40eab6ea89ece4ec02fbc57":
+            # ref: https://huggingface.co/sarvamai/sarvam-30b
+            res = "sarvam-moe"
 
         if res is None:
             logger.warning("\n")
@@ -2173,7 +2176,8 @@ class MmprojModel(ModelBase):
             text_config = {
                 k: v for k, v in self.hparams.items() if k not in ["vision_encoder", "audio_encoder"]
             }
-            self.n_embd_text = text_config.get("hidden_dim", 0)
+            # mistral native params.json: "dim" is the text hidden size ("hidden_dim" is the FFN intermediate size)
+            self.n_embd_text = text_config.get("dim", 0)
 
         assert self.n_embd_text > 0, "n_embd not found in hparams"
 
@@ -3134,6 +3138,11 @@ class LlavaVisionModel(MmprojModel):
             assert self.hparams["norm_eps"] is not None, "norm_eps not found in params.json"
             if self.use_break_tok:
                 self.img_break_tok_id = self.find_vparam(["image_break_token_id"])
+
+                # params.json may ship -1 placeholders (Mistral Medium 3.5)
+                # resolve the real id from the bundled tokenizer in that case
+                if self.img_break_tok_id < 0:
+                    self.img_break_tok_id = self.get_mistral_token_id("[IMG_BREAK]")
         else:
             raise ValueError(f"Unsupported model type: {self.hparams['model_type']}")
         logger.info(f"Image break token id: {self.img_break_tok_id}")
@@ -3152,6 +3161,24 @@ class LlavaVisionModel(MmprojModel):
                 if token_data["content"] == token:
                     return int(token_data["id"])
         raise ValueError(f"Token '{token}' not found in tokenizer config.")
+
+    def get_mistral_token_id(self, token: str) -> int:
+        # mistral native format ships tekken.json or a versioned spm tokenizer
+        tekken_file = self.dir_model / "tekken.json"
+        if tekken_file.is_file():
+            with open(tekken_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for entry in data.get("special_tokens", []):
+                if entry.get("token_str") == token:
+                    return int(entry["rank"])
+        tokenizer_json_file = self.dir_model / "tokenizer.json"
+        if tokenizer_json_file.is_file():
+            with open(tokenizer_json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for entry in data.get("added_tokens", []):
+                if entry.get("content") == token:
+                    return int(entry["id"])
+        raise ValueError(f"Token '{token}' not found in mistral tokenizer files.")
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -8034,13 +8061,37 @@ class Gemma4Model(Gemma3Model):
         rope_freqs_full = torch.tensor(values, dtype=torch.float32)
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), rope_freqs_full)
 
+    def _generate_nvfp4_tensors(self):
+        # Gemma-4 stores a per-layer router.per_expert_scale ([n_expert]) that scales
+        # each expert's contribution. It's mathematically equivalent to a per-expert
+        # scalar on the down_proj output, which is exactly where ffn_down_exps_s is
+        # applied at inference. Fold it into each expert's NVFP4 weight_scale_2 so the
+        # existing NVFP4 path produces the right scales.
+        n_experts = self.find_hparam(["num_local_experts", "num_experts"], optional=True) or 0
+        for name in [n for n in self.model_tensors if n.endswith(".router.per_expert_scale")]:
+            bid_match = re.search(r"\.layers\.(\d+)\.", name)
+            if bid_match is None:
+                continue
+            bid = bid_match.group(1)
+            prefix = name[: name.index(f".layers.{bid}.") + len(f".layers.{bid}.")]
+            w2_targets = [f"{prefix}experts.{e}.down_proj.weight_scale_2" for e in range(n_experts)]
+            present = [w2 in self.model_tensors for w2 in w2_targets]
+            if not any(present):
+                continue
+            assert all(present), f"layer {bid}: partial NVFP4 quantization across experts"
+            r = self.model_tensors.pop(name)
+            for e, w2 in enumerate(w2_targets):
+                s = self.model_tensors[w2]
+                self.model_tensors[w2] = lambda s=s, r=r, i=e: s() * r()[i]
+        super()._generate_nvfp4_tensors()
+
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
 
         if name.endswith("per_dim_scale") or name.endswith("layer_scalar"):
             name = name + ".weight"
-        if ".experts." in name and not name.endswith(".weight"):
+        if ".experts." in name and not name.endswith((".weight", ".weight_scale", ".weight_scale_2", ".input_scale")):
             name += ".weight"
 
         return super().filter_tensors((name, gen))
@@ -9753,6 +9804,73 @@ class MimoV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("MiMoV2ForCausalLM")
+class MiMoV2VisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        hp = self.hparams_vision
+
+        hp["image_size"] = hp.get("image_size", 560)
+        hp["num_attention_heads"] = hp.get("num_heads", 32)
+        hp["num_hidden_layers"] = hp.get("depth", 28)
+
+        self.n_q_heads = int(hp["num_heads"])
+        self.num_kv_heads = int(hp.get("num_key_value_heads", 8))
+        self.head_dim = int(hp.get("qk_channels", 64))
+        self.spatial_merge_size = int(hp["spatial_merge_size"])
+        # MiMoV2 vision RMSNorm: HF uses getattr(config, "rms_norm_eps", 1e-6) and the
+        # field is absent from MiMo-V2.5's vision_config
+        self.rms_norm_eps = float(hp.get("rms_norm_eps", 1e-6))
+
+        # fullatt_block_indexes are also reflected in vit_window_attn_types as -1
+        self.fullatt_block_indexes = list(hp.get("fullatt_block_indexes") or [])
+        self.vit_window_attn_types = list(hp.get("vit_window_attn_types") or [])
+        self.visual_token_window_size = int(hp.get("visual_token_window_size", -1))
+        self.use_sink = bool(hp.get("use_sink", False))
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MIMOVL)
+        self.gguf_writer.add_vision_use_silu(True)
+        self.gguf_writer.add_vision_head_count_kv(self.num_kv_heads)
+        self.gguf_writer.add_vision_spatial_merge_size(self.spatial_merge_size)
+        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.WINDOW_SIZE, self.visual_token_window_size)
+        self.gguf_writer.add_vision_wa_pattern_mode(self.vit_window_attn_types)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.rms_norm_eps)
+        self.gguf_writer.add_vision_min_pixels(int(self.preprocessor_config["min_pixels"]))
+        self.gguf_writer.add_vision_max_pixels(int(self.preprocessor_config["max_pixels"]))
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # Sinks must be F32: any sink-style softmax/mask add in ggml requires
+        # F32, and we fold sinks into a host-built F32 mask at encode time.
+        if new_name.endswith(".attn_sinks"):
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        if not name.startswith("visual."):
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch, name, bid):
+        # Conv3D patch embed: split along the temporal axis (kt=2) into two Conv2D
+        # weights that the existing qwen2vl-style two-Conv2D path consumes.
+        if name == "visual.patch_embed.proj.weight":
+            _, _, kt, _, _ = data_torch.shape
+            if kt != 2:
+                raise ValueError(f"unexpected temporal_patch_size: {kt}")
+            embd_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH]
+            yield (embd_name + ".weight",   data_torch[:, :, 0, ...])
+            yield (embd_name + ".weight.1", data_torch[:, :, 1, ...])
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Step3p5ForCausalLM")
@@ -11611,6 +11729,34 @@ class BailingMoeV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("SarvamMoEForCausalLM", "modeling_sarvam_moe.SarvamMoEForCausalLM")
+class SarvamMoEModel(BailingMoeV2Model):
+    model_arch = gguf.MODEL_ARCH.BAILINGMOE2
+    # Sarvam-MoE shares the BailingMoeV2 architecture; only differences:
+    #  - full rotary (no partial_rotary_factor)
+    #  - expert bias is zero-mean normalized at load time
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if (rope_dim := hparams.get("head_dim")) is None:
+            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+        # Override the partial-rotary value written by BailingMoeV2 with the full rotary dim
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.endswith(".expert_bias"):
+            # Sarvam normalizes expert bias to zero mean
+            inner = gen
+
+            def gen():
+                t = inner()
+                return t - t.mean()
+        return super().filter_tensors((name, gen))
 
 
 @ModelBase.register("GroveMoeForCausalLM", "modeling_grove_moe.GroveMoeForCausalLM")

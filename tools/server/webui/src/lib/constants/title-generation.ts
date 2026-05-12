@@ -1,5 +1,5 @@
 /* Title generation constants */
-export const TITLE = {
+export const TITLE_GENERATION = {
 	MIN_LENGTH: 3,
 	FALLBACK: 'New Chat',
 	DEFAULT_PROMPT:

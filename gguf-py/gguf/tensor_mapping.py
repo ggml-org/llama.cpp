@@ -1569,6 +1569,10 @@ class TensorNameMap:
             "vision_model.transformer.resblocks.{bid}.attn.out_proj", # Step3-VL
         ),
 
+        MODEL_TENSOR.V_ENC_ATTN_SINKS: (
+            "visual.blocks.{bid}.attn.sinks", # mimovl
+        ),
+
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2",
             "model.vision_tower.encoder.layers.{bid}.layer_norm2", # minicpmv4_6

@@ -513,7 +513,7 @@ export class ChatService {
 
 			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
 
-			if (import.meta.env.DEV) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
 			}
 

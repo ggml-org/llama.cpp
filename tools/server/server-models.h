@@ -63,6 +63,7 @@ struct server_model_meta {
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
     int64_t last_used = 0; // for LRU unloading
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
+    json loaded_info; // info to be reflected via /v1/models endpoint
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
 
@@ -145,6 +146,7 @@ public:
 
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
+    void update_loaded_info(const std::string & name, std::string & raw_info);
 
     // wait until the model instance is fully loaded (thread-safe)
     // return when the model no longer in "loading" state
@@ -163,7 +165,7 @@ public:
 
     // notify the router server that a model instance is ready
     // return the monitoring thread (to be joined by the caller)
-    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler);
+    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info);
 
     // notify the router server that the sleeping state has changed
     static void notify_router_sleeping_state(bool sleeping);

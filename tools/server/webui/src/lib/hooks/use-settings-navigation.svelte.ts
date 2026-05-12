@@ -1,6 +1,7 @@
 import { page } from '$app/state';
 import { beforeNavigate } from '$app/navigation';
 import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
+import { ROUTES } from '$lib/constants/routes';
 
 export interface ChatSettings {
 	reset: () => void;
@@ -15,11 +16,8 @@ export function useSettingsNavigation() {
 	const isSettingsRoute = $derived(!!page.route.id?.startsWith('/settings'));
 
 	beforeNavigate(({ to, from }) => {
-		if (
-			to?.route?.id?.startsWith('/settings/chat') &&
-			!from?.route?.id?.startsWith('/settings/chat')
-		) {
-			settingsReferrer.url = window.location.hash || '#/';
+		if (to?.route?.id?.startsWith('/settings') && !from?.route?.id?.startsWith('/settings')) {
+			settingsReferrer.url = window.location.hash || ROUTES.START;
 		}
 	});
 

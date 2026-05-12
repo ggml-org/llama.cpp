@@ -1,6 +1,7 @@
 import { Settings, Search, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import type { Component } from 'svelte';
+import { ROUTES } from './routes';
 
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
@@ -19,18 +20,18 @@ export interface DesktopIconStripItem {
 }
 
 export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
-	{ icon: SquarePen, tooltip: 'New chat', route: '?new_chat=true#/', keys: ['shift', 'cmd', 'o'] },
+	{ icon: SquarePen, tooltip: 'New chat', route: ROUTES.NEW_CHAT, keys: ['shift', 'cmd', 'o'] },
 	{ icon: Search, tooltip: 'Search', keys: ['cmd', 'k'] },
 	{
 		icon: McpLogo,
 		tooltip: 'MCP Servers',
-		route: '#/settings/mcp',
-		activeRouteId: '/settings/mcp'
+		route: ROUTES.MCP_SERVERS,
+		activeRouteId: '/mcp-servers'
 	},
 	{
 		icon: Settings,
 		tooltip: 'Settings',
-		route: '#/settings/chat/general',
-		activeRoutePrefix: '/settings/chat'
+		route: ROUTES.SETTINGS,
+		activeRoutePrefix: '/settings'
 	}
 ];
