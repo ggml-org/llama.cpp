@@ -74,13 +74,19 @@ jobs:
         run: npm run lint
         working-directory: tools/server/webui
 
-      - name: Run Client tests
+      - name: Install Playwright browsers
+        id: playwright
         if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npx playwright install --with-deps
+        working-directory: tools/server/webui
+
+      - name: Run Client tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:client
         working-directory: tools/server/webui
 
       - name: Run Unit tests
-        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:unit
         working-directory: tools/server/webui
 
