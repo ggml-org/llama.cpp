@@ -209,7 +209,7 @@
 
 {#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
 	<ChatMessage
-		class="mx-auto mt-12 w-full max-w-[48rem]"
+		class="mx-auto mt-12 w-full"
 		{message}
 		{toolMessages}
 		{isLastAssistantMessage}
@@ -223,7 +223,7 @@
 
 	{#if pendingContent}
 		<ChatMessageUserPending
-			class="mx-auto mt-12 w-full max-w-[48rem]"
+			class="mx-auto mt-12 w-full"
 			content={pendingContent}
 			extras={agenticPendingSteeringMessageExtras(convId)}
 			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
@@ -237,7 +237,7 @@
 
 	{#if pendingContent}
 		<ChatMessageUserPending
-			class="mx-auto mt-12 w-full max-w-[48rem]"
+			class="mx-auto mt-12 w-full"
 			content={pendingContent}
 			extras={chatPendingMessageExtras(convId)}
 			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}

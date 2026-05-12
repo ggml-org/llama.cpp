@@ -377,7 +377,6 @@
 		flex-direction: column;
 		gap: 0.5rem;
 		width: 100%;
-		max-width: 48rem;
 	}
 
 	.agentic-text {

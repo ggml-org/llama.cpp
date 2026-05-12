@@ -321,6 +321,18 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.AUTO_CHAT_WIDTH,
+				label: 'Auto chat width',
+				help: 'Automatically adjust the chat width based on the screen size.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.AUTO_CHAT_WIDTH,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			}
 		]
 	},

@@ -108,7 +108,7 @@
 	});
 </script>
 
-<div class="relative mx-auto max-w-[48rem]">
+<div class="relative mx-auto">
 	<ChatForm
 		bind:this={chatFormRef}
 		bind:value={message}

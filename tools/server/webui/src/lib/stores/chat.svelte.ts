@@ -37,7 +37,9 @@ import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
-	TITLE_GENERATION
+	TITLE_GENERATION,
+	AUTO_WIDTH_CLASSES,
+	DEFAULT_WIDTH_CLASS
 } from '$lib/constants';
 import type {
 	ChatMessageTimings,
@@ -84,6 +86,11 @@ class ChatStore {
 		string,
 		{ content: string; extras?: DatabaseMessageExtra[] }
 	>();
+
+	get chatWidthClasses(): string {
+		const currentConfig = config();
+		return currentConfig.autoChatWidth ? AUTO_WIDTH_CLASSES : DEFAULT_WIDTH_CLASS;
+	}
 
 	private setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);
@@ -1839,3 +1846,4 @@ export const chatInjectPendingMessage = (
 	content: string,
 	extras?: DatabaseMessageExtra[]
 ) => chatStore.injectPendingMessage(convId, content, extras);
+export const chatWidthClasses = () => chatStore.chatWidthClasses;
