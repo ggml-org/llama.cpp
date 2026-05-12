@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# type: ignore
 
 import argparse
 import json
@@ -100,6 +99,8 @@ D) {D}
 
 
 class BaseDataset(ABC):
+    questions: List[Dict]
+
     @abstractmethod
     def get_question(self, index: int) -> Dict:
         pass
@@ -573,7 +574,7 @@ def normalize_number(s: str) -> Optional[int]:
 class AimeDataset(BaseDataset):
     def __init__(self, split: str = "train"):
         self.split = split
-        self.questions: List[Dict] = []
+        self.questions = []
         self._load_dataset()
 
     def _load_dataset(self):
@@ -618,7 +619,7 @@ class AimeDataset(BaseDataset):
 
 class Aime2025Dataset(BaseDataset):
     def __init__(self):
-        self.questions: List[Dict] = []
+        self.questions = []
         self._load_dataset()
 
     def _load_dataset(self):
@@ -681,7 +682,7 @@ class Aime2025Dataset(BaseDataset):
 class Gsm8kDataset(BaseDataset):
     def __init__(self, split: str = "test"):
         self.split = split
-        self.questions: List[Dict] = []
+        self.questions = []
         self._load_dataset()
 
     def _load_dataset(self):
@@ -742,7 +743,7 @@ class GpqaDataset(BaseDataset):
     def __init__(self, variant: str = "diamond", seed: int = 1234):
         self.variant = variant
         self.seed = seed
-        self.questions: List[Dict] = []
+        self.questions = []
         self._load_dataset()
 
     def _load_dataset(self):
