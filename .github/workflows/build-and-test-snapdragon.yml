@@ -58,14 +58,44 @@ jobs:
           name: llama-cpp-android-arm64-snapdragon
           path: pkg-snapdragon/llama.cpp
 
+  linux-iot-snapdragon:
+    runs-on: ubuntu-latest
+    container:
+      image: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.1'
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          lfs: false
+
+      - name: Build Llama.CPP for Snapdragon Linux IoT
+        id: build_llama_cpp_snapdragon_linux
+        run: |
+          cp docs/backend/snapdragon/CMakeUserPresets.json .
+          cmake --preset arm64-linux-snapdragon-release -B build-snapdragon -DGGML_OPENCL=ON
+          cmake --build build-snapdragon -j $(nproc)
+          cmake --install build-snapdragon --prefix pkg-snapdragon/llama.cpp
+
+      - name: Upload Llama.CPP Snapdragon Linux IoT Build Artifact
+        if: ${{ always() && steps.build_llama_cpp_snapdragon_linux.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-cpp-linux-arm64-snapdragon
+          path: pkg-snapdragon/llama.cpp
+
   test-snapdragon-qdc:
-    name: Test on QDC Android Device (${{ matrix.device }})
-    needs: [android-ndk-snapdragon]
+    name: Test on QDC Device (${{ matrix.device }})
+    needs: [android-ndk-snapdragon, linux-iot-snapdragon]
     runs-on: ubuntu-slim
     strategy:
       fail-fast: false
       matrix:
-        device: [SM8750, SM8650, SM8850]
+        device: [SM8750, SM8850, QCS9075M]
 
     steps:
       - name: Checkout
@@ -74,7 +104,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v7
         with:
-          name: llama-cpp-android-arm64-snapdragon
+          name: ${{ startsWith(matrix.device, 'QCS') && 'llama-cpp-linux-arm64-snapdragon' || 'llama-cpp-android-arm64-snapdragon' }}
           path: pkg-snapdragon/llama.cpp
 
       - name: Set up Python
