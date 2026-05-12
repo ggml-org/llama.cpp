@@ -3148,6 +3148,16 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
             }
             ctx->param_arena.reset();
             commands.clear();
+#ifdef GGML_WEBGPU_GPU_PROFILE
+            // flush before the next batch can overflow the QuerySet
+            if (ctx->profile_timestamp_query_count + 2 * ctx->global_ctx->command_submit_batch_size >=
+                WEBGPU_MAX_PROFILE_QUERY_COUNT) {
+                ggml_backend_webgpu_collect_profile_results(ctx, profile_pipeline_names, num_inflight_batches);
+                // reset profile timestamp state
+                ctx->profile_timestamp_query_count = 0;
+                profile_pipeline_names.clear();
+            }
+#endif
         }
 
         node_idx += num_encoded_ops;
