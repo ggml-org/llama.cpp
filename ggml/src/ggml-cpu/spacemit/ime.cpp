@@ -974,9 +974,7 @@ class tensor_traits_common : public tensor_traits_base {
                         spacemit_kernels::rvv::forward_norm_f32(params, op);
                         return true;
                     default:
-                        {
-                            GGML_ABORT("fatal error");
-                        }
+                        GGML_ABORT("fatal error");
                 }
             case GGML_OP_RMS_NORM:
                 switch (op->src[0]->type) {
@@ -984,9 +982,7 @@ class tensor_traits_common : public tensor_traits_base {
                         spacemit_kernels::rvv::forward_rms_norm_f32(params, op);
                         return true;
                     default:
-                        {
-                            GGML_ABORT("fatal error");
-                        }
+                        GGML_ABORT("fatal error");
                 }
             case GGML_OP_ADD:
                 switch (op->src[0]->type) {
@@ -1037,10 +1033,8 @@ class tensor_traits_common : public tensor_traits_base {
                         return true;
                 }
             case GGML_OP_FLASH_ATTN_EXT:
-                {
-                    forward_flash_attn_ext_f16(params, op);
-                    return true;
-                }
+                forward_flash_attn_ext_f16(params, op);
+                return true;
             case GGML_OP_CONT:
                 {
                     const ggml_tensor * src0 = op->src[0];
@@ -1095,8 +1089,8 @@ class tensor_traits_common : public tensor_traits_base {
                     }
 
                     ggml_compute_forward_repeat(params, op);
-                    return true;
                 }
+                return true;
             case GGML_OP_SUM_ROWS:
                 {
                     if (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) {
