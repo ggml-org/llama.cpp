@@ -187,6 +187,7 @@ struct webgpu_capabilities {
     uint32_t sg_mat_k = 0;
 
     uint32_t subgroup_size     = 0;
+    uint32_t min_subgroup_size = 0;
     uint32_t max_subgroup_size = 0;
     size_t   memset_bytes_per_thread;
 };
@@ -1442,6 +1443,7 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
     shader_lib_ctx.sg_mat_m                 = ctx->global_ctx->capabilities.sg_mat_m;
     shader_lib_ctx.sg_mat_n                 = ctx->global_ctx->capabilities.sg_mat_n;
     shader_lib_ctx.sg_mat_k                 = ctx->global_ctx->capabilities.sg_mat_k;
+    shader_lib_ctx.min_subgroup_size        = ctx->global_ctx->capabilities.min_subgroup_size;
     shader_lib_ctx.max_subgroup_size        = ctx->global_ctx->capabilities.max_subgroup_size;
 
     // Get or create pipeline
@@ -1750,6 +1752,7 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
     shader_lib_ctx.sg_mat_m           = ctx->global_ctx->capabilities.sg_mat_m;
     shader_lib_ctx.sg_mat_n           = ctx->global_ctx->capabilities.sg_mat_n;
     shader_lib_ctx.sg_mat_k           = ctx->global_ctx->capabilities.sg_mat_k;
+    shader_lib_ctx.min_subgroup_size  = ctx->global_ctx->capabilities.min_subgroup_size;
     shader_lib_ctx.max_subgroup_size  = ctx->global_ctx->capabilities.max_subgroup_size;
     webgpu_pipeline pipeline          = ctx->shader_lib->get_flash_attn_pipeline(
         shader_lib_ctx, ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment);
@@ -3469,6 +3472,7 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                     shader_lib_ctx.sg_mat_m          = ctx->webgpu_global_ctx->capabilities.sg_mat_m;
                     shader_lib_ctx.sg_mat_n          = ctx->webgpu_global_ctx->capabilities.sg_mat_n;
                     shader_lib_ctx.sg_mat_k          = ctx->webgpu_global_ctx->capabilities.sg_mat_k;
+                    shader_lib_ctx.min_subgroup_size = ctx->webgpu_global_ctx->capabilities.min_subgroup_size;
                     shader_lib_ctx.max_subgroup_size = ctx->webgpu_global_ctx->capabilities.max_subgroup_size;
 
                     const ggml_webgpu_flash_attn_decisions decisions = ggml_webgpu_flash_attn_get_decisions(
@@ -3667,8 +3671,9 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 #endif
     ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix = valid_subgroup_matrix_config;
 
-    // For subgroup matrix code to be the most efficient, we would like the subgroup size to be consistent and accurate.
-    // Unfortunately, that is not possible, so we use the maximum subgroup size reported by the adapter.
+    // Runtime subgroup size can be any supported size in this range. Shaders
+    // that allocate per-lane register arrays must size them for the minimum.
+    ctx->webgpu_global_ctx->capabilities.min_subgroup_size = info.subgroupMinSize;
     ctx->webgpu_global_ctx->capabilities.max_subgroup_size = info.subgroupMaxSize;
     // Initialize device
     std::vector<wgpu::FeatureName> required_features       = { wgpu::FeatureName::ShaderF16 };
@@ -4024,11 +4029,14 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 shader_lib_ctx.dst                            = const_cast<ggml_tensor *>(op);
                 shader_lib_ctx.supports_subgroups             = ctx->webgpu_global_ctx->capabilities.supports_subgroups;
                 shader_lib_ctx.supports_subgroup_matrix = ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix;
+                shader_lib_ctx.max_wg_size =
+                    ctx->webgpu_global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
                 shader_lib_ctx.wg_mem_limit_bytes =
                     ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize;
                 shader_lib_ctx.sg_mat_m          = ctx->webgpu_global_ctx->capabilities.sg_mat_m;
                 shader_lib_ctx.sg_mat_n          = ctx->webgpu_global_ctx->capabilities.sg_mat_n;
                 shader_lib_ctx.sg_mat_k          = ctx->webgpu_global_ctx->capabilities.sg_mat_k;
+                shader_lib_ctx.min_subgroup_size = ctx->webgpu_global_ctx->capabilities.min_subgroup_size;
                 shader_lib_ctx.max_subgroup_size = ctx->webgpu_global_ctx->capabilities.max_subgroup_size;
 
                 const ggml_webgpu_flash_attn_decisions decisions = ggml_webgpu_flash_attn_get_decisions(
@@ -4040,9 +4048,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     break;
                 }
                 if (decisions.path == GGML_WEBGPU_FLASH_ATTN_PATH_VEC) {
-                    const size_t min_bytes =
-                        ggml_webgpu_flash_attn_wg_mem_bytes(decisions.q_tile, decisions.kv_tile, (uint32_t) src0->ne[0],
-                                                            (uint32_t) src2->ne[0], has_mask, decisions.kv_direct);
+                    const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
+                        decisions.q_tile, decisions.kv_tile, (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask,
+                        decisions.kv_direct, decisions.path);
                     if (min_bytes > limit_bytes) {
                         supports_op = false;
                     }
@@ -4050,9 +4058,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 }
 
                 if (decisions.path == GGML_WEBGPU_FLASH_ATTN_PATH_TILE) {
-                    const size_t min_bytes =
-                        ggml_webgpu_flash_attn_wg_mem_bytes(decisions.q_tile, decisions.kv_tile, (uint32_t) src0->ne[0],
-                                                            (uint32_t) src2->ne[0], has_mask, decisions.kv_direct);
+                    const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
+                        decisions.q_tile, decisions.kv_tile, (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask,
+                        decisions.kv_direct, decisions.path);
                     if (min_bytes > limit_bytes) {
                         supports_op = false;
                     }
@@ -4063,9 +4071,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     supports_op = false;
                     break;
                 }
-                const size_t min_bytes =
-                    ggml_webgpu_flash_attn_wg_mem_bytes(decisions.q_tile, decisions.kv_tile, (uint32_t) src0->ne[0],
-                                                        (uint32_t) src2->ne[0], has_mask, decisions.kv_direct);
+                const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
+                    decisions.q_tile, decisions.kv_tile, (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask,
+                    decisions.kv_direct, decisions.path);
                 if (min_bytes > limit_bytes) {
                     supports_op = false;
                 }
