@@ -18,7 +18,6 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
-#include <optional>
 #include <openvino/core/any.hpp>
 #include <openvino/core/graph_util.hpp>
 #include <openvino/core/shape.hpp>
@@ -27,9 +26,11 @@
 #include <openvino/openvino.hpp>
 #include <openvino/runtime/compiled_model.hpp>
 #include <openvino/runtime/infer_request.hpp>
+#include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
 #include <openvino/runtime/intel_npu/properties.hpp>
 #include <openvino/runtime/properties.hpp>
 #include <openvino/runtime/tensor.hpp>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -122,6 +123,14 @@ static std::optional<ov::Tensor> try_make_kv_sliced_tensor(std::shared_ptr<GgmlO
 
     ov::Shape sliced_shape = full_shape;
     sliced_shape[2] = static_cast<size_t>(n_kv);
+
+    // Disabling for now as gpu has bug with in-place ScatterUpdate with remote tensors, can re-enable once CVS-186519 is fixed
+    // if (ggml_openvino_buffer_is_remote(ggml_tensor)) {
+    //     auto remote_context = ggml_openvino_get_remote_context();
+    //     auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
+    //     return gpu_context.create_tensor(ggml_decoder->get_ov_type(ggml_tensor), sliced_shape, ggml_tensor->data);
+    // }
+
     return ov::Tensor(ggml_decoder->get_ov_type(ggml_tensor), sliced_shape, ggml_tensor->data);
 }
 
@@ -133,15 +142,14 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
         return *sliced;
     }
 
-    if (ggml_tensor->extra != nullptr && !ggml_decoder->is_splited_model()) {
-        auto * extra_base = static_cast<ggml_openvino_extra_base *>(ggml_tensor->extra);
-        if (extra_base->type != ggml_openvino_extra_base::Type::TENSOR) {
-            throw std::runtime_error("ggml tensor extra is not of type TENSOR for output: " +
-                                     std::string(ggml_tensor->name));
-        }
-        auto * tensor_extra = static_cast<ggml_openvino_tensor_extra *>(extra_base);
-        return *tensor_extra->tensor;
-    }
+    // Disabling for now as gpu has bug with in-place ScatterUpdate with remote tensors, can re-enable once CVS-186519 is fixed
+    // if (ggml_tensor->extra != nullptr && !ggml_decoder->is_splited_model()) {
+    //     auto * extra_base = static_cast<ggml_openvino_extra_base *>(ggml_tensor->extra);
+    //     if (extra_base->type == ggml_openvino_extra_base::Type::TENSOR) {
+    //         auto * tensor_extra = static_cast<ggml_openvino_tensor_extra *>(extra_base);
+    //         return *tensor_extra->tensor;
+    //     }
+    // }
 
     auto output_type = ggml_decoder->get_ov_type(ggml_tensor);
     ov::Shape output_shape;
@@ -745,13 +753,12 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
     }
 
     if (ggml_tensor->extra != nullptr && !ggml_decoder->is_splited_model()) {
-        // GGML_LOG_DEBUG("Using ggml_tensor->extra as ov::Tensor for input: %s\n", name.c_str());
         auto * extra_base = static_cast<ggml_openvino_extra_base *>(ggml_tensor->extra);
-        if (extra_base->type != ggml_openvino_extra_base::Type::TENSOR) {
-            throw std::runtime_error("ggml tensor extra is not of type TENSOR for input: " + name);
+        if (extra_base->type == ggml_openvino_extra_base::Type::TENSOR) {
+            // GGML_LOG_DEBUG("Using ggml_tensor->extra as ov::Tensor for input: %s\n", name.c_str());
+            auto * tensor_extra = static_cast<ggml_openvino_tensor_extra *>(extra_base);
+            return *tensor_extra->tensor;
         }
-        auto * tensor_extra = static_cast<ggml_openvino_tensor_extra *>(extra_base);
-        return *tensor_extra->tensor;
     }
 
     // GGML_LOG_DEBUG("Converting ggml tensor to ov::Tensor for input: %s\n", name.c_str());

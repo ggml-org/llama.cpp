@@ -164,6 +164,9 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
 
 ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor, bool is_remote);
 
+// Check if a tensor's buffer uses remote (device) memory (e.g. GPU USM)
+bool ggml_openvino_buffer_is_remote(const ggml_tensor * tensor);
+
 // Register an extra with the tensor's OpenVINO buffer context for proper lifetime management.
 // This sets tensor->extra and tracks the extra in the buffer context for cleanup.
 void ggml_openvino_buffer_register_extra(ggml_tensor * tensor, ggml_openvino_extra_base * extra);

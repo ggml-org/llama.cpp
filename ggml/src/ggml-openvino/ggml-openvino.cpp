@@ -579,6 +579,17 @@ size_t ggml_backend_openvino_buffer_get_ctx_id(ggml_backend_buffer_t buffer) {
     return ctx->id;
 }
 
+bool ggml_openvino_buffer_is_remote(const ggml_tensor * tensor) {
+    if (tensor == nullptr || tensor->buffer == nullptr) {
+        return false;
+    }
+    if (!ggml_backend_buffer_is_openvino(tensor->buffer)) {
+        return false;
+    }
+    auto * ctx = static_cast<ggml_backend_openvino_buffer_context *>(tensor->buffer->context);
+    return ctx->is_remote;
+}
+
 void ggml_openvino_buffer_register_extra(ggml_tensor * tensor, ggml_openvino_extra_base * extra) {
     GGML_ASSERT(tensor != nullptr);
     GGML_ASSERT(tensor->buffer != nullptr);
