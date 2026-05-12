@@ -3,7 +3,11 @@
 
 void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
-    ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
+    // Some Qwen 3.5 GGUFs store three M-RoPE sections. The runtime
+    // representation has four slots, so accept the shorter metadata form.
+    if (!ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 3, false)) {
+        ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, true);
+    }
 
     // Load linear attention (gated delta net) parameters
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
@@ -29,7 +33,7 @@ void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_qwen35::load_arch_tensors(llama_model_loader &) {
+void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
@@ -60,7 +64,8 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader &) {
 
         if (!hparams.is_recurrent(i)) {
             // Attention layers
-            create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head * 2, n_embd_k_gqa, n_embd_v_gqa, 0);
+            create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head * 2,
+                    hparams.n_embd_k_gqa(i), hparams.n_embd_v_gqa(i), 0);
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
             // Q/K normalization for attention layers
@@ -72,7 +77,10 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader &) {
             layer.wqkv           = create_tensor(tn(LLM_TENSOR_ATTN_QKV,       "weight", i), { n_embd, key_dim * 2 + value_dim }, TENSOR_NOT_REQUIRED);
             layer.wqkv_gate      = create_tensor(tn(LLM_TENSOR_ATTN_GATE,      "weight", i), { n_embd, value_dim }, TENSOR_NOT_REQUIRED);
             layer.ssm_conv1d     = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,     "weight", i), { hparams.ssm_d_conv, conv_dim }, 0);
-            layer.ssm_dt         = create_tensor(tn(LLM_TENSOR_SSM_DT,         "bias",   i), { hparams.ssm_dt_rank }, 0);
+            layer.ssm_dt         = create_tensor(tn(LLM_TENSOR_SSM_DT,                   i), { hparams.ssm_dt_rank }, TENSOR_NOT_REQUIRED);
+            if (!layer.ssm_dt) {
+                layer.ssm_dt     = create_tensor(tn(LLM_TENSOR_SSM_DT,         "bias",   i), { hparams.ssm_dt_rank }, 0);
+            }
             layer.ssm_a          = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN,             i), { hparams.ssm_dt_rank }, 0);
             layer.ssm_beta       = create_tensor(tn(LLM_TENSOR_SSM_BETA,       "weight", i), { n_embd, n_v_heads }, 0);
             layer.ssm_alpha      = create_tensor(tn(LLM_TENSOR_SSM_ALPHA,      "weight", i), { n_embd, n_v_heads }, 0);
@@ -84,6 +92,11 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader &) {
         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
     }
+
+    // Some Qwen 3.5 GGUFs contain auxiliary vision and MTP tensors in the same
+    // file. The text-only graph does not consume those tensors.
+    ml.skip_tensor_prefix("v.");
+    ml.skip_tensor_prefix("mtp.");
 }
 
 std::unique_ptr<llm_graph_context> llama_model_qwen35::build_arch_graph(const llm_graph_params & params) const {
@@ -209,6 +222,7 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
         int *                     sections,
         int                       il) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
+    const int64_t n_head_kv   = hparams.n_head_kv(il);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     // Order: joint QG projection, QG split, Q norm, KV projection, K norm, RoPE, attention

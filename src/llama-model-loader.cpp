@@ -1284,6 +1284,31 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     return tensor;
 }
 
+int llama_model_loader::skip_tensor_prefix(const std::string & prefix) {
+    if (prefix.empty()) {
+        return 0;
+    }
+
+    int n_skipped = 0;
+
+    for (const auto & weight : weights_map) {
+        const auto & name = weight.first;
+        if (name.compare(0, prefix.size(), prefix) != 0) {
+            continue;
+        }
+
+        size_data -= ggml_nbytes(weight.second.tensor);
+        n_created++;
+        n_skipped++;
+    }
+
+    if (n_skipped > 0) {
+        LLAMA_LOG_INFO("%s: skipped %d tensors with prefix '%s'\n", __func__, n_skipped, prefix.c_str());
+    }
+
+    return n_skipped;
+}
+
 struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required) {
     const struct ggml_tensor * cur = check_tensor_dims(name, ne, required);
 
