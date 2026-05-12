@@ -6534,6 +6534,8 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             return;
         }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
+        // TODO: normal q5_0
+        (void) extra;
         return;
     }
     if (tensor->type == GGML_TYPE_Q5_1) {
@@ -6574,6 +6576,8 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             return;
         }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
+        // TODO: normal q5_1
+        (void) extra;
         return;
     }
     if (tensor->type == GGML_TYPE_MXFP4) {
@@ -13512,6 +13516,11 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     ggml_tensor_extra_cl_mxfp4 * extra0_mxfp4 = (ggml_tensor_extra_cl_mxfp4 *)src0->extra;
     ggml_tensor_extra_cl_q8_0 * extra0_q8_0 = (ggml_tensor_extra_cl_q8_0 *)src0->extra;
 #endif
+
+    // TODO: general MoE for the following types
+    (void)extra0_q4_1;
+    (void)extra0_q5_0;
+    (void)extra0_q5_1;
 
     const int ne00 = src0->ne[0];
     const int ne01 = src0->ne[1];
