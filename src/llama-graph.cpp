@@ -81,7 +81,19 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     if (ubatch->token) {
         const int64_t n_tokens = ubatch->n_tokens;
 
-        ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
+        if (n_token_limit > 0) {
+            std::vector<llama_token> token_data(ubatch->token, ubatch->token + n_tokens);
+
+            for (llama_token & token : token_data) {
+                if (token < 0 || token >= n_token_limit) {
+                    token = 0;
+                }
+            }
+
+            ggml_backend_tensor_set(tokens, token_data.data(), 0, n_tokens*ggml_element_size(tokens));
+        } else {
+            ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
+        }
     }
 
     if (ubatch->embd) {

@@ -28,11 +28,12 @@ void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
+void llama_model_gemma4::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     const uint32_t n_embd_per_layer = hparams.n_embd_per_layer;
     const int64_t  n_ff_exp         = hparams.n_ff_exp;
+    int64_t        n_vocab_per_layer = n_vocab;
 
     if (n_embd_head_k != n_embd_head_v) {
         throw std::runtime_error("Gemma 4 requires n_embd_head_k == n_embd_head_v");
@@ -50,7 +51,11 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
     if (n_embd_per_layer > 0) {
-        per_layer_tok_embd   = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),    {n_embd_per_layer * n_layer, n_vocab}, 0);
+        if (const auto * cur = ml.get_tensor_meta(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").str().c_str())) {
+            n_vocab_per_layer = cur->ne[1];
+        }
+
+        per_layer_tok_embd   = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),    {n_embd_per_layer * n_layer, n_vocab_per_layer}, 0);
         per_layer_model_proj = create_tensor(tn(LLM_TENSOR_PER_LAYER_MODEL_PROJ, "weight", 0), {n_embd, n_embd_per_layer * n_layer}, 0);
         per_layer_proj_norm  = create_tensor(tn(LLM_TENSOR_PER_LAYER_PROJ_NORM,  "weight", 0), {n_embd_per_layer}, 0);
     }
@@ -129,6 +134,10 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
             layer.per_layer_post_norm  = create_tensor(tn(LLM_TENSOR_PER_LAYER_POST_NORM, "weight", i), {n_embd}, 0);
         }
     }
+
+    ml.skip_tensor_prefix("a.");
+    ml.skip_tensor_prefix("v.");
+    ml.skip_tensor_prefix("mm.");
 }
 
 std::unique_ptr<llm_graph_context> llama_model_gemma4::build_arch_graph(const llm_graph_params & params) const {
@@ -397,14 +406,13 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_per_layer, n_layer, n_tokens]
 ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+    auto inp = std::make_unique<llm_graph_input_embd>(n_embd, model.per_layer_tok_embd->ne[1]);
 
     ggml_tensor * inp_per_layer;
     float tok_embd_scale = sqrtf((float) n_embd_per_layer);
     if (ubatch.token) {
         inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
         ggml_set_input(inp->tokens);
-        res->t_inp_tokens = inp->tokens;
 
         inp_per_layer = ggml_get_rows  (ctx0, model.per_layer_tok_embd, inp->tokens);
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);

@@ -20,12 +20,13 @@ void llama_model_gemma3n::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_gemma3n::load_arch_tensors(llama_model_loader &) {
+void llama_model_gemma3n::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t n_altup      = hparams.n_altup;
     const int64_t laurel_rank  = hparams.laurel_rank;
     const int64_t n_embd_altup = hparams.n_embd_altup;
+    int64_t n_vocab_per_layer  = n_vocab;
 
     output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
     // if output is NULL, init from the input tok embed
@@ -38,7 +39,11 @@ void llama_model_gemma3n::load_arch_tensors(llama_model_loader &) {
     altup_proj        = create_tensor(tn(LLM_TENSOR_ALTUP_PROJ,        "weight"), {n_embd, n_embd, n_altup - 1}, 0);
     altup_unembd_proj = create_tensor(tn(LLM_TENSOR_ALTUP_UNEMBD_PROJ, "weight"), {n_embd, n_embd, n_altup - 1}, 0);
 
-    per_layer_tok_embd   = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"), {n_embd_altup * n_layer, n_vocab}, 0);
+    if (const auto * cur = ml.get_tensor_meta(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").str().c_str())) {
+        n_vocab_per_layer = cur->ne[1];
+    }
+
+    per_layer_tok_embd   = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"), {n_embd_altup * n_layer, n_vocab_per_layer}, 0);
     per_layer_model_proj = create_tensor(tn(LLM_TENSOR_PER_LAYER_MODEL_PROJ, "weight", 0), {n_embd, n_embd_altup * n_layer}, 0);
     per_layer_proj_norm  = create_tensor(tn(LLM_TENSOR_PER_LAYER_PROJ_NORM,  "weight", 0), {n_embd_altup}, 0);
 
@@ -317,13 +322,12 @@ ggml_tensor * llama_model_gemma3n::graph::calc_magnitude(ggml_tensor * x) {
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_altup, n_layer, n_tokens]
 ggml_tensor * llama_model_gemma3n::graph::build_inp_per_layer() {
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+    auto inp = std::make_unique<llm_graph_input_embd>(n_embd, model.per_layer_tok_embd->ne[1]);
     ggml_tensor * inp_per_layer;
     float tok_embd_scale = sqrtf((float) n_embd_altup);
     if (ubatch.token) {
         inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
         ggml_set_input(inp->tokens);
-        res->t_inp_tokens = inp->tokens;
         inp_per_layer = ggml_get_rows  (ctx0, model.per_layer_tok_embd, inp->tokens);
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_altup, n_layer, n_tokens);
         inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
