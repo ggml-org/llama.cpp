@@ -25,7 +25,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   android-ndk-snapdragon:
