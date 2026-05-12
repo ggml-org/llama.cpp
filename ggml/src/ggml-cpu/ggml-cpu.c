@@ -3074,24 +3074,9 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
             if (state->ith == 0) {
                 uint64_t t_end = ggml_profiler_time_ns();
-                {
-                    static const int64_t zero_ne[4] = {0, 0, 0, 0};
-                    const int64_t * src0_ne = node->src[0] ? node->src[0]->ne : zero_ne;
-                    const int64_t * src1_ne = node->src[1] ? node->src[1]->ne : zero_ne;
-                    const int64_t * src2_ne = (node->op == GGML_OP_MUL_MAT_ID && node->src[2]) ? node->src[2]->ne : zero_ne;
-                    int type_src0 = node->src[0] ? (int)node->src[0]->type : -1;
-                    int type_src1 = node->src[1] ? (int)node->src[1]->type : -1;
-                    int type_src2 = (node->op == GGML_OP_MUL_MAT_ID && node->src[2]) ? (int)node->src[2]->type : -1;
-                    int sub_op = -1;
-                    if (node->op == GGML_OP_UNARY) {
-                        sub_op = (int)ggml_get_unary_op(node);
-                    } else if (node->op == GGML_OP_GLU) {
-                        sub_op = (int)ggml_get_glu_op(node);
-                    }
-                    cplan->profiling_record_fn(cplan->profiling_context, 0 /* GGML_PROFILE_EVENT_OP */,
-                                               ggml_op_name(node->op), -1, t_start, t_end, ggml_nbytes(node), NULL,
-                                               src0_ne, src1_ne, src2_ne, type_src0, type_src1, type_src2, sub_op);
-                }
+                cplan->profiling_record_fn(cplan->profiling_context, 0 /* GGML_PROFILE_EVENT_OP */,
+                                           ggml_op_name(node->op), -1, t_start, t_end, ggml_nbytes(node), NULL,
+                                           node);
             }
 
             if (state->ith == 0 && cplan->abort_callback && cplan->abort_callback(cplan->abort_callback_data)) {

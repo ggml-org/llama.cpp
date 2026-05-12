@@ -3,6 +3,8 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,12 +29,20 @@ typedef struct ggml_profile_record {
     uint64_t                     end_ns;      // end timestamp in nanoseconds
     uint64_t                     bytes;       // bytes transferred (for copy) or tensor size (for ops)
     const char *                 extra;       // fusion name for fused ops, or NULL
-    int64_t                      ne_src0[4];  // src[0] tensor dimensions (e.g. weight matrix for MUL_MAT)
-    int64_t                      ne_src1[4];  // src[1] tensor dimensions (e.g. input matrix for MUL_MAT)
-    int64_t                      ne_src2[4];  // src[2] tensor dimensions (e.g. ids for MUL_MAT_ID)
-    int                          type_src0;   // src[0] tensor type (ggml_type), -1 if N/A
-    int                          type_src1;   // src[1] tensor type (ggml_type), -1 if N/A
-    int                          type_src2;   // src[2] tensor type (ggml_type), -1 if N/A
+
+    // Output tensor info
+    int64_t                      ne[4];                                // output tensor dimensions
+    int                          out_type;                             // output tensor type (ggml_type), -1 if N/A
+
+    // Source tensors (up to GGML_MAX_SRC).  n_src is the actual number populated.
+    int                          n_src;
+    int64_t                      ne_src[GGML_MAX_SRC][4];              // per-source dimensions
+    int64_t                      nb_src[GGML_MAX_SRC][4];              // per-source strides (bytes)
+    int                          type_src[GGML_MAX_SRC];               // per-source ggml_type, -1 if not present
+
+    // Operation parameters (raw bytes copied from ggml_tensor::op_params)
+    int32_t                      op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
+
     int                          sub_op;      // sub-operation (ggml_unary_op or ggml_glu_op), -1 if N/A
 } ggml_profile_record;
 
@@ -60,6 +70,13 @@ struct ggml_backend_profiler {
 };
 
 typedef struct ggml_backend_profiler * ggml_backend_profiler_t;
+
+// Populate the per-node fields of a ggml_profile_record from a ggml_tensor node:
+//   ne, out_type, n_src, ne_src, nb_src, type_src, op_params, sub_op.
+// All other fields (type/name/backend_id/split_id/timestamps/bytes/extra) must
+// be filled in separately by the backend that records the event.
+GGML_API void ggml_profile_record_from_tensor(struct ggml_profile_record * rec,
+                                              const struct ggml_tensor *   node);
 
 // Register a profiler on a backend (called by backend during init)
 // The profiler is owned by the backend and will be freed when the backend is freed

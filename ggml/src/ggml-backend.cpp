@@ -1563,6 +1563,38 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     return true;
 }
 
+// Build a COPY profiling record.  Copies have no real ggml_tensor "node" backing
+// them, so we synthesize one source describing the input tensor that was moved.
+static ggml_profile_record make_copy_record(const char * copy_dir, int backend_id, int split_id,
+                                            uint64_t start_ns, uint64_t end_ns, uint64_t bytes,
+                                            const struct ggml_tensor * input) {
+    ggml_profile_record rec = {};
+    rec.type       = GGML_PROFILE_EVENT_COPY;
+    rec.name       = copy_dir;
+    rec.backend_id = backend_id;
+    rec.split_id   = split_id;
+    rec.start_ns   = start_ns;
+    rec.end_ns     = end_ns;
+    rec.bytes      = bytes;
+    rec.extra      = input ? input->name : NULL;
+    rec.out_type   = -1;
+    rec.sub_op     = -1;
+    rec.n_src      = 0;
+    if (input != NULL) {
+        // Describe the input tensor as src[0] so consumers can inspect its shape.
+        rec.n_src = 1;
+        memcpy(rec.ne_src[0], input->ne, sizeof(rec.ne_src[0]));
+        for (int d = 0; d < 4; d++) {
+            rec.nb_src[0][d] = (int64_t) input->nb[d];
+        }
+        rec.type_src[0] = (int) input->type;
+    }
+    for (int i = rec.n_src; i < GGML_MAX_SRC; i++) {
+        rec.type_src[i] = -1;
+    }
+    return rec;
+}
+
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
@@ -1620,9 +1652,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         copy_dir = "copy_D2H";
                     }
 
-                    sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id, split_id,
-                                                    copy_start, copy_end, ggml_nbytes(input), input->name,
-                                                    {input->ne[0], input->ne[1], input->ne[2], input->ne[3]}, {0}, {0}, -1, -1, -1, -1 });
+                    sched->copy_records.push_back(make_copy_record(copy_dir, split_backend_id, split_id,
+                                                                   copy_start, copy_end, ggml_nbytes(input), input));
                 } else {
                     ggml_backend_tensor_copy(input, input_cpy);
                 }
@@ -1740,10 +1771,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             copy_dir = "copy_D2H";
                         }
 
-                        sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
-                                                        split_id, moe_copy_start, moe_copy_end,
-                                                        (uint64_t) total_copied_bytes, input->name,
-                                                        {input->ne[0], input->ne[1], input->ne[2], input->ne[3]}, {0}, {0}, -1, -1, -1, -1 });
+                        sched->copy_records.push_back(make_copy_record(copy_dir, split_backend_id, split_id,
+                                                                       moe_copy_start, moe_copy_end,
+                                                                       (uint64_t) total_copied_bytes, input));
                     }
                 } else {
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
@@ -1778,9 +1808,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                                 copy_dir = "copy_D2H";
                             }
 
-                            sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
-                                                            split_id, copy_start, copy_end, ggml_nbytes(input), input->name,
-                                                            {input->ne[0], input->ne[1], input->ne[2], input->ne[3]}, {0}, {0}, -1, -1, -1, -1 });
+                            sched->copy_records.push_back(make_copy_record(copy_dir, split_backend_id, split_id,
+                                                                           copy_start, copy_end, ggml_nbytes(input), input));
                         } else {
                             ggml_backend_tensor_copy(input, input_cpy);
                         }
@@ -1799,9 +1828,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                                 copy_dir = "copy_D2H";
                             }
 
-                            sched->copy_records.push_back({ GGML_PROFILE_EVENT_COPY, copy_dir, split_backend_id,
-                                                            split_id, copy_start, copy_end, ggml_nbytes(input), input->name,
-                                                            {input->ne[0], input->ne[1], input->ne[2], input->ne[3]}, {0}, {0}, -1, -1, -1, -1 });
+                            sched->copy_records.push_back(make_copy_record(copy_dir, split_backend_id, split_id,
+                                                                           copy_start, copy_end, ggml_nbytes(input), input));
                         }
                     }
                 }
@@ -2656,7 +2684,7 @@ void ggml_backend_sched_print_profiling(ggml_backend_sched_t sched) {
             s.max_ns      = dur;
             s.count       = 1;
             s.total_bytes = rec.bytes;
-            memcpy(s.representative_ne, rec.ne_src0, sizeof(s.representative_ne));
+            memcpy(s.representative_ne, rec.ne_src[0], sizeof(s.representative_ne));
             stats.push_back(s);
         }
     }
@@ -2717,7 +2745,7 @@ int ggml_backend_sched_write_profiling_json(ggml_backend_sched_t sched, FILE * f
     }
 
     fprintf(fp, "{\n");
-    fprintf(fp, "  \"version\": 2,\n");
+    fprintf(fp, "  \"version\": 3,\n");
     fprintf(fp, "  \"profiler\": \"ggml\",\n");
     fprintf(fp, "  \"total_records\": %d,\n", (int) sched->profiling_records.size());
     fprintf(fp, "  \"total_ns\": %llu,\n", (unsigned long long) total_ns);
@@ -2763,18 +2791,41 @@ int ggml_backend_sched_write_profiling_json(ggml_backend_sched_t sched, FILE * f
             fprintf(fp, "null");
         }
 
-        // Tensor dimensions (all source tensors)
-        fprintf(fp, ", \"ne_src0\": [%lld, %lld, %lld, %lld]", (long long) rec.ne_src0[0], (long long) rec.ne_src0[1],
-                (long long) rec.ne_src0[2], (long long) rec.ne_src0[3]);
-        fprintf(fp, ", \"ne_src1\": [%lld, %lld, %lld, %lld]", (long long) rec.ne_src1[0], (long long) rec.ne_src1[1],
-                (long long) rec.ne_src1[2], (long long) rec.ne_src1[3]);
-        fprintf(fp, ", \"ne_src2\": [%lld, %lld, %lld, %lld]", (long long) rec.ne_src2[0], (long long) rec.ne_src2[1],
-                (long long) rec.ne_src2[2], (long long) rec.ne_src2[3]);
+        // Output tensor info
+        fprintf(fp, ", \"ne\": [%lld, %lld, %lld, %lld]", (long long) rec.ne[0], (long long) rec.ne[1],
+                (long long) rec.ne[2], (long long) rec.ne[3]);
+        fprintf(fp, ", \"out_type\": %d", rec.out_type);
 
-        // Tensor types (quantization)
-        fprintf(fp, ", \"type_src0\": %d", rec.type_src0);
-        fprintf(fp, ", \"type_src1\": %d", rec.type_src1);
-        fprintf(fp, ", \"type_src2\": %d", rec.type_src2);
+        // Source tensors
+        fprintf(fp, ", \"n_src\": %d", rec.n_src);
+        fprintf(fp, ", \"ne_src\": [");
+        for (int s = 0; s < rec.n_src; s++) {
+            fprintf(fp, "%s[%lld, %lld, %lld, %lld]", s == 0 ? "" : ", ",
+                    (long long) rec.ne_src[s][0], (long long) rec.ne_src[s][1],
+                    (long long) rec.ne_src[s][2], (long long) rec.ne_src[s][3]);
+        }
+        fprintf(fp, "]");
+        fprintf(fp, ", \"nb_src\": [");
+        for (int s = 0; s < rec.n_src; s++) {
+            fprintf(fp, "%s[%lld, %lld, %lld, %lld]", s == 0 ? "" : ", ",
+                    (long long) rec.nb_src[s][0], (long long) rec.nb_src[s][1],
+                    (long long) rec.nb_src[s][2], (long long) rec.nb_src[s][3]);
+        }
+        fprintf(fp, "]");
+        fprintf(fp, ", \"type_src\": [");
+        for (int s = 0; s < rec.n_src; s++) {
+            fprintf(fp, "%s%d", s == 0 ? "" : ", ", rec.type_src[s]);
+        }
+        fprintf(fp, "]");
+
+        // op_params (full 16-int32 block, matching export-graph-ops format)
+        fprintf(fp, ", \"op_params\": [");
+        const int n_op_params = (int) (sizeof(rec.op_params) / sizeof(rec.op_params[0]));
+        for (int p = 0; p < n_op_params; p++) {
+            fprintf(fp, "%s%d", p == 0 ? "" : ", ", rec.op_params[p]);
+        }
+        fprintf(fp, "]");
+
         fprintf(fp, ", \"sub_op\": %d", rec.sub_op);
 
         fprintf(fp, "}%s\n", (i < (int) sched->profiling_records.size() - 1) ? "," : "");
@@ -2882,9 +2933,9 @@ int ggml_backend_sched_write_profiling_text(ggml_backend_sched_t sched, FILE * f
             s.max_ns      = dur;
             s.count       = 1;
             s.total_bytes = rec.bytes;
-            memcpy(s.representative_ne_src0, rec.ne_src0, sizeof(s.representative_ne_src0));
-            memcpy(s.representative_ne_src1, rec.ne_src1, sizeof(s.representative_ne_src1));
-            memcpy(s.representative_ne_src2, rec.ne_src2, sizeof(s.representative_ne_src2));
+            memcpy(s.representative_ne_src0, rec.ne_src[0], sizeof(s.representative_ne_src0));
+            memcpy(s.representative_ne_src1, rec.ne_src[1], sizeof(s.representative_ne_src1));
+            memcpy(s.representative_ne_src2, rec.ne_src[2], sizeof(s.representative_ne_src2));
             stats.push_back(s);
         }
     }
