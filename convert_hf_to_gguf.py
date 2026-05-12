@@ -5564,33 +5564,43 @@ class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 class MiniCPMV4_6TextModel(Qwen3_5TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
-    # Lock the chat_template default mode into the GGUF.
+    # Lock the instruct-default chat_template into the GGUF.
     #
     # Both MiniCPM-V 4.6 (instruct) and MiniCPM-V 4.6-Thinking ship a
     # chat_template.jinja whose only meaningful difference is a header guard:
     #
     #     {%- if enable_thinking is not defined -%}
     #         {%- set enable_thinking = false -%}   # 4.6 instruct
-    #         {%- set enable_thinking = true  -%}   # 4.6 thinking
+    #         {%- set enable_thinking = true  -%}   # 4.6-Thinking
     #     {%- endif -%}
     #
     # The body then renders an empty `<think>\n\n</think>\n\n` block when
-    # `enable_thinking is false` and a leading `<think>\n` otherwise. The
-    # author's intent is therefore "instruct by default" for 4.6 and
-    # "thinking by default" for 4.6-Thinking.
+    # `enable_thinking is false` and a leading `<think>\n` otherwise.
     #
-    # llama.cpp's runtime always injects `enable_thinking=true` into the
-    # jinja context (common/chat.cpp), so the `is not defined` guard is
-    # short-circuited and both models default to thinking, which is wrong
-    # for 4.6.
+    # llama.cpp's runtime currently injects `enable_thinking=true` into the
+    # jinja context unconditionally (common/chat.cpp), short-circuiting the
+    # `is not defined` guard. The two models are affected asymmetrically:
     #
-    # We patch the guard at convert time by removing the `if not defined`
-    # wrapper. The remaining unconditional `set enable_thinking = X` runs
-    # at template top level and overrides whatever value llama.cpp injected,
-    # so the GGUF is hard-coded to the author's default. Side effect: the
-    # caller can no longer flip the mode via `--reasoning on/off` or
-    # `chat_template_kwargs.enable_thinking`. This is intentional: 4.6 and
-    # 4.6-Thinking are released as two separate GGUFs, one per mode.
+    #   * 4.6-Thinking: the runtime injects true, the body renders
+    #     `<think>\n` -- thinking by default. Matches the author's intent;
+    #     callers can still flip to instruct via `--reasoning off`. No fix
+    #     needed; leave the template byte-identical to the HF repo.
+    #
+    #   * 4.6 (instruct): the runtime injects true, the body renders
+    #     `<think>\n` -- thinking by default. Wrong; the author's intent is
+    #     instruct. Patch the guard at convert time by stripping the
+    #     `if not defined` wrapper; the remaining unconditional
+    #     `set enable_thinking = false` runs at template top level and
+    #     overrides whatever value the runtime injected, locking the GGUF
+    #     to instruct. Side effect on this checkpoint only: callers can no
+    #     longer flip via `--reasoning on/off` or
+    #     `chat_template_kwargs.enable_thinking`. Acceptable because
+    #     4.6 and 4.6-Thinking are released as two separate GGUFs, one per
+    #     mode.
+    #
+    # If a future runtime detects an `is not defined` check and skips its
+    # auto-injection, both branches above will already do the right thing
+    # without further changes here.
     _CHAT_TEMPLATE_GUARD_RE = re.compile(
         r'\{%-?\s*if\s+enable_thinking\s+is\s+not\s+defined\s*-?%\}\s*'
         r'\{%-?\s*set\s+enable_thinking\s*=\s*(true|false)\s*-?%\}\s*'
@@ -5612,16 +5622,18 @@ class MiniCPMV4_6TextModel(Qwen3_5TextModel):
 
         match = self._CHAT_TEMPLATE_GUARD_RE.search(original_template)
         if match is None:
-            logger.warning(
-                "MiniCPM-V 4.6: did not find the expected `{%% if enable_thinking is not "
-                "defined %%}` guard in chat_template; leaving the template unchanged. "
-                "The resulting GGUF may default to thinking mode under llama.cpp."
-            )
             return
 
         author_default = match.group(1).lower()
+        if author_default != 'false':
+            # Thinking-default templates already produce the right output
+            # under the current runtime injection (see class docstring).
+            # Leaving the template untouched keeps the GGUF byte-identical
+            # to the HF repo and preserves caller-side `--reasoning off`.
+            return
+
         patched = self._CHAT_TEMPLATE_GUARD_RE.sub(
-            f'{{%- set enable_thinking = {author_default} -%}}',
+            '{%- set enable_thinking = false -%}',
             original_template,
             count=1,
         )
@@ -5630,9 +5642,8 @@ class MiniCPMV4_6TextModel(Qwen3_5TextModel):
             return
 
         logger.info(
-            "MiniCPM-V 4.6: locking chat_template default enable_thinking=%s "
-            "(removed `is not defined` guard so the runtime cannot override).",
-            author_default,
+            "MiniCPM-V 4.6: locking chat_template default enable_thinking=false "
+            "(removed `is not defined` guard so the runtime cannot override)."
         )
         self.gguf_writer.add_chat_template(patched)
 
