@@ -1738,6 +1738,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
 
     uint64_t data_size = ggml_row_size(type, ne[0]);
     for (int i = 1; i < n_dims; i++) {
+		GGML_ASSERT(ne[i] == 0 || data_size <= SIZE_MAX / (size_t) ne[i]);
         data_size *= ne[i];
     }
 
@@ -1752,7 +1753,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
 
     if (view_src == NULL && !ctx->no_alloc) {
         // allocate tensor data in the context's memory pool
-        obj_alloc_size = (data_size<= SIZE_MAX) ? (size_t)data_size : SIZE_MAX;
+        obj_alloc_size = (size_t)data_size;
     }
 
     GGML_ASSERT(GGML_TENSOR_SIZE <= SIZE_MAX - obj_alloc_size);
