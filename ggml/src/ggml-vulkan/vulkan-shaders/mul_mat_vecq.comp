@@ -66,8 +66,15 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
 #endif
 
         uint ibi = first_row*p.ncols;
+        const bool transpose_a = (p.fusion_flags & MAT_VEC_FUSION_FLAGS_TRANSPOSE_A) != 0;
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-            const uint a_block_idx = (ibi + col)/QUANT_K_Q8_1 + a_offset;
+#if defined(DATA_A_QUANT_K)
+            const uint a_block_idx = (transpose_a ? ((col / QUANT_K) * p.stride_d + (first_row + n)) * (QUANT_K / QUANT_K_Q8_1) + ((col / QUANT_K_Q8_1) & ((QUANT_K / QUANT_K_Q8_1) - 1))
+                                                  : (ibi + col)/QUANT_K_Q8_1) + a_offset;
+#else
+            const uint a_block_idx = (transpose_a ? (col / QUANT_K_Q8_1) * p.stride_d + first_row + n
+                                                  : (ibi + col)/QUANT_K_Q8_1) + a_offset;
+#endif
             ibi += p.ncols;
 
             temp[j][n] += mmvq_dot_product(a_block_idx, b_qs_idx);

@@ -242,7 +242,11 @@ void main() {
 #else
         batch_idx_a * (p.batch_stride_a / LOAD_VEC_A) +
 #endif
+#ifdef TRANSPOSE_A
+        0;
+#else
         (ir * BM * p.stride_a + start_k) / LOAD_VEC_A;
+#endif
 #ifdef MUL_MAT_ID
     uint pos_b = 0;
 #else
@@ -286,7 +290,9 @@ void main() {
 
         barrier();
 
+#ifndef TRANSPOSE_A
         pos_a += BK / LOAD_VEC_A;
+#endif
         pos_b += BK / LOAD_VEC_B;
 
 #ifdef COOPMAT

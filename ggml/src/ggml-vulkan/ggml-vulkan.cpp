@@ -700,6 +700,7 @@ struct vk_device_struct {
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat[GGML_TYPE_COUNT];
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_COUNT];
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_COUNT];
+    vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_COUNT];
 
     vk_matmul_pipeline pipeline_matmul_id_f32 {};
     vk_matmul_pipeline pipeline_matmul_id_bf16 {};
@@ -888,6 +889,7 @@ struct vk_device_struct {
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
+    bool transpose_a;
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
@@ -1006,6 +1008,7 @@ struct vk_mat_mat_push_constants {
 #define MAT_VEC_FUSION_FLAGS_BIAS1 0x2
 #define MAT_VEC_FUSION_FLAGS_SCALE0 0x4
 #define MAT_VEC_FUSION_FLAGS_SCALE1 0x8
+#define MAT_VEC_FUSION_FLAGS_TRANSPOSE_A 0x10
 
 struct vk_mat_vec_push_constants {
     uint32_t ncols;
@@ -3865,8 +3868,17 @@ static void ggml_vk_load_shaders(vk_device& device) {
             CREATE_MM2(GGML_TYPE_Q2_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q2_K], matmul_q2_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
             CREATE_MM2(GGML_TYPE_Q3_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q3_K], matmul_q3_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
             CREATE_MM2(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q4_K], matmul_q4_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            if (device->transpose_a) {
+                CREATE_MM2(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q4_K], matmul_q4_k_f32_transa, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            }
             CREATE_MM2(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q5_K], matmul_q5_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            if (device->transpose_a) {
+                CREATE_MM2(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q5_K], matmul_q5_k_f32_transa, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            }
             CREATE_MM2(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q6_K], matmul_q6_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            if (device->transpose_a) {
+                CREATE_MM2(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q6_K], matmul_q6_k_f32_transa, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            }
             CREATE_MM2(GGML_TYPE_IQ1_S,   pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ1_S],   matmul_iq1_s_f32,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
             CREATE_MM2(GGML_TYPE_IQ1_M,   pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ1_M],   matmul_iq1_m_f32,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
             CREATE_MM2(GGML_TYPE_IQ2_XXS, pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ2_XXS], matmul_iq2_xxs_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
@@ -3889,8 +3901,17 @@ static void ggml_vk_load_shaders(vk_device& device) {
             CREATE_MM(GGML_TYPE_Q2_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q2_K].f32acc, matmul_q2_k_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
             CREATE_MM(GGML_TYPE_Q3_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q3_K].f32acc, matmul_q3_k_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
             CREATE_MM(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q4_K].f32acc, matmul_q4_k_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            if (device->transpose_a) {
+                CREATE_MM(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q4_K].f32acc, matmul_q4_k_f32_transa, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            }
             CREATE_MM(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q5_K].f32acc, matmul_q5_k_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            if (device->transpose_a) {
+                CREATE_MM(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q5_K].f32acc, matmul_q5_k_f32_transa, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            }
             CREATE_MM(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q6_K].f32acc, matmul_q6_k_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            if (device->transpose_a) {
+                CREATE_MM(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q6_K].f32acc, matmul_q6_k_f32_transa, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+            }
             CREATE_MM(GGML_TYPE_IQ1_S,   pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ1_S].f32acc,   matmul_iq1_s_f32,   , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
             CREATE_MM(GGML_TYPE_IQ1_M,   pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ1_M].f32acc,   matmul_iq1_m_f32,   , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
             CREATE_MM(GGML_TYPE_IQ2_XXS, pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ2_XXS].f32acc, matmul_iq2_xxs_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
@@ -3990,8 +4011,17 @@ static void ggml_vk_load_shaders(vk_device& device) {
         CREATE_MM2(GGML_TYPE_Q2_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q2_K], matmul_q2_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
         CREATE_MM2(GGML_TYPE_Q3_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q3_K], matmul_q3_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
         CREATE_MM2(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q4_K], matmul_q4_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        if (device->transpose_a) {
+            CREATE_MM2(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q4_K], matmul_q4_k_f32_transa, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        }
         CREATE_MM2(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q5_K], matmul_q5_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        if (device->transpose_a) {
+            CREATE_MM2(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q5_K], matmul_q5_k_f32_transa, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        }
         CREATE_MM2(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q6_K], matmul_q6_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        if (device->transpose_a) {
+            CREATE_MM2(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q6_K], matmul_q6_k_f32_transa, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        }
         CREATE_MM2(GGML_TYPE_IQ1_S,   pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ1_S],   matmul_iq1_s_f32,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
         CREATE_MM2(GGML_TYPE_IQ1_M,   pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ1_M],   matmul_iq1_m_f32,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
         CREATE_MM2(GGML_TYPE_IQ2_XXS, pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ2_XXS], matmul_iq2_xxs_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
@@ -4159,8 +4189,17 @@ static void ggml_vk_load_shaders(vk_device& device) {
         CREATE_MM(GGML_TYPE_Q2_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q2_K].f32acc, matmul_q2_k_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
         CREATE_MM(GGML_TYPE_Q3_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q3_K].f32acc, matmul_q3_k_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
         CREATE_MM(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q4_K].f32acc, matmul_q4_k_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        if (device->transpose_a) {
+            CREATE_MM(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q4_K].f32acc, matmul_q4_k_f32_transa, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        }
         CREATE_MM(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q5_K].f32acc, matmul_q5_k_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        if (device->transpose_a) {
+            CREATE_MM(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q5_K].f32acc, matmul_q5_k_f32_transa, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        }
         CREATE_MM(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q6_K].f32acc, matmul_q6_k_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        if (device->transpose_a) {
+            CREATE_MM(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat_transa[GGML_TYPE_Q6_K].f32acc, matmul_q6_k_f32_transa, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
+        }
         CREATE_MM(GGML_TYPE_IQ1_S,   pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ1_S].f32acc,   matmul_iq1_s_f32,   , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
         CREATE_MM(GGML_TYPE_IQ1_M,   pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ1_M].f32acc,   matmul_iq1_m_f32,   , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
         CREATE_MM(GGML_TYPE_IQ2_XXS, pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ2_XXS].f32acc, matmul_iq2_xxs_f32, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, , 0);
@@ -5057,6 +5096,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         const char* GGML_VK_DISABLE_GRAPH_OPTIMIZE = getenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE");
         device->disable_graph_optimize = GGML_VK_DISABLE_GRAPH_OPTIMIZE != nullptr;
+
+        device->transpose_a = getenv("GGML_VK_NO_TRANSPOSE_A") == nullptr;
 
         bool fp16_storage = false;
         bool fp16_compute = false;
@@ -7769,6 +7810,26 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         mmp = ggml_vk_get_mul_mat_mat_pipeline(ctx, f16_type, y_f32_kernel ? GGML_TYPE_F32 : f16_type, (ggml_prec)dst->op_params[0]);
     }
 
+    // Use transposed-A pipeline when the weight data was repacked in set_tensor.
+    // The repack only happens for 2D tensors (ne[2]==1, ne[3]==1) that are not dequantized.
+    if (ctx->device->transpose_a && !qx_needs_dequant &&
+        ne02 == 1 && ne03 == 1 &&
+        (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K) &&
+        src0->name != nullptr && strstr(src0->name, "token_embd") == nullptr) {
+        vk_matmul_pipeline2 & transa = ctx->device->pipeline_dequant_mul_mat_mat_transa[src0->type];
+        if (ctx->device->coopmat_support) {
+            vk_matmul_pipeline candidate = (ctx->device->fp16 && ctx->device->coopmat_acc_f16_support && (ggml_prec)dst->op_params[0] == GGML_PREC_DEFAULT) ? transa.f16acc : transa.f32acc;
+            if (candidate && !candidate->is_empty()) {
+                mmp = candidate;
+            }
+        } else {
+            vk_matmul_pipeline candidate = (ctx->device->fp16 && (ggml_prec)dst->op_params[0] == GGML_PREC_DEFAULT) ? transa.f16acc : transa.f32acc;
+            if (candidate && !candidate->is_empty()) {
+                mmp = candidate;
+            }
+        }
+    }
+
     // Not implemented
     GGML_ASSERT(y_non_contig || !qy_needs_dequant);  // NOLINT
 
@@ -8219,6 +8280,15 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     }
 
     uint32_t fusion_flags = 0;
+
+    // Token embedding weights are used as a lookup table (single-row gather),
+    // not as a matrix multiply operand, so transposing them would be incorrect.
+    if (ctx->device->transpose_a && !x_non_contig &&
+        (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K) &&
+        src0->ne[2] == 1 && src0->ne[3] == 1 &&
+        src0->name != nullptr && strstr(src0->name, "token_embd") == nullptr) {
+        fusion_flags |= MAT_VEC_FUSION_FLAGS_TRANSPOSE_A;
+    }
 
     vk_subbuffer d_F0 = d_D;
     if (ctx->num_additional_fused_ops > 0) {
@@ -13853,6 +13923,34 @@ static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml
         return;
     }
 
+    // Repack weight blocks from [row, k_block] to [k_block, row] order.
+    // Token embedding is excluded: it is used as a lookup table, not a matmul operand.
+    if (buf_ctx->device.lock()->transpose_a && offset == 0 && tensor->ne[2] == 1 && tensor->ne[3] == 1
+        && (tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q5_K || tensor->type == GGML_TYPE_Q6_K)
+        && tensor->name != nullptr && strstr(tensor->name, "token_embd") == nullptr) {
+        const size_t block_size = ggml_type_size(tensor->type);
+        const int64_t n_rows = tensor->ne[1];
+        const int64_t blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
+        const size_t total_blocks = n_rows * blocks_per_row;
+
+        if (size == total_blocks * block_size) {
+            std::vector<uint8_t> transposed(size);
+            const uint8_t * src = (const uint8_t *)data;
+            uint8_t * dst = transposed.data();
+
+            for (int64_t row = 0; row < n_rows; row++) {
+                for (int64_t kb = 0; kb < blocks_per_row; kb++) {
+                    memcpy(dst + (kb * n_rows + row) * block_size,
+                           src + (row * blocks_per_row + kb) * block_size,
+                           block_size);
+                }
+            }
+
+            ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs, transposed.data(), size);
+            return;
+        }
+    }
+
     ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data, size);
 }
 
@@ -13881,6 +13979,32 @@ static void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, cons
     vk_buffer buf = buf_ctx->dev_buffer;
 
     ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data, size);
+
+    // Un-transpose: convert back from [k_block, row] to [row, k_block] order.
+    if (buf_ctx->device.lock()->transpose_a && offset == 0 && tensor->ne[2] == 1 && tensor->ne[3] == 1
+        && (tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q5_K || tensor->type == GGML_TYPE_Q6_K)
+        && tensor->name != nullptr && strstr(tensor->name, "token_embd") == nullptr) {
+        const size_t block_size = ggml_type_size(tensor->type);
+        const int64_t n_rows = tensor->ne[1];
+        const int64_t blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
+        const size_t total_blocks = n_rows * blocks_per_row;
+
+        if (size == total_blocks * block_size) {
+            std::vector<uint8_t> original(size);
+            const uint8_t * src = (const uint8_t *)data;
+            uint8_t * dst = original.data();
+
+            for (int64_t row = 0; row < n_rows; row++) {
+                for (int64_t kb = 0; kb < blocks_per_row; kb++) {
+                    memcpy(dst + (row * blocks_per_row + kb) * block_size,
+                           src + (kb * n_rows + row) * block_size,
+                           block_size);
+                }
+            }
+
+            memcpy(data, original.data(), size);
+        }
+    }
 }
 
 static void ggml_backend_vk_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset,

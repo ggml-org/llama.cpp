@@ -12,8 +12,11 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint v_im, 
     const uint y1_idx = i * QUANT_K + y_offset;
     const uint y2_idx = y1_idx + 128;
 
+    const bool transpose_a = (p.fusion_flags & MAT_VEC_FUSION_FLAGS_TRANSPOSE_A) != 0;
+
     [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-        const uint ib0 = a_offset + (first_row+n)*num_blocks_per_row;
+        const uint ib0 = transpose_a ? (a_offset + i * (p.stride_d - 1) + (first_row+n))
+                                     : (a_offset + (first_row+n)*num_blocks_per_row);
         const FLOAT_TYPEV2 dm = FLOAT_TYPEV2(data_a[ib0 + i].dm);
 
         const uint32_t scale0_u32 = data_a_packed16[ib0 + i].scales[v_im    ];
