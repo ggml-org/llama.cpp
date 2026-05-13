@@ -746,6 +746,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = QK_NVFP4,
         .type_size                = sizeof(block_nvfp4),
         .is_quantized             = true,
+        .is_derived               = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_nvfp4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_nvfp4_ref,
     },
@@ -1333,6 +1334,13 @@ bool ggml_is_quantized(enum ggml_type type) {
     assert(type >= 0);
     assert(type < GGML_TYPE_COUNT);
     return type_traits[type].is_quantized;
+}
+
+bool ggml_is_derived_quantized(enum ggml_type type) {
+    assert(type >= 0);
+    assert(type < GGML_TYPE_COUNT);
+    assert(!type_traits[type].is_derived || type_traits[type].is_quantized);
+    return type_traits[type].is_derived;
 }
 
 const char * ggml_op_name(enum ggml_op op) {
@@ -3241,8 +3249,23 @@ struct ggml_tensor * ggml_mul_mat(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b) {
+    GGML_ASSERT(!ggml_is_derived_quantized(a->type) && !ggml_is_derived_quantized(b->type));
+
+    return ggml_mul_mat_ext(ctx, a, b, NULL, NULL);
+}
+
+struct ggml_tensor * ggml_mul_mat_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * scale_weight,
+        struct ggml_tensor  * scale_activations) {
     GGML_ASSERT(ggml_can_mul_mat(a, b));
     GGML_ASSERT(!ggml_is_transposed(a));
+    GGML_ASSERT(!ggml_is_derived_quantized(a->type) || scale_weight != NULL);
+    GGML_ASSERT(!ggml_is_derived_quantized(b->type));
+    GGML_ASSERT(scale_weight == NULL || scale_weight->type == GGML_TYPE_F32);
+    GGML_ASSERT(scale_activations == NULL || scale_activations->type == GGML_TYPE_F32);
 
     const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
@@ -3250,6 +3273,15 @@ struct ggml_tensor * ggml_mul_mat(
     result->op     = GGML_OP_MUL_MAT;
     result->src[0] = a;
     result->src[1] = b;
+    // TODO: decide during review whether scale_weight should be attached as matmul metadata
+    // or inferred only from the post-matmul multiply.
+    result->src[2] = scale_weight;
+    result->src[3] = scale_activations;
+
+    if (scale_weight) {
+        GGML_ASSERT(ggml_can_repeat(scale_weight, result));
+        result = ggml_mul(ctx, result, scale_weight);
+    }
 
     return result;
 }
@@ -3257,6 +3289,10 @@ struct ggml_tensor * ggml_mul_mat(
 void ggml_mul_mat_set_prec(
         struct ggml_tensor * a,
         enum ggml_prec       prec) {
+    if (a->op == GGML_OP_MUL && a->src[0] && a->src[0]->op == GGML_OP_MUL_MAT) {
+        a = a->src[0];
+    }
+
     GGML_ASSERT(a->op == GGML_OP_MUL_MAT);
 
     const int32_t prec_i32 = (int32_t) prec;
@@ -3267,6 +3303,10 @@ void ggml_mul_mat_set_prec(
 void ggml_mul_mat_set_hint(
         struct ggml_tensor * a,
         enum ggml_op_hint    hint) {
+    if (a->op == GGML_OP_MUL && a->src[0] && a->src[0]->op == GGML_OP_MUL_MAT) {
+        a = a->src[0];
+    }
+
     GGML_ASSERT(a->op == GGML_OP_MUL_MAT);
 
     const int32_t hint_i32 = (int32_t) hint;
@@ -3293,8 +3333,24 @@ struct ggml_tensor * ggml_mul_mat_id(
         struct ggml_tensor  * as,
         struct ggml_tensor  * b,
         struct ggml_tensor  * ids) {
+    GGML_ASSERT(!ggml_is_derived_quantized(as->type) && !ggml_is_derived_quantized(b->type));
+
+    return ggml_mul_mat_id_ext(ctx, as, b, ids, NULL, NULL);
+}
+
+struct ggml_tensor * ggml_mul_mat_id_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * as,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * ids,
+        struct ggml_tensor  * scale_weight,
+        struct ggml_tensor  * scale_activations) {
     GGML_ASSERT(!ggml_is_transposed(as));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
+    GGML_ASSERT(!ggml_is_derived_quantized(as->type) || scale_weight != NULL);
+    GGML_ASSERT(!ggml_is_derived_quantized(b->type));
+    GGML_ASSERT(scale_weight == NULL || scale_weight->type == GGML_TYPE_F32);
+    GGML_ASSERT(scale_activations == NULL || scale_activations->type == GGML_TYPE_F32);
 
     GGML_ASSERT(as->ne[3] == 1); // as is 3d (one matrix per expert)
     GGML_ASSERT(b->ne[3] == 1); // b is 3d
@@ -3310,6 +3366,22 @@ struct ggml_tensor * ggml_mul_mat_id(
     result->src[0] = as;
     result->src[1] = b;
     result->src[2] = ids;
+    // TODO: decide during review whether scale_weight should be attached as matmul metadata
+    // or inferred only from the post-matmul multiply.
+    result->src[3] = scale_weight;
+    result->src[4] = scale_activations;
+
+    if (scale_weight) {
+        struct ggml_tensor * s = scale_weight;
+        if (s->ne[0] == as->ne[2] && s->ne[1] == 1 && s->ne[2] == 1 && s->ne[3] == 1) {
+            s = ggml_reshape_3d(ctx, s, 1, as->ne[2], 1);
+            s = ggml_repeat_4d(ctx, s, 1, as->ne[2], b->ne[2], 1);
+            s = ggml_get_rows(ctx, s, ids);
+        }
+
+        GGML_ASSERT(ggml_can_repeat(s, result));
+        result = ggml_mul(ctx, result, s);
+    }
 
     return result;
 }

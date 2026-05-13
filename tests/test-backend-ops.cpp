@@ -4052,10 +4052,15 @@ struct test_mul_mat : public test_case {
             ggml_set_name(b, "b");
         }
 
-        ggml_tensor * out = ggml_mul_mat(ctx, a, b);
+        ggml_tensor * scale_weight = nullptr;
+        if (ggml_is_derived_quantized(type_a)) {
+            scale_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+            ggml_set_name(scale_weight, "scale_weight");
+        }
+        ggml_tensor * out = ggml_mul_mat_ext(ctx, a, b, scale_weight, nullptr);
         ggml_set_name(out, "out");
         for (uint32_t i = 1; i < o; ++i) {
-            ggml_tensor * out2 = ggml_mul_mat(ctx, a, b);
+            ggml_tensor * out2 = ggml_mul_mat_ext(ctx, a, b, scale_weight, nullptr);
             ggml_set_name(out2, "out2");
             out = ggml_add(ctx, out, out2);
         }
@@ -4200,7 +4205,12 @@ struct test_mul_mat_id : public test_case {
         ggml_tensor * b = ggml_new_tensor_3d(ctx, type_b, k, this->b ? 1 : n_used, n);
         ggml_set_name(b, "b");
 
-        ggml_tensor * out = ggml_mul_mat_id(ctx, as, b, ids);
+        ggml_tensor * scale_weight = nullptr;
+        if (ggml_is_derived_quantized(type_a)) {
+            scale_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
+            ggml_set_name(scale_weight, "scale_weight");
+        }
+        ggml_tensor * out = ggml_mul_mat_id_ext(ctx, as, b, ids, scale_weight, nullptr);
         ggml_set_name(out, "out");
 
         return out;
@@ -4208,6 +4218,11 @@ struct test_mul_mat_id : public test_case {
 
     void initialize_tensors(ggml_context * ctx) override {
         init_mul_mat_id_tensors(ctx, n_mats);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return ggml_op_name(GGML_OP_MUL_MAT_ID);
     }
 };
 
@@ -5803,14 +5818,26 @@ struct test_mul_mat_vec_fusion : public test_case {
             ggml_tensor * gate = with_gate ? ggml_new_tensor(ctx, type, 4, ne0.data()) : nullptr;
             ggml_tensor * up   = ggml_new_tensor(ctx, type, 4, ne0.data());
 
-            ggml_tensor * ffn_up = ggml_mul_mat(ctx, up, cur);
+            ggml_tensor * up_scale = nullptr;
+            if (ggml_is_derived_quantized(type)) {
+                up_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+                ggml_set_name(up_scale, "up_scale");
+            }
+
+            ggml_tensor * ffn_up = up_scale ? ggml_mul_mat_ext(ctx, up, cur, up_scale, nullptr) : ggml_mul_mat(ctx, up, cur);
             if (with_bias) {
                 std::array<int64_t, 4> bias_ne = { ffn_up->ne[0], 1, channels, samples };
                 ggml_tensor * up_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
                 ffn_up = ggml_add(ctx, ffn_up, up_bias);
             }
 
-            ggml_tensor * ffn_gate = with_gate ? ggml_mul_mat(ctx, gate, cur) : nullptr;
+            ggml_tensor * gate_scale = nullptr;
+            if (with_gate && ggml_is_derived_quantized(type)) {
+                gate_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+                ggml_set_name(gate_scale, "gate_scale");
+            }
+
+            ggml_tensor * ffn_gate = with_gate ? (gate_scale ? ggml_mul_mat_ext(ctx, gate, cur, gate_scale, nullptr) : ggml_mul_mat(ctx, gate, cur)) : nullptr;
             if (with_bias && with_gate) {
                 std::array<int64_t, 4> bias_ne   = { ffn_gate->ne[0], 1, channels, samples };
                 ggml_tensor * gate_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
@@ -5837,13 +5864,25 @@ struct test_mul_mat_vec_fusion : public test_case {
             ggml_tensor * cur = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, this->b ? 1 : n_used, m);
             ggml_set_name(cur, "cur");
 
-            ggml_tensor * ffn_up = ggml_mul_mat_id(ctx, ups, cur, ids);
+            ggml_tensor * up_scale = nullptr;
+            if (ggml_is_derived_quantized(type)) {
+                up_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
+                ggml_set_name(up_scale, "up_scale");
+            }
+
+            ggml_tensor * ffn_up = up_scale ? ggml_mul_mat_id_ext(ctx, ups, cur, ids, up_scale, nullptr) : ggml_mul_mat_id(ctx, ups, cur, ids);
             if (with_bias) {
                 ggml_tensor * up_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_up->ne[0], n_mats);
                 ffn_up = ggml_add_id(ctx, ffn_up, up_bias_param, ids);
             }
 
-            ggml_tensor * ffn_gate = with_gate? ggml_mul_mat_id(ctx, gates, cur, ids) : nullptr;
+            ggml_tensor * gate_scale = nullptr;
+            if (with_gate && ggml_is_derived_quantized(type)) {
+                gate_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
+                ggml_set_name(gate_scale, "gate_scale");
+            }
+
+            ggml_tensor * ffn_gate = with_gate ? (gate_scale ? ggml_mul_mat_id_ext(ctx, gates, cur, ids, gate_scale, nullptr) : ggml_mul_mat_id(ctx, gates, cur, ids)) : nullptr;
             if (with_bias && with_gate) {
                 ggml_tensor * gate_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_gate->ne[0], n_mats);
                 ffn_gate = ggml_add_id(ctx, ffn_gate, gate_bias_param, ids);
