@@ -15,6 +15,7 @@ set(ASSETS       "" CACHE STRING "Semicolon-separated list of asset filenames")
 set(STAMP_FILE   "" CACHE STRING "Stamp file to create on success (optional)")
 set(SOURCE_DIR   "" CACHE STRING "Project source root (to resolve version from git)")
 set(NPM_DIR      "" CACHE STRING "WebUI source directory (to run npm build)")
+set(HF_ENABLED   "" CACHE STRING "Whether to allow HF Bucket download (ON/OFF)")
 
 # ---------------------------------------------------------------------------
 # 1. Resolve version from git if not provided at configure time
@@ -121,9 +122,9 @@ if(NOT PROVISION_SUCCESS AND NOT "${NPM_DIR}" STREQUAL "")
 endif()
 
 # ---------------------------------------------------------------------------
-# 5. Priority 3: download from Hugging Face Bucket
+# 5. Priority 3: download from Hugging Face Bucket (if enabled)
 # ---------------------------------------------------------------------------
-if(NOT PROVISION_SUCCESS)
+if(NOT PROVISION_SUCCESS AND HF_ENABLED)
     # Build list of URLs to try — version-specific first, then 'latest'
     set(URL_ENTRIES "")
     if(NOT "${RESOLVED_VERSION}" STREQUAL "")
@@ -193,7 +194,7 @@ if(NOT PROVISION_SUCCESS)
     endforeach()
 
     if(PROVISION_SUCCESS)
-        message(STATUS "WebUI: download complete")
+        message(STATUS "WebUI: provisioning complete")
     else()
         message(WARNING "WebUI: failed to download assets from HF Bucket (${HF_BUCKET})")
     endif()
