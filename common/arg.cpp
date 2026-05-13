@@ -337,11 +337,15 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
 struct handle_model_result {
     bool found_mmproj = false;
     common_params_model mmproj;
+
+    bool found_mtp = false;
+    common_params_model mtp;
 };
 
 static handle_model_result common_params_handle_model(struct common_params_model & model,
                                                       const std::string          & bearer_token,
-                                                      bool                         offline) {
+                                                      bool                         offline,
+                                                      bool                         search_mtp = false) {
     handle_model_result result;
 
     if (!model.docker_repo.empty()) {
@@ -356,7 +360,7 @@ static handle_model_result common_params_handle_model(struct common_params_model
         common_download_opts opts;
         opts.bearer_token = bearer_token;
         opts.offline = offline;
-        auto download_result = common_download_model(model, opts, true);
+        auto download_result = common_download_model(model, opts, true, search_mtp);
 
         if (download_result.model_path.empty()) {
             throw std::runtime_error("failed to download model from Hugging Face");
@@ -368,6 +372,11 @@ static handle_model_result common_params_handle_model(struct common_params_model
         if (!download_result.mmproj_path.empty()) {
             result.found_mmproj = true;
             result.mmproj.path  = download_result.mmproj_path;
+        }
+
+        if (!download_result.mtp_path.empty()) {
+            result.found_mtp = true;
+            result.mtp.path  = download_result.mtp_path;
         }
     } else if (!model.url.empty()) {
         if (model.path.empty()) {
@@ -436,7 +445,11 @@ static bool parse_bool_value(const std::string & value) {
 //
 
 void common_params_handle_models(common_params & params, llama_example curr_ex) {
-    auto res = common_params_handle_model(params.model, params.hf_token, params.offline);
+    const bool spec_type_mtp = std::find(params.speculative.types.begin(),
+                                         params.speculative.types.end(),
+                                         COMMON_SPECULATIVE_TYPE_MTP) != params.speculative.types.end();
+
+    auto res = common_params_handle_model(params.model, params.hf_token, params.offline, spec_type_mtp);
     if (params.no_mmproj) {
         params.mmproj = {};
     } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
@@ -449,6 +462,14 @@ void common_params_handle_models(common_params & params, llama_example curr_ex) 
             common_params_handle_model(params.mmproj,    params.hf_token, params.offline);
             break;
         }
+    }
+    // when --spec-type mtp is set and no draft model was provided explicitly,
+    // fall back to the MTP head discovered alongside the -hf model
+    if (spec_type_mtp && res.found_mtp &&
+        params.speculative.draft.mparams.path.empty() &&
+        params.speculative.draft.mparams.hf_repo.empty() &&
+        params.speculative.draft.mparams.url.empty()) {
+        params.speculative.draft.mparams.path = res.mtp.path;
     }
     common_params_handle_model(params.speculative.draft.mparams, params.hf_token, params.offline);
     common_params_handle_model(params.vocoder.model,             params.hf_token, params.offline);

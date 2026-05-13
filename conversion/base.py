@@ -91,6 +91,7 @@ class ModelBase:
     gguf_writer: gguf.GGUFWriter
     model_name: str | None
     metadata_override: Path | None
+    metadata: gguf.Metadata
     dir_model_card: Path
     remote_hf_model_id: str | None
 

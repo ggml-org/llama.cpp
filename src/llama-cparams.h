@@ -41,6 +41,7 @@ struct llama_cparams {
     bool kv_unified;
     bool pipeline_parallel;
 
+    enum llama_context_type ctx_type;
     enum llama_pooling_type pooling_type;
 
     ggml_backend_sched_eval_callback cb_eval;
