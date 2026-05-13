@@ -557,7 +557,18 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
             }
         }
 
-        FENCE;
+        // Self-drain phantom FCC 0 credits left by the wait-skip on the
+        // first 2 chunks. Hart 1 issued chunk_id posts but only
+        // (chunk_id - 2) waits (when chunk_id >= 2), so hart 1's FCC 0
+        // carries +min(chunk_id,2) credits from hart 0's matching posts
+        // that hart 1 never consumed.
+        uint32_t drain = (chunk_id < 2) ? chunk_id : 2;
+        for (uint32_t d = 0; d < drain; d++) {
+            et_sem_wait(ET_BARRIER_MINION);
+        }
+
+        // FENCE;
+        // et_barrier(ET_BARRIER_GLOBAL);
         return 0;
     }
 
