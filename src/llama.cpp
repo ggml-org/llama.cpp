@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <stdexcept>
@@ -148,6 +149,31 @@ int64_t llama_time_us(void) {
 
 // returns true on success
 static bool llama_prepare_model_devices(const llama_model_params & params, llama_model * model) {
+    const int dist_tp_rank = []() {
+        const char * v = std::getenv("LLAMA_DIST_TP_WORLD_RANK");
+        if (!v || v[0] == '\0') {
+            return 0;
+        }
+        char * end = nullptr;
+        const long x = std::strtol(v, &end, 10);
+        if (end == v || (end && *end != '\0')) {
+            return 0;
+        }
+        return (int) x;
+    }();
+    const int dist_tp_world_size = []() {
+        const char * v = std::getenv("LLAMA_DIST_TP_WORLD_SIZE");
+        if (!v || v[0] == '\0') {
+            return 1;
+        }
+        char * end = nullptr;
+        const long x = std::strtol(v, &end, 10);
+        if (end == v || (end && *end != '\0') || x <= 0) {
+            return 1;
+        }
+        return (int) x;
+    }();
+
     // create list of devices to use with this model
     if (params.devices) {
         if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
@@ -165,9 +191,15 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
             }
             model->get_split_state_ud.n_devices = n_devs;
             model->get_split_state_ud.model = model;
+            model->get_split_state_ud.dist_tp_rank = dist_tp_rank;
+            model->get_split_state_ud.dist_tp_world_size = dist_tp_world_size;
+            const ggml_backend_meta_dist_cfg dist_cfg = {
+                /* .world_rank = */ dist_tp_rank,
+                /* .world_size = */ dist_tp_world_size,
+            };
             model->devices.push_back({
                 true, ggml_backend_meta_device(
-                params.devices, n_devs, llama_meta_device_get_split_state, &model->get_split_state_ud)
+                params.devices, n_devs, llama_meta_device_get_split_state, &model->get_split_state_ud, &dist_cfg)
             });
         } else {
             for (ggml_backend_dev_t * dev = params.devices; *dev; ++dev) {
@@ -206,9 +238,15 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
             GGML_ASSERT(!devs.empty());
             model->get_split_state_ud.n_devices = devs.size();
             model->get_split_state_ud.model     = model;
+            model->get_split_state_ud.dist_tp_rank = dist_tp_rank;
+            model->get_split_state_ud.dist_tp_world_size = dist_tp_world_size;
+            const ggml_backend_meta_dist_cfg dist_cfg = {
+                /* .world_rank = */ dist_tp_rank,
+                /* .world_size = */ dist_tp_world_size,
+            };
             gpus.push_back({
                 true, ggml_backend_meta_device(
-                devs.data(), devs.size(), llama_meta_device_get_split_state, &model->get_split_state_ud)
+                devs.data(), devs.size(), llama_meta_device_get_split_state, &model->get_split_state_ud, &dist_cfg)
             });
         } else {
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
@@ -319,6 +357,9 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
         if (model == nullptr) {
             GGML_ABORT("fatal error: model does not implement llama_model_base");
         }
+
+        ml.get_tensor_shard_view = llama_meta_device_get_tensor_shard_view;
+        ml.get_tensor_shard_view_ud = &model->get_split_state_ud;
 
         // loading time will be recalculated after the first eval, so
         // we take page faults deferred by mmap() into consideration

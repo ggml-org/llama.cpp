@@ -18,6 +18,99 @@ static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
 
+static size_t llama_tensor_shard_segment_nbytes(const ggml_tensor * tensor, int axis, int64_t segment_len) {
+    switch (axis) {
+        case GGML_BACKEND_SPLIT_AXIS_0: {
+            const int64_t blck_size = ggml_blck_size(tensor->type);
+            GGML_ASSERT(blck_size > 0);
+            GGML_ASSERT(segment_len % blck_size == 0);
+            return (size_t) (segment_len / blck_size) * tensor->nb[0];
+        }
+        case GGML_BACKEND_SPLIT_AXIS_1:
+            return (size_t) segment_len * tensor->nb[1];
+        case GGML_BACKEND_SPLIT_AXIS_2:
+            return (size_t) segment_len * tensor->nb[2];
+        case GGML_BACKEND_SPLIT_AXIS_3:
+            return (size_t) segment_len * tensor->nb[3];
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
+static size_t llama_tensor_shard_segment_byte_offset(const ggml_tensor * tensor, int axis, int64_t segment_start) {
+    switch (axis) {
+        case GGML_BACKEND_SPLIT_AXIS_0: {
+            const int64_t blck_size = ggml_blck_size(tensor->type);
+            GGML_ASSERT(blck_size > 0);
+            GGML_ASSERT(segment_start % blck_size == 0);
+            return (size_t) (segment_start / blck_size) * tensor->nb[0];
+        }
+        case GGML_BACKEND_SPLIT_AXIS_1:
+            return (size_t) segment_start * tensor->nb[1];
+        case GGML_BACKEND_SPLIT_AXIS_2:
+            return (size_t) segment_start * tensor->nb[2];
+        case GGML_BACKEND_SPLIT_AXIS_3:
+            return (size_t) segment_start * tensor->nb[3];
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
+static size_t llama_tensor_shard_outer_count(const ggml_tensor * tensor, int axis) {
+    size_t count = 1;
+    for (int d = axis + 1; d < GGML_MAX_DIMS; ++d) {
+        count *= (size_t) tensor->ne[d];
+    }
+    return count;
+}
+
+static size_t llama_tensor_shard_outer_offset(const ggml_tensor * tensor, int axis, size_t outer_index) {
+    size_t offset = 0;
+    for (int d = axis + 1; d < GGML_MAX_DIMS; ++d) {
+        const size_t dim = (size_t) tensor->ne[d];
+        if (dim == 0) {
+            return offset;
+        }
+        const size_t idx = outer_index % dim;
+        outer_index /= dim;
+        offset += idx * tensor->nb[d];
+    }
+    return offset;
+}
+
+static size_t llama_tensor_shard_compact_nbytes(const ggml_tensor * tensor, const llama_tensor_shard_view & shard_view) {
+    size_t bytes_per_outer = 0;
+    for (uint32_t is = 0; is < shard_view.n_segments; ++is) {
+        bytes_per_outer += llama_tensor_shard_segment_nbytes(tensor, shard_view.axis, shard_view.segment_lengths[is]);
+    }
+    return bytes_per_outer * llama_tensor_shard_outer_count(tensor, shard_view.axis);
+}
+
+static void llama_file_read_tensor_shard(
+        llama_file * file,
+        const ggml_tensor * tensor,
+        const llama_model_loader::llama_tensor_weight * weight,
+        const llama_tensor_shard_view & shard_view,
+        uint8_t * dst) {
+    size_t dst_offset = 0;
+    const size_t outer_count = llama_tensor_shard_outer_count(tensor, shard_view.axis);
+
+    for (size_t outer = 0; outer < outer_count; ++outer) {
+        const size_t outer_offset = llama_tensor_shard_outer_offset(tensor, shard_view.axis, outer);
+        for (uint32_t is = 0; is < shard_view.n_segments; ++is) {
+            const int64_t segment_len = shard_view.segment_lengths[is];
+            if (segment_len <= 0) {
+                continue;
+            }
+            const size_t segment_size = llama_tensor_shard_segment_nbytes(tensor, shard_view.axis, segment_len);
+            const size_t segment_offset = llama_tensor_shard_segment_byte_offset(tensor, shard_view.axis, shard_view.segment_starts[is]);
+            file->seek(weight->offs + outer_offset + segment_offset, SEEK_SET);
+            file->read_raw(dst + dst_offset, segment_size);
+            dst_offset += segment_size;
+        }
+    }
+}
+
 const char * llama_file_version_name(llama_fver version) {
     switch (version) {
         case GGUF_FILE_VERSION_V1: return "GGUF V1 (support until nov 2023)";
@@ -527,8 +620,10 @@ llama_model_loader::llama_model_loader(
         bool check_tensors,
         bool no_alloc,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
-        : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        llama_model_get_tensor_shard_view_t get_tensor_shard_view, void * get_tensor_shard_view_ud)
+        : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud),
+          get_tensor_shard_view(get_tensor_shard_view), get_tensor_shard_view_ud(get_tensor_shard_view_ud) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -1528,6 +1623,24 @@ bool llama_model_loader::load_all_data(
         }
 
         size_t n_size = ggml_nbytes(cur);
+        llama_tensor_shard_view shard_view;
+        const bool use_compact_shard_load = !use_mmap && get_tensor_shard_view != nullptr &&
+            get_tensor_shard_view(cur, get_tensor_shard_view_ud, &shard_view) && shard_view.compact;
+
+        if (use_compact_shard_load) {
+            const size_t shard_nbytes = llama_tensor_shard_compact_nbytes(cur, shard_view);
+            if (shard_nbytes > 0) {
+                read_buf.resize(shard_nbytes);
+                uint8_t * shard_data = reinterpret_cast<uint8_t *>(read_buf.data());
+                llama_file_read_tensor_shard(files.at(weight->idx).get(), cur, weight, shard_view, shard_data);
+                ggml_backend_tensor_set(cur, shard_data, 0, shard_nbytes);
+                if (check_tensors && !ggml_validate_row_data(cur->type, shard_data, shard_nbytes)) {
+                    throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+                }
+            }
+            size_done += n_size;
+            continue;
+        }
 
         if (use_mmap) {
             const auto & mapping = mappings.at(weight->idx);

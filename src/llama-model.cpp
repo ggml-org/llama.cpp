@@ -339,23 +339,29 @@ llama_model * llama_model_create(llama_model_loader & ml, const llama_model_para
     return llama_model_create(arch, params);
 }
 
-struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata) {
-    const llama_meta_device_get_split_state_userdata * ud = (const llama_meta_device_get_split_state_userdata *) userdata;
+static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
+        const struct ggml_tensor * tensor,
+        const llama_meta_device_get_split_state_userdata * ud,
+        struct llama_tensor_shard_view * shard_view) {
     const llama_hparams & hparams = ud->model->hparams;
     const std::string tensor_name = tensor->name;
 
-    static const std::regex pattern_q_weight        ("blk\\.\\d*\\.attn_q.weight");
-    static const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v).weight");
-    static const std::regex pattern_qkv_weight      ("blk\\.\\d*\\.attn_qkv.weight");
-    static const std::regex pattern_q_bias          ("blk\\.\\d*\\.attn_q\\.bias");
-    static const std::regex pattern_kv_bias         ("blk\\.\\d*\\.attn_(k|v)\\.bias");
-    static const std::regex pattern_qkv_bias        ("blk\\.\\d*\\.attn_qkv.bias");
-    static const std::regex pattern_qk_norm         ("blk\\.\\d*\\.attn_(q|k)_norm\\.weight");
-    static const std::regex pattern_kv_cache        ("cache_(k|v)_l\\d*");
-    static const std::regex pattern_attn_sinks      ("blk\\.\\d*\\.attn_sinks.weight");
-    static const std::regex pattern_attn_out_weight ("blk\\.\\d*\\.attn_output.weight");
-    static const std::regex pattern_attn_out_bias   ("blk\\.\\d*\\.attn_output.bias");
-    static const std::regex pattern_attn_gate_weight("blk\\.\\d*\\.attn_gate.weight");
+    if (shard_view != nullptr) {
+        *shard_view = {};
+    }
+
+    const std::regex pattern_q_weight        ("blk\\.\\d*\\.attn_q.weight");
+    const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v).weight");
+    const std::regex pattern_qkv_weight      ("blk\\.\\d*\\.attn_qkv.weight");
+    const std::regex pattern_q_bias          ("blk\\.\\d*\\.attn_q\\.bias");
+    const std::regex pattern_kv_bias         ("blk\\.\\d*\\.attn_(k|v)\\.bias");
+    const std::regex pattern_qkv_bias        ("blk\\.\\d*\\.attn_qkv.bias");
+    const std::regex pattern_qk_norm         ("blk\\.\\d*\\.attn_(q|k)_norm\\.weight");
+    const std::regex pattern_kv_cache        ("cache_(k|v)_l\\d*");
+    const std::regex pattern_attn_sinks      ("blk\\.\\d*\\.attn_sinks.weight");
+    const std::regex pattern_attn_out_weight ("blk\\.\\d*\\.attn_output.weight");
+    const std::regex pattern_attn_out_bias   ("blk\\.\\d*\\.attn_output.bias");
+    const std::regex pattern_attn_gate_weight("blk\\.\\d*\\.attn_gate.weight");
 
     static const std::regex pattern_ssm_dt          ("blk\\.\\d*\\.ssm_dt.bias");
     static const std::regex pattern_ssm_a           ("blk\\.\\d*\\.ssm_a");
@@ -405,21 +411,24 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         uint32_t il;
         std::string prefix;
         size_t rotation;
+        const size_t rank_rotation = (ud->dist_tp_world_size > 1 && ud->n_devices > 0)
+            ? ((size_t) ((ud->dist_tp_rank % (int) ud->n_devices + (int) ud->n_devices) % (int) ud->n_devices))
+            : 0;
         if (tensor_name.substr(0, 4) == "blk.") {
             const size_t length_prefix = tensor_name.find('.', 4);
             GGML_ASSERT(length_prefix != std::string::npos);
             prefix = tensor_name.substr(0, length_prefix + 1);
             il = std::stoull(tensor_name.substr(4, length_prefix));
-            rotation = get_il_eff(il) % ud->n_devices;
+            rotation = (get_il_eff(il) + rank_rotation) % ud->n_devices;
         } else if (tensor_name.substr(0, 6) == "cache_") {
             const size_t layer_index_start = tensor_name.find("_l", 6);
             GGML_ASSERT(layer_index_start != std::string::npos);
             il = std::stoull(tensor_name.substr(layer_index_start + 2));
             prefix = "blk." + std::to_string(il) + ".";
-            rotation = get_il_eff(il) % ud->n_devices;
+            rotation = (get_il_eff(il) + rank_rotation) % ud->n_devices;
         } else {
             il = 0;
-            rotation = hparams.n_layer() % ud->n_devices;
+            rotation = (hparams.n_layer() + rank_rotation) % ud->n_devices;
         }
         const ggml_tensor * tensor_axis_0 = suffix.empty() ? tensor : ud->model->get_tensor((prefix + suffix).c_str());
         if (tensor_axis_0 == nullptr) {
@@ -679,32 +688,149 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         }
         const std::vector<std::pair<int64_t, uint32_t>> segments = get_split_segments(split_state.axis, tc.il);
         const std::vector<int64_t> granularity = get_split_granularity(blck_size, tc.il, segments);
-        for (size_t is = 0; is < segments.size(); is++) {
-            const int64_t  ne_s = segments[is].first;
-            const uint32_t nr_s = segments[is].second;
-            const int64_t  g_s  = granularity[is];
-            int64_t low = 0;
-            size_t j = 0;
-            for (; j < ud->n_devices - 1; j++) {
-                int64_t high = tensor_split_scan.back() == 0.0f ?
-                    ne_s * (j+1)/ud->n_devices : ne_s * tensor_split_scan[j]/tensor_split_scan.back();
-                if (high % g_s != 0) {
+        const bool dist_single_device = ud->n_devices == 1 && ud->dist_tp_world_size > 1;
+        const int rank = std::max(0, std::min(ud->dist_tp_rank, ud->dist_tp_world_size - 1));
+        const int world_size = std::max(1, ud->dist_tp_world_size);
+        size_t dist_expanded_segments = 0;
+        if (dist_single_device) {
+            for (const auto & seg : segments) {
+                dist_expanded_segments += seg.second;
+            }
+            GGML_ASSERT(dist_expanded_segments <= 16);
+        }
+
+        if (dist_single_device && shard_view != nullptr) {
+            shard_view->compact = split_state.axis >= 0 && split_state.axis <= GGML_BACKEND_SPLIT_AXIS_3;
+            shard_view->axis = split_state.axis;
+            shard_view->n_segments = dist_expanded_segments;
+        }
+
+        if (dist_single_device && segments.size() == 1) {
+            const int64_t ne_s = segments[0].first;
+            const uint32_t nr_s = segments[0].second;
+            const int64_t g_s = granularity[0];
+
+            int64_t low = ne_s * rank / world_size;
+            int64_t high = ne_s * (rank + 1) / world_size;
+
+            if (g_s > 1) {
+                low -= low % g_s;
+                if (rank == world_size - 1) {
+                    high = ne_s;
+                } else {
                     high -= high % g_s;
                 }
-                split_state.ne[is*ud->n_devices + (j + tc.rotation) % ud->n_devices] = high - low;
-                low = high;
+                if (high < low) {
+                    high = low;
+                }
             }
-            split_state.ne[is*ud->n_devices + (j + tc.rotation) % ud->n_devices] = ne_s - low;
-            split_state.nr[is] = nr_s;
+
+            const int64_t local = high - low;
+            int64_t segment_base = 0;
+            for (uint32_t r = 0; r < nr_s; ++r) {
+                split_state.ne[r] = local;
+                split_state.nr[r] = 1;
+                if (shard_view != nullptr) {
+                    shard_view->segment_starts[r] = segment_base + low;
+                    shard_view->segment_lengths[r] = local;
+                }
+                segment_base += ne_s;
+            }
+            if (shard_view != nullptr) {
+                shard_view->n_segments = nr_s;
+            }
+            if (local > 0) {
+                split_state.n_segments = nr_s;
+            } else {
+                // Tiny tensors can legitimately be empty on a rank after granularity rounding.
+                for (uint32_t r = 0; r < nr_s; ++r) {
+                    split_state.ne[r] = 0;
+                    split_state.nr[r] = 1;
+                }
+                split_state.n_segments = nr_s;
+            }
+        } else if (dist_single_device && segments.size() > 1) {
+            int64_t segment_base = 0;
+            size_t out_is = 0;
+            for (size_t is = 0; is < segments.size(); ++is) {
+                const int64_t ne_s = segments[is].first;
+                const uint32_t nr_s = segments[is].second;
+                const int64_t g_s = granularity[is];
+
+                int64_t low = ne_s * rank / world_size;
+                int64_t high = ne_s * (rank + 1) / world_size;
+
+                if (g_s > 1) {
+                    low -= low % g_s;
+                    if (rank == world_size - 1) {
+                        high = ne_s;
+                    } else {
+                        high -= high % g_s;
+                    }
+                    if (high < low) {
+                        high = low;
+                    }
+                }
+
+                const int64_t local = high - low;
+                for (uint32_t r = 0; r < nr_s; ++r) {
+                    split_state.ne[out_is] = local;
+                    split_state.nr[out_is] = 1;
+                    if (shard_view != nullptr) {
+                        shard_view->segment_starts[out_is] = segment_base + low;
+                        shard_view->segment_lengths[out_is] = local;
+                    }
+                    segment_base += ne_s;
+                    out_is++;
+                }
+            }
+            split_state.n_segments = out_is;
+        } else {
+            for (size_t is = 0; is < segments.size(); is++) {
+                const int64_t ne_s = segments[is].first;
+                const uint32_t nr_s = segments[is].second;
+                const int64_t g_s = granularity[is];
+                int64_t low = 0;
+                size_t j = 0;
+                for (; j < ud->n_devices - 1; j++) {
+                    int64_t high = tensor_split_scan.back() == 0.0f ?
+                        ne_s * (j+1)/ud->n_devices : ne_s * tensor_split_scan[j]/tensor_split_scan.back();
+                    if (high % g_s != 0) {
+                        high -= high % g_s;
+                    }
+                    split_state.ne[is*ud->n_devices + (j + tc.rotation) % ud->n_devices] = high - low;
+                    low = high;
+                }
+                split_state.ne[is*ud->n_devices + (j + tc.rotation) % ud->n_devices] = ne_s - low;
+                split_state.nr[is] = nr_s;
+            }
+            split_state.n_segments = segments.size();
         }
-        split_state.n_segments = segments.size();
     } else {
         memset(split_state.ne, 0, sizeof(split_state.ne));
         split_state.nr[0] = 1;
         split_state.n_segments = 1;
     }
     return split_state;
-    GGML_UNUSED(userdata);
+}
+
+struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata) {
+    const llama_meta_device_get_split_state_userdata * ud = (const llama_meta_device_get_split_state_userdata *) userdata;
+    return llama_meta_device_get_split_state_impl(tensor, ud, nullptr);
+}
+
+bool llama_meta_device_get_tensor_shard_view(const struct ggml_tensor * tensor, void * userdata, struct llama_tensor_shard_view * out) {
+    GGML_ASSERT(out != nullptr);
+    const llama_meta_device_get_split_state_userdata * ud = (const llama_meta_device_get_split_state_userdata *) userdata;
+    const ggml_backend_meta_split_state split_state = llama_meta_device_get_split_state_impl(tensor, ud, out);
+    if (!out->compact) {
+        return false;
+    }
+    if (split_state.axis < 0 || split_state.axis > GGML_BACKEND_SPLIT_AXIS_3) {
+        *out = {};
+        return false;
+    }
+    return true;
 }
 
 const char * llm_type_name(llm_type type) {

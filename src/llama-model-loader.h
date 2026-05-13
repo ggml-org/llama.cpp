@@ -20,6 +20,16 @@ using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 // lists of buffer types used for each layer
 using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
 
+struct llama_tensor_shard_view {
+    bool     compact = false;
+    int      axis = -1;
+    uint32_t n_segments = 0;
+    int64_t  segment_starts[16] = {0};
+    int64_t  segment_lengths[16] = {0};
+};
+
+typedef bool (*llama_model_get_tensor_shard_view_t)(const struct ggml_tensor * tensor, void * userdata, struct llama_tensor_shard_view * out);
+
 enum llama_fver {
     GGUF_FILE_VERSION_V1 = 1,
     GGUF_FILE_VERSION_V2 = 2,
@@ -94,6 +104,8 @@ struct llama_model_loader {
     struct gguf_context * metadata; // either metadata_ptr.get() or externally set
     llama_model_set_tensor_data_t set_tensor_data;
     void * set_tensor_data_ud;
+    llama_model_get_tensor_shard_view_t get_tensor_shard_view = nullptr;
+    void * get_tensor_shard_view_ud = nullptr;
     std::vector<ggml_context_ptr> contexts;
 
     std::string arch_name;
@@ -130,7 +142,9 @@ struct llama_model_loader {
         bool check_tensors,
         bool no_alloc,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        llama_model_get_tensor_shard_view_t get_tensor_shard_view = nullptr,
+        void * get_tensor_shard_view_ud = nullptr);
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type

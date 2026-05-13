@@ -17,6 +17,7 @@
 struct llama_cparams;
 struct llama_ubatch;
 struct llama_model_loader;
+struct llama_tensor_shard_view;
 
 // available models
 enum llm_type {
@@ -543,9 +544,12 @@ struct llama_device {
 struct llama_meta_device_get_split_state_userdata {
     size_t                     n_devices;
     const struct llama_model * model;
+    int                        dist_tp_rank = 0;
+    int                        dist_tp_world_size = 1;
 };
 
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
+bool llama_meta_device_get_tensor_shard_view(const struct ggml_tensor * tensor, void * userdata, struct llama_tensor_shard_view * out);
 
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
