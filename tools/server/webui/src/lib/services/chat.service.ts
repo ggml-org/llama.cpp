@@ -818,12 +818,9 @@ export class ChatService {
 
 		const contentParts: ApiChatMessageContentPart[] = [];
 
-		if (message.content) {
-			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: message.content
-			});
-		}
+		// Attachments are emitted before the typed text so the user's question
+		// follows the pasted/uploaded data, keeping the data at a stable prefix
+		// for cache reuse across different queries on the same input.
 
 		// Include images from all messages
 		const imageFiles = message.extra.filter(
@@ -930,6 +927,13 @@ export class ChatService {
 					mcpResource.content,
 					mcpResource.serverName
 				)
+			});
+		}
+
+		if (message.content) {
+			contentParts.push({
+				type: ContentPartType.TEXT,
+				text: message.content
 			});
 		}
 
