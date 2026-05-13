@@ -44,9 +44,12 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
     return FLOAT_TYPE(da * (float(q_sum) * dsb.x - (8 / sum_divisor) * dsb.y));
 }
 
+#ifdef USE_HF_INTERNAL
 FLOAT_TYPE mul_q8_1_hf(const int32_t q_sum, const float da, const f16vec2 dsb, const int32_t sum_divisor) {
     return FLOAT_TYPE(da * (float(q_sum) * dsb.x - float16_t(8 / sum_divisor) * dsb.y));
 }
+#endif  // USE_HF_INTERNAL
+
 #endif
 
 #if defined(DATA_A_Q4_1)
@@ -155,7 +158,7 @@ FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
 #endif
 
     // 2 quants per call => divide sums by 8/2 = 4
-#if defined(DATA_A_Q4_0)
+#if defined(USE_HF_INTERNAL) && defined(DATA_A_Q4_0)
     return mul_q8_1_hf(q_sum, get_dm(ib_a), cache_b_ds, 4);
 #else
     return mul_q8_1(q_sum, get_dm(ib_a), cache_b_ds, 4);
