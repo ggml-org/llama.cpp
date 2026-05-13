@@ -1044,8 +1044,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
                                                  GGML_OP_CLAMP,
                                                  GGML_OP_PAD,
                                                  GGML_OP_SSM_CONV,
-                                                 GGML_OP_GATED_DELTA_NET,
-                                                 GGML_OP_ARGSORT};
+                                                 GGML_OP_GATED_DELTA_NET};
     static const std::set<ggml_unary_op> supported_unary_ops{
         GGML_UNARY_OP_GELU,
         GGML_UNARY_OP_SILU,
