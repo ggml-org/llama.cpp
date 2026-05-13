@@ -2,6 +2,7 @@
 
 #include "ggml.h"
 #include "llama-arch.h"
+#include "llama-graph.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
@@ -20,6 +21,14 @@
 //
 // llama_context
 //
+
+static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
+    switch (ctx_type) {
+        case LLAMA_CONTEXT_TYPE_DEFAULT: return LLM_GRAPH_TYPE_DEFAULT;
+        case LLAMA_CONTEXT_TYPE_MTP    : return LLM_GRAPH_TYPE_DECODER_MTP;
+    }
+    throw std::runtime_error("Unsupported ctx type");
+}
 
 llama_context::llama_context(
         const llama_model & model,
@@ -65,6 +74,8 @@ llama_context::llama_context(
 
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
+
+    cparams.ctx_type          = params.ctx_type;
 
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
@@ -279,6 +290,7 @@ llama_context::llama_context(
             /*.type_k   =*/ params.type_k,
             /*.type_v   =*/ params.type_v,
             /*.swa_full =*/ params.swa_full,
+            /*.ctx_type= */ cparams.ctx_type,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -1738,7 +1750,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         ggml_status status;
-        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+
+        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -2198,7 +2211,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * res = gf_res_reserve.get();
 
-    const auto gparams = graph_params(res, ubatch, mctx, LLM_GRAPH_TYPE_DEFAULT);
+    const auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type));
 
     res->reset();
 
@@ -3177,7 +3190,7 @@ void llama_context::opt_epoch_iter(
 
             auto * res = gf_res_prev.get();
 
-            const auto gparams = graph_params(res, ubatch, mctx.get(), LLM_GRAPH_TYPE_DEFAULT);
+            const auto gparams = graph_params(res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type));
 
             res->reset();
 
@@ -3280,6 +3293,7 @@ llama_context_params llama_context_default_params() {
         /*.n_seq_max                   =*/ 1,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
+        /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
         /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
@@ -3382,6 +3396,13 @@ llama_context * llama_init_from_model(
         LLAMA_LOG_WARN("%s: model default pooling_type is [%d], but [%d] was specified\n", __func__,
                        model->hparams.pooling_type, params.pooling_type);
     }
+
+    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
+        model->hparams.nextn_predict_layers == 0) {
+        LLAMA_LOG_WARN("%s: context type MTP requested but model doesn't contain MTP layers\n", __func__);
+        return nullptr;
+    }
+
 
     try {
         auto * ctx = new llama_context(*model, params);

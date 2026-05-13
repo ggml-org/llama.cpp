@@ -1198,7 +1198,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 LOG_WRN("%s: draft model is not specified - cannot use 'draft' type\n", __func__);
                 has_draft_simple = false;
             }
-        } else if (has_draft_model_path) {
+        } else if (has_draft_model_path && !has_mtp && !has_draft_eagle3) {
             LOG_WRN("%s: draft model is specified but 'draft' speculative type is not explicitly enabled - enabling it\n", __func__);
             has_draft_simple = true;
         }

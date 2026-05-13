@@ -32,6 +32,7 @@ enum llm_graph_type {
     LLM_GRAPH_TYPE_DEFAULT,
     LLM_GRAPH_TYPE_ENCODER,
     LLM_GRAPH_TYPE_DECODER,
+    LLM_GRAPH_TYPE_DECODER_MTP,
 };
 
 enum llm_ffn_op_type {
