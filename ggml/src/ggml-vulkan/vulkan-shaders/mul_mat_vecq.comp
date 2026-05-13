@@ -24,7 +24,7 @@ uint a_offset, b_offset, d_offset;
 
 int32_t cache_b_qs[K_PER_ITER / 4];
 
-#if defined(USE_HF_INTERNAL) && defined(DATA_A_Q4_0)
+#if defined(USE_FP16_INTERNAL) && defined(DATA_A_Q4_0)
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #define CACHE_VEC_TYPE f16vec2
 #else
