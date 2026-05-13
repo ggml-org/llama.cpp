@@ -138,7 +138,7 @@ if(NOT PROVISION_SUCCESS AND HF_ENABLED)
         string(REGEX REPLACE "^([^:]+):.*$" "\\1" url_label "${entry}")
         string(REGEX REPLACE "^[^:]+:(.*)$" "\\1" base_url "${entry}")
 
-        message(STATUS "WebUI: trying ${url_label}: ${base_url}")
+        message(STATUS "WebUI: downloading assets from ${url_label}: ${base_url}")
 
         # Download each asset
         set(ALL_OK TRUE)
