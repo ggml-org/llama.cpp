@@ -1700,6 +1700,87 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     return data;
 }
 
+// Nemotron Nano v2 format: uses <SPECIAL_10/11/12> role markers and <TOOLCALL> JSON array tool calls.
+// - Reasoning: <think>{reasoning}</think> (optional)
+// - Content: plain text (optional)
+// - Tool calls: <TOOLCALL>[{"name": "...", "arguments": {...}}]</TOOLCALL>
+// <SPECIAL_12> is the EOT token, added as an additional stop.
+static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_template &    tmpl,
+                                                              const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking = true;
+    data.additional_stops  = { "<SPECIAL_12>" };
+    data.preserved_tokens  = {
+        "<TOOLCALL>",
+        "</TOOLCALL>",
+        "<think>",
+        "</think>",
+        "<SPECIAL_12>",
+    };
+
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    const std::string TOOL_CALL_START = "<TOOLCALL>";
+    const std::string TOOL_CALL_END   = "</TOOLCALL>";
+    const std::string THINK_START     = "<think>";
+    const std::string THINK_END       = "</think>";
+    const std::string EOT             = "<SPECIAL_12>";
+
+    data.thinking_start_tag = THINK_START;
+    data.thinking_end_tag   = THINK_END;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
+        auto eot = p.optional(p.literal(EOT));
+        auto end = p.end();
+
+        auto reasoning = p.eps();
+        if (extract_reasoning && inputs.enable_thinking) {
+            reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
+        }
+
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            return generation_prompt + reasoning + p.content(p.until(EOT)) + eot + end;
+        }
+
+        auto tool_calls = p.standard_json_tools(
+            TOOL_CALL_START, TOOL_CALL_END,
+            inputs.tools, inputs.parallel_tool_calls,
+            inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED,
+            "name", "arguments",
+            /* array_wrapped */ true
+        );
+
+        auto content = p.content(p.until(TOOL_CALL_START));
+
+        return generation_prompt + reasoning + content + tool_calls + eot + end;
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, TOOL_CALL_START }
+        };
+    }
+    return data;
+}
+
 // LFM2.5 format: uses plain "List of tools: [...]" in system prompt, no wrapper tokens.
 // Tool calls are bare [name(arg="val")], though model may optionally emit <|tool_call_start|>.
 // - Reasoning: <think>{reasoning}</think> (optional)
@@ -2334,6 +2415,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
             workaround::convert_tool_responses_gemma4(params.messages);
         }
         return common_chat_params_init_gemma4(tmpl, params);
+    }
+
+    // Nemotron Nano v2 - uses <SPECIAL_10/11/12> role markers with <TOOLCALL> JSON array format
+    if (src.find("<SPECIAL_10>") != std::string::npos && src.find("<TOOLCALL>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Nemotron Nano v2\n");
+        return common_chat_params_init_nemotron_v2(tmpl, params);
     }
 
     return std::nullopt;
