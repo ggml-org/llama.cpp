@@ -3301,16 +3301,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_LOG_VERBOSITY"));
     add_opt(common_arg(
         {"--log-prefix"},
+        {"--no-log-prefix"},
         "Enable prefix in log messages",
-        [](common_params &) {
-            common_log_set_prefix(common_log_main(), true);
+        [](common_params &, bool value) {
+            common_log_set_prefix(common_log_main(), value);
         }
     ).set_env("LLAMA_LOG_PREFIX"));
     add_opt(common_arg(
         {"--log-timestamps"},
+        {"--no-log-timestamps"},
         "Enable timestamps in log messages",
-        [](common_params &) {
-            common_log_set_timestamps(common_log_main(), true);
+        [](common_params &, bool value) {
+            common_log_set_timestamps(common_log_main(), value);
         }
     ).set_env("LLAMA_LOG_TIMESTAMPS"));
 

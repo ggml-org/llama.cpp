@@ -166,6 +166,7 @@ struct server_slot {
     // stats
     size_t n_sent_text = 0; // number of sent text character
 
+    int64_t t_print_last = 0;
     int64_t t_start_process_prompt;
     int64_t t_start_generation;
 
@@ -417,6 +418,24 @@ struct server_slot {
         return stop_pos;
     }
 
+    void print_timings_tg() {
+        if (n_decoded < 100) {
+            return;
+        }
+
+        const int64_t t_now = ggml_time_us();
+
+        if (t_now - t_print_last < 3*1000*1000) {
+            return;
+        }
+
+        t_print_last = t_now;
+
+        const double n_gen_second = 1e3 / t_token_generation * n_decoded;
+
+        SLT_INF(*this, "n_decoded = %6d, tg = %6.2f t/s\n", n_decoded, n_gen_second);
+    }
+
     void print_timings() const {
         const double t_prompt        =       t_prompt_processing / n_prompt_tokens_processed;
         const double n_prompt_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
@@ -588,6 +607,10 @@ public:
     // note: chat_params must not be refreshed upon existing sleeping state
     server_chat_params chat_params;
 
+    server_context_impl() {
+        mtmd_helper_log_set(common_log_default_callback, nullptr);
+    }
+
     ~server_context_impl() {
         if (!sleeping) {
             // destroy() is already called when entering sleeping state
@@ -749,10 +772,6 @@ private:
 
         std::string & mmproj_path = params_base.mmproj.path;
         if (!mmproj_path.empty()) {
-            if (!is_resume) {
-                mtmd_helper_log_set(common_log_default_callback, nullptr);
-            }
-
             mtmd_context_params mparams = mtmd_context_params_default();
 
             mparams.use_gpu          = params_base.mmproj_use_gpu;
@@ -896,17 +915,17 @@ private:
 
         if (params_base.cache_ram_mib != 0) {
             if (params_base.cache_ram_mib < 0) {
-                SRV_WRN("prompt cache is enabled, size limit: %s\n", "no limit");
+                SRV_INF("prompt cache is enabled, size limit: %s\n", "no limit");
             } else {
-                SRV_WRN("prompt cache is enabled, size limit: %d MiB\n", params_base.cache_ram_mib);
+                SRV_INF("prompt cache is enabled, size limit: %d MiB\n", params_base.cache_ram_mib);
             }
-            SRV_WRN("%s", "use `--cache-ram 0` to disable the prompt cache\n");
+            SRV_INF("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
             prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
         } else {
-            SRV_WRN("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+            SRV_INF("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
-        SRV_WRN("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
+        SRV_INF("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
         if (!params_base.model_alias.empty()) {
             // backward compat: use first alias as model name
@@ -954,13 +973,13 @@ private:
 
         if (params_base.cache_idle_slots) {
             if (!params_base.kv_unified) {
-                SRV_WRN("%s: --cache-idle-slots requires --kv-unified, disabling\n", __func__);
+                SRV_WRN("%s", "--cache-idle-slots requires --kv-unified, disabling\n");
                 params_base.cache_idle_slots = false;
             } else if (params_base.cache_ram_mib == 0) {
-                SRV_WRN("%s: --cache-idle-slots requires --cache-ram, disabling\n", __func__);
+                SRV_WRN("%s", "--cache-idle-slots requires --cache-ram, disabling\n");
                 params_base.cache_idle_slots = false;
             } else {
-                SRV_INF("%s: idle slots will be saved to prompt cache and cleared upon starting a new task\n", __func__);
+                SRV_INF("%s", "idle slots will be saved to prompt cache and cleared upon starting a new task\n");
                 SRV_DBG("%s", "__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__\n");
             }
         }
@@ -1112,7 +1131,7 @@ private:
             update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
 
             if (update_cache) {
-                SRV_WRN("%s", "updating prompt cache\n");
+                SRV_INF("%s", "updating prompt cache\n");
 
                 const int64_t t_start = ggml_time_us();
 
@@ -1127,7 +1146,7 @@ private:
 
                 prompt_cache->update();
 
-                SRV_WRN("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
+                SRV_INF("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
         }
 
@@ -3084,6 +3103,8 @@ private:
 
                     continue;
                 }
+
+                slot.print_timings_tg();
             }
 
             // speculative decoding - main model sample and accept
@@ -3195,6 +3216,8 @@ private:
                         break;
                     }
                 }
+
+                slot.print_timings_tg();
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
             }

@@ -104,14 +104,13 @@ int main(int argc, char ** argv) {
         params.model_alias.insert(params.model.name);
     }
 
-    // struct that contains llama context and inference
-    server_context ctx_server;
-
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    LOG_INF("build_info: %s\n", llama_build_info());
-    LOG_INF("%s\n", common_params_get_system_info(params).c_str());
+    common_params_print_info(params);
+
+    // struct that contains llama context and inference
+    server_context ctx_server;
 
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {

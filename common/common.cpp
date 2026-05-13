@@ -366,6 +366,9 @@ void common_init() {
     SetConsoleCP(CP_UTF8);
 #endif
 
+    common_log_set_prefix(common_log_main(), true);
+    common_log_set_timestamps(common_log_main(), true);
+
     llama_log_set(common_log_default_callback, NULL);
 
 #ifdef NDEBUG
@@ -375,6 +378,18 @@ void common_init() {
 #endif
 
     LOG_DBG("build: %d (%s) with %s for %s%s\n", llama_build_number(), llama_commit(), llama_compiler(), llama_build_target(), build_type);
+}
+
+void common_params_print_info(const common_params & params) {
+    LOG_INF("build_info: %s\n", llama_build_info());
+    LOG_INF("device_info:\n");
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        auto * dev = ggml_backend_dev_get(i);
+        size_t free, total;
+        ggml_backend_dev_memory(dev, &free, &total);
+        LOG_INF("  - %-8s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+    }
+    LOG_INF("%s\n", common_params_get_system_info(params).c_str());
 }
 
 std::string common_params_get_system_info(const common_params & params) {
@@ -1196,7 +1211,7 @@ common_init_result::common_init_result(common_params & params) :
     // initialize once
     for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {
         if (llama_vocab_is_eog(vocab, i)) {
-            LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(vocab, i).c_str(), -INFINITY);
+            LOG_TRC("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(vocab, i).c_str(), -INFINITY);
             params.sampling.logit_bias_eog.push_back({i, -INFINITY});
         }
     }
@@ -1209,12 +1224,12 @@ common_init_result::common_init_result(common_params & params) :
     }
 
     //if (params.sampling.penalty_last_n == -1) {
-    //    LOG_INF("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+    //    LOG_TRC("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
     //    params.sampling.penalty_last_n = llama_n_ctx(lctx);
     //}
 
     //if (params.sampling.dry_penalty_last_n == -1) {
-    //    LOG_INF("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+    //    LOG_TRC("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
     //    params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
     //}
 
@@ -1422,7 +1437,7 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
 
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
-        LOG_WRN("%s: the context does not support partial sequence removal\n", __func__);
+        LOG_TRC("%s: the context does not support partial sequence removal\n", __func__);
         res = COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
         goto done;
     }
