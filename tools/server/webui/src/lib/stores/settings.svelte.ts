@@ -32,9 +32,13 @@
  */
 
 import { browser } from '$app/environment';
+import { ColorMode } from '$lib/enums';
+import type { SettingsExportType } from '$lib/types';
+import { setMode } from 'mode-watcher';
 import {
 	CONFIG_LOCALSTORAGE_KEY,
 	SETTING_CONFIG_DEFAULT,
+	SETTINGS_KEYS,
 	USER_OVERRIDES_LOCALSTORAGE_KEY
 } from '$lib/constants';
 import { IsMobile } from '$lib/hooks/is-mobile.svelte';
@@ -57,7 +61,6 @@ class SettingsStore {
 	 */
 
 	config = $state<SettingsConfigType>({ ...SETTING_CONFIG_DEFAULT });
-	theme = $state<string>('auto');
 	isInitialized = $state(false);
 	userOverrides = $state<Set<string>>(new Set());
 
@@ -99,7 +102,9 @@ class SettingsStore {
 	initialize() {
 		try {
 			this.loadConfig();
-			this.loadTheme();
+			this.migrateLegacyTheme();
+			// Apply the persisted theme from config on initial load
+			setMode(this.config[SETTINGS_KEYS.THEME] as ColorMode);
 			this.isInitialized = true;
 		} catch (error) {
 			console.error('Failed to initialize settings store:', error);
@@ -124,9 +129,9 @@ class SettingsStore {
 			};
 
 			// Default sendOnEnter to false on mobile when the user has no saved preference
-			if (!('sendOnEnter' in savedVal)) {
+			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
 				if (new IsMobile().current) {
-					this.config.sendOnEnter = false;
+					this.config[SETTINGS_KEYS.SEND_ON_ENTER] = false;
 				}
 			}
 
@@ -143,12 +148,21 @@ class SettingsStore {
 	}
 
 	/**
-	 * Load theme from localStorage
+	 * Migrate the legacy un-namespaced "theme" localStorage key into config.
+	 * Previously theme was stored separately in localStorage("theme") — now it lives
+	 * inside the config object alongside all other settings.
+	 * After migration the legacy key is removed.
 	 */
-	private loadTheme() {
+	private migrateLegacyTheme() {
 		if (!browser) return;
 
-		this.theme = localStorage.getItem('theme') || 'auto';
+		const legacyTheme = localStorage.getItem('theme');
+		if (legacyTheme) {
+			this.config[SETTINGS_KEYS.THEME] = legacyTheme;
+			localStorage.removeItem('theme');
+			this.saveConfig();
+			setMode(legacyTheme as ColorMode);
+		}
 	}
 	/**
 	 *
@@ -233,29 +247,13 @@ class SettingsStore {
 	}
 
 	/**
-	 * Update the theme setting
+	 * Update the theme setting.
 	 * @param newTheme - The new theme value
 	 */
 	updateTheme(newTheme: string) {
-		this.theme = newTheme;
-		this.saveTheme();
-	}
+		this.updateConfig(SETTINGS_KEYS.THEME, newTheme);
 
-	/**
-	 * Save the current theme to localStorage
-	 */
-	private saveTheme() {
-		if (!browser) return;
-
-		try {
-			if (this.theme === 'auto') {
-				localStorage.removeItem('theme');
-			} else {
-				localStorage.setItem('theme', this.theme);
-			}
-		} catch (error) {
-			console.error('Failed to save theme to localStorage:', error);
-		}
+		setMode(newTheme as ColorMode);
 	}
 
 	/**
@@ -271,22 +269,26 @@ class SettingsStore {
 	 */
 	resetConfig() {
 		this.config = { ...SETTING_CONFIG_DEFAULT };
+
 		this.saveConfig();
 	}
 
 	/**
-	 * Reset theme to auto
+	 * Reset theme to default value.
+	 * Theme is now stored inside the config object.
 	 */
 	resetTheme() {
-		this.theme = 'auto';
-		this.saveTheme();
+		this.updateConfig(SETTINGS_KEYS.THEME, SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.THEME]);
+
+		setMode(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.THEME] as ColorMode);
 	}
 
 	/**
-	 * Reset all settings to defaults
+	 * Reset all settings to defaults.
 	 */
 	resetAll() {
 		this.resetConfig();
+
 		this.resetTheme();
 	}
 
@@ -456,10 +458,86 @@ class SettingsStore {
 		this.saveConfig();
 		console.log('Cleared all user overrides');
 	}
+
+	/**
+	 *
+	 *
+	 * Import / Export
+	 *
+	 *
+	 */
+
+	/**
+	 * Export all settings as a versioned JSON-compatible object.
+	 * The export captures the full config (excluding sensitive values like API key)
+	 * and user overrides. Sensitive fields are filtered out for security by default.
+	 * @param includeSensitiveData - If true, include sensitive fields (apiKey, MCP server headers) in export
+	 */
+	exportSettings(includeSensitiveData: boolean = false): SettingsExportType {
+		// Build config excluding sensitive data unless user opts in
+		const configToExport: Record<string, string | number | boolean | undefined> =
+			includeSensitiveData
+				? { ...this.config }
+				: Object.fromEntries(Object.entries(this.config).filter(([key]) => key !== 'apiKey'));
+
+		// Handle MCP servers: exclude custom headers unless user opts in
+		if ('mcpServers' in configToExport && !includeSensitiveData) {
+			try {
+				const mcpServers = JSON.parse(configToExport.mcpServers as string) as Array<
+					Record<string, unknown>
+				>;
+				const safeServers = mcpServers.map((server) => {
+					delete server.headers;
+					return server;
+				});
+				configToExport.mcpServers = JSON.stringify(safeServers);
+			} catch {
+				// If parsing fails, just exclude the entire mcpServers field
+				delete (configToExport as Record<string, unknown>).mcpServers;
+			}
+		}
+
+		return {
+			version: 1,
+			timestamp: Date.now(),
+			config: configToExport,
+			userOverrides: Array.from(this.userOverrides)
+		};
+	}
+
+	/**
+	 * Import settings from a previously exported object.
+	 * Restores config (including theme) and user overrides.
+	 * @param data - The exported settings object
+	 */
+	importSettings(data: SettingsExportType): void {
+		if (!browser) return;
+
+		if (!data || !data.config) {
+			throw new Error('Invalid settings data: missing config');
+		}
+
+		// Restore config (theme is included in config)
+		this.config = {
+			...SETTING_CONFIG_DEFAULT,
+			...data.config
+		};
+
+		// Restore user overrides (derived state — may be stale if server defaults differ)
+		this.userOverrides = new Set(data.userOverrides ?? []);
+
+		// Persist to localStorage
+		this.saveConfig();
+
+		// Apply theme for immediate visual feedback
+		setMode(this.config[SETTINGS_KEYS.THEME] as ColorMode);
+
+		console.log('Settings imported successfully');
+	}
 }
 
 export const settingsStore = new SettingsStore();
 
 export const config = () => settingsStore.config;
-export const theme = () => settingsStore.theme;
+export const theme = () => settingsStore.config[SETTINGS_KEYS.THEME];
 export const isInitialized = () => settingsStore.isInitialized;

@@ -63,8 +63,10 @@ struct server_model_meta {
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
     int64_t last_used = 0; // for LRU unloading
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
+    json loaded_info; // info to be reflected via /v1/models endpoint
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
+    mtmd_caps multimodal; // multimodal capabilities
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -79,6 +81,7 @@ struct server_model_meta {
     }
 
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
+    void update_caps();
 };
 
 struct subprocess_s;
@@ -100,6 +103,9 @@ private:
     std::condition_variable cv_stop;
     std::set<std::string> stopping_models;
 
+    // set to true while load_models() is executing a reload; load() will wait until clear
+    bool is_reloading = false;
+
     common_preset_context ctx_preset;
 
     common_params base_params;
@@ -118,6 +124,11 @@ private:
 public:
     server_models(const common_params & params, int argc, char ** argv);
 
+    // (re-)load the list of models from various sources and prepare the metadata mapping
+    // - if this is called the first time, simply populate the metadata
+    // - if this is called subsequently (e.g. when refreshing from disk):
+    //   - if a model is running but updated or removed from the source, it will be unloaded
+    //   - if a model is not running, it will be added or updated according to the source
     void load_models();
 
     // check if a model instance exists (thread-safe)
@@ -137,6 +148,7 @@ public:
 
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
+    void update_loaded_info(const std::string & name, std::string & raw_info);
 
     // wait until the model instance is fully loaded (thread-safe)
     // return when the model no longer in "loading" state
@@ -155,7 +167,7 @@ public:
 
     // notify the router server that a model instance is ready
     // return the monitoring thread (to be joined by the caller)
-    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler);
+    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info);
 
     // notify the router server that the sleeping state has changed
     static void notify_router_sleeping_state(bool sleeping);

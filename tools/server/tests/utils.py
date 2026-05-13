@@ -5,6 +5,8 @@
 
 import subprocess
 import os
+
+TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
 import re
 import json
 from json import JSONDecodeError
@@ -86,6 +88,7 @@ class ServerProcess:
     api_key: str | None = None
     models_dir: str | None = None
     models_max: int | None = None
+    models_preset: str | None = None
     no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
     enable_ctx_shift: int | None = False
@@ -105,6 +108,8 @@ class ServerProcess:
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     webui_mcp_proxy: bool = False
+    backend_sampling: bool = False
+    gcp_compat: bool = False
 
     # session variables
     process: subprocess.Popen | None = None
@@ -119,6 +124,9 @@ class ServerProcess:
         self.external_server = "DEBUG_EXTERNAL" in os.environ
 
     def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
+        env = {**os.environ}
+        if "LLAMA_CACHE" not in os.environ:
+            env["LLAMA_CACHE"] = "tmp"
         if self.external_server:
             print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
             return
@@ -156,6 +164,8 @@ class ServerProcess:
             server_args.extend(["--models-dir", self.models_dir])
         if self.models_max is not None:
             server_args.extend(["--models-max", self.models_max])
+        if self.models_preset:
+            server_args.extend(["--models-preset", self.models_preset])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
@@ -243,6 +253,10 @@ class ServerProcess:
             server_args.append("--no-cache-idle-slots")
         if self.webui_mcp_proxy:
             server_args.append("--webui-mcp-proxy")
+        if self.backend_sampling:
+            server_args.append("--backend_sampling")
+        if self.gcp_compat:
+            env["AIP_MODE"] = "PREDICTION"
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
@@ -263,7 +277,7 @@ class ServerProcess:
             creationflags=flags,
             stdout=self._log,
             stderr=self._log if self._log != sys.stdout else sys.stdout,
-            env={**os.environ, "LLAMA_CACHE": "tmp"} if "LLAMA_CACHE" not in os.environ else None,
+            env=env,
         )
         server_instances.add(self)
 

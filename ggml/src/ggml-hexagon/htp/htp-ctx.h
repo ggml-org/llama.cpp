@@ -20,7 +20,7 @@ struct htp_mmap {
     uint64_t size;
     uint64_t base;
     uint32_t fd;
-    uint32_t pinned;
+    uint32_t reserved;
 };
 
 // Scratchpad state
@@ -77,6 +77,8 @@ struct htp_context {
     atomic_bool            vtcm_valid;
     atomic_bool            vtcm_needs_release;
 
+    uint64_t               max_vmem;
+
     struct htp_ops_context octx;
 
 #ifdef HTP_HAS_HMX
@@ -104,5 +106,6 @@ int op_cumsum(struct htp_ops_context * octx);
 int op_fill(struct htp_ops_context * octx);
 int op_diag(struct htp_ops_context * octx);
 int op_solve_tri(struct htp_ops_context * octx);
+int op_gated_delta_net(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */
