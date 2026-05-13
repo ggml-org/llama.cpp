@@ -678,6 +678,7 @@ static NOINLINE void ggml_vec_dot_q1_0_q8_0_vl128(const int n, float * GGML_REST
 
 void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
 #if defined __riscv_xtheadvector
+    assert(nrc == 1);
     ggml_vec_dot_q1_0_q8_0_xthead(n, s, vx, vy);
 #elif GGML_RISCV_RVV_1_0
     assert(nrc == 1);
