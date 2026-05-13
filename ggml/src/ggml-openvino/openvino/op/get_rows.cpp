@@ -18,8 +18,6 @@ namespace op {
 OutputVector translate_get_rows(const NodeContext & context) {
     num_inputs_check(context, 2, 2);
 
-    int op_case = context.get_op_case();
-
     Output<Node> res;
     auto data = process_view_input_new(context, 0);
     auto indices = process_view_input_new(context, 1);
