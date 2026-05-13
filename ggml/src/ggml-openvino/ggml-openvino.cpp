@@ -1036,7 +1036,6 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
             return false;
         }
         static std::set<ggml_op> ops_not_support_view_input{
-            GGML_OP_GET_ROWS,
             GGML_OP_RMS_NORM,
             GGML_OP_NORM,
             GGML_OP_L2_NORM,

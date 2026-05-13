@@ -492,6 +492,48 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                              view_stride.size() == view_ggml_shape.size();
             const size_t relative_offset = view_offset >= view_src_offset ? view_offset - view_src_offset : 0;
 
+            if (same_rank) {
+                const size_t ndims = view_ggml_shape.size();
+                std::vector<int> diff_dims;
+                for (size_t i = 0; i < ndims; ++i) {
+                    if (view_ggml_shape[i] != view_src_ggml_shape[i]) {
+                        diff_dims.push_back(static_cast<int>(i));
+                    }
+                }
+
+                if (diff_dims.size() == 1) {
+                    const size_t slice_dim = static_cast<size_t>(diff_dims[0]);
+                    bool suffix_stride_match = true;
+                    for (size_t i = slice_dim + 1; i < ndims; ++i) {
+                        if (view_stride[i] != view_src_stride[i]) {
+                            suffix_stride_match = false;
+                            break;
+                        }
+                    }
+
+                    if (suffix_stride_match && view_src_stride[slice_dim] > 0 &&
+                        relative_offset % view_src_stride[slice_dim] == 0) {
+                        const int64_t begin_val = static_cast<int64_t>(relative_offset / view_src_stride[slice_dim]);
+                        const int64_t end_val = begin_val + static_cast<int64_t>(view_ggml_shape[slice_dim]);
+                        const int64_t dim_size = static_cast<int64_t>(view_src_ggml_shape[slice_dim]);
+
+                        if (begin_val >= 0 && end_val <= dim_size) {
+                            auto sliced = std::make_shared<ov::op::v8::Slice>(
+                                current,
+                                ov::op::v0::Constant::create(ov::element::i64, {1}, {begin_val}),
+                                ov::op::v0::Constant::create(ov::element::i64, {1}, {end_val}),
+                                ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                                ov::op::v0::Constant::create(
+                                    ov::element::i64,
+                                    {1},
+                                    {static_cast<int64_t>(slice_dim)}));
+                            sliced->set_friendly_name(view_name);
+                            return sliced;
+                        }
+                    }
+                }
+            }
+
             size_t view_elems = 1;
             size_t src_elems = 1;
             if (same_rank) {
