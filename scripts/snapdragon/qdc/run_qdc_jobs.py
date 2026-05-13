@@ -41,19 +41,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from qualcomm_device_cloud_sdk.api import qdc_api  # ty: ignore[unresolved-import]
-from qualcomm_device_cloud_sdk.logging import configure_logging  # ty: ignore[unresolved-import]
-from qualcomm_device_cloud_sdk.models import ArtifactType, JobMode, JobState, JobSubmissionParameter, JobType, TestFramework  # ty: ignore[unresolved-import]
 from qualcomm_device_cloud_sdk.api import qdc_api
 from qualcomm_device_cloud_sdk.logging import configure_logging
-from qualcomm_device_cloud_sdk.models import (
-    ArtifactType,
-    JobMode,
-    JobState,
-    JobSubmissionParameter,
-    JobType,
-    TestFramework,
-)
+from qualcomm_device_cloud_sdk.models import ArtifactType, JobMode, JobState, JobSubmissionParameter, JobType, TestFramework
 
 # configure_logging only sets up the SDK logger; basicConfig is needed for
 # our own log.info to reach stdout.
@@ -182,6 +172,7 @@ def _build_android_artifact(
     shutil.copy(_CONFTEST, tests_dir / "conftest.py")
 
     if test_mode in ("bench", "all"):
+        assert model_url is not None
         (tests_dir / "test_bench_posix.py").write_text(
             _RUN_BENCH.read_text().replace("<<MODEL_URL>>", model_url)
         )
