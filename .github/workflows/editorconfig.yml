@@ -2,11 +2,6 @@ name: EditorConfig Checker
 
 on:
   workflow_dispatch: # allows manual triggering
-    inputs:
-      create_release:
-        description: 'Create new release'
-        required: true
-        type: boolean
   push:
     branches:
       - master
