@@ -580,6 +580,91 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
         GGML_ASSERT(ptr == (void *) ((char *)(pool_addr) + pool_used));
     }
 };
+
+// ----------------------------------------------------------------------------
+// VMM-backed allocator for long-lived buffers (weight tensors).
+//
+// Unlike ggml_cuda_pool_vmm above, which is a LIFO scratch pool for transient
+// compute allocations, this helper allocates an isolated VA region + single
+// physical handle per buffer. Each buffer's lifetime is independent and freed
+// in arbitrary order (model unload).
+//
+// Motivation: on L4T 36.4.7 the CVE-2025-33177 NvMap patch rejects large
+// single-shot cudaMalloc requests. Empirically (driver-API probe at
+// `cuMemCreate`+`cuMemMap` on Jetson Orin Nano Super 8GB, see
+// distributed-torch/runs/vmm_spike_20260513T162324Z/), the VMM API bypasses
+// the cap up to the physical memory ceiling. This helper lets weight buffers
+// take the same path.
+//
+// Beyond Jetson, the VMM path is also useful on long-running desktop servers
+// where the legacy cudaMalloc allocator fragments — analogous to PyTorch's
+// PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True.
+struct ggml_cuda_vmm_buffer {
+    int device = -1;
+    CUdeviceptr addr = 0;          // mapped VA base (also returned as void* to ggml-backend)
+    size_t mapped_size = 0;        // bytes mapped / accessible (granularity-aligned)
+    CUmemGenericAllocationHandle handle = 0;
+    bool valid = false;
+};
+
+// Allocate `size` bytes of VMM-backed device memory on `device`.
+// On success, fills *out with handle/addr/mapped_size and returns CUDA_SUCCESS.
+// On failure, leaves *out invalid (valid=false) and returns the CUresult so
+// the caller can fall back to cudaMalloc with diagnostic info.
+static CUresult ggml_cuda_vmm_alloc_buffer(ggml_cuda_vmm_buffer * out, size_t size, int device) {
+    out->device = device;
+    out->valid = false;
+
+    CUmemAllocationProp prop = {};
+    prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
+    prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+    prop.location.id = device;
+
+    const size_t granularity = ggml_cuda_info().devices[device].vmm_granularity;
+    if (granularity == 0) {
+        return CUDA_ERROR_NOT_SUPPORTED;
+    }
+    const size_t aligned = ((size + granularity - 1) / granularity) * granularity;
+
+    CUresult r = cuMemCreate(&out->handle, aligned, &prop, 0);
+    if (r != CUDA_SUCCESS) return r;
+
+    r = cuMemAddressReserve(&out->addr, aligned, 0, 0, 0);
+    if (r != CUDA_SUCCESS) {
+        (void)cuMemRelease(out->handle);
+        return r;
+    }
+
+    r = cuMemMap(out->addr, aligned, 0, out->handle, 0);
+    if (r != CUDA_SUCCESS) {
+        (void)cuMemAddressFree(out->addr, aligned);
+        (void)cuMemRelease(out->handle);
+        return r;
+    }
+
+    CUmemAccessDesc adesc = {};
+    adesc.location = prop.location;
+    adesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+    r = cuMemSetAccess(out->addr, aligned, &adesc, 1);
+    if (r != CUDA_SUCCESS) {
+        (void)cuMemUnmap(out->addr, aligned);
+        (void)cuMemAddressFree(out->addr, aligned);
+        (void)cuMemRelease(out->handle);
+        return r;
+    }
+
+    out->mapped_size = aligned;
+    out->valid = true;
+    return CUDA_SUCCESS;
+}
+
+static void ggml_cuda_vmm_free_buffer(ggml_cuda_vmm_buffer * b) {
+    if (!b->valid) return;
+    CU_CHECK(cuMemUnmap(b->addr, b->mapped_size));
+    CU_CHECK(cuMemAddressFree(b->addr, b->mapped_size));
+    CU_CHECK(cuMemRelease(b->handle));
+    b->valid = false;
+}
 #endif // defined(GGML_USE_VMM)
 
 std::unique_ptr<ggml_cuda_pool> ggml_backend_cuda_context::new_pool_for_device(int                  device,
@@ -625,6 +710,11 @@ struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
     std::string name;
+#if defined(GGML_USE_VMM)
+    // When valid, this buffer was allocated via the VMM API (cuMemCreate/cuMemMap)
+    // rather than cudaMalloc. Destructor dispatches on vmm.valid.
+    ggml_cuda_vmm_buffer vmm{};
+#endif
 
     ggml_backend_cuda_buffer_context(int device, void * dev_ptr) :
         device(device), dev_ptr(dev_ptr),
@@ -632,6 +722,12 @@ struct ggml_backend_cuda_buffer_context {
     }
 
     ~ggml_backend_cuda_buffer_context() {
+#if defined(GGML_USE_VMM)
+        if (vmm.valid) {
+            ggml_cuda_vmm_free_buffer(&vmm);
+            return;
+        }
+#endif
         CUDA_CHECK(cudaFree(dev_ptr));
     }
 };
@@ -776,19 +872,59 @@ static bool ggml_backend_buft_is_cuda(ggml_backend_buffer_type_t buft) {
 
 static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *)buft->context;
+    const int device = buft_ctx->device;
 
-    ggml_cuda_set_device(buft_ctx->device);
+    ggml_cuda_set_device(device);
+
+#if defined(GGML_USE_VMM)
+    // GGML_CUDA_VMM_BUFFERS=1 routes weight-buffer allocations through the CUDA
+    // VMM API (cuMemCreate / cuMemAddressReserve / cuMemMap / cuMemSetAccess),
+    // analogous to PyTorch's PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True.
+    // Two benefits, both empirically validated:
+    //   (1) on L4T 36.4.7 Jetson, bypasses the CVE-2025-33177 NvMap allocation-
+    //       tracking cap that rejects large single-shot cudaMalloc requests
+    //       (see discussion #16706). cuMemCreate uses a different kernel path
+    //       not gated by the patch.
+    //   (2) the larger benefit: large weight buffers going through VMM leaves
+    //       cudaMalloc's NvMap budget free for the smaller compute / KV-cache
+    //       buffers that still need it (which is critical on memory-tight
+    //       Jetson with hostile page-cache pressure). Recommended companion
+    //       flags: `--no-mmap` to keep GGUF off the page cache during load,
+    //       and `echo 3 > /proc/sys/vm/drop_caches` before launch.
+    // Default off; explicit opt-in until soak-tested. Falls back to cudaMalloc
+    // on VMM failure (preserves graceful degradation on older CUDA drivers /
+    // unsupported topologies).
+    if (getenv("GGML_CUDA_VMM_BUFFERS") != nullptr && ggml_cuda_info().devices[device].vmm) {
+        ggml_cuda_vmm_buffer v;
+        const CUresult vr = ggml_cuda_vmm_alloc_buffer(&v, size, device);
+        if (vr == CUDA_SUCCESS) {
+            static bool announced = false;
+            if (!announced) {
+                announced = true;
+                GGML_LOG_INFO("%s: GGML_CUDA_VMM_BUFFERS=1 — weight-buffer allocations using cuMemCreate (first %.2f MiB succeeded on device %d)\n",
+                              __func__, size / 1024.0 / 1024.0, device);
+            }
+            ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(device, (void *)v.addr);
+            ctx->vmm = v;
+            return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
+        }
+        const char * es = nullptr;
+        cuGetErrorString(vr, &es);
+        GGML_LOG_WARN("%s: VMM alloc of %.2f MiB on device %d failed (%s); falling back to cudaMalloc\n",
+                      __func__, size / 1024.0 / 1024.0, device, es ? es : "(no string)");
+    }
+#endif
 
     void * dev_ptr;
-    cudaError_t err = ggml_cuda_device_malloc(&dev_ptr, size, buft_ctx->device);
+    cudaError_t err = ggml_cuda_device_malloc(&dev_ptr, size, device);
     if (err != cudaSuccess) {
         // clear the error
         (void)cudaGetLastError();
-        GGML_LOG_ERROR("%s: allocating %.2f MiB on device %d: cudaMalloc failed: %s\n", __func__, size / 1024.0 / 1024.0, buft_ctx->device, cudaGetErrorString(err));
+        GGML_LOG_ERROR("%s: allocating %.2f MiB on device %d: cudaMalloc failed: %s\n", __func__, size / 1024.0 / 1024.0, device, cudaGetErrorString(err));
         return nullptr;
     }
 
-    ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, dev_ptr);
+    ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(device, dev_ptr);
 
     return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
 }
