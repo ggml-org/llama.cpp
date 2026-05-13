@@ -5716,12 +5716,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 break;
             }
 
-            device->mul_mat_l_int[i]    = true;
-            device->mul_mat_m_int[i]    = true;
-            device->mul_mat_s_int[i]    = true;
-            device->mul_mat_id_l_int[i] = true;
-            device->mul_mat_id_m_int[i] = true;
-            device->mul_mat_id_s_int[i] = true;
+            device->mul_mat_l_int[i]    = device->mul_mat_l[i];
+            device->mul_mat_m_int[i]    = device->mul_mat_m[i];
+            device->mul_mat_s_int[i]    = device->mul_mat_s[i];
+            device->mul_mat_id_l_int[i] = device->mul_mat_id_l[i];
+            device->mul_mat_id_m_int[i] = device->mul_mat_id_m[i];
+            device->mul_mat_id_s_int[i] = device->mul_mat_id_s[i];
         }
 
 
