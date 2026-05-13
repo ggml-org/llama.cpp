@@ -7808,7 +7808,14 @@ static vk_subbuffer ggml_vk_tensor_subbuffer(
         ggml_vk_host_get(ctx->device, tensor->data, buffer, offset);
     }
     if (!buffer) {
-        auto buf_ctx = (ggml_backend_vk_buffer_context *)tensor->buffer->context;
+        const ggml_tensor * tensor_buf_src = tensor;
+        if (tensor->view_src != nullptr && tensor->view_src->buffer != nullptr) {
+            tensor_buf_src = tensor->view_src;
+        }
+
+        GGML_ASSERT(tensor_buf_src->buffer != nullptr);
+        GGML_ASSERT(tensor_buf_src->buffer->context != nullptr);
+        auto buf_ctx = (ggml_backend_vk_buffer_context *) tensor_buf_src->buffer->context;
         buffer = buf_ctx->dev_buffer;
         offset = vk_tensor_offset(tensor) + tensor->view_offs;
     }
@@ -14842,17 +14849,17 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         // checked against the written list. Two nodes overlap in memory if they come from the same
         // buffer and the tensor or view ranges overlap.
         auto const &overlaps_unsynced = [&](const ggml_tensor *node, const std::vector<const ggml_tensor *> &unsynced_nodes) -> bool {
-            if (unsynced_nodes.size() == 0) {
+            if (node == nullptr || node->buffer == nullptr || unsynced_nodes.size() == 0) {
                 return false;
             }
+
             auto n_base = vk_tensor_offset(node) + node->view_offs;
             auto n_size = ggml_nbytes(node);
-            ggml_backend_vk_buffer_context * a_buf_ctx = (ggml_backend_vk_buffer_context *)node->buffer->context;
-            vk_buffer a_buf = a_buf_ctx->dev_buffer;
             for (auto &other : unsynced_nodes) {
-                ggml_backend_vk_buffer_context * o_buf_ctx = (ggml_backend_vk_buffer_context *)other->buffer->context;
-                vk_buffer o_buf = o_buf_ctx->dev_buffer;
-                if (a_buf == o_buf) {
+                if (other == nullptr || other->buffer == nullptr) {
+                    continue;
+                }
+                if (node->buffer == other->buffer) {
                     auto o_base = vk_tensor_offset(other) + other->view_offs;
                     auto o_size = ggml_nbytes(other);
 
