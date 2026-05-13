@@ -3075,6 +3075,27 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
         int64_t is_max = (ne11 + MUL_MAT_SRC1_COL_STRIDE - 1) / MUL_MAT_SRC1_COL_STRIDE;
         is_max = is_max <= GGML_SYCL_MAX_STREAMS ? is_max : GGML_SYCL_MAX_STREAMS;
 
+        GGML_SYCL_DEBUG("[SYCL][TENSOR-SPLIT] mul_mat ne11=%ld stride=%d slots=%ld devices=%d\n",
+                        (long) ne11, (int) MUL_MAT_SRC1_COL_STRIDE, (long) is_max,
+                        ggml_sycl_info().device_count);
+
+        // each non-main device's slot 0 waits on its own slots 1..is_max-1, so
+        // buffers allocated from its slot-0 pool (and used across slots) are
+        // safe to reuse on slot 0 after this op returns. before commit
+        // 7277d77b1 every slot aliased slot 0 and this dep was implicit; now
+        // slots are distinct queues and must be joined explicitly.
+        for (int i = 0; i < ggml_sycl_info().device_count; ++i) {
+            if (i == ctx.device || dev[i].row_low == dev[i].row_high) {
+                continue;
+            }
+            ggml_sycl_set_device(i);
+            for (int64_t is = 1; is < is_max; ++is) {
+                SYCL_CHECK(CHECK_TRY_ERROR(
+                    ctx.stream(i, 0)->ext_oneapi_submit_barrier(
+                        {*src0_extra->events[i][is]})));
+            }
+        }
+
         ggml_sycl_set_device(ctx.device);
         for (int i = 0; i < ggml_sycl_info().device_count; ++i) {
             if (dev[i].row_low == dev[i].row_high) {
@@ -4184,6 +4205,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         src1_row.data = src1_contiguous.get();
         dst_row.data  =  dst_contiguous.get();
 
+        // Multi-stream the per-expert iterations across N stream slots so that
+        // independent experts run concurrently. Each iteration's allocations come
+        // from that slot's pool (per-stream isolation prevents the cross-stream
+        // alias hazard the shared pool would otherwise create).
+        const int n_streams = (int) std::min<int64_t>(GGML_SYCL_MAX_STREAMS, n_as);
+
         for (int64_t i02 = 0; i02 < n_as; i02++) {
             int64_t num_src1_rows = 0;
             for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
@@ -4204,6 +4231,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                 continue;
             }
 
+            ggml_sycl_stream_override_guard slot_guard(ctx, (int)(i02 % n_streams));
+            const queue_ptr stream = ctx.stream();  // per-iter, follows the override
 
             ggml_sycl_pool_alloc<int> dev_cur_src1_row(ctx.pool(), 1);
             ggml_sycl_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), num_src1_rows);
@@ -4277,6 +4306,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                         });
                 });
             }
+        }
+
+        // Barrier-and-join: ensure all per-stream work completes before slot 0
+        // proceeds. The next op in the graph runs on slot 0 by default and may
+        // read tensors written by experts dispatched to slots 1..n_streams-1.
+        if (n_streams > 1) {
+            std::vector<sycl::event> events;
+            events.reserve(n_streams - 1);
+            for (int s = 1; s < n_streams; ++s) {
+                events.push_back(ctx.stream(ctx.device, s)->ext_oneapi_submit_barrier());
+            }
+            ctx.stream(ctx.device, 0)->ext_oneapi_submit_barrier(events);
         }
     }
 }
