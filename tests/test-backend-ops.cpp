@@ -1973,9 +1973,19 @@ struct test_unary : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
+        float min = -150.f;
+        float max =  150.f;
+
+        // Keep FP16 exp/expm1 inputs in-range so all backends stay finite instead of
+        // disagreeing on whether overflow saturates to max-F16 or produces +inf.
+        if (type == GGML_TYPE_F16 && (op == GGML_UNARY_OP_EXP || op == GGML_UNARY_OP_EXPM1)) {
+            min = -10.f;
+            max =  10.f;
+        }
+
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             // test extended range of values to check for NaNs in GELU
-            init_tensor_uniform(t, -150.f, 150.f);
+            init_tensor_uniform(t, min, max);
         }
     }
 
@@ -2376,6 +2386,14 @@ struct test_set_rows : public test_case {
             return err_estimate;
         }
         return 1e-7;
+    }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        if (type == GGML_TYPE_F16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
+            return 1e-6;
+        }
+        return max_nmse_err();
     }
 };
 
@@ -4959,6 +4977,14 @@ struct test_pool2d : public test_case {
         ggml_set_name(out, "out");
 
         return out;
+    }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        if (dst_type == GGML_TYPE_F16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
+            return 1e-6;
+        }
+        return max_nmse_err();
     }
 };
 

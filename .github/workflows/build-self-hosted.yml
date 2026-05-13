@@ -97,7 +97,6 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
-  # TODO: investigate slight precision issues in some operations for test-backend-ops on the WebGPU backend.
   ggml-ci-nvidia-webgpu:
     runs-on: [self-hosted, Linux, NVIDIA]
 
