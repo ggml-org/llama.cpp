@@ -109,7 +109,7 @@ fn op(a: DataType, b: DataType) -> DataType {
 #elif defined(OP_MUL)
     return a * b;
 #elif defined(OP_DIV)
-    return DataType(f32(a) / f32(b));
+    return a / b;
 #endif
 }
 
