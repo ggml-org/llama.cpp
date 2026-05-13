@@ -192,7 +192,10 @@ class ModelBase:
             logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
             remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
             for name, remote_tensor in remote_tensors.items():
-                tensors[name] = lambda r=remote_tensor: LazyTorchTensor.from_remote_tensor(r)
+                data_gen = lambda r=remote_tensor: LazyTorchTensor.from_remote_tensor(r)  # noqa: E731
+                if titem := self.filter_tensors((name, data_gen)):
+                    tname, tgen = titem
+                    tensors[tname] = tgen
 
             return tensors
 
@@ -203,6 +206,7 @@ class ModelBase:
             part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
 
         tensor_names_from_index: set[str] = set()
+        tensor_names_from_parts: set[str] = set()
 
         if not self.is_mistral_format:
             index_name = "model.safetensors" if is_safetensors else "pytorch_model.bin"
@@ -236,6 +240,7 @@ class ModelBase:
                 assert model_part is not None
 
                 for name in model_part.keys():
+                    tensor_names_from_parts.add(name)
                     if is_safetensors:
                         data: gguf.utility.LocalTensor = model_part[name]
                         if self.lazy:
@@ -249,11 +254,12 @@ class ModelBase:
                             data_gen = lambda data=data_torch: LazyTorchTensor.from_eager(data)  # noqa: E731
                         else:
                             data_gen = lambda data=data_torch: data  # noqa: E731
-                    tensors[name] = data_gen
+                    if titem := self.filter_tensors((name, data_gen)):
+                        tname, tgen = titem
+                        tensors[tname] = tgen
 
         # verify tensor name presence and identify potentially missing files
         if len(tensor_names_from_index) > 0:
-            tensor_names_from_parts = set(tensors.keys())
             if len(tensor_names_from_parts.symmetric_difference(tensor_names_from_index)) > 0:
                 missing = sorted(tensor_names_from_index.difference(tensor_names_from_parts))
                 extra = sorted(tensor_names_from_parts.difference(tensor_names_from_index))
@@ -518,6 +524,18 @@ class ModelBase:
         for name, value in new_tensors.items():
             self.model_tensors[name] = value
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+
+        if "language_model." in name:
+            name = name.replace("language_model.", "")
+
+        return name, gen
+
     def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
         for name, gen in self.model_tensors.items():
             yield name, gen()
@@ -615,9 +633,6 @@ class ModelBase:
         return raw, [out_features, n_super * 64]
 
     def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
-        if "language_model." in name:
-            name = name.replace("language_model.", "")
-
         new_name = self.map_tensor_name(name)
 
         raw, shape = self._nvfp4_pack(weight, scale)
@@ -636,7 +651,7 @@ class ModelBase:
         n_experts = self.find_hparam(["num_local_experts", "num_experts"], optional=True) or 0
         consumed: list[str] = []
 
-        for name in list(self.model_tensors.keys()):
+        for name in self.model_tensors.keys():
             if not name.endswith(".weight"):
                 continue
             scale_name = name.replace(".weight", ".weight_scale")
@@ -691,7 +706,7 @@ class ModelBase:
                 self._repack_nvfp4(name, weight, scale, scale2, input_scale)
 
         # Flush any remaining experts (fallback if n_experts was unknown)
-        for (bid, proj_type) in list(expert_blocks.keys()):
+        for bid, proj_type in list(expert_blocks.keys()):
             self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type)
 
         # Remove consumed tensors so get_tensors/modify_tensors won't see them
@@ -724,9 +739,6 @@ class ModelBase:
 
         del experts, merged
 
-    def _needs_nvfp4_processing(self) -> bool:
-        return True
-
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
         quant_algo = (self.hparams.get("quantization_config") or {}).get("quant_algo")
@@ -757,7 +769,7 @@ class ModelBase:
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
         # from model_tensors, leaving only non-NVFP4 (e.g. FP8) for dequant.
-        if self._is_nvfp4 and self._needs_nvfp4_processing():
+        if self._is_nvfp4:
             self._generate_nvfp4_tensors()
 
         self.dequant_model()
@@ -1041,6 +1053,23 @@ class TextModel(ModelBase):
         # would require using decorated functions instead of simply defining the property
         if "model_arch" not in cls.__dict__:
             raise TypeError(f"Missing property 'model_arch' for {cls.__name__!r}")
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # Skip multimodal tensors
+        if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
+                or "visual." in name or "vision." in name or "audio." in name or "talker." in name \
+                or "vision_" in name or "audio_" in name or "sam_model" in name \
+                or "token2wav." in name or "code2wav." in name \
+                or "projector." in name or "pre_mm_projector_norm" in name \
+                or "image_newline" in name or "view_seperator" in name \
+                or "patch_embed" in name or "patch_embedding" in name \
+                or "patch_merger." in name or "model.connector." in name:
+            return None
+
+        return super().filter_tensors(item)
 
     def set_vocab(self):
         self._set_vocab_gpt2()
@@ -1327,6 +1356,9 @@ class TextModel(ModelBase):
         if chkhsh == "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c":
             # ref: https://huggingface.co/Qwen/Qwen3-Embedding-0.6B
             res = "qwen2"
+        if chkhsh == "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f":
+            # ref: https://huggingface.co/openbmb/MiniCPM-V-4_6
+            res = "qwen35"
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
@@ -1534,6 +1566,9 @@ class TextModel(ModelBase):
         if chkhsh == "862f827721df956049dff5ca81a57f29e575280bc622e290d3bf4e35eca29015":
             # ref: https://huggingface.co/codefuse-ai/F2LLM-v2-4B
             res = "f2llmv2"
+        if chkhsh == "62f6fb0a6fd5098caeabb19b07a5c1099cafc8b9c40eab6ea89ece4ec02fbc57":
+            # ref: https://huggingface.co/sarvamai/sarvam-30b
+            res = "sarvam-moe"
 
         if res is None:
             logger.warning("\n")
@@ -2141,7 +2176,8 @@ class MmprojModel(ModelBase):
             text_config = {
                 k: v for k, v in self.hparams.items() if k not in ["vision_encoder", "audio_encoder"]
             }
-            self.n_embd_text = text_config.get("hidden_dim", 0)
+            # mistral native params.json: "dim" is the text hidden size ("hidden_dim" is the FFN intermediate size)
+            self.n_embd_text = text_config.get("dim", 0)
 
         assert self.n_embd_text > 0, "n_embd not found in hparams"
 
@@ -2193,9 +2229,15 @@ class MmprojModel(ModelBase):
                 # merge configs
                 self.preprocessor_config = {**self.preprocessor_config, **cfg}
 
-    def _needs_nvfp4_processing(self) -> bool:
-        # nvfp4 quantization applies to the text model only.
-        return False
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # Skip non-multimodal tensors
+        if "language_model." in name:
+            return None
+
+        return super().filter_tensors(item)
 
     def get_vision_config(self) -> dict[str, Any] | None:
         config_name = "vision_config" if not self.is_mistral_format else "vision_encoder"
@@ -2295,17 +2337,18 @@ class LazyTorchTensor(gguf.LazyBase):
     }
 
     # only used when byteswapping data. Only correct size is needed
+    # TODO: uncomment uint64, uint32, and uint16, ref: https://github.com/pytorch/pytorch/issues/58734
     _dtype_byteswap_map: dict[torch.dtype, type] = {
         torch.float64: np.float64,
         torch.float32: np.float32,
         torch.bfloat16: np.float16,
         torch.float16: np.float16,
         torch.int64: np.int64,
-        torch.uint64: np.uint64,
+        # torch.uint64: np.uint64,
         torch.int32: np.int32,
-        torch.uint32: np.uint32,
+        # torch.uint32: np.uint32,
         torch.int16: np.int16,
-        torch.uint16: np.uint16,
+        # torch.uint16: np.uint16,
         torch.int8: np.int8,
         torch.uint8: np.uint8,
         torch.bool: np.uint8,
@@ -2412,7 +2455,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
     # For text conversion we route to a dedicated text-only class.
     # TODO: refactor this later to avoid adding exception here
-    if model_type == ModelType.TEXT and arch == "StepVLForConditionalGeneration":
+    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

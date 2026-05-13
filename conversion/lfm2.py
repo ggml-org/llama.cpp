@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, TYPE_CHECKING
+from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -44,22 +44,24 @@ class LFM2Model(TextModel):
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["norm_eps"])
         self._add_feed_forward_length()
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if self._is_vision_tensor(name) or ConformerAudioModel.is_audio_tensor(name):
-            # skip multimodal tensors
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
-        name = name.replace("language_model.", "") # vision
+        if ConformerAudioModel.is_audio_tensor(name):
+            # skip multimodal tensors
+            return None
+
         name = name.replace("lfm.", "model.")      # audio
 
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # conv op requires 2d tensor
         if 'conv.conv' in name:
             data_torch = data_torch.squeeze(1)
 
         yield from super().modify_tensors(data_torch, name, bid)
-
-    def _is_vision_tensor(self, name: str) -> bool:
-        return "vision_tower" in name or "multi_modal_projector" in name
 
 
 @ModelBase.register("Lfm2Model")
@@ -106,13 +108,19 @@ class LFM2MoeModel(TextModel):
     # cache for experts weights for merging
     _experts_cache: dict[int, dict[str, Tensor]] = {}
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.endswith(".expert_bias"):
+            name = name.replace(".expert_bias", ".expert_bias.bias")
+
+        return super().filter_tensors((name, gen))
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # conv op requires 2d tensor
         if 'conv.conv' in name:
             data_torch = data_torch.squeeze(1)
-
-        if name.endswith(".expert_bias"):
-            name = name.replace(".expert_bias", ".expert_bias.bias")
 
         # merge expert weights
         if 'experts' in name:
@@ -168,21 +176,20 @@ class LFM2VLModel(MmprojModel):
         vision_feature_layers_to_drop = -(self.global_config.get("vision_feature_layer", -1) + 1)
         self.gguf_writer.add_vision_block_count(self.find_vparam(self.n_block_keys) - vision_feature_layers_to_drop)
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        name = name.replace("model.vision_tower.", "vision_tower.")
+        name = name.replace("model.multi_modal_projector.", "multi_modal_projector.")
+
+        return super().filter_tensors((name, gen))
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        is_vision_tensor = "vision_tower" in name or "multi_modal_projector" in name
+        if "patch_embedding.weight" in name:
+            data_torch = data_torch.view(data_torch.shape[0], 16, 16, 3).permute(0, 3, 1, 2)
 
-        if is_vision_tensor:
-            # remove "model." prefix
-            name = name.replace("model.vision_tower.", "vision_tower.")
-            name = name.replace("model.multi_modal_projector.", "multi_modal_projector.")
-
-            if "patch_embedding.weight" in name:
-                data_torch = data_torch.view(data_torch.shape[0], 16, 16, 3).permute(0, 3, 1, 2)
-
-            yield from super().modify_tensors(data_torch, name, bid)
-            return
-
-        return # skip other tensors
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Lfm2AudioForConditionalGeneration")
@@ -204,20 +211,23 @@ class LFM2AudioModel(ConformerAudioModel):
         self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["feat_in"])
         self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
 
-    def modify_tensors(self, data_torch, name, bid):
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # skip language model tensors
         if name.startswith("lfm."):
-            return
+            return None
 
         # for training only
         if any(p in name for p in ["audio_loss_weight"]):
-            return
+            return None
 
         # for audio output
         if any(p in name for p in ["codebook_offsets", "depth_embeddings", "depth_linear", "depthformer"]):
-            return
+            return None
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors(item)
 
 
 @ModelBase.register("Lfm25AudioTokenizer")
@@ -232,11 +242,15 @@ class LFM25AudioTokenizer(LFM2Model):
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
         self.gguf_writer.add_embedding_length_out(self.hparams["output_size"])
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # skip language model tensors
         if name == "istft.window" or name.startswith("emb.emb"):
-            return
+            return None
 
         if name.startswith("lin"):
             name = name.replace("lin", "dense_2_out")
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors((name, gen))

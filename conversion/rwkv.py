@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -186,20 +186,27 @@ class Rwkv7Model(TextModel):
     lerp_weights: dict[int, dict[str, Tensor]] = {}
     lora_needs_transpose: bool = True
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # unify tensor names here to make life easier
         name = name.replace("blocks", "layers").replace("ffn", "feed_forward")
         name = name.replace("self_attn", "attention").replace("attn", "attention")
         name = name.replace("time_mixer.", "")
+
+        name = name.replace("feed_forward_norm", "ln2")
+        name = name.replace("g_norm", "ln_x")
+
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # lora layer names in fla-hub's impl
         if "_lora.lora" in name:
             self.lora_needs_transpose = False
         name = name.replace("_lora.lora.0.weight", "1.weight")
         name = name.replace("_lora.lora.2.weight", "2.weight")
         name = name.replace("_lora.lora.2.bias", "0.weight")
-
-        name = name.replace("feed_forward_norm", "ln2")
-        name = name.replace("g_norm", "ln_x")
 
         if "attention.v" in name and "value" not in self.map_tensor_name(name) and bid == 0:
             # some models have dummy v0/v1/v2 on first layer while others don't

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -155,9 +155,13 @@ class ChatGLMModel(TextModel):
             rope_freq = rope_freq * self.hparams["rope_ratio"]
         self.gguf_writer.add_rope_freq_base(rope_freq)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.endswith(".rotary_pos_emb.inv_freq") or name.startswith("model.vision."):
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.endswith(".rotary_pos_emb.inv_freq"):
+            return None
 
         name = name.removeprefix("transformer.")
-        yield from super().modify_tensors(data_torch, name, bid)
+
+        return super().filter_tensors((name, gen))

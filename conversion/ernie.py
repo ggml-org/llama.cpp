@@ -4,7 +4,7 @@ import json
 import math
 import re
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -31,18 +31,21 @@ class Ernie4_5Model(TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if "ernie." in name:
+            name = name.replace("ernie.", "model.")
+
+        return super().filter_tensors((name, gen))
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         num_heads = self.hparams["num_attention_heads"]
         num_kv_heads = self.hparams["num_key_value_heads"]
         if (head_dim := self.hparams.get("head_dim")) is None:
             head_dim = self.hparams["hidden_size"] // num_heads
 
-        if "mlp_AR" in name or "vision_model" in name:
-            # skip vision model and projector tensors
-            return
-
-        if "ernie." in name:
-            name = name.replace("ernie.", "model.")
         # split the qkv weights
         # qkv_proj shape: [(num_heads + 2 * num_kv_heads) * head_dim, hidden_size]
         if "qkv_proj" in name:
@@ -91,29 +94,31 @@ class Ernie4_5MoeModel(Ernie4_5Model):
             if shared_expert_count > 0 and (shared_expert_intermediate_size := self.hparams.get('intermediate_size')) is not None and (num_key_value_heads := self.hparams.get('num_key_value_heads')) is not None:
                 self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size // num_key_value_heads)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Modify correction bias name as in DeepseekV2
-        if name.endswith("e_score_correction_bias"):
-            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
         # skip Multi-Token Prediction (MTP) layers (again, same as DeepseekV2)
         match = re.match(r"model.mtp_block.(\d+)", name)
         if match:
-            return
+            return None
 
         # skip all other MTP tensors for now
         match = re.match(r"model.mtp_emb_norm.(\d+)", name)
         if match:
-            return
+            return None
 
         match = re.match(r"model.mtp_hidden_norm.(\d+)", name)
         if match:
-            return
+            return None
 
         match = re.match(r"model.mtp_linear_proj.(\d+)", name)
         if match:
-            return
+            return None
 
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # process the experts separately
         if name.find("mlp.experts") != -1:
             n_experts = self.hparams["moe_num_experts"]
@@ -178,15 +183,18 @@ class PaddleOCRVisionModel(MmprojModel):
         self.gguf_writer.add_vision_use_gelu(True)
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("rms_norm_eps", 1e-6))
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        name = name.replace("visual.", "model.")
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
-        if "vision_model" in name or "mlp_AR" in name:
-            if "packing_position_embedding" in name:
-                return # unused
-            elif "vision_model.head" in name:
-                # we don't yet support image embeddings for this model
-                return
-            else:
-                yield from super().modify_tensors(data_torch, name, bid)
-        return # skip other tensors
+        if "vision_model" not in name and "mlp_AR" not in name:
+            return None
+        name = name.replace("visual.", "model.")
+        if "packing_position_embedding" in name:
+            # unused
+            return None
+        if "vision_model.head" in name:
+            # we don't yet support image embeddings for this model
+            return None
+
+        return super().filter_tensors((name, gen))

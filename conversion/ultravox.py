@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, TYPE_CHECKING
+from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -41,21 +41,18 @@ class GlmASRWhisperEncoderModel(MmprojModel):
             return gguf.GGMLQuantizationType.F16
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("model.") or name.startswith("lm_head."):
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.startswith(("model.", "lm_head.")):
             # skip language model tensors
-            return
+            return None
 
         if name.startswith("audio_encoder.whisper."):
             name = name.replace("audio_encoder.whisper.","audio_tower.")
         if "audio_encoder.layer_norm." in name or "audio_encoder.proj." in name:
             name = name.replace("audio_encoder.", "audio_encoder.adapting.")
-
-        if name.startswith("audio_encoder.audio_bos_eos_token."):
-            yield from super().modify_tensors(data_torch[0], "model.vision.boi", bid)
-            yield from super().modify_tensors(data_torch[1], "model.vision.eoi", bid)
-            return
-
         if name.startswith("audio_encoder.adapting."):
             name = name.replace("audio_encoder.adapting.","audio.multi_modal_projector.")
             if ".layer_norm." in name:
@@ -64,6 +61,16 @@ class GlmASRWhisperEncoderModel(MmprojModel):
                 name = name.replace(".0.", ".linear_1.")
             if ".2." in name:
                 name = name.replace(".2.", ".linear_2.")
+
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("audio_encoder.audio_bos_eos_token."):
+            yield from super().modify_tensors(data_torch[0], "model.vision.boi", bid)
+            yield from super().modify_tensors(data_torch[1], "model.vision.eoi", bid)
+            return
+
+        if name.startswith("audio_encoder.adapting."):
             if ".proj." in name:
                 return
 
@@ -97,15 +104,17 @@ class WhisperEncoderModel(MmprojModel):
             return gguf.GGMLQuantizationType.F16
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("language_model."):
-            # skip language model tensors
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
         # prevent clash naming with vision tensors
         if name.startswith("multi_modal_projector"):
             name = "audio." + name
 
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "conv1.bias" in name or "conv2.bias" in name:
             # transpose conv1 and conv2 bias
             data_torch = data_torch.unsqueeze(-1)
@@ -137,15 +146,19 @@ class MERaLiONWhisperEncoderModel(WhisperEncoderModel):
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MERALION)
         self.gguf_writer.add_audio_stack_factor(self.global_config.get("speech_mlp_scale_factor", 15))
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if name.startswith("text_decoder."):
-            return
+            return None
 
         if name.startswith("speech_encoder."):
             name = name.replace("speech_encoder.", "audio_tower.")
-            yield from super().modify_tensors(data_torch, name, bid)
-            return
 
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         suffix = "." + name.rsplit(".", 1)[-1]
 
         if name.startswith("ln_speech."):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -18,13 +18,21 @@ class Llama4VisionModel(MmprojModel):
         assert self.hparams["hidden_act"] == "gelu"
         self.gguf_writer.add_vision_use_gelu(True)
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if "multi_modal_projector" not in name and "vision_model" not in name:
+            return None
+
+        if "positional_embedding_vlm" in name and ".weight" not in name:
+            name += ".weight"
+
+        return super().filter_tensors((name, gen))
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if "multi_modal_projector" in name or "vision_model" in name:
-            # process vision tensors
-            if "positional_embedding_vlm" in name and ".weight" not in name:
-                name += ".weight"
-            if "multi_modal_projector.linear_1" in name:
-                # despite the name with number postfix, this is a single fully connected layer
-                yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MMPROJ_FC] + '.weight', data_torch)
-            else:
-                yield from super().modify_tensors(data_torch, name, bid)
+        if "multi_modal_projector.linear_1" in name:
+            # despite the name with number postfix, this is a single fully connected layer
+            yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MMPROJ_FC] + '.weight', data_torch)
+        else:
+            yield from super().modify_tensors(data_torch, name, bid)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, TYPE_CHECKING
+from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -29,14 +29,14 @@ class Qwen2VLModel(TextModel):
         except FileNotFoundError:
             self._set_vocab_gpt2()
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if name.startswith("thinker."):
             name = name.replace("thinker.", "")
-        if name.startswith("visual") or name.startswith("audio") or \
-                name.startswith("talker") or name.startswith("token2wav"):
-            # skip multimodal tensors
-            return
-        yield from super().modify_tensors(data_torch, name, bid)
+
+        return super().filter_tensors((name, gen))
 
 
 @ModelBase.register("Qwen2VLModel", "Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
@@ -84,32 +84,39 @@ class Qwen2VLVisionModel(MmprojModel):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if not name.startswith("visual."):
+            return None
+
+        return super().filter_tensors(item)
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("visual."):
-            # process visual tensors
-            # split QKV tensors if needed
-            if ".qkv." in name:
-                if data_torch.ndim == 2: # weight
-                    c3, _ = data_torch.shape
-                else: # bias
-                    c3 = data_torch.shape[0]
-                assert c3 % 3 == 0
-                c = c3 // 3
-                wq = data_torch[:c]
-                wk = data_torch[c: c * 2]
-                wv = data_torch[c * 2:]
-                yield from super().modify_tensors(wq, name.replace("qkv", "q"), bid)
-                yield from super().modify_tensors(wk, name.replace("qkv", "k"), bid)
-                yield from super().modify_tensors(wv, name.replace("qkv", "v"), bid)
-            elif 'patch_embed.proj.weight' in name:
-                # split Conv3D into Conv2Ds
-                c1, c2, kt, kh, kw = data_torch.shape
-                del c1, c2, kh, kw  # unused
-                assert kt == 2, "Current implementation only support temporal_patch_size of 2"
-                yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"  , data_torch[:, :, 0, ...])
-                yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...])
-            else:
-                yield from super().modify_tensors(data_torch, name, bid)
+        # split QKV tensors if needed
+        if ".qkv." in name:
+            if data_torch.ndim == 2: # weight
+                c3, _ = data_torch.shape
+            else: # bias
+                c3 = data_torch.shape[0]
+            assert c3 % 3 == 0
+            c = c3 // 3
+            wq = data_torch[:c]
+            wk = data_torch[c: c * 2]
+            wv = data_torch[c * 2:]
+            yield from super().modify_tensors(wq, name.replace("qkv", "q"), bid)
+            yield from super().modify_tensors(wk, name.replace("qkv", "k"), bid)
+            yield from super().modify_tensors(wv, name.replace("qkv", "v"), bid)
+        elif 'patch_embed.proj.weight' in name:
+            # split Conv3D into Conv2Ds
+            c1, c2, kt, kh, kw = data_torch.shape
+            del c1, c2, kh, kw  # unused
+            assert kt == 2, "Current implementation only support temporal_patch_size of 2"
+            yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"  , data_torch[:, :, 0, ...])
+            yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...])
+        else:
+            yield from super().modify_tensors(data_torch, name, bid)
 
 
 class Qwen25AudioModel(MmprojModel):
@@ -146,21 +153,11 @@ class Qwen25AudioModel(MmprojModel):
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("thinker."):
-            name = name.replace("thinker.", "")
+        if "conv1.bias" in name or "conv2.bias" in name:
+            # transpose conv1 and conv2 bias
+            data_torch = data_torch.unsqueeze(-1)
 
-        if name.startswith("audio_tower"):
-            # process audio tensors
-            if "conv1.bias" in name or "conv2.bias" in name:
-                # transpose conv1 and conv2 bias
-                data_torch = data_torch.unsqueeze(-1)
-            if "audio_bos_eos_token" in name:
-                # this tensor is left unused in transformers code
-                # https://github.com/huggingface/transformers/blob/6e3063422c4b1c014aa60c32b9254fd2902f0f28/src/transformers/models/qwen2_5_omni/modular_qwen2_5_omni.py#L1809
-                return
-            yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
-
-        return  # skip other tensors
+        yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
 
 
 @ModelBase.register("Qwen2_5OmniModel")
@@ -177,6 +174,23 @@ class Qwen25OmniModel(Qwen2VLVisionModel, Qwen25AudioModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN25O)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if not name.startswith("visual.") and not name.startswith("audio_tower."):
+            return None
+
+        if name.startswith("thinker."):
+            name = name.replace("thinker.", "")
+
+        if "audio_bos_eos_token" in name:
+            # this tensor is left unused in transformers code
+            # https://github.com/huggingface/transformers/blob/6e3063422c4b1c014aa60c32b9254fd2902f0f28/src/transformers/models/qwen2_5_omni/modular_qwen2_5_omni.py#L1809
+            return None
+
+        return MmprojModel.filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "visual." in name:

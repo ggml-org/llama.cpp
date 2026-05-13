@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from typing import Any, Iterable, TYPE_CHECKING
+from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -65,17 +65,20 @@ class DeepseekOCRVisionModel(MmprojModel):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # Only process vision-related tensors, skip language model tensors
         # Vision components: sam_model, vision_model, projector, image_newline, view_seperator
         # Language model components to skip: lm_head, embed_tokens, layers, norm
         if name.startswith(("lm_head.", "model.embed_tokens.", "model.layers.", "model.norm.")):
-            return
+            return None
 
         if name.endswith("pos_embed") or name.endswith("rel_pos_h") or name.endswith("rel_pos_w"):
             name += ".weight"
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors((name, gen))
 
 
 @ModelBase.register("DeepseekForCausalLM")
@@ -312,30 +315,11 @@ class DeepseekV2Model(TextModel):
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # skip vision tensors and remove "language_model." for Kimi-VL and Kimi-K2.5, and DeepSeek-OCR
-        if ("vision_tower" in name
-                or "multi_modal_projector" in name
-                or "mm_projector" in name
-                or "vision_model" in name
-                or "image_newline" in name
-                or "model.projector" in name
-                or "sam_model" in name
-                or "view_seperator" in name):
-            return
-        if name.startswith("siglip2.") or name.startswith("merger."):
-            return
-        if name.startswith("language_model."):
-            name = name.replace("language_model.", "")
-
         # skip lm_head.weight if tie_word_embeddings is True
         if self.hparams.get("tie_word_embeddings", False):
             if name == "lm_head.weight" or name == "model.lm_head.weight":
                 logger.info("Skipping tied output layer 'lm_head.weight' (will use token_embd.weight)")
                 return
-
-        # rename e_score_correction_bias tensors
-        if name.endswith("e_score_correction_bias"):
-            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
 
         # skip Multi-Token Prediction (MTP) layers
         if self.skip_mtp:

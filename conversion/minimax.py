@@ -22,9 +22,6 @@ class MiniMaxM2Model(TextModel):
         self.gguf_writer.add_rope_dimension_count(self.find_hparam(["rotary_dim"]))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        if name.endswith("e_score_correction_bias"):
-            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
-
         # merge expert weights
         if 'experts' in name:
             n_experts = self.find_hparam(["num_local_experts", "num_experts"])

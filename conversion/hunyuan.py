@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from pathlib import Path
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -283,10 +283,6 @@ class HunYuanModel(TextModel):
                 logger.info("Skipping tied output layer 'lm_head.weight'")
                 return
 
-        # skip vision tensors for HunyuanVL models
-        if name.startswith("vit."):
-            return
-
         yield from super().modify_tensors(data_torch, name, bid)
 
 
@@ -340,9 +336,16 @@ class HunyuanVLVisionModel(MmprojModel):
         self.gguf_writer.add_vision_min_pixels(int(self.preprocessor_config["min_pixels"]))
         self.gguf_writer.add_vision_max_pixels(int(self.preprocessor_config["max_pixels"]))
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if not name.startswith("vit."):
-            return
+            return None
+
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # strip CLS token (row 0) from position embeddings so resize_position_embeddings works
         if "position_embedding" in name:
             data_torch = data_torch[1:]  # [n_patches+1, n_embd] -> [n_patches, n_embd]
@@ -402,9 +405,3 @@ class HunyuanVLTextModel(HunYuanModel):
         self.gguf_writer.add_context_length(ctx_len)
 
         self.gguf_writer.add_rope_dimension_sections(list(self.rope_parameters["xdrope_section"]))
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Skip vision tensors — they are written by HunyuanVLVisionModel
-        if name.startswith("vit."):
-            return
-        yield from super().modify_tensors(data_torch, name, bid)

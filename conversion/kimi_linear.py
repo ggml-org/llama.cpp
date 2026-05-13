@@ -169,10 +169,6 @@ class KimiLinearModel(TextModel):
                 data_torch = data_torch.reshape(1, d_inner, 1, d_conv)
                 logger.info(f"Reshaped conv1d weight {name}: [d_inner={d_inner}, 1, d_conv={d_conv}] -> numpy {tuple(data_torch.shape)} -> ggml ne=[{d_conv}, 1, {d_inner}, 1]")
 
-        # Kimi specific bias
-        if name.endswith("e_score_correction_bias"):
-            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
-
         # Handle A_log: iHF stores as [1, 1, num_heads, 1]
         # llama.cpp expects ggml ne = [1, num_heads, 1, 1]
         # GGUF reverses numpy shape: numpy (1, 1, num_heads, 1) -> ggml ne = [1, num_heads, 1, 1]

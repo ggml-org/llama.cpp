@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, TYPE_CHECKING
+from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -39,12 +39,6 @@ class NemotronNanoV2VLModel(MmprojModel):
         }
         return vision_config
 
-    def dequant_model(self):
-        if self._is_nvfp4:
-            # Skip nvfp4 quantization for vision/audio model.
-            return
-        super().dequant_model()
-
     def set_gguf_parameters(self):
         if "image_mean" not in self.preprocessor_config:
             self.preprocessor_config["image_mean"] = [0.485, 0.456, 0.406]
@@ -64,18 +58,29 @@ class NemotronNanoV2VLModel(MmprojModel):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if "input_conditioner" in name:
-            return
+            return None
 
         # mtmd does not support video yet so skip tensors related to video.
         if "radio_model.model.patch_generator.video_embedder" in name:
-            return
+            return None
 
-        # RADIO's pos_embed doesn't have .weight suffix, but clip.cpp expects it
+        if not name.startswith("vision_model.radio_model.model.") and not name.startswith("mlp1."):
+            return None
+
         if "patch_generator.pos_embed" in name:
             if not name.endswith(".weight"):
                 name += ".weight"
+
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # RADIO's pos_embed doesn't have .weight suffix, but clip.cpp expects it
+        if "patch_generator.pos_embed" in name:
             # Downsample position embeddings for fixed 512x512 image size
             import torch.nn.functional as F
             n_embd = self.hparams["hidden_size"]
@@ -99,8 +104,7 @@ class NemotronNanoV2VLModel(MmprojModel):
             n_embd = self.hparams["hidden_size"]
             data_torch = data_torch.reshape(n_embd, 3, patch_size, patch_size)
 
-        if name.startswith("vision_model.radio_model.model.") or name.startswith("mlp1."):
-            yield from super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("NemotronForCausalLM")
@@ -303,19 +307,6 @@ class NemotronHModel(GraniteHybridModel):
             self.gguf_writer.add_add_bos_token(True)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Skip vision model and projector tensors for VLM models (handled by mmproj) (e.g., Nemotron Nano 12B v2 VL)
-        if name.startswith(("vision_model.", "mlp1.")):
-            return
-
-        if name.startswith(("sound_encoder.")):
-            return
-        if name.startswith(("sound_projection.")):
-            return
-
-        # Strip language_model. prefix for VLM models (e.g., Nemotron Nano 12B v2 VL)
-        if name.startswith("language_model."):
-            name = name[len("language_model."):]
-
         if self.is_moe and bid is not None:
             # Skip Multi-Token Prediction (MTP) tensors. These are used for
             # for speculative decoding but we don't include them in this model
@@ -324,9 +315,8 @@ class NemotronHModel(GraniteHybridModel):
                 logger.info(f"gguf: Skipping MTP (Speculative) layer: {name}")
                 return
 
-            if name.endswith("mixer.gate.e_score_correction_bias"):
-                new_name = name.replace("e_score_correction_bias", "e_score_correction.bias")
-                yield from ModelBase.modify_tensors(self, data_torch, new_name, bid)
+            if name.endswith("mixer.gate.e_score_correction.bias"):
+                yield from ModelBase.modify_tensors(self, data_torch, name, bid)
                 return
 
             if name.endswith("mixer.dt_bias"):

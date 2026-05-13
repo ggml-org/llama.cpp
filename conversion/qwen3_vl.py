@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from typing import Any, Iterable, TYPE_CHECKING
+from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -58,18 +58,28 @@ class Qwen3VLVisionModel(MmprojModel):
         if self.is_deepstack_layers:
             self.gguf_writer.add_vision_is_deepstack_layers(self.is_deepstack_layers)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        assert self.hparams_vision is not None
-        # Skip text model tensors - they go in the text model file
-        if name.startswith("model.language_model.") or name.startswith("lm_head."):
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # Skip text model tensors
+        if name.startswith("lm_head."):
+            return None
 
         # Skip MTP tensors
         if name.startswith("mtp."):
-            return
+            return None
 
         if name.startswith("model.visual."):
             name = name.replace("model.visual.", "visual.", 1)
+
+        if not name.startswith("visual."):
+            return None
+
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        assert self.hparams_vision is not None
 
         if name.startswith("visual.deepstack_merger_list."):
             prefix, rest = name.split(".", maxsplit=3)[2:]
@@ -130,9 +140,7 @@ class Qwen3VLVisionModel(MmprojModel):
             yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".bias", data_torch)
             return
 
-        if name.startswith("visual."):
-            yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
-        return  # skip other tensors
+        yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
 
 
 @ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
@@ -159,6 +167,26 @@ class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
         if self.has_audio_encoder:
             Qwen25AudioModel.set_gguf_parameters(self)
             self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.QWEN3A)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # Skip text model tensors
+        if name.startswith("lm_head."):
+            return None
+
+        # Skip MTP tensors
+        if name.startswith("mtp."):
+            return None
+
+        if name.startswith("model.visual."):
+            name = name.replace("model.visual.", "visual.", 1)
+
+        if "visual." not in name and "audio_tower." not in name:
+            return None
+
+        return MmprojModel.filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "visual." in name:
@@ -208,8 +236,6 @@ class Glm4VVisionModel(Qwen3VLVisionModel):
         self.gguf_writer.add_vision_attention_layernorm_eps(rms_norm_eps)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("model.visual."):
-            name = name.replace("model.visual.", "visual.")
         if name.startswith("visual.merger."):
             yield from ModelBase.modify_tensors(self, data_torch, name, bid)
             return
@@ -229,12 +255,13 @@ class Qwen3VLTextModel(Qwen3Model):
         deepstack_layer_num = len(vision_config.get("deepstack_visual_indexes", []))
         self.gguf_writer.add_num_deepstack_layers(deepstack_layer_num)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Skip vision tensors - they go in the mmproj file
-        if name.startswith("model.visual."):
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        name = name.replace("thinker.", "")
+
+        return super().filter_tensors((name, gen))
 
 
 @ModelBase.register("Qwen3VLMoeForConditionalGeneration")
@@ -247,21 +274,23 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         deepstack_layer_num = len(vision_config.get("deepstack_visual_indexes", []))
         self.gguf_writer.add_num_deepstack_layers(deepstack_layer_num)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Skip vision tensors - they go in the mmproj file
-        if name.startswith("model.visual."):
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
+        name = name.replace("thinker.", "")
+
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Qwen3VL has transposed packed tensors, so we treat it differently from general Qwen2MoE packed tensors
         if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
-            name = name.replace("language_model.", "")
             mapped = f"{name}.weight" if not name.endswith(".weight") else name
             permuted = data_torch.permute(0, 2, 1).contiguous()
             yield from ModelBase.modify_tensors(self, permuted, mapped, bid)
             return
 
         if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
-            name = name.replace("language_model.", "")
             if data_torch.ndim < 3 or data_torch.shape[-1] % 2 != 0:
                 raise ValueError(f"Unexpected gate_up_proj shape for {name}: {tuple(data_torch.shape)}")
             split_dim = data_torch.shape[-1] // 2
@@ -304,15 +333,6 @@ class Qwen3OmniMoeTextModel(Qwen3VLMoeTextModel):
         super().set_gguf_parameters()
         self.gguf_writer.add_num_deepstack_layers(0)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Skip vision and audio tensors - they go in the mmproj file
-        if "visual." in name or "audio_tower." in name \
-                or "talker." in name or "code2wav." in name:
-            return
-
-        name = name.replace("thinker.", "")
-        yield from super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("Qwen3ASRForConditionalGeneration")
 class Qwen3ASRTextModel(Qwen3VLTextModel):
@@ -335,14 +355,3 @@ class Qwen3ASRTextModel(Qwen3VLTextModel):
                     self.gguf_writer.add_bos_token_id(int(token_id))
                     self.gguf_writer.add_eos_token_id(int(token_id))
                     break
-
-    def modify_tensors(self, data_torch, name, bid):
-        # qwen3-omni
-        name = name.replace("thinker.", "")
-
-        # Skip vision and audio tensors - they go in the mmproj file
-        if "visual." in name or "audio_tower." in name \
-                or "talker." in name or "code2wav." in name:
-            return
-
-        yield from super().modify_tensors(data_torch, name, bid)

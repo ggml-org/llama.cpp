@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -12,17 +12,18 @@ from .base import ModelBase, TextModel, gguf, logger
 class WavTokenizerDecModel(TextModel):
     model_arch = gguf.MODEL_ARCH.WAVTOKENIZER_DEC
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if \
                 name.endswith("codebook.cluster_size") or \
                 name.endswith("codebook.embed_avg") or \
                 name.endswith("codebook.inited"):
             logger.debug(f"Skipping {name!r}")
-            return
+            return None
 
-        logger.info(f"{self.map_tensor_name(name)} -> {data_torch.shape}")
-
-        yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors(item)
 
     def set_vocab(self):
         self._set_vocab_none()

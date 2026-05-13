@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -43,12 +43,18 @@ class YoutuVLVisionModel(MmprojModel):
         # Store the explicit layer indices for YoutuVL (irregular pattern approach)
         self.gguf_writer.add_vision_wa_layer_indexes(layers=fullatt_block_indexes)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # Skip language model tensors
         skip_prefixes = ('lm_head.', 'model.layers.', 'model.embed_tokens.', 'model.norm.')
         if name.startswith(skip_prefixes):
-            return
+            return None
 
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Try to map the tensor using TensorNameMap (handles vision encoder and projector)
         try:
             yield from super().modify_tensors(data_torch, name, bid)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -151,11 +151,6 @@ class InternLM2Model(TextModel):
         head_dim = n_embd // num_heads
         num_groups = num_heads // q_per_kv
 
-        name = name.replace("language_model.", "") # InternVL
-        if name.startswith("mlp") or name.startswith("vision_model"):
-            # skip visual tensors
-            return
-
         if bid is not None and f"model.layers.{bid}.attention.wqkv" in name:
             qkv = data_torch
 
@@ -217,13 +212,19 @@ class InternLM3Model(TextModel):
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.startswith(("mlp", "vision_model")):
+            # skip visual tensors
+            return None
+
+        return super().filter_tensors(item)
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams["num_attention_heads"]
         n_kv_head = self.hparams.get("num_key_value_heads")
-        name = name.replace("language_model.", "") # InternVL
-        if name.startswith("mlp") or name.startswith("vision_model"):
-            # skip visual tensors
-            return
         if name.endswith(("q_proj.weight", "q_proj.bias")):
             data_torch = LlamaModel.permute(data_torch, n_head, n_head)
         if name.endswith(("k_proj.weight", "k_proj.bias")):

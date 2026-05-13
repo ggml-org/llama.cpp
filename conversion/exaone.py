@@ -169,9 +169,6 @@ class ExaoneMoEModel(Exaone4Model):
                     yield from super().modify_tensors(data_torch, new_name.format(bid=bid), bid)
                 return
 
-        if name.endswith("e_score_correction_bias"):
-            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
-
         if name.find("mlp.experts") != -1:
             n_experts = self.find_hparam(["num_local_experts", "num_experts"])
             assert bid is not None

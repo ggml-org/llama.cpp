@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -26,21 +26,29 @@ class KimiVLModel(MmprojModel):
         assert self.hparams_vision is not None
         self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("layer_norm_eps", 1e-5))
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         is_vision_tensor = "vision_tower" in name or "multi_modal_projector" in name
 
-        if is_vision_tensor:
-            if "pos_emb.weight" in name:
-                data_torch = data_torch.view(data_torch.shape[0] * data_torch.shape[1], data_torch.shape[2])
+        if not is_vision_tensor:
+            return None
 
-            if "wqkv" in name:
-                split_dim = 0 if "weight" in name else -1
-                wq, wk, wv = data_torch.chunk(3, dim=split_dim)
-                yield from super().modify_tensors(wq, name.replace("wqkv", "wq"), bid)
-                yield from super().modify_tensors(wk, name.replace("wqkv", "wk"), bid)
-                yield from super().modify_tensors(wv, name.replace("wqkv", "wv"), bid)
-            else:
-                yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "pos_emb.weight" in name:
+            data_torch = data_torch.view(data_torch.shape[0] * data_torch.shape[1], data_torch.shape[2])
+
+        if "wqkv" in name:
+            split_dim = 0 if "weight" in name else -1
+            wq, wk, wv = data_torch.chunk(3, dim=split_dim)
+            yield from super().modify_tensors(wq, name.replace("wqkv", "wq"), bid)
+            yield from super().modify_tensors(wk, name.replace("wqkv", "wk"), bid)
+            yield from super().modify_tensors(wv, name.replace("wqkv", "wv"), bid)
+        else:
+            yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("KimiK25ForConditionalGeneration")
@@ -96,13 +104,19 @@ class KimiK25Model(MmprojModel):
         w = w.permute(0, 2, 1, 3, 4)
         return w.reshape(out_dim, in_dim)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # Only process vision and projector tensors
         is_vision = any(x in name for x in ["vision_tower", "mm_projector"])
 
         if not is_vision:
-            return
+            return None
 
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         assert self.hparams_vision is not None
         n_head = self.hparams_vision.get("num_attention_heads", 16)
 

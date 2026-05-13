@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -35,10 +35,13 @@ class SmolVLMModel(MmprojModel):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         is_vision_tensor = "vision_tower" in name or "vision_model" in name or "model.connector" in name
 
-        if is_vision_tensor:
-            yield from super().modify_tensors(data_torch, name, bid)
+        if not is_vision_tensor:
+            return None
 
-        return # skip other tensors
+        return super().filter_tensors(item)

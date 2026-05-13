@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -97,11 +97,12 @@ class MistralModel(LlamaModel):
     def set_mistral_config(gguf_writer: gguf.GGUFWriter, hparams: dict):
         if "yarn" in hparams:
             yarn_params = hparams["yarn"]
+            mscale_all_dim = 1.0 if not yarn_params["apply_scale"] else 0.0
             gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             gguf_writer.add_rope_scaling_factor(yarn_params["factor"])
             gguf_writer.add_rope_scaling_yarn_beta_fast(yarn_params["beta"])
             gguf_writer.add_rope_scaling_yarn_beta_slow(yarn_params["alpha"])
-            gguf_writer.add_rope_scaling_yarn_log_mul(1.0) # mscale_all_dim
+            gguf_writer.add_rope_scaling_yarn_log_mul(mscale_all_dim)
             gguf_writer.add_rope_scaling_orig_ctx_len(yarn_params["original_max_position_embeddings"])
 
         if "llama_4_scaling" in hparams:
@@ -179,9 +180,9 @@ class MistralMoeModel(DeepseekV2Model):
         # ref https://github.com/ggml-org/llama.cpp/pull/17945
         self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1) # mscale_all_dim * 0.1
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        if name.startswith("vision_") or name.startswith("patch_merger.") or "mm_projector" in name:
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
         # rename certain tensors so that we can reuse DeepseekV2Model modify_tensors logic
         if name.endswith(".qscale_act"):
@@ -197,4 +198,4 @@ class MistralMoeModel(DeepseekV2Model):
             name = name.replace(".w3.", ".up_proj.")
             name = "model." + name
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors((name, gen))

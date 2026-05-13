@@ -4,7 +4,7 @@ import json
 import os
 
 from pathlib import Path
-from typing import Any, Iterable, TYPE_CHECKING
+from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -65,7 +65,10 @@ class BertModel(TextModel):
         special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
         special_vocab.add_to_gguf(self.gguf_writer)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if name.startswith("bert."):
             name = name[5:]
 
@@ -77,14 +80,17 @@ class BertModel(TextModel):
 
         # we are only using BERT for embeddings so we don't need the pooling layer
         if name in ("embeddings.position_ids", "pooler.dense.weight", "pooler.dense.bias"):
-            return # we don't need these
+            return None
 
         if name.startswith("cls.predictions"):
-            return
+            return None
 
         if name.startswith("cls.seq_relationship"):
-            return
+            return None
 
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if self.cls_out_labels:
             # For BertForSequenceClassification (direct projection layer)
             if name == "classifier.weight":
@@ -242,15 +248,18 @@ class DistilBertModel(BertModel):
         logger.info("gguf: layer norm epsilon = 1e-12")
         super().set_gguf_parameters()
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if name.startswith("distilbert."):
             name = name[11:]
 
         # These layers act as MLM head, so we don't need them
         if name.startswith("vocab_"):
-            return
+            return None
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors((name, gen))
 
 
 @ModelBase.register("RobertaModel", "RobertaForSequenceClassification")
@@ -282,12 +291,18 @@ class RobertaModel(BertModel):
         else:
             return super().set_vocab()
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # if name starts with "roberta.", remove the prefix
         # e.g. https://huggingface.co/BAAI/bge-reranker-v2-m3/tree/main
         if name.startswith("roberta."):
             name = name[8:]
 
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # position embeddings start at pad_token_id + 1, so just chop down the weight tensor
         if name == "embeddings.position_embeddings.weight":
             if self._position_offset is not None:
@@ -343,11 +358,17 @@ class NomicBertModel(BertModel):
             return self._xlmroberta_set_vocab()
         return super().set_vocab()
 
-    def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
-        # If the tensor is an experts bias tensor, skip it by returning an empty list.
-        if "mlp.experts.bias" in name:
-            return # Explicitly return.
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
+        # If the tensor is an experts bias tensor, skip it.
+        if "mlp.experts.bias" in name:
+            return None
+
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
         n_experts = self.find_hparam(["num_local_experts", "num_experts"])
         if "mlp.experts.mlp.w1" in name:
             data_torch = data_torch.view(n_experts, self.hparams["n_inner"], self.hparams["n_embd"])
@@ -395,14 +416,17 @@ class NeoBert(BertModel):
 
         self.gguf_writer.add_pooling_type(gguf.PoolingType.CLS) # https://huggingface.co/chandar-lab/NeoBERT#how-to-use
 
-    def modify_tensors(self, data_torch, name, bid):
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if name.startswith("decoder."):
-            return
+            return None
 
         if name.startswith("model."):
             name = name[6:]
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors((name, gen))
 
 
 @ModelBase.register("EuroBertModel", "JinaEmbeddingsV5Model")
@@ -423,12 +447,14 @@ class EuroBertModel(TextModel):
 
         self._try_set_pooling_type()
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Strip "model." prefix from tensor names
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if name.startswith("model."):
             name = name[6:]
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors((name, gen))
 
 
 @ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
@@ -466,7 +492,10 @@ class XLMRobertaModel(BertModel):
     def set_vocab(self):
         self._xlmroberta_set_vocab()
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # if name starts with "roberta.", remove the prefix
         # e.g. https://huggingface.co/BAAI/bge-reranker-v2-m3/tree/main
         if name.startswith("roberta."):
@@ -478,6 +507,9 @@ class XLMRobertaModel(BertModel):
             if name.endswith(".original"):
                 name = name[:-9]
 
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # position embeddings start at pad_token_id + 1, so just chop down the weight tensor
         if name == "embeddings.position_embeddings.weight":
             if self._position_offset is not None:
@@ -563,10 +595,16 @@ class ModernBertModel(BertModel):
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if name.startswith("model."):
             name = name[6:]
 
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if self.cls_out_labels:
             # For BertForSequenceClassification (direct projection layer)
             if name == "classifier.weight":

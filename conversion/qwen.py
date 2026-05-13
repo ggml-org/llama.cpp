@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -65,14 +65,6 @@ class Qwen2Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if self.hf_arch == "Qwen2Model":
             name = f"model.{name}"  # map to Qwen2ForCausalLM tensors
-        if "language_model." in name:
-            name = name.replace("language_model.", "") # for InternVL
-        if name.startswith("mlp") or name.startswith("multi_modal_projector") \
-                or name.startswith("vision_model") or name.startswith("audio_tower") \
-                or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector") \
-                or name.startswith("vision_tower."):
-            # skip vision and audio tensors
-            return
         yield from super().modify_tensors(data_torch, name, bid)
 
 
@@ -92,17 +84,6 @@ class Qwen2MoeModel(TextModel):
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # process the experts separately
-        name = name.replace("language_model.", "") # InternVL
-
-        # NVFP4 expert weights are handled in _generate_nvfp4_tensors
-        if self._is_nvfp4 and "experts" in name:
-            if name.endswith((".weight", ".weight_scale", ".weight_scale_2", ".input_scale")):
-                if name.endswith(".weight") and name.replace(".weight", ".weight_scale") in self.model_tensors:
-                    return
-                if not name.endswith(".weight"):
-                    return
-
         # handle aggregated expert tensors
         # GGUF stores dimensions reversed from PyTorch, so:
         # PyTorch (A,B,C) -> GGUF writes [C,B,A] -> GGML reads ne={C,B,A}
@@ -127,10 +108,6 @@ class Qwen2MoeModel(TextModel):
             mapped_up = f"{base_name}.up_proj.weight"
             yield from super().modify_tensors(gate, mapped_gate, bid)
             yield from super().modify_tensors(up, mapped_up, bid)
-            return
-
-        if name.startswith("mlp") or name.startswith("vision_model") or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector") or name.startswith("model.visual"):
-            # skip visual tensors
             return
 
         if name.find("experts") != -1:
@@ -255,10 +232,6 @@ class Qwen3Model(Qwen2Model):
         return torch.stack([true_row, false_row], dim=0)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if "model.vision_" in name:
-            # skip multimodal tensors
-            return
-
         if self.is_rerank:
             is_tied_head = self.is_tied_embeddings and "embed_tokens" in name
             is_real_head = not self.is_tied_embeddings and "lm_head" in name
@@ -309,9 +282,17 @@ class Qwen3NextModel(Qwen2MoeModel):
             rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.25)))
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if name.startswith("mtp"):
-            return  # ignore MTP layers for now
+            # ignore MTP layers for now
+            return None
+
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.endswith(".A_log"):
             data_torch = -torch.exp(data_torch)
         elif name.endswith(".dt_bias"):
@@ -537,11 +518,27 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+class _Qwen35MRopeMixin:
+    # Qwen3.5 always applies interleaved MRoPE (see Qwen3_5RotaryEmbedding in transformers);
+    # the upstream default mrope_section is [11, 11, 10] and llama.cpp's QWEN35 / QWEN35MOE
+    # loaders treat qwen35.rope.dimension_sections as required, so make sure it is always
+    # written even when a particular checkpoint omits the field in `rope_parameters`.
+    _QWEN35_DEFAULT_MROPE_SECTION = [11, 11, 10, 0]
+
+    gguf_writer: gguf.GGUFWriter
+    rope_parameters: dict
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        if "mrope_section" not in self.rope_parameters:
+            self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
+
+
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
-class Qwen3_5TextModel(_LinearAttentionVReorderBase):
+class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
-class Qwen3_5MoeTextModel(_LinearAttentionVReorderBase):
+class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE

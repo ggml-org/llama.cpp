@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -14,7 +14,10 @@ from .llama import LlamaModel
 class JanusProModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA  # reuse Llama arch
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # Skip vision, aligner, and generation tensors
         skip_prefixes = (
             'model.vision_model.',
@@ -25,14 +28,9 @@ class JanusProModel(LlamaModel):
             'model.generation_head.',
         )
         if name.startswith(skip_prefixes):
-            return
+            return None
 
-        if name.startswith('model.language_model.'):
-            name = name.replace('model.language_model.', 'model.')
-        elif name.startswith('language_model.'):
-            name = name.replace('language_model.', '')
-
-        yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors(item)
 
 
 @ModelBase.register("JanusForConditionalGeneration")
@@ -84,10 +82,9 @@ class JanusProVisionModel(MmprojModel):
         tensor_name = self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, mm_index, suffix=suffix)
         return [(tensor_name, data_torch)]
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Skip language model tensors as they will be handled by `JanusProModel`
-        if name.startswith(('model.language_model.', 'language_model.')):
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
         # Skip generation-related components
         skip_generation_prefixes = (
@@ -101,8 +98,11 @@ class JanusProVisionModel(MmprojModel):
             'generation_head.',
         )
         if name.startswith(skip_generation_prefixes):
-            return
+            return None
 
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Handle aligner tensors
         if name.startswith(('model.aligner.', 'aligner.')):
             yield from self._map_aligner_tensor(data_torch, name)

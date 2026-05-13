@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -54,10 +54,16 @@ class Step3VLVisionModel(MmprojModel):
             return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("model.") or name.startswith("lm_head."):
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
+        if name.startswith(("model.", "lm_head.")):
+            return None
+
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("vision_model.vit_downsampler"):
             match = re.match(r"vision_model\.vit_downsampler(\d+)\.(weight|bias)", name)
             if match is None:
@@ -87,11 +93,6 @@ class Step3VLVisionModel(MmprojModel):
 @ModelBase.register("StepVLForConditionalGeneration")
 class Step3VLTextModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("vision_model.") or name.startswith("model.vision_model.") or name.startswith("vit_large_projector."):
-            return
-        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Step3p5ForCausalLM")
@@ -164,6 +165,16 @@ class Step35Model(TextModel):
             limits_shared_f = [0.0 if v is None else float(v) for v in limits_shared[: self.block_count]]
             self.gguf_writer.add_swiglu_clamp_shexp(limits_shared_f)
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # Map router bias (expert selection bias) to a GGUF bias tensor
+        if name.endswith(".moe.router_bias"):
+            name += ".bias"
+
+        return super().filter_tensors((name, gen))
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         # remove mtp layers
         if (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None:
@@ -173,9 +184,6 @@ class Step35Model(TextModel):
                 return
         if name.endswith("norm.weight"):
             data_torch += 1.0
-        # Map router bias (expert selection bias) to a GGUF bias tensor
-        if name.endswith(".moe.router_bias"):
-            name += ".bias"
 
         if name.endswith((".self_attn.g_proj.weight", ".moe.gate.weight", ".moe.up_proj.weight", ".moe.gate_proj.weight", ".moe.down_proj.weight")):
             data_torch = data_torch.squeeze().contiguous()

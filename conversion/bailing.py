@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -140,6 +140,15 @@ class BailingMoeV2Model(TextModel):
 
     _experts: list[dict[str, Tensor]] | None = None
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.endswith(".expert_bias"):
+            name = name.replace(".expert_bias", ".expert_bias.bias")
+
+        return super().filter_tensors((name, gen))
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "mlp.experts" in name:
             n_experts = self.find_hparam(["num_local_experts", "num_experts"])
@@ -167,9 +176,6 @@ class BailingMoeV2Model(TextModel):
                     yield from super().modify_tensors(data_torch, merged_name, bid)
             return
 
-        if name.endswith(".expert_bias"):
-            name = name.replace(".expert_bias", ".expert_bias.bias")
-
         yield from super().modify_tensors(data_torch, name, bid)
 
     def prepare_tensors(self):
@@ -180,3 +186,31 @@ class BailingMoeV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("SarvamMoEForCausalLM", "modeling_sarvam_moe.SarvamMoEForCausalLM")
+class SarvamMoEModel(BailingMoeV2Model):
+    model_arch = gguf.MODEL_ARCH.BAILINGMOE2
+    # Sarvam-MoE shares the BailingMoeV2 architecture; only differences:
+    #  - full rotary (no partial_rotary_factor)
+    #  - expert bias is zero-mean normalized at load time
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if (rope_dim := hparams.get("head_dim")) is None:
+            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+        # Override the partial-rotary value written by BailingMoeV2 with the full rotary dim
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.endswith(".expert_bias"):
+            # Sarvam normalizes expert bias to zero mean
+            inner = gen
+
+            def gen():
+                t = inner()
+                return t - t.mean()
+        return super().filter_tensors((name, gen))

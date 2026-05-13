@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -37,6 +37,15 @@ class AfmoeModel(LlamaModel):
         if (sliding_window := self.hparams.get("sliding_window")) is not None:
             self.gguf_writer.add_sliding_window(sliding_window)
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.endswith(".expert_bias"):
+            name = name.replace(".expert_bias", ".expert_bias.bias")
+
+        return super().filter_tensors((name, gen))
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Handle expert weights - they're already merged in the HF format
         # process the experts separately
@@ -66,8 +75,5 @@ class AfmoeModel(LlamaModel):
                 return
             else:
                 return
-
-        if name.endswith(".expert_bias"):
-            name = name.replace(".expert_bias", ".expert_bias.bias")
 
         yield from ModelBase.modify_tensors(self, data_torch, name, bid)

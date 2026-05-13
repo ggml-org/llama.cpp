@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -210,12 +210,6 @@ class Phi3MiniModel(TextModel):
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_LONG), torch.tensor(long_factors, dtype=torch.float32))
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT), torch.tensor(short_factors, dtype=torch.float32))
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith(("model.vision_tower.", "vision_tower.", "model.mm_projector.", "mm_projector.")):
-            return
-
-        yield from super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("Phi4ForCausalLMV")
 class Phi4VisionMmprojModel(MmprojModel):
@@ -285,20 +279,29 @@ class Phi4VisionMmprojModel(MmprojModel):
         self.gguf_writer.add_vision_use_gelu(True)
         self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("layer_norm_eps", 1e-6))
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        name = name.replace("model.vision_tower.vision_tower.", "vision_tower.")
+
+        if not name.startswith(("vision_tower.", "model.mm_projector.", "mm_projector.")):
+            return None
+
+        if ".vision_model.head." in name:
+            return None
+
+        if ".vision_model.post_layernorm." in name:
+            return None
+
+        return super().filter_tensors((name, gen))
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith(("model.vision_tower.vision_tower.", "vision_tower.")):
-            if ".vision_model.head." in name:
-                return
-
-            new_name = name.replace("model.vision_tower.vision_tower.", "vision_tower.")
-
-            if ".vision_model.post_layernorm." in new_name:
-                return
-
+        if name.startswith("vision_tower."):
             if bid is not None and bid == self.vision_last_layer_idx:
                 return
 
-            if new_name.endswith("vision_model.embeddings.patch_embedding.weight"):
+            if name.endswith("vision_model.embeddings.patch_embedding.weight"):
                 assert self.hparams_vision is not None
                 if data_torch.ndim != 2:
                     raise ValueError(f"Unexpected Phi-4 patch embedding shape: {tuple(data_torch.shape)}")
@@ -315,7 +318,7 @@ class Phi4VisionMmprojModel(MmprojModel):
                 data_torch = data_torch.view(data_torch.shape[0], patch_size, patch_size, num_channels)
                 data_torch = data_torch.permute(0, 3, 1, 2)
 
-            yield from super().modify_tensors(data_torch, new_name, bid)
+            yield from super().modify_tensors(data_torch, name, bid)
             return
 
         if name.startswith(("model.mm_projector.", "mm_projector.")):

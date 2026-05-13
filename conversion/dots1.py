@@ -26,8 +26,6 @@ class Dots1Model(Qwen2MoeModel):
         self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        if name.endswith("e_score_correction_bias"):
-            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
         if "shared_experts" in name:
             yield from ModelBase.modify_tensors(self, data_torch, name, bid)
         else:

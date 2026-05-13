@@ -70,10 +70,6 @@ class Glm4Model(TextModel):
         return result if len(orig_shape) != 1 else result.squeeze(1)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("model.visual."): # ignore visual part of Glm4v
-            return
-        elif name.startswith("model.language_model."):
-            name = name.replace("language_model.", "") # for Glm4v
         if self.use_mrope:
             n_head = self.hparams["num_attention_heads"]
             n_kv_head = self.hparams["num_key_value_heads"]
@@ -159,14 +155,7 @@ class Glm4MoeModel(TextModel):
     _experts: list[dict[str, Tensor]] | None = None
 
     # note: unlike GLM4V non-MoE, we don't need to permute Q/K here since GLM4V_MOE uses Neox ordering already
-    def modify_tensors(
-        self, data_torch: Tensor, name: str, bid: int | None
-    ) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("model.visual."):  # ignore visual part
-            return
-        elif name.startswith("model.language_model."):
-            name = name.replace("language_model.", "")  # for multimodal variants
-
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Handle main token embedding (but not layer-specific NextN embeddings)
         if name == "model.embed_tokens.weight" and ".layers." not in name:
             yield from super().modify_tensors(data_torch, "token_embd.weight", bid)
@@ -200,9 +189,6 @@ class Glm4MoeModel(TextModel):
                 return
             else:
                 return
-
-        if name.endswith("e_score_correction_bias"):
-            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
 
         yield from super().modify_tensors(data_torch, name, bid)
 

@@ -28,13 +28,6 @@ class Mistral3Model(TextModel):
                 self.gguf_writer.add_rope_scaling_yarn_log_mul(rope_params["mscale_all_dim"])
                 self.gguf_writer.add_attn_temperature_scale(rope_params["llama_4_scaling_beta"])
 
-        def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-            name = name.replace("language_model.", "")
-            if "multi_modal_projector" in name or "vision_tower" in name:
-                return
-
-            yield from super().modify_tensors(data_torch, name, bid)
-
     class Mistral4Model(DeepseekV2Model):
         model_arch = gguf.MODEL_ARCH.MISTRAL4
         skip_mtp = False # model contains no MTP layers, so no need to skip

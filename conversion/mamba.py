@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from pathlib import Path
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -164,15 +164,20 @@ class Mamba2Model(TextModel):
         self.gguf_writer.add_layer_norm_rms_eps(rms_norm_eps)
         self.gguf_writer.add_file_type(self.ftype)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
-        if name.startswith("model.backbone") or name.startswith("model.lm_head"):
+        if name.startswith(("model.backbone", "model.lm_head")):
             # map Mamba-Codestral-7B-v0.1 tensor names to the names used by Mamba-2
             name = name.removeprefix("model.")
 
         if name.endswith(".dt_bias"):
             name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
 
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         new_name = self.map_tensor_name(name)
 
         if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.SSM_CONV1D, bid):

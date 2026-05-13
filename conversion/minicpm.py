@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import MmprojModel, ModelBase, TextModel, gguf, logger
 
 from .llama import LlamaModel
+from .qwen import Qwen3_5TextModel
 
 
 @ModelBase.register("MiniCPMForCausalLM")
@@ -112,3 +113,72 @@ class MiniCPM3Model(TextModel):
             .swapaxes(1, 2)
             .reshape(weights.shape)
         )
+
+
+# MiniCPM-V 4.6: text tower is Qwen3.5 (linear+full hybrid attention) wrapped under
+# `model.language_model.*`; vision tower is SigLIP + a window-attention ViT merger
+# + a final DownsampleMLP merger. The same HF arch is registered twice below: once as
+# the LM (text mode) and once as the mmproj (vision mode), mirroring the Qwen3-VL setup.
+
+@ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
+class MiniCPMV4_6TextModel(Qwen3_5TextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.startswith("model.merger."):
+            return None
+        # MTP tensors are not used at inference yet; align with Qwen3Next behaviour
+        if name.startswith("mtp"):
+            return None
+
+        return super().filter_tensors(item)
+
+
+@ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
+class MiniCPMV4_6VisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.hparams_vision is not None:
+            # In MiniCPM-V 4.6 `vision_config.image_size` (980) describes the SigLIP
+            # positional embedding bucket grid (70 x 70), while the per-slice processing
+            # resolution is the preprocessor's `scale_resolution` (typically 448).
+            # The CLIP loader in tools/mtmd/clip.cpp consumes `clip.vision.image_size`
+            # as the slice size and warmup resolution, so report `scale_resolution` there
+            # to match the upstream MiniCPMV4_6ImageProcessorPil slicing rules.
+            scale_resolution = self.preprocessor_config.get("scale_resolution")
+            if scale_resolution is not None:
+                self.hparams_vision["image_size"] = int(scale_resolution)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+
+        # projector type string is consumed by clip_projector_type_from_string() in clip.cpp
+        # (mapped to PROJECTOR_TYPE_MINICPMV4_6).
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MINICPMV4_6)
+
+        # ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension; used for slice alignment
+        self.gguf_writer.add_vision_projector_scale_factor(4)
+
+        # borrow wa_layer_indexes for vit_merger insertion point
+        insert_layer_id = int(self.global_config.get(
+            "insert_layer_id", self.hparams_vision.get("insert_layer_id", 6)))
+        self.gguf_writer.add_vision_wa_layer_indexes([insert_layer_id])
+
+        # SigLIP vision body uses gelu_pytorch_tanh, which matches ggml_gelu (tanh approx).
+        self.gguf_writer.add_vision_use_gelu(True)
+        self.gguf_writer.add_vision_attention_layernorm_eps(
+            self.hparams_vision.get("layer_norm_eps", 1e-6))
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # lm_head / MTP -> belong to the LM file
+        if name.startswith(("lm_head.", "mtp")):
+            return None
+
+        return super().filter_tensors(item)

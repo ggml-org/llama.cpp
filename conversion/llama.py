@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -32,8 +32,12 @@ class LlamaModel(TextModel):
         # fix for SmolVLM2, missing `num_attention_heads` in config.json
         if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
-        hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
-        self.origin_hf_arch = hparams.get('architectures', [None])[0]
+        # Mistral consolidated format has no config.json; origin_hf_arch is HF-only.
+        if self.is_mistral_format:
+            self.origin_hf_arch = None
+        else:
+            hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
+            self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
     def set_vocab(self):
         if self.origin_hf_arch == "GlmasrModel":
@@ -98,38 +102,37 @@ class LlamaModel(TextModel):
                 .swapaxes(1, 2)
                 .reshape(weights.shape))
 
+    def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
+        # Mirror the BF16 Q/K RoPE permutation site in modify_tensors; the NVFP4 path bypasses it.
+        if self.undo_permute:
+            n_head = self.find_hparam(["n_heads", "num_attention_heads"], optional=True)
+            n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"], optional=True)
+            if n_head is not None:
+                if name.endswith("q_proj.weight"):
+                    weight = LlamaModel.permute(weight, n_head, n_head)
+                    scale  = LlamaModel.permute(scale, n_head, n_head)
+                elif name.endswith("k_proj.weight"):
+                    weight = LlamaModel.permute(weight, n_head, n_kv_head)
+                    scale  = LlamaModel.permute(scale, n_head, n_kv_head)
+        super()._repack_nvfp4(name, weight, scale, scale2, input_scale)
+
     _experts: list[dict[str, Tensor]] | None = None
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if "text_model." in name:
+            name = name.replace("text_model.", "") # for SmolVLM
+
+        return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.find_hparam(["n_heads", "num_attention_heads"])
         n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"])
 
-        vision_prefixes = [
-            "vision_encoder.",
-            "vision_language_adapter.",
-            "patch_merger.",
-            "pre_mm_projector_norm",
-            "audio_encoder.",
-        ]
-
-        is_multimodal_tensor = "vision_tower" in name \
-            or "vision_model" in name \
-            or "audio_tower" in name \
-            or "model.connector" in name \
-            or "multi_modal_projector" in name \
-            or any(
-                name.startswith(prefix)
-                for prefix in vision_prefixes
-            )
-
-        if is_multimodal_tensor:
-            return  # skip vision tensors
-        elif self.hf_arch == "LlamaModel":
+        if self.hf_arch == "LlamaModel":
             name = "model." + name
-        elif name.startswith("model.text_model"):
-            name = name.replace("text_model.", "") # for SmolVLM
-        elif name.startswith("language_model."):
-            name = name.replace("language_model.", "") # for the rest
 
         if self.undo_permute:
             if name.endswith(("q_proj.weight", "q_proj.bias")):
@@ -245,9 +248,6 @@ class Llama4Model(LlamaModel):
                 self.gguf_writer.add_sliding_window(0)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        if name.startswith("language_model."):
-            name = name.replace("language_model.", "")
-
         # split the gate_up into gate and up
         if "gate_up_proj" in name:
             name_up = name.replace("gate_up_proj", "up_proj.weight")
@@ -262,8 +262,6 @@ class Llama4Model(LlamaModel):
             name += ".weight"
             data_torch = data_torch.transpose(-1, -2)
 
-        if "multi_modal_projector" in name or "vision_model" in name:
-            return
         yield from super().modify_tensors(data_torch, name, bid)
 
 

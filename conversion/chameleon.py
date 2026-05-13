@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -22,12 +22,18 @@ class ChameleonModel(TextModel):
     def set_vocab(self):
         self._set_vocab_gpt2()
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # ignore image tokenizer for now
-        # TODO: remove this once image support is implemented for Chameleon
-        if name.startswith("model.vqmodel"):
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
 
+        # ignore image tokenizer for now
+        # TODO: image support for Chameleon
+        if name.startswith("model.vqmodel"):
+            return None
+
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams["num_attention_heads"]
         n_kv_head = self.hparams.get("num_key_value_heads")
         hidden_dim = self.hparams.get("hidden_size")

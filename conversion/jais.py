@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -65,11 +65,17 @@ class JaisModel(TextModel):
         self.gguf_writer.add_layer_norm_eps(self.hparams["layer_norm_epsilon"])
         self.gguf_writer.add_file_type(self.ftype)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # we don't need these
         if name.endswith((".attn.bias")):
-            return
+            return None
 
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.endswith(("relative_pe.slopes")):
             # Calculate max ALiBi bias (this is the inverse of the ALiBi calculation)
             # Some other models has max_alibi_bias spelled out explicitly in the hyperparams,

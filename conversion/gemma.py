@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -46,13 +47,19 @@ class GemmaModel(TextModel):
         self.gguf_writer.add_value_length(hparams["head_dim"])
         self.gguf_writer.add_file_type(self.ftype)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # lm_head is not used in llama.cpp, while autoawq will include this tensor in model
         # To prevent errors, skip loading lm_head.weight.
         if name == "lm_head.weight":
             logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
-            return
+            return None
 
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # ref: https://github.com/huggingface/transformers/blob/fc37f38915372c15992b540dfcbbe00a916d4fc6/src/transformers/models/gemma/modeling_gemma.py#L89
         if name.endswith("norm.weight"):
             data_torch = data_torch + 1
@@ -90,13 +97,19 @@ class Gemma2Model(TextModel):
         )
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         # lm_head is not used in llama.cpp, while autoawq will include this tensor in model
         # To prevent errors, skip loading lm_head.weight.
         if name == "lm_head.weight":
             logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
-            return
+            return None
 
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # ref: https://github.com/huggingface/transformers/blob/fc37f38915372c15992b540dfcbbe00a916d4fc6/src/transformers/models/gemma/modeling_gemma.py#L89
         if name.endswith("norm.weight"):
             data_torch = data_torch + 1
@@ -138,13 +151,6 @@ class Gemma3Model(TextModel):
         self.gguf_writer.add_head_count_kv(hparams.get("num_key_value_heads", 4))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if "language_model." in name:
-            name = name.replace("language_model.", "")
-
-        elif name.startswith("multi_modal_projector.") or name.startswith("vision_tower.") \
-                or name.startswith("multimodal_projector.") or name.startswith("vision_model."):
-            return # skip vision tensors
-
         # remove OOV (out-of-vocabulary) rows in token_embd
         if "embed_tokens.weight" in name:
             n_vocab_real = -1
@@ -269,25 +275,30 @@ class Gemma3VisionModel(MmprojModel):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if "vision_model.head." in name:
-            return # skip redundant tensors for tinygemma3
+            # skip redundant tensors for tinygemma3
+            return None
 
-        if name.startswith("multi_modal_projector.") or name.startswith("vision_tower.") \
-                or name.startswith("multimodal_projector.") or name.startswith("vision_model."):
-            # process vision tensors
-            name = name.replace("_weight", ".weight")
+        if not name.startswith(("multi_modal_projector.", "vision_tower.", "multimodal_projector.", "vision_model.")):
+            return None
 
-            # correct norm value ; only this "soft_emb_norm" need to be corrected as it's part of Gemma projector
-            # the other norm values are part of SigLIP model, and they are already correct
-            # ref code: Gemma3RMSNorm
-            if "soft_emb_norm.weight" in name:
-                logger.info(f"Correcting norm value for '{name}'")
-                data_torch = data_torch + 1
+        name = name.replace("_weight", ".weight")
 
-            yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors((name, gen))
 
-        return # skip other tensors
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # correct norm value ; only this "soft_emb_norm" need to be corrected as it's part of Gemma projector
+        # the other norm values are part of SigLIP model, and they are already correct
+        # ref code: Gemma3RMSNorm
+        if "soft_emb_norm.weight" in name:
+            logger.info(f"Correcting norm value for '{name}'")
+            data_torch = data_torch + 1
+
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 class ConformerAudioModel(MmprojModel):
@@ -530,14 +541,17 @@ class Gemma3NModel(Gemma3Model):
         else:
             return torch.stack(matrices, dim=0)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if name.endswith("_scale"):
             name = name + ".weight"
 
-        # TODO: implement self.prediction_coefs.weight.clamp_(...)
+        return super().filter_tensors((name, gen))
 
-        if "language_model." not in name:
-            return # skip non-language model tensors
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # TODO: implement self.prediction_coefs.weight.clamp_(...)
 
         # Pad token embeddings for vision/audio special tokens (262144-262399)
         if "embed_tokens.weight" in name or "embed_tokens_per_layer" in name:
@@ -558,7 +572,6 @@ class Gemma3NModel(Gemma3Model):
                 data_torch = torch.cat([data_torch, padding], dim=0)
 
             # Continue with normal processing
-            name = name.replace("language_model.", "")
             yield from ModelBase.modify_tensors(self, data_torch, name, bid)
             return
 
@@ -703,14 +716,42 @@ class Gemma4Model(Gemma3Model):
         rope_freqs_full = torch.tensor(values, dtype=torch.float32)
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), rope_freqs_full)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    def _generate_nvfp4_tensors(self):
+        # Gemma-4 stores a per-layer router.per_expert_scale ([n_expert]) that scales
+        # each expert's contribution. It's mathematically equivalent to a per-expert
+        # scalar on the down_proj output, which is exactly where ffn_down_exps_s is
+        # applied at inference. Fold it into each expert's NVFP4 weight_scale_2 so the
+        # existing NVFP4 path produces the right scales.
+        n_experts = self.find_hparam(["num_local_experts", "num_experts"], optional=True) or 0
+        for name in [n for n in self.model_tensors if n.endswith(".router.per_expert_scale")]:
+            bid_match = re.search(r"\.layers\.(\d+)\.", name)
+            if bid_match is None:
+                continue
+            bid = bid_match.group(1)
+            prefix = name[: name.index(f".layers.{bid}.") + len(f".layers.{bid}.")]
+            w2_targets = [f"{prefix}experts.{e}.down_proj.weight_scale_2" for e in range(n_experts)]
+            present = [w2 in self.model_tensors for w2 in w2_targets]
+            if not any(present):
+                continue
+            assert all(present), f"layer {bid}: partial NVFP4 quantization across experts"
+            r = self.model_tensors.pop(name)
+            for e, w2 in enumerate(w2_targets):
+                s = self.model_tensors[w2]
+                self.model_tensors[w2] = lambda s=s, r=r, i=e: s() * r()[i]
+        super()._generate_nvfp4_tensors()
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
         if name.endswith("per_dim_scale") or name.endswith("layer_scalar"):
             name = name + ".weight"
+        if ".experts." in name and not name.endswith((".weight", ".weight_scale", ".weight_scale_2", ".input_scale")):
+            name += ".weight"
 
-        if "language_model." not in name and "rope_freqs" not in name:
-            return # skip non-language model tensors
+        return super().filter_tensors((name, gen))
 
-        name = name.replace("language_model.", "")
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.endswith("router.scale"):
             name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_INP, bid, ".scale")
             yield (name, data_torch)
@@ -720,8 +761,6 @@ class Gemma4Model(Gemma3Model):
             name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid, ".scale")
             yield (name, data_torch)
             return
-        if ".experts." in name and not name.endswith(".weight"):
-            name += ".weight"
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -769,9 +808,6 @@ class Gemma4VisionAudioModel(MmprojModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid # unused
-
-        if name.startswith("model.language_model."):
-            return # skip
 
         if len(data_torch.shape) == 0:
             # convert scalar tensors (input/output_mix/max) to 1D tensors
