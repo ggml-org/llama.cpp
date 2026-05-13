@@ -145,6 +145,9 @@ struct common_speculative_impl {
     virtual void draft(common_speculative_draft_params_vec & dparams) = 0;
 
     virtual void accept(llama_seq_id seq_id, uint16_t n_accepted) = 0;
+
+    // true if this implementation requires the target context to extract embeddings
+    virtual bool need_embd() const = 0;
 };
 
 struct common_speculative_impl_draft_simple : public common_speculative_impl {
@@ -340,6 +343,10 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/) override {
         // noop
     }
+
+    bool need_embd() const override {
+        return false;
+    }
 };
 
 struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
@@ -363,6 +370,10 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/) override {
         // noop
+    }
+
+    bool need_embd() const override {
+        return false;
     }
 };
 
@@ -648,6 +659,10 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/) override {
     }
+
+    bool need_embd() const override {
+        return true;
+    }
 };
 
 // state of self-speculation (simple implementation, not ngram-map)
@@ -688,6 +703,10 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/) override {
         // noop
+    }
+
+    bool need_embd() const override {
+        return false;
     }
 };
 
@@ -736,6 +755,10 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
         GGML_ASSERT((seq_id < (llama_seq_id) config.size()));
 
         common_ngram_map_accept(config[seq_id], n_accepted);
+    }
+
+    bool need_embd() const override {
+        return false;
     }
 };
 
@@ -905,6 +928,10 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
             }
         }
     }
+
+    bool need_embd() const override {
+        return false;
+    }
 };
 
 struct common_speculative_impl_ngram_cache : public common_speculative_impl {
@@ -1037,6 +1064,10 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/) override {
         // noop
+    }
+
+    bool need_embd() const override {
+        return false;
     }
 };
 
@@ -1331,6 +1362,20 @@ bool common_speculative_process(common_speculative * spec, const llama_batch & b
     }
 
     return result;
+}
+
+bool common_speculative_need_embd(common_speculative * spec) {
+    if (spec == nullptr) {
+        return false;
+    }
+
+    for (auto & impl : spec->impls) {
+        if (impl->need_embd()) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void common_speculative_draft(common_speculative * spec) {
