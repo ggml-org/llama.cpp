@@ -322,16 +322,7 @@ struct ggml_backend_sycl_context {
     std::string name;
     optimize_feature opt_feature;
 
-    // Active stream slot used by stream() / stream_dnnl() / pool() (no-arg defaults).
-    // Multi-stream consumers set this via ggml_sycl_stream_override_guard so that
-    // existing call sites that use the default-arg form route to a non-zero slot
-    // without having to thread a parameter through every layer of dispatch.
-    int curr_stream_no = 0;
-
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
-    // Owns per-slot in-order queues for slot > 0. Slot 0 aliases dpct's default_queue
-    // and is not stored here. unique_ptr gives stable addresses across vector growth.
-    std::vector<std::unique_ptr<sycl::queue>> owned_queues;
 
     explicit ggml_backend_sycl_context(int device) :
         device(device),
@@ -341,20 +332,13 @@ struct ggml_backend_sycl_context {
 
     queue_ptr stream(int device, int stream) {
         if (qptrs[device][stream] == nullptr) {
-            if (stream == 0) {
-                qptrs[device][stream] = &(dpct::get_device(device).default_queue());
-            } else {
-                ggml_sycl_set_device(device);
-                owned_queues.emplace_back(std::make_unique<sycl::queue>(
-                    dpct::get_device(device).create_in_order_queue()));
-                qptrs[device][stream] = owned_queues.back().get();
-            }
+            qptrs[device][stream] = &(dpct::get_device(device).default_queue());
         }
         return qptrs[device][stream];
     }
 
     queue_ptr stream() {
-        return stream(device, curr_stream_no);
+        return stream(device, 0);
     }
 
 #if GGML_SYCL_DNNL
@@ -399,7 +383,7 @@ struct ggml_backend_sycl_context {
         }
     }
     dnnl::stream stream_dnnl() {
-        return stream_dnnl(device, curr_stream_no);
+        return stream_dnnl(device, 0);
     }
     dnnl::memory get_scratchpad_mem(const dnnl::memory::desc & scratchpad_md,
                                     const dnnl::engine & eng, const queue_ptr q) {
@@ -421,12 +405,8 @@ struct ggml_backend_sycl_context {
     }
 #endif
 
-    // pool — one per (device, stream slot). Per-slot pools give multi-stream consumers
-    // race-free concurrent allocation: each in-order queue's pool reuses buffers in
-    // submission order, so a buffer freed and re-alloced on the same slot is naturally
-    // serialized. Slot 0 is the default; the per-slot pools are lazily created on
-    // first use, so single-GPU/single-stream paths only ever instantiate slot 0.
-    std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS];
+    // pool
+    std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES];
     std::unordered_map<sycl::queue *, std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>>> scratchpad_map;
 
     std::unique_ptr<ggml_sycl_fattn_kv_buffers> fattn_bufs[GGML_SYCL_MAX_DEVICES];
@@ -437,21 +417,17 @@ struct ggml_backend_sycl_context {
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_host(queue_ptr qptr, int device);
 
-    ggml_sycl_pool & pool(int device, int stream) {
-        if (pools[device][stream] == nullptr) {
-            pools[device][stream] = new_pool_for_device(this->stream(device, stream), device);
-        }
-        return *pools[device][stream];
-    }
-
     static std::unique_ptr<ggml_sycl_fattn_kv_buffers> new_fattn_kv_buffers(queue_ptr qptr, int device);
 
     ggml_sycl_pool & pool(int device) {
-        return pool(device, 0);
+        if (pools[device] == nullptr) {
+            pools[device] = new_pool_for_device(stream(device,0), device);
+        }
+        return *pools[device];
     }
 
     ggml_sycl_pool & pool() {
-        return pool(device, curr_stream_no);
+        return pool(device);
     }
 
     ggml_sycl_fattn_kv_buffers & fattn_buffers(int device) {
@@ -477,26 +453,6 @@ struct ggml_backend_sycl_context {
     }
 
     ggml_sycl_pool & host_pool() { return host_pool(device); }
-};
-
-// RAII guard: scopes an override of ggml_backend_sycl_context::curr_stream_no.
-// Used by multi-stream consumers (e.g. per-expert MoE loop) to redirect the
-// default stream() / stream_dnnl() / pool() lookups to a specific slot for
-// the duration of a code region, then restore the prior slot on exit.
-struct ggml_sycl_stream_override_guard {
-    ggml_backend_sycl_context & ctx;
-    int saved;
-
-    ggml_sycl_stream_override_guard(ggml_backend_sycl_context & ctx_, int new_slot) :
-        ctx(ctx_), saved(ctx_.curr_stream_no) {
-        ctx.curr_stream_no = new_slot;
-    }
-    ~ggml_sycl_stream_override_guard() {
-        ctx.curr_stream_no = saved;
-    }
-
-    ggml_sycl_stream_override_guard(const ggml_sycl_stream_override_guard &)             = delete;
-    ggml_sycl_stream_override_guard & operator=(const ggml_sycl_stream_override_guard &) = delete;
 };
 
 // common device functions
