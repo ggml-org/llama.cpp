@@ -230,8 +230,14 @@ struct ggml_cuda_pdl_config {
 template<typename Kernel, typename... Args>
 static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_kernel_launch_params & launch_params, Args&&... args) {
 #if defined(GGML_CUDA_USE_PDL)
-    static const bool disable_pdl = (getenv("GGML_CUDA_PDL") != nullptr);
-    if (!disable_pdl) {
+
+    // PDL is off by default. To enable, set GGML_CUDA_ENABLE_PDL=1
+    static const bool enable_pdl = []() {
+        const char * env = getenv("GGML_CUDA_ENABLE_PDL");
+        return env != nullptr && std::atoi(env) != 0;
+    }();
+
+    if (enable_pdl) {
         auto pdl_cfg = ggml_cuda_pdl_config(launch_params);
         CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, kernel, std::forward<Args>(args)... ));
         return;
