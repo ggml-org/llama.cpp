@@ -396,11 +396,24 @@ extern "C" {
     // function to assign split states for statically allocated tensors, compute tensor split states will be assigned to be compatible:
     typedef struct ggml_backend_meta_split_state(*ggml_backend_meta_get_split_state_t)(const struct ggml_tensor * tensor, void * userdata);
 
+    struct ggml_backend_meta_dist_cfg {
+        int32_t world_rank;
+        int32_t world_size;
+    };
+
     // create a new meta device from "simple" devices, meta buffer type/buffer/backend is then derived from this:
     // TODO: this looks a bit strange - a backend API creates a device. I think we should try
     //       express this as a backend registry functionality instead
     GGML_API ggml_backend_dev_t ggml_backend_meta_device(
-        ggml_backend_dev_t * devs, size_t n_devs, ggml_backend_meta_get_split_state_t get_split_state, void * get_split_state_ud);
+        ggml_backend_dev_t * devs, size_t n_devs, ggml_backend_meta_get_split_state_t get_split_state, void * get_split_state_ud,
+        const struct ggml_backend_meta_dist_cfg * dist_cfg);
+
+    // optional process-level cross-rank exchange hook for meta backend subgraph boundary reductions
+    // meta backend orchestrates accumulation and only requests raw payload exchange.
+    typedef bool (*ggml_backend_meta_dist_allreduce_tensor_t)(void * comm_ctx, const float * send_data, size_t n,
+                                                              int32_t src_rank, float * recv_data, int32_t * recv_src_rank);
+    GGML_API void ggml_backend_meta_set_dist_allreduce(void * comm_ctx, ggml_backend_meta_dist_allreduce_tensor_t allreduce);
+    GGML_API void ggml_backend_meta_get_dist_allreduce(void ** comm_ctx, ggml_backend_meta_dist_allreduce_tensor_t * allreduce);
 
     //
     // Utils

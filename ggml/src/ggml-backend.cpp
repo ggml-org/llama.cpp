@@ -27,6 +27,13 @@
 #include <sys/sysctl.h>
 #endif
 
+namespace {
+
+void * g_meta_dist_comm_ctx = nullptr;
+ggml_backend_meta_dist_allreduce_tensor_t g_meta_dist_allreduce = nullptr;
+
+}
+
 
 // backend buffer type
 
@@ -662,6 +669,20 @@ void * ggml_backend_reg_get_proc_address(ggml_backend_reg_t reg, const char * na
         return NULL;
     }
     return reg->iface.get_proc_address(reg, name);
+}
+
+void ggml_backend_meta_set_dist_allreduce(void * comm_ctx, ggml_backend_meta_dist_allreduce_tensor_t allreduce) {
+    g_meta_dist_comm_ctx = comm_ctx;
+    g_meta_dist_allreduce = allreduce;
+}
+
+void ggml_backend_meta_get_dist_allreduce(void ** comm_ctx, ggml_backend_meta_dist_allreduce_tensor_t * allreduce) {
+    if (comm_ctx != nullptr) {
+        *comm_ctx = g_meta_dist_comm_ctx;
+    }
+    if (allreduce != nullptr) {
+        *allreduce = g_meta_dist_allreduce;
+    }
 }
 
 // multi-buffer buffer
