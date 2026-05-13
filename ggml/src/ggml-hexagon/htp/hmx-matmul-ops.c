@@ -45,6 +45,17 @@ static const __fp16 iq4_nl_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
     1,    0, 13,   0, 25,  0, 38,  0, 53,  0, 69,  0, 89,  0, 113, 0,
 };
 
+static const uint8_t repl_2x_f16_ctrl[128] __attribute__((aligned(VLEN))) = {
+    0x00,0x00,0x02,0x02,0x04,0x04,0x02,0x02,0x08,0x08,0x02,0x02,0x04,0x04,0x02,0x02,
+    0x10,0x10,0x02,0x02,0x04,0x04,0x02,0x02,0x08,0x08,0x02,0x02,0x04,0x04,0x02,0x02,
+    0x20,0x20,0x02,0x02,0x04,0x04,0x02,0x02,0x08,0x08,0x02,0x02,0x04,0x04,0x02,0x02,
+    0x10,0x10,0x02,0x02,0x04,0x04,0x02,0x02,0x08,0x08,0x02,0x02,0x04,0x04,0x02,0x02,
+    0x02,0x02,0x40,0x40,0x02,0x02,0x04,0x04,0x02,0x02,0x08,0x08,0x02,0x02,0x04,0x04,
+    0x02,0x02,0x10,0x10,0x02,0x02,0x04,0x04,0x02,0x02,0x08,0x08,0x02,0x02,0x04,0x04,
+    0x02,0x02,0x20,0x20,0x02,0x02,0x04,0x04,0x02,0x02,0x08,0x08,0x02,0x02,0x04,0x04,
+    0x02,0x02,0x10,0x10,0x02,0x02,0x04,0x04,0x02,0x02,0x08,0x08,0x02,0x02,0x04,0x04,
+};
+
 // Scales per x4x2 logical block: 8 × sizeof(__fp16) = 16 bytes
 #define HMX_X4X2_SCALES_PER_BLK  8
 #define HMX_X4X2_DBLK_SIZE       16  // 8 * 2 bytes (fp16 scales for Q4_0/Q8_0/IQ4_NL)
@@ -201,11 +212,10 @@ static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(const uint8_t *packed_32
 
 // Batch-dequantize 4 contiguous x4x2 Q4_0 groups (4x32 = 128 packed bytes) using
 // full HVX vector width.  One vmemu + one vlut16 replaces 4 separate calls.
-// Output: out[0..3] each hold 32 FP16 values in the first 64 bytes.
-static inline void dequantize_x4x2_q4_0_x4groups_hvx(
+// Output: vector_x2 each hold 32 FP16 values in the first 64 bytes.
+static inline HVX_Vector_x2 dequantize_x4x2_q4_0_x4groups_hvx(
             const uint8_t *packed_128, bool upper_nibbles,
-            const __fp16 *scales_4, const HVX_Vector vlut_cvt,
-            HVX_Vector out[4]) {
+            const __fp16 *scales_4, const HVX_Vector vlut_cvt) {
     // Load all 128 packed bytes (4 contiguous 32-byte groups)
     HVX_Vector vq = hvx_vmemu(packed_128);
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
@@ -221,8 +231,7 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
     HVX_Vector v_hi = Q6_V_hi_W(vp);  // [group2: 32 fp16 | group3: 32 fp16]
 
     // Build per-group scale vectors: first 64 bytes use scale_a, last 64 use scale_b
-    volatile HVX_Vector vscale = hvx_vmemu(scales_4);
-
+    HVX_Vector vscale = hvx_vmemu(scales_4);
     HVX_Vector v_sc01 = hvx_vec_repl_2x_f16(vscale);
     HVX_Vector v_sc23 = hvx_vec_repl_2x_f16(Q6_V_vror_VR(vscale, 4));
 
@@ -230,8 +239,9 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
     v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
 
     // Extract individual groups: scatter uses q_mask64 so only first 64 bytes matter
-    out[0] = v_lo; // group0 already in [0:63]
-    out[1] = v_hi; // group2 already in [0:63]
+    HVX_Vector_x2 r = { v_lo,/* group1 already in [0:63] */ 
+                        v_hi /* group2 already in [0:63] */ };
+    return r;
 }
 
 // Dequantize one x4x2 Q8_0 group (32 int8 quants) -> 32 FP16 in first 64 bytes.
@@ -292,12 +302,11 @@ static inline HVX_Vector dequantize_x4x2_mxfp4_group_hvx(const uint8_t *  packed
 }
 
 // Batch-dequantize 4 contiguous x4x2 MXFP4 groups (4x32 = 128 packed bytes).
-static inline void dequantize_x4x2_mxfp4_x4groups_hvx(const uint8_t *  packed_128,
+static inline HVX_Vector_x4 dequantize_x4x2_mxfp4_x4groups_hvx(const uint8_t *  packed_128,
                                                       bool             upper_nibbles,
                                                       int              sub_blk_base,
                                                       const HVX_Vector vlut_cvt,
-                                                      mxfp4_scales_t   scales,
-                                                      HVX_Vector       out[4]) {
+                                                      mxfp4_scales_t   scales) {
     HVX_Vector       vq       = hvx_vmemu(packed_128);
     const HVX_Vector mask_h4  = Q6_Vb_vsplat_R(0x0F);
     HVX_Vector       v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
@@ -318,10 +327,8 @@ static inline void dequantize_x4x2_mxfp4_x4groups_hvx(const uint8_t *  packed_12
     v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01));
     v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
 
-    out[0] = v_lo;
-    out[1] = Q6_V_vror_VR(v_lo, 64);
-    out[2] = v_hi;
-    out[3] = Q6_V_vror_VR(v_hi, 64);
+    HVX_Vector_x4 r = { v_lo, Q6_V_vror_VR(v_lo, 64), v_hi, Q6_V_vror_VR(v_hi, 64) };
+    return r;
 }
 
 // Dequantize a tile range from x4x2 weight data (already in VTCM) to tile-major FP16.
@@ -372,18 +379,18 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
             unsigned row1 = ct * HMX_FP16_TILE_N_COLS + 1;
 
             for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2, row1 += 2) {
-                HVX_Vector v0[2];
                 const uint8_t *r0 = vtcm_src + row_offset; row_offset += row_stride;
-                dequantize_x4x2_q4_0_x4groups_hvx(r0 + packed_off, upper, (const __fp16 *)(r0 + scale_off), vlut_cvt, v0);
-                Q6_vscatter_RMVwV((size_t)tile_bases[0], 2 * HMX_FP16_TILE_SIZE - 1, v_off, v0[0]);
-                Q6_vscatter_RMVwV((size_t)tile_bases[2], 2 * HMX_FP16_TILE_SIZE - 1, v_off, v0[1]);
+                const uint8_t *r1 = vtcm_src + row_offset; row_offset += row_stride;
+
+                HVX_Vector_x2 dv0 = dequantize_x4x2_q4_0_x4groups_hvx(r0 + packed_off, upper, (const __fp16 *)(r0 + scale_off), vlut_cvt);
+                HVX_Vector_x2 dv1 = dequantize_x4x2_q4_0_x4groups_hvx(r1 + packed_off, upper, (const __fp16 *)(r1 + scale_off), vlut_cvt);
+
+                Q6_vscatter_RMVwV((size_t)tile_bases[0], 2 * HMX_FP16_TILE_SIZE - 1, v_off, dv0.v[0]);
+                Q6_vscatter_RMVwV((size_t)tile_bases[2], 2 * HMX_FP16_TILE_SIZE - 1, v_off, dv0.v[1]);
                 v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
 
-
-                r0 = vtcm_src + row_offset; row_offset += row_stride;
-                dequantize_x4x2_q4_0_x4groups_hvx(r0 + packed_off, upper, (const __fp16 *)(r0 + scale_off), vlut_cvt, v0);
-                Q6_vscatter_RMVwV((size_t)tile_bases[0], 2 * HMX_FP16_TILE_SIZE - 1, v_off, v0[0]);
-                Q6_vscatter_RMVwV((size_t)tile_bases[2], 2 * HMX_FP16_TILE_SIZE - 1, v_off, v0[1]);
+                Q6_vscatter_RMVwV((size_t)tile_bases[0], 2 * HMX_FP16_TILE_SIZE - 1, v_off, dv1.v[0]);
+                Q6_vscatter_RMVwV((size_t)tile_bases[2], 2 * HMX_FP16_TILE_SIZE - 1, v_off, dv1.v[1]);
                 v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
             }
 
@@ -415,21 +422,21 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
                 // Batch-convert all 8 E8M0 scales once per row (stays in HVX register)
                 mxfp4_scales_t r0_e8 = mxfp4_convert_scales(r0 + e8m0_blk_off);
 
-                HVX_Vector v0[4], v1[4];
-                dequantize_x4x2_mxfp4_x4groups_hvx(r0 + packed_off, upper, sub_blk_base, vlut_cvt, r0_e8, v0);
+                HVX_Vector_x4 dv0, dv1;
+                dv0 = dequantize_x4x2_mxfp4_x4groups_hvx(r0 + packed_off, upper, sub_blk_base, vlut_cvt, r0_e8);
                 if (row1 < n_cols) {
                     mxfp4_scales_t r1_e8 = mxfp4_convert_scales(r1 + e8m0_blk_off);
-                    dequantize_x4x2_mxfp4_x4groups_hvx(r1 + packed_off, upper, sub_blk_base, vlut_cvt, r1_e8, v1);
+                    dv1 = dequantize_x4x2_mxfp4_x4groups_hvx(r1 + packed_off, upper, sub_blk_base, vlut_cvt, r1_e8);
                 } else {
-                    v1[0] = v1[1] = v1[2] = v1[3] = Q6_V_vzero();
+                    dv1.v[0] = dv1.v[1] = dv1.v[2] = dv1.v[3] = Q6_V_vzero();
                 }
 
                 for (int g = 0; g < 4; g++) {
-                    Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_bases[g], HMX_FP16_TILE_SIZE - 1, v_off, v0[g]);
+                    Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_bases[g], HMX_FP16_TILE_SIZE - 1, v_off, dv0.v[g]);
                 }
                 v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
                 for (int g = 0; g < 4; g++) {
-                    Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_bases[g], HMX_FP16_TILE_SIZE - 1, v_off, v1[g]);
+                    Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_bases[g], HMX_FP16_TILE_SIZE - 1, v_off, dv1.v[g]);
                 }
                 v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
             }
