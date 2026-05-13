@@ -1128,7 +1128,10 @@ struct test_case {
     }
 
     virtual double max_nmse_err(ggml_backend_t backend) {
-        GGML_UNUSED(backend);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        if (contains_f16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
+            return std::max(max_nmse_err(), 1e-6);
+        }
         return max_nmse_err();
     }
 
@@ -1205,6 +1208,17 @@ struct test_case {
     std::vector<ggml_tensor *> sentinels;
 
     std::string current_op_name;
+    bool contains_f16 = false;
+
+    void update_type_flags(ggml_context * ctx) {
+        contains_f16 = false;
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_F16) {
+                contains_f16 = true;
+                break;
+            }
+        }
+    }
 
     void add_sentinel(ggml_context * ctx) {
         if (mode == MODE_PERF || mode == MODE_GRAD || mode == MODE_SUPPORT) {
@@ -1298,6 +1312,7 @@ struct test_case {
 
         ggml_tensor * out = build_graph(ctx);
         current_op_name   = op_desc(out);
+        update_type_flags(ctx);
 
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
@@ -1993,16 +2008,6 @@ struct test_unary : public test_case {
         return 15.0f;
     }
 
-    double max_nmse_err(ggml_backend_t backend) override {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (type == GGML_TYPE_F16 &&
-            (op == GGML_UNARY_OP_EXP || op == GGML_UNARY_OP_EXPM1) &&
-            strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
-            return 1e-6;
-        }
-        return test_case::max_nmse_err();
-    }
-
     std::vector<float> grad_expect() override {
         if (op == GGML_UNARY_OP_ABS) {
             return {-1.0f, 1.0f};
@@ -2398,13 +2403,6 @@ struct test_set_rows : public test_case {
         return 1e-7;
     }
 
-    double max_nmse_err(ggml_backend_t backend) override {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (type == GGML_TYPE_F16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
-            return 1e-6;
-        }
-        return max_nmse_err();
-    }
 };
 
 // GGML_OP_ROPE + GGML_OP_VIEW + GGML_OP_SET_ROWS
@@ -2508,13 +2506,6 @@ struct test_rope_set_rows : public test_case {
         }
     }
 
-    double max_nmse_err(ggml_backend_t backend) override {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (type == GGML_TYPE_F16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
-            return 1e-6;
-        }
-        return test_case::max_nmse_err();
-    }
 };
 
 // GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ROPE (+ GGML_OP_VIEW + GGML_OP_SET_ROWS)
@@ -2589,13 +2580,6 @@ struct test_rms_norm_mul_rope : public test_case {
         }
     }
 
-    double max_nmse_err(ggml_backend_t backend) override {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (set_rows && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
-            return 1e-6;
-        }
-        return test_case::max_nmse_err();
-    }
 };
 
 // GGML_OP_ARGMAX
@@ -3110,13 +3094,6 @@ struct test_bin_bcast : public test_case {
         return op == ggml_add ? 1e-4 : 1e-3;
     }
 
-    double max_nmse_err(ggml_backend_t backend) override {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (op == ggml_div && type == GGML_TYPE_F16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
-            return 1e-6;
-        }
-        return test_case::max_nmse_err();
-    }
 };
 
 // GGML_OP_ADD_ID
@@ -5163,13 +5140,6 @@ struct test_im2col : public test_case {
         return out;
     }
 
-    double max_nmse_err(ggml_backend_t backend) override {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (dst_type == GGML_TYPE_F16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
-            return 1e-6;
-        }
-        return test_case::max_nmse_err();
-    }
 };
 
 // GGML_OP_IM2COL_3D
