@@ -91,7 +91,7 @@ jobs:
   test-snapdragon-qdc:
     name: Test on QDC Device (${{ matrix.device }})
     needs: [android-ndk-snapdragon, linux-iot-snapdragon]
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
