@@ -43,7 +43,14 @@ from typing import Callable
 
 from qualcomm_device_cloud_sdk.api import qdc_api
 from qualcomm_device_cloud_sdk.logging import configure_logging
-from qualcomm_device_cloud_sdk.models import ArtifactType, JobMode, JobState, JobSubmissionParameter, JobType, TestFramework
+from qualcomm_device_cloud_sdk.models import (
+    ArtifactType,
+    JobMode,
+    JobState,
+    JobSubmissionParameter,
+    JobType,
+    TestFramework,
+)
 
 # configure_logging only sets up the SDK logger; basicConfig is needed for
 # our own log.info to reach stdout.
@@ -69,6 +76,7 @@ DEFAULT_RETRIES      = 0
 RETRY_DELAY          = 300
 TERMINAL_STATES     = {JobState.COMPLETED, JobState.CANCELED}
 NON_TERMINAL_STATES = {JobState.DISPATCHED, JobState.RUNNING, JobState.SETUP, JobState.SUBMITTED}
+
 
 class DeviceUnavailableError(Exception):
     """Raised when the QDC device resource is not available (retryable)."""
@@ -113,6 +121,8 @@ _LINUX_ENTRY_SCRIPT = "/bin/bash /data/local/tmp/TestContent/run_linux.sh"
 # =============================================================================
 # Artifact builders (per platform)
 # =============================================================================
+
+
 @dataclass
 class JobResult:
     passed: bool
@@ -215,8 +225,6 @@ def _build_linux_artifact(
     zip_base = str(stage_dir / "artifact")
     shutil.make_archive(zip_base, "zip", stage_dir)
     return Path(f"{zip_base}.zip")
-
-
 
 
 # =============================================================================
@@ -353,9 +361,11 @@ def wait_for_capacity(client, max_jobs: int = MAX_CONCURRENT_JOBS) -> None:
         f"Capacity wait timed out after {CAPACITY_TIMEOUT}s"
     )
 
+
 # ---------------------------------------------------------------------------
 # Log parsing helpers
 # ---------------------------------------------------------------------------
+
 
 def _parse_junit_xml(content: str) -> tuple[dict[str, bool], dict[str, str]]:
     try:
@@ -436,8 +446,7 @@ def fetch_logs_and_parse_tests(
                 elif fname.endswith(".log"):
                     if fname in _EXCLUDED_LOGS:
                         continue
-                    log.info("--- %s ---", fname)
-                    print(content)
+                    log.info("--- %s ---\n%s", fname, content)
                     raw_logs[fname] = content
                     pytest_fallback.update(_parse_pytest_output(content))
 
