@@ -33,8 +33,7 @@
 	let resolvedShowRaw = $derived(showRaw ?? (config().showRawModelNames as boolean) ?? false);
 
 	let uniqueAliases = $derived([...new Set(aliases ?? [])]);
-	let allTags = $derived([...(parsed.tags ?? []), ...(tags ?? [])]);
-	let uniqueTags = $derived([...new Set(allTags)]);
+	let uniqueTags = $derived([...new Set([...(parsed.tags ?? []), ...(tags ?? [])])]);
 
 	let primaryAlias = $derived(uniqueAliases.length === 1 ? uniqueAliases[0] : null);
 	let displayName = $derived(primaryAlias ?? parsed.modelName ?? modelId);
@@ -61,10 +60,12 @@
 		{/if}
 
 		{#if primaryAlias}
-			<span class={tagBadgeClass}>{parsed.modelName ?? modelId}</span>
+			{#if primaryAlias !== parsed.modelName}
+				<span class={badgeClass}>{parsed.modelName ?? modelId}</span>
+			{/if}
 		{:else if uniqueAliases.length > 1}
 			{#each uniqueAliases as alias (alias)}
-				<span class={tagBadgeClass}>{alias}</span>
+				<span class={badgeClass}>{alias}</span>
 			{/each}
 		{/if}
 
