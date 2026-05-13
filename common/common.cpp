@@ -4,6 +4,7 @@
 #include "build-info.h"
 #include "common.h"
 #include "fit.h"
+#include "dist-comm.h"
 #include "log.h"
 #include "llama.h"
 #include "sampling.h"
@@ -1201,7 +1202,12 @@ static void common_init_sampler_from_model(
 
 struct common_init_result::impl {
     impl() = default;
-    ~impl() = default;
+    ~impl() {
+        if (dist_tp_runtime) {
+            common_dist_tp_runtime_destroy(dist_tp_runtime);
+            dist_tp_runtime = nullptr;
+        }
+    }
 
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
 
@@ -1212,10 +1218,32 @@ struct common_init_result::impl {
 
     std::vector<common_sampler_ptr> samplers;
     std::vector<llama_sampler_seq_config> samplers_seq_config;
+
+    common_dist_tp_runtime * dist_tp_runtime = nullptr;
 };
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    common_dist_tp_env dist_tp_env;
+    std::string dist_tp_err;
+    if (!common_dist_tp_resolve(params, dist_tp_env, dist_tp_err)) {
+        LOG_ERR("%s: failed to resolve distributed TP config: %s\n", __func__, dist_tp_err.c_str());
+        return;
+    }
+
+    if (dist_tp_env.enabled) {
+        if (!common_dist_tp_apply_env_overrides(params, dist_tp_env, dist_tp_err)) {
+            LOG_ERR("%s: failed to apply distributed TP overrides: %s\n", __func__, dist_tp_err.c_str());
+            return;
+        }
+
+        pimpl->dist_tp_runtime = common_dist_tp_runtime_create(params, dist_tp_env, dist_tp_err);
+        if (pimpl->dist_tp_runtime == nullptr) {
+            LOG_ERR("%s: failed to initialize distributed TP runtime: %s\n", __func__, dist_tp_err.c_str());
+            return;
+        }
+    }
+
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
@@ -1316,6 +1344,14 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     }
 
     pimpl->context.reset(lctx);
+
+    if (pimpl->dist_tp_runtime) {
+        if (!common_dist_tp_runtime_attach_context(pimpl->dist_tp_runtime, lctx, dist_tp_err)) {
+            LOG_ERR("%s: failed to attach distributed TP decode callback: %s\n", __func__, dist_tp_err.c_str());
+            pimpl->context.reset();
+            return;
+        }
+    }
 }
 
 llama_model * common_init_result::model() {

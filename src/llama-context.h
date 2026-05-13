@@ -111,6 +111,8 @@ struct llama_context {
     void set_n_threads(int32_t n_threads, int32_t n_threads_batch);
 
     void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
+    void set_decode_batch_callback(llama_decode_batch_callback callback, void * callback_data);
+    bool sync_decode_batch(llama_batch & batch);
 
     void set_embeddings (bool value);
     void set_embeddings_nextn(bool value, bool masked);
@@ -356,6 +358,9 @@ private:
 
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
+
+    llama_decode_batch_callback decode_batch_callback = nullptr;
+    void *                      decode_batch_callback_data = nullptr;
 
     std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
 

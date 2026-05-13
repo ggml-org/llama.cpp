@@ -479,6 +479,15 @@ struct common_params {
     bool    fit_params_print   = false; // print the estimated required memory to run the model
     int32_t fit_params_min_ctx = 4096;  // minimum context size to set when trying to reduce memory use
 
+    // distributed TP params
+    bool    dist_tp_enable      = false;
+    int32_t dist_tp_world_size  = 1;
+    int32_t dist_tp_rank        = 0;
+    int32_t dist_tp_master_rank = 0;
+    std::string dist_tp_master_host = "127.0.0.1";
+    int32_t dist_tp_master_port = 0;
+    int32_t dist_tp_listen_port = 0;
+
     // margin per device in bytes for fitting parameters to free memory:
     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
 

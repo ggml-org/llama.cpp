@@ -235,6 +235,7 @@ extern "C" {
     } llama_token_data_array;
 
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
+    typedef bool (*llama_decode_batch_callback)(struct llama_context * ctx, struct llama_batch * batch, void * user_data);
 
     // Input data for llama_encode/llama_decode
     // A llama_batch object can contain input about one or many sequences
@@ -1005,6 +1006,10 @@ extern "C" {
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
+
+    // Set callback to synchronize/mutate decode input batches before each llama_decode() execution.
+    // This can be used by distributed runtimes to broadcast rank0 input batches to all other ranks.
+    LLAMA_API void llama_set_decode_batch_callback(struct llama_context * ctx, llama_decode_batch_callback callback, void * user_data);
 
     // Wait until all computations are finished
     // This is automatically done when using one of the functions below to obtain the computation results

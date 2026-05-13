@@ -2726,6 +2726,61 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MAIN_GPU"));
     add_opt(common_arg(
+        {"--world-size", "--dist-world-size"}, "N",
+        string_format("tensor-parallel world size (default: %d)", params.dist_tp_world_size),
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.dist_tp_world_size = value;
+        }
+    ).set_env("LLAMA_DIST_TP_WORLD_SIZE"));
+    add_opt(common_arg(
+        {"--world-rank", "--dist-rank", "--dist-rank-id"}, "N",
+        string_format("tensor-parallel rank id (default: %d)", params.dist_tp_rank),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.dist_tp_rank = value;
+        }
+    ).set_env("LLAMA_DIST_TP_WORLD_RANK"));
+    add_opt(common_arg(
+        {"--dist-master-rank"}, "N",
+        string_format("distributed TP master rank (default: %d)", params.dist_tp_master_rank),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.dist_tp_master_rank = value;
+        }
+    ).set_env("LLAMA_DIST_TP_MASTER_RANK"));
+    add_opt(common_arg(
+        {"--dist-master"}, "HOST:PORT",
+        string_format("distributed TP master endpoint (default: %s:%d)", params.dist_tp_master_host.c_str(), params.dist_tp_master_port),
+        [](common_params & params, const std::string & value) {
+            const size_t pos = value.rfind(':');
+            if (pos == std::string::npos || pos == 0 || pos + 1 >= value.size()) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.dist_tp_master_host = value.substr(0, pos);
+            params.dist_tp_master_port = std::stoi(value.substr(pos + 1));
+            if (params.dist_tp_master_port <= 0) {
+                throw std::invalid_argument("invalid value");
+            }
+        }
+    ).set_env("LLAMA_DIST_TP_MASTER"));
+    add_opt(common_arg(
+        {"--dist-listen-port"}, "PORT",
+        "distributed TP local listen port override (default: auto)",
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.dist_tp_listen_port = value;
+        }
+    ).set_env("LLAMA_DIST_TP_LISTEN_PORT"));
+    add_opt(common_arg(
         { "-fit", "--fit" }, "[on|off]",
         string_format("whether to adjust unset arguments to fit in device memory ('on' or 'off', default: '%s')", params.fit_params ? "on" : "off"),
         [](common_params & params, const std::string & value) {

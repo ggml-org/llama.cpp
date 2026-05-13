@@ -1142,6 +1142,21 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
     }
 }
 
+void llama_context::set_decode_batch_callback(llama_decode_batch_callback callback, void * callback_data) {
+    LLAMA_LOG_DEBUG("%s: call\n", __func__);
+
+    this->decode_batch_callback = callback;
+    this->decode_batch_callback_data = callback_data;
+}
+
+bool llama_context::sync_decode_batch(llama_batch & batch) {
+    if (decode_batch_callback == nullptr) {
+        return true;
+    }
+
+    return decode_batch_callback(this, &batch, decode_batch_callback_data);
+}
+
 void llama_context::set_embeddings(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -3661,6 +3676,10 @@ void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void *
     ctx->set_abort_callback(abort_callback, abort_callback_data);
 }
 
+void llama_set_decode_batch_callback(llama_context * ctx, llama_decode_batch_callback callback, void * user_data) {
+    ctx->set_decode_batch_callback(callback, user_data);
+}
+
 void llama_set_embeddings(llama_context * ctx, bool embeddings) {
     ctx->set_embeddings(embeddings);
 }
@@ -4074,6 +4093,11 @@ int32_t llama_encode(
 int32_t llama_decode(
         llama_context * ctx,
           llama_batch   batch) {
+    if (!ctx->sync_decode_batch(batch)) {
+        LLAMA_LOG_ERROR("%s: failed to synchronize decode batch, client might exit\n", __func__);
+        return -1;
+    }
+
     const int ret = ctx->decode(batch);
     if (ret != 0 && ret != 1) {
         LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
