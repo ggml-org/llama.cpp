@@ -180,12 +180,10 @@ next_nc:
 // Dequantize one x4x2 Q4_0 group (32 elements from 32 packed bytes) -> 32 FP16 in first 64 bytes.
 // In x4x2, sub-blocks 0..3 use lower nibbles, sub-blocks 4..7 use upper nibbles
 // of the same 32 packed bytes.
-static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(
-         const uint8_t *packed_32, bool upper_nibbles,
-         const __fp16 *scale, const HVX_Vector vlut_cvt) {
+static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(const uint8_t *packed_32, bool upper_nibbles, const __fp16 *scale, const HVX_Vector vlut_cvt) {
     HVX_Vector vq = hvx_vmemu(packed_32);
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
-    HVX_Vector v_scales = hvx_vec_splat_f16(*scale);
+    HVX_Vector v_scales = hvx_vec_repl_f16(hvx_vmemu(scale));
     // q4x4x2 stores two int4 values per byte. Keep only the selected nibble.
     HVX_Vector v_quants =  Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
     v_quants = Q6_V_vand_VV(v_quants, mask_h4);
@@ -223,9 +221,10 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
     HVX_Vector v_hi = Q6_V_hi_W(vp);  // [group2: 32 fp16 | group3: 32 fp16]
 
     // Build per-group scale vectors: first 64 bytes use scale_a, last 64 use scale_b
-    HVX_VectorPred q64 = Q6_Q_vsetq_R(64);
-    HVX_Vector v_sc01 = Q6_V_vmux_QVV(q64, hvx_vec_splat_f16(scales_4[0]), hvx_vec_splat_f16(scales_4[1]));
-    HVX_Vector v_sc23 = Q6_V_vmux_QVV(q64, hvx_vec_splat_f16(scales_4[2]), hvx_vec_splat_f16(scales_4[3]));
+    volatile HVX_Vector vscale = hvx_vmemu(scales_4);
+
+    HVX_Vector v_sc01 = hvx_vec_repl_2x_f16(vscale);
+    HVX_Vector v_sc23 = hvx_vec_repl_2x_f16(Q6_V_vror_VR(vscale, 4));
 
     v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01));
     v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
@@ -237,10 +236,10 @@ static inline void dequantize_x4x2_q4_0_x4groups_hvx(
 
 // Dequantize one x4x2 Q8_0 group (32 int8 quants) -> 32 FP16 in first 64 bytes.
 static inline HVX_Vector dequantize_x4x2_q8_0_group_hvx(const int8_t *quants_32, const __fp16 *scale) {
-    HVX_Vector vq = hvx_vmemu(quants_32);
-    HVX_Vector v_scales = hvx_vec_splat_f16(*scale);
-    HVX_Vector v0 = Q6_V_lo_W(Q6_Wh_vunpack_Vb(vq));
-    HVX_Vector v_hf = Q6_Vhf_equals_Vh(v0);
+    HVX_Vector vq       = hvx_vmemu(quants_32);
+    HVX_Vector v_scales = hvx_vec_repl_f16(hvx_vmemu(scale));
+    HVX_Vector v0       = Q6_V_lo_W(Q6_Wh_vunpack_Vb(vq));
+    HVX_Vector v_hf     = Q6_Vhf_equals_Vh(v0);
     return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
 }
 
@@ -521,12 +520,8 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
                 const uint8_t *r0 = vtcm_src + row0 * row_stride;
                 const uint8_t *r1 = vtcm_src + row1 * row_stride;
 
-                HVX_Vector v0 = dequantize_x4x2_q8_0_group_hvx(
-                    (const int8_t *)(r0 + byte_off), (const __fp16 *)(r0 + scale_off));
-                HVX_Vector v1 = (row1 < n_cols)
-                    ? dequantize_x4x2_q8_0_group_hvx(
-                        (const int8_t *)(r1 + byte_off), (const __fp16 *)(r1 + scale_off))
-                    : Q6_V_vzero();
+                HVX_Vector v0 = dequantize_x4x2_q8_0_group_hvx((const int8_t *)(r0 + byte_off), (const __fp16 *)(r0 + scale_off));
+                HVX_Vector v1 = (row1 < n_cols) ? dequantize_x4x2_q8_0_group_hvx((const int8_t *)(r1 + byte_off), (const __fp16 *)(r1 + scale_off)) : Q6_V_vzero();
 
                 Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v0);
                 v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);

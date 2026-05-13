@@ -5,6 +5,7 @@
 
 #include "hvx-types.h"
 #include "hvx-copy.h"
+#include "hvx-repl.h"
 #include "hvx-scale.h"
 #include "hvx-exp.h"
 #include "hvx-inverse.h"
