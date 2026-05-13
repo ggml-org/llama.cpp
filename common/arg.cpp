@@ -3306,7 +3306,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, bool value) {
             common_log_set_prefix(common_log_main(), value);
         }
-    ).set_env("LLAMA_LOG_PREFIX"));
+    ).set_env("LLAMA_ARG_LOG_PREFIX"));
     add_opt(common_arg(
         {"--log-timestamps"},
         {"--no-log-timestamps"},
@@ -3314,7 +3314,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, bool value) {
             common_log_set_timestamps(common_log_main(), value);
         }
-    ).set_env("LLAMA_LOG_TIMESTAMPS"));
+    ).set_env("LLAMA_ARG_LOG_TIMESTAMPS"));
 
     //
     // speculative parameters
