@@ -105,6 +105,7 @@ if (LLAMA_BUILD_WEBUI)
                 "-DHF_VERSION=${HF_WEBUI_VERSION}"
                 "-DASSETS=${PUBLIC_ASSETS_ESC}"
                 "-DSTAMP_FILE=${WEBUI_DOWNLOAD_STAMP}"
+                "-DNPM_DIR=${CMAKE_CURRENT_SOURCE_DIR}/webui"
                 -P ${PROJECT_SOURCE_DIR}/scripts/webui-download.cmake
             COMMENT "Downloading WebUI assets from Hugging Face Bucket (if not already cached)"
         )
