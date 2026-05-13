@@ -7,7 +7,7 @@ import os
 import subprocess
 import tempfile
 
-from pathlib import Path
+from appium.options.common import AppiumOptions
 
 log = logging.getLogger(__name__)
 
@@ -27,8 +27,6 @@ PROMPT_DIR = "/data/local/tmp/scorecard_prompts"
 # ---------------------------------------------------------------------------
 # Appium session options
 # ---------------------------------------------------------------------------
-
-from appium.options.common import AppiumOptions
 
 options = AppiumOptions()
 options.set_capability("automationName", "UiAutomator2")
@@ -88,7 +86,7 @@ def run_adb_command(cmd: str, *, check: bool = True) -> subprocess.CompletedProc
                 stdout = "\n".join(lines[:-1]) + "\n"
             except ValueError:
                 pass
-    print(stdout)
+    log.info(stdout)
     result = subprocess.CompletedProcess(raw.args, returncode, stdout=stdout)
     if check:
         assert returncode == 0, f"Command failed (exit {returncode})"
@@ -110,7 +108,7 @@ def run_script(
         cmd, env=env,
         text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
-    print(result.stdout)
+    log.info(result.stdout)
     return result
 
 

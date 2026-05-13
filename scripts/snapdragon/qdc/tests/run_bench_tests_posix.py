@@ -21,7 +21,6 @@ from utils import (
     MODEL_DEVICE_PATH,
     MODEL_NAME,
     PROMPT_DIR,
-    ensure_bundle,
     push_bundle_if_needed,
     run_adb_command,
     run_script,
@@ -57,7 +56,7 @@ def test_llama_completion(device):
         "run-completion.sh",
         extra_env={"D": device, "M": MODEL_NAME},
         extra_args=["--batch-size", "128", "-n", "128", "--seed", "42",
-                     "-f", f"{PROMPT_DIR}/bench_prompt.txt"],
+                    "-f", f"{PROMPT_DIR}/bench_prompt.txt"],
     )
     write_qdc_log(f"llama_completion_{device}.log", result.stdout or "")
     assert result.returncode == 0, (

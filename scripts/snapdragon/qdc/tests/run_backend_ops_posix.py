@@ -13,7 +13,6 @@ import pytest
 
 from utils import (
     BIN_PATH,
-    ensure_bundle,
     push_bundle_if_needed,
     run_script,
     write_qdc_log,
