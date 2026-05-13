@@ -24,7 +24,7 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
-    {"mtp",           COMMON_SPECULATIVE_TYPE_MTP},
+    {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -366,7 +366,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     }
 };
 
-struct common_speculative_state_mtp : public common_speculative_impl {
+struct common_speculative_state_draft_mtp : public common_speculative_impl {
     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
 
     llama_batch batch;
@@ -383,8 +383,8 @@ struct common_speculative_state_mtp : public common_speculative_impl {
     std::vector<int32_t> i_batch_beg;
     std::vector<int32_t> i_batch_end;
 
-    common_speculative_state_mtp(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_MTP, n_seq)
+    common_speculative_state_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq)
         , params(params.draft)
     {
         auto * ctx_tgt = this->params.ctx_tgt;
@@ -417,7 +417,7 @@ struct common_speculative_state_mtp : public common_speculative_impl {
         i_batch_end.assign(n_seq, -1);
     }
 
-    ~common_speculative_state_mtp() override {
+    ~common_speculative_state_draft_mtp() override {
         if (batch.token != nullptr) {
             free(batch.token);
             batch.token = nullptr;
@@ -1106,7 +1106,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
         case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:  return "draft-simple";
         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
-        case COMMON_SPECULATIVE_TYPE_MTP:           return "mtp";
+        case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram-map-k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
@@ -1163,7 +1163,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
 
         bool has_draft_simple = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE));
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
-        bool has_mtp = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_MTP)) && params.draft.ctx_dft != nullptr;
+        bool has_mtp = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP)) && params.draft.ctx_dft != nullptr;
 
         bool has_ngram_cache   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_CACHE));
         bool has_ngram_simple  = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE));
@@ -1210,7 +1210,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params));
         }
         if (has_mtp) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_MTP, params));
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, params));
         }
     }
 
@@ -1229,8 +1229,8 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 impls.push_back(std::make_unique<common_speculative_impl_draft_eagle3>(config.params, n_seq));
                 break;
             }
-            case COMMON_SPECULATIVE_TYPE_MTP: {
-                impls.push_back(std::make_unique<common_speculative_state_mtp>(config.params, n_seq));
+            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP: {
+                impls.push_back(std::make_unique<common_speculative_state_draft_mtp>(config.params, n_seq));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {

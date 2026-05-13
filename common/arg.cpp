@@ -445,11 +445,11 @@ static bool parse_bool_value(const std::string & value) {
 //
 
 void common_params_handle_models(common_params & params, llama_example curr_ex) {
-    const bool spec_type_mtp = std::find(params.speculative.types.begin(),
+    const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
                                          params.speculative.types.end(),
-                                         COMMON_SPECULATIVE_TYPE_MTP) != params.speculative.types.end();
+                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
-    auto res = common_params_handle_model(params.model, params.hf_token, params.offline, spec_type_mtp);
+    auto res = common_params_handle_model(params.model, params.hf_token, params.offline, spec_type_draft_mtp);
     if (params.no_mmproj) {
         params.mmproj = {};
     } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
@@ -465,7 +465,7 @@ void common_params_handle_models(common_params & params, llama_example curr_ex) 
     }
     // when --spec-type mtp is set and no draft model was provided explicitly,
     // fall back to the MTP head discovered alongside the -hf model
-    if (spec_type_mtp && res.found_mtp &&
+    if (spec_type_draft_mtp && res.found_mtp &&
         params.speculative.draft.mparams.path.empty() &&
         params.speculative.draft.mparams.hf_repo.empty() &&
         params.speculative.draft.mparams.url.empty()) {

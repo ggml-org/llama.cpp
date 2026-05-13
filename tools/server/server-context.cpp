@@ -795,7 +795,7 @@ private:
 
             const bool spec_mtp = std::find(params_base.speculative.types.begin(),
                                             params_base.speculative.types.end(),
-                                            COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end();
+                                            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
             if (spec_mtp) {
                 cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
             }
@@ -807,7 +807,7 @@ private:
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
         } else if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
-                             COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end()) {
+                             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end()) {
             SRV_INF("creating MTP draft context against the target model '%s'\n",
                     params_base.model.path.c_str());
 
@@ -931,7 +931,7 @@ private:
             slot.ctx_dft = ctx_dft.get();
             slot.spec    = spec.get();
             slot.is_mtp_enabled = (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
-                                             COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end())
+                                             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end())
                                   && (ctx_dft != nullptr);
             slot.n_ctx   = n_ctx_slot;
 
