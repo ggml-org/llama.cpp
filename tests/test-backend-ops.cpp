@@ -4979,13 +4979,6 @@ struct test_pool2d : public test_case {
         return out;
     }
 
-    double max_nmse_err(ggml_backend_t backend) override {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (dst_type == GGML_TYPE_F16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
-            return 1e-6;
-        }
-        return max_nmse_err();
-    }
 };
 
 // GGML_OP_POOL1D
@@ -5017,6 +5010,7 @@ struct test_pool1d : public test_case {
 
         return out;
     }
+
 };
 
 // GGML_OP_CONV_TRANSPOSE_1D
@@ -5133,6 +5127,14 @@ struct test_im2col : public test_case {
         ggml_set_name(out, "out");
 
         return out;
+    }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        if (dst_type == GGML_TYPE_F16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
+            return 1e-6;
+        }
+        return test_case::max_nmse_err();
     }
 };
 
