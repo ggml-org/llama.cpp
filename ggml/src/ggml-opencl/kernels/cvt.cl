@@ -664,6 +664,110 @@ kernel void kernel_restore_block_q5_1_trans4_ns(
     ((__global ushort8 *)(&(b->qs[0])))[0] = pre_block;
 }
 
+kernel void kernel_convert_block_q4_k_trans4_ns(
+    __global struct block_q4_K * src0,
+    __global uint  * dst_q,
+    __global half  * dst_d,
+    __global half  * dst_dm,
+    __global uchar * dst_s,
+    uint ne00,
+    uint ne01,
+    uchar mask_0F,
+    uchar mask_F0
+) {
+    uint i00 = get_global_id(1);
+    uint i01 = get_global_id(0);
+    uint i02 = get_global_id(2);
+
+    uint ne00_blk = ne00 / QK_K;
+    uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
+    uint dst_blk_offset = i01 + i00 * ne01     + i02 * ne00_blk * ne01;
+
+    __global struct block_q4_K * b = src0 + src_blk_offset;
+
+    dst_d [dst_blk_offset] = b->d;
+    dst_dm[dst_blk_offset] = b->dm;
+
+    uint4 qv[8];
+    uchar * qv_bytes = (uchar *)qv;
+    for (int i = 0; i < QK_K / 64; ++i) {
+        for (int j = 0; j < 16; ++j) {
+            uchar x0 = b->q[i*32 + 2*j];
+            uchar x1 = b->q[i*32 + 2*j + 1];
+
+            qv_bytes[i*32 + j     ] = convert_uchar(x0 & mask_0F) | convert_uchar((x1 & mask_0F) << 4);
+            qv_bytes[i*32 + j + 16] = convert_uchar((x0 & mask_F0) >> 4) | convert_uchar(x1 & mask_F0);
+        }
+    }
+
+    uint base = i02 * ne00_blk * ne01 * 32 + i00 * ne01 * 32 + i01;
+    #pragma unroll
+    for (int p = 0; p < 8; ++p) {
+        uint4 v = qv[p];
+        dst_q[base + (p * 4 + 0) * ne01] = v.x;
+        dst_q[base + (p * 4 + 1) * ne01] = v.y;
+        dst_q[base + (p * 4 + 2) * ne01] = v.z;
+        dst_q[base + (p * 4 + 3) * ne01] = v.w;
+    }
+
+    __global uchar * s_dst = dst_s + (i02 * ne01 + i01) * ne00_blk * K_SCALE_SIZE + i00 * K_SCALE_SIZE;
+    #pragma unroll
+    for (int i = 0; i < K_SCALE_SIZE; ++i) {
+        s_dst[i] = b->s[i];
+    }
+}
+
+kernel void kernel_restore_block_q4_k_trans4_ns(
+    __global uint  * src_q,
+    __global half  * src_d,
+    __global half  * src_dm,
+    __global uchar * src_s,
+    __global struct block_q4_K * dst0,
+    uint ne00,
+    uint ne01,
+    uchar mask_0F,
+    uchar mask_F0
+) {
+    uint i00 = get_global_id(1);  // block index along K
+    uint i01 = get_global_id(0);  // row index
+    uint i02 = get_global_id(2);  // batch index
+
+    uint ne00_blk = ne00 / QK_K;
+
+    uint src_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
+    uint dst_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
+
+    __global struct block_q4_K * b = dst0 + dst_blk_offset;
+
+    b->d  = src_d[src_blk_offset];
+    b->dm = src_dm[src_blk_offset];
+
+    __global uchar * s_src = src_s + (i02 * ne01 + i01) * ne00_blk * K_SCALE_SIZE + i00 * K_SCALE_SIZE;
+    for (int i = 0; i < K_SCALE_SIZE; ++i) {
+        b->s[i] = s_src[i];
+    }
+
+    uint base = i02 * ne00_blk * ne01 * 32 + i00 * ne01 * 32 + i01;
+
+    uint4 qv[8];
+    for (int p = 0; p < 8; ++p) {
+        qv[p].x = src_q[base + (p * 4 + 0) * ne01];
+        qv[p].y = src_q[base + (p * 4 + 1) * ne01];
+        qv[p].z = src_q[base + (p * 4 + 2) * ne01];
+        qv[p].w = src_q[base + (p * 4 + 3) * ne01];
+    }
+
+    uchar * qv_bytes = (uchar *)qv;
+    for (int i = 0; i < QK_K / 64; ++i) {
+        for (int j = 0; j < 16; ++j) {
+            uchar lo = qv_bytes[i*32 + j];
+            uchar hi = qv_bytes[i*32 + j + 16];
+            b->q[i*32 + 2*j]     = convert_uchar((lo & mask_0F) | ((hi & mask_0F) << 4));
+            b->q[i*32 + 2*j + 1] = convert_uchar(((lo & mask_F0) >> 4) | (hi & mask_F0));
+        }
+    }
+}
+
 //------------------------------------------------------------------------------
 // block_mxfp4
 //------------------------------------------------------------------------------
