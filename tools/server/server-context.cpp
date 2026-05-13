@@ -57,11 +57,6 @@ struct server_slot {
     llama_context * ctx_tgt = nullptr;
     llama_context * ctx_dft = nullptr;
 
-    // True when this slot's speculative impl is MTP (ctx_dft is the MTP head).
-    // MTP needs every prefill position to carry logits=1 so the streaming
-    // hook in common_speculative_state_mtp::process() can read t_h_pre_norm.
-    bool is_mtp_enabled = false;
-
     // multimodal
     mtmd_context * mctx = nullptr;
 
@@ -242,15 +237,9 @@ struct server_slot {
                 (ggml_time_us() - t_start) / 1000.0, n_text, (int) prompt.tokens.size());
     }
 
-    bool is_mtp() const { return is_mtp_enabled; }
-
-    // The trunk needs to emit logits at every prefill position when either:
-    //  - the task asked for embeddings, or
-    //  - MTP is enabled for this slot (the streaming hook in process() reads
-    //    h_pre_norm at every prompt position).
     bool need_embd() const {
         GGML_ASSERT(task);
-        return task->need_embd() || is_mtp();
+        return task->need_embd() || (spec && common_speculative_need_embd(spec));
     }
 
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
@@ -898,9 +887,6 @@ private:
             slot.ctx_tgt = ctx_tgt;
             slot.ctx_dft = ctx_dft.get();
             slot.spec    = spec.get();
-            slot.is_mtp_enabled = (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
-                                             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end())
-                                  && (ctx_dft != nullptr);
             slot.n_ctx   = n_ctx_slot;
 
             slot.mctx                   = mctx;
