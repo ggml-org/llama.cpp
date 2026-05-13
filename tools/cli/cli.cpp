@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <thread>
 #include <signal.h>
 
@@ -59,6 +60,7 @@ struct cli_context {
     std::vector<raw_buffer> input_files;
     task_params defaults;
     bool verbose_prompt;
+    std::optional<std::ofstream> file_out = std::nullopt;
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -75,6 +77,7 @@ struct cli_context {
         // defaults.return_progress = true; // TODO: show progress
 
         verbose_prompt = params.verbose_prompt;
+        defaults.special_characters = params.special;
     }
 
     std::string generate_completion(result_timings & out_timings) {
@@ -124,6 +127,11 @@ struct cli_context {
             console::set_display(DISPLAY_TYPE_RESET);
         }
 
+        append_file_out(
+            "[Prompt]: " + messages.back()["content"].get<std::string>() + "\n\n",
+            chat_params.prompt
+        );
+
         // wait for first result
         console::spinner::start();
         server_task_result_ptr result = rd.next(should_stop);
@@ -131,6 +139,7 @@ struct cli_context {
         console::spinner::stop();
         std::string curr_content;
         bool is_thinking = false;
+        bool content_started = false;
 
         while (result) {
             if (should_stop()) {
@@ -153,26 +162,39 @@ struct cli_context {
                         if (is_thinking) {
                             console::log("\n[End thinking]\n\n");
                             console::set_display(DISPLAY_TYPE_RESET);
+                            append_file_out("\n\n", "</think>");
                             is_thinking = false;
                         }
                         curr_content += diff.content_delta;
                         console::log("%s", diff.content_delta.c_str());
                         console::flush();
+                        if (!content_started) {
+                            append_file_out("[Assistant]: ", "");
+                            content_started = true;
+                        }
+                        append_file_out(diff.content_delta);
                     }
                     if (!diff.reasoning_content_delta.empty()) {
                         console::set_display(DISPLAY_TYPE_REASONING);
+                        std::string reasoning_delta = diff.reasoning_content_delta;
                         if (!is_thinking) {
                             console::log("[Start thinking]\n");
+                            append_file_out("[Thinking]: ", "<think>");
+                            if (reasoning_delta == "<think>") {
+                                reasoning_delta = "";
+                            }
                         }
                         is_thinking = true;
-                        console::log("%s", diff.reasoning_content_delta.c_str());
+                        console::log("%s", reasoning_delta.c_str());
                         console::flush();
+                        append_file_out(reasoning_delta);
                     }
                 }
             }
             auto res_final = dynamic_cast<server_task_result_cmpl_final *>(result.get());
             if (res_final) {
                 out_timings = std::move(res_final->timings);
+                append_file_out("\n\n", "");
                 break;
             }
             result = rd.next(should_stop);
@@ -197,6 +219,18 @@ struct cli_context {
             std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             return content;
         }
+    }
+
+    void append_file_out(const std::string & content, const std::optional<std::string> & special_content = std::nullopt) {
+        if (!file_out.has_value()) {
+            return;
+        }
+        if (defaults.special_characters && special_content.has_value()) {
+            file_out.value() << special_content.value();
+        } else {
+            file_out.value() << content;
+        }
+        file_out.value().flush();
     }
 
     common_chat_params format_chat() {
@@ -368,6 +402,16 @@ int main(int argc, char ** argv) {
     // TODO: avoid using atexit() here by making `console` a singleton
     console::init(params.simple_io, params.use_color);
     atexit([]() { console::cleanup(); });
+
+    // open output file early to fail fast
+    if (!params.out_file.empty()) {
+        ctx_cli.file_out.emplace(params.out_file, std::ios::binary);
+
+        if (!ctx_cli.file_out.has_value() || !ctx_cli.file_out->is_open()) {
+            console::error("Failed to open output file '%s'\n", params.out_file.c_str());
+            return 1;
+        }
+    }
 
     console::set_display(DISPLAY_TYPE_RESET);
     console::set_completion_callback(auto_completion_callback);
