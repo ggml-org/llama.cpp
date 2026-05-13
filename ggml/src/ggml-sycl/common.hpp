@@ -225,6 +225,7 @@ struct sycl_device_info {
                        // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
     size_t  total_vram;
+    bool    host_unified_memory; // true for integrated GPUs (CPU and GPU share the same physical memory)
     sycl_hw_info hw_info;
     optimize_feature opt_feature;
 };

@@ -110,6 +110,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
         info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
         info.devices[i].hw_info = get_device_hw_info(&device);
+        info.devices[i].host_unified_memory = device.get_info<sycl::info::device::host_unified_memory>();
 
     }
 
@@ -357,12 +358,13 @@ struct ggml_backend_sycl_buffer_context {
     int device;
     void * dev_ptr = nullptr;
     queue_ptr stream;
+    bool is_shared;  // true when malloc_shared was used (integrated/UMA GPU)
     std::string name;
     optimize_feature opt_feature;
     std::vector<ggml_tensor_extra_gpu *> tensor_extras;
 
-    ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream) :
-        device(device), dev_ptr(dev_ptr), stream(stream) {
+    ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream, bool is_shared = false) :
+        device(device), dev_ptr(dev_ptr), stream(stream), is_shared(is_shared) {
             check_allow_gpu_index(device);
             name = (GGML_SYCL_NAME + std::to_string(device));
             opt_feature = ggml_sycl_info().devices[device].opt_feature;
@@ -462,6 +464,13 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
+
+    if (ctx->is_shared) {
+        // Shared (UMA) buffer: CPU can access directly, no DMA needed
+        memcpy((char *)tensor->data + offset, data, size);
+        return;
+    }
+
     ggml_sycl_set_device(ctx->device);
     auto stream = &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
     SYCL_CHECK(CHECK_TRY_ERROR(dpct::dev_mgr::instance().get_device(ctx->device).queues_wait_and_throw()));
@@ -490,6 +499,12 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
+
+    if (ctx->is_shared) {
+        // Shared (UMA) buffer: CPU can access directly, no DMA needed
+        memcpy(data, (const char *)tensor->data + offset, size);
+        return;
+    }
 
     ggml_sycl_set_device(ctx->device);
     auto stream = dpct::dev_mgr::instance().get_device(ctx->device).default_queue();
@@ -655,6 +670,7 @@ static const ggml_backend_buffer_i ggml_backend_sycl_buffer_interface = {
 struct ggml_backend_sycl_buffer_type_context {
     int device;
     std::string name;
+    bool use_shared_buffers; // true for integrated/UMA GPUs (host_unified_memory)
 
     // each buffer type has its own stream
     queue_ptr stream = nullptr;
@@ -675,13 +691,16 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
     size = std::max(size, (size_t)1); // syclMalloc returns null for size 0
 
     void * dev_ptr;
-    SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)sycl::malloc_device(
-                                    size, *stream)));
+    if (buft_ctx->use_shared_buffers) {
+        SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)sycl::malloc_shared(size, *stream)));
+    } else {
+        SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)sycl::malloc_device(size, *stream)));
+    }
     if (!dev_ptr) {
       GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
       return nullptr;
     }
-    ggml_backend_sycl_buffer_context * ctx = new  ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, buft_ctx->stream);
+    ggml_backend_sycl_buffer_context * ctx = new  ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, buft_ctx->stream, buft_ctx->use_shared_buffers);
     return ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface, ctx, size);
 }
 catch (sycl::exception const &exc) {
@@ -745,10 +764,12 @@ ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(int device) {
         for (int i = 0; i < dev_count; i++) {
             auto & device_i = dpct::dev_mgr::instance().get_device(i);
             queue_ptr stream = &(device_i.default_queue());
+            bool use_shared = ggml_sycl_info().devices[i].host_unified_memory &&
+                              getenv("GGML_SYCL_NO_SHARED") == nullptr;
             ggml_backend_sycl_buffer_types[i] = {
                 /* .iface    = */ ggml_backend_sycl_buffer_type_interface,
                 /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_sycl_reg(), i),
-                /* .context  = */ new ggml_backend_sycl_buffer_type_context{i, GGML_SYCL_NAME + std::to_string(i), stream},
+                /* .context  = */ new ggml_backend_sycl_buffer_type_context{i, GGML_SYCL_NAME + std::to_string(i), use_shared, stream},
             };
         }
         ggml_backend_sycl_buffer_type_initialized = true;
@@ -771,10 +792,12 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(ggml_backend_syc
 
     if (!ggml_backend_sycl_buffer_type_initialized) {
         for (int i = 0; i < ggml_sycl_info().device_count; i++) {
+            bool use_shared = ggml_sycl_info().devices[i].host_unified_memory &&
+                              getenv("GGML_SYCL_NO_SHARED") == nullptr;
             ggml_backend_sycl_buffer_types[i] = {
                 /* .iface    = */ ggml_backend_sycl_buffer_type_interface,
                 /* .device   = */ nullptr,
-                /* .context  = */ new ggml_backend_sycl_buffer_type_context{i, GGML_SYCL_NAME + std::to_string(i), ctx->stream(i, 0)},
+                /* .context  = */ new ggml_backend_sycl_buffer_type_context{i, GGML_SYCL_NAME + std::to_string(i), use_shared, ctx->stream(i, 0)},
             };
         }
         ggml_backend_sycl_buffer_type_initialized = true;
@@ -5440,6 +5463,12 @@ ggml_backend_t ggml_backend_sycl_init(int device) {
     ggml_check_sycl();
 
     check_allow_gpu_index(device);
+
+    if (ggml_sycl_info().devices[device].host_unified_memory &&
+        getenv("GGML_SYCL_NO_SHARED") == nullptr) {
+        GGML_LOG_INFO("%s: device %d has unified memory - using sycl::malloc_shared for zero-copy tensor access\n",
+            __func__, device);
+    }
 
     ggml_backend_sycl_context * ctx = new ggml_backend_sycl_context(device);
     if (ctx == nullptr) {
