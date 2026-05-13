@@ -309,15 +309,6 @@ llama_model * llama_model_create(llama_model_loader & ml, const llama_model_para
     if (arch == LLM_ARCH_UNKNOWN) {
         throw std::runtime_error("unknown model architecture: '" + ml.get_arch_name() + "'");
     }
-    if (params.override_arch != nullptr && params.override_arch[0] != '\0') {
-        const llm_arch override = llm_arch_from_string(params.override_arch);
-        if (override == LLM_ARCH_UNKNOWN) {
-            throw std::runtime_error(std::string("unknown override architecture: '") + params.override_arch + "'");
-        }
-        LLAMA_LOG_INFO("%s: overriding architecture %s -> %s\n",
-                __func__, llm_arch_name(arch), llm_arch_name(override));
-        arch = override;
-    }
 
     return llama_model_create(arch, params);
 }
@@ -2118,7 +2109,6 @@ llama_model_params llama_model_default_params() {
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
-        /*.override_arch               =*/ nullptr,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
         /*.use_direct_io               =*/ false,
