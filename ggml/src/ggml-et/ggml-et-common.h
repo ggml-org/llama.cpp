@@ -31,10 +31,11 @@ struct ggml_backend_et_context {
 
 struct ggml_backend_et_device_context;
 
-struct ggml_backend_et_uberkernel_context {
-    bool failed = false;
-    uint64_t shire_mask = 0;
-
+// One slot in the uberkernel ring. The host vectors back the H2D copy and
+// must outlive the upload; the device buffers feed the kernel that consumes
+// them. pending_event lets us know when both have drained so the slot can
+// be recycled.
+struct ggml_backend_et_uberkernel_slot {
     std::vector<ggml_et_uberkernel_inst> insts;
     std::vector<std::byte> params_blob;
 
@@ -42,6 +43,21 @@ struct ggml_backend_et_uberkernel_context {
     std::byte * device_params = nullptr;
     size_t device_insts_capacity = 0;
     size_t device_params_capacity = 0;
+
+    rt::EventId pending_event{};
+    bool has_pending = false;
+};
+
+struct ggml_backend_et_uberkernel_context {
+    bool failed = false;
+    uint64_t shire_mask = 0;
+
+    // Ring of slots. We accumulate into slots[current_slot]; on segment
+    // commit we fire the H2D + launch and rotate to the next slot,
+    // waiting on its previous launch only if it hasn't drained yet.
+    static constexpr size_t SLOT_COUNT = 4;
+    ggml_backend_et_uberkernel_slot slots[SLOT_COUNT];
+    size_t current_slot = 0;
 };
 
 struct ggml_backend_et_device_context {

@@ -29,49 +29,69 @@ static size_t ggml_et_next_capacity(size_t current_capacity, size_t required_cap
     return next_capacity;
 }
 
+static ggml_backend_et_uberkernel_slot & ggml_et_uberkernel_current_slot(ggml_backend_et_uberkernel_context * uk_ctx) {
+    return uk_ctx->slots[uk_ctx->current_slot];
+}
+
+// Wait for any in-flight launch that previously used this slot to finish,
+// so the host vectors and device buffers are safe to mutate / free.
+static void ggml_et_uberkernel_slot_wait(ggml_backend_et_uberkernel_slot & slot,
+                                         const std::shared_ptr<rt::IRuntime> & runtime) {
+    if (!slot.has_pending || !runtime) {
+        return;
+    }
+    runtime->waitForEvent(slot.pending_event);
+    slot.has_pending = false;
+}
+
 static void ggml_et_uberkernel_reset_segment(ggml_backend_et_uberkernel_context * uk_ctx) {
     if (!uk_ctx) {
         return;
     }
 
     uk_ctx->shire_mask = 0;
-    uk_ctx->insts.clear();
-    uk_ctx->params_blob.clear();
+    auto & slot = ggml_et_uberkernel_current_slot(uk_ctx);
+    // Drain any prior launch on this slot before clearing its host buffers.
+    // begin_graph and abort_graph both come through here; in either case we
+    // must not yank the source memory out from under an in-flight DMA.
+    ggml_et_uberkernel_slot_wait(slot, ggml_et_runtime());
+    slot.insts.clear();
+    slot.params_blob.clear();
 }
 
-static bool ggml_et_uberkernel_ensure_device_capacity(ggml_backend_et_uberkernel_context * uk_ctx,
-                                                       ggml_backend_et_device_context * dev_ctx,
-                                                       size_t insts_size,
-                                                       size_t params_size) {
+static bool ggml_et_uberkernel_ensure_slot_capacity(ggml_backend_et_uberkernel_slot & slot,
+                                                    ggml_backend_et_device_context * dev_ctx,
+                                                    size_t insts_size,
+                                                    size_t params_size) {
     std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
-    if (!uk_ctx || !dev_ctx || !runtime) {
+    if (!dev_ctx || !runtime) {
         return false;
     }
 
     try {
-        if (uk_ctx->device_insts == nullptr || insts_size > uk_ctx->device_insts_capacity) {
-            const size_t new_capacity = ggml_et_next_capacity(uk_ctx->device_insts_capacity, insts_size);
-            if (uk_ctx->device_insts) {
-                runtime->freeDevice(dev_ctx->rtid, uk_ctx->device_insts);
+        if (slot.device_insts == nullptr || insts_size > slot.device_insts_capacity) {
+            const size_t new_capacity = ggml_et_next_capacity(slot.device_insts_capacity, insts_size);
+            if (slot.device_insts) {
+                runtime->freeDevice(dev_ctx->rtid, slot.device_insts);
             }
-            uk_ctx->device_insts = runtime->mallocDevice(dev_ctx->rtid, new_capacity);
-            uk_ctx->device_insts_capacity = uk_ctx->device_insts ? new_capacity : 0;
+            slot.device_insts = runtime->mallocDevice(dev_ctx->rtid, new_capacity);
+            slot.device_insts_capacity = slot.device_insts ? new_capacity : 0;
         }
 
-        if (uk_ctx->device_params == nullptr || params_size > uk_ctx->device_params_capacity) {
-            const size_t new_capacity = ggml_et_next_capacity(uk_ctx->device_params_capacity, params_size);
-            if (uk_ctx->device_params) {
-                runtime->freeDevice(dev_ctx->rtid, uk_ctx->device_params);
+        if (slot.device_params == nullptr || params_size > slot.device_params_capacity) {
+            const size_t new_capacity = ggml_et_next_capacity(slot.device_params_capacity, params_size);
+            if (slot.device_params) {
+                runtime->freeDevice(dev_ctx->rtid, slot.device_params);
             }
-            uk_ctx->device_params = runtime->mallocDevice(dev_ctx->rtid, new_capacity);
-            uk_ctx->device_params_capacity = uk_ctx->device_params ? new_capacity : 0;
+            slot.device_params = runtime->mallocDevice(dev_ctx->rtid, new_capacity);
+            slot.device_params_capacity = slot.device_params ? new_capacity : 0;
         }
     } catch (const std::exception & e) {
         GGML_LOG_ERROR("ET: Failed to resize uberkernel buffers: %s\n", e.what());
         return false;
     }
 
-    return uk_ctx->device_insts != nullptr && uk_ctx->device_params != nullptr;
+    return slot.device_insts != nullptr && slot.device_params != nullptr;
 }
 
 // Get embedded kernel data by name
@@ -162,7 +182,7 @@ bool ggml_et_load_kernel(ggml_backend_et_device_context* dev_ctx, const std::str
 
 static bool ggml_et_launch_kernel_internal(ggml_backend_et_device_context* dev_ctx, const std::string& kernel_name,
                                            void* params, size_t params_size, uint64_t shire_mask, bool enable_print,
-                                           bool sync_error_check) {
+                                           bool sync_error_check, rt::EventId* out_event = nullptr) {
     std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
     if (!runtime) {
         GGML_LOG_ERROR("ET: Runtime not available for kernel launch\n");
@@ -218,8 +238,11 @@ static bool ggml_et_launch_kernel_internal(ggml_backend_et_device_context* dev_c
             }
         }
 
-        runtime->kernelLaunch(dev_ctx->default_stream, kernel_id,
+        rt::EventId launch_event = runtime->kernelLaunch(dev_ctx->default_stream, kernel_id,
                              reinterpret_cast<std::byte*>(params), params_size, k_opts);
+        if (out_event) {
+            *out_event = launch_event;
+        }
 
         if(enable_print) {
             std::vector<std::byte> hostTraceBuf(ET_TRACE_BUFFER_SIZE);
@@ -274,7 +297,8 @@ static bool ggml_et_launch_uberkernel_segment(ggml_backend_et_device_context * d
         return false;
     }
 
-    if (uk_ctx->insts.empty()) {
+    auto & slot = ggml_et_uberkernel_current_slot(uk_ctx);
+    if (slot.insts.empty()) {
         return true;
     }
 
@@ -285,39 +309,69 @@ static bool ggml_et_launch_uberkernel_segment(ggml_backend_et_device_context * d
         return false;
     }
 
-    const size_t insts_size = uk_ctx->insts.size() * sizeof(ggml_et_uberkernel_inst);
-    const size_t params_size = uk_ctx->params_blob.size();
+    const size_t insts_size = slot.insts.size() * sizeof(ggml_et_uberkernel_inst);
+    const size_t params_size = slot.params_blob.size();
+    const uint64_t shire_mask = uk_ctx->shire_mask;
     bool ok = false;
 
     try {
-        if (!ggml_et_uberkernel_ensure_device_capacity(uk_ctx, dev_ctx, insts_size, params_size)) {
+        if (!ggml_et_uberkernel_ensure_slot_capacity(slot, dev_ctx, insts_size, params_size)) {
             GGML_LOG_ERROR("ET: Failed to allocate uberkernel device buffers\n");
             uk_ctx->failed = true;
-            ggml_et_uberkernel_reset_segment(uk_ctx);
+            // Drop this segment but keep the slot drained so we don't leak
+            // host vectors into the next graph.
+            slot.insts.clear();
+            slot.params_blob.clear();
+            uk_ctx->shire_mask = 0;
             return false;
         }
 
+        // Fire-and-forget H2D + launch on default_stream. In-stream FIFO
+        // ordering guarantees the kernel sees fully-uploaded buffers; the
+        // host source bytes (slot.insts / slot.params_blob) stay alive
+        // because we won't touch this slot again until pending_event fires.
         runtime->memcpyHostToDevice(dev_ctx->default_stream,
-                                    reinterpret_cast<const std::byte *>(uk_ctx->insts.data()),
-                                    uk_ctx->device_insts, insts_size, true);
+                                    reinterpret_cast<const std::byte *>(slot.insts.data()),
+                                    slot.device_insts, insts_size, true);
         runtime->memcpyHostToDevice(dev_ctx->default_stream,
-                                    uk_ctx->params_blob.data(),
-                                    uk_ctx->device_params, params_size, true);
-        runtime->waitForStream(dev_ctx->default_stream);
+                                    slot.params_blob.data(),
+                                    slot.device_params, params_size, true);
 
         ggml_et_uberkernel_params params = {
-            static_cast<uint32_t>(uk_ctx->insts.size()),
+            static_cast<uint32_t>(slot.insts.size()),
             static_cast<uint32_t>(sizeof(ggml_et_uberkernel_inst)),
-            reinterpret_cast<uint64_t>(uk_ctx->device_insts),
-            reinterpret_cast<uint64_t>(uk_ctx->device_params),
+            reinterpret_cast<uint64_t>(slot.device_insts),
+            reinterpret_cast<uint64_t>(slot.device_params),
         };
 
-        ok = ggml_et_launch_kernel_internal(dev_ctx, "uberkernel", &params, sizeof(params), uk_ctx->shire_mask, false, false);
+        rt::EventId launch_event{};
+        ok = ggml_et_launch_kernel_internal(dev_ctx, "uberkernel", &params, sizeof(params),
+                                            shire_mask, false, false, &launch_event);
+        if (ok) {
+            // The kernelLaunch above is the last thing on default_stream
+            // that touches this slot's device buffers. Recording its event
+            // lets the next reuse of this slot wait on that one event
+            // instead of the whole stream.
+            slot.pending_event = launch_event;
+            slot.has_pending = true;
+        }
     } catch (const std::exception & e) {
         GGML_LOG_ERROR("ET: Failed to commit uberkernel segment: %s\n", e.what());
     }
     uk_ctx->failed = !ok;
-    ggml_et_uberkernel_reset_segment(uk_ctx);
+
+    if (ok) {
+
+        uk_ctx->current_slot = (uk_ctx->current_slot + 1) % ggml_backend_et_uberkernel_context::SLOT_COUNT;
+        auto & next = ggml_et_uberkernel_current_slot(uk_ctx);
+        ggml_et_uberkernel_slot_wait(next, runtime);
+        next.insts.clear();
+        next.params_blob.clear();
+    } else {
+        slot.insts.clear();
+        slot.params_blob.clear();
+    }
+    uk_ctx->shire_mask = 0;
     return ok;
 }
 
@@ -354,13 +408,14 @@ static bool ggml_et_launch_uberkernel(ggml_backend_et_device_context * dev_ctx,
         return ggml_et_launch_kernel_internal(dev_ctx, kernel_name, params, params_size, shire_mask, enable_print, sync_error_check);
     }
 
-    const size_t params_offset = ggml_et_align_up(uk_ctx->params_blob.size(), GGML_ET_UBERKERNEL_PARAM_ALIGN);
-    if (params_offset > uk_ctx->params_blob.size()) {
-        uk_ctx->params_blob.resize(params_offset);
+    auto & slot = ggml_et_uberkernel_current_slot(uk_ctx);
+    const size_t params_offset = ggml_et_align_up(slot.params_blob.size(), GGML_ET_UBERKERNEL_PARAM_ALIGN);
+    if (params_offset > slot.params_blob.size()) {
+        slot.params_blob.resize(params_offset);
     }
 
     const std::byte * params_bytes = reinterpret_cast<const std::byte *>(params);
-    uk_ctx->params_blob.insert(uk_ctx->params_blob.end(), params_bytes, params_bytes + params_size);
+    slot.params_blob.insert(slot.params_blob.end(), params_bytes, params_bytes + params_size);
 
     ggml_et_uberkernel_inst inst = {
         uberkernel_id,
@@ -368,9 +423,9 @@ static bool ggml_et_launch_uberkernel(ggml_backend_et_device_context * dev_ctx,
         static_cast<uint32_t>(params_offset),
         static_cast<uint32_t>(params_size),
     };
-    uk_ctx->insts.push_back(inst);
+    slot.insts.push_back(inst);
 
-    if (uk_ctx->insts.size() == 1) {
+    if (slot.insts.size() == 1) {
         uk_ctx->shire_mask = shire_mask;
     }
 

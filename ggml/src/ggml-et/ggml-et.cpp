@@ -477,13 +477,19 @@ static void ggml_backend_et_free(ggml_backend_t backend) {
                 runtime->freeDevice(dev_ctx->rtid, dev_ctx->trace_buffer);
                 dev_ctx->trace_buffer = nullptr;
             }
-            if (dev_ctx->uberkernel.device_insts) {
-                runtime->freeDevice(dev_ctx->rtid, dev_ctx->uberkernel.device_insts);
-                dev_ctx->uberkernel.device_insts = nullptr;
-            }
-            if (dev_ctx->uberkernel.device_params) {
-                runtime->freeDevice(dev_ctx->rtid, dev_ctx->uberkernel.device_params);
-                dev_ctx->uberkernel.device_params = nullptr;
+            // Drain any in-flight uberkernel launches before freeing the
+            // device buffers they read from.
+            runtime->waitForStream(dev_ctx->default_stream);
+            for (auto & slot : dev_ctx->uberkernel.slots) {
+                if (slot.device_insts) {
+                    runtime->freeDevice(dev_ctx->rtid, slot.device_insts);
+                    slot.device_insts = nullptr;
+                }
+                if (slot.device_params) {
+                    runtime->freeDevice(dev_ctx->rtid, slot.device_params);
+                    slot.device_params = nullptr;
+                }
+                slot.has_pending = false;
             }
         }
     }
@@ -1923,17 +1929,21 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 	    dev_ctx->default_stream = ggml_et_runtime()->createStream(rtid);
 
 		dev_ctx->trace_buffer = ggml_et_runtime()->mallocDevice(rtid, ET_TRACE_BUFFER_SIZE);
-        dev_ctx->uberkernel.insts.reserve(256);
-        dev_ctx->uberkernel.params_blob.reserve(1 << 20);
-        dev_ctx->uberkernel.device_insts_capacity = 256 * sizeof(ggml_et_uberkernel_inst);
-        dev_ctx->uberkernel.device_params_capacity = 1 << 20;
-        dev_ctx->uberkernel.device_insts = ggml_et_runtime()->mallocDevice(rtid, dev_ctx->uberkernel.device_insts_capacity);
-        dev_ctx->uberkernel.device_params = ggml_et_runtime()->mallocDevice(rtid, dev_ctx->uberkernel.device_params_capacity);
-        if (dev_ctx->uberkernel.device_insts == nullptr) {
-            dev_ctx->uberkernel.device_insts_capacity = 0;
-        }
-        if (dev_ctx->uberkernel.device_params == nullptr) {
-            dev_ctx->uberkernel.device_params_capacity = 0;
+        // Pre-size each slot's host buffers and device-side scratch so the
+        // first few graph_compute calls don't pay a malloc/grow penalty.
+        for (auto & slot : dev_ctx->uberkernel.slots) {
+            slot.insts.reserve(256);
+            slot.params_blob.reserve(1 << 20);
+            slot.device_insts_capacity = 256 * sizeof(ggml_et_uberkernel_inst);
+            slot.device_params_capacity = 1 << 20;
+            slot.device_insts = ggml_et_runtime()->mallocDevice(rtid, slot.device_insts_capacity);
+            slot.device_params = ggml_et_runtime()->mallocDevice(rtid, slot.device_params_capacity);
+            if (slot.device_insts == nullptr) {
+                slot.device_insts_capacity = 0;
+            }
+            if (slot.device_params == nullptr) {
+                slot.device_params_capacity = 0;
+            }
         }
 
 	    dev->context = dev_ctx;
