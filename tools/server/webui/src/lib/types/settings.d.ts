@@ -92,6 +92,8 @@ export interface SettingsChatServiceOptions {
 	// Custom parameters
 	custom?: string;
 	timings_per_token?: boolean;
+	// Continuation control (vLLM compat), opt in to the explicit continue final message flag
+	continueFinalMessage?: boolean;
 	// Callbacks
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;

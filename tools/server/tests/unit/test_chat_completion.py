@@ -178,6 +178,45 @@ def test_chat_template_assistant_prefill(prefill, re_prefill):
     assert res.body["__verbose"]["prompt"] == f"<s> <|start_header_id|>system<|end_header_id|>\n\nBook<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{re_prefill}"
 
 
+def test_chat_template_continue_final_message_vllm_compat():
+    """continue_final_message is the vLLM/transformers explicit alias for the prefill_assistant heuristic.
+    Both must produce the same prompt."""
+    global server
+    server.chat_template = "llama3"
+    server.debug = True
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 8,
+        "add_generation_prompt": False,
+        "continue_final_message": True,
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+            {"role": "assistant", "content": "Whill"},
+        ]
+    })
+    assert res.status_code == 200
+    assert "__verbose" in res.body
+    assert res.body["__verbose"]["prompt"] == "<s> <|start_header_id|>system<|end_header_id|>\n\nBook<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nWhill"
+
+
+def test_chat_template_continue_final_message_mutual_exclusion():
+    """add_generation_prompt and continue_final_message both set to true must be rejected"""
+    global server
+    server.chat_template = "llama3"
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 8,
+        "add_generation_prompt": True,
+        "continue_final_message": True,
+        "messages": [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello"},
+        ]
+    })
+    assert res.status_code == 400
+
+
 def test_apply_chat_template():
     global server
     server.chat_template = "command-r"

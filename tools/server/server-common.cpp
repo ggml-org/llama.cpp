@@ -1040,6 +1040,10 @@ json oaicompat_chat_params_parse(
     inputs.use_jinja             = opt.use_jinja;
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", caps["supports_parallel_tool_calls"]);
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
+    const bool continue_final_message = json_value(body, "continue_final_message", false);
+    if (continue_final_message && inputs.add_generation_prompt) {
+        throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
+    }
     inputs.reasoning_format      = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
@@ -1071,7 +1075,10 @@ json oaicompat_chat_params_parse(
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token
     // for ex. this can be useful to modify the reasoning process in reasoning models
-    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
+    // continue_final_message is the explicit opt in alias from the vLLM/transformers API,
+    // equivalent to the prefill_assistant heuristic
+    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant"
+        && (continue_final_message || opt.prefill_assistant);
     common_chat_msg last_message;
     if (prefill_assistant_message) {
         last_message = inputs.messages.back();

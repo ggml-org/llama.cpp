@@ -239,6 +239,9 @@ export interface ApiChatCompletionRequest {
 	// Custom parameters (JSON string)
 	custom?: Record<string, unknown>;
 	timings_per_token?: boolean;
+	// Continuation control (vLLM compat)
+	add_generation_prompt?: boolean;
+	continue_final_message?: boolean;
 }
 
 export interface ApiChatCompletionToolCallFunctionDelta {
