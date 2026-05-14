@@ -1511,16 +1511,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
-    {
-        // Since MTP has a low number of draft tokens, enable recurrent checkpointing
-        // for hybrid attn models
-        // TODO: figure out how to make it place nicely with other speculative techniques
-        bool has_mtp = std::any_of(params.speculative.types.begin(),
-            params.speculative.types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
-        });
-        cparams.n_rs_seq = has_mtp ? (uint32_t) params.speculative.draft.n_max : 0u;
-    }
+    cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;

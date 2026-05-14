@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 #include <map>
+#include <algorithm>
 
 #if defined(_WIN32) && !defined(_WIN32_WINNT)
 #define _WIN32_WINNT 0x0A00
@@ -355,6 +356,14 @@ struct common_params_speculative {
 
     bool has_dft() const {
         return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
+    }
+
+    uint32_t need_n_rs_seq() const {
+        bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+        });
+
+        return needs_rs_seq ? draft.n_max : 0u;
     }
 };
 
