@@ -243,7 +243,6 @@ struct ggml_sycl_device_info {
 
 const ggml_sycl_device_info & ggml_sycl_info();
 
-// Same as CUDA/CANN backends.
 static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;
 
 struct ggml_sycl_pool {
