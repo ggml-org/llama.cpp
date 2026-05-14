@@ -79,6 +79,11 @@ if (LLAMA_BUILD_WEBUI)
         # Environment variable takes precedence (e.g., from CI workflows)
         if(DEFINED ENV{HF_WEBUI_VERSION})
             set(HF_WEBUI_VERSION "$ENV{HF_WEBUI_VERSION}")
+            # Validate against allowed characters to prevent CMake list separator
+            # or path-traversal issues in stamp filenames and download URLs
+            if(NOT HF_WEBUI_VERSION MATCHES "^[A-Za-z0-9._-]+$")
+                message(FATAL_ERROR "WebUI: invalid HF_WEBUI_VERSION='${HF_WEBUI_VERSION}' - must match ^[A-Za-z0-9._-]+$")
+            endif()
             message(STATUS "WebUI: using HF_WEBUI_VERSION from environment=${HF_WEBUI_VERSION}")
         elseif(DEFINED LLAMA_BUILD_NUMBER)
             set(HF_WEBUI_VERSION "b${LLAMA_BUILD_NUMBER}")
