@@ -13,8 +13,7 @@ exclude = [
 [[overrides]]
 include = [
     "./tools/server/tests/**",
-    "./scripts/snapdragon/qdc/tests/**",
-    "./scripts/snapdragon/qdc/*.py",
+    "./scripts/snapdragon/qdc/**",
 ]
 
 [overrides.rules]
