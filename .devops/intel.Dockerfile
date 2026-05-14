@@ -40,11 +40,11 @@ RUN mkdir -p /app/full \
 
 FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS base
 
-ARG IGC_VERSION=v2.32.7
-ARG IGC_VERSION_FULL=2_2.32.7+21184
-ARG COMPUTE_RUNTIME_VERSION=26.14.37833.4
-ARG COMPUTE_RUNTIME_VERSION_FULL=26.14.37833.4-0
-ARG IGDGMM_VERSION=22.9.0
+ARG IGC_VERSION=v2.20.5
+ARG IGC_VERSION_FULL=2_2.20.5+19972
+ARG COMPUTE_RUNTIME_VERSION=25.40.35563.10
+ARG COMPUTE_RUNTIME_VERSION_FULL=25.40.35563.10-0
+ARG IGDGMM_VERSION=22.8.2
 RUN mkdir /tmp/neo/ && cd /tmp/neo/ \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-core-${IGC_VERSION_FULL}_amd64.deb \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-opencl-${IGC_VERSION_FULL}_amd64.deb \
