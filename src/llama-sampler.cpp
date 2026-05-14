@@ -1551,24 +1551,26 @@ static void llama_sampler_min_p_apply(struct llama_sampler * smpl, llama_token_d
 
     // if the cur_p aren't sorted, try the unsorted implementation first
     if (!cur_p->sorted) {
-        std::vector<llama_token_data> filtered_tokens;
-
         float max_logit = -FLT_MAX;
         for (size_t i = 0; i < cur_p->size; ++i) {
             max_logit = std::max(max_logit, cur_p->data[i].logit);
         }
         const float min_logit = max_logit + logf(ctx->p); // min logit for p_i >= p * p_max
 
+        // in-place partition: swap qualifying tokens to the front
+        size_t n_keep = 0;
         for (size_t i = 0; i < cur_p->size; ++i) {
             if (cur_p->data[i].logit >= min_logit) {
-                filtered_tokens.push_back(cur_p->data[i]);
+                if (n_keep != i) {
+                    std::swap(cur_p->data[n_keep], cur_p->data[i]);
+                }
+                n_keep++;
             }
         }
 
         // if we have enough values the operation was a success
-        if (!filtered_tokens.empty() && filtered_tokens.size() >= ctx->min_keep) {
-            std::copy(filtered_tokens.begin(), filtered_tokens.end(), cur_p->data);
-            cur_p->size = filtered_tokens.size();
+        if (n_keep > 0 && n_keep >= ctx->min_keep) {
+            cur_p->size = n_keep;
             min_p_applied = true;
         }
     }
