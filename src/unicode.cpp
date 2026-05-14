@@ -664,7 +664,7 @@ static std::vector<size_t> unicode_regex_split_custom_qwen35(const std::string &
 
             // regex: [^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+
             if (!(cpt == '\r' || cpt == '\n' || flags.is_number)) {
-                if (flags.is_letter || flags.is_accent_mark || _get_flags(pos + 1).is_accent_mark || _get_flags(pos+1).is_letter) {  
+                if (flags.is_letter || flags.is_accent_mark || _get_flags(pos + 1).is_accent_mark || _get_flags(pos+1).is_letter) {
                     pos++;
                     while (_get_flags(pos).is_letter || _get_flags(pos).is_accent_mark) {
                         pos++;
