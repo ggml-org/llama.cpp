@@ -189,11 +189,11 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--reuse-port` | allow multiple sockets to bind to the same port (default: disabled)<br/>(env: LLAMA_ARG_REUSE_PORT) |
 | `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
 | `--api-prefix PREFIX` | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX) |
-| `--webui-config JSON` | JSON that provides default WebUI settings (overrides WebUI defaults)<br/>(env: LLAMA_ARG_WEBUI_CONFIG) |
-| `--webui-config-file PATH` | JSON file that provides default WebUI settings (overrides WebUI defaults)<br/>(env: LLAMA_ARG_WEBUI_CONFIG_FILE) |
-| `--webui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_WEBUI_MCP_PROXY) |
+| `--ui-config JSON` / `--webui-config JSON` (deprecated) | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG / LLAMA_ARG_WEBUI_CONFIG) |
+| `--ui-config-file PATH` / `--webui-config-file PATH` (deprecated) | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE / LLAMA_ARG_WEBUI_CONFIG_FILE) |
+| `--ui-mcp-proxy, --no-ui-mcp-proxy` / `--webui-mcp-proxy, --no-webui-mcp-proxy` (deprecated) | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY / LLAMA_ARG_WEBUI_MCP_PROXY) |
 | `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime<br/>(env: LLAMA_ARG_TOOLS) |
-| `--webui, --no-webui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_WEBUI) |
+| `--ui, --no-ui` / `--webui, --no-webui` (deprecated) | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI / LLAMA_ARG_WEBUI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
 | `--rerank, --reranking` | enable reranking endpoint on server (default: disabled)<br/>(env: LLAMA_ARG_RERANKING) |
 | `--api-key KEY` | API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none)<br/>(env: LLAMA_API_KEY) |
@@ -1831,10 +1831,12 @@ Apart from error types supported by OAI, we also have custom types that are spec
 
 ### Custom default Web UI preferences
 
-You can specify default preferences for the web UI using `--webui-config <JSON config>` or `--webui-config-file <path to JSON config>`. For example, you can disable pasting long text as attachments and enable rendering Markdown in user messages with this command:
+You can specify default preferences for the web UI using `--ui-config <JSON config>` or `--ui-config-file <path to JSON config>`. For example, you can disable pasting long text as attachments and enable rendering Markdown in user messages with this command:
 
 ```bash
-./llama-server -m model.gguf --webui-config '{"pasteLongTextToFileLen": 0, "renderUserContentAsMarkdown": true}'
+./llama-server -m model.gguf --ui-config '{"pasteLongTextToFileLen": 0, "renderUserContentAsMarkdown": true}'
 ```
 
-You may find available preferences in [settings-config.ts](webui/src/lib/constants/settings-config.ts).
+> **Note:** The old flags `--webui-config` and `--webui-config-file` are deprecated but still work as aliases.
+
+You may find available preferences in [settings-config.ts](../ui/src/lib/constants/settings-config.ts).
