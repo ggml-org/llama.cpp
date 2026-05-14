@@ -1210,7 +1210,8 @@ struct test_case {
     std::string current_op_name;
     bool contains_f16 = false;
 
-    void update_type_flags(ggml_context * ctx) {
+    // Used by the WebGPU backend to relax error thresholds on ops on f16 tensors
+    void check_for_f16_tensor(ggml_context * ctx) {
         contains_f16 = false;
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
             if (t->type == GGML_TYPE_F16) {
@@ -1312,7 +1313,7 @@ struct test_case {
 
         ggml_tensor * out = build_graph(ctx);
         current_op_name   = op_desc(out);
-        update_type_flags(ctx);
+        check_for_f16_tensor(ctx);
 
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
@@ -2402,7 +2403,6 @@ struct test_set_rows : public test_case {
         }
         return 1e-7;
     }
-
 };
 
 // GGML_OP_ROPE + GGML_OP_VIEW + GGML_OP_SET_ROWS
@@ -2505,7 +2505,6 @@ struct test_rope_set_rows : public test_case {
             }
         }
     }
-
 };
 
 // GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ROPE (+ GGML_OP_VIEW + GGML_OP_SET_ROWS)
@@ -2579,7 +2578,6 @@ struct test_rms_norm_mul_rope : public test_case {
             }
         }
     }
-
 };
 
 // GGML_OP_ARGMAX
@@ -3093,7 +3091,6 @@ struct test_bin_bcast : public test_case {
     double max_maa_err() override {
         return op == ggml_add ? 1e-4 : 1e-3;
     }
-
 };
 
 // GGML_OP_ADD_ID
@@ -4989,7 +4986,6 @@ struct test_pool2d : public test_case {
 
         return out;
     }
-
 };
 
 // GGML_OP_POOL1D
@@ -5021,7 +5017,6 @@ struct test_pool1d : public test_case {
 
         return out;
     }
-
 };
 
 // GGML_OP_CONV_TRANSPOSE_1D
@@ -5139,7 +5134,6 @@ struct test_im2col : public test_case {
 
         return out;
     }
-
 };
 
 // GGML_OP_IM2COL_3D
