@@ -320,9 +320,9 @@ static int common_download_file_single_online(const std::string & url,
 
     auto head = cli.Head(parts.path);
     if (!head || head->status < 200 || head->status >= 300) {
-        LOG_WRN("%s: HEAD failed, status: %d\n", __func__, head ? head->status : -1);
+        LOG_TRC("%s: HEAD failed, status: %d\n", __func__, head ? head->status : -1);
         if (file_exists) {
-            LOG_INF("%s: using cached file (HEAD failed): %s\n", __func__, path.c_str());
+            LOG_TRC("%s: using cached file (HEAD failed): %s\n", __func__, path.c_str());
             return 304; // 304 Not Modified - fake cached response
         }
         return head ? head->status : -1;
