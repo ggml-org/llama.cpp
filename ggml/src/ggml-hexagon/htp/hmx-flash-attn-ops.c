@@ -760,8 +760,9 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
             // ALiBi slopes — only needed when has_alibi (scheme A)
             HVX_Vector v_slope0, v_slope1;
             if (args->has_alibi) {
-                v_slope0 = hvx_vec_splat_f16(args->slopes[r + 0]);
-                v_slope1 = (r + 1 < (int) n_rows_g) ? hvx_vec_splat_f16(args->slopes[r + 1]) : Q6_V_vzero();
+                HVX_Vector v_s = hvx_vmemu(args->slopes + r);
+                v_slope0 = hvx_vec_repl_f16(v_s);
+                v_slope1 = (r + 1 < (int) n_rows_g) ? hvx_vec_repl_f16(Q6_V_vror_VR(v_s, 2)) : Q6_V_vzero();
             }
 
             const HVX_Vector v_threshold = Q6_Vh_vsplat_R(0xcc00);  // fp16 -16.0 (hoisted outside for-c)

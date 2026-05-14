@@ -83,17 +83,22 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    llama_backend_init();
+    llama_numa_init(params.numa);
+
+    common_params_print_info(params);
+
     // validate batch size for embeddings
     // embeddings require all tokens to be processed in a single ubatch
     // see https://github.com/ggml-org/llama.cpp/issues/12836
     if (params.embedding && params.n_batch > params.n_ubatch) {
-        LOG_WRN("%s: embeddings enabled with n_batch (%d) > n_ubatch (%d)\n", __func__, params.n_batch, params.n_ubatch);
-        LOG_WRN("%s: setting n_batch = n_ubatch = %d to avoid assertion failure\n", __func__, params.n_ubatch);
+        SRV_WRN("embeddings enabled with n_batch (%d) > n_ubatch (%d)\n", params.n_batch, params.n_ubatch);
+        SRV_WRN("setting n_batch = n_ubatch = %d to avoid assertion failure\n", params.n_ubatch);
         params.n_batch = params.n_ubatch;
     }
 
     if (params.n_parallel < 0) {
-        LOG_INF("%s: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n", __func__);
+        SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
 
         params.n_parallel = 4;
         params.kv_unified = true;
@@ -107,15 +112,9 @@ int main(int argc, char ** argv) {
     // struct that contains llama context and inference
     server_context ctx_server;
 
-    llama_backend_init();
-    llama_numa_init(params.numa);
-
-    LOG_INF("build_info: %s\n", llama_build_info());
-    LOG_INF("%s\n", common_params_get_system_info(params).c_str());
-
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {
-        LOG_ERR("%s: failed to initialize HTTP server\n", __func__);
+        SRV_ERR("%s", "failed to initialize HTTP server\n");
         return 1;
     }
 
@@ -134,7 +133,7 @@ int main(int argc, char ** argv) {
         try {
             models_routes.emplace(params, argc, argv);
         } catch (const std::exception & e) {
-            LOG_ERR("%s: failed to initialize router models: %s\n", __func__, e.what());
+            SRV_ERR("failed to initialize router models: %s\n", e.what());
             return 1;
         }
 
@@ -222,7 +221,7 @@ int main(int argc, char ** argv) {
         try {
             tools.setup(params.server_tools);
         } catch (const std::exception & e) {
-            LOG_ERR("%s: tools setup failed: %s\n", __func__, e.what());
+            SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;
         }
         SRV_WRN("%s", "-----------------\n");
@@ -240,7 +239,7 @@ int main(int argc, char ** argv) {
     std::function<void()> clean_up;
 
     if (is_router_server) {
-        LOG_INF("%s: starting router server, no model will be loaded in this process\n", __func__);
+        SRV_INF("%s", "starting router server, no model will be loaded in this process\n");
 
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
@@ -252,7 +251,7 @@ int main(int argc, char ** argv) {
 
         if (!ctx_http.start()) {
             clean_up();
-            LOG_ERR("%s: exiting due to HTTP server error\n", __func__);
+            SRV_ERR("%s", "exiting due to HTTP server error\n");
             return 1;
         }
         ctx_http.is_ready.store(true);
@@ -273,12 +272,12 @@ int main(int argc, char ** argv) {
         // start the HTTP server before loading the model to be able to serve /health requests
         if (!ctx_http.start()) {
             clean_up();
-            LOG_ERR("%s: exiting due to HTTP server error\n", __func__);
+            SRV_ERR("%s", "exiting due to HTTP server error\n");
             return 1;
         }
 
         // load the model
-        LOG_INF("%s: loading model\n", __func__);
+        SRV_INF("%s", "loading model\n");
 
         if (server_models::is_child_server()) {
             ctx_server.on_sleeping_changed([&](bool sleeping) {
@@ -291,14 +290,14 @@ int main(int argc, char ** argv) {
             if (ctx_http.thread.joinable()) {
                 ctx_http.thread.join();
             }
-            LOG_ERR("%s: exiting due to model loading error\n", __func__);
+            SRV_ERR("%s", "exiting due to model loading error\n");
             return 1;
         }
 
         routes.update_meta(ctx_server);
         ctx_http.is_ready.store(true);
 
-        LOG_INF("%s: model loaded\n", __func__);
+        SRV_INF("%s", "model loaded\n");
 
         shutdown_handler = [&](int) {
             // this will unblock start_loop()
@@ -322,9 +321,9 @@ int main(int argc, char ** argv) {
 #endif
 
     if (is_router_server) {
-        LOG_INF("%s: router server is listening on %s\n", __func__, ctx_http.listening_address.c_str());
-        LOG_INF("%s: NOTE: router mode is experimental\n", __func__);
-        LOG_INF("%s:       it is not recommended to use this mode in untrusted environments\n", __func__);
+        SRV_INF("router server is listening on %s\n", ctx_http.listening_address.c_str());
+        SRV_WRN("%s", "NOTE: router mode is experimental\n");
+        SRV_WRN("%s", "      it is not recommended to use this mode in untrusted environments\n");
         if (ctx_http.thread.joinable()) {
             ctx_http.thread.join(); // keep the main thread alive
         }
@@ -332,8 +331,7 @@ int main(int argc, char ** argv) {
         // when the HTTP server stops, clean up and exit
         clean_up();
     } else {
-        LOG_INF("%s: server is listening on %s\n", __func__, ctx_http.listening_address.c_str());
-        LOG_INF("%s: starting the main loop...\n", __func__);
+        SRV_INF("server is listening on %s\n", ctx_http.listening_address.c_str());
 
         // optionally, notify router server that this instance is ready
         std::thread monitor_thread;

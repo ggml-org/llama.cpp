@@ -122,7 +122,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
 				label: 'Enable "Continue" button',
-				help: 'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.',
+				help: 'Enable "Continue" button for assistant messages, including reasoning models.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
