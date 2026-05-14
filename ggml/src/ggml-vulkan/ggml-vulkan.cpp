@@ -1506,6 +1506,7 @@ struct vk_op_gated_delta_net_push_constants {
     uint32_t sb1, sb2, sb3;
     uint32_t neq1, rq3;
     float scale;
+    uint32_t K;
 };
 
 struct vk_op_ssm_scan_push_constants {
@@ -10767,6 +10768,7 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
     const ggml_tensor * src_q     = dst->src[0];
     const ggml_tensor * src_v     = dst->src[2];
     const ggml_tensor * src_beta  = dst->src[4];
+    const ggml_tensor * src_state = dst->src[5];
 
     GGML_ASSERT(dst->buffer != nullptr);
 
@@ -10774,6 +10776,9 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
     const uint32_t H        = (uint32_t)src_v->ne[1];
     const uint32_t n_tokens = (uint32_t)src_v->ne[2];
     const uint32_t n_seqs   = (uint32_t)src_v->ne[3];
+
+    // state is 3D (S_v*S_v*H, K, n_seqs); K is the snapshot slot count.
+    const uint32_t K = (uint32_t)src_state->ne[1];
 
     const uint32_t s_off = S_v * H * n_tokens * n_seqs;
 
@@ -10808,7 +10813,8 @@ static void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& s
         sv1, sv2, sv3,
         sb1, sb2, sb3,
         neq1, rq3,
-        scale
+        scale,
+        K
     };
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
