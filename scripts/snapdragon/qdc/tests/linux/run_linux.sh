@@ -122,22 +122,30 @@ note_timeout_if_triggered() {
   } >> "$log"
 }
 
+completion_extra_args() {
+  case "$1" in
+    cpu) echo "--device none --ctx-size 128 -no-cnv -n 32 --seed 42 --batch-size 128" ;;
+    gpu) echo "--device GPUOpenCL --ctx-size 128 -no-cnv -n 32 --seed 42 --ubatch-size 512" ;;
+    npu) echo "--device HTP0 --ctx-size 128 -no-cnv -n 32 --seed 42 --ubatch-size 1024" ;;
+  esac
+}
+
 run_completion_case() {
   local name=$1
   local parts=($(backend_env "$name"))
   local ndev=${parts[0]} device=${parts[1]}
   local device_log_name=$(backend_device_name "$name")
   local log="$LOG_DIR/llama_completion_${device_log_name}.log"
-  echo "=== [completion:$name] llama-cli --device $device (NDEV=$ndev) ==="
-  timeout 600 env GGML_HEXAGON_NDEV=$ndev ./bin/llama-cli \
+  local prompt="$LOG_DIR/bench_prompt.txt"
+  echo 'What is the capital of France?' > "$prompt"
+  local extra
+  extra=$(completion_extra_args "$name")
+  echo "=== [completion:$name] llama-completion --device $device (NDEV=$ndev) ==="
+  timeout 600 env GGML_HEXAGON_NDEV=$ndev ./bin/llama-completion \
       -m "$MODEL_PATH" \
-      --device "$device" \
-      -ngl 99 \
-      --batch-size 128 \
-      -n 128 \
-      --seed 42 \
-      -p "What is the capital of France?" \
-      > "$log" 2>&1
+      -f "$prompt" \
+      $extra \
+      > "$log" 2>&1 < /dev/null
   local rc=$?
   note_timeout_if_triggered "$rc" 600 "$log"
   if [ $rc -eq 0 ]; then
