@@ -88,6 +88,29 @@ static void cpy_thread_sametype_reshape(struct htp_copy_context * ct, struct htp
     const uint32_t ir0 = dr * ith;
     const uint32_t ir1 = (ir0 + dr) < nr ? (ir0 + dr) : nr;
 
+    // Fast path: when both src0 and dst are contiguous in memory
+    // Replace the element-by-element loop with a single bulk HVX copy per (i03, i02) slice.
+    const bool src0_contig = (nb00 == ct->src0_type_size) &&
+                             (nb01 == ne00 * nb00) &&
+                             (nb02 == ne01 * nb01) &&
+                             (nb03 == ne02 * nb02);
+    const bool dst_contig  = (nb0  == ct->dst_type_size)  &&
+                             (nb1  == ne0  * nb0)  &&
+                             (nb2  == ne1  * nb1)  &&
+                             (nb3  == ne2  * nb2);
+
+    if (src0_contig && dst_contig) {
+        for (int64_t i03 = 0; i03 < ne03; i03++) {
+            for (int64_t i02 = 0; i02 < ne02; i02++) {
+                uint8_t * src_ptr = (uint8_t *) src0->data + i03*nb03 + i02*nb02 + ir0*nb01;
+                uint32_t  flat    = ((i03*ne02 + i02)*ne01 + ir0) * ne00;
+                uint8_t * dst_ptr = (uint8_t *) dst->data  + flat * ct->src0_type_size;
+                hvx_copy_uu(dst_ptr, src_ptr, (ir1 - ir0) * ne00, ct->src0_type_size);
+            }
+        }
+        return;
+    }
+
     // dst counters
     int64_t k10 = 0;
     int64_t i11 = 0;
