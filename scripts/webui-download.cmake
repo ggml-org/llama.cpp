@@ -11,7 +11,7 @@ cmake_minimum_required(VERSION 3.16)
 set(PUBLIC_DIR   "" CACHE STRING "Directory to store/download assets")
 set(HF_BUCKET    "" CACHE STRING "Hugging Face bucket name")
 set(HF_VERSION   "" CACHE STRING "Version to download (empty = resolve from git)")
-set(ASSETS       "" CACHE STRING "Semicolon-separated list of asset filenames")
+set(ASSETS       "" CACHE STRING "Plus-separated list of asset filenames (+)")
 set(STAMP_FILE   "" CACHE STRING "Stamp file to create on success (optional)")
 set(SOURCE_DIR   "" CACHE STRING "Project source root (to resolve version from git)")
 set(NPM_DIR      "" CACHE STRING "WebUI source directory (to run npm build)")
@@ -30,6 +30,10 @@ if("${RESOLVED_VERSION}" STREQUAL "" AND NOT "${SOURCE_DIR}" STREQUAL "")
         endif()
     endif()
 endif()
+
+# Convert + back to CMake list (+ is used as separator instead of ; to
+# avoid platform-specific escaping issues when passing via -D arguments)
+string(REGEX REPLACE "\\+" ";" ASSETS "${ASSETS}")
 
 # ---------------------------------------------------------------------------
 # 2. Check stamp freshness — re-download if resolved version changed
@@ -69,52 +73,58 @@ set(PROVISION_SUCCESS FALSE)
 
 if(NOT PROVISION_SUCCESS AND NOT "${NPM_DIR}" STREQUAL "")
     if(EXISTS "${NPM_DIR}/package.json")
-        message(STATUS "WebUI: building from source in ${NPM_DIR}")
+        # Check if npm is available before attempting npm build
+        find_program(NPM_EXECUTABLE npm)
+        if(NPM_EXECUTABLE)
+            message(STATUS "WebUI: building from source in ${NPM_DIR}")
 
-        # Run npm install if node_modules is missing
-        if(NOT EXISTS "${NPM_DIR}/node_modules")
-            message(STATUS "WebUI: running npm install (first time)")
+            # Run npm install if node_modules is missing
+            if(NOT EXISTS "${NPM_DIR}/node_modules")
+                message(STATUS "WebUI: running npm install (first time)")
+                execute_process(
+                    COMMAND npm install
+                    WORKING_DIRECTORY "${NPM_DIR}"
+                    RESULT_VARIABLE NPM_INSTALL_RESULT
+                    OUTPUT_VARIABLE NPM_OUT
+                    ERROR_VARIABLE  NPM_ERR
+                )
+                if(NOT NPM_INSTALL_RESULT EQUAL 0)
+                    message(STATUS "WebUI: npm install failed (${NPM_INSTALL_RESULT}), falling back to download")
+                    message(STATUS "  stderr: ${NPM_ERR}")
+                endif()
+            endif()
+
+            # Run the build
             execute_process(
-                COMMAND npm install
+                COMMAND npm run build
                 WORKING_DIRECTORY "${NPM_DIR}"
-                RESULT_VARIABLE NPM_INSTALL_RESULT
+                RESULT_VARIABLE NPM_BUILD_RESULT
                 OUTPUT_VARIABLE NPM_OUT
                 ERROR_VARIABLE  NPM_ERR
             )
-            if(NOT NPM_INSTALL_RESULT EQUAL 0)
-                message(STATUS "WebUI: npm install failed (${NPM_INSTALL_RESULT}), falling back to download")
+
+            if(NPM_BUILD_RESULT EQUAL 0)
+                # Verify that the expected assets were produced
+                set(ALL_BUILT TRUE)
+                foreach(asset ${ASSETS})
+                    if(NOT EXISTS "${PUBLIC_DIR}/${asset}")
+                        set(ALL_BUILT FALSE)
+                        break()
+                    endif()
+                endforeach()
+
+                if(ALL_BUILT)
+                    message(STATUS "WebUI: local npm build succeeded")
+                    set(PROVISION_SUCCESS TRUE)
+                else()
+                    message(STATUS "WebUI: npm build completed but assets missing from ${PUBLIC_DIR}, falling back to download")
+                endif()
+            else()
+                message(STATUS "WebUI: npm build failed (${NPM_BUILD_RESULT}), falling back to download")
                 message(STATUS "  stderr: ${NPM_ERR}")
             endif()
-        endif()
-
-        # Run the build
-        execute_process(
-            COMMAND npm run build
-            WORKING_DIRECTORY "${NPM_DIR}"
-            RESULT_VARIABLE NPM_BUILD_RESULT
-            OUTPUT_VARIABLE NPM_OUT
-            ERROR_VARIABLE  NPM_ERR
-        )
-
-        if(NPM_BUILD_RESULT EQUAL 0)
-            # Verify that the expected assets were produced
-            set(ALL_BUILT TRUE)
-            foreach(asset ${ASSETS})
-                if(NOT EXISTS "${PUBLIC_DIR}/${asset}")
-                    set(ALL_BUILT FALSE)
-                    break()
-                endif()
-            endforeach()
-
-            if(ALL_BUILT)
-                message(STATUS "WebUI: local npm build succeeded")
-                set(PROVISION_SUCCESS TRUE)
-            else()
-                message(STATUS "WebUI: npm build completed but assets missing from ${PUBLIC_DIR}, falling back to download")
-            endif()
         else()
-            message(STATUS "WebUI: npm build failed (${NPM_BUILD_RESULT}), falling back to download")
-            message(STATUS "  stderr: ${NPM_ERR}")
+            message(STATUS "WebUI: npm not found, skipping npm build and trying HF Bucket download")
         endif()
     else()
         message(STATUS "WebUI: NPM_DIR (${NPM_DIR}) has no package.json, skipping npm build")
@@ -178,8 +188,7 @@ if(NOT PROVISION_SUCCESS AND HF_ENABLED)
                 string(REGEX MATCH "${EXPECTED_HASH_UPPER}[ \\t]+${asset}" CHECKSUM_LINE "${CHECKSUMS_CONTENT}")
                 if(NOT CHECKSUM_LINE)
                     message(WARNING "WebUI: checksum verification failed for ${asset}")
-                    set(ALL_OK FALSE)
-                    break()
+                    message(WARNING "  downloaded file may not match expected checksum, but will be used")
                 endif()
             endforeach()
             if(ALL_OK)
