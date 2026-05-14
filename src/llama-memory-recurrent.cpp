@@ -170,10 +170,12 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             // partial rollback via per-token snapshot index (bounded by n_rs_seq)
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
                 const llama_pos rollback = cell.pos - (p0 - 1);
-                GGML_ASSERT(rollback >= 1 && rollback <= (llama_pos) n_rs_seq);
-                set_rs_idx(seq_id, (uint32_t) rollback);
-                cell.pos = p0 - 1;
-                return true;
+                if (rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
+                    set_rs_idx(seq_id, (uint32_t) rollback);
+                    cell.pos = p0 - 1;
+                    return true;
+                }
+                return false;
             }
             // invalidate tails which will be cleared
             if (p0 <= cell.pos && cell.pos < p1) {
