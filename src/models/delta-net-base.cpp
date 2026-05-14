@@ -447,7 +447,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     return build_delta_net_chunking(q, k, v, g, b, s, il);
 }
 
-bool llm_build_delta_net_base::keep_intermediates() const {
+bool llm_build_delta_net_base::keep_rs() const {
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
     return cparams.n_rs_seq > 0
         && n_seq_tokens > 1
@@ -466,7 +466,7 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
     const uint32_t mem_size = mctx_cur->get_size();
     const int64_t n_seqs       = ubatch.n_seqs;
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
-    const bool    keep         = keep_intermediates();
+    const bool    keep         = keep_rs();
 
     ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
     cb(conv_states, "conv_states", il);
@@ -531,7 +531,7 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const int64_t n_seqs       = s->ne[3];
     const int64_t n_seq_tokens = q->ne[2];
 
-    if (!keep_intermediates()) {
+    if (!keep_rs()) {
         auto attn_out = build_delta_net(q, k, v, g, b, s, il);
         ggml_tensor * output    = attn_out.first;
         ggml_tensor * new_state = attn_out.second;

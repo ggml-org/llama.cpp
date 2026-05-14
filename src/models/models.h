@@ -67,7 +67,7 @@ struct llm_build_delta_net_base : public llm_graph_context {
                         int   il);
 
     // true when speculative rollback is enabled and the batch fits in the rs cache
-    bool keep_intermediates() const;
+    bool keep_rs() const;
 
     // read conv state from cache, concat with qkv_mixed, write back (single slot or per-token)
     // qkv_mixed: (qkv_dim, n_seq_tokens, n_seqs); returns conv_input: (kernel_size + n_seq_tokens - 1, channels, n_seqs)

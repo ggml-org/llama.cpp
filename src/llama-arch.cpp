@@ -878,7 +878,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
     }
 }
 
-bool llm_arch_supports_recurrent_partial_rollback(const llm_arch & arch) {
+bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
