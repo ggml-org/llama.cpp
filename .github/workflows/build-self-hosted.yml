@@ -57,7 +57,7 @@ env:
 jobs:
   determine-tag:
     name: Determine tag name
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
     steps:
