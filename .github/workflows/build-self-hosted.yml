@@ -68,6 +68,8 @@ jobs:
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 
   ggml-ci-nvidia-cuda:
     needs: determine-tag
