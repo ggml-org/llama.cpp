@@ -746,7 +746,7 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
 
 | Name            | Function                                                                         |
 |-----------------|----------------------------------------------------------------------------------|
-| DEBUG_SYCL_POOL   | Enable device memory pool logging on teardown. Useful for profiling allocations. |
+| DEBUG_SYCL_POOL| Enable device memory pool logging on teardown. Useful for profiling allocations. |
 | DEBUG_SYCL_MALLOC | Enable verbose per-call logging of device pool alloc/free operations. |
 
 ## Design Rule
