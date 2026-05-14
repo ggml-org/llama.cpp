@@ -37,13 +37,20 @@
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIP)
 
-// x4 pack for q8_1 blocks:
-// - 4 x ds first (16 bytes)
-// - then 4 blocks of qs, packed as 32 x int32 (128 bytes total)
-struct block_q8_1_x4 {
-    half2   ds[4];
-    int32_t qs[4 * QK8_1 / 4];
+template<int q8_1_layout_block_size>
+struct block_q8_1_layout {
+    static_assert(q8_1_layout_block_size % QK8_1 == 0, "q8_1 layout block size must contain whole q8_1 blocks");
+
+    static constexpr int q8_1_blocks = q8_1_layout_block_size / QK8_1;
+
+    // Scales for all q8_1 blocks in the layout group are stored before the quantized values.
+    half2   ds[q8_1_blocks];
+    int32_t qs[q8_1_layout_block_size / sizeof(int32_t)];
 };
+
+using block_q8_1_x4 = block_q8_1_layout<4 * QK8_1>;
+
+static_assert(sizeof(block_q8_1_layout<QK8_1>) == sizeof(block_q8_1), "Unexpected block_q8_1 layout size");
 static_assert(sizeof(block_q8_1_x4) == 4 * sizeof(block_q8_1), "Unexpected block_q8_1_x4 size");
 
 #define STRINGIZE_IMPL(...) #__VA_ARGS__

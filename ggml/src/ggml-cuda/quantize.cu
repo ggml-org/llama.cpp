@@ -56,50 +56,106 @@ static __device__ __forceinline__ int32_t pack_q8_1_i8x4(
         ((uint32_t) (uint8_t) q3 << 24);
 }
 
-// one warp handles 4 q8_1 blocks, each 8-lane subgroup handles one block.
-static __global__ void quantize_q8_1_x4(
+template<int q8_1_layout_block_size>
+static __global__ void quantize_q8_1_layout(
         const float * __restrict__ x, void * __restrict__ vy,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const uint32_t ne1, const uint3 ne2) {
-    const int lane       = threadIdx.x;      // [0, 31]
-    const int ibx4_inner = lane >> 3;        // [0, 3]
-    const int iqs        = lane &  7;        // [0, 7] (one packed int32 = 4 values)
+    // q8_1_layout_block_size controls the memory layout group size only.
+    // The q8_1 quantization block is still QK8_1 values with one half2 ds.
+    static_assert(q8_1_layout_block_size % QK8_1 == 0, "q8_1 layout block size must contain whole q8_1 blocks");
+
+    // Each thread quantizes 4 float values and stores them packed into one int32.
+    // A single q8_1 block therefore uses 8 lanes: 32 values / 4 values per lane.
+    constexpr int lanes_per_q8_1 = QK8_1 / sizeof(int32_t);
+    constexpr int threads_per_layout = q8_1_layout_block_size / sizeof(int32_t);
+    static_assert(WARP_SIZE % threads_per_layout == 0 || threads_per_layout % WARP_SIZE == 0,
+            "q8_1 layout block size must tile a warp or contain whole warps");
+
+
+    // If one layout group needs fewer than one warp,
+    // one warp can process multiple layout groups.
+    //   WARP_SIZE = 32
+    //
+    // Example layout<32>:
+    //   threads_per_layout = 8
+    //   layouts_per_cuda_block = 4
+    //
+    // Example layout<128>:
+    //   threads_per_layout = 32
+    //   layouts_per_cuda_block = 1
+    constexpr int layouts_per_cuda_block = threads_per_layout < WARP_SIZE ? WARP_SIZE / threads_per_layout : 1;
+
+    // Which layout group inside this CUDA block this thread belongs to.
+    const int layout_inner = threadIdx.x / threads_per_layout;
+    // Thread index inside its own layout group. For layout<32>, tid_layout is 0-7
+    const int tid_layout   = threadIdx.x - layout_inner * threads_per_layout;
+    // Which q8_1 block inside the layout group this thread belongs to.
+    const int q8_1_inner   = tid_layout / lanes_per_q8_1;
+    // Which packed int32 this thread writes inside the q8_1 block. q8_1 block has 8 packed int32 entries, iqs is 0-7.
+    const int iqs          = tid_layout - q8_1_inner * lanes_per_q8_1;
 
     const int64_t i3 = fastdiv(blockIdx.z, ne2);
     const int64_t i2 = blockIdx.z - i3*ne2.z;
     const int64_t i1 = blockIdx.y;
 
-    const int64_t x4_per_row = ne0 / (4 * QK8_1);
-    const int64_t i0_block = ((int64_t) blockIdx.x * 4 + ibx4_inner) * QK8_1;
-    const int64_t i0 = i0_block + iqs * 4;
+    // Number of layout groups per row. ne0 is the padded row length used for quantization (layouts_per_row = 4096 (ne0) / 128 (layout size) = 32)
+    const int64_t layouts_per_row = ne0 / q8_1_layout_block_size;
+    // which layout group along the row this thread is working on
+    const int64_t layout_x = (int64_t) blockIdx.x * layouts_per_cuda_block + layout_inner;
+
+    // Starting element index of the selected q8_1 block inside the row. q8_1_inner * QK8_1: jumps to the selected q8_1 block inside that layout group.
+    const int64_t i0_block = layout_x * q8_1_layout_block_size + q8_1_inner * QK8_1;
+    // Starting element index for this thread. Each thread handles 4 values, so iqs * 4 selects this lane's chunk.
+    const int64_t i0 = i0_block + iqs * sizeof(int32_t);
     const int64_t base = i3*s03 + i2*s02 + i1*s01;
 
+    // loads the 4 float values handled by this thread, ne00 is the real row length of the original input. (is this index still inside the REAL row?)
     const float x0 = i0 + 0 < ne00 ? x[base + i0 + 0] : 0.0f;
     const float x1 = i0 + 1 < ne00 ? x[base + i0 + 1] : 0.0f;
     const float x2 = i0 + 2 < ne00 ? x[base + i0 + 2] : 0.0f;
     const float x3 = i0 + 3 < ne00 ? x[base + i0 + 3] : 0.0f;
 
+    // Find max absolute value among this thread's 4 values.
     float amax = fmaxf(fmaxf(fabsf(x0), fabsf(x1)), fmaxf(fabsf(x2), fabsf(x3)));
-    amax = warp_reduce_max<8>(amax);
+    // Reduce only within the 8 lanes that own this q8_1 block, not across
+    // the whole layout group. Each q8_1 block has its own scale.
+    amax = warp_reduce_max<lanes_per_q8_1>(amax);
 
+    // Compute quantization scale, q8 values range approximately from -127 to 127.
     const float d = amax / 127.0f;
     const float d_inv = (amax == 0.0f) ? 0.0f : (1.0f / d);
 
-    // Keep CUDA q8_1 behavior consistent with the existing kernel: ds.y stores sum(x), not d * sum(q).
+    // q8_1 also stores sum of original float values. Keep CUDA q8_1 behavior consistent with the existing kernel: ds.y stores sum(x), not d * sum(q).
     float sum = x0 + x1 + x2 + x3;
-    sum = warp_reduce_sum<8>(sum);
+    // Reduce sum across the same 8 lanes in this q8_1 block.
+    sum = warp_reduce_sum<lanes_per_q8_1>(sum);
 
-    block_q8_1_x4 * y = (block_q8_1_x4 *) vy;
-    const int64_t ibx4_outer = ((i3*ne2.z + i2) * ne1 + i1) * x4_per_row + blockIdx.x;
+    // Output layout is [all ds values for the group][all packed q values for the group].
+    block_q8_1_layout<q8_1_layout_block_size> * y = (block_q8_1_layout<q8_1_layout_block_size> *) vy;
+    // Compute flattened output layout index, selects which layout group in the output tensor we write to.
+    const int64_t layout_idx = ((i3*ne2.z + i2) * ne1 + i1) * layouts_per_row + layout_x;
 
+    // Quantize each float value to int8, if amax == 0, all outputs are zero.
     const int8_t q0 = (amax == 0.0f) ? 0 : (int8_t) roundf(x0 * d_inv);
     const int8_t q1 = (amax == 0.0f) ? 0 : (int8_t) roundf(x1 * d_inv);
     const int8_t q2 = (amax == 0.0f) ? 0 : (int8_t) roundf(x2 * d_inv);
     const int8_t q3 = (amax == 0.0f) ? 0 : (int8_t) roundf(x3 * d_inv);
 
-    y[ibx4_outer].qs[ibx4_inner * 8 + iqs] = pack_q8_1_i8x4(q0, q1, q2, q3);
+
+    // Store this thread's 4 quantized int8 values as one packed int32.
+    //
+    // Index explanation:
+    //
+    // q8_1_inner * lanes_per_q8_1:
+    //   jumps to this q8_1 block inside the layout group.
+    //
+    // + iqs:
+    //   selects this thread's packed int32 inside that q8_1 block.
+    y[layout_idx].qs[q8_1_inner * lanes_per_q8_1 + iqs] = pack_q8_1_i8x4(q0, q1, q2, q3);
+    // Only lane 0 of each q8_1 block writes the metadata
     if (iqs == 0) {
-        y[ibx4_outer].ds[ibx4_inner] = make_half2(d, sum);
+        y[layout_idx].ds[q8_1_inner] = make_half2(d, sum);
     }
 }
 
@@ -438,21 +494,40 @@ void quantize_row_q8_1_cuda(
     GGML_UNUSED(type_src0);
 }
 
-void quantize_row_q8_1_x4_cuda(
+template<int q8_1_layout_block_size>
+void quantize_row_q8_1_layout_cuda(
         const float * x, const int32_t * ids, void * vy, const ggml_type type_src0,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    static_assert(q8_1_layout_block_size % QK8_1 == 0, "q8_1 layout block size must contain whole q8_1 blocks");
+
+    constexpr int threads_per_layout = q8_1_layout_block_size / sizeof(int32_t);
+    static_assert(WARP_SIZE % threads_per_layout == 0 || threads_per_layout % WARP_SIZE == 0,
+            "q8_1 layout block size must tile a warp or contain whole warps");
+
+    constexpr int layouts_per_cuda_block = threads_per_layout < WARP_SIZE ? WARP_SIZE / threads_per_layout : 1;
+    constexpr int threads_per_cuda_block = threads_per_layout < WARP_SIZE ? WARP_SIZE : threads_per_layout;
+
     GGML_ASSERT(!ids);
     GGML_ASSERT(ne0 % QK8_1 == 0);
-    GGML_ASSERT(ne0 % (4 * QK8_1) == 0);
+    GGML_ASSERT(ne0 % q8_1_layout_block_size == 0);
 
     const uint3 ne2_fastdiv = init_fastdiv_values(ne2);
-    const int64_t block_num_x = ne0 / (4 * QK8_1);
+    const int64_t layouts_per_row = ne0 / q8_1_layout_block_size;
+    GGML_ASSERT(layouts_per_row % layouts_per_cuda_block == 0);
+
+    const int64_t block_num_x = layouts_per_row / layouts_per_cuda_block;
     const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
-    const dim3 block_size(WARP_SIZE, 1, 1);
-    quantize_q8_1_x4<<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    const dim3 block_size(threads_per_cuda_block, 1, 1);
+    quantize_q8_1_layout<q8_1_layout_block_size>
+        <<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
     GGML_UNUSED(type_src0);
 }
+
+template void quantize_row_q8_1_layout_cuda<4 * QK8_1>(
+        const float * x, const int32_t * ids, void * vy, ggml_type type_src0,
+        int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
 void quantize_mmq_q8_1_cuda(
         const float * x, const int32_t * ids, void * vy, const ggml_type type_src0,
