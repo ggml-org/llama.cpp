@@ -423,7 +423,7 @@ class ModelBase:
                 for name in self.model_tensors.keys():
                     if name.endswith(".input_scale"):
                         tensors_to_remove.append(name)
-                    if name.endswith(("_scale_inv", "weight_scale")):
+                    if name.endswith(("_scale_inv", ".weight_scale")):
                         weight_name = name.removesuffix("_scale_inv")
                         weight_name = name.removesuffix("_scale")
                         w = self.model_tensors[weight_name]
