@@ -3065,6 +3065,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_AUTOLOAD"));
     add_opt(common_arg(
+        {"--only-ini-presets"},
+        {"--no-only-ini-presets"},
+        string_format("for router server, only expose models defined in the INI file (default: %s)", params.only_ini_presets ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.only_ini_presets = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ONLY_INI_PRESETS"));
+    add_opt(common_arg(
         {"--jinja"},
         {"--no-jinja"},
         string_format("whether to use jinja template engine for chat (default: %s)", params.use_jinja ? "enabled" : "disabled"),

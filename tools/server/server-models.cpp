@@ -309,6 +309,17 @@ void server_models::load_models() {
         preset.merge(base_preset);
     }
 
+    // remove models not defined in INI
+    if (base_params.only_ini_presets) {
+	for (auto it = final_presets.begin(); it != final_presets.end(); ) {
+	    if (custom_presets.find(it->first) == custom_presets.end()) {
+		it = final_presets.erase(it);
+	    } else {
+		++it;
+	    }
+	}
+    }
+
     // Helpers that read `mapping` — must be called while holding the lock.
     std::unordered_set<std::string> custom_names;
     for (const auto & [name, preset] : custom_presets) custom_names.insert(name);
