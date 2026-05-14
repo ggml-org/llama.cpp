@@ -97,8 +97,8 @@ if (LLAMA_BUILD_WEBUI)
         endif()
         set(WEBUI_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.webui-${WEBUI_VERSION_TAG}.stamp")
 
-        # Escape semicolons so the CMake list is passed as a single -D argument
-        string(REPLACE ";" "\\;" PUBLIC_ASSETS_ESC "${PUBLIC_ASSETS}")
+        # Join assets with + separator (safe across all platforms, unlike ; and |)
+        string(REPLACE ";" "+" PUBLIC_ASSETS_JOINED "${PUBLIC_ASSETS}")
 
         add_custom_command(
             OUTPUT ${WEBUI_STAMP}
@@ -108,7 +108,7 @@ if (LLAMA_BUILD_WEBUI)
                 "-DHF_BUCKET=${LLAMA_WEBUI_HF_BUCKET}"
                 "-DHF_VERSION=${HF_WEBUI_VERSION}"
                 "-DHF_ENABLED=${LLAMA_USE_PREBUILT_WEBUI}"
-                "-DASSETS=${PUBLIC_ASSETS_ESC}"
+                "-DASSETS=${PUBLIC_ASSETS_JOINED}"
                 "-DSTAMP_FILE=${WEBUI_STAMP}"
                 "-DNPM_DIR=${CMAKE_CURRENT_SOURCE_DIR}/webui"
                 -P ${PROJECT_SOURCE_DIR}/scripts/webui-download.cmake

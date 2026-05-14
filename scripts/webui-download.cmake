@@ -11,7 +11,7 @@ cmake_minimum_required(VERSION 3.16)
 set(PUBLIC_DIR   "" CACHE STRING "Directory to store/download assets")
 set(HF_BUCKET    "" CACHE STRING "Hugging Face bucket name")
 set(HF_VERSION   "" CACHE STRING "Version to download (empty = resolve from git)")
-set(ASSETS       "" CACHE STRING "Semicolon-separated list of asset filenames")
+set(ASSETS       "" CACHE STRING "Plus-separated list of asset filenames (+)")
 set(STAMP_FILE   "" CACHE STRING "Stamp file to create on success (optional)")
 set(SOURCE_DIR   "" CACHE STRING "Project source root (to resolve version from git)")
 set(NPM_DIR      "" CACHE STRING "WebUI source directory (to run npm build)")
@@ -30,6 +30,10 @@ if("${RESOLVED_VERSION}" STREQUAL "" AND NOT "${SOURCE_DIR}" STREQUAL "")
         endif()
     endif()
 endif()
+
+# Convert + back to CMake list (+ is used as separator instead of ; to
+# avoid platform-specific escaping issues when passing via -D arguments)
+string(REGEX REPLACE "\\+" ";" ASSETS "${ASSETS}")
 
 # ---------------------------------------------------------------------------
 # 2. Check stamp freshness — re-download if resolved version changed
