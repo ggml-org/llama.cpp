@@ -744,8 +744,8 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spot.
 
-| Name              | Function                                                                         |
-|-------------------|----------------------------------------------------------------------------------|
+| Name            | Function                                                                         |
+|-----------------|----------------------------------------------------------------------------------|
 | DEBUG_SYCL_POOL   | Enable device memory pool logging on teardown. Useful for profiling allocations. |
 | DEBUG_SYCL_MALLOC | Enable verbose per-call logging of device pool alloc/free operations. |
 
