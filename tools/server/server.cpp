@@ -83,6 +83,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    llama_backend_init();
+    llama_numa_init(params.numa);
+
+    common_params_print_info(params);
+
     // validate batch size for embeddings
     // embeddings require all tokens to be processed in a single ubatch
     // see https://github.com/ggml-org/llama.cpp/issues/12836
@@ -103,11 +108,6 @@ int main(int argc, char ** argv) {
     if (params.model_alias.empty() && !params.model.name.empty()) {
         params.model_alias.insert(params.model.name);
     }
-
-    llama_backend_init();
-    llama_numa_init(params.numa);
-
-    common_params_print_info(params);
 
     // struct that contains llama context and inference
     server_context ctx_server;
