@@ -2995,7 +2995,6 @@ int op_matmul(struct htp_ops_context * octx) {
     //  is handled by HMX itself; when M < 32  fall back to HVX.
     const int m_total = (int) src1->ne[1];
     const int m_hmx   = m_total & ~31;   // 0 when M < 32
-
     if (m_hmx == 0) {
         return op_matmul_hvx(octx);
     }

@@ -839,10 +839,6 @@ static void transfer_activation_chunk_threaded(struct htp_context *ctx, __fp16 *
     worker_pool_run_func(ctx->worker_pool, transfer_activation_chunk_worker_fn, &state, ctx->n_threads);
 }
 
-//
-
-#define FALLBACK_TO_STANDARD 1
-
 // C += AB
 static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b,
                                 const __fp16 *restrict col_scales, const __fp16 *restrict eye_tile,
@@ -879,199 +875,6 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
     }
 }
 
-static __attribute__((noinline)) int mat_mul_qk_0_d16a32_out_stationary(struct htp_context *ctx,
-                                       float *restrict out, const float *restrict x, const uint8_t *restrict w,
-                                       int m, int k, int n, int weight_type) {
-    // assume k % 32 == 0 && n % 32 == 0
-    const size_t row_stride = get_x4x2_row_stride(weight_type, k);
-    if (row_stride == 0) {
-        return -1;
-    }
-
-    const size_t vtcm_budget = ctx->vtcm_size;
-    size_t vtcm_need = 0;
-    size_t vtcm_used = 0;
-
-    const size_t K_BLOCK_SIZE = 1024;
-    size_t M_BLOCK_SIZE = 0, N_BLOCK_SIZE = 0;
-
-    // Fallback: if k doesn't need K-blocking, out-stationary has no advantage
-    const size_t k_iters_check = (k + K_BLOCK_SIZE - 1) / K_BLOCK_SIZE;
-    if (k_iters_check <= 1) {
-        FARF(HIGH, "hxm-mm-q: K_BLK >= k (%d %d), fallback to standard", K_BLOCK_SIZE, k);
-        return FALLBACK_TO_STANDARD;
-    }
-
-    // Dynamic M,N search via hmx_compute_chunks
-    const size_t sub_row_stride_alloc = get_x4x2_row_stride(weight_type, K_BLOCK_SIZE);
-    const size_t per_m  = K_BLOCK_SIZE * sizeof(float)   // scratch1: M×K×4 (act DMA staging F32)
-                        + K_BLOCK_SIZE * sizeof(__fp16); // activation: M×K×2 (F16 tiles)
-    const size_t per_n  = sub_row_stride_alloc           // scratch0: N×sub_row(K) (packed quant)
-                        + K_BLOCK_SIZE * sizeof(__fp16); // weight: N×K×2 (F16 tiles)
-    const size_t per_mn = sizeof(__fp16);                // output: M×N×2 (out-stationary)
-
-    // Alignment margin: hex_align_up can add up to 2047 bytes per buffer;
-    // scratch1 (mc×6144) is naturally 2048-aligned, remaining 4 buffers need margin
-    const size_t align_margin = 4 * HMX_FP16_TILE_SIZE;
-    const size_t overhead     = HMX_FP16_TILE_SIZE + 256 + align_margin;  // eye_tile + scales + alignment
-
-    // Cost-based search: minimize ceil(m/mc)*m_block_cost + ceil(n/nc)*n_block_cost.
-    // From profiling: wt_dequant per element ≈ 1.5× activation load per element.
-    // m_block_cost = n*3: each extra M-block re-dequants all N×K weight (expensive).
-    // n_block_cost = m*2: each extra N-block re-loads all M×K activation (cheaper).
-    const size_t m_block_cost = (size_t) n * 3;
-    const size_t n_block_cost = (size_t) m * 2;
-    if (hmx_compute_chunks(vtcm_budget, overhead, per_n, per_m, per_mn,
-                           hex_align_up(m, HMX_FP16_TILE_N_ROWS), n,
-                           m_block_cost, n_block_cost, &M_BLOCK_SIZE,
-                           &N_BLOCK_SIZE, &vtcm_used) != 0) {
-        FARF(HIGH, "hmx-mm-q: VTCM too small : m %d k %d n %d budget %zu", m, k, n, vtcm_budget);
-        return -1;
-    }
-
-    // Compute precise buffer sizes from searched M,N and fixed K
-    const size_t weight_size  = hex_align_up(N_BLOCK_SIZE * K_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
-    const size_t act_size     = hex_align_up(M_BLOCK_SIZE * K_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
-    const size_t out_size     = hex_align_up(M_BLOCK_SIZE * N_BLOCK_SIZE * sizeof(__fp16), HMX_FP16_TILE_SIZE);
-    const size_t scratch0_sz  = hex_align_up(N_BLOCK_SIZE * sub_row_stride_alloc, HMX_FP16_TILE_SIZE);
-    const size_t scratch1_sz  = hex_align_up(M_BLOCK_SIZE * K_BLOCK_SIZE * sizeof(float), HMX_FP16_TILE_SIZE);
-
-    vtcm_need = weight_size + act_size + out_size + scratch0_sz + scratch1_sz + HMX_FP16_TILE_SIZE + 256;
-    if (vtcm_need > vtcm_budget) {
-        FARF(HIGH, "hmx-mm-q: VTCM overflow after search: need %zu budget %zu : block m %zu n %zu k %zu",
-                    vtcm_need, vtcm_budget, M_BLOCK_SIZE, N_BLOCK_SIZE, K_BLOCK_SIZE);
-        return -1;
-    }
-
-    uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
-    __fp16  *vtcm_weight     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_size);
-    __fp16  *vtcm_activation = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, act_size);
-    __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, out_size);
-    uint8_t *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch0_sz);
-    uint8_t *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch1_sz);
-    __fp16  *vtcm_eye_tile   = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, HMX_FP16_TILE_SIZE);
-    __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
-
-    vtcm_used = vtcm_ptr - (uint8_t *)ctx->vtcm_base;
-    assert(vtcm_used <= vtcm_budget);
-
-    FARF(HIGH, "hmx-mm-q: stationary : block m %zu n %zu k %zu vtcm %zu/%zu", M_BLOCK_SIZE, N_BLOCK_SIZE, K_BLOCK_SIZE, vtcm_used, vtcm_budget);
-
-    // initialize eye tile (32x32 identity matrix)
-    {
-        HVX_Vector v;
-        v = Q6_V_vzero();
-        v = Q6_Vw_vinsert_VwR(v, 0x3c000000);
-        v = Q6_V_vror_VR(v, VLEN - 4);
-        v = Q6_Vw_vinsert_VwR(v, 0x00003c00);
-        for (int i = 0; i < 16; ++i) {
-            ((HVX_Vector *) vtcm_eye_tile)[i] = v;
-            v = Q6_V_vror_VR(v, VLEN - 8);
-        }
-    }
-    hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
-
-    TIMER_DEFINE(fetch);
-    TIMER_DEFINE(act_load);
-    TIMER_DEFINE(wt_dequant);
-    TIMER_DEFINE(core);
-
-    HAP_compute_res_hmx_lock(ctx->vtcm_rctx);
-
-    for (size_t mr = 0; mr < m; mr += M_BLOCK_SIZE) {
-        size_t m_blk_sz = hex_smin(m - mr, M_BLOCK_SIZE);
-        for (size_t nc = 0; nc < n; nc += N_BLOCK_SIZE) {
-            size_t n_blk_sz = hex_smin(n - nc, N_BLOCK_SIZE);
-
-            const int n_row_tiles = hmx_ceil_div(m_blk_sz, HMX_FP16_TILE_N_ROWS);
-            const int n_col_tiles = hmx_ceil_div(n_blk_sz, HMX_FP16_TILE_N_COLS);
-
-            for (size_t kk = 0; kk < k; kk += K_BLOCK_SIZE) {
-                const size_t k_blk_sz = hex_smin(k - kk, K_BLOCK_SIZE);
-
-                TIMER_START(fetch);
-                // fetch activation block into VTCM
-                {
-                    const float *activation_block = x + mr * k + kk;
-
-                    dma_queue_push(ctx->dma[0],
-                                     dma_make_ptr(vtcm_scratch1, activation_block),
-                                     k_blk_sz * sizeof(float),
-                                     k * sizeof(float),
-                                     k_blk_sz * sizeof(float),
-                                     m_blk_sz);
-                }
-
-                // fetch weight block into VTCM (x4x2 sub-block: quants + scales)
-                const size_t sub_row_stride = get_x4x2_row_stride(weight_type, k_blk_sz);
-                {
-                    const int blk_start       = kk / QK_Q4_0x4x2;
-                    const int nb_sub          = (k_blk_sz + QK_Q4_0x4x2 - 1) / QK_Q4_0x4x2;
-                    const int  full_qrow      = (weight_type == HTP_TYPE_Q8_0) ? k : (k / 2);
-                    const int  scale_blk_size = (weight_type == HTP_TYPE_MXFP4) ? HMX_X4X2_MXFP4_EBLK_SIZE : HMX_X4X2_DBLK_SIZE;
-                    uint8_t       *dst        = vtcm_scratch0;
-                    const uint8_t *src        = w + nc * row_stride;
-                    const size_t  n_rows      = n_blk_sz;
-                    const size_t  src_stride  = row_stride;
-                    const size_t  dst_stride  = sub_row_stride;
-                    const size_t  quant_off   = (weight_type == HTP_TYPE_Q8_0) ? (blk_start * QK_Q8_0x4x2) : (blk_start * (QK_Q4_0x4x2 / 2));
-                    const size_t  quant_width = (weight_type == HTP_TYPE_Q8_0) ? (nb_sub    * QK_Q8_0x4x2) : (nb_sub    * (QK_Q4_0x4x2 / 2));
-                    const size_t  scale_off   = full_qrow + blk_start * scale_blk_size;
-                    const size_t  scale_width = nb_sub * scale_blk_size;
-
-                    // 2D DMA: quants sub-range
-                    dma_queue_push(ctx->dma[0], dma_make_ptr(dst, src + quant_off), dst_stride, src_stride, quant_width, n_rows);
-                    // 2D DMA: scales sub-range
-                    dma_queue_push(ctx->dma[0], dma_make_ptr(dst + quant_width, src + scale_off), dst_stride, src_stride, scale_width, n_rows);
-                }
-                TIMER_STOP(fetch);
-
-                TIMER_START(act_load);
-                // load activation block
-                {
-                    dma_queue_pop(ctx->dma[0]); // wait for act DNA
-                    transfer_activation_chunk_threaded(ctx, vtcm_activation, (float *) vtcm_scratch1, m_blk_sz, k_blk_sz, k_blk_sz);
-                }
-                TIMER_STOP(act_load);
-
-                TIMER_START(wt_dequant);
-                // dequantize weight block
-                {
-                    dma_queue_pop(ctx->dma[0]);
-                    dma_queue_pop(ctx->dma[0]);
-                    // vtcm_scratch0 is used to store the qweight chunk
-                    // worker_pool_run_func already returned, so fetch is done
-                    dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight, vtcm_scratch0,
-                                                                n_blk_sz, k_blk_sz, sub_row_stride, weight_type);
-                }
-                TIMER_STOP(wt_dequant);
-
-                // core mma
-                TIMER_START(core);
-                {
-                    core_mma_chunk_fp16(vtcm_output, vtcm_activation, vtcm_weight, vtcm_scales, vtcm_eye_tile, n_row_tiles,
-                                        n_col_tiles, k_blk_sz / HMX_FP16_TILE_N_COLS, kk == 0);
-                }
-                TIMER_STOP(core);
-            }
-
-            // store output block
-            {
-                float *output_block = out + (mr * n + nc);
-                transfer_output_chunk_threaded(ctx, output_block, vtcm_output, m_blk_sz, n_blk_sz, n);
-            }
-        }
-    }
-
-    HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
-
-#if defined(ENABLE_PROFILE_TIMERS)
-    FARF(HIGH, "fetch: %lld us, act_load: %lld us, wt_dequant: %lld us, core: %lld us",
-         TIMER_US(fetch), TIMER_US(act_load), TIMER_US(wt_dequant), TIMER_US(core));
-#endif
-    return 0;
-}
-
 int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
                                      const uint8_t *restrict permuted_weight, int m, int k, int n,
                                      int weight_type) {
@@ -1084,15 +887,6 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
 
     FARF(HIGH, "hmx-mm-q: m %d k %d n %d wtype %d", m, k, n, weight_type);
 
-    // for large m, k (e.g. prefill FFN Down), use out-stationary version
-    if (m >= 128 && k > n && n > 1024) {
-        int rc = mat_mul_qk_0_d16a32_out_stationary(ctx, dst, activation, permuted_weight, m, k, n, weight_type);
-        if (rc != FALLBACK_TO_STANDARD) {
-            return rc;  // 0 success, -1 error
-        }
-        // fall through to standard path
-    }
-
     size_t row_stride = get_x4x2_row_stride(weight_type, k);
     if (row_stride == 0) {
         return -1;
@@ -1104,64 +898,32 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     size_t vtcm_used = 0;
 
     // Pipeline = 4-stage DMA→dequant→HMX→store with HMX worker overlap.
-    // Only pays off when the chunker yields >=2 n-chunks, so the main loop can
-    // overlap HMX (C) with HVX (B/D); with a single n-chunk the extra VTCM for
-    // double-buffered output and the worker-dispatch overhead are pure loss.
-    // Try pipeline costs first; fall back to sequential if the layout collapses
-    // to one n-chunk. m >= 128 floor keeps HMX utilization reasonable.
     const size_t pipe_per_n  = row_stride + 2 * vec_dot_size;  // Q + S0 + S1 (dequant bufs)
     const size_t pipe_per_mn = 2 * sizeof(__fp16);             // O x 2 (output double buffer)
     const size_t seq_per_n   = vec_dot_size + 2 * row_stride;  // W + S0 + S1 (x4x2 DMA bufs)
     const size_t seq_per_mn  = sizeof(__fp16);                 // O x 1
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0;
-    bool   use_pipeline = false;
-
-    if (m >= 128) {
-        size_t mc = 0, nc = 0, used = 0;
-        if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, pipe_per_n, /*per_m=*/vec_dot_size, pipe_per_mn,
-                               hex_align_up(m, HMX_FP16_TILE_N_ROWS), n,
-                               /*m_block_cost=*/(size_t) n * 3,
-                               /*n_block_cost=*/(size_t) m * 2, &mc, &nc, &used) == 0 &&
-            hmx_ceil_div((size_t) n, nc) >= 2) {
-            m_chunk_n_rows = mc;
-            n_chunk_n_cols = nc;
-            vtcm_used      = used;
-            use_pipeline   = true;
-        }
+    if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, pipe_per_n, /*per_m=*/vec_dot_size, pipe_per_mn,
+                           hex_align_up(m, HMX_FP16_TILE_N_ROWS), n,
+                           /*m_block_cost=*/(size_t) n * 3,
+                           /*n_block_cost=*/(size_t) m * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used)) {
+        FARF(HIGH, "hmx-mm-q: VTCM too small : m %d k %d n %d budget %zu", m, k, n, vtcm_budget);
+        return -1;
     }
 
-    if (!use_pipeline) {
-        if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, seq_per_n, /*per_m=*/vec_dot_size, seq_per_mn,
-                               hex_align_up(m, HMX_FP16_TILE_N_ROWS), n,
-                               /*m_block_cost=*/(size_t) n * 3,
-                               /*n_block_cost=*/(size_t) m * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
-            FARF(HIGH, "hmx-mm-q: VTCM too small : m %d k %d n %d budget %zu", m, k, n, vtcm_budget);
-            return -1;
-        }
-    }
-
-    // Compute precise buffer sizes per execution path
-    const size_t weight_area_size = hex_align_up(
-        n_chunk_n_cols * (use_pipeline ? row_stride : vec_dot_size), HMX_FP16_TILE_SIZE);
-    const size_t activation_area_size = hex_align_up(m_chunk_n_rows * vec_dot_size, HMX_FP16_TILE_SIZE);
-    const size_t output_area_size = hex_align_up(
-        m_chunk_n_rows * n_chunk_n_cols * sizeof(__fp16), HMX_FP16_TILE_SIZE);
+    const size_t weight_area_size = hex_align_up(n_chunk_n_cols * row_stride,   HMX_FP16_TILE_SIZE);
+    const size_t act_area_size    = hex_align_up(m_chunk_n_rows * vec_dot_size, HMX_FP16_TILE_SIZE);
+    const size_t output_area_size = hex_align_up(m_chunk_n_rows * n_chunk_n_cols * sizeof(__fp16), HMX_FP16_TILE_SIZE);
 
     size_t scratch0_size, scratch1_size, scratch2_size;
-    if (use_pipeline) {
-        scratch0_size = hex_align_up(n_chunk_n_cols * vec_dot_size, HMX_FP16_TILE_SIZE);  // dequant buf 0
-        scratch1_size = scratch0_size;                                                    // dequant buf 1
-        scratch2_size = output_area_size;                                                 // output buf 1
-    } else {
-        scratch0_size = hex_align_up(n_chunk_n_cols * row_stride, HMX_FP16_TILE_SIZE);    // x4x2 DMA buf 0
-        scratch1_size = scratch0_size;                                                    // x4x2 DMA buf 1
-        scratch2_size = 0;                                                                // unused
-    }
+    scratch0_size = hex_align_up(n_chunk_n_cols * vec_dot_size, HMX_FP16_TILE_SIZE);  // dequant buf 0
+    scratch1_size = scratch0_size;                                                    // dequant buf 1
+    scratch2_size = output_area_size;                                                 // output buf 1
 
     uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
     __fp16  *vtcm_weight     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size);
-    __fp16  *vtcm_activation = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, activation_area_size);
+    __fp16  *vtcm_activation = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, act_area_size);
     __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, output_area_size);
     void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch0_size);
     void    *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch1_size);
@@ -1176,8 +938,8 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
 
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
 
-    FARF(HIGH, "hmx-mm-q: standard : m %d k %d n %d wtype %d pipe %d mc %zu nc %zu vtcm %zu/%zu",
-         m, k, n, weight_type, use_pipeline, m_chunk_n_rows, n_chunk_n_cols, vtcm_used, vtcm_budget);
+    FARF(HIGH, "hmx-mm-q: standard : m %d k %d n %d wtype %d mc %zu nc %zu vtcm %zu/%zu",
+         m, k, n, weight_type, m_chunk_n_rows, n_chunk_n_cols, vtcm_used, vtcm_budget);
 
     TIMER_DEFINE(activation_load);
     TIMER_DEFINE(weight_load);
@@ -1187,180 +949,115 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
     TIMER_DEFINE(total);
     TIMER_START(total);
 
-    if (!use_pipeline) {
-        HAP_compute_res_hmx_lock(ctx->vtcm_rctx);
-        for (size_t mr = 0; mr < m; mr += m_chunk_n_rows) {
-            // transfer activation matrix chunk into VTCM
-            const size_t n_rows = hex_smin(m - mr, m_chunk_n_rows);
-            const size_t n_row_tiles = hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS);
+    // 4-stage pipeline: DMA load (A), dequantize (B), HMX matmul (C), store (D)
+    // HMX compute (C) runs on dedicated worker thread, overlapping with HVX stages (B, D).
 
-            TIMER_START(activation_load);
-            {
-                const float *activation_chunk = activation + mr * k;
-                transfer_activation_chunk_threaded(ctx, vtcm_activation, activation_chunk, n_rows, k, k);
-            }
-            TIMER_STOP(activation_load);
+    // A --> B: vtcm_qweight, 1 buffer
+    // B --> C: vtcm_weight0/vtcm_weight1, 2 buffers
+    // C --> D: vtcm_output0/vtcm_output1, 2 buffers
 
-            void *buf_curr = vtcm_scratch0;
-            void *buf_next = vtcm_scratch1;
+    // Async timeline (C overlaps B+D):
+    //   main+HVX:   [A0][Act][B0][A1][sub C0][B1‖C0][A2][wait,sub C1][D0+B2‖C1][wait,sub C2][D1‖C2][wait][D2]
+    //   HMX queue:                   [████ C0 ████████][████ C1 ████████████][████ C2 ████████]
 
-            {
-                const size_t n_cols_first = hex_smin(n, n_chunk_n_cols);
-                dma_queue_push(ctx->dma[0], dma_make_ptr(buf_curr, permuted_weight), row_stride, row_stride, row_stride, n_cols_first);
-            }
+    int n_chunk_cnt = hmx_ceil_div(n, n_chunk_n_cols);
+    hmx_matmul_job_t job_slots[2];  // persistent double-buffered job descriptors
 
-            for (size_t nc = 0; nc < n; nc += n_chunk_n_cols) {
-                const size_t n_cols = hex_smin(n - nc, n_chunk_n_cols);
-                const size_t n_col_tiles = hmx_ceil_div(n_cols, HMX_FP16_TILE_N_COLS);
+    for (size_t mr = 0; mr < m; mr += m_chunk_n_rows) {
+        const size_t n_rows = hex_smin(m - mr, m_chunk_n_rows);
 
-                TIMER_START(weight_load);
-                {
-                    dma_queue_pop(ctx->dma[0]);  // wait until current weight chunk become ready
+        void *vtcm_qweight        = vtcm_weight;
+        void *vtcm_weight_bufs[2] = { vtcm_scratch0, vtcm_scratch1 };
+        void *vtcm_output_bufs[2] = { vtcm_output,   vtcm_scratch2 };
 
-                    const size_t nc_next = nc + n_chunk_n_cols;
-                    if (nc_next < n) {
-                        const size_t n_cols_next = hex_smin(n - nc_next, n_chunk_n_cols);
-
-                        const uint8_t *next_weight_chunk = permuted_weight + nc_next * row_stride;
-
-                        dma_queue_push(ctx->dma[0], dma_make_ptr(buf_next, next_weight_chunk), row_stride, row_stride, row_stride, n_cols_next);
-                    }
-
-                    // Dequant + vscatter writes directly to [K, N] transposed tiles.
-                    // HMX computes C = A x B, where A=[M,K] activation, B=[K,N] weight.
-                    dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight, buf_curr, n_cols, k, row_stride, weight_type);
-
-                    hex_swap_ptr(&buf_curr, &buf_next);
-                }
-                TIMER_STOP(weight_load);
-
-                TIMER_START(hmx_core);
-                {
-                    core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_weight, vtcm_scales, n_row_tiles, n_col_tiles, k / 32);
-                }
-                TIMER_STOP(hmx_core);
-
-                TIMER_START(output_store);
-                {
-                    float *output = dst + (mr * n + nc);
-                    transfer_output_chunk_threaded(ctx, output, vtcm_output, n_rows, n_cols, n);
-                }
-                TIMER_STOP(output_store);
-            }
+        // prologue: A0
+        const size_t n_cols_A0 = hex_smin(n - 0 * n_chunk_n_cols, n_chunk_n_cols);
+        {
+            const uint8_t *qweight_chunk_A0 = permuted_weight;
+            dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A0), row_stride, row_stride, row_stride, n_cols_A0);
         }
-        HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
-    } else {
-        // 4-stage pipeline: DMA load (A), dequantize (B), HMX matmul (C), store (D)
-        // HMX compute (C) runs on dedicated worker thread, overlapping with HVX stages (B, D).
 
-        // A --> B: vtcm_qweight, 1 buffer
-        // B --> C: vtcm_weight0/vtcm_weight1, 2 buffers
-        // C --> D: vtcm_output0/vtcm_output1, 2 buffers
+        {
+            const float *activation_chunk = activation + mr * k;
+            transfer_activation_chunk_threaded(ctx, vtcm_activation, activation_chunk, n_rows, k, k);
+        }
 
-        // Async timeline (C overlaps B+D):
-        //   main+HVX:   [A0][Act][B0][A1][sub C0][B1‖C0][A2][wait,sub C1][D0+B2‖C1][wait,sub C2][D1‖C2][wait][D2]
-        //   HMX queue:                   [████ C0 ████████][████ C1 ████████████][████ C2 ████████]
+        // prologue: B0, A1, submit C0 (async), B1 (overlaps C0)
+        {
+            // B0: wait for DMA, dequant weight chunk 0
+            dma_queue_pop(ctx->dma[0]);
+            dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[0], vtcm_qweight, n_cols_A0, k, row_stride, weight_type);
 
-        int n_chunk_cnt = hmx_ceil_div(n, n_chunk_n_cols);
-        hmx_matmul_job_t job_slots[2];  // persistent double-buffered job descriptors
-
-        for (size_t mr = 0; mr < m; mr += m_chunk_n_rows) {
-            const size_t n_rows = hex_smin(m - mr, m_chunk_n_rows);
-
-            void *vtcm_qweight        = vtcm_weight;
-            void *vtcm_weight_bufs[2] = { vtcm_scratch0, vtcm_scratch1 };
-            void *vtcm_output_bufs[2] = { vtcm_output, vtcm_scratch2 };
-
-            // prologue: A0
-            const size_t n_cols_A0 = hex_smin(n - 0 * n_chunk_n_cols, n_chunk_n_cols);
-            {
-                // Use 2D DMA (n_cols rows x row_stride) to avoid 16-bit roiwidth overflow.
-                const uint8_t *qweight_chunk_A0 = permuted_weight;
-                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A0), row_stride, row_stride, row_stride, n_cols_A0);
+            // A1: issue DMA for weight chunk 1
+            const size_t n_cols_A1 = hex_smin(n - 1 * n_chunk_n_cols, n_chunk_n_cols);
+            if (1 < n_chunk_cnt) {
+                const uint8_t *qweight_chunk_A1 = permuted_weight + n_chunk_n_cols * row_stride;
+                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A1), row_stride, row_stride, row_stride, n_cols_A1);
             }
 
-            {
-                const float *activation_chunk = activation + mr * k;
-                transfer_activation_chunk_threaded(ctx, vtcm_activation, activation_chunk, n_rows, k, k);
-            }
+            // submit C0 (non-blocking — HMX worker executes in parallel)
+            hmx_matmul_job_init(&job_slots[0], (__fp16 *) vtcm_output_bufs[0], (__fp16 *) vtcm_activation,
+                                (__fp16 *) vtcm_weight_bufs[0], vtcm_scales,
+                                hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
+                                hmx_ceil_div(n_cols_A0, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
+            hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[0]));
 
-            // prologue: B0, A1, submit C0 (async), B1 (overlaps C0)
-            {
-                // B0: wait for DMA, dequant weight chunk 0
+            // B1: DMA pop + dequant (runs in parallel with C0 on HMX worker)
+            if (1 < n_chunk_cnt) {
                 dma_queue_pop(ctx->dma[0]);
-                dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[0], vtcm_qweight, n_cols_A0, k, row_stride, weight_type);
-
-                // A1: issue DMA for weight chunk 1
-                const size_t n_cols_A1 = hex_smin(n - 1 * n_chunk_n_cols, n_chunk_n_cols);
-                if (1 < n_chunk_cnt) {
-                    const uint8_t *qweight_chunk_A1 = permuted_weight + n_chunk_n_cols * row_stride;
-                    dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_A1), row_stride, row_stride, row_stride, n_cols_A1);
-                }
-
-                // submit C0 (non-blocking — HMX worker executes in parallel)
-                hmx_matmul_job_init(&job_slots[0], (__fp16 *) vtcm_output_bufs[0], (__fp16 *) vtcm_activation,
-                                    (__fp16 *) vtcm_weight_bufs[0], vtcm_scales,
-                                    hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
-                                    hmx_ceil_div(n_cols_A0, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
-                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[0]));
-
-                // B1: DMA pop + dequant (runs in parallel with C0 on HMX worker)
-                if (1 < n_chunk_cnt) {
-                    dma_queue_pop(ctx->dma[0]);
-                    dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[1], vtcm_qweight, n_cols_A1, k, row_stride, weight_type);
-                }
-            }
-
-            // main loop: wait C_i → submit C_{i+1} → D_i + B_{i+2} (parallel with C_{i+1})
-            for (int i = 0; i < n_chunk_cnt; ++i) {
-                const size_t nc    = i * n_chunk_n_cols;
-                const size_t nc_p1 = nc + 1 * n_chunk_n_cols;
-                const size_t nc_p2 = nc + 2 * n_chunk_n_cols;
-
-                const size_t n_cols    = hex_smin(n - nc, n_chunk_n_cols);
-                const size_t n_cols_p1 = hex_smin(n - nc_p1, n_chunk_n_cols);
-                const size_t n_cols_p2 = hex_smin(n - nc_p2, n_chunk_n_cols);
-
-                // issue A_{i+2}: DMA push (non-blocking)
-                if (i + 2 < n_chunk_cnt) {
-                    const uint8_t *qweight_chunk_p2 = permuted_weight + nc_p2 * row_stride;
-                    dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_p2), row_stride, row_stride, row_stride, n_cols_p2);
-                }
-
-                // wait C_i: block until prologue/previous C completes
-                hmx_queue_pop(ctx->hmx_queue);
-
-                // submit C_{i+1} (non-blocking, overlaps with D_i + B_{i+2} below)
-                // job_slots[(i+1)%2] is safe: C_i just completed, freeing slot i%2's
-                // counterpart — and (i+1)%2 was last used by C_{i-1} which completed
-                // before C_i was submitted.
-                if (i + 1 < n_chunk_cnt) {
-                    hmx_matmul_job_init(&job_slots[(i + 1) % 2], (__fp16 *) vtcm_output_bufs[(i + 1) % 2],
-                                        (__fp16 *) vtcm_activation, (__fp16 *) vtcm_weight_bufs[(i + 1) % 2],
-                                        vtcm_scales, hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
-                                        hmx_ceil_div(n_cols_p1, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
-                    hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[(i + 1) % 2]));
-                }
-
-                // D_i: store output (multi-thread HVX, parallel with C_{i+1})
-                float *output_chunk = dst + (mr * n + nc);
-                transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, n);
-
-                // B_{i+2}: DMA pop + dequant (multi-thread HVX, parallel with C_{i+1})
-                if (i + 2 < n_chunk_cnt) {
-                    dma_queue_pop(ctx->dma[0]);
-                    dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[(i + 2) % 2], vtcm_qweight, n_cols_p2, k, row_stride, weight_type);
-                }
+                dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[1], vtcm_qweight, n_cols_A1, k, row_stride, weight_type);
             }
         }
 
-        hmx_queue_suspend(ctx->hmx_queue);
+        // main loop: wait C_i → submit C_{i+1} → D_i + B_{i+2} (parallel with C_{i+1})
+        for (int i = 0; i < n_chunk_cnt; ++i) {
+            const size_t nc    = i * n_chunk_n_cols;
+            const size_t nc_p1 = nc + 1 * n_chunk_n_cols;
+            const size_t nc_p2 = nc + 2 * n_chunk_n_cols;
+
+            const size_t n_cols    = hex_smin(n - nc, n_chunk_n_cols);
+            const size_t n_cols_p1 = hex_smin(n - nc_p1, n_chunk_n_cols);
+            const size_t n_cols_p2 = hex_smin(n - nc_p2, n_chunk_n_cols);
+
+            // issue A_{i+2}: DMA push (non-blocking)
+            if (i + 2 < n_chunk_cnt) {
+                const uint8_t *qweight_chunk_p2 = permuted_weight + nc_p2 * row_stride;
+                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_qweight, qweight_chunk_p2), row_stride, row_stride, row_stride, n_cols_p2);
+            }
+
+            // wait C_i: block until prologue/previous C completes
+            hmx_queue_pop(ctx->hmx_queue);
+
+            // submit C_{i+1} (non-blocking, overlaps with D_i + B_{i+2} below)
+            // job_slots[(i+1)%2] is safe: C_i just completed, freeing slot i%2's
+            // counterpart — and (i+1)%2 was last used by C_{i-1} which completed
+            // before C_i was submitted.
+            if (i + 1 < n_chunk_cnt) {
+                hmx_matmul_job_init(&job_slots[(i + 1) % 2], (__fp16 *) vtcm_output_bufs[(i + 1) % 2],
+                                    (__fp16 *) vtcm_activation, (__fp16 *) vtcm_weight_bufs[(i + 1) % 2],
+                                    vtcm_scales, hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
+                                    hmx_ceil_div(n_cols_p1, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[(i + 1) % 2]));
+            }
+
+            // D_i: store output (multi-thread HVX, parallel with C_{i+1})
+            float *output_chunk = dst + (mr * n + nc);
+            transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, n);
+
+            // B_{i+2}: DMA pop + dequant (multi-thread HVX, parallel with C_{i+1})
+            if (i + 2 < n_chunk_cnt) {
+                dma_queue_pop(ctx->dma[0]);
+                dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[(i + 2) % 2], vtcm_qweight, n_cols_p2, k, row_stride, weight_type);
+            }
+        }
     }
+
+    hmx_queue_suspend(ctx->hmx_queue);
 
     TIMER_STOP(total);
 
 #if defined(ENABLE_PROFILE_TIMERS)
-    FARF(HIGH, "%s: %lld us, m=%d k=%d n=%d pipeline=%d", __func__, TIMER_US(total), m, k, n, use_pipeline);
+    FARF(HIGH, "hex-mm-q: %lld us : m %d k %d n %d", TIMER_US(total), m, k, n);
     if (!use_pipeline) {
         FARF(HIGH, "  activation_load: %lld us, weight_load: %lld us, hmx_core: %lld us, output_store: %lld us",
              TIMER_US(activation_load), TIMER_US(weight_load), TIMER_US(hmx_core), TIMER_US(output_store));
