@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <cstdint>
+#include <set>
 
 #define LLAMA_MAX_SEQ 256
 
@@ -39,6 +40,9 @@ struct llama_cparams {
     bool op_offload;
     bool kv_unified;
     bool pipeline_parallel;
+    bool attn_weights;
+
+    std::set<int32_t> attn_layers; // which layers to extract attention from (derived from attn_heads)
 
     enum llama_pooling_type pooling_type;
 
