@@ -54,12 +54,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  webui-build:
-    name: Build WebUI
-    uses: ./.github/workflows/webui-build.yml
+  ui-build:
+    name: Build UI
+    uses: ./.github/workflows/ui-build.yml
 
   server:
-    needs: webui-build
+    needs: ui-build
     runs-on: ubuntu-latest
 
     name: server (${{ matrix.wf_name }})
@@ -98,10 +98,10 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: Build
@@ -136,7 +136,7 @@ jobs:
           SLOW_TESTS=1 pytest -v -x
 
   server-windows:
-    needs: webui-build
+    needs: ui-build
     runs-on: windows-2022
 
     steps:
@@ -147,10 +147,10 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: Build

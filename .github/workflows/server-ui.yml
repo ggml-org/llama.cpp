@@ -1,4 +1,4 @@
-name: Server WebUI
+name: Server UI
 
 on:
   workflow_dispatch:
@@ -11,15 +11,15 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/server-webui.yml',
-      'tools/server/webui/**.*',
+      '.github/workflows/server-ui.yml',
+      'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
-      '.github/workflows/server-webui.yml',
-      'tools/server/webui/**.*',
+      '.github/workflows/server-ui.yml',
+      'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
 
@@ -34,13 +34,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  webui-build:
-    name: Build WebUI
-    uses: ./.github/workflows/webui-build.yml
+  ui-build:
+    name: Build UI
+    uses: ./.github/workflows/ui-build.yml
 
-  webui-checks:
-    name: WebUI Checks
-    needs: webui-build
+  ui-checks:
+    name: UI Checks
+    needs: ui-build
     runs-on: ubuntu-24.04-arm
     continue-on-error: true
     steps:
@@ -92,7 +92,7 @@ jobs:
 
   e2e-tests:
     name: E2E Tests
-    needs: webui-build
+    needs: ui-build
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout code

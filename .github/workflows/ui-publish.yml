@@ -1,4 +1,4 @@
-name: WebUI Publish
+name: UI Publish
 
 on:
   workflow_call:
@@ -14,14 +14,14 @@ on:
 
 jobs:
   publish:
-    name: Publish WebUI Static Output
+    name: Publish UI Static Output
     runs-on: ubuntu-24.04-arm
 
     permissions:
       contents: read
 
     env:
-      HF_BUCKET_NAME: ${{ vars.HF_BUCKET_WEBUI_STATIC_OUTPUT }}
+      HF_BUCKET_NAME: ${{ vars.HF_BUCKET_UI_STATIC_OUTPUT }}
 
     steps:
       - name: Checkout code
@@ -29,10 +29,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: Install Hugging Face Hub CLI

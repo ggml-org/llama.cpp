@@ -1,11 +1,11 @@
-name: Build WebUI
+name: Build UI
 
 on:
   workflow_call:
 
 jobs:
   build:
-    name: Build WebUI
+    name: Build UI
     runs-on: ubuntu-slim
     env:
       BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
@@ -36,9 +36,9 @@ jobs:
             sha256sum "$f" | awk '{print $1, $2}' >> checksums.txt
           done
 
-      - name: Upload built webui
+      - name: Upload built UI
         uses: actions/upload-artifact@v6
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
           retention-days: 1

@@ -36,13 +36,13 @@ env:
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
 
 jobs:
-  webui-build:
-    name: Build WebUI
-    uses: ./.github/workflows/webui-build.yml
+  ui-build:
+    name: Build UI
+    uses: ././.github/workflows/ui-build.yml
 
   macOS-cpu:
     needs:
-      - webui-build
+      - ui-build
 
     strategy:
       matrix:
@@ -71,10 +71,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: ccache
@@ -114,7 +114,7 @@ jobs:
 
   ubuntu-cpu:
     needs:
-      - webui-build
+      - ui-build
 
     strategy:
       matrix:
@@ -135,10 +135,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: ccache
@@ -192,7 +192,7 @@ jobs:
 
   ubuntu-vulkan:
     needs:
-      - webui-build
+      - ui-build
 
     strategy:
       matrix:
@@ -211,10 +211,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: ccache
@@ -269,7 +269,7 @@ jobs:
 
   android-arm64:
     needs:
-      - webui-build
+      - ui-build
 
     runs-on: ubuntu-latest
 
@@ -283,10 +283,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: ccache
@@ -347,7 +347,7 @@ jobs:
 
   ubuntu-24-openvino:
     needs:
-      - webui-build
+      - ui-build
 
     runs-on: ubuntu-24.04
 
@@ -370,10 +370,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: ccache
@@ -436,7 +436,7 @@ jobs:
 
   windows-cpu:
     needs:
-      - webui-build
+      - ui-build
 
     runs-on: windows-2025
 
@@ -452,10 +452,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: ccache
@@ -497,7 +497,7 @@ jobs:
 
   windows:
     needs:
-      - webui-build
+      - ui-build
 
     runs-on: windows-2025
 
@@ -522,10 +522,10 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: ccache
@@ -588,7 +588,7 @@ jobs:
 
   windows-cuda:
     needs:
-      - webui-build
+      - ui-build
 
     runs-on: windows-2022
 
@@ -601,10 +601,10 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: Install ccache
@@ -668,7 +668,7 @@ jobs:
 
   windows-sycl:
     needs:
-      - webui-build
+      - ui-build
 
     runs-on: windows-2022
 
@@ -708,10 +708,10 @@ jobs:
           Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
           "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: ccache
@@ -782,7 +782,7 @@ jobs:
 
   ubuntu-24-sycl:
     needs:
-      - webui-build
+      - ui-build
 
     strategy:
       matrix:
@@ -831,10 +831,10 @@ jobs:
           wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb
           sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: ccache
@@ -877,7 +877,7 @@ jobs:
 
   ubuntu-22-rocm:
     needs:
-      - webui-build
+      - ui-build
 
     runs-on: ubuntu-22.04
 
@@ -895,10 +895,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: Free up disk space
@@ -989,7 +989,7 @@ jobs:
 
   windows-hip:
     needs:
-      - webui-build
+      - ui-build
 
     runs-on: windows-2022
 
@@ -1007,10 +1007,10 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Download WebUI build artifact
+      - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: webui-build
+          name: ui-build
           path: build/tools/ui/
 
       - name: Grab rocWMMA package
@@ -1259,7 +1259,7 @@ jobs:
     runs-on: ubuntu-slim
 
     needs:
-      - webui-build
+      - ui-build
       - windows
       - windows-cpu
       - windows-cuda
@@ -1404,14 +1404,14 @@ jobs:
               }
             }
 
-  webui-publish:
+  ui-publish:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
 
     needs:
       - release
 
-    uses: ./.github/workflows/webui-publish.yml
+    uses: ././.github/workflows/ui-publish.yml
     with:
       version_tag: ${{ needs.release.outputs.tag_name }}
     secrets:
-      hf_token: ${{ secrets.HF_TOKEN_WEBUI_STATIC_OUTPUT }}
+      hf_token: ${{ secrets.HF_TOKEN_UI_STATIC_OUTPUT }}
