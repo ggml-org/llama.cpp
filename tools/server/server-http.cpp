@@ -112,7 +112,7 @@ bool server_http_context::init(const common_params & params) {
     }
 #else
     if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
-        SRV_ERR("the server is built without SSL support\n");
+        SRV_ERR("%s", "the server is built without SSL support\n");
         return false;
     }
     srv.reset(new httplib::Server());
