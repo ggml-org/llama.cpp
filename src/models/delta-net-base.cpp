@@ -547,15 +547,11 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     }
 
     const int64_t D = S_v * S_v * H_v;
-    // Memory has 1 + n_rs_seq slots (slot 0 = current, slots 1..n_rs_seq = rollback distances).
-    // The snapshot buffer must match — otherwise the deepest rollback (= n_rs_seq) reads
-    // uninitialized memory and corrupts the recurrent state.
     const int64_t K = (int64_t) cparams.n_rs_seq + 1;
 
-    ggml_tensor * state_3d    = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, D, K, n_seqs);
-    ggml_tensor * slot_0      = ggml_view_2d(ctx0, state_3d, D, n_seqs, state_3d->nb[2], 0);
-    ggml_tensor * state_in_2d = ggml_reshape_2d(ctx0, s, D, n_seqs);
-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, state_in_2d, slot_0));
+    // TODO: remove pad + simplify
+    ggml_tensor * state_in_3d = ggml_reshape_3d(ctx0, s, D, 1, n_seqs);
+    ggml_tensor * state_3d    = ggml_pad(ctx0, state_in_3d, 0, K - 1, 0, 0);
 
     ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, state_3d);
     cb(gdn_out, LLAMA_TENSOR_NAME_FGDN_CH, il);
