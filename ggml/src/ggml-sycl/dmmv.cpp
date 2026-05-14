@@ -239,7 +239,9 @@ static void convert_mul_mat_vec_bf16_sycl(const void *vx, const dfloat *y,
                                           float *dst, const int ncols,
                                           const int nrows,
                                           dpct::queue_ptr stream) {
-    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    // The qk=1 kernel iterates with stride 2*GGML_SYCL_DMMV_X, so ncols must be a
+    // multiple of that — not just GGML_SYCL_DMMV_X — to avoid out-of-bounds reads.
+    GGML_ASSERT(ncols % (2*GGML_SYCL_DMMV_X) == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
