@@ -56,39 +56,39 @@ jobs:
         with:
           node-version: "24"
           cache: "npm"
-          cache-dependency-path: "tools/server/webui/package-lock.json"
+          cache-dependency-path: "tools/ui/package-lock.json"
 
       - name: Install dependencies
         id: setup
         if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Run type checking
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run check
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Run linting
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run lint
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Install Playwright browsers
         id: playwright
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npx playwright install --with-deps
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Run Client tests
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:client
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Run Unit tests
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:unit
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
   e2e-tests:
     name: E2E Tests
@@ -107,36 +107,36 @@ jobs:
         with:
           node-version: "24"
           cache: "npm"
-          cache-dependency-path: "tools/server/webui/package-lock.json"
+          cache-dependency-path: "tools/ui/package-lock.json"
 
       - name: Install dependencies
         id: setup
         if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Build application
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run build
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Install Playwright browsers
         id: playwright
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npx playwright install --with-deps
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Build Storybook
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run build-storybook
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Run UI tests
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:ui -- --testTimeout=60000
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Run E2E tests
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:e2e
-        working-directory: tools/server/webui
+        working-directory: tools/ui

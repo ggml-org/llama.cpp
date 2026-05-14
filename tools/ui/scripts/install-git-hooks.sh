@@ -13,13 +13,13 @@ cat > "$PRE_COMMIT_HOOK" << 'EOF'
 #!/bin/bash
 
 # Check if there are any changes in the webui directory
-if git diff --cached --name-only | grep -q "^tools/server/webui/"; then
+if git diff --cached --name-only | grep -q "^tools/ui/"; then
     REPO_ROOT=$(git rev-parse --show-toplevel)
-    cd "$REPO_ROOT/tools/server/webui"
+    cd "$REPO_ROOT/tools/ui"
 
     # Check if package.json exists
     if [ ! -f "package.json" ]; then
-        echo "Error: package.json not found in tools/server/webui"
+        echo "Error: package.json not found in tools/ui"
         exit 1
     fi
 

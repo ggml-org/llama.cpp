@@ -19,15 +19,15 @@ jobs:
         with:
           node-version: "24"
           cache: "npm"
-          cache-dependency-path: "tools/server/webui/package-lock.json"
+          cache-dependency-path: "tools/ui/package-lock.json"
 
       - name: Install dependencies
         run: npm ci
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Build application
         run: npm run build
-        working-directory: tools/server/webui
+        working-directory: tools/ui
 
       - name: Generate checksums
         run: |

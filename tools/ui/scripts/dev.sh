@@ -9,7 +9,7 @@
 #   bash scripts/dev.sh
 #   npm run dev
 
-cd ../../../
+cd ../../
 
 # Check and install git hooks if missing
 check_and_install_hooks() {
@@ -22,13 +22,13 @@ check_and_install_hooks() {
 
     if [ "$hooks_missing" = true ]; then
         echo "🔧 Git hooks missing, installing them..."
-        cd tools/server/webui
+        cd tools/ui
         if bash scripts/install-git-hooks.sh; then
             echo "✅ Git hooks installed successfully"
         else
             echo "⚠️  Failed to install git hooks, continuing anyway..."
         fi
-        cd ../../../
+        cd ../../
     else
         echo "✅ Git hooks already installed"
     fi
@@ -48,7 +48,7 @@ trap cleanup SIGINT SIGTERM
 
 echo "🚀 Starting development servers..."
 echo "📝 Note: Make sure to start llama-server separately if needed"
-cd tools/server/webui
+cd tools/ui
 # Use --insecure-http-parser to handle malformed HTTP responses from llama-server
 # (some responses have both Content-Length and Transfer-Encoding headers)
 storybook dev -p 6006 --ci & NODE_OPTIONS="--insecure-http-parser" vite dev --host 0.0.0.0 &

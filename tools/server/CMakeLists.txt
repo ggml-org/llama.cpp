@@ -115,7 +115,7 @@ if (LLAMA_BUILD_WEBUI)
                 "-DHF_ENABLED=${LLAMA_USE_PREBUILT_WEBUI}"
                 "-DASSETS=${PUBLIC_ASSETS_JOINED}"
                 "-DSTAMP_FILE=${WEBUI_STAMP}"
-                "-DNPM_DIR=${CMAKE_CURRENT_SOURCE_DIR}/webui"
+                "-DNPM_DIR=${PROJECT_SOURCE_DIR}/tools/ui"
                 -P ${PROJECT_SOURCE_DIR}/scripts/webui-download.cmake
             COMMENT "Building/provisioning WebUI assets (npm build -> HF Bucket fallback)"
         )

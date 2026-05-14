@@ -88,7 +88,7 @@ The WebUI supports two server operation modes:
 ### 1. Install Dependencies
 
 ```bash
-cd tools/server/webui
+cd tools/ui
 npm install
 ```
 
@@ -194,7 +194,7 @@ The build process:
    - Deterministic output (zeroed timestamps)
 
 ```text
-tools/server/webui/        →  build  →  build/tools/ui/
+tools/ui/        →  build  →  build/tools/ui/
 ├── src/                                 ├── index.html  (served by llama-server)
 ├── static/                              └── (favicon inlined)
 └── ...
@@ -659,7 +659,7 @@ npm run check         # TypeScript type checking
 ## Project Structure
 
 ```text
-tools/server/webui/
+tools/ui/
 ├── src/
 │   ├── lib/
 │   │   ├── components/   # UI components (app/, ui/)

@@ -76,7 +76,7 @@ android:
 server/webui:
     - changed-files:
         - any-glob-to-any-file:
-            - tools/server/webui/**
+            - tools/ui/**
 server:
     - changed-files:
         - any-glob-to-any-file:
