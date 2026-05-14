@@ -181,9 +181,7 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         keys = list(keys) + prefixed
         return Mamba2Model.find_hparam(self, keys, *args, **kwargs)
 
-    def modify_tensors(
-        self, data_torch: Tensor, name: str, bid: int | None
-    ) -> Iterable[tuple[str, Tensor]]:
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if (
             name.endswith("block_sparse_moe.input_linear.weight")
             or "shared_mlp" in name
