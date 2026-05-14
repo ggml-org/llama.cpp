@@ -13081,13 +13081,6 @@ class Granite4VisionMmprojModel(MmprojModel):
         n_text_layers = self.global_config["text_config"]["num_hidden_layers"]
         n_vision_layers = self.global_config["vision_config"]["num_hidden_layers"]
 
-        # The tensors for the individual per-layer injection projectors are held
-        # separately in safetensors. We merge them here, so this is used to
-        # accumulate the projector tensors in the order that will correspond
-        # with the layer mapping in deepstack_layer_arr.
-        self._projector_tensors = {}
-        self._deepstack_layer_arr = [-1 for _ in range(n_text_layers)] # Populate with -1 sentinels
-
         # Normalize both deepstack and spatial projector maps to the form:
         # (vision_layer, llm_layer, <type>, type_index)
         #
@@ -13125,6 +13118,7 @@ class Granite4VisionMmprojModel(MmprojModel):
             for proj_idx, (_, _, proj_type, type_idx) in enumerate(normalized_projector_map)
         }
         self._vision_feature_layers = [vision_layer for vision_layer, _, _, _ in normalized_projector_map]
+        self._deepstack_layer_arr = [-1 for _ in range(n_text_layers)] # Populate with -1 sentinels
         for proj_idx, (_, llm_layer, _, _) in enumerate(normalized_projector_map):
             self._deepstack_layer_arr[llm_layer] = proj_idx
 
@@ -13174,29 +13168,37 @@ class Granite4VisionMmprojModel(MmprojModel):
 
         # Detect projector tensors and bin them
         projector_idx = None
-        proj_tensor_type = None
         for prefix, proj_idx in self._tensor_prefix_map.items():
             if name.startswith(prefix):
                 projector_idx = proj_idx
-                proj_tensor_type = name[len(prefix):].lstrip(".")
                 break
         if projector_idx is not None:
-            # Add to the stacked tensor mappings
-            tensor_stack = self._projector_tensors.setdefault(
-                proj_tensor_type, [None for _ in range(self._n_proj)]
-            )
-            tensor_stack[projector_idx] = data_torch
-
-            # If we've found all of the stacked projectors for this tensor type,
-            # yield the stacked tensor data
-            if None not in tensor_stack:
-                stacked_data_torch = torch.stack(tensor_stack)
-                stacked_name = name.replace(f".{bid}.", ".")
-                yield from super().modify_tensors(stacked_data_torch, stacked_name, 0)
-                return
-            else:
-                return None
+            # If this projector tensor has a block id within the projector,
+            # alias the bid to projector_idx
+            #
+            # TODO: currently, none of the Granite 4 Vision models have
+            # projectors with multiple QFormer layers, so the `layer.{}` index
+            # is always 0. This allows us to simply map to a single `bid` that
+            # matches the projector index. If this changes, we'll need a
+            # convention that merges the two IDs.
+            id_matches = list(re.finditer(r"\.([0-9]+)\.", name))
+            all_ids = [int(m.group(1)) for m in id_matches]
+            assert len(all_ids) >= 1 and len(all_ids) <= 2, "Must have at least 1 and at most 2 ids in tensor names"
+            # If not layer id, just use the projector index
+            new_bid = projector_idx
+            if len(all_ids) == 1:
+                new_name = name[:id_matches[0].span(1)[0]] + str(new_bid) + name[id_matches[0].span(1)[1]:]
+            else: # len(all_ids) == 2
+                new_bid = projector_idx # + all_ids[1]
+                new_name = name[:id_matches[0].span(0)[0]] + name[id_matches[0].span(1)[1]:id_matches[1].span(1)[0]] + str(new_bid) + name[id_matches[1].span(1)[1]:]
+            try:
+                yield from super().modify_tensors(data_torch, new_name, new_bid)
+            except Exception as err:
+                breakpoint()
+            return
         yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Lfm25AudioTokenizer")
 class LFM25AudioTokenizer(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
