@@ -308,12 +308,14 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
     common_download_opts opts;
     opts.bearer_token = params.hf_token;
     opts.offline = params.offline;
+
+    LOG_TRC("%s: looking for remote preset at %s\n", __func__, preset_url.c_str());
     const int status = common_download_file_single(preset_url, preset_path, opts);
     const bool has_preset = status >= 200 && status < 400;
 
     // remote preset is optional, so we don't error out if not found
     if (has_preset) {
-        LOG_INF("applying remote preset from %s\n", preset_url.c_str());
+        LOG_TRC("%s: applying remote preset from %s\n", __func__, preset_url.c_str());
         common_preset_context ctx(ex, /* only_remote_allowed */ true);
         common_preset global;
         auto remote_presets = ctx.load_from_ini(preset_path, global);
@@ -326,7 +328,7 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
             throw std::runtime_error("Remote preset.ini does not contain [" + std::string(hf_tag) + "] section");
         }
     } else {
-        LOG_INF("%s", "no remote preset found, skipping\n");
+        LOG_TRC("%s: no remote preset found, skipping\n", __func__);
     }
 
     return has_preset;
