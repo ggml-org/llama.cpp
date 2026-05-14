@@ -31,7 +31,7 @@ jobs:
 
       - name: Generate checksums
         run: |
-          cd tools/server/public
+          cd build/tools/ui
           for f in *; do
             sha256sum "$f" | awk '{print $1, $2}' >> checksums.txt
           done
@@ -40,5 +40,5 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
           retention-days: 1

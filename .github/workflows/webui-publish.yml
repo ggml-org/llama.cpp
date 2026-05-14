@@ -33,7 +33,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: Install Hugging Face Hub CLI
         run: pip install -U huggingface_hub
@@ -44,12 +44,12 @@ jobs:
       - name: Sync built files to Hugging Face bucket (version tag)
         run: |
           # Upload the built files to the Hugging Face bucket under the release version
-          hf buckets sync tools/server/public hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/${{ inputs.version_tag }} --delete --quiet
+          hf buckets sync build/tools/ui hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/${{ inputs.version_tag }} --delete --quiet
 
       - name: Sync built files to Hugging Face bucket (latest)
         run: |
           # Also upload to the 'latest' directory for fallback downloads
-          hf buckets sync tools/server/public hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/latest --delete --quiet
+          hf buckets sync build/tools/ui hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/latest --delete --quiet
 
       - name: Verify upload
         run: |

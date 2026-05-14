@@ -57,7 +57,7 @@ if (LLAMA_BUILD_WEBUI)
     set(WEBUI_SOURCE_DIR "")
 
     # Priority 1: Check for local webui build output
-    set(LOCAL_WEBUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/public")
+    set(LOCAL_WEBUI_DIR "${PROJECT_SOURCE_DIR}/build/tools/ui")
 
     # Verify all required assets exist before declaring local source valid
     set(ALL_ASSETS_PRESENT TRUE)
@@ -109,7 +109,7 @@ if (LLAMA_BUILD_WEBUI)
             OUTPUT ${WEBUI_STAMP}
             COMMAND ${CMAKE_COMMAND}
                 "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
-                "-DPUBLIC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/public"
+                "-DPUBLIC_DIR=${PROJECT_SOURCE_DIR}/build/tools/ui"
                 "-DHF_BUCKET=${LLAMA_WEBUI_HF_BUCKET}"
                 "-DHF_VERSION=${HF_WEBUI_VERSION}"
                 "-DHF_ENABLED=${LLAMA_USE_PREBUILT_WEBUI}"
@@ -121,7 +121,7 @@ if (LLAMA_BUILD_WEBUI)
         )
 
         set(WEBUI_SOURCE "provisioned")
-        set(WEBUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/public")
+        set(WEBUI_SOURCE_DIR "${PROJECT_SOURCE_DIR}/build/tools/ui")
     endif()
 
     # Process assets from the determined source
@@ -156,7 +156,7 @@ if (LLAMA_BUILD_WEBUI)
     else()
         # WebUI source not found - issue warning but don't fail the build
         # The server will still build but without webui embedded
-        message(WARNING "WebUI: no source available. Neither local build (tools/server/public/) nor HF Bucket download succeeded.")
+        message(WARNING "WebUI: no source available. Neither local build (build/tools/ui/) nor HF Bucket download succeeded.")
         message(WARNING "WebUI: building server without embedded WebUI. Set LLAMA_BUILD_WEBUI=OFF to suppress this warning.")
         add_definitions(-DLLAMA_WEBUI_DEFAULT_ENABLED=0)
     endif()

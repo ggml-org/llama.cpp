@@ -186,7 +186,7 @@ npm run build
 The build process:
 
 1. **Vite Build** - Bundles all TypeScript, Svelte, and CSS
-2. **Static Adapter** - Outputs to `../public` (llama-server's static file directory)
+2. **Static Adapter** - Outputs to `../../../build/tools/ui` (llama-server's static file directory)
 3. **Post-Build Script** - Cleans up intermediate files
 4. **Custom Plugin** - Creates `index.html` with:
    - Inlined favicon as base64
@@ -194,7 +194,7 @@ The build process:
    - Deterministic output (zeroed timestamps)
 
 ```text
-tools/server/webui/        →  build  →  tools/server/public/
+tools/server/webui/        →  build  →  build/tools/ui/
 ├── src/                                 ├── index.html  (served by llama-server)
 ├── static/                              └── (favicon inlined)
 └── ...
@@ -205,8 +205,8 @@ tools/server/webui/        →  build  →  tools/server/public/
 ```javascript
 // svelte.config.js
 adapter: adapter({
-  pages: '../public',      // Output directory
-  assets: '../public',     // Static assets
+  pages: '../../../build/tools/ui',      // Output directory
+  assets: '../../../build/tools/ui',     // Static assets
   fallback: 'index.html',  // SPA fallback
   strict: true
 }),
@@ -219,9 +219,9 @@ output: {
 
 The WebUI is embedded directly into the llama-server binary:
 
-1. `npm run build` outputs `index.html` to `tools/server/public/`
+1. `npm run build` outputs `index.html` to `build/tools/ui/`
 2. llama-server compiles this into the binary at build time
-3. When accessing `/`, llama-server serves the gzipped HTML
+3. When accessing `/`, llama-server serves the bundled HTML
 4. All assets are inlined (CSS, JS, fonts, favicon)
 
 This results in a **single portable binary** with the full WebUI included.

@@ -75,7 +75,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -139,7 +139,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: ccache
         if: ${{ matrix.build != 's390x' }}
@@ -215,7 +215,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -287,7 +287,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -374,7 +374,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -456,7 +456,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -526,7 +526,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -605,7 +605,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: Install ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -712,7 +712,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -835,7 +835,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -899,7 +899,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: Free up disk space
         uses: ggml-org/free-disk-space@v1.3.1
@@ -1011,7 +1011,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: Grab rocWMMA package
         id: grab_rocwmma

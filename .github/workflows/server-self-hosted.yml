@@ -76,7 +76,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: webui-build
-          path: tools/server/public/
+          path: build/tools/ui/
 
       - name: Build
         id: cmake_build

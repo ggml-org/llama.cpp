@@ -1,4 +1,12 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync } from 'fs';
+import {
+	readFileSync,
+	writeFileSync,
+	existsSync,
+	readdirSync,
+	copyFileSync,
+	rmSync,
+	unlinkSync
+} from 'fs';
 import { resolve } from 'path';
 import type { Plugin } from 'vite';
 
@@ -11,28 +19,28 @@ const GUIDE_FOR_FRONTEND = `
 -->
 `.trim();
 
+const OUTPUT_DIR = '../../../build/tools/ui';
+
 export function llamaCppBuildPlugin(): Plugin {
 	return {
 		name: 'llamacpp:build',
 		apply: 'build',
 		closeBundle() {
-			// Ensure the SvelteKit adapter has finished writing to ../public
 			setTimeout(() => {
 				try {
-					const indexPath = resolve('../public/index.html');
+					const outDir = resolve(OUTPUT_DIR);
+					const indexPath = resolve(outDir, 'index.html');
 					if (!existsSync(indexPath)) return;
 
 					let content = readFileSync(indexPath, 'utf-8');
 
+					// Inline favicon as base64 data URL
 					const faviconPath = resolve('static/favicon.svg');
-
 					if (existsSync(faviconPath)) {
 						const faviconContent = readFileSync(faviconPath, 'utf-8');
 						const faviconBase64 = Buffer.from(faviconContent).toString('base64');
 						const faviconDataUrl = `data:image/svg+xml;base64,${faviconBase64}`;
-
 						content = content.replace(/href="[^"]*favicon\.svg"/g, `href="${faviconDataUrl}"`);
-
 						console.log('✓ Inlined favicon.svg as base64 data URL');
 					}
 
@@ -48,17 +56,16 @@ export function llamaCppBuildPlugin(): Plugin {
 					writeFileSync(indexPath, content, 'utf-8');
 					console.log('✓ Updated index.html');
 
-					// Copy bundle.*.js -> ../public/bundle.js
-					const immutableDir = resolve('../public/_app/immutable');
-					const bundleDir = resolve('../public/_app/immutable/assets');
+					// Copy bundle.*.js -> bundle.js at output root
+					const immutableDir = resolve(outDir, '_app/immutable');
+					const bundleDir = resolve(outDir, '_app/immutable/assets');
 
 					if (existsSync(immutableDir)) {
 						const jsFiles = readdirSync(immutableDir).filter((f) => f.match(/^bundle\..+\.js$/));
-
 						if (jsFiles.length > 0) {
-							copyFileSync(resolve(immutableDir, jsFiles[0]), resolve('../public/bundle.js'));
+							copyFileSync(resolve(immutableDir, jsFiles[0]), resolve(outDir, 'bundle.js'));
 							// Normalize __sveltekit_<hash> to __sveltekit__ in bundle.js
-							const bundleJsPath = resolve('../public/bundle.js');
+							const bundleJsPath = resolve(outDir, 'bundle.js');
 							let bundleJs = readFileSync(bundleJsPath, 'utf-8');
 							bundleJs = bundleJs.replace(/__sveltekit_[a-z0-9]+/g, '__sveltekit__');
 							writeFileSync(bundleJsPath, bundleJs, 'utf-8');
@@ -66,17 +73,29 @@ export function llamaCppBuildPlugin(): Plugin {
 						}
 					}
 
-					// Copy bundle.*.css -> ../public/bundle.css
+					// Copy bundle.*.css -> bundle.css at output root
 					if (existsSync(bundleDir)) {
 						const cssFiles = readdirSync(bundleDir).filter((f) => f.match(/^bundle\..+\.css$/));
-
 						if (cssFiles.length > 0) {
-							copyFileSync(resolve(bundleDir, cssFiles[0]), resolve('../public/bundle.css'));
+							copyFileSync(resolve(bundleDir, cssFiles[0]), resolve(outDir, 'bundle.css'));
 							console.log(`✓ Copied ${cssFiles[0]} -> bundle.css`);
 						}
 					}
+
+					// Cleanup: remove _app directory, favicon.svg, and legacy index.html.gz
+					const appDir = resolve(outDir, '_app');
+					if (existsSync(appDir)) {
+						rmSync(appDir, { recursive: true, force: true });
+						console.log('✓ Removed _app directory');
+					}
+
+					const faviconOut = resolve(outDir, 'favicon.svg');
+					if (existsSync(faviconOut)) {
+						unlinkSync(faviconOut);
+						console.log('✓ Removed favicon.svg');
+					}
 				} catch (error) {
-					console.error('Failed to update index.html:', error);
+					console.error('Failed to process build output:', error);
 				}
 			}, 100);
 		}
