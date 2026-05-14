@@ -1460,11 +1460,10 @@ static std::vector<ggml_type> parse_quant_list(const std::string & s) {
     return result;
 }
 
-static void print_usage(const char * prog) {
-    LOG("Usage: %s [options]\n", prog);
+static void print_usage(int /*argc*/, char ** argv) {
+    LOG("Usage: %s [options]\n", argv[0]);
     LOG("\n");
-    LOG("Options:\n");
-    LOG("  -m, --model PATH         Path to input GGUF model (required)\n");
+    LOG("Tool-specific options:\n");
     LOG("  -i, --imatrix PATH       Path to importance matrix file (required)\n");
     LOG("  -q, --quants LIST        Comma-separated list of candidate quant types (required)\n");
     LOG("                           e.g., IQ1_BN,IQ2_TQ,IQ3_TQ,Q4_KPT,Q6_K\n");
@@ -1480,7 +1479,6 @@ static void print_usage(const char * prog) {
     LOG("                           Avoids spending top-shelf bits on a force-pinned tensor\n");
     LOG("                           whose budget the DP spends better on amplified roles.)\n");
     LOG("  --max-iterations N       Max optimization iterations (default: 100)\n");
-    LOG("  --threads N              Number of threads (default: 1)\n");
     LOG("  --layer-buckets N        Per-class layer buckets for independent quant assignment\n");
     LOG("                           (default: 3 — first/middle/last third).\n");
     LOG("                           1 reproduces the older per-role-only behavior.\n");
@@ -1498,96 +1496,174 @@ static void print_usage(const char * prog) {
     LOG("                           skips Phase 2+3 entirely (~50min savings) when the\n");
     LOG("                           cache header matches model+quants+test-data+sampling.\n");
     LOG("                           On miss, runs Phase 3 normally and overwrites PATH.\n");
+    LOG("\n");
+    LOG("Model / offload options (forwarded to the standard llama.cpp parser; pass --help\n");
+    LOG("to see the full list of supported common args, including caching, NUMA, etc.):\n");
+    LOG("  -m,   --model PATH               Path to input GGUF model (required)\n");
+    LOG("  -ngl, --gpu-layers N             Layers to offload to GPU; 'auto' or 'all' (default: all)\n");
+    LOG("  -ot,  --override-tensor PAT=BUF  Per-tensor buffer-type override (e.g. 'exps=CPU')\n");
+    LOG("  -cmoe,  --cpu-moe                Keep all MoE expert weights on CPU\n");
+    LOG("  -ncmoe, --n-cpu-moe N            Keep MoE expert weights of the first N layers on CPU\n");
+    LOG("  -ts,  --tensor-split A,B,...     Fraction of model per GPU\n");
+    LOG("  -mg,  --main-gpu IDX             Main GPU index\n");
+    LOG("  -sm,  --split-mode MODE          GPU split mode: none|layer|row|tensor\n");
+    LOG("  -t,   --threads N                CPU threads (also drives Phase-3 parallelism)\n");
+    LOG("  --no-mmap, --mlock, --numa MODE  Standard memory-locking / NUMA controls\n");
 }
 
-static config parse_args(int argc, char ** argv) {
+// Args owned by this tool. Everything else in argv is forwarded to the standard
+// llama.cpp parser (common_params_parse), which handles -m/--model, -ngl, -ot,
+// --cpu-moe, --n-cpu-moe, -ts, -mg, -sm, -t/--threads, -c, --no-mmap, --mlock,
+// --numa, -h/--help, etc. — exactly the same offloading/fitting machinery used
+// by llama-cli, llama-imatrix, llama-perplexity, llama-bench.
+static const std::set<std::string> & tool_args_with_value() {
+    static const std::set<std::string> s = {
+        "-q", "--quants",
+        "-b", "--target-bpw",
+        "-o", "--output",
+        "-i", "--imatrix",
+        "--bpw-tolerance",
+        "--test-data",
+        "--test-samples",
+        "--test-sizes",
+        "--min-elements",
+        "--output-tensor-type",
+        "--max-iterations",
+        "--layer-buckets",
+        "--reps-per-bucket",
+        "--importance-alpha",
+        "--cost-matrix-cache",
+    };
+    return s;
+}
+
+static config parse_args(int argc, char ** argv, common_params & params) {
     config cfg;
+
+    // First pass: split argv into (tool-specific args we own) and (everything else,
+    // forwarded to the common parser). Stripping tool-specific args is required —
+    // common_params_parse() throws on unknown flags.
+    std::vector<char *> forwarded;
+    forwarded.reserve(argc);
+    forwarded.push_back(argv[0]);
+
+    auto need_value = [&](int i, const std::string & arg) {
+        if (i + 1 >= argc) {
+            LOG_ERR("Missing value for argument: %s\n", arg.c_str());
+            exit(1);
+        }
+    };
+
+    const auto & owned = tool_args_with_value();
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if ((arg == "-m" || arg == "--model") && i + 1 < argc) {
-            cfg.model_path = argv[++i];
-        } else if ((arg == "-i" || arg == "--imatrix") && i + 1 < argc) {
-            cfg.imatrix_path = argv[++i];
-        } else if ((arg == "-q" || arg == "--quants") && i + 1 < argc) {
-            cfg.quant_types = parse_quant_list(argv[++i]);
-        } else if ((arg == "-b" || arg == "--target-bpw") && i + 1 < argc) {
-            cfg.target_bpw = std::stof(argv[++i]);
-        } else if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
-            cfg.output_path = argv[++i];
-        } else if (arg == "--bpw-tolerance" && i + 1 < argc) {
-            std::string tol = argv[++i];
-            // Parse "+HIGH,-LOW" format
+        if (!owned.count(arg)) {
+            forwarded.push_back(argv[i]);
+            continue;
+        }
+        need_value(i, arg);
+        const char * val = argv[++i];
+        if (arg == "-q" || arg == "--quants") {
+            cfg.quant_types = parse_quant_list(val);
+        } else if (arg == "-b" || arg == "--target-bpw") {
+            cfg.target_bpw = std::stof(val);
+        } else if (arg == "-o" || arg == "--output") {
+            cfg.output_path = val;
+        } else if (arg == "-i" || arg == "--imatrix") {
+            cfg.imatrix_path = val;
+        } else if (arg == "--bpw-tolerance") {
+            std::string tol = val;
             size_t comma = tol.find(',');
             if (comma != std::string::npos) {
                 cfg.bpw_tol_high = std::stof(tol.substr(0, comma));
-                cfg.bpw_tol_low = std::stof(tol.substr(comma + 1));
+                cfg.bpw_tol_low  = std::stof(tol.substr(comma + 1));
             } else {
                 cfg.bpw_tol_high = std::stof(tol);
             }
-        } else if (arg == "--test-data" && i + 1 < argc) {
-            cfg.test_data_path = argv[++i];
-        } else if (arg == "--test-samples" && i + 1 < argc) {
-            cfg.n_test_samples = std::stoi(argv[++i]);
+        } else if (arg == "--test-data") {
+            cfg.test_data_path = val;
+        } else if (arg == "--test-samples") {
+            cfg.n_test_samples = std::stoi(val);
             if (cfg.n_test_samples < 1) {
                 LOG_ERR("--test-samples must be >= 1\n");
                 exit(1);
             }
-        } else if (arg == "--test-sizes" && i + 1 < argc) {
-            std::string sizes = argv[++i];
-            std::istringstream ss(sizes);
+        } else if (arg == "--test-sizes") {
+            std::istringstream ss(val);
             std::string token;
             cfg.test_sizes.clear();
             while (std::getline(ss, token, ',')) {
                 cfg.test_sizes.push_back(std::stoi(token));
             }
-        } else if (arg == "--min-elements" && i + 1 < argc) {
-            cfg.min_elements = std::stoll(argv[++i]);
-        } else if (arg == "--output-tensor-type" && i + 1 < argc) {
-            cfg.output_tensor_type = parse_ggml_type_str(argv[++i]);
-        } else if (arg == "--max-iterations" && i + 1 < argc) {
-            cfg.max_iterations = std::stoi(argv[++i]);
-        } else if (arg == "--threads" && i + 1 < argc) {
-            cfg.n_threads = std::stoi(argv[++i]);
-        } else if (arg == "--layer-buckets" && i + 1 < argc) {
-            cfg.n_layer_buckets = std::stoi(argv[++i]);
+        } else if (arg == "--min-elements") {
+            cfg.min_elements = std::stoll(val);
+        } else if (arg == "--output-tensor-type") {
+            cfg.output_tensor_type = parse_ggml_type_str(val);
+        } else if (arg == "--max-iterations") {
+            cfg.max_iterations = std::stoi(val);
+        } else if (arg == "--layer-buckets") {
+            cfg.n_layer_buckets = std::stoi(val);
             if (cfg.n_layer_buckets < 1) {
                 LOG_ERR("--layer-buckets must be >= 1\n");
                 exit(1);
             }
-        } else if (arg == "--reps-per-bucket" && i + 1 < argc) {
-            cfg.n_reps_per_bucket = std::stoi(argv[++i]);
+        } else if (arg == "--reps-per-bucket") {
+            cfg.n_reps_per_bucket = std::stoi(val);
             if (cfg.n_reps_per_bucket < 1) {
                 LOG_ERR("--reps-per-bucket must be >= 1\n");
                 exit(1);
             }
-        } else if (arg == "--importance-alpha" && i + 1 < argc) {
-            cfg.importance_alpha = std::stof(argv[++i]);
+        } else if (arg == "--importance-alpha") {
+            cfg.importance_alpha = std::stof(val);
             if (cfg.importance_alpha < 0.0f) {
                 LOG_ERR("--importance-alpha must be >= 0\n");
                 exit(1);
             }
-        } else if (arg == "--cost-matrix-cache" && i + 1 < argc) {
-            cfg.cost_matrix_cache = argv[++i];
-        } else if (arg == "-h" || arg == "--help") {
-            print_usage(argv[0]);
-            exit(0);
-        } else {
-            LOG_ERR("Unknown argument: %s\n\n", arg.c_str());
-            print_usage(argv[0]);
-            exit(1);
+        } else if (arg == "--cost-matrix-cache") {
+            cfg.cost_matrix_cache = val;
         }
     }
+
+    // Hand the rest to the standard llama.cpp arg parser. This wires up -m,
+    // -ngl/--gpu-layers, -ot/--override-tensor, --cpu-moe/--n-cpu-moe,
+    // -ts/--tensor-split, -mg/--main-gpu, -sm/--split-mode, -t/--threads,
+    // -c/--ctx-size, --no-mmap, --mlock, --numa, -h/--help, etc.
+    // Default n_gpu_layers stays at common's default (-1 = auto/all layers),
+    // which matches the previous hardcoded n_gpu_layers=99 for models that
+    // fit in VRAM, and is overridable here by passing -ngl.
+    if (!common_params_parse((int)forwarded.size(), forwarded.data(), params,
+                             LLAMA_EXAMPLE_COMMON, print_usage)) {
+        exit(1);
+    }
+
+    // Pull values needed by the tool out of the parsed common_params.
+    cfg.model_path = params.model.path;
+    cfg.n_threads  = params.cpuparams.n_threads;
 
     if (cfg.model_path.empty() || cfg.imatrix_path.empty() ||
         cfg.quant_types.empty() || cfg.target_bpw <= 0 || cfg.output_path.empty()) {
         LOG_ERR("Missing required arguments\n\n");
-        print_usage(argv[0]);
+        print_usage(0, argv);
         exit(1);
     }
 
     if (cfg.output_tensor_type == GGML_TYPE_COUNT) {
         cfg.output_tensor_type = default_output_type_for_target(cfg.quant_types, cfg.target_bpw);
     }
+
+    // Set n_ctx / n_batch / n_ubatch from --test-sizes so the fitting algorithm
+    // (which runs inside common_init_from_params in Phase 2) uses the correct
+    // memory footprint for its estimates. n_batch must be >= the longest sequence
+    // or llama_decode asserts; n_ctx just needs to hold that many tokens.
+    // fit_params_min_ctx is set to the same value so the fitter's floor matches
+    // what the tests actually require.
+    int max_test_size = 0;
+    for (int s : cfg.test_sizes) { max_test_size = std::max(max_test_size, s); }
+    const int min_ctx_batch = std::max(512, max_test_size + 1);
+    params.n_batch           = min_ctx_batch;
+    params.n_ubatch          = min_ctx_batch;
+    params.n_ctx             = std::max(1024, max_test_size + 1);
+    params.fit_params_min_ctx = (uint32_t)params.n_ctx;
 
     return cfg;
 }
@@ -1761,7 +1837,10 @@ static bool load_cost_matrix_cache(
 // ============================================================================
 
 int main(int argc, char ** argv) {
-    config cfg = parse_args(argc, argv);
+    common_init();
+
+    common_params params;
+    config cfg = parse_args(argc, argv, params);
 
     LOG("=== llama-auto-tensor-type ===\n");
     LOG("Model:       %s\n", cfg.model_path.c_str());
@@ -2012,19 +2091,8 @@ int main(int argc, char ** argv) {
     // ---- Phase 2: Capture reference activations ----
     LOG("\n--- Phase 2: Capturing reference activations ---\n");
 
-    // Load model with llama API
-    common_params params;
-    params.model.path = cfg.model_path;
-    params.n_gpu_layers = 99;  // Offload to GPU if available, falls back to CPU
-    // Size batch/context to the largest requested test size (+BOS); n_batch must be
-    // >= n_tokens_all or llama_decode asserts.
-    int max_test_size = 0;
-    for (int s : cfg.test_sizes) max_test_size = std::max(max_test_size, s);
-    const int min_batch = std::max(512, max_test_size + 1);
-    params.n_batch  = min_batch;
-    params.n_ubatch = min_batch;
-    params.n_ctx    = std::max(1024, max_test_size + 1);
-
+    // params.n_ctx / n_batch / n_ubatch were set in parse_args from --test-sizes
+    // so the fitting algorithm already used them. Just install the eval callback.
     for (const auto & ti : quantizable) {
         if (target_weight_names.count(ti.name)) {
             cap_state.target_weight_names.insert(ti.name);
@@ -2043,9 +2111,9 @@ int main(int argc, char ** argv) {
     params.cb_eval = capture_callback;
     params.cb_eval_user_data = &cap_state;
 
-    common_init();
     ggml_backend_load_all();
     llama_backend_init();
+    llama_numa_init(params.numa);
 
     auto llama_init = common_init_from_params(params);
     if (!llama_init) {
