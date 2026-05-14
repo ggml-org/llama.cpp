@@ -76,12 +76,16 @@ if (LLAMA_BUILD_WEBUI)
 
     # Priority 2: Build-time asset provisioning (npm build → HF Bucket fallback)
     if(NOT WEBUI_SOURCE_DIR)
-        if(DEFINED LLAMA_BUILD_NUMBER)
+        # Environment variable takes precedence (e.g., from CI workflows)
+        if(DEFINED ENV{HF_WEBUI_VERSION})
+            set(HF_WEBUI_VERSION "$ENV{HF_WEBUI_VERSION}")
+            message(STATUS "WebUI: using HF_WEBUI_VERSION from environment=${HF_WEBUI_VERSION}")
+        elseif(DEFINED LLAMA_BUILD_NUMBER)
             set(HF_WEBUI_VERSION "${LLAMA_BUILD_NUMBER}")
             message(STATUS "WebUI: using LLAMA_BUILD_NUMBER=${HF_WEBUI_VERSION}")
         else()
             set(HF_WEBUI_VERSION "")
-            message(STATUS "WebUI: LLAMA_BUILD_NUMBER not defined")
+            message(STATUS "WebUI: version not specified (will use HF 'latest')")
         endif()
 
         # Stamp file embeds the version tag so a changed build number triggers
