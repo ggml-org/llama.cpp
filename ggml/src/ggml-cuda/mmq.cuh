@@ -106,42 +106,106 @@ struct tile_x_sizes {
     int sc;
 };
 
-static int get_mmq_x_max_host(const int cc) {
-    return (turing_mma_available(cc) || amd_wmma_available(cc)) ? 128 :
-        GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA ?
-#ifdef GGML_CUDA_FORCE_MMQ
-            128                     : 64;
+// Config options for the MMQ kernel.
+struct mmq_config {
+    int mmq_x_max;
+    int mmq_y;
+    int nwarps;
+    int granularity_small;
+    int granularity_large;
+    int granularity_large_min_x;
+
+    constexpr __host__ __device__ mmq_config(
+            int mmq_x_max, int mmq_y, int nwarps,
+            int granularity_small, int granularity_large, int granularity_large_min_x) :
+        mmq_x_max(mmq_x_max), mmq_y(mmq_y), nwarps(nwarps),
+        granularity_small(granularity_small), granularity_large(granularity_large),
+        granularity_large_min_x(granularity_large_min_x) {}
+};
+
+#define GGML_CUDA_MMQ_CONFIG_CASE(mmq_x_max_, mmq_y_, nwarps_, granularity_small_, granularity_large_, granularity_large_min_x_) \
+    static_assert((mmq_x_max_) > 0,                                                "bad mmq_x_max");                              \
+    static_assert((mmq_y_) > 0 && (mmq_y_) % 8 == 0,                               "bad mmq_y");                                 \
+    static_assert((granularity_small_) > 0,                                        "bad granularity_small");                     \
+    static_assert((granularity_large_) >= (granularity_small_),                    "bad granularity_large");                     \
+    static_assert((granularity_large_min_x_) >= 0,                                 "bad granularity_large_min_x");               \
+    static_assert((granularity_small_) == (granularity_large_)                                                                    \
+                  || (granularity_large_min_x_) > 0,                               "min_x must be positive when granularities differ"); \
+    return mmq_config{(mmq_x_max_), (mmq_y_), (nwarps_),                                                                          \
+                      (granularity_small_), (granularity_large_), (granularity_large_min_x_)};
+
+// Per-target overrides hoisted out so the per-arch rows below stay table-like.
+#if defined(GGML_USE_HIP)
+#define MMQ_MFMA_NWARPS 8
 #else
-            MMQ_DP4A_MAX_BATCH_SIZE : 64;
-#endif // GGML_CUDA_FORCE_MMQ
+#define MMQ_MFMA_NWARPS (256/warp_size)
+#endif
+
+#ifdef GGML_CUDA_FORCE_MMQ
+#define MMQ_VOLTA_X_MAX 128
+#else
+#define MMQ_VOLTA_X_MAX MMQ_DP4A_MAX_BATCH_SIZE
+#endif
+
+//                                                                                                                                                                x_max    y           nwarps  gs  gl gmx
+static constexpr __host__ __device__ mmq_config ggml_cuda_mmq_get_config_amd_mfma   (const int /*cc*/, const int warp_size) { GGML_CUDA_MMQ_CONFIG_CASE(             64, 128, MMQ_MFMA_NWARPS, 16, 32, 128); }
+static constexpr __host__ __device__ mmq_config ggml_cuda_mmq_get_config_amd_wmma   (const int /*cc*/, const int warp_size) { GGML_CUDA_MMQ_CONFIG_CASE(            128, 128,   256/warp_size, 16, 32, 128); }
+static constexpr __host__ __device__ mmq_config ggml_cuda_mmq_get_config_rdna1      (const int /*cc*/, const int warp_size) { GGML_CUDA_MMQ_CONFIG_CASE(             64,  64,   256/warp_size,  8,  8,   0); }
+static constexpr __host__ __device__ mmq_config ggml_cuda_mmq_get_config_amd_other  (const int /*cc*/, const int warp_size) { GGML_CUDA_MMQ_CONFIG_CASE(             64, 128,   256/warp_size,  8,  8,   0); }
+static constexpr __host__ __device__ mmq_config ggml_cuda_mmq_get_config_turing_plus(const int /*cc*/, const int warp_size) { GGML_CUDA_MMQ_CONFIG_CASE(            128, 128,   256/warp_size,  8, 16,  48); }
+static constexpr __host__ __device__ mmq_config ggml_cuda_mmq_get_config_volta      (const int /*cc*/, const int warp_size) { GGML_CUDA_MMQ_CONFIG_CASE(MMQ_VOLTA_X_MAX, 128,   256/warp_size,  8,  8,   0); }
+static constexpr __host__ __device__ mmq_config ggml_cuda_mmq_get_config_default    (const int /*cc*/, const int warp_size) { GGML_CUDA_MMQ_CONFIG_CASE(             64,  64,   256/warp_size,  8,  8,   0); }
+
+static __host__ mmq_config ggml_cuda_mmq_get_config(const int cc, const int warp_size) {
+    if (amd_mfma_available(cc)) {
+        return ggml_cuda_mmq_get_config_amd_mfma(cc, warp_size);
+    }
+    if (amd_wmma_available(cc)) {
+        return ggml_cuda_mmq_get_config_amd_wmma(cc, warp_size);
+    }
+    if (GGML_CUDA_CC_IS_AMD(cc) && GGML_CUDA_CC_IS_RDNA1(cc)) {
+        return ggml_cuda_mmq_get_config_rdna1(cc, warp_size);
+    }
+    if (GGML_CUDA_CC_IS_AMD(cc)) {
+        return ggml_cuda_mmq_get_config_amd_other(cc, warp_size);
+    }
+    if (turing_mma_available(cc)) {
+        return ggml_cuda_mmq_get_config_turing_plus(cc, warp_size);
+    }
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA) {
+        return ggml_cuda_mmq_get_config_volta(cc, warp_size);
+    }
+    return ggml_cuda_mmq_get_config_default(cc, warp_size);
+}
+
+static constexpr __device__ mmq_config ggml_cuda_mmq_get_config() {
+#if defined(AMD_MFMA_AVAILABLE)
+    return ggml_cuda_mmq_get_config_amd_mfma(0, ggml_cuda_get_physical_warp_size());
+#elif defined(AMD_WMMA_AVAILABLE)
+    return ggml_cuda_mmq_get_config_amd_wmma(0, ggml_cuda_get_physical_warp_size());
+#elif defined(GGML_USE_HIP) && defined(RDNA1)
+    return ggml_cuda_mmq_get_config_rdna1(0, ggml_cuda_get_physical_warp_size());
+#elif defined(GGML_USE_HIP)
+    return ggml_cuda_mmq_get_config_amd_other(0, ggml_cuda_get_physical_warp_size());
+#elif defined(TURING_MMA_AVAILABLE)
+    return ggml_cuda_mmq_get_config_turing_plus(0, ggml_cuda_get_physical_warp_size());
+#elif __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
+    return ggml_cuda_mmq_get_config_volta(0, ggml_cuda_get_physical_warp_size());
+#else
+    return ggml_cuda_mmq_get_config_default(0, ggml_cuda_get_physical_warp_size());
+#endif
+}
+
+static int get_mmq_x_max_host(const int cc) {
+    return ggml_cuda_mmq_get_config(cc, WARP_SIZE).mmq_x_max;
 }
 
 static constexpr __device__ int get_mmq_x_max_device() {
-#if defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-    return 128;
-#else // defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-
-#if defined(GGML_USE_HIP)
-    return 64;
-#else // defined(GGML_USE_HIP)
-
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
-#ifdef GGML_CUDA_FORCE_MMQ
-    return 128;
-#else // GGML_CUDA_FORCE_MMQ
-    return MMQ_DP4A_MAX_BATCH_SIZE;
-#endif // GGML_CUDA_FORCE_MMQ
-#else // __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
-    return 64;
-#endif // __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
-
-#endif // defined(GGML_USE_HIP)
-#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+    return ggml_cuda_mmq_get_config().mmq_x_max;
 }
 
 static int get_mmq_y_host(const int cc) {
-    return GGML_CUDA_CC_IS_AMD(cc) ? (GGML_CUDA_CC_IS_RDNA1(cc) ? 64 : 128) :
-        ((GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA) ? 128 : 64);
+    return ggml_cuda_mmq_get_config(cc, WARP_SIZE).mmq_y;
 }
 
 static constexpr __device__ int get_iter_k([[maybe_unused]] const ggml_type type) {
@@ -154,19 +218,7 @@ if (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4) {
 }
 
 static constexpr __device__ int get_mmq_y_device() {
-#if defined(GGML_USE_HIP)
-#if defined(RDNA1)
-    return 64;
-#else
-    return 128;
-#endif // defined RDNA1
-#else
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
-    return 128;
-#else
-    return 64;
-#endif // __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
-#endif // defined(GGML_USE_HIP)
+    return ggml_cuda_mmq_get_config().mmq_y;
 }
 
 // Decouple shared memory tile sizes from WARP_SIZE to allow for different warp sizes.
@@ -271,45 +323,21 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
 #define MMQ_TILE_Y_FP4_K MMQ_TILE_Y_K
 
 static int mmq_get_granularity_host(const int mmq_x, const int cc) {
-    if (amd_mfma_available(cc) || amd_wmma_available(cc)) {
-        return mmq_x >= 128 ? 32 : 16;
-    } else if (turing_mma_available(cc) && mmq_x >= 48) {
-        return 16;
-    } else {
-        return 8;
-    }
+    const mmq_config cfg = ggml_cuda_mmq_get_config(cc, WARP_SIZE);
+    return mmq_x >= cfg.granularity_large_min_x ? cfg.granularity_large : cfg.granularity_small;
 }
 
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 static constexpr __device__ int mmq_get_granularity_device(const int mmq_x) {
-    return mmq_x >= 128 ? 32 : 16;
+    const mmq_config cfg = ggml_cuda_mmq_get_config();
+    return mmq_x >= cfg.granularity_large_min_x ? cfg.granularity_large : cfg.granularity_small;
 }
-#elif defined(TURING_MMA_AVAILABLE)
-static constexpr __device__ int mmq_get_granularity_device(const int mmq_x) {
-    return mmq_x >= 48 ? 16 : 8;
-}
-#else
-static constexpr __device__ int mmq_get_granularity_device(const int /*mmq_x*/) {
-    return 8;
-}
-#endif // AMD_MFMA_AVAILABLE
 
-#if defined(GGML_USE_HIP)
 static int mmq_get_nwarps_host(const int cc, const int warp_size) {
-    return amd_mfma_available(cc) ? 8 : 256/warp_size;
+    return ggml_cuda_mmq_get_config(cc, warp_size).nwarps;
 }
-#else
-static int mmq_get_nwarps_host(const int /*cc*/, const int warp_size) {
-    return 256/warp_size;
-}
-#endif // (GGML_USE_HIP)
 
 static constexpr __device__ int mmq_get_nwarps_device() {
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-    return 8;
-#else
-    return 256/ggml_cuda_get_physical_warp_size();
-#endif // AMD_MFMA_AVAILABLE
+    return ggml_cuda_mmq_get_config().nwarps;
 }
 
 // ------------------------------------------------------------
