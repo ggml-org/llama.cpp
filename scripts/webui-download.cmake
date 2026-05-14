@@ -69,52 +69,58 @@ set(PROVISION_SUCCESS FALSE)
 
 if(NOT PROVISION_SUCCESS AND NOT "${NPM_DIR}" STREQUAL "")
     if(EXISTS "${NPM_DIR}/package.json")
-        message(STATUS "WebUI: building from source in ${NPM_DIR}")
+        # Check if npm is available before attempting npm build
+        find_program(NPM_EXECUTABLE npm)
+        if(NPM_EXECUTABLE)
+            message(STATUS "WebUI: building from source in ${NPM_DIR}")
 
-        # Run npm install if node_modules is missing
-        if(NOT EXISTS "${NPM_DIR}/node_modules")
-            message(STATUS "WebUI: running npm install (first time)")
+            # Run npm install if node_modules is missing
+            if(NOT EXISTS "${NPM_DIR}/node_modules")
+                message(STATUS "WebUI: running npm install (first time)")
+                execute_process(
+                    COMMAND npm install
+                    WORKING_DIRECTORY "${NPM_DIR}"
+                    RESULT_VARIABLE NPM_INSTALL_RESULT
+                    OUTPUT_VARIABLE NPM_OUT
+                    ERROR_VARIABLE  NPM_ERR
+                )
+                if(NOT NPM_INSTALL_RESULT EQUAL 0)
+                    message(STATUS "WebUI: npm install failed (${NPM_INSTALL_RESULT}), falling back to download")
+                    message(STATUS "  stderr: ${NPM_ERR}")
+                endif()
+            endif()
+
+            # Run the build
             execute_process(
-                COMMAND npm install
+                COMMAND npm run build
                 WORKING_DIRECTORY "${NPM_DIR}"
-                RESULT_VARIABLE NPM_INSTALL_RESULT
+                RESULT_VARIABLE NPM_BUILD_RESULT
                 OUTPUT_VARIABLE NPM_OUT
                 ERROR_VARIABLE  NPM_ERR
             )
-            if(NOT NPM_INSTALL_RESULT EQUAL 0)
-                message(STATUS "WebUI: npm install failed (${NPM_INSTALL_RESULT}), falling back to download")
+
+            if(NPM_BUILD_RESULT EQUAL 0)
+                # Verify that the expected assets were produced
+                set(ALL_BUILT TRUE)
+                foreach(asset ${ASSETS})
+                    if(NOT EXISTS "${PUBLIC_DIR}/${asset}")
+                        set(ALL_BUILT FALSE)
+                        break()
+                    endif()
+                endforeach()
+
+                if(ALL_BUILT)
+                    message(STATUS "WebUI: local npm build succeeded")
+                    set(PROVISION_SUCCESS TRUE)
+                else()
+                    message(STATUS "WebUI: npm build completed but assets missing from ${PUBLIC_DIR}, falling back to download")
+                endif()
+            else()
+                message(STATUS "WebUI: npm build failed (${NPM_BUILD_RESULT}), falling back to download")
                 message(STATUS "  stderr: ${NPM_ERR}")
             endif()
-        endif()
-
-        # Run the build
-        execute_process(
-            COMMAND npm run build
-            WORKING_DIRECTORY "${NPM_DIR}"
-            RESULT_VARIABLE NPM_BUILD_RESULT
-            OUTPUT_VARIABLE NPM_OUT
-            ERROR_VARIABLE  NPM_ERR
-        )
-
-        if(NPM_BUILD_RESULT EQUAL 0)
-            # Verify that the expected assets were produced
-            set(ALL_BUILT TRUE)
-            foreach(asset ${ASSETS})
-                if(NOT EXISTS "${PUBLIC_DIR}/${asset}")
-                    set(ALL_BUILT FALSE)
-                    break()
-                endif()
-            endforeach()
-
-            if(ALL_BUILT)
-                message(STATUS "WebUI: local npm build succeeded")
-                set(PROVISION_SUCCESS TRUE)
-            else()
-                message(STATUS "WebUI: npm build completed but assets missing from ${PUBLIC_DIR}, falling back to download")
-            endif()
         else()
-            message(STATUS "WebUI: npm build failed (${NPM_BUILD_RESULT}), falling back to download")
-            message(STATUS "  stderr: ${NPM_ERR}")
+            message(STATUS "WebUI: npm not found, skipping npm build and trying HF Bucket download")
         endif()
     else()
         message(STATUS "WebUI: NPM_DIR (${NPM_DIR}) has no package.json, skipping npm build")
