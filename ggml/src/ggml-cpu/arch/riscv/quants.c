@@ -480,6 +480,104 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
+#if defined(__riscv_v)
+static NOINLINE void ggml_vec_dot_q1_0_q8_0_vl256(const int n, float * GGML_RESTRICT s, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy) {
+    const int qk = QK1_0;
+    const int nb = n / qk;
+    assert(n % qk == 0);
+
+    const block_q1_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    //LMUL = 1, VLMAX = 32
+    const size_t vl32 = __riscv_vsetvl_e8m1(32);
+    assert(vl32 == 32);
+
+    const vint16m1_t zero = __riscv_vmv_v_x_i16m1(0, 1);
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[ib].d);
+
+        float acc = 0;
+
+        for (int k = 0; k < 4; ++k) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[ib * 4 + k];
+            const vbool8_t is_not_zero = __riscv_vlm_v_b8(x[ib].qs + 4 * k, vl32);
+
+            const vint8m1_t qy = __riscv_vle8_v_i8m1(yb->qs, vl32);
+            const vint8m1_t neg_qy = __riscv_vneg_v_i8m1(qy, vl32);
+            const vint8m1_t sy = __riscv_vmerge_vvm_i8m1(neg_qy, qy, is_not_zero, vl32);
+
+            const vint16m1_t red = __riscv_vwredsum_vs_i8m1_i16m1(sy, zero, vl32);
+            acc += GGML_CPU_FP16_TO_FP32(yb->d) * (float)__riscv_vmv_x_s_i16m1_i16(red);
+        }
+
+        sumf += d0 * acc;
+    }
+
+    *s = sumf;
+}
+
+static NOINLINE void ggml_vec_dot_q1_0_q8_0_vl128(const int n, float * GGML_RESTRICT s, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy) {
+    const int qk = QK1_0;
+    const int nb = n / qk;
+    assert(n % qk == 0);
+
+    const block_q1_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    //LMUL = 2, VLMAX = 32
+    const size_t vl32 = __riscv_vsetvl_e8m2(32);
+    assert(vl32 == 32);
+
+    const vint16m1_t zero = __riscv_vmv_v_x_i16m1(0, 1);
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[ib].d);
+
+        float acc = 0;
+
+        for (int k = 0; k < 4; ++k) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[ib * 4 + k];
+            const vbool4_t is_not_zero = __riscv_vlm_v_b4(x[ib].qs + 4 * k, vl32);
+
+            const vint8m2_t qy = __riscv_vle8_v_i8m2(yb->qs, vl32);
+            const vint8m2_t neg_qy =__riscv_vneg_v_i8m2(qy, vl32);
+            const vint8m2_t sy = __riscv_vmerge_vvm_i8m2(neg_qy, qy, is_not_zero, vl32);
+
+            const vint16m1_t red = __riscv_vwredsum_vs_i8m2_i16m1(sy, zero, vl32);
+            acc += GGML_CPU_FP16_TO_FP32(yb->d) * (float)__riscv_vmv_x_s_i16m1_i16(red);
+        }
+
+        sumf += d0 * acc;
+    }
+
+    *s = sumf;
+}
+#endif
+
+void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if defined(__riscv_v)
+    assert(nrc == 1);
+
+    const size_t vlen_bits = __riscv_vlenb() * 8;
+
+    if (vlen_bits >= 256) {
+        ggml_vec_dot_q1_0_q8_0_vl256(n, s, vx, vy);
+    } else if (vlen_bits >= 128) {
+        ggml_vec_dot_q1_0_q8_0_vl128(n, s, vx, vy);
+    } else {
+        ggml_vec_dot_q1_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+    }
+#else
+    ggml_vec_dot_q1_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
 void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);

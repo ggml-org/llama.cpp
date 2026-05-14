@@ -36,7 +36,8 @@ import {
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
-	SYSTEM_MESSAGE_PLACEHOLDER
+	SYSTEM_MESSAGE_PLACEHOLDER,
+	TITLE_GENERATION
 } from '$lib/constants';
 import type {
 	ChatMessageTimings,
@@ -44,7 +45,12 @@ import type {
 	ChatStreamCallbacks,
 	ErrorDialogState
 } from '$lib/types/chat';
-import type { ApiProcessingState, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
+import type {
+	ApiChatMessageData,
+	ApiProcessingState,
+	DatabaseMessage,
+	DatabaseMessageExtra
+} from '$lib/types';
 import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 
 interface ConversationStateEntry {
@@ -259,7 +265,7 @@ class ChatStore {
 	}
 
 	private isChatLoadingInternal(convId: string): boolean {
-		return this.chatStreamingStates.has(convId);
+		return this.chatLoadingStates.has(convId) || this.chatStreamingStates.has(convId);
 	}
 
 	hasPendingMessage(convId: string): boolean {
@@ -572,7 +578,11 @@ class ChatStore {
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
-				assistantMessage
+				assistantMessage,
+				undefined,
+				undefined,
+				undefined,
+				config().titleGenerationUseLLM && isNewConversation ? content : undefined
 			);
 		} catch (error) {
 			if (isAbortError(error)) {
@@ -601,7 +611,8 @@ class ChatStore {
 		assistantMessage: DatabaseMessage,
 		onComplete?: (content: string) => Promise<void>,
 		onError?: (error: Error) => void,
-		modelOverride?: string | null
+		modelOverride?: string | null,
+		firstUserMessageContent?: string
 	): Promise<void> {
 		let effectiveModel = modelOverride;
 
@@ -663,7 +674,8 @@ class ChatStore {
 			},
 			onReasoningChunk: (chunk: string) => {
 				streamedReasoningContent += chunk;
-				// Update UI to show reasoning is being received
+				// mark streaming state so a stop mid-thinking can persist the partial reasoning
+				this.setChatStreaming(convId, streamedContent, currentMessageId);
 				const idx = conversationsStore.findMessageIndex(currentMessageId);
 				conversationsStore.updateMessageAtIndex(idx, {
 					reasoningContent: streamedReasoningContent
@@ -845,6 +857,10 @@ class ChatStore {
 				perChatOverrides
 			});
 			if (agenticResult.handled) {
+				// Generate LLM based title for new conversations after agentic flow completes
+				if (firstUserMessageContent) {
+					await this.generateTitleWithLLM(firstUserMessageContent, streamedContent, convId);
+				}
 				// Check if there's a pending steering message to re-send
 				const pending = agenticStore.consumePendingSteeringMessage(convId);
 				if (pending) {
@@ -894,6 +910,12 @@ class ChatStore {
 					if (onComplete) await onComplete(content);
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 
+					// Generate LLM based title for new conversations (avoids stale reference
+					// issue when user switches conversations while streaming)
+					if (firstUserMessageContent) {
+						await this.generateTitleWithLLM(firstUserMessageContent, streamedContent, convId);
+					}
+
 					// Check if there's a pending message queued during streaming
 					const pending = this.consumePendingMessage(convId);
 					if (pending) {
@@ -921,42 +943,98 @@ class ChatStore {
 		this.setProcessingState(convId, null);
 		this.clearPendingMessage(convId);
 	}
+
+	private async generateTitleWithLLM(
+		userContent: string,
+		assistantContent: string,
+		convId: string
+	): Promise<void> {
+		const effectiveModel = isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
+		const configValue = config();
+		const titlePromptTemplate =
+			typeof configValue.titleGenerationPrompt === 'string' &&
+			configValue.titleGenerationPrompt.trim()
+				? configValue.titleGenerationPrompt
+				: TITLE_GENERATION.DEFAULT_PROMPT;
+
+		const titlePrompt = titlePromptTemplate
+			.replace('{{USER}}', String(userContent || ''))
+			.replace('{{ASSISTANT}}', String(assistantContent || ''));
+
+		const titleMessage: ApiChatMessageData = {
+			role: MessageRole.USER,
+			content: titlePrompt
+		};
+
+		const titleResponse = await ChatService.generateTitle(titleMessage, effectiveModel);
+
+		if (!titleResponse) {
+			return;
+		}
+
+		let cleanTitle = titleResponse.trim();
+		cleanTitle = cleanTitle
+			.replace(TITLE_GENERATION.PREFIX_PATTERN, '')
+			.replace(TITLE_GENERATION.QUOTE_PATTERN, '')
+			.trim();
+		if (!cleanTitle || cleanTitle.length < TITLE_GENERATION.MIN_LENGTH) {
+			const firstLine = userContent.split('\n').find((l) => l.trim().length > 0);
+			cleanTitle = firstLine ? firstLine.trim() : TITLE_GENERATION.FALLBACK;
+		}
+		if (cleanTitle && cleanTitle.length >= TITLE_GENERATION.MIN_LENGTH) {
+			await conversationsStore.updateConversationName(convId, cleanTitle);
+		}
+	}
+
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
 		const conversationId = convId || conversationsStore.activeConversation?.id;
 		if (!conversationId) return;
 		const streamingState = this.getChatStreaming(conversationId);
-		if (!streamingState || !streamingState.response.trim()) return;
+		if (!streamingState) return;
 		const messages =
 			conversationId === conversationsStore.activeConversation?.id
 				? conversationsStore.activeMessages
 				: await conversationsStore.getConversationMessages(conversationId);
 		if (!messages.length) return;
 		const lastMessage = messages[messages.length - 1];
-		if (lastMessage?.role === MessageRole.ASSISTANT) {
-			try {
-				const updateData: { content: string; timings?: ChatMessageTimings } = {
-					content: streamingState.response
-				};
-				const lastKnownState = this.getProcessingState(conversationId);
-				if (lastKnownState) {
-					updateData.timings = {
-						prompt_n: lastKnownState.promptTokens || 0,
-						prompt_ms: lastKnownState.promptMs,
-						predicted_n: lastKnownState.tokensDecoded || 0,
-						cache_n: lastKnownState.cacheTokens || 0,
-						predicted_ms:
-							lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
-								? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
-								: undefined
-					};
-				}
-				await DatabaseService.updateMessage(lastMessage.id, updateData);
-				lastMessage.content = streamingState.response;
-				if (updateData.timings) lastMessage.timings = updateData.timings;
-			} catch (error) {
-				lastMessage.content = streamingState.response;
-				console.error('Failed to save partial response:', error);
+		if (lastMessage?.role !== MessageRole.ASSISTANT) return;
+
+		const partialContent = streamingState.response;
+		const partialReasoning = lastMessage.reasoningContent || '';
+
+		// nothing to persist when both content and reasoning are empty (e.g. stop before any token)
+		if (!partialContent.trim() && !partialReasoning.trim()) return;
+
+		try {
+			const updateData: {
+				content: string;
+				reasoningContent?: string;
+				timings?: ChatMessageTimings;
+			} = {
+				content: partialContent
+			};
+			if (partialReasoning) {
+				updateData.reasoningContent = partialReasoning;
 			}
+			const lastKnownState = this.getProcessingState(conversationId);
+			if (lastKnownState) {
+				updateData.timings = {
+					prompt_n: lastKnownState.promptTokens || 0,
+					prompt_ms: lastKnownState.promptMs,
+					predicted_n: lastKnownState.tokensDecoded || 0,
+					cache_n: lastKnownState.cacheTokens || 0,
+					predicted_ms:
+						lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
+							? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
+							: undefined
+				};
+			}
+			await DatabaseService.updateMessage(lastMessage.id, updateData);
+			lastMessage.content = partialContent;
+			if (updateData.timings) lastMessage.timings = updateData.timings;
+		} catch (error) {
+			lastMessage.content = partialContent;
+			console.error('Failed to save partial response:', error);
 		}
 	}
 
@@ -1201,7 +1279,11 @@ class ChatStore {
 			const conversationContext = conversationsStore.activeMessages.slice(0, idx);
 			const contextWithContinue = [
 				...conversationContext,
-				{ role: MessageRole.ASSISTANT as const, content: originalContent }
+				{
+					role: MessageRole.ASSISTANT as const,
+					content: originalContent,
+					reasoning_content: originalReasoning || undefined
+				}
 			];
 
 			let appendedContent = '';
@@ -1219,6 +1301,7 @@ class ChatStore {
 				contextWithContinue,
 				{
 					...this.getApiOptions(),
+					continueFinalMessage: true,
 					onChunk: (chunk: string) => {
 						appendedContent += chunk;
 						hasReceivedContent = true;
@@ -1227,6 +1310,8 @@ class ChatStore {
 					onReasoningChunk: (chunk: string) => {
 						appendedReasoning += chunk;
 						hasReceivedContent = true;
+						// mark streaming state so a stop mid-thinking can persist the partial reasoning
+						this.setChatStreaming(msg.convId, originalContent + appendedContent, msg.id);
 						conversationsStore.updateMessageAtIndex(idx, {
 							reasoningContent: originalReasoning + appendedReasoning
 						});

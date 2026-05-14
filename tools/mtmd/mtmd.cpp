@@ -310,9 +310,22 @@ struct mtmd_context {
                     }
                     image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_MINICPMV4_6:
+                {
+                    slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
+                    tok_ov_img_start  = {lookup_token("<image>")};
+                    tok_ov_img_end    = {lookup_token("</image>")};
+                    tok_sli_img_start = {lookup_token("<slice>")};
+                    tok_sli_img_end   = {lookup_token("</slice>")};
+                    tok_row_end       = {lookup_token("\n")};
+                    tok_row_end_trail = false; // no trailing end-of-row token
+                    ov_img_first      = true;
+                    image_preproc     = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
             case PROJECTOR_TYPE_QWEN3VL:
+            case PROJECTOR_TYPE_MIMOVL:
                 {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
                     img_beg = "<|vision_start|>";
@@ -531,6 +544,10 @@ struct mtmd_context {
             case PROJECTOR_TYPE_LFM2A:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_GRANITE_SPEECH:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_granite_speech>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_GEMMA4A:
                 {
@@ -1404,6 +1421,19 @@ mtmd_input_chunks * mtmd_test_create_input_chunks() {
 void mtmd_log_set(ggml_log_callback log_callback, void * user_data) {
     g_logger_state.log_callback = log_callback ? log_callback : clip_log_callback_default;
     g_logger_state.log_callback_user_data = user_data;
+}
+
+struct mtmd_caps mtmd_get_cap_from_file(const char * fname) {
+    try {
+        auto tmp = clip_get_cap(fname);
+        mtmd_caps cap;
+        cap.inp_audio  = tmp.has_audio;
+        cap.inp_vision = tmp.has_vision;
+        return cap;
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: failed to get capabilities from file '%s': %s\n", __func__, fname, e.what());
+        return mtmd_caps{ false, false };
+    }
 }
 
 //

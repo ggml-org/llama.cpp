@@ -31,6 +31,7 @@
 #define KEY_N_BLOCK             "clip.%s.block_count"
 #define KEY_PROJ_DIM            "clip.%s.projection_dim"
 #define KEY_N_HEAD              "clip.%s.attention.head_count"
+#define KEY_N_HEAD_KV           "clip.%s.attention.head_count_kv"
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
 
 // vision-specific
@@ -53,6 +54,7 @@
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"
 #define KEY_WIN_ATTN_PATTERN       "clip.vision.n_wa_pattern"
 #define KEY_WIN_ATTN_LAYER_INDEXES "clip.vision.wa_layer_indexes"
+#define KEY_WA_PATTERN_MODE        "clip.vision.wa_pattern_mode"
 #define KEY_ATTN_WINDOW_SIZE       "clip.vision.window_size"
 #define KEY_MINICPMV_VERSION       "clip.minicpmv_version"
 #define KEY_MINICPMV_QUERY_NUM     "clip.minicpmv_query_num"
@@ -60,9 +62,15 @@
 #define KEY_SAM_N_BLOCK            "clip.vision.sam.block_count"
 #define KEY_SAM_N_EMBD             "clip.vision.sam.embedding_length"
 // audio-specific
-#define KEY_AUDIO_PROJ_TYPE     "clip.audio.projector_type" // for models with mixed modalities
-#define KEY_A_NUM_MEL_BINS      "clip.audio.num_mel_bins"
-#define KEY_A_PROJ_STACK_FACTOR "clip.audio.projector.stack_factor"
+#define KEY_AUDIO_PROJ_TYPE        "clip.audio.projector_type" // for models with mixed modalities
+#define KEY_A_NUM_MEL_BINS         "clip.audio.num_mel_bins"
+#define KEY_A_PROJ_STACK_FACTOR    "clip.audio.projector.stack_factor"
+#define KEY_A_CHUNK_SIZE           "clip.audio.chunk_size"
+#define KEY_A_CONV_KERNEL_SIZE     "clip.audio.conv_kernel_size"
+#define KEY_A_MAX_POS_EMB          "clip.audio.max_pos_emb"
+#define KEY_A_PROJ_WINDOW_SIZE     "clip.audio.projector.window_size"
+#define KEY_A_PROJ_DOWNSAMPLE_RATE "clip.audio.projector.downsample_rate"
+#define KEY_A_PROJ_HEAD_COUNT      "clip.audio.projector.head_count"
 
 
 //
@@ -80,6 +88,7 @@
 #define TN_ATTN_Q          "%s.blk.%d.attn_q.%s"
 #define TN_ATTN_V          "%s.blk.%d.attn_v.%s"
 #define TN_ATTN_OUTPUT     "%s.blk.%d.attn_out.%s"
+#define TN_ATTN_SINKS      "%s.blk.%d.attn_sinks"
 #define TN_ATTN_K_NORM     "%s.blk.%d.attn_k_norm.%s"
 #define TN_ATTN_Q_NORM     "%s.blk.%d.attn_q_norm.%s"
 #define TN_FFN_DOWN        "%s.blk.%d.ffn_down.%s"
@@ -125,6 +134,17 @@
 #define TN_MINICPMV_KV_PROJ    "resampler.kv.weight"
 #define TN_MINICPMV_ATTN       "resampler.attn.%s.%s"
 #define TN_MINICPMV_LN         "resampler.ln_%s.%s"
+
+// MiniCPM-V 4.6 ViT merger (window attention + MLP downsample),
+// matching the upstream `vit_merger` module name in transformers.
+#define TN_VIT_MERGER_LN1      "v.vit_merger.ln1.%s"
+#define TN_VIT_MERGER_ATTN_Q   "v.vit_merger.attn_q.%s"
+#define TN_VIT_MERGER_ATTN_K   "v.vit_merger.attn_k.%s"
+#define TN_VIT_MERGER_ATTN_V   "v.vit_merger.attn_v.%s"
+#define TN_VIT_MERGER_ATTN_O   "v.vit_merger.attn_out.%s"
+#define TN_VIT_MERGER_DS_LN    "v.vit_merger.ds_ln.%s"
+#define TN_VIT_MERGER_DS_UP    "v.vit_merger.ds_ffn_up.%s"
+#define TN_VIT_MERGER_DS_DOWN  "v.vit_merger.ds_ffn_down.%s"
 
 #define TN_GLM_ADAPER_CONV      "adapter.conv.%s"
 #define TN_GLM_ADAPTER_LINEAR   "adapter.linear.linear.%s"
@@ -182,6 +202,27 @@
 #define TN_CONV_NORM       "%s.blk.%d.conv_norm.%s"
 #define TN_CONV_PW1        "%s.blk.%d.conv_pw1.%s"
 #define TN_CONV_PW2        "%s.blk.%d.conv_pw2.%s"
+#define TN_INP_PROJ        "a.input_projection.%s"
+#define TN_CTC_OUT         "a.enc_ctc_out.%s"
+#define TN_CTC_OUT_MID     "a.enc_ctc_out_mid.%s"
+#define TN_ATTN_REL_POS_EMB "%s.blk.%d.attn_rel_pos_emb"
+// qformer projector
+#define TN_QF_PROJ_QUERY   "a.proj_query"
+#define TN_QF_PROJ_NORM    "a.proj_norm.%s"
+#define TN_QF_PROJ_LINEAR  "a.proj_linear.%s"
+#define TN_QF_SELF_ATTN_Q  "a.proj_blk.%d.self_attn_q.%s"
+#define TN_QF_SELF_ATTN_K  "a.proj_blk.%d.self_attn_k.%s"
+#define TN_QF_SELF_ATTN_V  "a.proj_blk.%d.self_attn_v.%s"
+#define TN_QF_SELF_ATTN_O  "a.proj_blk.%d.self_attn_out.%s"
+#define TN_QF_SELF_ATTN_N  "a.proj_blk.%d.self_attn_norm.%s"
+#define TN_QF_CROSS_ATTN_Q "a.proj_blk.%d.cross_attn_q.%s"
+#define TN_QF_CROSS_ATTN_K "a.proj_blk.%d.cross_attn_k.%s"
+#define TN_QF_CROSS_ATTN_V "a.proj_blk.%d.cross_attn_v.%s"
+#define TN_QF_CROSS_ATTN_O "a.proj_blk.%d.cross_attn_out.%s"
+#define TN_QF_CROSS_ATTN_N "a.proj_blk.%d.cross_attn_norm.%s"
+#define TN_QF_FFN_UP       "a.proj_blk.%d.ffn_up.%s"
+#define TN_QF_FFN_DOWN     "a.proj_blk.%d.ffn_down.%s"
+#define TN_QF_FFN_NORM     "a.proj_blk.%d.ffn_norm.%s"
 
 // gemma4 audio conformer
 #define TN_A_MM_INP_PROJ     "mm.a.input_projection.%s"
@@ -304,6 +345,9 @@ enum projector_type {
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANOCR,
     PROJECTOR_TYPE_HUNYUANVL,
+    PROJECTOR_TYPE_MINICPMV4_6,
+    PROJECTOR_TYPE_GRANITE_SPEECH,
+    PROJECTOR_TYPE_MIMOVL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -351,6 +395,9 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
     { PROJECTOR_TYPE_HUNYUANOCR, "hunyuanocr"},
     { PROJECTOR_TYPE_HUNYUANVL,  "hunyuanvl"},
+    { PROJECTOR_TYPE_MINICPMV4_6, "minicpmv4_6"},
+    { PROJECTOR_TYPE_GRANITE_SPEECH, "granite_speech"},
+    { PROJECTOR_TYPE_MIMOVL,     "mimovl"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

@@ -1,44 +1,45 @@
-[tool.poetry]
+[project]
 name = "gguf"
-version = "0.18.0"
+version = "0.19.0"
 description = "Read and write ML models in GGUF for GGML"
-authors = ["GGML <ggml@ggml.ai>"]
-packages = [
-    {include = "gguf"},
-    {include = "gguf/py.typed"},
-]
-readme = "README.md"
-homepage = "https://ggml.ai"
-repository = "https://github.com/ggml-org/llama.cpp"
 keywords = ["ggml", "gguf", "llama.cpp"]
+dynamic = ["classifiers"]
+readme = "README.md"
+authors = [{name = "GGML", email = "ggml@ggml.ai"}]
+requires-python = '>=3.10'
+dependencies = ['numpy (>=1.17)', 'tqdm (>=4.27)', 'pyyaml (>=5.1)', 'requests (>=2.25)']
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
 
-[tool.poetry.dependencies]
-python = ">=3.8"
-numpy = ">=1.17"
-tqdm = ">=4.27"
-pyyaml = ">=5.1"
-requests = ">=2.25"
-sentencepiece = { version = ">=0.1.98,<0.3.0", optional = true }
-PySide6 = { version = "^6.9", python = ">=3.9,<3.14", optional = true }
+[project.urls]
+homepage = "https://ggml.ai"
+repository = "https://github.com/ggml-org/llama.cpp"
 
-[tool.poetry.dev-dependencies]
-pytest = "^5.2"
-
-[tool.poetry.extras]
-gui = ["PySide6"]
-
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.poetry.scripts]
+[project.scripts]
 gguf-convert-endian = "gguf.scripts.gguf_convert_endian:main"
 gguf-dump = "gguf.scripts.gguf_dump:main"
 gguf-set-metadata = "gguf.scripts.gguf_set_metadata:main"
 gguf-new-metadata = "gguf.scripts.gguf_new_metadata:main"
 gguf-editor-gui = "gguf.scripts.gguf_editor_gui:main"
+
+[project.optional-dependencies]
+gui = ['PySide6 (>=6.9,<7.0) ; python_version >= "3.9" and python_version < "3.14"']
+
+[tool.poetry]
+packages = [
+    {include = "gguf"},
+    {include = "gguf/py.typed"},
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
