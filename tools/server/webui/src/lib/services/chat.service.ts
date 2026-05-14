@@ -130,7 +130,8 @@ export class ChatService {
 			timings_per_token,
 			// Config options
 			disableReasoningParsing,
-			excludeReasoningFromContext
+			excludeReasoningFromContext,
+			continueFinalMessage
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -208,6 +209,11 @@ export class ChatService {
 		requestBody.reasoning_format = disableReasoningParsing
 			? ReasoningFormat.NONE
 			: ReasoningFormat.AUTO;
+
+		if (continueFinalMessage) {
+			requestBody.continue_final_message = true;
+			requestBody.add_generation_prompt = false;
+		}
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {
@@ -513,7 +519,7 @@ export class ChatService {
 
 			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
 
-			if (import.meta.env.DEV) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
 			}
 

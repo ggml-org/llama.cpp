@@ -17,6 +17,7 @@
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { deriveAgenticSections } from '$lib/utils';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
 		class?: string;
@@ -178,11 +179,11 @@
 		isEditing = false;
 
 		// If canceling a new system message with placeholder content, remove it without deleting children
-		if (message.role === MessageRole.SYSTEM) {
+		if (message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER) {
 			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
-				goto(`#/`);
+				goto(ROUTES.START);
 			}
 
 			return;
@@ -205,7 +206,7 @@
 			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
-				goto(`#/`);
+				goto(ROUTES.START);
 			}
 		} else {
 			chatActions.delete(message);
@@ -271,7 +272,7 @@
 				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 				isEditing = false;
 				if (conversationDeleted) {
-					goto(`#/`);
+					goto(ROUTES.START);
 				}
 				return;
 			}

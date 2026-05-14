@@ -2,6 +2,7 @@ import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { FileTypeCategory, AttachmentType, SpecialFileType } from '$lib/enums';
+import { SETTINGS_KEYS } from '$lib/constants';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { getFileTypeCategory } from '$lib/utils';
@@ -106,7 +107,7 @@ export async function parseFilesToMessageExtras(
 					console.log('Non-vision model detected: forcing PDF-to-text mode and updating settings');
 
 					// Update the setting in localStorage
-					settingsStore.updateConfig('pdfAsImage', false);
+					settingsStore.updateConfig(SETTINGS_KEYS.PDF_AS_IMAGE, false);
 
 					// Show toast notification to user
 					toast.warning(

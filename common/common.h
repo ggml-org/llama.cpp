@@ -157,9 +157,9 @@ enum common_params_sampling_config : uint64_t {
 
 enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
-    COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
-    COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
-    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,  // standalone draft model speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
+    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
@@ -295,8 +295,6 @@ struct common_params_model {
     std::string name        = ""; // in format <user>/<model>[:<tag>] (tag is optional)     // NOLINT
 };
 
-struct common_ngram_mod;
-
 // draft-model-based speculative decoding parameters
 struct common_params_speculative_draft {
     int32_t n_max = 16; // maximum number of tokens to draft during speculative decoding
@@ -307,11 +305,9 @@ struct common_params_speculative_draft {
 
     common_params_model mparams;
 
-    llama_model * model = nullptr; // a llama_model that can be shared by multiple speculative contexts
+    llama_context * ctx_tgt = nullptr;
+    llama_context * ctx_dft = nullptr;
 
-    llama_context_params cparams; // these are the parameters for the draft llama_context
-
-    int32_t n_ctx        = 0;  // draft context size
     int32_t n_gpu_layers = -1; // number of layers to store in VRAM for the draft model (-1 - use default)
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
@@ -322,7 +318,6 @@ struct common_params_speculative_draft {
 
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
-    std::vector<std::pair<std::string, std::string>> replacements; // main to speculative model replacements
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
 };
 
@@ -331,9 +326,6 @@ struct common_params_speculative_ngram_mod {
 
     int32_t n_max = 64;
     int32_t n_min = 48;
-
-    // shared instance of the ngram container for all speculative decoding contexts
-    std::shared_ptr<common_ngram_mod> obj;
 };
 
 struct common_params_speculative_ngram_map {
@@ -348,9 +340,9 @@ struct common_params_speculative_ngram_cache {
 };
 
 struct common_params_speculative {
-    // TODO: become a vector in order to support "chains of speculators"
-    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+    std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
 
+    // used by Simple, MTP, Eagle3, etc. - all methods that require some kind of draft model
     common_params_speculative_draft draft;
 
     common_params_speculative_ngram_mod ngram_mod;
@@ -1026,3 +1018,47 @@ ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std
 
 // "adamw" or "sgd" (case insensitive)
 enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
+
+//
+// prompt utils
+//
+
+struct common_prompt_checkpoint {
+    int64_t n_tokens;
+
+    llama_pos pos_min;
+    llama_pos pos_max;
+
+    std::vector<uint8_t> data_tgt;
+    std::vector<uint8_t> data_dft;
+
+    size_t size() const;
+
+    bool empty() const;
+    void clear();
+
+    void update_pos(
+            int64_t n_tokens,
+            llama_pos pos_min,
+            llama_pos pos_max);
+
+    void update_tgt(
+            llama_context * ctx,
+            llama_seq_id seq_id,
+            llama_state_seq_flags flags);
+
+    void update_dft(
+            llama_context * ctx,
+            llama_seq_id seq_id,
+            llama_state_seq_flags flags);
+
+    void load_tgt(
+            llama_context * ctx,
+            llama_seq_id seq_id,
+            llama_state_seq_flags flags) const;
+
+    void load_dft(
+            llama_context * ctx,
+            llama_seq_id seq_id,
+            llama_state_seq_flags flags) const;
+};
