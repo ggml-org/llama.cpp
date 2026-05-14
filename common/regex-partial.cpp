@@ -52,7 +52,7 @@ common_regex_match common_regex::search(const std::string & input, size_t pos, b
   Transforms a regex pattern to a partial match pattern that operates on a reversed input string to find partial final matches of the original pattern.
 
   Ideally we'd like to use boost::match_partial (https://beta.boost.org/doc/libs/1_59_0/libs/regex/doc/html/boost_regex/partial_matches.html)
-  to see if a string ends with a partial regex match, but but it's not in std::regex yet.
+  to see if a string ends with a partial regex match, but it's not in std::regex yet.
   Instead, we'll the regex into a partial match regex operating as a full match on the reverse iterators of the input.
 
   - /abcd/ -> ^(dcba|cba|ba|a) -> ^((?:(?:(?:(?:d)?c)?b)?a)
