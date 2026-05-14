@@ -25,7 +25,7 @@ if("${RESOLVED_VERSION}" STREQUAL "" AND NOT "${SOURCE_DIR}" STREQUAL "")
     if(EXISTS "${SOURCE_DIR}/cmake/build-info.cmake")
         include("${SOURCE_DIR}/cmake/build-info.cmake")
         if(NOT "${BUILD_NUMBER}" STREQUAL "" AND NOT BUILD_NUMBER EQUAL 0)
-            set(RESOLVED_VERSION "${BUILD_NUMBER}")
+            set(RESOLVED_VERSION "b${BUILD_NUMBER}")
             message(STATUS "WebUI: resolved version from git: ${RESOLVED_VERSION}")
         endif()
     endif()
@@ -82,7 +82,7 @@ if(NOT PROVISION_SUCCESS AND NOT "${NPM_DIR}" STREQUAL "")
             if(NOT EXISTS "${NPM_DIR}/node_modules")
                 message(STATUS "WebUI: running npm install (first time)")
                 execute_process(
-                    COMMAND npm install
+                    COMMAND ${NPM_EXECUTABLE} install
                     WORKING_DIRECTORY "${NPM_DIR}"
                     RESULT_VARIABLE NPM_INSTALL_RESULT
                     OUTPUT_VARIABLE NPM_OUT
@@ -96,7 +96,7 @@ if(NOT PROVISION_SUCCESS AND NOT "${NPM_DIR}" STREQUAL "")
 
             # Run the build
             execute_process(
-                COMMAND npm run build
+                COMMAND ${NPM_EXECUTABLE} run build
                 WORKING_DIRECTORY "${NPM_DIR}"
                 RESULT_VARIABLE NPM_BUILD_RESULT
                 OUTPUT_VARIABLE NPM_OUT
@@ -185,10 +185,14 @@ if(NOT PROVISION_SUCCESS AND HF_ENABLED)
                 set(download_path "${PUBLIC_DIR}/${asset}")
                 file(SHA256 "${download_path}" asset_hash)
                 string(TOUPPER "${asset_hash}" EXPECTED_HASH_UPPER)
-                string(REGEX MATCH "${EXPECTED_HASH_UPPER}[ \\t]+${asset}" CHECKSUM_LINE "${CHECKSUMS_CONTENT}")
+                # Escape regex-special characters in asset name to avoid false positives
+                # (e.g., '.' in 'bundle.js' matching any character)
+                string(REGEX REPLACE "([][.+*?^$(){|\\\\}])" "\\1" ASSET_ESCAPED "${asset}")
+                string(REGEX MATCH "${EXPECTED_HASH_UPPER}[ \\t]+${ASSET_ESCAPED}" CHECKSUM_LINE "${CHECKSUMS_CONTENT}")
                 if(NOT CHECKSUM_LINE)
                     message(WARNING "WebUI: checksum verification failed for ${asset}")
-                    message(WARNING "  downloaded file may not match expected checksum, but will be used")
+                    set(ALL_OK FALSE)
+                    break()
                 endif()
             endforeach()
             if(ALL_OK)
