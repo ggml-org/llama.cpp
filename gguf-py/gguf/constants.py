@@ -332,6 +332,7 @@ class Keys:
             SCALE_FACTOR    = "clip.vision.projector.scale_factor"
             QUERY_SIDE      = "clip.vision.projector.query_side"
             WINDOW_SIDE     = "clip.vision.projector.window_side"
+            SPATIAL_OFFSETS = "clip.vision.projector.spatial_offsets"
 
         class SAM:
             BLOCK_COUNT         = "clip.vision.sam.block_count"

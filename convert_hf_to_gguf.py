@@ -13118,6 +13118,10 @@ class Granite4VisionMmprojModel(MmprojModel):
             for proj_idx, (_, _, proj_type, type_idx) in enumerate(normalized_projector_map)
         }
         self._vision_feature_layers = [vision_layer for vision_layer, _, _, _ in normalized_projector_map]
+        self._spatial_offsets = [
+            type_idx if proj_type == "spatial" else -1
+            for _, _, proj_type, type_idx in normalized_projector_map
+        ]
         self._deepstack_layer_arr = [-1 for _ in range(n_text_layers)] # Populate with -1 sentinels
         for proj_idx, (_, llm_layer, _, _) in enumerate(normalized_projector_map):
             self._deepstack_layer_arr[llm_layer] = proj_idx
@@ -13149,6 +13153,9 @@ class Granite4VisionMmprojModel(MmprojModel):
 
         # Set vision feature layers
         self.gguf_writer.add_vision_feature_layers(self._vision_feature_layers)
+
+        # Set the spatial offests per projector
+        self.gguf_writer.add_vision_spatial_offsets(self._spatial_offsets)
 
         # Write array of deepstack layers (llm_layer -> projector_idx)
         self.gguf_writer.add_num_deepstack_layers(self._deepstack_layer_arr)

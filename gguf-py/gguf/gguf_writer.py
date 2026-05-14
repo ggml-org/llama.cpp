@@ -1191,6 +1191,9 @@ class GGUFWriter:
     def add_vision_projector_window_side(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Projector.WINDOW_SIDE, value)
 
+    def add_vision_spatial_offsets(self, layers: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.Projector.SPATIAL_OFFSETS, layers)
+
     def add_vision_image_mean(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_MEAN, values)
 
