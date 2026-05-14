@@ -46,7 +46,9 @@ Before submitting your PR:
     - provide KL divergence data calculated vs. the FP16/BF16 (whichever is the native precision) version for both the new type as well as types of similar size
     - provide [performance data](https://github.com/ggml-org/llama.cpp/tree/master/tools/llama-bench) for the new type in comparison to types of similar size on pure CPU
 - Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
-- If you are a new contributor, limit your open PRs to 1.
+- If you are a new contributor
+    - Limit your open PRs to 1
+    - Do not submit trivial fixes (e.g. typos, formatting changes)
 
 After submitting your PR:
 - Expect requests for modifications to ensure the code meets llama.cpp's standards for quality and long-term maintainability
