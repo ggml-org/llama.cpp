@@ -714,13 +714,6 @@ jobs:
           name: webui-build
           path: tools/server/public/
 
-      - name: Use oneAPI Installation Cache
-        uses: actions/cache@v5
-        id: cache-sycl
-        with:
-          path: ${{ env.ONEAPI_ROOT }}
-          key: oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
-
       - name: Download & Install oneAPI
         shell: bash
         if: steps.cache-sycl.outputs.cache-hit != 'true'
@@ -849,13 +842,6 @@ jobs:
         with:
           name: webui-build
           path: tools/server/public/
-
-      - name: Use oneAPI Installation Cache
-        uses: actions/cache@v5
-        id: cache-sycl
-        with:
-          path: ${{ env.ONEAPI_ROOT }}
-          key: oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: Download & Install oneAPI
         shell: bash
