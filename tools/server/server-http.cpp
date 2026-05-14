@@ -238,10 +238,11 @@ bool server_http_context::init(const common_params & params) {
     };
 
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
-        (void)req; // suppress unused parameter warning when LLAMA_BUILD_WEBUI is not defined
+        (void)req; // suppress unused parameter warning when LLAMA_BUILD_UI / LLAMA_BUILD_WEBUI is not defined
         bool ready = is_ready.load();
         if (!ready) {
-#ifdef LLAMA_BUILD_WEBUI
+// Support both old and new preprocessor defines
+#if defined(LLAMA_BUILD_UI) || defined(LLAMA_BUILD_WEBUI)
             auto tmp = string_split<std::string>(req.path, '.');
             if (req.path == "/" || (tmp.size() > 0 && tmp.back() == "html")) {
                 res.status = 503;
@@ -305,8 +306,10 @@ bool server_http_context::init(const common_params & params) {
     // Web UI setup
     //
 
-    if (!params.webui) {
-        SRV_INF("%s", "the WebUI is disabled\n");
+    // Use new `params.ui` field (backed by old `params.webui` for compat)
+    if (!params.ui) {
+        SRV_INF("%s", "the Web UI is disabled\n");
+        SRV_INF("%s", "Use --ui/--no-ui (or deprecated --webui/--no-webui) to enable/disable\n");
     } else {
         // register static assets routes
         if (!params.public_path.empty()) {
@@ -317,7 +320,8 @@ bool server_http_context::init(const common_params & params) {
                 return 1;
             }
         } else {
-#ifdef LLAMA_BUILD_WEBUI
+// Support both old and new preprocessor defines
+#if defined(LLAMA_BUILD_UI) || defined(LLAMA_BUILD_WEBUI)
             // using embedded static index.html
             srv->Get(params.api_prefix + "/", [](const httplib::Request & /*req*/, httplib::Response & res) {
                 // COEP and COOP headers, required by pyodide (python interpreter)
