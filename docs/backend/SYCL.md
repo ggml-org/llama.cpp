@@ -734,7 +734,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_DISABLE_OPT | 0 (default) or 1 | Disable optimize features for Intel GPUs. (Recommended to 1 for intel devices older than Gen 10) |
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because SYCL Graph is still on development, no better performance. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
-| GGML_SYCL_DISABLE_VMM | 0 (default) or 1 | Disable the virtual-memory device pool. |
+| GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
 
@@ -742,9 +742,10 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spot.
 
-| Name            | Function                                                                         |
-|-----------------|----------------------------------------------------------------------------------|
-| DEBUG_SYCL_POOL | Enable device memory pool logging on teardown. Useful for profiling allocations. |
+| Name              | Function                                                                         |
+|-------------------|----------------------------------------------------------------------------------|
+| DEBUG_SYCL_POOL   | Enable device memory pool logging on teardown. Useful for profiling allocations. |
+| DEBUG_SYCL_MALLOC | Enable verbose per-call logging of device pool alloc/free operations. |
 
 ## Design Rule
 
