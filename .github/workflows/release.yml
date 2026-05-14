@@ -1289,6 +1289,9 @@ jobs:
       - ios-xcode-build
       - openEuler-cann
 
+    outputs:
+      tag_name: ${{ steps.tag.outputs.name }}
+
     steps:
       - name: Clone
         id: checkout
@@ -1423,6 +1426,6 @@ jobs:
 
     uses: ./.github/workflows/webui-publish.yml
     with:
-      version_tag: ${{ github.ref_name }}
+      version_tag: ${{ needs.release.outputs.tag_name }}
     secrets:
       hf_token: ${{ secrets.HF_TOKEN_WEBUI_STATIC_OUTPUT }}
