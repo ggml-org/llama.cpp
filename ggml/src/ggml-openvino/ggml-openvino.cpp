@@ -873,6 +873,28 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         }
         break;
     }
+    case GGML_OP_DIV: {
+        bool requires_broadcast = false;
+        for (int i = 0; i < 4; i++) {
+            if (op->src[0]->ne[i] == op->src[1]->ne[i]) {
+                continue;
+            }
+
+            if (op->src[0]->ne[i] != 1 && op->src[1]->ne[i] != 1) {
+                return true;
+            }
+
+            requires_broadcast = true;
+        }
+
+        // The GPU plugin can fuse broadcast DIV into the preceding FFN GEMM path
+        // and produce infs for per-channel scale vectors. Keep those DIVs on CPU
+        // until the fused GPU kernel is reliable. (falied case llama-arch-test mpt)
+        if (requires_broadcast && ggml_openvino_get_device_name() == "GPU") {
+            return true;
+        }
+        break;
+    }
     case GGML_OP_SOFT_MAX: {
         if (op->src[2] != nullptr) {
             // GGML_LOG_WARN("OpenVINO backend does not support SOFT_MAX with sinks\n");
