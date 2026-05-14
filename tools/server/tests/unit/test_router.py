@@ -253,3 +253,37 @@ def test_router_reload_models():
         assert "model-reload-c" in ids, "newly added model should appear"
     finally:
         os.remove(preset_path)
+
+
+def test_router_only_ini_presets():
+    """GET /models to confirm only models listed the INI preset are in the model list."""
+    global server
+
+    preset_path = os.path.join(TMP_DIR, "test_presets.ini")
+
+    # Initial preset: two models
+    with open(preset_path, "w") as f:
+        f.write(
+            "version = 1\n"
+            "\n"
+            "[*]\n"
+            "c = 2048\n"
+            "\n"
+            "[model-a]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+            "\n"
+            "[model-b]\n"
+            "hf-repo = ggml-org/test-model-stories260K-infill\n"
+        )
+
+    server.models_preset = preset_path
+    server.only_ini_presets = True
+    server.start()
+
+    ids = _get_model_ids(is_reload=False)
+    assert "model-a" in ids
+    assert "model-b" in ids
+    assert 3 == len(ids), "Expected only 3 ids (model-a, model-b, default)"
+    assert "ggml-org/tinygemma3-GGUF:Q8_0" not in ids, "Model without ini config should not appear"
+
+    os.remove(preset_path)

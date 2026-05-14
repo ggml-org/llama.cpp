@@ -90,6 +90,7 @@ class ServerProcess:
     models_max: int | None = None
     models_preset: str | None = None
     no_models_autoload: bool | None = None
+    only_ini_presets: bool | None = None
     lora_files: List[str] | None = None
     enable_ctx_shift: int | None = False
     spec_draft_n_min: int | None = None
@@ -166,6 +167,8 @@ class ServerProcess:
             server_args.extend(["--models-max", self.models_max])
         if self.models_preset:
             server_args.extend(["--models-preset", self.models_preset])
+        if self.only_ini_presets:
+            server_args.append("--only-ini-presets")
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
