@@ -807,6 +807,17 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
         }
     }
 
+    // MUL_MAT_ID expert weights are 3D GGML tensors [k, m, n_expert].
+    // Keep the full reversed 4D shape when materializing non-quantized constants,
+    // otherwise the expert dimension is collapsed and later Gather/MatMul logic
+    // only sees a single expert slice.
+    if (!ggml_is_quantized(tensor->type) && (tensor->ne[2] > 1 || tensor->ne[3] > 1)) {
+        auto weight_tensor = ov::Tensor(get_ov_type(tensor), get_shape(tensor), tensor->data);
+        auto weight_node = std::make_shared<ov::op::v0::Constant>(weight_tensor);
+        weight_node->set_friendly_name(tensor->name);
+        return weight_node;
+    }
+
     // There are three cases where we need to create a new weight node:
     // 1. weights are in openvino_host_buffer. Weight loading to host buffer will not trigger backend_buffer_set_tensor
     // 2. weights are in cpu/cpu_mapped buffer. On token_embd.weight goes to case 1 or 2, depending on whether mmap or direct_io is used
