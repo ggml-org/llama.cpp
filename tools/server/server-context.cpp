@@ -2738,8 +2738,8 @@ private:
                     // - the model uses SWA (and we are not using `swa_full`)
                     // - the model supports partial sequence removal but only up to a fixed bound
                     do_checkpoint = do_checkpoint && (
-                            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL         ||
-                            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART_BOUNDED ||
+                            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
                             n_swa > 0);
 
                     bool has_mtmd = false;

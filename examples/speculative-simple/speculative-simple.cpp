@@ -83,7 +83,6 @@ int main(int argc, char ** argv) {
 
     // check if the context supports partial sequence removal
     const bool use_ckpt_tgt = (common_context_can_seq_rm(ctx_tgt)       == COMMON_CONTEXT_SEQ_RM_TYPE_FULL)
-        || (common_context_can_seq_rm(ctx_tgt) == COMMON_CONTEXT_SEQ_RM_TYPE_PART_BOUNDED);
     const bool use_ckpt_dft = (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
 
     if (use_ckpt_tgt) {

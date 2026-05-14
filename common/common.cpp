@@ -1437,7 +1437,7 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
 
     if (llama_n_rs_seq(ctx) > 0) {
         LOG_INF("%s: the context supports bounded partial sequence removal\n", __func__);
-        res = COMMON_CONTEXT_SEQ_RM_TYPE_PART_BOUNDED;
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_RS;
         goto done;
     }
 
