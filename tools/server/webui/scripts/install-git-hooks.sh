@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script to install pre-commit hook for webui
-# Pre-commit: formats, checks, builds, and stages build output
+# Pre-commit: formats, checks, and builds webui
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 PRE_COMMIT_HOOK="$REPO_ROOT/.git/hooks/pre-commit"
@@ -56,11 +56,7 @@ if git diff --cached --name-only | grep -q "^tools/server/webui/"; then
         exit 1
     fi
 
-    # Stage the build output alongside the source changes
-    cd "$REPO_ROOT"
-    git add tools/server/public/
-
-    echo "✅ Webui built and build output staged"
+    echo "✅ Webui built successfully"
 fi
 
 exit 0
@@ -75,7 +71,7 @@ if [ $? -eq 0 ]; then
     echo ""
     echo "The hook will automatically:"
     echo "  • Format, lint and check webui code before commits"
-    echo "  • Build webui and stage tools/server/public/ into the same commit"
+    echo "  • Build webui"
 else
     echo "❌ Failed to make hook executable"
     exit 1

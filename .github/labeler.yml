@@ -77,7 +77,6 @@ server/webui:
     - changed-files:
         - any-glob-to-any-file:
             - tools/server/webui/**
-            - tools/server/public/**
 server:
     - changed-files:
         - any-glob-to-any-file:

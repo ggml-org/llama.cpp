@@ -605,7 +605,11 @@ struct common_params {
     std::map<std::string, std::string> default_template_kwargs;
 
     // webui configs
-    bool webui = true;
+#ifdef LLAMA_WEBUI_DEFAULT_ENABLED
+    bool webui = LLAMA_WEBUI_DEFAULT_ENABLED != 0;
+#else
+    bool webui = true; // default to enabled when not set
+#endif
     bool webui_mcp_proxy = false;
     std::string webui_config_json;
 

@@ -40,7 +40,9 @@ set(TARGET_SRCS
     server-models.h
 )
 
-option(LLAMA_BUILD_WEBUI "Build the embedded Web UI" ON)
+# Option to specify custom HF bucket for webui (defaults to llama-ui)
+# Usage: cmake -B build -DLLAMA_WEBUI_HF_BUCKET=llama-ui
+set(LLAMA_WEBUI_HF_BUCKET "llama-ui" CACHE STRING "Hugging Face bucket name for prebuilt webui assets")
 
 if (LLAMA_BUILD_WEBUI)
     set(PUBLIC_ASSETS
@@ -50,19 +52,108 @@ if (LLAMA_BUILD_WEBUI)
         loading.html
     )
 
+    # Determine source of webui assets (priority: local > HF Bucket)
+    set(WEBUI_SOURCE "")
+    set(WEBUI_SOURCE_DIR "")
+
+    # Priority 1: Check for local webui build output
+    set(LOCAL_WEBUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/public")
+
+    # Verify all required assets exist before declaring local source valid
+    set(ALL_ASSETS_PRESENT TRUE)
     foreach(asset ${PUBLIC_ASSETS})
-        set(input "${CMAKE_CURRENT_SOURCE_DIR}/public/${asset}")
-        set(output "${CMAKE_CURRENT_BINARY_DIR}/${asset}.hpp")
-        list(APPEND TARGET_SRCS ${output})
-        add_custom_command(
-            DEPENDS "${input}"
-            OUTPUT "${output}"
-            COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
-        )
-        set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
+        if(NOT EXISTS "${LOCAL_WEBUI_DIR}/${asset}")
+            set(ALL_ASSETS_PRESENT FALSE)
+            break()
+        endif()
     endforeach()
-    add_definitions(-DLLAMA_BUILD_WEBUI)
+
+    if(ALL_ASSETS_PRESENT)
+        set(WEBUI_SOURCE "local")
+        set(WEBUI_SOURCE_DIR "${LOCAL_WEBUI_DIR}")
+        message(STATUS "WebUI: using local build from ${WEBUI_SOURCE_DIR}")
+    endif()
+
+    # Priority 2: Build-time asset provisioning (npm build → HF Bucket fallback)
+    if(NOT WEBUI_SOURCE_DIR)
+        if(DEFINED LLAMA_BUILD_NUMBER)
+            set(HF_WEBUI_VERSION "${LLAMA_BUILD_NUMBER}")
+            message(STATUS "WebUI: using LLAMA_BUILD_NUMBER=${HF_WEBUI_VERSION}")
+        else()
+            set(HF_WEBUI_VERSION "")
+            message(STATUS "WebUI: LLAMA_BUILD_NUMBER not defined")
+        endif()
+
+        # Stamp file embeds the version tag so a changed build number triggers
+        # a fresh provision run on the next `cmake --build` without reconfiguring.
+        if("${HF_WEBUI_VERSION}" STREQUAL "")
+            set(WEBUI_VERSION_TAG "provisioned")
+        else()
+            set(WEBUI_VERSION_TAG "${HF_WEBUI_VERSION}")
+        endif()
+        set(WEBUI_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.webui-${WEBUI_VERSION_TAG}.stamp")
+
+        # Escape semicolons so the CMake list is passed as a single -D argument
+        string(REPLACE ";" "\\;" PUBLIC_ASSETS_ESC "${PUBLIC_ASSETS}")
+
+        add_custom_command(
+            OUTPUT ${WEBUI_STAMP}
+            COMMAND ${CMAKE_COMMAND}
+                "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+                "-DPUBLIC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/public"
+                "-DHF_BUCKET=${LLAMA_WEBUI_HF_BUCKET}"
+                "-DHF_VERSION=${HF_WEBUI_VERSION}"
+                "-DHF_ENABLED=${LLAMA_USE_PREBUILT_WEBUI}"
+                "-DASSETS=${PUBLIC_ASSETS_ESC}"
+                "-DSTAMP_FILE=${WEBUI_STAMP}"
+                "-DNPM_DIR=${CMAKE_CURRENT_SOURCE_DIR}/webui"
+                -P ${PROJECT_SOURCE_DIR}/scripts/webui-download.cmake
+            COMMENT "Building/provisioning WebUI assets (npm build -> HF Bucket fallback)"
+        )
+
+        set(WEBUI_SOURCE "provisioned")
+        set(WEBUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/public")
+    endif()
+
+    # Process assets from the determined source
+    if(WEBUI_SOURCE_DIR)
+        foreach(asset ${PUBLIC_ASSETS})
+            set(input "${WEBUI_SOURCE_DIR}/${asset}")
+            set(output "${CMAKE_CURRENT_BINARY_DIR}/${asset}.hpp")
+            list(APPEND TARGET_SRCS ${output})
+
+            if(WEBUI_SOURCE STREQUAL "local")
+                # Local build: files exist at configure time
+                if(NOT EXISTS "${input}")
+                    message(FATAL_ERROR "WebUI asset not found: ${input}")
+                endif()
+                set(dependency "${input}")
+            else()
+                # HF Bucket: files are downloaded at build time
+                set(dependency "${WEBUI_STAMP}")
+            endif()
+
+            add_custom_command(
+                DEPENDS ${dependency}
+                OUTPUT "${output}"
+                COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
+            )
+            set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
+        endforeach()
+
+        add_definitions(-DLLAMA_BUILD_WEBUI)
+        add_definitions(-DLLAMA_WEBUI_DEFAULT_ENABLED=1)
+        message(STATUS "WebUI: embedded with source: ${WEBUI_SOURCE}")
+    else()
+        # WebUI source not found - issue warning but don't fail the build
+        # The server will still build but without webui embedded
+        message(WARNING "WebUI: no source available. Neither local build (tools/server/public/) nor HF Bucket download succeeded.")
+        message(WARNING "WebUI: building server without embedded WebUI. Set LLAMA_BUILD_WEBUI=OFF to suppress this warning.")
+        add_definitions(-DLLAMA_WEBUI_DEFAULT_ENABLED=0)
+    endif()
 else()
+    # WebUI is disabled at build time
+    add_definitions(-DLLAMA_WEBUI_DEFAULT_ENABLED=0)
 endif()
 
 add_executable(${TARGET} ${TARGET_SRCS})

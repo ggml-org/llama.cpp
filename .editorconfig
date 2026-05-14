@@ -53,14 +53,6 @@ charset = unset
 trim_trailing_whitespace = unset
 insert_final_newline = unset
 
-[tools/server/public/**]
-indent_style = unset
-indent_size = unset
-end_of_line = unset
-charset = unset
-trim_trailing_whitespace = unset
-insert_final_newline = unset
-
 [benches/**]
 indent_style = unset
 indent_size = unset

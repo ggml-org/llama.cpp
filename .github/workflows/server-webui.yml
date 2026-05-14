@@ -1,7 +1,7 @@
 name: Server WebUI
 
 on:
-  workflow_dispatch: # allows manual triggering
+  workflow_dispatch:
     inputs:
       sha:
         description: 'Commit SHA1 to build'
@@ -13,16 +13,14 @@ on:
     paths: [
       '.github/workflows/server-webui.yml',
       'tools/server/webui/**.*',
-      'tools/server/tests/**.*',
-      'tools/server/public/**'
+      'tools/server/tests/**.*'
     ]
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/server-webui.yml',
       'tools/server/webui/**.*',
-      'tools/server/tests/**.*',
-      'tools/server/public/**'
+      'tools/server/tests/**.*'
     ]
 
 env:
@@ -36,9 +34,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  webui-check:
+  webui-build:
+    name: Build WebUI
+    uses: ./.github/workflows/webui-build.yml
+
+  webui-checks:
     name: WebUI Checks
-    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    needs: webui-build
+    runs-on: ubuntu-24.04-arm
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -51,7 +54,7 @@ jobs:
         id: node
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: "tools/server/webui/package-lock.json"
 
@@ -71,6 +74,47 @@ jobs:
         run: npm run lint
         working-directory: tools/server/webui
 
+      - name: Install Playwright browsers
+        id: playwright
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npx playwright install --with-deps
+        working-directory: tools/server/webui
+
+      - name: Run Client tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        run: npm run test:client
+        working-directory: tools/server/webui
+
+      - name: Run Unit tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        run: npm run test:unit
+        working-directory: tools/server/webui
+
+  e2e-tests:
+    name: E2E Tests
+    needs: webui-build
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        id: node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/server/webui/package-lock.json"
+
+      - name: Install dependencies
+        id: setup
+        if: ${{ steps.node.conclusion == 'success' }}
+        run: npm ci
+        working-directory: tools/server/webui
+
       - name: Build application
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run build
@@ -85,16 +129,6 @@ jobs:
       - name: Build Storybook
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run build-storybook
-        working-directory: tools/server/webui
-
-      - name: Run Client tests
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
-        run: npm run test:client
-        working-directory: tools/server/webui
-
-      - name: Run Unit tests
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
-        run: npm run test:unit
         working-directory: tools/server/webui
 
       - name: Run UI tests

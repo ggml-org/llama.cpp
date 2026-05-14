@@ -238,30 +238,30 @@ bool server_http_context::init(const common_params & params) {
     };
 
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
+        (void)req; // suppress unused parameter warning when LLAMA_BUILD_WEBUI is not defined
         bool ready = is_ready.load();
         if (!ready) {
 #ifdef LLAMA_BUILD_WEBUI
             auto tmp = string_split<std::string>(req.path, '.');
-            if (req.path == "/" || tmp.back() == "html") {
+            if (req.path == "/" || (tmp.size() > 0 && tmp.back() == "html")) {
                 res.status = 503;
                 res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
-            } else
-#endif
-            {
-                // no endpoints is allowed to be accessed when the server is not ready
-                // this is to prevent any data races or inconsistent states
-                res.status = 503;
-                res.set_content(
-                    safe_json_to_str(json {
-                        {"error", {
-                            {"message", "Loading model"},
-                            {"type", "unavailable_error"},
-                            {"code", 503}
-                        }}
-                    }),
-                    "application/json; charset=utf-8"
-                );
+                return false;
             }
+#endif
+            // no endpoints are allowed to be accessed when the server is not ready
+            // this is to prevent any data races or inconsistent states
+            res.status = 503;
+            res.set_content(
+                safe_json_to_str(json {
+                    {"error", {
+                        {"message", "Loading model"},
+                        {"type", "unavailable_error"},
+                        {"code", 503}
+                    }}
+                }),
+                "application/json; charset=utf-8"
+            );
             return false;
         }
         return true;
