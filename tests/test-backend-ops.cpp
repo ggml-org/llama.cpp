@@ -1129,6 +1129,7 @@ struct test_case {
 
     virtual double max_nmse_err(ggml_backend_t backend) {
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        // See https://github.com/ggml-org/llama.cpp/pull/22976 for explanation.
         if (contains_f16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
             return std::max(max_nmse_err(), 1e-6);
         }
