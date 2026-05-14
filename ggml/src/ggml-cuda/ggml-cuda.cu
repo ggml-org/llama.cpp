@@ -1649,9 +1649,19 @@ static void ggml_cuda_op_mul_mat_cublas(
     const bool supports_bf16 = GGML_CUDA_CC_IS_NVIDIA(cc) || GGML_CUDA_CC_IS_AMD(cc) ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2);
 
+    const auto & force_compute_type = ggml_cuda_cublas_get_force_compute_type();
+
+    // Volta and CDNA/RDNA4 don't have a TF32-style fast path for fp32 matmul,
+    // so it's cheaper to downcast F32 inputs to fp16 and use the matrix cores.
+    const bool f32_prefers_fp16_path =
+        src0->type == GGML_TYPE_F32 &&
+        !force_compute_type.fp16 &&
+        (GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA4(cc) ||
+         cc == GGML_CUDA_CC_VOLTA || force_compute_type.fp32);
+
     const bool use_fp16 =
         src0->type != GGML_TYPE_NVFP4 &&
-        (src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) &&
+        (src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type) || f32_prefers_fp16_path) &&
         ggml_is_contiguous(src0) &&
         row_diff == src0->ne[1] &&
         dst->op_params[0] == GGML_PREC_DEFAULT;
