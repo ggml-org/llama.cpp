@@ -234,7 +234,7 @@ struct server_slot {
             }
         }
 
-        SLT_INF(*this, "init sampler, took %0.2f ms, tokens: text = %d, total = %d\n",
+        SLT_TRC(*this, "init sampler, took %0.2f ms, tokens: text = %d, total = %d\n",
                 (ggml_time_us() - t_start) / 1000.0, n_text, (int) prompt.tokens.size());
     }
 
@@ -434,6 +434,18 @@ struct server_slot {
         const double n_gen_second = 1e3 / t_token_generation * n_decoded;
 
         SLT_INF(*this, "n_decoded = %6d, tg = %6.2f t/s\n", n_decoded, n_gen_second);
+    }
+
+    void print_timings_pp() const {
+        const double n_prompt_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+        const double f_progress = (float) prompt.n_tokens() / task->n_tokens();
+
+        if (t_prompt_processing < 3000.0) {
+            return;
+        }
+
+        SLT_INF(*this, "prompt processing, n_tokens = %6d, progress = %.2f, t = %6.2f s / %.2f tokens per second\n",
+                n_prompt_tokens_processed, f_progress, t_prompt_processing / 1e3, n_prompt_second);
     }
 
     void print_timings() const {
@@ -1205,10 +1217,10 @@ private:
             if (!are_lora_equal(task_loras, slot.lora)) {
                 // if lora has changed, check to see if the cache should be cleared
                 if (lora_should_clear_cache(slot.lora, task_loras)) {
-                    SLT_INF(slot, "clearing cache for lora change. %zu loras -> %zu loras\n", slot.lora.size(), task.params.lora.size());
+                    SLT_TRC(slot, "clearing cache for lora change. %zu loras -> %zu loras\n", slot.lora.size(), task.params.lora.size());
                     slot.prompt.tokens.clear();
                 } else {
-                    SLT_INF(slot, "keeping cache for alora. %zu target loras\n", task_loras.size());
+                    SLT_TRC(slot, "keeping cache for alora. %zu target loras\n", task_loras.size());
                 }
                 slot.lora = task_loras;
             }
@@ -1300,7 +1312,8 @@ private:
                 llama_set_sampler(ctx_tgt, slot.id, nullptr);
             }
 
-            SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
+            SLT_TRC(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
+            SLT_TRC(slot, "sampler params: \n%s\n", task.params.sampling.print().c_str());
         } else {
             slot.smpl.reset();
         }
@@ -1819,7 +1832,7 @@ private:
         cur.update_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
         cur.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
-        SLT_WRN(slot,
+        SLT_INF(slot,
                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
@@ -2358,7 +2371,7 @@ private:
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
-                        SLT_INF(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
+                        SLT_TRC(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
                                 slot.n_ctx, slot.task->params.n_keep, slot.task->n_tokens());
 
                         // print prompt tokens (for debugging)
@@ -2473,7 +2486,7 @@ private:
                                         }
 
                                         if (n_match >= (size_t) n_cache_reuse) {
-                                            SLT_INF(slot, "reusing chunk with size %zu, shifting KV cache [%zu, %zu) -> [%zu, %zu)\n", n_match, head_c, head_c + n_match, head_p, head_p + n_match);
+                                            SLT_TRC(slot, "reusing chunk with size %zu, shifting KV cache [%zu, %zu) -> [%zu, %zu)\n", n_match, head_c, head_c + n_match, head_p, head_p + n_match);
                                             //for (size_t i = head_p; i < head_p + n_match; i++) {
                                             //    SLT_DBG(slot, "cache token %3zu: %6d '%s'\n", i, prompt_tokens[i], common_token_to_piece(ctx_tgt, prompt_tokens[i]).c_str());
                                             //}
@@ -2639,10 +2652,14 @@ private:
                         }
                     }
 
+                    const int64_t t_current = ggml_time_us();
+                    slot.t_prompt_processing = (t_current - slot.t_start_process_prompt) / 1e3;
+                    slot.print_timings_pp();
+
                     // truncate any tokens that are beyond n_past for this slot
                     const llama_pos p0 = slot.prompt.tokens.pos_next();
 
-                    SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
+                    SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
                     if (!llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, p0, -1)) {
                         SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
@@ -2783,7 +2800,6 @@ private:
                         slot.i_batch   = batch.n_tokens - 1;
 
                         slot.init_sampler();
-                        SLT_INF(slot, "prompt processing done, n_tokens = %d, batch.n_tokens = %d\n", slot.prompt.n_tokens(), batch.n_tokens);
                     } else {
                         if (slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch) {
                             // near the end of the prompt
@@ -2805,8 +2821,6 @@ private:
                                 }
                             }
                         }
-
-                        SLT_INF(slot, "prompt processing progress, n_tokens = %d, batch.n_tokens = %d, progress = %f\n", slot.prompt.n_tokens(), batch.n_tokens, (float) slot.prompt.n_tokens() / slot.task->n_tokens());
                     }
 
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
