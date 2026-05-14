@@ -967,7 +967,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
 
 static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
         const void * __restrict__ vbq,
-        const block_q8_1_x4 * __restrict__ yx4,
+        const block_q8_1_layout<4 * QK8_1> * __restrict__ yx4,
         const int & kby,
         const int & kbx,
         const int subblock_pair) {
@@ -1041,11 +1041,11 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
 
         // Compute global Q8 subblock index
         const int block_offset = kby + subblock;
-        // Divide by 4 to choose which block_q8_1_x4 object. (block_q8_1_x4 stores 4 Q8)
+        // Divide by 4 to choose which q8_1 layout group.
         const int block_outer  = block_offset >> 2;
-        // Modulo 4 to choose which subblock inside that x4 object.
+        // Modulo 4 to choose which q8_1 block inside that layout group.
         const int block_inner  = block_offset & 3;
-        const block_q8_1_x4 * by = yx4 + block_outer;
+        const block_q8_1_layout<4 * QK8_1> * by = yx4 + block_outer;
         //Q8 values for the selected inner subblock (uses 8 int32 entries = 2 int4 loads).
         const int4 * q8 = (const int4 *) (by->qs + block_inner * 8);
 

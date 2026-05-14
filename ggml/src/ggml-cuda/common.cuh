@@ -48,10 +48,8 @@ struct block_q8_1_layout {
     int32_t qs[q8_1_layout_block_size / sizeof(int32_t)];
 };
 
-using block_q8_1_x4 = block_q8_1_layout<4 * QK8_1>;
-
 static_assert(sizeof(block_q8_1_layout<QK8_1>) == sizeof(block_q8_1), "Unexpected block_q8_1 layout size");
-static_assert(sizeof(block_q8_1_x4) == 4 * sizeof(block_q8_1), "Unexpected block_q8_1_x4 size");
+static_assert(sizeof(block_q8_1_layout<4 * QK8_1>) == 4 * sizeof(block_q8_1), "Unexpected q8_1 x4 layout size");
 
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)

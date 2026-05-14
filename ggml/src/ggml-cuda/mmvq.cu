@@ -493,10 +493,10 @@ static __global__ void mul_mat_vec_q(
     float tmp[ncols_dst][rows_per_cuda_block] = {{0.0f}};
     float tmp_gate[ncols_dst][rows_per_cuda_block] = {{0.0f}};
 
-    const block_q8_1    * y    = nullptr;
-    const block_q8_1_x4 * y_x4 = nullptr;
+    const block_q8_1 * y = nullptr;
+    const block_q8_1_layout<4 * QK8_1> * y_x4 = nullptr;
     if constexpr (use_q8_1_x4) {
-        y_x4 = ((const block_q8_1_x4 *) vy) + sample_y*stride_sample_y + channel_y*stride_channel_y;
+        y_x4 = ((const block_q8_1_layout<4 * QK8_1> *) vy) + sample_y*stride_sample_y + channel_y*stride_channel_y;
     } else {
         y = ((const block_q8_1 *) vy) + sample_y*stride_sample_y + channel_y*stride_channel_y;
     }
