@@ -714,12 +714,6 @@ jobs:
           name: webui-build
           path: tools/server/public/
 
-      - name: Download & Install oneAPI
-        shell: bash
-        if: steps.cache-sycl.outputs.cache-hit != 'true'
-        run: |
-          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
-
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
@@ -842,14 +836,6 @@ jobs:
         with:
           name: webui-build
           path: tools/server/public/
-
-      - name: Download & Install oneAPI
-        shell: bash
-        if: steps.cache-sycl.outputs.cache-hit != 'true'
-        run: |
-          cd /tmp
-          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
-          sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
