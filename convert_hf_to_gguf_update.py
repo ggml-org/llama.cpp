@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("convert_hf_to_gguf_update")
 sess = requests.Session()
 
-convert_py_pth = pathlib.Path("convert_hf_to_gguf.py")
+convert_py_pth = pathlib.Path("conversion/base.py")
 convert_py = convert_py_pth.read_text(encoding="utf-8")
 hf_token_pth = pathlib.Path.home() / ".cache" / "huggingface" / "token"
 hf_token = hf_token_pth.read_text(encoding="utf-8").strip() if hf_token_pth.exists() else None
@@ -374,7 +374,7 @@ convert_py = re.sub(
 
 convert_py_pth.write_text(convert_py, encoding="utf-8")
 
-logger.info("+++ convert_hf_to_gguf.py was updated")
+logger.info(f"+++ {convert_py_pth} was updated")
 
 # generate tests for each tokenizer model
 
