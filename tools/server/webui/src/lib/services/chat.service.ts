@@ -76,7 +76,7 @@ export class ChatService {
 	 */
 
 	/**
-	 * Sends a chat completion request to the llama.cpp server.
+	 * Sends a chat completion request to the llama-server.
 	 * Supports both streaming and non-streaming responses with comprehensive parameter configuration.
 	 * Automatically converts database messages with attachments to the appropriate API format.
 	 *
@@ -130,7 +130,8 @@ export class ChatService {
 			timings_per_token,
 			// Config options
 			disableReasoningParsing,
-			excludeReasoningFromContext
+			excludeReasoningFromContext,
+			continueFinalMessage
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -208,6 +209,11 @@ export class ChatService {
 		requestBody.reasoning_format = disableReasoningParsing
 			? ReasoningFormat.NONE
 			: ReasoningFormat.AUTO;
+
+		if (continueFinalMessage) {
+			requestBody.continue_final_message = true;
+			requestBody.add_generation_prompt = false;
+		}
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {

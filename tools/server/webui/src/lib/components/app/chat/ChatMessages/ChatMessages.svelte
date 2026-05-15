@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import { beforeNavigate, afterNavigate } from '$app/navigation';
 	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
@@ -27,11 +29,14 @@
 	interface Props {
 		messages?: DatabaseMessage[];
 		onUserAction?: () => void;
+		onMessagesReady?: (messageCount: number) => void;
 	}
 
-	let { messages = [], onUserAction }: Props = $props();
+	let { messages = [], onUserAction, onMessagesReady }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
+	let isVisible = $state(false);
+	let previousConversationId = $state<string | null>(null);
 
 	const currentConfig = config();
 
@@ -117,13 +122,49 @@
 		}
 	}
 
-	// Single effect that tracks both conversation and message changes
+	// Track conversation changes to trigger transition even on same route
 	$effect(() => {
 		const conversation = activeConversation();
+		const currentId = conversation?.id ?? null;
 
-		if (conversation) {
-			refreshAllMessages();
+		if (currentId !== previousConversationId && previousConversationId !== null) {
+			// Conversation changed - trigger fade out/in
+			isVisible = false;
+			requestAnimationFrame(() => {
+				refreshAllMessages();
+				previousConversationId = currentId;
+				requestAnimationFrame(() => {
+					isVisible = true;
+				});
+			});
+		} else {
+			previousConversationId = currentId;
+			if (conversation) {
+				refreshAllMessages();
+			}
 		}
+	});
+
+	$effect(() => {
+		void allConversationMessages;
+
+		onMessagesReady?.(displayMessages.length);
+	});
+
+	onMount(() => {
+		requestAnimationFrame(() => {
+			isVisible = true;
+		});
+	});
+
+	beforeNavigate(() => {
+		isVisible = false;
+	});
+
+	afterNavigate(() => {
+		requestAnimationFrame(() => {
+			isVisible = true;
+		});
 	});
 
 	let displayMessages = $derived.by(() => {
@@ -207,42 +248,47 @@
 	});
 </script>
 
-{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
-	<ChatMessage
-		class="mx-auto mt-12 w-full max-w-[48rem]"
-		{message}
-		{toolMessages}
-		{isLastAssistantMessage}
-		{siblingInfo}
-	/>
-{/each}
-
-{#if activeConversation() && agenticPendingSteeringMessageContent(activeConversation()!.id)}
-	{@const convId = activeConversation()!.id}
-	{@const pendingContent = agenticPendingSteeringMessageContent(convId)}
-
-	{#if pendingContent}
-		<ChatMessageUserPending
+<div
+	class="transition-opacity delay-300 duration-500 ease-out
+		{isVisible ? 'opacity-100' : 'opacity-0'}"
+>
+	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
+		<ChatMessage
 			class="mx-auto mt-12 w-full max-w-[48rem]"
-			content={pendingContent}
-			extras={agenticPendingSteeringMessageExtras(convId)}
-			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-			onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
-			onDelete={() => agenticClearSteeringMessage(convId)}
+			{message}
+			{toolMessages}
+			{isLastAssistantMessage}
+			{siblingInfo}
 		/>
-	{/if}
-{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}
-	{@const convId = activeConversation()!.id}
-	{@const pendingContent = chatPendingMessageContent(convId)}
+	{/each}
 
-	{#if pendingContent}
-		<ChatMessageUserPending
-			class="mx-auto mt-12 w-full max-w-[48rem]"
-			content={pendingContent}
-			extras={chatPendingMessageExtras(convId)}
-			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-			onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
-			onDelete={() => chatClearPendingMessage(convId)}
-		/>
+	{#if activeConversation() && agenticPendingSteeringMessageContent(activeConversation()!.id)}
+		{@const convId = activeConversation()!.id}
+		{@const pendingContent = agenticPendingSteeringMessageContent(convId)}
+
+		{#if pendingContent}
+			<ChatMessageUserPending
+				class="mx-auto mt-12 w-full max-w-[48rem]"
+				content={pendingContent}
+				extras={agenticPendingSteeringMessageExtras(convId)}
+				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+				onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
+				onDelete={() => agenticClearSteeringMessage(convId)}
+			/>
+		{/if}
+	{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}
+		{@const convId = activeConversation()!.id}
+		{@const pendingContent = chatPendingMessageContent(convId)}
+
+		{#if pendingContent}
+			<ChatMessageUserPending
+				class="mx-auto mt-12 w-full max-w-[48rem]"
+				content={pendingContent}
+				extras={chatPendingMessageExtras(convId)}
+				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+				onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
+				onDelete={() => chatClearPendingMessage(convId)}
+			/>
+		{/if}
 	{/if}
-{/if}
+</div>

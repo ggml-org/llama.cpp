@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Development script for llama.cpp webui
-# 
+# Development script for llama-ui
+#
 # This script starts the webui development servers (Storybook and Vite).
 # Note: You need to start llama-server separately.
 #
@@ -14,12 +14,12 @@ cd ../../../
 # Check and install git hooks if missing
 check_and_install_hooks() {
     local hooks_missing=false
-    
+
     # Check for required hooks
     if [ ! -f ".git/hooks/pre-commit" ] || [ ! -f ".git/hooks/pre-push" ] || [ ! -f ".git/hooks/post-push" ]; then
         hooks_missing=true
     fi
-    
+
     if [ "$hooks_missing" = true ]; then
         echo "🔧 Git hooks missing, installing them..."
         cd tools/server/webui

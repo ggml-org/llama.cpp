@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { afterNavigate } from '$app/navigation';
 	import { DialogModelNotAvailable } from '$lib/components/app';
-	import { ROUTES } from '$lib/constants/routes';
+	import { APP_NAME, ROUTES } from '$lib/constants';
 	import { chatStore, isLoading } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
@@ -125,7 +125,7 @@
 </script>
 
 <svelte:head>
-	<title>{activeConversation()?.name || 'Chat'} - llama.cpp</title>
+	<title>{activeConversation()?.name || 'Chat'} - {APP_NAME}</title>
 </svelte:head>
 
 <DialogModelNotAvailable

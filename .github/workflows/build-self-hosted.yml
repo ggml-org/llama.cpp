@@ -55,7 +55,22 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  determine-tag:
+    name: Determine tag name
+    runs-on: ubuntu-slim
+    outputs:
+      tag_name: ${{ steps.tag.outputs.name }}
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
   ggml-ci-nvidia-cuda:
+    needs: determine-tag
     runs-on: [self-hosted, Linux, NVIDIA]
 
     steps:
@@ -65,11 +80,14 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           nvidia-smi
           GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-nvidia-vulkan-cm:
+    needs: determine-tag
     runs-on: [self-hosted, Linux, NVIDIA]
 
     steps:
@@ -79,11 +97,14 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-nvidia-vulkan-cm2:
+    needs: determine-tag
     runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
 
     steps:
@@ -93,39 +114,40 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
-  # TODO: investigate slight precision issues in some operations for test-backend-ops on the WebGPU backend.
-  #ggml-ci-nvidia-webgpu:
-  #  runs-on: [self-hosted, Linux, NVIDIA]
+  ggml-ci-nvidia-webgpu:
+    runs-on: [self-hosted, Linux, NVIDIA]
 
-  #  steps:
-  #    - name: Clone
-  #      id: checkout
-  #      uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #    - name: Dawn Dependency
-  #      id: dawn-depends
-  #      run: |
-  #        DAWN_VERSION="v20260317.182325"
-  #        DAWN_OWNER="google"
-  #        DAWN_REPO="dawn"
-  #        DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release"
-  #        echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
-  #        curl -L -o artifact.tar.gz \
-  #          "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
-  #        mkdir dawn
-  #        tar -xvf artifact.tar.gz -C dawn --strip-components=1
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          DAWN_VERSION="v20260317.182325"
+          DAWN_OWNER="google"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release"
+          echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
 
-  #    - name: Test
-  #      id: ggml-ci
-  #      run: |
-  #        GG_BUILD_WEBGPU=1 \
-  #        GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
-  #        GG_BUILD_WEBGPU_DAWN_DIR="$GITHUB_WORKSPACE/dawn/lib64/cmake/Dawn" \
-  #          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_WEBGPU=1 \
+          GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
+          GG_BUILD_WEBGPU_DAWN_DIR="$GITHUB_WORKSPACE/dawn/lib64/cmake/Dawn" \
+            bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   # TODO: provision AMX-compatible machine
   #ggml-ci-cpu-amx:
@@ -172,6 +194,7 @@ jobs:
   #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-mac-metal:
+    needs: determine-tag
     runs-on: [self-hosted, macOS, ARM64]
 
     steps:
@@ -181,10 +204,13 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-mac-webgpu:
+    needs: determine-tag
     runs-on: [self-hosted, macOS, ARM64]
 
     steps:
@@ -207,11 +233,14 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
             bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-mac-vulkan:
+    needs: determine-tag
     runs-on: [self-hosted, macOS, ARM64]
 
     steps:
@@ -221,11 +250,14 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-linux-intel-vulkan:
+    needs: determine-tag
     runs-on: [self-hosted, Linux, Intel]
 
     steps:
@@ -237,11 +269,14 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-win-intel-vulkan:
+    needs: determine-tag
     runs-on: [self-hosted, Windows, X64, Intel]
 
     steps:
@@ -256,6 +291,7 @@ jobs:
           MSYSTEM: UCRT64
           CHERE_INVOKING: 1
           PATH: C:\msys64\ucrt64\bin;C:\msys64\usr\bin;C:\Windows\System32;${{ env.PATH }}
+          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           # Skip python related tests with GG_BUILD_LOW_PERF=1 since Windows MSYS2 UCRT64 currently fails to create
@@ -263,6 +299,7 @@ jobs:
           LLAMA_FATAL_WARNINGS=OFF GG_BUILD_NINJA=1 GG_BUILD_VULKAN=1 GG_BUILD_LOW_PERF=1 ./ci/run.sh ./results/llama.cpp ./mnt/llama.cpp
 
   ggml-ci-intel-openvino-gpu-low-perf:
+    needs: determine-tag
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
     concurrency:
@@ -294,6 +331,8 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           source ./openvino_toolkit/setupvars.sh
           GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt

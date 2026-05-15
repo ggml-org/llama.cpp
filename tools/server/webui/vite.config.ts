@@ -23,11 +23,6 @@ export default defineConfig({
 		minify: true
 	},
 
-	esbuild: {
-		lineLimit: 500,
-		minifyIdentifiers: false
-	},
-
 	css: {
 		preprocessorOptions: {
 			scss: {

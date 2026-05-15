@@ -1128,7 +1128,11 @@ struct test_case {
     }
 
     virtual double max_nmse_err(ggml_backend_t backend) {
-        GGML_UNUSED(backend);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        // See https://github.com/ggml-org/llama.cpp/pull/22976 for explanation.
+        if (contains_f16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
+            return std::max(max_nmse_err(), 1e-6);
+        }
         return max_nmse_err();
     }
 
@@ -1205,6 +1209,18 @@ struct test_case {
     std::vector<ggml_tensor *> sentinels;
 
     std::string current_op_name;
+    bool contains_f16 = false;
+
+    // Used by the WebGPU backend to relax error thresholds on ops on f16 tensors
+    void check_for_f16_tensor(ggml_context * ctx) {
+        contains_f16 = false;
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_F16) {
+                contains_f16 = true;
+                break;
+            }
+        }
+    }
 
     void add_sentinel(ggml_context * ctx) {
         if (mode == MODE_PERF || mode == MODE_GRAD || mode == MODE_SUPPORT) {
@@ -1298,6 +1314,7 @@ struct test_case {
 
         ggml_tensor * out = build_graph(ctx);
         current_op_name   = op_desc(out);
+        check_for_f16_tensor(ctx);
 
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
@@ -1973,9 +1990,19 @@ struct test_unary : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
+        float min = -150.f;
+        float max =  150.f;
+
+        // Keep FP16 exp/expm1 inputs in-range so all backends stay finite instead of
+        // disagreeing on whether overflow saturates to max-F16 or produces +inf.
+        if (type == GGML_TYPE_F16 && (op == GGML_UNARY_OP_EXP || op == GGML_UNARY_OP_EXPM1)) {
+            min = -10.f;
+            max =  10.f;
+        }
+
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             // test extended range of values to check for NaNs in GELU
-            init_tensor_uniform(t, -150.f, 150.f);
+            init_tensor_uniform(t, min, max);
         }
     }
 
@@ -3561,7 +3588,7 @@ struct test_relu_sqr : public test_case {
 // and dispatches a single fused kernel.
 struct test_snake_fuse : public test_case {
     const ggml_type type;
-    const std::array<int64_t, 2> ne;   // [T, C]
+    const std::array<int64_t, 4> ne;   // [T, C, D2, D3]
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -3586,11 +3613,11 @@ struct test_snake_fuse : public test_case {
     }
 
     test_snake_fuse(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 2> ne = {256, 192})
+            std::array<int64_t, 4> ne = {256, 192, 1, 1})
         : type(type), ne(ne) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * x = ggml_new_tensor_2d(ctx, type, ne[0], ne[1]);
+        ggml_tensor * x = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
         ggml_set_name(x, "x");
 
         ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, ne[1]);
@@ -7558,11 +7585,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // SNAKE activation fusion: x + sin(a*x)^2 * inv_b
     for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
-        test_cases.emplace_back(new test_snake_fuse(type, {   5,   7}));   // primes sub-block
-        test_cases.emplace_back(new test_snake_fuse(type, {  33,  32}));   // boundary
-        test_cases.emplace_back(new test_snake_fuse(type, {1025,  13}));   // large prime, grid-stride
-        test_cases.emplace_back(new test_snake_fuse(type, { 128,  16}));   // power-of-two
-        test_cases.emplace_back(new test_snake_fuse(type, { 256, 192}));   // BigVGAN-ish
+        test_cases.emplace_back(new test_snake_fuse(type, {   5,   7, 1, 1}));   // primes sub-block
+        test_cases.emplace_back(new test_snake_fuse(type, {  33,  32, 1, 1}));   // boundary
+        test_cases.emplace_back(new test_snake_fuse(type, {1025,  13, 1, 1}));   // large prime, grid-stride
+        test_cases.emplace_back(new test_snake_fuse(type, { 128,  16, 1, 1}));   // power-of-two
+        test_cases.emplace_back(new test_snake_fuse(type, { 256, 192, 1, 1}));   // BigVGAN-ish
+        // higher-rank shapes: matcher must reject fusion, fallback to naive chain
+        test_cases.emplace_back(new test_snake_fuse(type, {  64,  32, 2, 1}));   // ne[2] > 1
+        test_cases.emplace_back(new test_snake_fuse(type, {  64,  32, 1, 2}));   // ne[3] > 1
+        test_cases.emplace_back(new test_snake_fuse(type, {  64,  32, 2, 3}));   // ne[2] > 1 and ne[3] > 1
     }
 
     // glu ops
@@ -9093,9 +9124,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
 
     // SNAKE activation fusion at BigVGAN scale (T=7680 = 24 kHz x 320 ms, C=192)
-    test_cases.emplace_back(new test_snake_fuse(GGML_TYPE_F32,  {7680, 192}));
-    test_cases.emplace_back(new test_snake_fuse(GGML_TYPE_F16,  {7680, 192}));
-    test_cases.emplace_back(new test_snake_fuse(GGML_TYPE_BF16, {7680, 192}));
+    test_cases.emplace_back(new test_snake_fuse(GGML_TYPE_F32,  {7680, 192, 1, 1}));
+    test_cases.emplace_back(new test_snake_fuse(GGML_TYPE_F16,  {7680, 192, 1, 1}));
+    test_cases.emplace_back(new test_snake_fuse(GGML_TYPE_BF16, {7680, 192, 1, 1}));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 16416, 1, 128, {8,  1}, {4, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 128, 1, 16416, {8,  1}, {4, 1}, {0, 1, 2, 3}, 2*16416));

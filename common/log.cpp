@@ -435,10 +435,10 @@ void common_log_flush(struct common_log * log) {
 static int common_get_verbosity(enum ggml_log_level level) {
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG: return LOG_LEVEL_DEBUG;
-        case GGML_LOG_LEVEL_INFO:  return LOG_LEVEL_INFO;
+        case GGML_LOG_LEVEL_INFO:  return LOG_LEVEL_TRACE;
         case GGML_LOG_LEVEL_WARN:  return LOG_LEVEL_WARN;
         case GGML_LOG_LEVEL_ERROR: return LOG_LEVEL_ERROR;
-        case GGML_LOG_LEVEL_CONT:  return LOG_LEVEL_INFO; // same as INFO
+        case GGML_LOG_LEVEL_CONT:  return LOG_LEVEL_TRACE;
         case GGML_LOG_LEVEL_NONE:
         default:
             return LOG_LEVEL_OUTPUT;
