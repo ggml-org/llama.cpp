@@ -1322,6 +1322,22 @@ This provides information on the performance of the server. It also allows calcu
 
 The total number of tokens in context is equal to `prompt_n + cache_n + predicted_n`
 
+The response also includes a standard `usage` object:
+
+```js
+{
+    // ...
+    "usage": {
+        "completion_tokens": 48,
+        "prompt_tokens": 44,
+        "total_tokens": 92,
+        "prompt_tokens_details": {
+            "cached_tokens": 0
+        }
+    }
+}
+```
+
 *Reasoning support*
 
 The server supports parsing and returning reasoning via the `reasoning_content` field, similar to Deepseek API.
