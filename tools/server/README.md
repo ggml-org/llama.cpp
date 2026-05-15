@@ -1325,14 +1325,17 @@ The total number of tokens in context is equal to `prompt_n + cache_n + predicte
 The response also includes a standard `usage` object:
 
 ```js
-"usage": {
-    "completion_tokens": 48,
-    "prompt_tokens": 44,
-    "total_tokens": 92,
-    "prompt_tokens_details": {
-      "cached_tokens": 0
+{
+    // ...
+    "usage": {
+        "completion_tokens": 48,
+        "prompt_tokens": 44,
+        "total_tokens": 92,
+        "prompt_tokens_details": {
+            "cached_tokens": 0
+        }
     }
-  },
+}
 ```
 
 *Reasoning support*
