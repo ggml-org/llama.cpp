@@ -2618,42 +2618,50 @@ struct clip_model_loader {
                         auto & b = model.qf_proj_blocks[bid];
 
                         // non-layerwise tensors
-                        b.qf_proj_norm_w      = get_tensor(string_format(TN_MULTI_PROJ_NORM,      prefix, bid, "weight"));
-                        b.qf_proj_norm_b      = get_tensor(string_format(TN_MULTI_PROJ_NORM,      prefix, bid, "bias"));
-                        b.qf_proj_query       = get_tensor(string_format(TN_MULTI_PROJ_QUERY,     prefix, bid));
                         b.qf_proj_img_pos     = get_tensor(string_format(TN_MULTI_PROJ_IMG_POS,           bid));
-                        b.qf_proj_layernorm_w = get_tensor(string_format(TN_MULTI_PROJ_LAYERNORM, prefix, bid, "weight"));
-                        b.qf_proj_layernorm_b = get_tensor(string_format(TN_MULTI_PROJ_LAYERNORM, prefix, bid, "bias"));
+                        b.qf_proj_query       = get_tensor(string_format(TN_MULTI_PROJ_QUERY,     prefix, bid));
                         b.qf_proj_linear_w    = get_tensor(string_format(TN_MULTI_PROJ_LINEAR,    prefix, bid, "weight"));
                         b.qf_proj_linear_b    = get_tensor(string_format(TN_MULTI_PROJ_LINEAR,    prefix, bid, "bias"));
+                        b.qf_proj_norm_w      = get_tensor(string_format(TN_MULTI_PROJ_NORM,      prefix, bid, "weight"));
+                        b.qf_proj_norm_b      = get_tensor(string_format(TN_MULTI_PROJ_NORM,      prefix, bid, "bias"));
+                        b.qf_proj_post_norm_w = get_tensor(string_format(TN_MULTI_PROJ_POST_NORM, prefix, bid, "weight"));
+                        b.qf_proj_post_norm_b = get_tensor(string_format(TN_MULTI_PROJ_POST_NORM, prefix, bid, "bias"));
 
                         // laywerwise tensors
                         // NOTE: If any model uses multi-layer qformers, this will need to change
                         b.qf_proj_layers.resize(1);
-                        auto & layer = b.qf_proj_layers[0];
+                        auto & pl = b.qf_proj_layers[0];
 
-                        layer.attn_rel_pos_emb = get_tensor(string_format(TN_ATTN_REL_POS_EMB, prefix, bid));
+                        pl.q_w    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, prefix, bid, "weight"));
+                        pl.q_b    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, prefix, bid, "bias"));
+                        pl.k_w    = get_tensor(string_format(TN_QF_SELF_ATTN_K, prefix, bid, "weight"));
+                        pl.k_b    = get_tensor(string_format(TN_QF_SELF_ATTN_K, prefix, bid, "bias"));
+                        pl.v_w    = get_tensor(string_format(TN_QF_SELF_ATTN_V, prefix, bid, "weight"));
+                        pl.v_b    = get_tensor(string_format(TN_QF_SELF_ATTN_V, prefix, bid, "bias"));
+                        pl.o_w    = get_tensor(string_format(TN_QF_SELF_ATTN_O, prefix, bid, "weight"));
+                        pl.o_b    = get_tensor(string_format(TN_QF_SELF_ATTN_O, prefix, bid, "bias"));
+                        pl.ln_1_w = get_tensor(string_format(TN_QF_SELF_ATTN_N, prefix, bid, "weight"));
+                        pl.ln_1_b = get_tensor(string_format(TN_QF_SELF_ATTN_N, prefix, bid, "bias"));
 
-                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM,   prefix, bid, "weight"));
-                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, bid, "bias"));
+                        pl.cross_attn_q_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_Q, prefix, bid, "weight"));
+                        pl.cross_attn_q_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_Q, prefix, bid, "bias"));
+                        pl.cross_attn_k_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_K, prefix, bid, "weight"));
+                        pl.cross_attn_k_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_K, prefix, bid, "bias"));
+                        pl.cross_attn_v_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_V, prefix, bid, "weight"));
+                        pl.cross_attn_v_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_V, prefix, bid, "bias"));
+                        pl.cross_attn_o_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_O, prefix, bid, "weight"));
+                        pl.cross_attn_o_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_O, prefix, bid, "bias"));
+                        pl.cross_attn_norm_w = get_tensor(string_format(TN_QF_CROSS_ATTN_N, prefix, bid, "weight"));
+                        pl.cross_attn_norm_b = get_tensor(string_format(TN_QF_CROSS_ATTN_N, prefix, bid, "bias"));
 
-                        layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, bid, "weight"));
-                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, bid, "bias"));
-                        layer.ff_up_1_w   = get_tensor(string_format(TN_FFN_UP_1,   prefix, bid, "weight"));
-                        layer.ff_up_1_b   = get_tensor(string_format(TN_FFN_UP_1,   prefix, bid, "bias"));
-                        layer.ff_down_1_w = get_tensor(string_format(TN_FFN_DOWN_1, prefix, bid, "weight"));
-                        layer.ff_down_1_b = get_tensor(string_format(TN_FFN_DOWN_1, prefix, bid, "bias"));
-
-                        layer.norm_conv_w = get_tensor(string_format(TN_NORM_CONV, prefix, bid, "weight"));
-                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, bid, "bias"));
-                        layer.conv_norm_w = get_tensor(string_format(TN_CONV_NORM, prefix, bid, "weight"));
-                        layer.conv_norm_b = get_tensor(string_format(TN_CONV_NORM, prefix, bid, "bias"));
-                        layer.conv_dw_w   = get_tensor(string_format(TN_CONV_DW,   prefix, bid, "weight"));
-                        layer.conv_pw1_w  = get_tensor(string_format(TN_CONV_PW1,  prefix, bid, "weight"));
-                        layer.conv_pw1_b  = get_tensor(string_format(TN_CONV_PW1,  prefix, bid, "bias"));
-                        layer.conv_pw2_w  = get_tensor(string_format(TN_CONV_PW2,  prefix, bid, "weight"));
-                        layer.conv_pw2_b  = get_tensor(string_format(TN_CONV_PW2,  prefix, bid, "bias"));
+                        pl.ff_up_w   = get_tensor(string_format(TN_QF_FFN_UP,   prefix, bid, "weight"));
+                        pl.ff_up_b   = get_tensor(string_format(TN_QF_FFN_UP,   prefix, bid, "bias"));
+                        pl.ff_down_w = get_tensor(string_format(TN_QF_FFN_DOWN, prefix, bid, "weight"));
+                        pl.ff_down_b = get_tensor(string_format(TN_QF_FFN_DOWN, prefix, bid, "bias"));
+                        pl.ln_2_w    = get_tensor(string_format(TN_QF_FFN_NORM, prefix, bid, "weight"));
+                        pl.ln_2_b    = get_tensor(string_format(TN_QF_FFN_NORM, prefix, bid, "bias"));
                     }
+
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");

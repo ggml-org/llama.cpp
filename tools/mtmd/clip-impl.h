@@ -210,8 +210,8 @@
 #define TN_CTC_OUT_MID     "a.enc_ctc_out_mid.%s"
 #define TN_ATTN_REL_POS_EMB "%s.blk.%d.attn_rel_pos_emb"
 // qformer projector
-#define TN_QF_PROJ_QUERY   "a.proj_query"
-#define TN_QF_PROJ_NORM    "%s.proj_norm.%s" // NOTE: This _should_ be qf_proj_norm
+#define TN_QF_PROJ_QUERY   "%s.proj_query"
+#define TN_QF_PROJ_NORM    "%s.proj_norm.%s"
 #define TN_QF_PROJ_LINEAR  "%s.proj_linear.%s"
 #define TN_QF_SELF_ATTN_Q  "%s.proj_blk.%d.self_attn_q.%s"
 #define TN_QF_SELF_ATTN_K  "%s.proj_blk.%d.self_attn_k.%s"
@@ -229,9 +229,9 @@
 // multi-projector qformer (bid => projector ID)
 #define TN_MULTI_PROJ_IMG_POS   "v.proj_blk.%d.img_pos"
 #define TN_MULTI_PROJ_QUERY     "%s.proj_blk.%d.query"
-#define TN_MULTI_PROJ_LAYERNORM "%s.proj_blk.%d.layernorm.%s" // NOTE: Disambig with QF_PROJ_NORM
 #define TN_MULTI_PROJ_LINEAR    "%s.proj_blk.%d.linear.%s"
 #define TN_MULTI_PROJ_NORM      "%s.proj_blk.%d.norm.%s"
+#define TN_MULTI_PROJ_POST_NORM "%s.proj_blk.%d.post_norm.%s"
 
 // gemma4 audio conformer
 #define TN_A_MM_INP_PROJ     "mm.a.input_projection.%s"

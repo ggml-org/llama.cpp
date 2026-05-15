@@ -337,8 +337,8 @@ struct qf_block {
     ggml_tensor * qf_proj_norm_b      = nullptr;
     ggml_tensor * qf_proj_linear_w    = nullptr;
     ggml_tensor * qf_proj_linear_b    = nullptr;
-    ggml_tensor * qf_proj_layernorm_w = nullptr;
-    ggml_tensor * qf_proj_layernorm_b = nullptr;
+    ggml_tensor * qf_proj_post_norm_w = nullptr;
+    ggml_tensor * qf_proj_post_norm_b = nullptr;
     ggml_tensor * qf_proj_img_pos     = nullptr; // Vision only
     std::vector<clip_layer> qf_proj_layers;
 };
