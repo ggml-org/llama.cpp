@@ -233,8 +233,8 @@ static inline void transpose_src0_block(const float * src0_block,
                 sub[r] = *(const HVX_UVector *) src_row;
             } else {
                 // Tail: load the valid lanes and zero the rest.
-                HVX_Vector v = Q6_V_vsplat_R(0);
-                hvx_vec_store_u(&v, t_n * sizeof(float), Q6_V_vsplat_R(0)); // no-op
+                HVX_Vector v = hvx_vec_splat_f32(0.0f);
+                hvx_vec_store_u(&v, t_n * sizeof(float), hvx_vec_splat_f32(0.0f));
                 // Use memcpy for the partial fp32 load — avoids an over-read.
                 float __attribute__((aligned(VLEN))) tmp[VLEN_FP32] = { 0 };
                 for (uint32_t k = 0; k < t_n; ++k) tmp[k] = src_row[k];
@@ -243,7 +243,7 @@ static inline void transpose_src0_block(const float * src0_block,
             }
         }
         for (uint32_t r = cb_n; r < T_TILE; ++r) {
-            sub[r] = Q6_V_vsplat_R(0);
+            sub[r] = hvx_vec_splat_f32(0.0f);
         }
 
         hvx_transpose_32x32_f32(sub);
@@ -323,7 +323,7 @@ static void ssm_conv_thread_f32_f32_hvx(unsigned int nth, unsigned int ith, void
                 for (uint32_t cb = 0; cb < tile_n; cb += C_TILE) {
                     const uint32_t cb_n = MIN(C_TILE, tile_n - cb);
 
-                    HVX_Vector acc = hvx_vec_splat_f32(0);
+                    HVX_Vector acc = hvx_vec_splat_f32(0.0f);
                     for (uint32_t j = 0; j < d_conv; ++j) {
                         // 32 channels' src0 at tap (t + j) — contiguous in src0_T.
                         HVX_Vector x = *(const HVX_Vector *)(src0_T + (t + j) * d_inner_tile + cb);
@@ -373,13 +373,8 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         uint32_t use_hvx = 0;
-        if (d_inner >= VLEN_FP32 && d_inner % VLEN_FP32 == 0 && n_t >= VLEN_FP32) {
-            int is_aligned = hex_is_aligned((void *) src0->data, VLEN) &&
-                             hex_is_aligned((void *) src1->data, VLEN) &&
-                             hex_is_aligned((void *) dst->data, VLEN);
-            if (is_aligned) {
-                use_hvx = 1;
-            }
+        if (d_inner >= VLEN_FP32 && n_t >= VLEN_FP32) {
+            use_hvx = 1;
         }
 
         // Per-thread channel slice
@@ -434,7 +429,7 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
         }
     }
         
-    return HTP_STATUS_OK; // SKIP_COMPUTE
+    return HTP_STATUS_OK;
 }
 
 int op_ssm_conv(struct htp_ops_context * octx) {
