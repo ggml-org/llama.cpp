@@ -11071,6 +11071,14 @@ class GraniteModel(LlamaModel):
             self.gguf_writer.add_logit_scale(logits_scale)
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
 
+        # If being used as the base for Granite4 Vision, add deepstack_layer_arr
+        if self.hparams.get("spatial_target_layers") or self.hparams.get("deepstack_layer_map"):
+            normalized_projector_map = Granite4VisionMmprojModel.get_normalized_projector_map(self.hparams)
+            deepstack_layer_arr = [-1 for _ in range(self.block_count)] # Populate with -1 sentinels
+            for proj_idx, (_, llm_layer, _, _) in enumerate(normalized_projector_map):
+                deepstack_layer_arr[llm_layer] = proj_idx
+            self.gguf_writer.add_num_deepstack_layers(deepstack_layer_arr)
+
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
@@ -13073,28 +13081,28 @@ class Granite4VisionMmprojModel(MmprojModel):
     has_vision_encoder = True
     has_audio_encoder = False
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    @staticmethod
+    def get_normalized_projector_map(global_config: dict) -> list[tuple[int, int, str, int]]:
+        """Normalize both deepstack and spatial projector maps to the form:
+        (vision_layer, llm_layer, <type>, type_index)
 
-        deepstack_map = self.global_config.get("deepstack_layer_map", [])  # [[vis_layer, llm_layer], ...]
-        spatial_layers = self.global_config.get("spatial_target_layers", [])  # [llm_layer, ...]
-        n_text_layers = self.global_config["text_config"]["num_hidden_layers"]
-        n_vision_layers = self.global_config["vision_config"]["num_hidden_layers"]
+        This is then used to populate the following mappings:
+        - vision_feature_layers (mmproj hparam): ordered list of all
+          vision_layer values where order corresponds with the order of the
+          stacked projector tensors
+          NOTE: Values may appear multiple times for spatial projectors
+        - tensor_prefix_map (mmproj tensors): mapping from tensor prefixes to
+          the index of the corresponding projector in the stacked tensors
+        - deepstack_layer_arr (llm hparam): per-text-layer array indicating
+          which input vision feature should be injected at that layer
+          (-1 if none)
 
-        # Normalize both deepstack and spatial projector maps to the form:
-        # (vision_layer, llm_layer, <type>, type_index)
-        #
-        # This is then used to populate the following mappings:
-        #
-        # - vision_feature_layers: ordered list of all vision_layer values where
-        #   order corresponds with the order of the stacked projector tensors
-        #   NOTE: Values may appear multiple times for spatial projectors
-        #
-        # - deepstack_layer_arr: per-text-layer array indicating which input
-        #   vision feature should be injected at that layer (-1 if none)
-        #
-        # - tensor_prefix_map: mapping from tensor prefixes to the index of the
-        #   corresponding projector in the stacked tensors
+        Output: (vision_layer, llm_layer, <type>, type_index)
+        """
+        deepstack_map = global_config.get("deepstack_layer_map", [])  # [[vis_layer, llm_layer], ...]
+        spatial_layers = global_config.get("spatial_target_layers", [])  # [llm_layer, ...]
+        n_text_layers = global_config["text_config"]["num_hidden_layers"]
+        n_vision_layers = global_config["vision_config"]["num_hidden_layers"]
         normalized_projector_map = []
         if deepstack_map:
             for deepstack_idx, (vision_layer, llm_layer) in enumerate(sorted(deepstack_map)):
@@ -13104,13 +13112,16 @@ class Granite4VisionMmprojModel(MmprojModel):
                     llm_layer = n_text_layers + llm_layer
                 normalized_projector_map.append((vision_layer, llm_layer, "layerwise", deepstack_idx))
         if spatial_layers:
-            spatial_vision_layer = self.global_config.get("spatial_vision_layer", -1)
+            spatial_vision_layer = global_config.get("spatial_vision_layer", -1)
             if spatial_vision_layer < 0:
                 spatial_vision_layer = n_vision_layers + spatial_vision_layer
             for spatial_idx, llm_layer in enumerate(spatial_layers):
                 normalized_projector_map.append((spatial_vision_layer, llm_layer, "spatial", spatial_idx))
+        return list(sorted(normalized_projector_map))
 
-        normalized_projector_map = list(sorted(normalized_projector_map))
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        normalized_projector_map = self.get_normalized_projector_map(self.global_config)
         self._n_proj = len(normalized_projector_map)
 
         self._tensor_prefix_map = {
@@ -13122,6 +13133,7 @@ class Granite4VisionMmprojModel(MmprojModel):
             type_idx if proj_type == "spatial" else -1
             for _, _, proj_type, type_idx in normalized_projector_map
         ]
+        n_text_layers = self.global_config["text_config"]["num_hidden_layers"]
         self._deepstack_layer_arr = [-1 for _ in range(n_text_layers)] # Populate with -1 sentinels
         for proj_idx, (_, llm_layer, _, _) in enumerate(normalized_projector_map):
             self._deepstack_layer_arr[llm_layer] = proj_idx
@@ -13156,9 +13168,6 @@ class Granite4VisionMmprojModel(MmprojModel):
 
         # Set the spatial offests per projector
         self.gguf_writer.add_vision_spatial_offsets(self._spatial_offsets)
-
-        # Write array of deepstack layers (llm_layer -> projector_idx)
-        self.gguf_writer.add_num_deepstack_layers(self._deepstack_layer_arr)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
