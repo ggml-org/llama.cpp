@@ -79,8 +79,9 @@ class SettingsStore {
 	 */
 	private getServerDefaults(): Record<string, string | number | boolean> {
 		const serverParams = serverStore.defaultParams;
-		const webuiSettings = serverStore.webuiSettings;
-		return ParameterSyncService.extractServerDefaults(serverParams, webuiSettings);
+		const uiSettings = serverStore.uiSettings;
+
+		return ParameterSyncService.extractServerDefaults(serverParams, uiSettings);
 	}
 
 	constructor() {
@@ -294,15 +295,15 @@ class SettingsStore {
 	}
 
 	/**
-	 * Reset a parameter to server default (or webui default if no server default)
+	 * Reset a parameter to Server default (or UI default if no Server default)
 	 */
 	resetParameterToServerDefault(key: string): void {
 		const serverDefaults = this.getServerDefaults();
-		const webuiSettings = serverStore.webuiSettings;
+		const uiSettings = serverStore.uiSettings;
 
-		if (webuiSettings && key in webuiSettings) {
+		if (uiSettings && key in uiSettings) {
 			// UI setting from admin config: write actual value
-			setConfigValue(this.config, key, webuiSettings[key]);
+			setConfigValue(this.config, key, uiSettings[key]);
 		} else if (serverDefaults[key] !== undefined) {
 			// sampling param known by server: clear it, let server decide
 			setConfigValue(this.config, key, '');
@@ -330,8 +331,8 @@ class SettingsStore {
 		const propsDefaults = this.getServerDefaults();
 		if (Object.keys(propsDefaults).length === 0) return;
 
-		const webuiSettings = serverStore.webuiSettings;
-		const webuiSettingsKeys = new Set(webuiSettings ? Object.keys(webuiSettings) : []);
+		const uiSettings = serverStore.uiSettings;
+		const uiSettingsKeys = new Set(uiSettings ? Object.keys(uiSettings) : []);
 
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
 			const currentValue = getConfigValue(this.config, key);
@@ -343,19 +344,16 @@ class SettingsStore {
 			if (normalizedCurrent === normalizedDefault) {
 				this.userOverrides.delete(key);
 
-				if (
-					!webuiSettingsKeys.has(key) &&
-					getConfigValue(SETTING_CONFIG_DEFAULT, key) === undefined
-				) {
+				if (!uiSettingsKeys.has(key) && getConfigValue(SETTING_CONFIG_DEFAULT, key) === undefined) {
 					setConfigValue(this.config, key, undefined);
 				}
 			}
 		}
 
-		// webui settings need actual values in config (no placeholder mechanism),
+		// UI settings need actual values in config (no placeholder mechanism),
 		// so write them for non-overridden keys
-		if (webuiSettings) {
-			for (const [key, value] of Object.entries(webuiSettings)) {
+		if (uiSettings) {
+			for (const [key, value] of Object.entries(uiSettings)) {
 				if (!this.userOverrides.has(key) && value !== undefined) {
 					setConfigValue(this.config, key, value);
 
@@ -374,16 +372,16 @@ class SettingsStore {
 	/**
 	 * Reset all parameters to their default values (from props)
 	 * This is used by the "Reset to Default" functionality
-	 * Prioritizes server defaults from /props, falls back to webui defaults
+	 * Prioritizes Server defaults from /props, falls back to UI defaults
 	 */
 	forceSyncWithServerDefaults(): void {
 		const propsDefaults = this.getServerDefaults();
-		const webuiSettings = serverStore.webuiSettings;
+		const uiSettings = serverStore.uiSettings;
 
 		for (const key of ParameterSyncService.getSyncableParameterKeys()) {
-			if (webuiSettings && key in webuiSettings) {
+			if (uiSettings && key in uiSettings) {
 				// UI setting from admin config: write actual value
-				setConfigValue(this.config, key, webuiSettings[key]);
+				setConfigValue(this.config, key, uiSettings[key]);
 			} else if (propsDefaults[key] !== undefined) {
 				// sampling param: clear it, let server decide
 				setConfigValue(this.config, key, '');

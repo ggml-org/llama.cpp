@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { ServerErrorSplash } from '$lib/components/app';
 	import { ROUTES } from '$lib/constants/routes';
+	import { APP_NAME } from '$lib/constants';
 
 	let error = $derived($page.error);
 	let status = $derived($page.status);
@@ -23,7 +24,7 @@
 </script>
 
 <svelte:head>
-	<title>Error {status} - WebUI</title>
+	<title>Error {status} - {APP_NAME}</title>
 </svelte:head>
 
 {#if isApiKeyError}

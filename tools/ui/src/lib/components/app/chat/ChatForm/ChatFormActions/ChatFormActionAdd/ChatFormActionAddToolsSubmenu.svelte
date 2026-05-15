@@ -5,6 +5,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { CLI_FLAGS } from '$lib/constants';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 
@@ -33,7 +34,7 @@
 						<Info class="mt-0.5 h-4 w-4 shrink-0" />
 
 						<span>
-							Run llama-server with <code>--tools</code> flag to enable
+							Run llama-server with <code>{CLI_FLAGS.TOOLS}</code> flag to enable
 
 							<strong>Built-in Tools</strong>.
 						</span>

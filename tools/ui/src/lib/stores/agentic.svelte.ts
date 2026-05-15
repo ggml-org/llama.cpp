@@ -638,10 +638,9 @@ class AgenticStore {
 					return;
 				}
 				const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
-				// Save error as content in the current turn
-				onChunk?.(`${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`);
+				// preserve partial output as is, the outer error dialog informs the user separately
 				await onAssistantTurnComplete?.(
-					turnContent + `${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`,
+					turnContent,
 					turnReasoningContent || undefined,
 					this.buildFinalTimings(capturedTimings, agenticTimings),
 					undefined

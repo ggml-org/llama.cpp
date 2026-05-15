@@ -55,7 +55,8 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const options = $derived(
 		modelOptions().filter((option) => {
 			const modelProps = modelsStore.getModelProps(option.model);
-			return modelProps?.webui !== false;
+
+			return modelProps?.ui !== false;
 		})
 	);
 	const loading = $derived(modelsLoading());

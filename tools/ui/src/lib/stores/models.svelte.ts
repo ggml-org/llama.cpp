@@ -342,11 +342,7 @@ class ModelsStore {
 			this.routerModels = response.data;
 			await this.fetchModalitiesForLoadedModels();
 
-			const o = this.models.filter((option) => {
-				const modelProps = this.getModelProps(option.model);
-
-				return modelProps?.webui !== false;
-			});
+			const o = this.models.filter((option) => this.getModelProps(option.model)?.ui !== false);
 
 			if (o.length === 1 && this.isModelLoaded(o[0].model)) {
 				this.selectModelById(o[0].id);
@@ -488,11 +484,10 @@ class ModelsStore {
 	async ensureFirstModelSelected(): Promise<void> {
 		if (this.selectedModelName) return;
 
-		// Filter models that are visible in webui
-		const availableModels = this.models.filter((option) => {
-			const modelProps = this.getModelProps(option.model);
-			return modelProps?.webui !== false;
-		});
+		// Filter models that are visible in the UI
+		const availableModels = this.models.filter(
+			(option) => this.getModelProps(option.model)?.ui !== false
+		);
 
 		if (availableModels.length === 0) return;
 

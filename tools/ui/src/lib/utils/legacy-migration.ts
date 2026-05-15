@@ -21,7 +21,7 @@ import { MessageRole, MessageType } from '$lib/enums';
 import type { DatabaseMessage } from '$lib/types/database';
 
 const MIGRATION_DONE_KEY = 'llama-ui-migration-v2-done';
-// Deprecated old key for backward compat
+/** @deprecated Use {@link MIGRATION_DONE_KEY} instead */
 const DEPRECATED_MIGRATION_DONE_KEY = 'llama-webui-migration-v2-done';
 
 /**

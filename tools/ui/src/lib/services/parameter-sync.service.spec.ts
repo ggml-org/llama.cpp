@@ -132,7 +132,7 @@ describe('ParameterSyncService', () => {
 			expect(result.temperature).toBe(0.7);
 		});
 
-		it('should merge webui settings from props when provided', () => {
+		it('should merge ui settings from props when provided', () => {
 			const result = ParameterSyncService.extractServerDefaults(null, {
 				pasteLongTextToFileLen: 0,
 				pdfAsImage: true,

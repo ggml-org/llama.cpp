@@ -25,16 +25,16 @@ export class ParameterSyncService {
 
 	/**
 	 * Extract server default parameters that can be synced from `/props` response.
-	 * Handles both generation settings parameters and webui-specific settings.
+	 * Handles both generation settings parameters and UI-specific settings.
 	 * Converts samplers array to semicolon-delimited string for UI display.
 	 *
 	 * @param serverParams - Raw generation settings from server `/props` endpoint
-	 * @param webuiSettings - Optional webui-specific settings from server
+	 * @param uiSettings - Optional UI-specific settings from server
 	 * @returns Record of extracted parameter key-value pairs with normalized precision
 	 */
 	static extractServerDefaults(
 		serverParams: ApiLlamaCppServerProps['default_generation_settings']['params'] | null,
-		webuiSettings?: Record<string, string | number | boolean>
+		uiSettings?: Record<string, string | number | boolean>
 	): ParameterRecord {
 		const extracted: ParameterRecord = {};
 
@@ -57,10 +57,11 @@ export class ParameterSyncService {
 			}
 		}
 
-		if (webuiSettings) {
+		if (uiSettings) {
 			for (const param of SYNCABLE_PARAMETERS) {
-				if (param.canSync && param.serverKey in webuiSettings) {
-					const value = webuiSettings[param.serverKey];
+				if (param.canSync && param.serverKey in uiSettings) {
+					const value = uiSettings[param.serverKey];
+
 					if (value !== undefined) {
 						extracted[param.key] = this.roundFloatingPoint(value);
 					}

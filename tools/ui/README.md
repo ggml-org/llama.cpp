@@ -2,7 +2,7 @@
 
 A modern, feature-rich web interface for llama-server built with SvelteKit. This UI provides an intuitive chat interface with advanced file handling, conversation management, and comprehensive model interaction capabilities.
 
-The WebUI supports two server operation modes:
+Llama UI supports two server operation modes:
 
 - **MODEL mode** - Single model operation (standard llama-server)
 - **ROUTER mode** - Multi-model operation with dynamic model loading/unloading
@@ -112,7 +112,7 @@ npm run dev
 
 This starts:
 
-- **Vite dev server** at `http://localhost:5173` - The main WebUI
+- **Vite dev server** at `http://localhost:5173` - The main UI frontend app
 - **Storybook** at `http://localhost:6006` - Component documentation
 
 The Vite dev server proxies API requests to `http://localhost:8080` (default llama-server port):
@@ -217,20 +217,19 @@ output: {
 
 ### Integration with llama-server
 
-The WebUI is embedded directly into the llama-server binary:
+llama-ui is embedded directly into the llama-server binary:
 
 1. `npm run build` outputs `index.html` to `build/tools/ui/`
 2. llama-server compiles this into the binary at build time
 3. When accessing `/`, llama-server serves the bundled HTML
-4. All assets are inlined (CSS, JS, fonts, favicon)
 
-This results in a **single portable binary** with the full WebUI included.
+This results in a **single portable binary** with the full Llama UI included.
 
 ---
 
 ## Architecture
 
-The WebUI follows a layered architecture with unidirectional data flow:
+Llama UI follows a layered architecture with unidirectional data flow:
 
 ```text
 Routes → Components → Hooks → Stores → Services → Storage/API

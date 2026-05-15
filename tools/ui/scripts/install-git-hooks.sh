@@ -1,18 +1,18 @@
 #!/bin/bash
 
-# Script to install pre-commit hook for webui
-# Pre-commit: formats, checks, and builds webui
+# Script to install pre-commit hook for llama-ui
+# Pre-commit: formats, checks, and builds the UI app
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 PRE_COMMIT_HOOK="$REPO_ROOT/.git/hooks/pre-commit"
 
-echo "Installing pre-commit hook for webui..."
+echo "Installing pre-commit hook for llama-ui..."
 
 # Create the pre-commit hook
 cat > "$PRE_COMMIT_HOOK" << 'EOF'
 #!/bin/bash
 
-# Check if there are any changes in the webui directory
+# Check if there are any changes in the tools/ui directory
 if git diff --cached --name-only | grep -q "^tools/ui/"; then
     REPO_ROOT=$(git rev-parse --show-toplevel)
     cd "$REPO_ROOT/tools/ui"
@@ -23,7 +23,7 @@ if git diff --cached --name-only | grep -q "^tools/ui/"; then
         exit 1
     fi
 
-    echo "Formatting and checking webui code..."
+    echo "Formatting and checking llama-ui code..."
 
     # Run the format command
     npm run format
@@ -46,17 +46,17 @@ if git diff --cached --name-only | grep -q "^tools/ui/"; then
         exit 1
     fi
 
-    echo "✅ Webui code formatted and checked successfully"
+    echo "✅ llama-ui code formatted and checked successfully"
 
-    # Build the webui
-    echo "Building webui..."
+    # Build the llama-ui
+    echo "Building llama-ui..."
     npm run build
     if [ $? -ne 0 ]; then
         echo "❌ npm run build failed"
         exit 1
     fi
 
-    echo "✅ Webui built successfully"
+    echo "✅ llama-ui built successfully"
 fi
 
 exit 0
@@ -70,8 +70,8 @@ if [ $? -eq 0 ]; then
     echo "   Pre-commit: $PRE_COMMIT_HOOK"
     echo ""
     echo "The hook will automatically:"
-    echo "  • Format, lint and check webui code before commits"
-    echo "  • Build webui"
+    echo "  • Format, lint and check llama-ui code before commits"
+    echo "  • Build llama-ui"
 else
     echo "❌ Failed to make hook executable"
     exit 1

@@ -50,8 +50,8 @@ class ServerStore {
 		return typeof nCtx === 'number' ? nCtx : null;
 	}
 
-	get webuiSettings(): Record<string, string | number | boolean> | undefined {
-		return this.props?.webui_settings;
+	get uiSettings(): Record<string, string | number | boolean> | undefined {
+		return this.props?.ui_settings ?? this.props?.webui_settings;
 	}
 
 	get isRouterMode(): boolean {

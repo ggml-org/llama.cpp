@@ -206,7 +206,7 @@ export { PropsService } from './props.service';
  *
  * **Exports:**
  * - `ParameterSyncService` class — static methods for sync logic
- * - `SYNCABLE_PARAMETERS` — mapping of webui setting keys to server parameter keys
+ * - `SYNCABLE_PARAMETERS` — mapping of UI setting keys to server parameter keys
  *
  * @see settingsStore in stores/settings.svelte.ts — primary consumer for settings sync
  * @see SettingsChatParameterSourceIndicator — displays parameter source badges in UI

@@ -856,7 +856,7 @@ export class ChatService {
 			});
 		}
 
-		// Handle legacy 'context' type from old webui (pasted content)
+		// Handle legacy 'context' type from the old UI (pasted content)
 		const legacyContextFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraLegacyContext =>
 				extra.type === AttachmentType.LEGACY_CONTEXT

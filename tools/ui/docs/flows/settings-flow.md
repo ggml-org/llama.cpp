@@ -58,8 +58,8 @@ sequenceDiagram
         end
     end
 
-    alt serverStore.props has webuiSettings
-        settingsStore->>settingsStore: Apply webuiSettings from server
+    alt serverStore.props has uiSettings
+        settingsStore->>settingsStore: Apply uiSettings from server
         Note right of settingsStore: Server-provided UI settings<br/>(e.g. showRawOutputSwitch)
     end
 

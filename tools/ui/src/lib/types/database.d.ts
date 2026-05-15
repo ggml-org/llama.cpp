@@ -31,7 +31,7 @@ export interface DatabaseMessageExtraImageFile {
 }
 
 /**
- * Legacy format from old webui - pasted content was stored as "context" type
+ * Legacy format from the old UI — pasted content was stored as "context" type
  * @deprecated Use DatabaseMessageExtraTextFile instead
  */
 export interface DatabaseMessageExtraLegacyContext {

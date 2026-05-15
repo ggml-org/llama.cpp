@@ -836,11 +836,7 @@ class ChatStore {
 				await this.savePartialResponseIfNeeded(convId);
 				cleanupStreamingState();
 				this.clearPendingMessage(convId);
-				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-				if (idx !== -1) {
-					const failedMessage = conversationsStore.removeMessageAtIndex(idx);
-					if (failedMessage) DatabaseService.deleteMessage(failedMessage.id).catch(console.error);
-				}
+
 				const contextInfo = (
 					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
 				).contextInfo;

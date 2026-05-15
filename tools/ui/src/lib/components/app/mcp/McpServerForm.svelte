@@ -7,6 +7,7 @@
 	import { UrlProtocol } from '$lib/enums';
 	import { MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { CLI_FLAGS } from '$lib/constants';
 
 	interface Props {
 		url: string;
@@ -87,7 +88,7 @@
 						<span class="inline-flex gap-0.75 text-xs text-muted-foreground/60"
 							>(Run <pre>llama-server</pre>
 							with
-							<pre>--webui-mcp-proxy</pre>
+							<pre>{CLI_FLAGS.MCP_PROXY}</pre>
 							flag)</span
 						>
 					{/if}

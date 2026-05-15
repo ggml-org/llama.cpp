@@ -2,7 +2,7 @@
 
 # Development script for llama-ui
 #
-# This script starts the webui development servers (Storybook and Vite).
+# This script starts the llama-ui development servers (Storybook and Vite).
 # Note: You need to start llama-server separately.
 #
 # Usage:

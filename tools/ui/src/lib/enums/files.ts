@@ -1,5 +1,5 @@
 /**
- * Comprehensive dictionary of all supported file types in webui
+ * Comprehensive dictionary of all supported file types in llama-ui
  * Organized by category with TypeScript enums for better type safety
  */
 

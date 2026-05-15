@@ -23,6 +23,7 @@ import type {
 	SettingsSectionEntry,
 	SettingsSection
 } from '$lib/types';
+import { CLI_FLAGS } from '$lib/constants';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
 import { TITLE_GENERATION } from './title-generation';
@@ -72,7 +73,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.API_KEY,
 				label: 'API Key',
-				help: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
+				help: `Set the API Key if you are using <code> ${CLI_FLAGS.API_KEY} </code> option for the server.`,
 				defaultValue: '',
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.GENERAL

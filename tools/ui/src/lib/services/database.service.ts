@@ -1,8 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
+import { DB_APP_NAME_DEPRECATED } from '$lib/constants';
 import type { McpServerOverride } from '$lib/types/database';
-
-const OLD_DB_NAME = 'LlamacppWebui';
 
 class LlamaUiDatabase extends Dexie {
 	conversations!: EntityTable<DatabaseConversation, string>;
@@ -24,11 +23,11 @@ const db = new LlamaUiDatabase();
 async function migrateFromOldDatabase(): Promise<void> {
 	try {
 		const oldDbNames = await Dexie.getDatabaseNames();
-		if (!oldDbNames.includes(OLD_DB_NAME)) return;
+		if (!oldDbNames.includes(DB_APP_NAME_DEPRECATED)) return;
 
-		console.log('[Database] Migrating data from old database:', OLD_DB_NAME);
+		console.log('[Database] Migrating data from old database:', DB_APP_NAME_DEPRECATED);
 
-		const oldDb = new Dexie(OLD_DB_NAME);
+		const oldDb = new Dexie(DB_APP_NAME_DEPRECATED);
 		oldDb.version(1).stores({
 			conversations: 'id, lastModified, currNode, name',
 			messages: 'id, convId, type, role, timestamp, parent, children'
@@ -47,7 +46,7 @@ async function migrateFromOldDatabase(): Promise<void> {
 		}
 
 		oldDb.close();
-		await Dexie.delete(OLD_DB_NAME);
+		await Dexie.delete(DB_APP_NAME_DEPRECATED);
 		console.log('[Database] Old database deleted');
 	} catch (err) {
 		console.warn('[Database] Migration from old database failed:', err);
