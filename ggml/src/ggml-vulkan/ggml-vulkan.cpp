@@ -7354,14 +7354,11 @@ static uint32_t ggml_vk_get_deltas_offset(const ggml_tensor * tensor) {
     return ggml_vk_repack_quants_region(info, ggml_vk_get_num_blocks(tensor)) / info->delta_elem_size;
 }
 
-static void ggml_vk_repack_pack(const ggml_tensor * tensor, const void * data, void * repacked) {
-    const auto * info = ggml_vk_get_repack_info(tensor->type);
-    GGML_ASSERT(info);
-    const size_t n_blocks = ggml_vk_get_num_blocks(tensor);
+static void ggml_vk_repack_pack(const vk_repack_type_info * info, size_t n_blocks,
+                                const void * data, void * quants_dst, void * deltas_dst) {
     const size_t block_size = info->quant_bytes + info->delta_bytes;
-    const size_t quants_region = ggml_vk_repack_quants_region(info, n_blocks);
-    uint8_t * dst_q = (uint8_t *)repacked;
-    uint8_t * dst_d = (uint8_t *)repacked + quants_region;
+    uint8_t * dst_q = (uint8_t *)quants_dst;
+    uint8_t * dst_d = (uint8_t *)deltas_dst;
     const uint8_t * src = (const uint8_t *)data;
 
     for (size_t i = 0; i < n_blocks; i++) {
@@ -7370,20 +7367,57 @@ static void ggml_vk_repack_pack(const ggml_tensor * tensor, const void * data, v
     }
 }
 
-static void ggml_vk_repack_unpack(const ggml_tensor * tensor, const void * repacked, void * data) {
-    const auto * info = ggml_vk_get_repack_info(tensor->type);
-    GGML_ASSERT(info);
-    const size_t n_blocks = ggml_vk_get_num_blocks(tensor);
+static void ggml_vk_repack_unpack(const vk_repack_type_info * info, size_t n_blocks,
+                                  const void * quants_src, const void * deltas_src, void * data) {
     const size_t block_size = info->quant_bytes + info->delta_bytes;
-    const size_t quants_region = ggml_vk_repack_quants_region(info, n_blocks);
-    const uint8_t * src_q = (const uint8_t *)repacked;
-    const uint8_t * src_d = (const uint8_t *)repacked + quants_region;
+    const uint8_t * src_q = (const uint8_t *)quants_src;
+    const uint8_t * src_d = (const uint8_t *)deltas_src;
     uint8_t * dst = (uint8_t *)data;
 
     for (size_t i = 0; i < n_blocks; i++) {
         memcpy(dst + block_size * i + info->delta_bytes, src_q + info->quant_bytes * i, info->quant_bytes);
         memcpy(dst + block_size * i, src_d + info->delta_bytes * i, info->delta_bytes);
     }
+}
+
+static void ggml_vk_repack_write(vk_buffer & buf, const ggml_tensor * tensor, size_t offset, const void * data, size_t size) {
+    const auto * info = ggml_vk_get_repack_info(tensor->type);
+    GGML_ASSERT(info);
+    const size_t block_size = info->quant_bytes + info->delta_bytes;
+    const size_t first_block = offset / block_size;
+    const size_t n_blocks_chunk = size / block_size;
+    const size_t n_blocks_total = ggml_vk_get_num_blocks(tensor);
+    const size_t quants_region = ggml_vk_repack_quants_region(info, n_blocks_total);
+    const size_t scratch_size = n_blocks_chunk * info->quant_bytes + n_blocks_chunk * info->delta_bytes;
+    void * scratch = ggml_vk_repack_scratch(scratch_size);
+    uint8_t * scratch_q = (uint8_t *)scratch;
+    uint8_t * scratch_d = scratch_q + n_blocks_chunk * info->quant_bytes;
+
+    ggml_vk_repack_pack(info, n_blocks_chunk, data, scratch_q, scratch_d);
+
+    const size_t buf_base = vk_tensor_offset(tensor) + tensor->view_offs;
+    ggml_vk_buffer_write(buf, buf_base + first_block * info->quant_bytes, scratch_q, n_blocks_chunk * info->quant_bytes);
+    ggml_vk_buffer_write(buf, buf_base + quants_region + first_block * info->delta_bytes, scratch_d, n_blocks_chunk * info->delta_bytes);
+}
+
+static void ggml_vk_repack_read(vk_buffer & buf, const ggml_tensor * tensor, size_t offset, void * data, size_t size) {
+    const auto * info = ggml_vk_get_repack_info(tensor->type);
+    GGML_ASSERT(info);
+    const size_t block_size = info->quant_bytes + info->delta_bytes;
+    const size_t first_block = offset / block_size;
+    const size_t n_blocks_chunk = size / block_size;
+    const size_t n_blocks_total = ggml_vk_get_num_blocks(tensor);
+    const size_t quants_region = ggml_vk_repack_quants_region(info, n_blocks_total);
+    const size_t scratch_size = n_blocks_chunk * info->quant_bytes + n_blocks_chunk * info->delta_bytes;
+    void * scratch = ggml_vk_repack_scratch(scratch_size);
+    uint8_t * scratch_q = (uint8_t *)scratch;
+    uint8_t * scratch_d = scratch_q + n_blocks_chunk * info->quant_bytes;
+
+    const size_t buf_base = vk_tensor_offset(tensor) + tensor->view_offs;
+    ggml_vk_buffer_read(buf, buf_base + first_block * info->quant_bytes, scratch_q, n_blocks_chunk * info->quant_bytes);
+    ggml_vk_buffer_read(buf, buf_base + quants_region + first_block * info->delta_bytes, scratch_d, n_blocks_chunk * info->delta_bytes);
+
+    ggml_vk_repack_unpack(info, n_blocks_chunk, scratch_q, scratch_d, data);
 }
 
 static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m, uint32_t n, uint32_t k, bool disable_split_k, const vk_pipeline& pipeline) {
@@ -13908,12 +13942,8 @@ static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml
         return;
     }
 
-    const auto * repack_info = ggml_vk_get_repack_info(tensor->type);
-    if (repack_info) {
-        const size_t repacked_size = ggml_vk_repack_size(repack_info, ggml_vk_get_num_blocks(tensor));
-        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
-        ggml_vk_repack_pack(tensor, data, data_repacked);
-        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+    if (ggml_vk_get_repack_info(tensor->type)) {
+        ggml_vk_repack_write(buf, tensor, offset, data, size);
         return;
     }
 
@@ -13931,12 +13961,8 @@ static void ggml_backend_vk_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, g
         return;
     }
 
-    const auto * repack_info = ggml_vk_get_repack_info(tensor->type);
-    if (repack_info) {
-        const size_t repacked_size = ggml_vk_repack_size(repack_info, ggml_vk_get_num_blocks(tensor));
-        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
-        ggml_vk_repack_pack(tensor, data, data_repacked);
-        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+    if (ggml_vk_get_repack_info(tensor->type)) {
+        ggml_vk_repack_write(buf, tensor, offset, data, size);
         return;
     }
 
@@ -13953,12 +13979,8 @@ static void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, cons
 
     vk_buffer buf = buf_ctx->dev_buffer;
 
-    const auto * repack_info = ggml_vk_get_repack_info(tensor->type);
-    if (repack_info) {
-        const size_t repacked_size = ggml_vk_repack_size(repack_info, ggml_vk_get_num_blocks(tensor));
-        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
-        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
-        ggml_vk_repack_unpack(tensor, data_repacked, data);
+    if (ggml_vk_get_repack_info(tensor->type)) {
+        ggml_vk_repack_read(buf, tensor, offset, data, size);
         return;
     }
 
@@ -13977,12 +13999,8 @@ static void ggml_backend_vk_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, c
 
     vk_buffer buf = buf_ctx->dev_buffer;
 
-    const auto * repack_info = ggml_vk_get_repack_info(tensor->type);
-    if (repack_info) {
-        const size_t repacked_size = ggml_vk_repack_size(repack_info, ggml_vk_get_num_blocks(tensor));
-        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
-        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
-        ggml_vk_repack_unpack(tensor, data_repacked, data);
+    if (ggml_vk_get_repack_info(tensor->type)) {
+        ggml_vk_repack_read(buf, tensor, offset, data, size);
         return;
     }
 
@@ -14192,12 +14210,8 @@ static void ggml_backend_vk_set_tensor_2d_async(ggml_backend_t backend, ggml_ten
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)tensor->buffer->context;
     vk_buffer buf = buf_ctx->dev_buffer;
 
-    const auto * repack_info = ggml_vk_get_repack_info(tensor->type);
-    if (repack_info) {
-        const size_t repacked_size = ggml_vk_repack_size(repack_info, ggml_vk_get_num_blocks(tensor));
-        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
-        ggml_vk_repack_pack(tensor, data, data_repacked);
-        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+    if (ggml_vk_get_repack_info(tensor->type)) {
+        ggml_vk_repack_write(buf, tensor, offset, data, size);
         return;
     }
 
@@ -14269,12 +14283,8 @@ static void ggml_backend_vk_get_tensor_2d_async(ggml_backend_t backend, const gg
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)tensor->buffer->context;
     vk_buffer buf = buf_ctx->dev_buffer;
 
-    const auto * repack_info = ggml_vk_get_repack_info(tensor->type);
-    if (repack_info) {
-        const size_t repacked_size = ggml_vk_repack_size(repack_info, ggml_vk_get_num_blocks(tensor));
-        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
-        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
-        ggml_vk_repack_unpack(tensor, data_repacked, data);
+    if (ggml_vk_get_repack_info(tensor->type)) {
+        ggml_vk_repack_read(buf, tensor, offset, data, size);
         return;
     }
 
@@ -16803,10 +16813,15 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
                         srci_clone->nb[i] = srci_clone->nb[i - 1]*srci_clone->ne[i - 1];
                     }
                 } else if (ggml_vk_get_repack_info(srci->type)) {
-                    const size_t repacked_size = ggml_vk_repack_size_tensor(srci);
+                    const auto * info = ggml_vk_get_repack_info(srci->type);
+                    const size_t n_blocks = ggml_vk_get_num_blocks(srci);
+                    const size_t quants_region = ggml_vk_repack_quants_region(info, n_blocks);
+                    const size_t repacked_size = ggml_vk_repack_size(info, n_blocks);
                     void * data_repacked = ggml_vk_repack_scratch(repacked_size);
                     ggml_vk_buffer_read(buffer_gpu, offset, data_repacked, repacked_size);
-                    ggml_vk_repack_unpack(srci, data_repacked, srci_clone->data);
+                    ggml_vk_repack_unpack(info, n_blocks,
+                        data_repacked, (uint8_t *)data_repacked + quants_region,
+                        srci_clone->data);
                     memcpy(srci_clone->nb, srci->nb, sizeof(size_t) * GGML_MAX_DIMS);
                 } else {
                     if (offset + srci_size >= buffer_gpu->size) {
