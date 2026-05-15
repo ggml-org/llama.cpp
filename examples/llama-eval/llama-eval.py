@@ -44,6 +44,7 @@ os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 GRADER_PATTERNS = {
     "aime": r'\boxed{(\d+)}|\b(\d+)\b',
     "aime2025": r'\boxed{(\d+)}|\b(\d+)\b',
+    "aime2026": r'\boxed{(\d+)}|\b(\d+)\b',
     "gsm8k": r'\b(\d+)\b',
 }
 
@@ -54,6 +55,11 @@ SAMPLE_ANSWERS = {
         "999"
     ],
     "aime2025": [
+        "42",
+        "-123",
+        "999"
+    ],
+    "aime2026": [
         "42",
         "-123",
         "999"
@@ -78,6 +84,12 @@ TEMPLATE_REGISTRY = {
 Remember to put your answer inside \\boxed{{}}.
 """,
     "aime2025": """Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
+
+{question}
+
+Remember to put your answer inside \\boxed{{}}.
+""",
+    "aime2026": """Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
 
 {question}
 
@@ -166,6 +178,8 @@ class EvalState:
             self.dataset = AimeDataset()
         elif self.dataset_type == "aime2025":
             self.dataset = Aime2025Dataset()
+        elif self.dataset_type == "aime2026":
+            self.dataset = Aime2026Dataset()
         elif self.dataset_type == "gsm8k":
             self.dataset = Gsm8kDataset()
         elif self.dataset_type == "gpqa":
@@ -679,6 +693,47 @@ class Aime2025Dataset(BaseDataset):
             question=self.get_question_text(question),
         )
 
+class Aime2026Dataset(BaseDataset):
+    def __init__(self):
+        self.questions = []
+        self._load_dataset()
+
+    def _load_dataset(self):
+        print(f"Loading AIME2026 dataset...")
+        from datasets import load_dataset
+
+        cache_path = cache_dir / "MathArena___aime_2026" / "default" / "0.0.0"
+        if cache_path.exists():
+            print(f"Using cached dataset from {cache_path}")
+            ds = load_dataset("MathArena/aime_2026", "default", split="train", cache_dir=str(cache_path))
+        else:
+            ds = load_dataset("MathArena/aime_2026", "default", split="train")
+
+        self.questions = []
+        for row in ds:
+            question = dict(row)
+            question["dataset_type"] = "aime2026"
+            self.questions.append(question)
+
+        print(f"AIME2026 dataset loaded: {len(self.questions)} questions")
+
+    def get_question(self, index: int) -> Dict:
+        """Get question by index"""
+        return self.questions[index]
+
+    def get_question_text(self, question: Dict) -> str:
+        """Get question string"""
+        return question["problem"]
+
+    def get_answer(self, question: Dict) -> str:
+        return str(question["answer"])
+
+    def get_prompt(self, question: Dict) -> str:
+        """Get formatted prompt for the question"""
+        return TEMPLATE_REGISTRY["aime2026"].format(
+            question=self.get_question_text(question),
+        )
+
 class Gsm8kDataset(BaseDataset):
     def __init__(self, split: str = "test"):
         self.split = split
@@ -1188,7 +1243,7 @@ def main():
         "--dataset",
         type=str,
         default="aime",
-        choices=["aime", "aime2025", "gsm8k", "gpqa"],
+        choices=["aime", "aime2025", "aime2026", "gsm8k", "gpqa"],
         help="Dataset type (default: aime)"
     )
     parser.add_argument(
