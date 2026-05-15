@@ -171,22 +171,12 @@ static void common_reasoning_budget_reset(struct llama_sampler * smpl) {
     ctx->force_pos = 0;
 }
 
-// forward declaration for use in clone
 static struct llama_sampler * common_reasoning_budget_init_state(
         const struct llama_vocab * vocab, const std::vector<llama_token> & start_tokens,
         const std::vector<llama_token> & end_tokens, const std::vector<llama_token> & forced_tokens,
         int32_t budget, common_reasoning_budget_state initial_state);
 
-static struct llama_sampler * common_reasoning_budget_clone(const struct llama_sampler * smpl) {
-    const auto * ctx = (const common_reasoning_budget_ctx *) smpl->ctx;
-    return common_reasoning_budget_init_state(
-        ctx->vocab,
-        ctx->start_matcher.tokens,
-        ctx->end_matcher.tokens,
-        ctx->forced_tokens,
-        ctx->budget,
-        ctx->state);
-}
+static struct llama_sampler * common_reasoning_budget_clone(const struct llama_sampler * smpl);
 
 static void common_reasoning_budget_free(struct llama_sampler * smpl) {
     delete (common_reasoning_budget_ctx *) smpl->ctx;
@@ -204,6 +194,15 @@ static struct llama_sampler_i common_reasoning_budget_i = {
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
 };
+
+static struct llama_sampler * common_reasoning_budget_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const common_reasoning_budget_ctx *) smpl->ctx;
+
+    return llama_sampler_init(
+        /* .iface = */ &common_reasoning_budget_i,
+        /* .ctx   = */ new common_reasoning_budget_ctx(*ctx)
+    );
+}
 
 static struct llama_sampler * common_reasoning_budget_init_state(
         const struct llama_vocab             * vocab,
