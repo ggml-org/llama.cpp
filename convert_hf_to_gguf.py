@@ -6545,21 +6545,21 @@ class ZayaModel(TextModel):
         if "hidden_states_scale" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_HS, bid), data_torch
         elif "hidden_states_bias" in name:
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_HS_B, bid, suffix=".bias"), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_HS, bid, suffix=".bias"), data_torch
         elif "residual_scale" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES, bid), data_torch
         elif "residual_bias" in name:
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES_B, bid, suffix=".bias"), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES, bid, suffix=".bias"), data_torch
 
     def _map_final_res_scale(self, name: str, data_torch: Tensor) -> Iterable[tuple[str, Tensor]]:
         if "hidden_states_scale" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_HS_FINAL), data_torch
         elif "hidden_states_bias" in name:
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_HS_B_FINAL, suffix=".bias"), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_HS_FINAL, suffix=".bias"), data_torch
         elif "residual_scale" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES_FINAL), data_torch
         elif "residual_bias" in name:
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES_B_FINAL, suffix=".bias"), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.RES_SCALE_RES_FINAL, suffix=".bias"), data_torch
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Common tensors
