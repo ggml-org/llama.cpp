@@ -9348,6 +9348,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 1024, 1)); // 4h PP-1024
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
 
+    for (int hsk : { 128, 256 }) {
+        for (int kv : { 4096, 4097, 8192, 16384 }) {
+            for (int nb : { 1, 2, 3, 5, 8 }) {
+                test_cases.emplace_back(new test_flash_attn_ext(
+                            hsk, hsk, 4, {hsk == 128 ? 8 : 6, 1}, kv, nb,
+                            true, false, 0.0f, 0.0f,
+                            GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+            }
+        }
+    }
+
     return test_cases;
 }
 

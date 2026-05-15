@@ -109,6 +109,10 @@
 #define OP_FLASH_ATTN_EXT_VEC_NQPSG 1
 #define OP_FLASH_ATTN_EXT_VEC_NCPSG 32
 
+// minimum ne11 (KV length) for the dk=128 Q=2 vec specialization;
+// below this the K/V reuse savings do not offset the extra register pressure
+#define OP_FLASH_ATTN_EXT_VEC_Q2_DK128_MIN_KV 4096
+
 #define OP_UNARY_NUM_SCALE      10
 #define OP_UNARY_NUM_FILL       11
 #define OP_UNARY_NUM_CLAMP      12
