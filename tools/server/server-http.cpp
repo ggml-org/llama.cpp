@@ -1,6 +1,7 @@
 #include "common.h"
 #include "server-http.h"
 #include "server-common.h"
+#include "ui.h"
 
 #include <cpp-httplib/httplib.h>
 
@@ -9,14 +10,6 @@
 #include <future>
 #include <string>
 #include <thread>
-
-#ifdef LLAMA_BUILD_WEBUI
-// auto generated files (see README.md for details)
-#include "index.html.hpp"
-#include "bundle.js.hpp"
-#include "bundle.css.hpp"
-#include "loading.html.hpp"
-#endif
 
 //
 // HTTP implementation using cpp-httplib
