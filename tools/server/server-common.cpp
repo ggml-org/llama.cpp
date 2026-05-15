@@ -1063,14 +1063,33 @@ json oaicompat_chat_params_parse(
         inputs.chat_template_kwargs[item.key()] = item.value().dump();
     }
 
-    // parse the "enable_thinking" kwarg to override the default value
-    auto enable_thinking_kwarg = json_value(inputs.chat_template_kwargs, "enable_thinking", std::string(""));
+    // parse the "enable_thinking" kwarg from extra_body or chat_template_kwargs
+    auto enable_thinking_kwarg = std::string("");
+    if (body.contains("extra_body") && body["extra_body"].is_object()) {
+        auto extra_body = body["extra_body"];
+        if (extra_body.contains("enable_thinking")) {
+            auto val = extra_body["enable_thinking"];
+            if (val.is_boolean()) {
+                enable_thinking_kwarg = val.get<bool>() ? "true" : "false";
+                // also copy into chat_template_kwargs so the template can use it
+                inputs.chat_template_kwargs["enable_thinking"] = enable_thinking_kwarg;
+            }
+        }
+    }
+    if (enable_thinking_kwarg.empty()) {
+        enable_thinking_kwarg = json_value(inputs.chat_template_kwargs, "enable_thinking", std::string(""));
+    }
     if (enable_thinking_kwarg == "true") {
         inputs.enable_thinking = true;
     } else if (enable_thinking_kwarg == "false") {
         inputs.enable_thinking = false;
     } else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
+    }
+
+    // pass enable_thinking to the slot so it can override the server default
+    if (!enable_thinking_kwarg.empty()) {
+        llama_params["enable_thinking"] = inputs.enable_thinking;
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token

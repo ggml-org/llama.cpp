@@ -93,7 +93,7 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs) cons
     }
     return build_chat_peg_parser([&](common_chat_peg_builder & p) {
         parser_build_context ctx(p, inputs);
-        bool                 extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+        bool                 extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE && inputs.enable_thinking;
 
         ctx.extracting_reasoning = extract_reasoning && reasoning.mode != reasoning_mode::NONE;
         ctx.content              = &content;
