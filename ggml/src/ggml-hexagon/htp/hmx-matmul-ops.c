@@ -619,11 +619,13 @@ static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict 
             const __fp16 *row_tiles = activation + r * n_dot_tiles * HMX_FP16_TILE_N_ELMS;
             const __fp16 *col_tiles = weight + c * n_dot_tiles * HMX_FP16_TILE_N_ELMS;
 
-            for (int k = 0; k < n_dot_tiles; ++k) {
-                Q6_activation_hf_mxmem_RR((unsigned int)row_tiles, 2047);
-                Q6_weight_hf_mxmem_RR((unsigned int)col_tiles, 2047);
-                row_tiles += HMX_FP16_TILE_N_ELMS;
-                col_tiles += HMX_FP16_TILE_N_ELMS;
+            for (int k = 0, k_block; k < n_dot_tiles; k += k_block) {
+                k_block = hex_smin(n_dot_tiles - k, 32);
+                const uint32_t range = 2048u * (uint32_t)k_block - 1;
+                Q6_activation_hf_mxmem_RR_deep((unsigned int)row_tiles, range);
+                Q6_weight_hf_mxmem_RR((unsigned int)col_tiles, range);
+                row_tiles += k_block * HMX_FP16_TILE_N_ELMS;
+                col_tiles += k_block * HMX_FP16_TILE_N_ELMS;
             }
 
             __fp16 *out_tile = output + (r * n_col_tiles + c) * HMX_FP16_TILE_N_ELMS;
@@ -864,21 +866,23 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
                 Q6_weight_hf_mxmem_RR((unsigned int)eye_tile, 2047);
             }
 
-            for (int k = 0; k < n_dot_tiles; ++k) {
-                Q6_activation_hf_mxmem_RR((unsigned int)row_tiles, 2047);
-                Q6_weight_hf_mxmem_RR((unsigned int)col_tiles, 2047);
-                row_tiles += HMX_FP16_TILE_N_ELMS;
-                col_tiles += HMX_FP16_TILE_N_ELMS;
+            for (int k = 0, k_block; k < n_dot_tiles; k += k_block) {
+                k_block = hex_smin(n_dot_tiles - k, 32);
+                const uint32_t range = 2048u * (uint32_t)k_block - 1;
+                Q6_activation_hf_mxmem_RR_deep((unsigned int)row_tiles, range);
+                Q6_weight_hf_mxmem_RR((unsigned int)col_tiles, range);
+                row_tiles += k_block * HMX_FP16_TILE_N_ELMS;
+                col_tiles += k_block * HMX_FP16_TILE_N_ELMS;
             }
+
             Q6_mxmem_AR_after_hf(accum_tile, 0);
         }
     }
 }
 
-int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
+int hmx_mat_mul_q_f32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
                                      const uint8_t *restrict permuted_weight, int m, int k, int n,
                                      int weight_type) {
-    if (!dst || !activation || !permuted_weight || !m || !n || !k) { return -1; }
     if (k % 32 != 0 || n % 32 != 0) { return -1; }
 
     if (!hex_is_aligned(dst, VLEN) || !hex_is_aligned(activation, VLEN) || !hex_is_aligned(permuted_weight, VLEN)) {
@@ -1072,15 +1076,15 @@ int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx, float *restrict ds
 
 //
 
-static inline int hmx_matmul_batch_r2(const hmx_matmul_w16a32_batched_params_t *params) {
+static inline int hmx_matmul_batch_r2(const hmx_matmul_f16_f32_batched_params_t *params) {
     return params->ne02 > 0 ? params->ne12 / params->ne02 : 1;
 }
 
-static inline int hmx_matmul_batch_r3(const hmx_matmul_w16a32_batched_params_t *params) {
+static inline int hmx_matmul_batch_r3(const hmx_matmul_f16_f32_batched_params_t *params) {
     return params->ne03 > 0 ? params->ne13 / params->ne03 : 1;
 }
 
-static inline const __fp16 *hmx_matmul_weight_batch_ptr(const hmx_matmul_w16a32_batched_params_t *params,
+static inline const __fp16 *hmx_matmul_weight_batch_ptr(const hmx_matmul_f16_f32_batched_params_t *params,
                                                         int dst_b2, int dst_b3) {
     const int r2 = hmx_matmul_batch_r2(params);
     const int r3 = hmx_matmul_batch_r3(params);
@@ -1089,37 +1093,36 @@ static inline const __fp16 *hmx_matmul_weight_batch_ptr(const hmx_matmul_w16a32_
                              (size_t) (dst_b3 / r3) * params->src0_nb3);
 }
 
-static inline const float *hmx_matmul_activation_batch_ptr(const hmx_matmul_w16a32_batched_params_t *params,
+static inline const float *hmx_matmul_activation_batch_ptr(const hmx_matmul_f16_f32_batched_params_t *params,
                                                            int dst_b2, int dst_b3) {
     return (const float *) ((const uint8_t *) params->activation +
                             (size_t) dst_b2 * params->src1_nb2 +
                             (size_t) dst_b3 * params->src1_nb3);
 }
 
-static inline float *hmx_matmul_dst_batch_ptr(const hmx_matmul_w16a32_batched_params_t *params,
+static inline float *hmx_matmul_dst_batch_ptr(const hmx_matmul_f16_f32_batched_params_t *params,
                                               int dst_b2, int dst_b3) {
     return (float *) ((uint8_t *) params->dst +
                       (size_t) dst_b2 * params->dst_nb2 +
                       (size_t) dst_b3 * params->dst_nb3);
 }
 
-static int hmx_mat_mul_permuted_w16a32_batched_legacy(struct htp_context *ctx,
-                                                      const hmx_matmul_w16a32_batched_params_t *params) {
+static int hmx_mat_mul_f16_f32_batched_legacy(struct htp_context *ctx,
+                                                      const hmx_matmul_f16_f32_batched_params_t *params) {
     int ret = 0;
     for (int b3 = 0; b3 < params->ne13 && ret == 0; ++b3) {
         for (int b2 = 0; b2 < params->ne12 && ret == 0; ++b2) {
-            ret = hmx_mat_mul_permuted_w16a32(ctx,
-                                              hmx_matmul_dst_batch_ptr(params, b2, b3),
-                                              hmx_matmul_activation_batch_ptr(params, b2, b3),
-                                              hmx_matmul_weight_batch_ptr(params, b2, b3),
-                                              params->m, params->k, params->n,
-                                              params->act_stride, params->weight_stride);
+            ret = hmx_mat_mul_f16_f32(ctx, hmx_matmul_dst_batch_ptr(params, b2, b3),
+                                           hmx_matmul_activation_batch_ptr(params, b2, b3),
+                                           hmx_matmul_weight_batch_ptr(params, b2, b3),
+                                           params->m, params->k, params->n,
+                                           params->act_stride, params->weight_stride);
         }
     }
     return ret;
 }
 
-int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmul_w16a32_batched_params_t *params) {
+int hmx_mat_mul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params) {
     if (!ctx || !params || !params->dst || !params->activation || !params->permuted_weight) { return -1; }
     if (!params->m || !params->k || !params->n) { return -1; }
     if (params->act_stride < params->k || params->weight_stride < params->k || params->dst_stride < params->n) { return -1; }
@@ -1137,7 +1140,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
 
     if (group_size <= 1) {
         FARF(HIGH, "%s: no dim2 GQA reuse (group=%d), using legacy batched loop", __func__, group_size);
-        return hmx_mat_mul_permuted_w16a32_batched_legacy(ctx, params);
+        return hmx_mat_mul_f16_f32_batched_legacy(ctx, params);
     }
 
     // Grouped path: reuse interleaved weight across all q_heads sharing a
@@ -1166,7 +1169,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
                            /*m_block_cost=*/(size_t) params->n,
                            /*n_block_cost=*/(size_t) params->m, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
         FARF(HIGH, "%s: grouped path does not fit VTCM, falling back to legacy batched loop", __func__);
-        return hmx_mat_mul_permuted_w16a32_batched_legacy(ctx, params);
+        return hmx_mat_mul_f16_f32_batched_legacy(ctx, params);
     }
 
     const size_t act_head_stride      = m_chunk_n_rows * (size_t) params->k;  // fp16 elements between heads
@@ -1188,7 +1191,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
 
     if ((size_t) (vtcm_ptr - (uint8_t *) ctx->vtcm_base) > vtcm_budget) {
         FARF(HIGH, "%s: grouped layout overflowed VTCM, falling back to legacy batched loop", __func__);
-        return hmx_mat_mul_permuted_w16a32_batched_legacy(ctx, params);
+        return hmx_mat_mul_f16_f32_batched_legacy(ctx, params);
     }
 
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
@@ -1316,7 +1319,7 @@ int hmx_mat_mul_permuted_w16a32_batched(struct htp_context *ctx, const hmx_matmu
 
 //
 
-int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
+int hmx_mat_mul_f16_f32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
                                 const __fp16 *restrict permuted_weight, int m, int k, int n,
                                 int act_stride, int weight_stride) {
     if (!dst || !activation || !permuted_weight || !m || !n || !k) { return -1; }
