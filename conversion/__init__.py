@@ -91,7 +91,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "GraniteSpeechForConditionalGeneration": "granite",
     "Grok1ForCausalLM": "grok",
     "GrokForCausalLM": "grok",
-    "GroveMoeForCausalLM": "grove",
+    "GroveMoeForCausalLM": "grovemoe",
     "HunYuanDenseV1ForCausalLM": "hunyuan",
     "HunYuanMoEV1ForCausalLM": "hunyuan",
     "HunYuanVLForConditionalGeneration": "hunyuan",
@@ -226,7 +226,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "XverseForCausalLM": "xverse",
     "YoutuForCausalLM": "deepseek",
     "YoutuVLForConditionalGeneration": "deepseek",
-    "modeling_grove_moe.GroveMoeForCausalLM": "grove",
+    "modeling_grove_moe.GroveMoeForCausalLM": "grovemoe",
     "modeling_sarvam_moe.SarvamMoEForCausalLM": "bailingmoe",
 }
 
