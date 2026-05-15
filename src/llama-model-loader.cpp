@@ -908,7 +908,8 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
     }
     ggml_context * ctx = ctx_ptr.get();
 
-    ggml_tensor * op_tensor = nullptr;
+    ggml_tensor * op_tensor           = nullptr;
+    ggml_tensor * op_tensor_companion = nullptr;
 
     switch (op) {
         case GGML_OP_GET_ROWS:
@@ -919,7 +920,12 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
         case GGML_OP_MUL_MAT:
             {
                 ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w->ne[0], 512, w->ne[2], w->ne[3]);
-                op_tensor = ggml_mul_mat(ctx, w, b);
+                ggml_tensor * s = ggml_is_derived_quantized(w->type) ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1) : nullptr;
+                op_tensor = ggml_mul_mat_ext(ctx, w, b, s, nullptr);
+                if (s) {
+                    op_tensor_companion = op_tensor;
+                    op_tensor = op_tensor_companion->src[0];
+                }
             } break;
         case GGML_OP_MUL_MAT_ID:
             {
@@ -927,7 +933,12 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 GGML_ASSERT(n_expert_used > 0);
                 ggml_tensor * b = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, w->ne[0], n_expert_used, 512);
                 ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert_used, 512);
-                op_tensor = ggml_mul_mat_id(ctx, w, b, ids);
+                ggml_tensor * s = ggml_is_derived_quantized(w->type) ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, w->ne[2]) : nullptr;
+                op_tensor = ggml_mul_mat_id_ext(ctx, w, b, ids, s, nullptr);
+                if (s) {
+                    op_tensor_companion = op_tensor;
+                    op_tensor = op_tensor_companion->src[0];
+                }
             } break;
         case GGML_OP_ADD:
             {
@@ -1022,6 +1033,9 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
     GGML_ASSERT(w->buffer == nullptr);
     w->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
     bool op_supported = ggml_backend_dev_supports_op(dev, op_tensor);
+    if (op_supported && op_tensor_companion != nullptr) {
+        op_supported = ggml_backend_dev_supports_op(dev, op_tensor_companion);
+    }
     ggml_backend_buffer_free(w->buffer);
     w->buffer = nullptr;
 
