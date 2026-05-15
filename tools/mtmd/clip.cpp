@@ -1581,7 +1581,7 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SAMPLE_WINDOW_SIDE, hparams.downsample_window_side);
                         get_f32(KEY_LLM_KV_EMBEDDING_SCALE, hparams.base_stream_scale, false);
                         hparams.warmup_image_size = hparams.image_size;
-                    }
+                    } break;
                 default:
                     throw std::runtime_error(string_format("%s: unknown vision projector type %s\n", __func__, proj_type.c_str()));
             }
