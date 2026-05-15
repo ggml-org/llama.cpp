@@ -227,7 +227,7 @@
 #define TN_QF_FFN_DOWN     "%s.proj_blk.%d.ffn_down.%s"
 #define TN_QF_FFN_NORM     "%s.proj_blk.%d.ffn_norm.%s"
 // multi-projector qformer (bid => projector ID)
-#define TN_MULTI_PROJ_IMG_POS   "%s.proj_blk.%d.img_pos"
+#define TN_MULTI_PROJ_IMG_POS   "v.proj_blk.%d.img_pos"
 #define TN_MULTI_PROJ_QUERY     "%s.proj_blk.%d.query"
 #define TN_MULTI_PROJ_LAYERNORM "%s.proj_blk.%d.layernorm.%s" // NOTE: Disambig with QF_PROJ_NORM
 #define TN_MULTI_PROJ_LINEAR    "%s.proj_blk.%d.linear.%s"
