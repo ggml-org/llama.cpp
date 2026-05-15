@@ -325,6 +325,7 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
             case PROJECTOR_TYPE_QWEN3VL:
+            case PROJECTOR_TYPE_MIMOVL:
                 {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
                     img_beg = "<|vision_start|>";
@@ -514,13 +515,18 @@ struct mtmd_context {
         // set preprocessor
         switch (proj) {
             case PROJECTOR_TYPE_QWEN2A:
-            case PROJECTOR_TYPE_QWEN3A:
             case PROJECTOR_TYPE_QWEN25O:
                 {
                     // <|audio_bos|> ... (embeddings) ... <|audio_eos|>
                     aud_beg = "<|audio_bos|>";
                     aud_end = "<|audio_eos|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_QWEN3A:
+                {
+                    aud_beg = "<|audio_start|>";
+                    aud_end = "<|audio_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_qwen3a>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_VOXTRAL:
                 {
@@ -1420,6 +1426,19 @@ mtmd_input_chunks * mtmd_test_create_input_chunks() {
 void mtmd_log_set(ggml_log_callback log_callback, void * user_data) {
     g_logger_state.log_callback = log_callback ? log_callback : clip_log_callback_default;
     g_logger_state.log_callback_user_data = user_data;
+}
+
+struct mtmd_caps mtmd_get_cap_from_file(const char * fname) {
+    try {
+        auto tmp = clip_get_cap(fname);
+        mtmd_caps cap;
+        cap.inp_audio  = tmp.has_audio;
+        cap.inp_vision = tmp.has_vision;
+        return cap;
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: failed to get capabilities from file '%s': %s\n", __func__, fname, e.what());
+        return mtmd_caps{ false, false };
+    }
 }
 
 //

@@ -674,7 +674,8 @@ class ChatStore {
 			},
 			onReasoningChunk: (chunk: string) => {
 				streamedReasoningContent += chunk;
-				// Update UI to show reasoning is being received
+				// mark streaming state so a stop mid-thinking can persist the partial reasoning
+				this.setChatStreaming(convId, streamedContent, currentMessageId);
 				const idx = conversationsStore.findMessageIndex(currentMessageId);
 				conversationsStore.updateMessageAtIndex(idx, {
 					reasoningContent: streamedReasoningContent
@@ -813,7 +814,7 @@ class ChatStore {
 					);
 				}
 			},
-			onError: (error: Error) => {
+			onError: async (error: Error) => {
 				this.setStreamingActive(false);
 				if (isAbortError(error)) {
 					cleanupStreamingState();
@@ -825,13 +826,10 @@ class ChatStore {
 					return;
 				}
 				console.error('Streaming error:', error);
+				// keep whatever was streamed so far, the message stays in memory and in DB
+				await this.savePartialResponseIfNeeded(convId);
 				cleanupStreamingState();
 				this.clearPendingMessage(convId);
-				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-				if (idx !== -1) {
-					const failedMessage = conversationsStore.removeMessageAtIndex(idx);
-					if (failedMessage) DatabaseService.deleteMessage(failedMessage.id).catch(console.error);
-				}
 				const contextInfo = (
 					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
 				).contextInfo;
@@ -989,38 +987,51 @@ class ChatStore {
 		const conversationId = convId || conversationsStore.activeConversation?.id;
 		if (!conversationId) return;
 		const streamingState = this.getChatStreaming(conversationId);
-		if (!streamingState || !streamingState.response.trim()) return;
+		if (!streamingState) return;
 		const messages =
 			conversationId === conversationsStore.activeConversation?.id
 				? conversationsStore.activeMessages
 				: await conversationsStore.getConversationMessages(conversationId);
 		if (!messages.length) return;
 		const lastMessage = messages[messages.length - 1];
-		if (lastMessage?.role === MessageRole.ASSISTANT) {
-			try {
-				const updateData: { content: string; timings?: ChatMessageTimings } = {
-					content: streamingState.response
-				};
-				const lastKnownState = this.getProcessingState(conversationId);
-				if (lastKnownState) {
-					updateData.timings = {
-						prompt_n: lastKnownState.promptTokens || 0,
-						prompt_ms: lastKnownState.promptMs,
-						predicted_n: lastKnownState.tokensDecoded || 0,
-						cache_n: lastKnownState.cacheTokens || 0,
-						predicted_ms:
-							lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
-								? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
-								: undefined
-					};
-				}
-				await DatabaseService.updateMessage(lastMessage.id, updateData);
-				lastMessage.content = streamingState.response;
-				if (updateData.timings) lastMessage.timings = updateData.timings;
-			} catch (error) {
-				lastMessage.content = streamingState.response;
-				console.error('Failed to save partial response:', error);
+		if (lastMessage?.role !== MessageRole.ASSISTANT) return;
+
+		const partialContent = streamingState.response;
+		const partialReasoning = lastMessage.reasoningContent || '';
+
+		// nothing to persist when both content and reasoning are empty (e.g. stop before any token)
+		if (!partialContent.trim() && !partialReasoning.trim()) return;
+
+		try {
+			const updateData: {
+				content: string;
+				reasoningContent?: string;
+				timings?: ChatMessageTimings;
+			} = {
+				content: partialContent
+			};
+			if (partialReasoning) {
+				updateData.reasoningContent = partialReasoning;
 			}
+			const lastKnownState = this.getProcessingState(conversationId);
+			if (lastKnownState) {
+				updateData.timings = {
+					prompt_n: lastKnownState.promptTokens || 0,
+					prompt_ms: lastKnownState.promptMs,
+					predicted_n: lastKnownState.tokensDecoded || 0,
+					cache_n: lastKnownState.cacheTokens || 0,
+					predicted_ms:
+						lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
+							? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
+							: undefined
+				};
+			}
+			await DatabaseService.updateMessage(lastMessage.id, updateData);
+			lastMessage.content = partialContent;
+			if (updateData.timings) lastMessage.timings = updateData.timings;
+		} catch (error) {
+			lastMessage.content = partialContent;
+			console.error('Failed to save partial response:', error);
 		}
 	}
 
@@ -1265,7 +1276,11 @@ class ChatStore {
 			const conversationContext = conversationsStore.activeMessages.slice(0, idx);
 			const contextWithContinue = [
 				...conversationContext,
-				{ role: MessageRole.ASSISTANT as const, content: originalContent }
+				{
+					role: MessageRole.ASSISTANT as const,
+					content: originalContent,
+					reasoning_content: originalReasoning || undefined
+				}
 			];
 
 			let appendedContent = '';
@@ -1283,6 +1298,7 @@ class ChatStore {
 				contextWithContinue,
 				{
 					...this.getApiOptions(),
+					continueFinalMessage: true,
 					onChunk: (chunk: string) => {
 						appendedContent += chunk;
 						hasReceivedContent = true;
@@ -1291,6 +1307,8 @@ class ChatStore {
 					onReasoningChunk: (chunk: string) => {
 						appendedReasoning += chunk;
 						hasReceivedContent = true;
+						// mark streaming state so a stop mid-thinking can persist the partial reasoning
+						this.setChatStreaming(msg.convId, originalContent + appendedContent, msg.id);
 						conversationsStore.updateMessageAtIndex(idx, {
 							reasoningContent: originalReasoning + appendedReasoning
 						});
@@ -1368,9 +1386,17 @@ class ChatStore {
 						}
 
 						console.error('Continue generation error:', error);
-						conversationsStore.updateMessageAtIndex(idx, { content: originalContent });
-
-						await DatabaseService.updateMessage(msg.id, { content: originalContent });
+						// keep whatever was appended so far, the message stays in memory and in DB
+						await DatabaseService.updateMessage(msg.id, {
+							content: originalContent + appendedContent,
+							reasoningContent: originalReasoning + appendedReasoning || undefined,
+							timestamp: Date.now()
+						});
+						conversationsStore.updateMessageAtIndex(idx, {
+							content: originalContent + appendedContent,
+							reasoningContent: originalReasoning + appendedReasoning || undefined,
+							timestamp: Date.now()
+						});
 
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);

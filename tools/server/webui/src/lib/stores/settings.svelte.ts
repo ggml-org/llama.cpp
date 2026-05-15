@@ -357,6 +357,11 @@ class SettingsStore {
 			for (const [key, value] of Object.entries(webuiSettings)) {
 				if (!this.userOverrides.has(key) && value !== undefined) {
 					setConfigValue(this.config, key, value);
+
+					// theme lives in mode-watcher, not just in config -> propagate
+					if (key === SETTINGS_KEYS.THEME) {
+						setMode(value as ColorMode);
+					}
 				}
 			}
 		}

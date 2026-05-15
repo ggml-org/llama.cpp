@@ -74,7 +74,6 @@
 	const editCtx = getMessageEditContext();
 
 	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
-	const hasReasoning = $derived(!!message.reasoningContent);
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
@@ -329,7 +328,7 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
-			onContinue={currentConfig.enableContinueGeneration && !hasReasoning ? onContinue : undefined}
+			onContinue={currentConfig.enableContinueGeneration ? onContinue : undefined}
 			{onForkConversation}
 			{onDelete}
 			{onConfirmDelete}

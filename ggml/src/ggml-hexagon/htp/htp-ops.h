@@ -62,6 +62,7 @@ enum htp_op_code {
     HTP_OP_UNARY_EXP,
     HTP_OP_UNARY_NEG,
     HTP_OP_UNARY_SOFTPLUS,
+    HTP_OP_UNARY_TANH,
     HTP_OP_GLU_SWIGLU,
     HTP_OP_GLU_SWIGLU_OAI,
     HTP_OP_GLU_GEGLU,
@@ -84,6 +85,7 @@ enum htp_op_code {
     HTP_OP_DIAG,
     HTP_OP_SOLVE_TRI,
     HTP_OP_L2_NORM,
+    HTP_OP_GATED_DELTA_NET,
 
     HTP_OP_INVALID
 };

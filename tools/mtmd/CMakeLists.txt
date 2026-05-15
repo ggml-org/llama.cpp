@@ -34,6 +34,7 @@ add_library(mtmd
             models/pixtral.cpp
             models/qwen2vl.cpp
             models/qwen3vl.cpp
+            models/mimovl.cpp
             models/qwen3a.cpp
             models/step3vl.cpp
             models/siglip.cpp
