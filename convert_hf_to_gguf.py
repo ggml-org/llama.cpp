@@ -13126,10 +13126,6 @@ class Granite4VisionMmprojModel(MmprojModel):
             type_idx if proj_type == "spatial" else -1
             for _, _, proj_type, type_idx in normalized_projector_map
         ]
-        n_text_layers = self.global_config["text_config"]["num_hidden_layers"]
-        self._deepstack_layer_arr = [-1 for _ in range(n_text_layers)] # Populate with -1 sentinels
-        for proj_idx, (_, llm_layer, _, _) in enumerate(normalized_projector_map):
-            self._deepstack_layer_arr[llm_layer] = proj_idx
 
     def set_gguf_parameters(self):
         assert self.hparams_vision is not None
@@ -13157,7 +13153,8 @@ class Granite4VisionMmprojModel(MmprojModel):
         self.gguf_writer.add_vision_projector_window_side(window_side)
 
         # Layer norm epsilon for ViT (use text model epsilon as fallback)
-        eps = v.get("rms_norm_eps", self.global_config.get("text_config", {}).get("rms_norm_eps", 1e-5))
+        text_config = self.global_config.get("text_config", {})
+        eps = v.get("rms_norm_eps", text_config.get("rms_norm_eps", 1e-5))
         self.gguf_writer.add_vision_attention_layernorm_eps(eps)
 
         # Set vision feature layers
@@ -13165,6 +13162,16 @@ class Granite4VisionMmprojModel(MmprojModel):
 
         # Set the spatial offests per projector
         self.gguf_writer.add_vision_spatial_offsets(self._spatial_offsets)
+
+        # The granite LLM will scale the first embedding input by
+        # embedding_multiplier, so the mmproj needs to invert that scale for its
+        # output so that the resulting injection works as expected.
+        if (embed_mult := text_config.get("embedding_multiplier")) is not None:
+            self.gguf_writer.add_embedding_scale(embed_mult)
+
+        # Add image grind pinpoints (resolution candidates internally)
+        if pinpoints := self.global_config.get("image_grid_pinpoints"):
+            self.gguf_writer.add_vision_image_grid_pinpoints(pinpoints)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:

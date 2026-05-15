@@ -1250,6 +1250,9 @@ class GGUFWriter:
     def add_vision_feature_layers(self, layers: Sequence[int]) -> None:
         self.add_array(Keys.ClipVision.FEATURE_LAYERS, layers)
 
+    def add_vision_image_grid_pinpoints(self, layers: Sequence[Sequence[int]]) -> None:
+        self.add_array(Keys.ClipVision.IMAGE_GRID_PINPOINTS, layers)
+
     def add_vision_sam_layers_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SAM.BLOCK_COUNT, value)
 
