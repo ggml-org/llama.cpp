@@ -1664,6 +1664,83 @@ static void test_convert_responses_to_chatcmpl() {
         assert_equals(false, result.contains("max_output_tokens"));
         assert_equals(100, result.at("max_tokens").get<int>());
     }
+
+    // Test mixed Responses tools: convert only function tools
+    {
+        json input = json::parse(R"({
+            "input": "Hello",
+            "model": "test-model",
+            "tools": [
+                {
+                    "type": "web_search"
+                },
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string"
+                            }
+                        },
+                        "required": ["location"]
+                    }
+                },
+                {
+                    "type": "image_generation"
+                },
+                {
+                    "type": "mcp",
+                    "server_label": "test-server"
+                },
+                {
+                    "type": "namespace",
+                    "name": "browser"
+                }
+            ]
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(true, result.contains("tools"));
+        assert_equals(true, result.at("tools").is_array());
+        assert_equals((size_t)1, result.at("tools").size());
+
+        const auto & tool = result.at("tools")[0];
+        assert_equals(std::string("function"), tool.at("type").get<std::string>());
+        assert_equals(std::string("get_weather"), tool.at("function").at("name").get<std::string>());
+        assert_equals(true, tool.at("function").at("strict").get<bool>());
+    }
+
+    // Test non-function Responses tools are ignored
+    {
+        json input = json::parse(R"({
+            "input": "Hello",
+            "model": "test-model",
+            "tools": [
+                {
+                    "type": "web_search"
+                },
+                {
+                    "type": "image_generation"
+                },
+                {
+                    "type": "mcp",
+                    "server_label": "test-server"
+                },
+                {
+                    "type": "namespace",
+                    "name": "browser"
+                }
+            ]
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(false, result.contains("tools"));
+    }
 }
 
 static void test_template_output_peg_parsers(bool detailed_debug) {
