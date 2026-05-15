@@ -1566,6 +1566,22 @@ struct clip_model_loader {
                         hparams.image_pad_color   = {127, 127, 127};
                         hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
                     } break;
+                case PROJECTOR_TYPE_GRANITE4_VISION:
+                    {
+                        // SigLIP tower.
+                        hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
+                        hparams.image_resize_pad = true;
+
+                        // Load the per-projector hparams (vision_feature_layers, spatial_offsets)
+                        get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer);
+                        get_arr_int(KEY_PROJ_SPATIAL_OFFSETS, hparams.proj_spatial_offsets);
+                        GGML_ASSERT(hparams.vision_feature_layer.size() == hparams.proj_spatial_offsets.size());
+
+                        get_u32(KEY_PROJ_SAMPLE_QUERY_SIDE,  hparams.downsample_query_side);
+                        get_u32(KEY_PROJ_SAMPLE_WINDOW_SIDE, hparams.downsample_window_side);
+                        get_f32(KEY_LLM_KV_EMBEDDING_SCALE, hparams.base_stream_scale, false);
+                        hparams.warmup_image_size = hparams.image_size;
+                    }
                 default:
                     throw std::runtime_error(string_format("%s: unknown vision projector type %s\n", __func__, proj_type.c_str()));
             }
