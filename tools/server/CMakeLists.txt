@@ -176,9 +176,9 @@ if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
         endforeach()
 
         # Define both old and new preprocessor symbols for backward compat
-        add_definitions(-DLLAMA_BUILD_WEBUI)   // Deprecated: use LLAMA_BUILD_UI
+        add_definitions(-DLLAMA_BUILD_WEBUI)   # Deprecated: use LLAMA_BUILD_UI
         add_definitions(-DLLAMA_BUILD_UI)
-        add_definitions(-DLLAMA_WEBUI_DEFAULT_ENABLED=1)   // Deprecated: use LLAMA_UI_DEFAULT_ENABLED
+        add_definitions(-DLLAMA_WEBUI_DEFAULT_ENABLED=1)   # Deprecated: use LLAMA_UI_DEFAULT_ENABLED
         add_definitions(-DLLAMA_UI_DEFAULT_ENABLED=1)
         message(STATUS "UI: embedded with source: ${UI_SOURCE}")
     else()
@@ -186,12 +186,12 @@ if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
         # The server will still build but without UI embedded
         message(WARNING "UI: no source available. Neither local build (build/tools/ui/) nor HF Bucket download succeeded.")
         message(WARNING "UI: building server without embedded UI. Set LLAMA_BUILD_UI=OFF to suppress this warning.")
-        add_definitions(-DLLAMA_WEBUI_DEFAULT_ENABLED=0)   // Deprecated
+        add_definitions(-DLLAMA_WEBUI_DEFAULT_ENABLED=0)   # Deprecated
         add_definitions(-DLLAMA_UI_DEFAULT_ENABLED=0)
     endif()
 else()
     # UI is disabled at build time
-    add_definitions(-DLLAMA_WEBUI_DEFAULT_ENABLED=0)   // Deprecated
+    add_definitions(-DLLAMA_WEBUI_DEFAULT_ENABLED=0)   # Deprecated
     add_definitions(-DLLAMA_UI_DEFAULT_ENABLED=0)
 endif()
 
