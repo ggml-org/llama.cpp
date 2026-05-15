@@ -1,11 +1,11 @@
-name: Build UI
+name: UI Build
 
 on:
   workflow_call:
 
 jobs:
   build:
-    name: Build UI
+    name: Build static output
     runs-on: ubuntu-slim
     env:
       BRANCH_NAME: ${{ github.head_ref || github.ref_name }}

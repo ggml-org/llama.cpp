@@ -1394,7 +1394,7 @@ jobs:
     needs:
       - release
 
-    uses: ././.github/workflows/ui-publish.yml
+    uses: ./.github/workflows/ui-publish.yml
     with:
       version_tag: ${{ needs.release.outputs.tag_name }}
     secrets:

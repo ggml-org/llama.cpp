@@ -1,4 +1,4 @@
-name: Server UI
+name: CI (UI)
 
 on:
   workflow_dispatch:
@@ -11,14 +11,14 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/server-ui.yml',
+      '.github/workflows/ui-ci.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
-      '.github/workflows/server-ui.yml',
+      '.github/workflows/ui-ci.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   ui-build:
-    name: Build UI
+    name: Build static output
     uses: ./.github/workflows/ui-build.yml
 
   ui-checks:
