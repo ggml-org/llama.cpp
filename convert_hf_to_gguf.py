@@ -6521,7 +6521,7 @@ class ZayaModel(TextModel):
 
     def _map_router(self, name: str, data_torch: Tensor, bid: int) -> Iterable[tuple[str, Tensor]]:
         if "down_proj.weight" in name:
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_DOWN, bid), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_INP, bid), data_torch
         elif "down_proj.bias" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_DOWN_B, bid, suffix=".bias"), data_torch
         elif "rmsnorm_eda" in name:

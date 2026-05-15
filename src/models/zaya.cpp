@@ -93,7 +93,7 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
         // MoE layers (odd indices)
         if (i % 2 == 1) {
             // Router network
-            layer.zaya_router_down   = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_DOWN, "weight", i),
+            layer.zaya_router_down   = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i),
                 {n_embd, n_ff_exp}, 0);
             layer.zaya_router_down_b = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_DOWN_B, "bias", i),
                 {n_ff_exp}, 0);

@@ -461,7 +461,6 @@ enum llm_tensor {
     LLM_TENSOR_RES_SCALE_RES_FINAL, // zaya: final residual_scale
     LLM_TENSOR_RES_SCALE_RES_B_FINAL,// zaya: final residual_bias
     // ZAYA Router (MoE gating)
-    LLM_TENSOR_ZAYA_ROUTER_DOWN,      // zaya: router down_proj weight
     LLM_TENSOR_ZAYA_ROUTER_DOWN_B,    // zaya: router down_proj bias
     LLM_TENSOR_ZAYA_ROUTER_MLP0,      // zaya: router MLP layer 0 weight
     LLM_TENSOR_ZAYA_ROUTER_MLP0_B,    // zaya: router MLP layer 0 bias

@@ -624,7 +624,6 @@ class MODEL_TENSOR(IntEnum):
     RES_SCALE_HS_B_FINAL = auto() # Zaya: final hidden_states_bias
     RES_SCALE_RES_FINAL  = auto() # Zaya: final residual_scale
     RES_SCALE_RES_B_FINAL = auto() # Zaya: final residual_bias
-    ZAYA_ROUTER_DOWN     = auto() # Zaya
     ZAYA_ROUTER_DOWN_B   = auto() # Zaya
     ZAYA_ROUTER_MLP0     = auto() # Zaya
     ZAYA_ROUTER_MLP0_B   = auto() # Zaya
@@ -1160,7 +1159,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.RES_SCALE_HS_B_FINAL:      "res_scale_hs_b",                 # Zaya
     MODEL_TENSOR.RES_SCALE_RES_FINAL:       "res_scale_res",                  # Zaya
     MODEL_TENSOR.RES_SCALE_RES_B_FINAL:     "res_scale_res_b",                # Zaya
-    MODEL_TENSOR.ZAYA_ROUTER_DOWN:          "blk.{bid}.zaya_router_down",     # Zaya
     MODEL_TENSOR.ZAYA_ROUTER_DOWN_B:        "blk.{bid}.zaya_router_down_b",   # Zaya
     MODEL_TENSOR.ZAYA_ROUTER_MLP0:          "blk.{bid}.zaya_router_mlp0",     # Zaya
     MODEL_TENSOR.ZAYA_ROUTER_MLP0_B:        "blk.{bid}.zaya_router_mlp0_b",   # Zaya
@@ -4060,7 +4058,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.RES_SCALE_HS_B_FINAL,
         MODEL_TENSOR.RES_SCALE_RES_FINAL,
         MODEL_TENSOR.RES_SCALE_RES_B_FINAL,
-        MODEL_TENSOR.ZAYA_ROUTER_DOWN,
+        MODEL_TENSOR.FFN_GATE_INP,
         MODEL_TENSOR.ZAYA_ROUTER_DOWN_B,
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.ZAYA_ROUTER_MLP0,

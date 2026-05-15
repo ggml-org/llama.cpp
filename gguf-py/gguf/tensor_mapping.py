@@ -454,6 +454,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.gate",                 # nemotron-h-moe
             "model.layers.{bid}.moe.gate",                      # step3.5
             "model.layers.{bid}.router.proj",                   # gemma4
+            "model.layers.{bid}.self_attn.router_mlp.down_proj", # zaya
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
