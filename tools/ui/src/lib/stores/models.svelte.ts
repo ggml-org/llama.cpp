@@ -8,9 +8,9 @@ import { TTLCache } from '$lib/utils';
 import {
 	MODEL_PROPS_CACHE_TTL_MS,
 	MODEL_PROPS_CACHE_MAX_ENTRIES,
-	FAVORITE_MODELS_LOCALSTORAGE_KEY,
-	readLocalStorageWithFallback
+	FAVORITE_MODELS_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { localStorageGetItem } from '$lib/services/localstorage.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 
 /**
@@ -766,7 +766,7 @@ class ModelsStore {
 
 	private loadFavoritesFromStorage(): Set<string> {
 		try {
-			const raw = readLocalStorageWithFallback(FAVORITE_MODELS_LOCALSTORAGE_KEY);
+			const raw = localStorageGetItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
 
 			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
 		} catch {

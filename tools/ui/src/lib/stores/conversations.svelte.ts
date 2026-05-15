@@ -42,9 +42,9 @@ import {
 	ISO_TIME_SEPARATOR_REPLACEMENT,
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
-	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY,
-	readLocalStorageWithFallback
+	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { localStorageGetItem } from '$lib/services/localstorage.service';
 import { ROUTES } from '$lib/constants/routes';
 import { RouterService } from '$lib/services/router.service';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -82,7 +82,7 @@ class ConversationsStore {
 	private static loadMcpDefaults(): McpServerOverride[] {
 		if (typeof globalThis.localStorage === 'undefined') return [];
 		try {
-			const raw = readLocalStorageWithFallback(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
+			const raw = localStorageGetItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
 			if (!raw) return [];
 			const parsed = JSON.parse(raw);
 			if (!Array.isArray(parsed)) return [];

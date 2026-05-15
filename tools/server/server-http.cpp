@@ -308,7 +308,7 @@ bool server_http_context::init(const common_params & params) {
 
     // Use new `params.ui` field (backed by old `params.webui` for compat)
     if (!params.ui) {
-        SRV_INF("%s", "the Web UI is disabled\n");
+        SRV_INF("%s", "The UI is disabled\n");
         SRV_INF("%s", "Use --ui/--no-ui (or deprecated --webui/--no-webui) to enable/disable\n");
     } else {
         // register static assets routes

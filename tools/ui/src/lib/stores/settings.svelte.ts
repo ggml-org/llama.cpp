@@ -37,11 +37,11 @@ import type { SettingsExportType } from '$lib/types';
 import { setMode } from 'mode-watcher';
 import {
 	CONFIG_LOCALSTORAGE_KEY,
-	readLocalStorageWithFallback,
 	SETTING_CONFIG_DEFAULT,
 	SETTINGS_KEYS,
 	USER_OVERRIDES_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { localStorageGetItem } from '$lib/services/localstorage.service';
 import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { serverStore } from '$lib/stores/server.svelte';
@@ -121,7 +121,7 @@ class SettingsStore {
 		if (!browser) return;
 
 		try {
-			const storedConfigRaw = readLocalStorageWithFallback(CONFIG_LOCALSTORAGE_KEY);
+			const storedConfigRaw = localStorageGetItem(CONFIG_LOCALSTORAGE_KEY);
 			const savedVal = JSON.parse(storedConfigRaw || '{}');
 
 			// Merge with defaults to prevent breaking changes
@@ -139,7 +139,7 @@ class SettingsStore {
 
 			// Load user overrides
 			const savedOverrides = JSON.parse(
-				readLocalStorageWithFallback(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
+				localStorageGetItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
 			);
 			this.userOverrides = new Set(savedOverrides);
 		} catch (error) {

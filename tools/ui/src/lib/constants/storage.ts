@@ -35,8 +35,8 @@ export const DEPRECATED_MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY = `${STORAGE_APP_NA
 /** @deprecated Use {@link USER_OVERRIDES_LOCALSTORAGE_KEY} instead */
 export const DEPRECATED_USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME_DEPRECATED}.userOverrides`;
 
-// Maps new keys to their deprecated fallback keys for migration
-const NEW_TO_DEPRECATED_MAP: Record<string, string> = {
+/** Maps new keys to their deprecated fallback keys */
+export const NEW_TO_DEPRECATED_MAP: Record<string, string> = {
 	[ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY]: DEPRECATED_ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY,
 	[CONFIG_LOCALSTORAGE_KEY]: DEPRECATED_CONFIG_LOCALSTORAGE_KEY,
 	[DISABLED_TOOLS_LOCALSTORAGE_KEY]: DEPRECATED_DISABLED_TOOLS_LOCALSTORAGE_KEY,
@@ -44,29 +44,3 @@ const NEW_TO_DEPRECATED_MAP: Record<string, string> = {
 	[MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY]: DEPRECATED_MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY,
 	[USER_OVERRIDES_LOCALSTORAGE_KEY]: DEPRECATED_USER_OVERRIDES_LOCALSTORAGE_KEY
 };
-
-/**
- * Reads a localStorage value using the new key, falling back to the deprecated key.
- * This ensures existing user data is not lost after the rename.
- */
-export function readLocalStorageWithFallback(key: string): string | null {
-	const value = localStorage.getItem(key);
-	if (value !== null) return value;
-
-	const deprecatedKey = NEW_TO_DEPRECATED_MAP[key];
-	if (deprecatedKey) {
-		const oldValue = localStorage.getItem(deprecatedKey);
-		if (oldValue !== null) {
-			// Migrate to new key and clean up old one
-			try {
-				localStorage.setItem(key, oldValue);
-				localStorage.removeItem(deprecatedKey);
-			} catch {
-				// Ignore storage errors
-			}
-			return oldValue;
-		}
-	}
-
-	return null;
-}
