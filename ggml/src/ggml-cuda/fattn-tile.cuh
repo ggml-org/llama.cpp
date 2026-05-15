@@ -870,8 +870,6 @@ static __global__ void flash_attn_tile(
     constexpr int DKQp = (DKQ + 2*warp_size - 1) & ~(2*warp_size - 1); // DKQ padded to multiple of 2*warp_size.
     constexpr int DVp  = (DV  + 2*warp_size - 1) & ~(2*warp_size - 1); // DV  padded to multiple of 2*warp_size.
 
-    ggml_cuda_pdl_sync(); // needs to guard Q, K, V, mask, sinks, KV_max, dst, dst_meta data accesses. Conservatively placed, not optimal
-
     // Q_tmp == SRAM buffer to hold Q data for the entire lifetime of the kernel.
     // KV_tmp == SRAM buffer to hold fragments of K/V data while iterating over ne11.
     //     KV_tmp is padded to avoid memory conflicts for K (cpy_ne) and OOB accesses for V (DVp-DV).
@@ -895,6 +893,8 @@ static __global__ void flash_attn_tile(
         KQ_max[j0/nwarps] = -FLT_MAX/2.0f;
     }
     float KQ_sum[cpw] = {0.0f};
+
+    ggml_cuda_pdl_sync(); // needs to guard Q, K, V, mask, sinks, KV_max, dst, dst_meta data accesses.
 
     // Load Q data, convert to FP16 if fast:
 #pragma unroll
