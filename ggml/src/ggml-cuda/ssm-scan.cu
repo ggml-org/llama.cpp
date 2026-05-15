@@ -16,13 +16,13 @@ using namespace cub;
 // For n_tok <= this threshold, the scan kernel is used (lower overhead for short sequences).
 #define SSM_SSD_MIN_TOKENS 64
 
+// Maximum number of tokens the SSD prepare_dt kernel can handle in one launch.
+// Bounded by DT_BLOCK (256) * DT_MAX_ITEMS (32) = 8192 items per block. Sequences
+// longer than this fall back to the scan path.
+#define SSM_SSD_MAX_TOKENS 8192
+
 // Chunk size for chunked SSD. Caps matmul cost at O(chunk^2) per chunk.
 #define SSM_SSD_CHUNK_SIZE 256
-
-// Fast exp() using hardware exp2: exp(x) = exp2(x * log2(e)).
-__device__ __forceinline__ float fast_expf(float x) {
-    return exp2f(x * 1.4426950408889634f);  // 1/ln(2) = log2(e)
-}
 
 // We would like to keep pragma unroll for cases where L_template is not 0,
 // so we suppress the clang transformation warning.
@@ -445,7 +445,7 @@ __global__ void ssm_ssd_pre_matmul_kernel(
         const int t = idx / d_state;
 
         const float cs_t = cs[cs_seq_off + (chunk_offset + t) * n_head + h] - cs_base;
-        const float decay_from_end = fast_expf(A_h * (cs_last - cs_t));
+        const float decay_from_end = __expf(A_h * (cs_last - cs_t));
 
         const float B_val = B[s * B_stride_seq + (chunk_offset + t) * B_stride_tok + g * d_state + n];
 
@@ -460,7 +460,7 @@ __global__ void ssm_ssd_pre_matmul_kernel(
         const int t = idx / d_state;
 
         const float cs_t = cs[cs_seq_off + (chunk_offset + t) * n_head + h] - cs_base;
-        const float decay_to_pos = fast_expf(A_h * cs_t);
+        const float decay_to_pos = __expf(A_h * cs_t);
 
         const float C_val = C_src[s * C_stride_seq + (chunk_offset + t) * C_stride_tok + g * d_state + n];
 
@@ -492,7 +492,7 @@ __global__ void ssm_ssd_scale_state_kernel(
     const int cs_seq_off = s * n_tok_total * n_head;
     const float cs_base = (chunk_offset > 0) ? cs[cs_seq_off + (chunk_offset - 1) * n_head + h] : 0.0f;
     const float cs_last = cs[cs_seq_off + (chunk_offset + chunk_len - 1) * n_head + h] - cs_base;
-    const float decay_total = fast_expf(A_h * cs_last);
+    const float decay_total = __expf(A_h * cs_last);
 
     const int off = s * state_per_head * n_head + h * state_per_head + idx;
     s_cur[off] *= decay_total;
@@ -670,7 +670,7 @@ __global__ void ssm_ssd_fused_y_mma_kernel(
                     if (t_out_abs < chunk_len && tin_local < k_len && t_in_abs <= t_out_abs) {
                         const float cs_out = smem_cs[t_out_abs];
                         const float cs_in  = smem_cs[t_in_abs];
-                        const float decay  = fast_expf(A_h * (cs_out - cs_in));
+                        const float decay  = __expf(A_h * (cs_out - cs_in));
                         const float cb_val = CB_g[t_out_abs + t_in_abs * chunk_len];
                         val = __float2half(decay * cb_val);
                     } else {
@@ -679,9 +679,6 @@ __global__ void ssm_ssd_fused_y_mma_kernel(
                     my_M[tout_local * K_TILE + tin_local] = val;
                 }
             }
-#ifndef GGML_USE_HIP
-            __syncwarp();
-#endif // GGML_USE_HIP
 
             // --- MMA tiles ---
             // A tile: loaded via ldmatrix_trans from d-fastest smem_X (hardware transpose)
@@ -793,7 +790,6 @@ static void ssm_scan_ssd_f32_cuda(
     {
         constexpr int DT_BLOCK = 256;
         constexpr int DT_MAX_ITEMS = 32;  // handles up to n_tok=8192 with BLOCK=256
-        GGML_ASSERT(n_tok <= DT_BLOCK * DT_MAX_ITEMS);
         dim3 grid(n_head, n_seq);
         ssm_ssd_prepare_dt_kernel<DT_BLOCK, DT_MAX_ITEMS><<<grid, DT_BLOCK, 0, stream>>>(
             src2_d, dt_sp, cs, n_head, n_tok, dt_stride_tok, dt_stride_seq);
@@ -986,6 +982,7 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const bool is_mamba2 = (src3->nb[1] == sizeof(float));
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const bool use_ssd = is_mamba2 && n_t > SSM_SSD_MIN_TOKENS
+                      && n_t <= SSM_SSD_MAX_TOKENS  // prepare_dt block bound (DT_BLOCK * DT_MAX_ITEMS)
                       && GGML_CUDA_CC_IS_NVIDIA(cc)
                       && cc >= GGML_CUDA_CC_TURING
                       && nr % 8 == 0;  // head_dim must be 8-aligned for cp.async 16-byte copies
