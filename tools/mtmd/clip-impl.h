@@ -211,7 +211,7 @@
 // qformer projector
 #define TN_QF_PROJ_QUERY   "a.proj_query"
 #define TN_QF_PROJ_NORM    "%s.proj_norm.%s" // NOTE: This _should_ be qf_proj_norm
-#define TN_QF_PROJ_LINEAR  "a.proj_linear.%s"
+#define TN_QF_PROJ_LINEAR  "%s.proj_linear.%s"
 #define TN_QF_SELF_ATTN_Q  "%s.proj_blk.%d.self_attn_q.%s"
 #define TN_QF_SELF_ATTN_K  "%s.proj_blk.%d.self_attn_k.%s"
 #define TN_QF_SELF_ATTN_V  "%s.proj_blk.%d.self_attn_v.%s"
