@@ -13939,6 +13939,48 @@ static void ggml_backend_vk_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, g
         return;
     }
 
+    if (tensor->type == GGML_TYPE_Q4_0) {
+        const size_t repacked_size = ggml_vk_repack_q4_0_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q4_0_delta_offset_tensor(tensor);
+
+        void * data_repacked = malloc(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        const block_q4_0 * src = (const block_q4_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 16 * i, src[i].qs, 16);
+            deltas[i] = src[i].d;
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        free(data_repacked);
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_MXFP4) {
+        const size_t repacked_size = ggml_vk_repack_mxfp4_size_tensor(tensor);
+        const size_t scales_offset = ggml_vk_repack_mxfp4_scale_offset_tensor(tensor);
+
+        void * data_repacked = malloc(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        uint8_t * scales = (uint8_t *)data_repacked + scales_offset;
+
+        const block_mxfp4 * src = (const block_mxfp4 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 16 * i, src[i].qs, 16);
+            scales[i] = src[i].e;
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        free(data_repacked);
+        return;
+    }
+
     ggml_vk_buffer_write_2d(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data, stride_data, stride_tensor, size, n_copies);
 }
 
@@ -14008,6 +14050,48 @@ static void ggml_backend_vk_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, c
     }
 
     vk_buffer buf = buf_ctx->dev_buffer;
+
+    if (tensor->type == GGML_TYPE_Q4_0) {
+        const size_t repacked_size = ggml_vk_repack_q4_0_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q4_0_delta_offset_tensor(tensor);
+
+        void * data_repacked = malloc(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_q4_0 * dst = (block_q4_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 16 * i, 16);
+            dst[i].d = deltas[i];
+        }
+
+        free(data_repacked);
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_MXFP4) {
+        const size_t repacked_size = ggml_vk_repack_mxfp4_size_tensor(tensor);
+        const size_t scales_offset = ggml_vk_repack_mxfp4_scale_offset_tensor(tensor);
+
+        void * data_repacked = malloc(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        uint8_t * scales = (uint8_t *)data_repacked + scales_offset;
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_mxfp4 * dst = (block_mxfp4 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 16 * i, 16);
+            dst[i].e = scales[i];
+        }
+
+        free(data_repacked);
+        return;
+    }
 
     ggml_vk_buffer_read_2d(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data, stride_tensor, stride_data, size, n_copies);
 }
