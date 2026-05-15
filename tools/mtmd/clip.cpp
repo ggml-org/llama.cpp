@@ -1,5 +1,6 @@
 #include "clip.h"
 #include "clip-impl.h"
+#include "common/common.h"
 #include "clip-model.h"
 #include "clip-graph.h"
 #include "models/models.h"
