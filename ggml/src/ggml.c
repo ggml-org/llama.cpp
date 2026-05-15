@@ -1063,6 +1063,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "RWKV_WKV7",
     "SOLVE_TRI",
     "GATED_DELTA_NET",
+    "DSV4_HC_SPLIT_SINKHORN",
+    "DSV4_HC_WEIGHTED_SUM",
+    "DSV4_HC_EXPAND",
+    "DSV4_FP8_KV_QUANTIZE",
+    "DSV4_ROPE_TAIL",
 
     "UNARY",
 
@@ -1080,7 +1085,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1173,6 +1178,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "rwkv_wkv7(r, w, k, v, a, b, s)",
     "A X = B, A triangular, solve X",
     "gated_delta_net(q, k, v, g, beta, s)",
+    "dsv4_hc_split_sinkhorn(x)",
+    "dsv4_hc_weighted_sum(x)",
+    "dsv4_hc_expand(x)",
+    "dsv4_fp8_kv_quantize(x)",
+    "dsv4_rope_tail(x)",
 
     "unary(x)",
 
@@ -1190,7 +1200,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6224,6 +6234,180 @@ struct ggml_tensor * ggml_gated_delta_net(
     result->src[3] = g;
     result->src[4] = beta;
     result->src[5] = state;
+
+    return result;
+}
+
+// ggml_dsv4_hc_split_sinkhorn
+
+struct ggml_tensor * ggml_dsv4_hc_split_sinkhorn(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * mixes,
+        struct ggml_tensor  * scale,
+        struct ggml_tensor  * base,
+        int                   n_hc,
+        int                   sinkhorn_iters,
+        float                 eps) {
+    GGML_ASSERT(mixes->type == GGML_TYPE_F32);
+    GGML_ASSERT(scale->type == GGML_TYPE_F32);
+    GGML_ASSERT(base->type  == GGML_TYPE_F32);
+
+    GGML_ASSERT(ggml_is_contiguous_rows(mixes));
+    GGML_ASSERT(ggml_is_contiguous(scale));
+    GGML_ASSERT(ggml_is_contiguous(base));
+
+    GGML_ASSERT(n_hc > 0);
+    GGML_ASSERT(n_hc <= 16);  // CPU forward uses a fixed float c[16*16] scratch
+    GGML_ASSERT(sinkhorn_iters > 0);
+    GGML_ASSERT(mixes->ne[0] == (2 + n_hc) * n_hc);
+    GGML_ASSERT(mixes->ne[2] == 1);
+    GGML_ASSERT(mixes->ne[3] == 1);
+    GGML_ASSERT(ggml_nelements(scale) >= 3);
+    GGML_ASSERT(ggml_nelements(base)  >= mixes->ne[0]);
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, mixes);
+
+    ggml_set_op_params_i32(result, 0, n_hc);
+    ggml_set_op_params_i32(result, 1, sinkhorn_iters);
+    ggml_set_op_params_f32(result, 2, eps);
+
+    result->op     = GGML_OP_DSV4_HC_SPLIT_SINKHORN;
+    result->src[0] = mixes;
+    result->src[1] = scale;
+    result->src[2] = base;
+
+    return result;
+}
+
+// ggml_dsv4_hc_weighted_sum
+
+struct ggml_tensor * ggml_dsv4_hc_weighted_sum(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * weights) {
+    GGML_ASSERT(x->type       == GGML_TYPE_F32);
+    GGML_ASSERT(weights->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(x->ne[1] == weights->ne[0]);
+    GGML_ASSERT(x->ne[2] == weights->ne[1]);
+    GGML_ASSERT(x->ne[3] == 1);
+    GGML_ASSERT(weights->ne[2] == 1);
+    GGML_ASSERT(weights->ne[3] == 1);
+
+    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, x->ne[0], x->ne[2]);
+
+    result->op     = GGML_OP_DSV4_HC_WEIGHTED_SUM;
+    result->src[0] = x;
+    result->src[1] = weights;
+
+    return result;
+}
+
+// ggml_dsv4_hc_expand
+
+struct ggml_tensor * ggml_dsv4_hc_expand(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * block_out,
+        struct ggml_tensor  * residual,
+        struct ggml_tensor  * post,
+        struct ggml_tensor  * comb) {
+    GGML_ASSERT(block_out->type == GGML_TYPE_F32);
+    GGML_ASSERT(residual->type  == GGML_TYPE_F32);
+    GGML_ASSERT(post->type      == GGML_TYPE_F32);
+    GGML_ASSERT(comb->type      == GGML_TYPE_F32);
+
+    GGML_ASSERT(block_out->ne[0] == residual->ne[0]);
+    GGML_ASSERT(block_out->ne[1] == residual->ne[2]);
+    GGML_ASSERT(block_out->ne[2] == 1);
+    GGML_ASSERT(block_out->ne[3] == 1);
+    GGML_ASSERT(post->ne[0] == residual->ne[1]);
+    GGML_ASSERT(post->ne[1] == residual->ne[2]);
+    GGML_ASSERT(post->ne[2] == 1);
+    GGML_ASSERT(post->ne[3] == 1);
+    GGML_ASSERT(comb->ne[0] == residual->ne[1]);
+    GGML_ASSERT(comb->ne[1] == residual->ne[1]);
+    GGML_ASSERT(comb->ne[2] == residual->ne[2]);
+    GGML_ASSERT(comb->ne[3] == 1);
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, residual);
+
+    result->op     = GGML_OP_DSV4_HC_EXPAND;
+    result->src[0] = block_out;
+    result->src[1] = residual;
+    result->src[2] = post;
+    result->src[3] = comb;
+
+    return result;
+}
+
+// ggml_dsv4_fp8_kv_quantize
+
+struct ggml_tensor * ggml_dsv4_fp8_kv_quantize(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   n_rot) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(n_rot >= 0);
+    GGML_ASSERT(a->ne[0] > n_rot);
+    GGML_ASSERT((a->ne[0] - n_rot) % 64 == 0);
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, n_rot);
+
+    result->op     = GGML_OP_DSV4_FP8_KV_QUANTIZE;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml_dsv4_rope_tail
+
+struct ggml_tensor * ggml_dsv4_rope_tail(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * pos,
+        struct ggml_tensor  * freq_factors,
+        int                   n_dims,
+        int                   mode,
+        int                   n_ctx_orig,
+        float                 freq_base,
+        float                 freq_scale,
+        float                 ext_factor,
+        float                 attn_factor,
+        float                 beta_fast,
+        float                 beta_slow,
+        bool                  inverse) {
+    GGML_ASSERT((mode & 1) == 0 && "mode & 1 == 1 is no longer supported");
+    GGML_ASSERT(mode == GGML_ROPE_TYPE_NORMAL || mode == GGML_ROPE_TYPE_NEOX);
+    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16);
+    GGML_ASSERT(pos->type == GGML_TYPE_I32);
+    GGML_ASSERT(ggml_is_vector(pos));
+    GGML_ASSERT(a->ne[2] == pos->ne[0]);
+    GGML_ASSERT(n_dims > 0);
+    GGML_ASSERT(n_dims <= a->ne[0]);
+    GGML_ASSERT(n_dims % 2 == 0);
+
+    if (freq_factors) {
+        GGML_ASSERT(freq_factors->type == GGML_TYPE_F32);
+        GGML_ASSERT(freq_factors->ne[0] >= n_dims / 2);
+    }
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    int32_t params[16] = { n_dims, mode, n_ctx_orig, inverse ? 1 : 0 };
+    memcpy(params +  4, &freq_base,   sizeof(float));
+    memcpy(params +  5, &freq_scale,  sizeof(float));
+    memcpy(params +  6, &ext_factor,  sizeof(float));
+    memcpy(params +  7, &attn_factor, sizeof(float));
+    memcpy(params +  8, &beta_fast,   sizeof(float));
+    memcpy(params +  9, &beta_slow,   sizeof(float));
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_DSV4_ROPE_TAIL;
+    result->src[0] = a;
+    result->src[1] = pos;
+    result->src[2] = freq_factors;
 
     return result;
 }
