@@ -113,9 +113,18 @@ llama_model_granite::graph::graph(
 
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
+        cur = inpL;
+
+        // apply deepstack injection for Granite4 Vision
+        const auto & deepstack_emb_idx = hparams.deepstack_layers_arr[il];
+        if (deepstack_emb_idx >= 0) {
+            ggml_tensor * ds = ggml_view_2d(ctx0, res->t_inp_embd, n_embd, n_tokens, res->t_inp_embd->nb[1], deepstack_emb_idx * n_embd * sizeof(float));
+            cur = ggml_add(ctx0, cur, ds);
+            cb(cur, "deepstack_out", il);
+        }
 
         // norm
-        cur = build_norm(inpL,
+        cur = build_norm(cur,
                 model.layers[il].attn_norm, NULL,
                 LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
