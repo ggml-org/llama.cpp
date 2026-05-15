@@ -32,7 +32,7 @@ if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
     set(UI_SOURCE_DIR "")
 
     # Priority 1: Check for local build output
-    set(LOCAL_UI_DIR "${PROJECT_SOURCE_DIR}/build/ui")
+    set(LOCAL_UI_DIR "${PROJECT_SOURCE_DIR}/build/tools/ui")
 
     # Verify all required assets exist before declaring local source valid
     set(ALL_ASSETS_PRESENT TRUE)
@@ -85,7 +85,7 @@ if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
             OUTPUT ${UI_STAMP}
             COMMAND ${CMAKE_COMMAND}
                 "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
-                "-DPUBLIC_DIR=${PROJECT_SOURCE_DIR}/build/ui"
+                "-DPUBLIC_DIR=${PROJECT_SOURCE_DIR}/build/tools/ui"
                 "-DHF_BUCKET=${LLAMA_UI_HF_BUCKET}"
                 "-DHF_VERSION=${HF_UI_VERSION}"
                 "-DHF_ENABLED=${LLAMA_USE_PREBUILT_UI}"
@@ -97,7 +97,7 @@ if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
         )
 
         set(UI_SOURCE "provisioned")
-        set(UI_SOURCE_DIR "${PROJECT_SOURCE_DIR}/build/ui")
+        set(UI_SOURCE_DIR "${PROJECT_SOURCE_DIR}/build/tools/ui")
     endif()
 
     # Process assets from the determined source

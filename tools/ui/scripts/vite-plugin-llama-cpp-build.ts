@@ -19,7 +19,7 @@ const GUIDE_FOR_FRONTEND = `
 -->
 `.trim();
 
-const OUTPUT_DIR = '../../build/ui';
+const OUTPUT_DIR = '../../build/tools/ui';
 
 export function llamaCppBuildPlugin(): Plugin {
 	return {
