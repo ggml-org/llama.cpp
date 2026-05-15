@@ -39,12 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ui-build:
-    name: Build UI
-    uses: ./.github/workflows/ui-build.yml
-
   server-metal:
-    needs: ui-build
     runs-on: [self-hosted, llama-server, macOS, ARM64]
 
     name: server-metal (${{ matrix.wf_name }})
@@ -72,11 +67,12 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Download UI build artifact
-        uses: actions/download-artifact@v7
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          name: ui-build
-          path: build/tools/ui/
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
 
       - name: Build
         id: cmake_build

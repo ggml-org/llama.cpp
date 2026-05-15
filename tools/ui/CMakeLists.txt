@@ -32,7 +32,7 @@ if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
     set(UI_SOURCE_DIR "")
 
     # Priority 1: Check for local build output
-    set(LOCAL_UI_DIR "${PROJECT_SOURCE_DIR}/build/tools/ui")
+    set(LOCAL_UI_DIR "${PROJECT_SOURCE_DIR}/build/tools/ui/dist")
 
     # Verify all required assets exist before declaring local source valid
     set(ALL_ASSETS_PRESENT TRUE)
@@ -85,7 +85,7 @@ if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
             OUTPUT ${UI_STAMP}
             COMMAND ${CMAKE_COMMAND}
                 "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
-                "-DPUBLIC_DIR=${PROJECT_SOURCE_DIR}/build/tools/ui"
+                "-DPUBLIC_DIR=${PROJECT_SOURCE_DIR}/build/tools/ui/dist"
                 "-DHF_BUCKET=${LLAMA_UI_HF_BUCKET}"
                 "-DHF_VERSION=${HF_UI_VERSION}"
                 "-DHF_ENABLED=${LLAMA_USE_PREBUILT_UI}"
@@ -97,7 +97,7 @@ if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
         )
 
         set(UI_SOURCE "provisioned")
-        set(UI_SOURCE_DIR "${PROJECT_SOURCE_DIR}/build/tools/ui")
+        set(UI_SOURCE_DIR "${PROJECT_SOURCE_DIR}/build/tools/ui/dist")
     endif()
 
     # Process assets from the determined source
@@ -132,7 +132,7 @@ if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
         )
         message(STATUS "UI: embedded with source: ${UI_SOURCE}")
     else()
-        message(WARNING "UI: no source available. Neither local build (build/tools/ui/) nor HF Bucket download succeeded.")
+        message(WARNING "UI: no source available. Neither local build (build/tools/ui/dist/) nor HF Bucket download succeeded.")
         message(WARNING "UI: building server without embedded UI. Set LLAMA_BUILD_UI=OFF to suppress this warning.")
         list(APPEND UI_COMPILE_DEFS LLAMA_WEBUI_DEFAULT_ENABLED=0 LLAMA_UI_DEFAULT_ENABLED=0)
     endif()
