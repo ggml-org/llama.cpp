@@ -130,11 +130,7 @@ static void ssm_conv_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
 }
 
 
-// In-register 32x32 fp32 transpose using the standard 5-stage HVX vshuff
-// butterfly. Pattern follows QHL `qhblas_hvx_matrix_transpose_aqf32`:
-// 5 stages, R in {-4, -8, -16, -32, -64}. Each stage halves the number of
-// blocks and doubles the shuffle granularity. Ping-pongs between `m` and a
-// local scratch array; final result is written back into `m`.
+// In-register 32x32 fp32 transpose using std 5-stage HVX vshuff butterfly.
 static inline void hvx_transpose_32x32_f32(HVX_Vector m[32]) {
     HVX_Vector tmp[32];
 
@@ -194,25 +190,22 @@ static inline void hvx_transpose_32x32_f32(HVX_Vector m[32]) {
 // Each thread iterates ceil(d_inner_per_thread d_inner_tile) tiles serially.
 #define HTP_SSM_CONV_VTCM_BUDGET (1u << 20) // 1 MiB per thread
 
-// Scalar transpose: src1 {d_conv, d_inner} (DDR) -> {d_inner_per_thread, d_conv} (VTCM).
+// Scalar transpose: src1 {d_conv, d_inner} (DDR) -> {d_inner_per_thread, d_conv} (VTCM)
 static inline void transpose_src1(const float * src1_data,
                                   uint32_t      src1_stride_inner,
                                   uint32_t      i1_off,
                                   uint32_t      d_inner_per_thread,
                                   uint32_t      d_conv,
                                   float *       src1_T) {
-    for (uint32_t j = 0; j < d_conv; ++j) {
-        for (uint32_t i = 0; i < d_inner_per_thread; ++i) {
-            src1_T[j * d_inner_per_thread + i] = src1_data[(i1_off + i) * src1_stride_inner + j];
+    for (uint32_t i = 0; i < d_inner_per_thread; ++i) {
+        const float * src_row = src1_data + (i1_off + i) * src1_stride_inner;
+        for (uint32_t j = 0; j < d_conv; ++j) {
+            src1_T[j * d_inner_per_thread + i] = src_row[j];
         }
     }
 }
 
-// HVX 32x32 src0 transpose: from src0 row at channel C (length ncs, contiguous in time)
-// laid out as 32 rows (one per channel in the sub-block) into 32 transposed
-// vectors in src0_T. Handles the time tail (ncs not a multiple of 32) by padding
-// the source with zeros for missing lanes; the tail rows of the transposed tile
-// are written but never read by the inner loop because t+j stays in [0, ncs-1].
+// HVX 32x32 src0 transpose: src0 {ncs, d_inner} (DDR) -> src0_T {d_inner_tile, ncs} (VTCM)
 static inline void transpose_src0_block(const float * src0_block,
                                         uint32_t      ncs,
                                         uint32_t      cb_n,
@@ -226,16 +219,15 @@ static inline void transpose_src0_block(const float * src0_block,
     for (uint32_t t0 = 0; t0 < ncs; t0 += T_TILE) {
         const uint32_t t_n = MIN(T_TILE, ncs - t0);
 
-        // Load 32 rows (channels) of T_TILE time samples; pad missing channels with zeros.
+        // Load 32 rows (channels) of T_TILE samples; pad missing channels with zeros.
         for (uint32_t r = 0; r < cb_n; ++r) {
             const float * src_row = src0_block + r * ncs + t0;
             if (t_n == T_TILE) {
                 sub[r] = *(const HVX_UVector *) src_row;
             } else {
-                // Tail: load the valid lanes and zero the rest.
                 HVX_Vector v = hvx_vec_splat_f32(0.0f);
                 hvx_vec_store_u(&v, t_n * sizeof(float), hvx_vec_splat_f32(0.0f));
-                // Use memcpy for the partial fp32 load — avoids an over-read.
+
                 float __attribute__((aligned(VLEN))) tmp[VLEN_FP32] = { 0 };
                 for (uint32_t k = 0; k < t_n; ++k) tmp[k] = src_row[k];
                 v = *(const HVX_Vector *) tmp;
@@ -301,40 +293,33 @@ static void ssm_conv_thread_f32_f32_hvx(unsigned int nth, unsigned int ith, void
     // Stage src1 weights once into VTCM in {d_inner_per_thread, d_conv} layout.
     transpose_src1(src1_data, src1_stride_inner, ir0, d_inner_per_thread, d_conv, src1_T);
 
-    const uint32_t C_TILE = VLEN_FP32; // 32 channels per HVX vector
+    const uint32_t C_TILE = VLEN_FP32;
 
     for (uint32_t i3 = 0; i3 < n_s; ++i3) {
-        // Iterate d_inner tiles.
         for (uint32_t tile_off = 0; tile_off < d_inner_per_thread; tile_off += d_inner_tile) {
             const uint32_t tile_n = MIN(d_inner_tile, d_inner_per_thread - tile_off);
 
-            // Stage src0 chunk into VTCM as {d_inner_tile, ncs} layout.
-            const float * src0_block = src0_data + i3 * src0_stride_seq
-                                                 + (ir0 + tile_off) * src0_stride_inner;
+            // Place src0 chunk into VTCM in {d_inner_tile, ncs} layout.
+            const float * src0_block = src0_data + i3 * src0_stride_seq + (ir0 + tile_off) * src0_stride_inner;
 
             for (uint32_t cb = 0; cb < tile_n; cb += C_TILE) {
                 const uint32_t cb_n = MIN(C_TILE, tile_n - cb);
-                transpose_src0_block(src0_block + cb * src0_stride_inner, ncs, cb_n,
-                                             d_inner_tile, src0_T, cb);
+                transpose_src0_block(src0_block + cb * src0_stride_inner, ncs, cb_n, d_inner_tile, src0_T, cb);
             }
 
-            // Inner loop: channel-vectorized convolution from VTCM.
             for (uint32_t t = 0; t < n_t; ++t) {
                 for (uint32_t cb = 0; cb < tile_n; cb += C_TILE) {
                     const uint32_t cb_n = MIN(C_TILE, tile_n - cb);
 
                     HVX_Vector acc = hvx_vec_splat_f32(0.0f);
                     for (uint32_t j = 0; j < d_conv; ++j) {
-                        // 32 channels' src0 at tap (t + j) — contiguous in src0_T.
-                        HVX_Vector x = *(const HVX_Vector *)(src0_T + (t + j) * d_inner_tile + cb);
-                        // 32 channels' weight at tap j — contiguous in src1_T.
-                        HVX_Vector w = *(const HVX_Vector *)(src1_T + j * d_inner_per_thread + tile_off + cb);
-                        acc = Q6_Vqf32_vadd_Vqf32Vqf32(acc, Q6_Vqf32_vmpy_VsfVsf(x, w));
+                        HVX_Vector x = *(const HVX_Vector *) (src0_T + (t + j) * d_inner_tile + cb);
+                        HVX_Vector w = *(const HVX_Vector *) (src1_T + j * d_inner_per_thread + tile_off + cb);
+                        acc          = Q6_Vqf32_vadd_Vqf32Vqf32(acc, Q6_Vqf32_vmpy_VsfVsf(x, w));
                     }
                     HVX_Vector res = Q6_Vsf_equals_Vqf32(acc);
 
-                    float * dst_ptr = dst_data + i3 * dst_stride_seq + t * dst_stride_token
-                                               + (ir0 + tile_off + cb);
+                    float * dst_ptr = dst_data + i3 * dst_stride_seq + t * dst_stride_token + (ir0 + tile_off + cb);
                     if (cb_n == C_TILE) {
                         *(HVX_UVector *) dst_ptr = res;
                     } else {
@@ -377,18 +362,15 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
             use_hvx = 1;
         }
 
-        // Per-thread channel slice
         scctx.nrows_per_thread  = (d_inner + n_threads - 1) / n_threads;
         scctx.nrows_per_thread += (scctx.nrows_per_thread & 1);
 
         const uint32_t d_inner_per_thread = scctx.nrows_per_thread;
         const uint32_t ncs                = src0->ne[0];
 
-        // Pick d_inner_tile so that (src0_T + src1_T) per thread fits in the budget.
         const uint32_t src1_T_size = hex_round_up(d_conv * d_inner_per_thread * sizeof(float), 256);
         const uint32_t src0_T_max = HTP_SSM_CONV_VTCM_BUDGET > src1_T_size ? HTP_SSM_CONV_VTCM_BUDGET - src1_T_size : 0;
 
-        // Largest multiple of VLEN_FP32 such that tile * ncs * 4 <= src0_T_max
         uint32_t d_inner_tile = (src0_T_max / sizeof(float)) / ncs;
         d_inner_tile -= (d_inner_tile % VLEN_FP32);
         if (d_inner_tile == 0) {
@@ -428,7 +410,7 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
             worker_pool_run_func(octx->ctx->worker_pool, ssm_conv_thread_f32_f32, &scctx, n_threads);
         }
     }
-        
+    
     return HTP_STATUS_OK;
 }
 
