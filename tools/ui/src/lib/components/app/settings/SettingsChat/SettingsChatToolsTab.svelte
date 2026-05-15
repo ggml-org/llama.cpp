@@ -36,7 +36,9 @@
 						<ChevronRight class="h-3.5 w-3.5 shrink-0" />
 					{/if}
 
-					{@const faviconUrl = group.serverId ? mcpStore.getServerFavicon(group.serverId) : null}
+					{@const faviconUrl = group.serverId
+						? mcpStore.getServerFavicon(group.serverId)
+						: null}
 
 					<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
 						<McpServerIdentity
@@ -56,7 +58,9 @@
 				<Collapsible.Content>
 					<div class="ml-4 border-l border-border/50 pl-2">
 						<!-- Header row -->
-						<div class="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
+						<div
+							class="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground"
+						>
 							<span class="min-w-0 flex-1">Tool</span>
 							<span class="w-16 shrink-0 text-center">Enabled</span>
 							<span class="w-20 shrink-0 text-center">Always allow</span>
@@ -70,7 +74,9 @@
 								? permissionsStore.hasTool(permissionKey)
 								: false}
 
-							<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
+							<div
+								class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
+							>
 								<TruncatedText text={toolName} class="flex-1" showTooltip={true} />
 
 								<div class="flex w-16 shrink-0 justify-center">

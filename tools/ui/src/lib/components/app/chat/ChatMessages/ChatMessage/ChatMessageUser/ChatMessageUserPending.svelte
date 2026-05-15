@@ -60,7 +60,11 @@
 					>
 						<ActionIcon icon={Edit} tooltip="Edit" onclick={editCtx.handleEdit} />
 						<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />
-						<ActionIcon icon={ArrowUp} tooltip="Send immediately" onclick={onSendImmediately} />
+						<ActionIcon
+							icon={ArrowUp}
+							tooltip="Send immediately"
+							onclick={onSendImmediately}
+						/>
 					</div>
 				</div>
 			</div>

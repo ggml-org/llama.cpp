@@ -53,7 +53,9 @@
 			}
 
 			if (!isCurrentConversationLoading && !isStreaming) {
-				untrack(() => chatStore.restoreProcessingStateFromMessages(messages, conversation.id));
+				untrack(() =>
+					chatStore.restoreProcessingStateFromMessages(messages, conversation.id)
+				);
 			}
 		}
 	});
@@ -64,7 +66,9 @@
 >
 	<div class="chat-processing-info-content">
 		{#each processingDetails as detail (detail)}
-			<span class="chat-processing-info-detail pointer-events-auto backdrop-blur-sm">{detail}</span>
+			<span class="chat-processing-info-detail pointer-events-auto backdrop-blur-sm"
+				>{detail}</span
+			>
 		{/each}
 	</div>
 </div>

@@ -130,13 +130,17 @@
 									<span class="min-w-0 flex-1 truncate">
 										{selectedOption?.name || currentModel}
 									</span>
-									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+									<span class="ml-2 text-xs whitespace-nowrap opacity-70"
+										>(not available)</span
+									>
 								</button>
 								<div class="my-1 h-px bg-border"></div>
 							{/if}
 
 							{#if ms.filteredOptions.length === 0}
-								<p class="px-3 py-3 text-center text-sm text-muted-foreground">No models found.</p>
+								<p class="px-3 py-3 text-center text-sm text-muted-foreground">
+									No models found.
+								</p>
 							{/if}
 
 							<ModelsSelectorList

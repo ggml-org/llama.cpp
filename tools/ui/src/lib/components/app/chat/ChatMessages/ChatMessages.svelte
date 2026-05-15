@@ -215,7 +215,10 @@
 			} else if (msg.role === MessageRole.ASSISTANT) {
 				let j = i + 1;
 
-				while (j < filteredMessages.length && filteredMessages[j].role === MessageRole.TOOL) {
+				while (
+					j < filteredMessages.length &&
+					filteredMessages[j].role === MessageRole.TOOL
+				) {
 					toolMessages.push(filteredMessages[j]);
 					j++;
 				}
@@ -272,7 +275,8 @@
 				content={pendingContent}
 				extras={agenticPendingSteeringMessageExtras(convId)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
+				onEdit={(newContent, extras) =>
+					agenticInjectSteeringMessage(convId, newContent, extras)}
 				onDelete={() => agenticClearSteeringMessage(convId)}
 			/>
 		{/if}
@@ -286,7 +290,8 @@
 				content={pendingContent}
 				extras={chatPendingMessageExtras(convId)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
+				onEdit={(newContent, extras) =>
+					chatInjectPendingMessage(convId, newContent, extras)}
 				onDelete={() => chatClearPendingMessage(convId)}
 			/>
 		{/if}

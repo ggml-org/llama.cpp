@@ -38,14 +38,14 @@
 			<AlertDialog.Description>
 				{#if includeSensitiveData}
 					<p class="text-amber-500">
-						Warning: This export will include sensitive data such as API keys and MCP server custom
-						headers (e.g., authorization tokens). Do not share this file with anyone you don't
-						trust.
+						Warning: This export will include sensitive data such as API keys and MCP
+						server custom headers (e.g., authorization tokens). Do not share this file
+						with anyone you don't trust.
 					</p>
 				{:else}
 					<p>
-						Sensitive data (API keys, MCP server custom headers) will not be included in the export
-						to protect your credentials.
+						Sensitive data (API keys, MCP server custom headers) will not be included in
+						the export to protect your credentials.
 					</p>
 				{/if}
 			</AlertDialog.Description>

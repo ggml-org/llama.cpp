@@ -84,7 +84,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: '',
 				type: SettingsFieldType.TEXTAREA,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				sync: { serverKey: SETTINGS_KEYS.SYSTEM_MESSAGE, paramType: SyncableParameterType.STRING }
+				sync: {
+					serverKey: SETTINGS_KEYS.SYSTEM_MESSAGE,
+					paramType: SyncableParameterType.STRING
+				}
 			},
 			{
 				key: SETTINGS_KEYS.PASTE_LONG_TEXT_TO_FILE_LEN,
@@ -105,7 +108,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				sync: { serverKey: SETTINGS_KEYS.SEND_ON_ENTER, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.SEND_ON_ENTER,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
@@ -139,7 +145,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				sync: { serverKey: SETTINGS_KEYS.PDF_AS_IMAGE, paramType: SyncableParameterType.BOOLEAN }
+				sync: {
+					serverKey: SETTINGS_KEYS.PDF_AS_IMAGE,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
@@ -336,7 +345,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
-				sync: { serverKey: SETTINGS_KEYS.TEMPERATURE, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.TEMPERATURE,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.DYNATEMP_RANGE,
@@ -345,7 +357,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
-				sync: { serverKey: SETTINGS_KEYS.DYNATEMP_RANGE, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.DYNATEMP_RANGE,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.DYNATEMP_EXPONENT,
@@ -393,7 +408,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
-				sync: { serverKey: SETTINGS_KEYS.XTC_PROBABILITY, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.XTC_PROBABILITY,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.XTC_THRESHOLD,
@@ -402,7 +420,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
-				sync: { serverKey: SETTINGS_KEYS.XTC_THRESHOLD, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.XTC_THRESHOLD,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.TYP_P,
@@ -420,7 +441,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.SAMPLING,
-				sync: { serverKey: SETTINGS_KEYS.MAX_TOKENS, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.MAX_TOKENS,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.SAMPLERS,
@@ -457,7 +481,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.PENALTIES,
-				sync: { serverKey: SETTINGS_KEYS.REPEAT_LAST_N, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.REPEAT_LAST_N,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.REPEAT_PENALTY,
@@ -466,7 +493,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.PENALTIES,
-				sync: { serverKey: SETTINGS_KEYS.REPEAT_PENALTY, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.REPEAT_PENALTY,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.PRESENCE_PENALTY,
@@ -475,7 +505,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.PENALTIES,
-				sync: { serverKey: SETTINGS_KEYS.PRESENCE_PENALTY, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.PRESENCE_PENALTY,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.FREQUENCY_PENALTY,
@@ -496,7 +529,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: undefined,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.PENALTIES,
-				sync: { serverKey: SETTINGS_KEYS.DRY_MULTIPLIER, paramType: SyncableParameterType.NUMBER }
+				sync: {
+					serverKey: SETTINGS_KEYS.DRY_MULTIPLIER,
+					paramType: SyncableParameterType.NUMBER
+				}
 			},
 			{
 				key: SETTINGS_KEYS.DRY_BASE,
@@ -630,7 +666,10 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		help: 'Display the system message at the top of each conversation.',
 		defaultValue: true,
 		type: SettingsFieldType.CHECKBOX,
-		sync: { serverKey: SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, paramType: SyncableParameterType.BOOLEAN }
+		sync: {
+			serverKey: SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE,
+			paramType: SyncableParameterType.BOOLEAN
+		}
 	},
 	{
 		key: SETTINGS_KEYS.MCP_SERVERS,

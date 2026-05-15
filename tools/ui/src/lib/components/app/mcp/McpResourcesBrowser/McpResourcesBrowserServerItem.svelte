@@ -168,8 +168,8 @@
 			<span class="text-xs text-muted-foreground">
 				({serverRes.resources.length} resource{serverRes.resources.length !== 1
 					? 's'
-					: ''}{#if hasTemplates}, {serverRes.templates.length} template{serverRes.templates
-						.length !== 1
+					: ''}{#if hasTemplates}, {serverRes.templates.length} template{serverRes
+						.templates.length !== 1
 						? 's'
 						: ''}{/if})
 			</span>

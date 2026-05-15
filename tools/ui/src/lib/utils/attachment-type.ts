@@ -34,7 +34,8 @@ export function isTextFile(
 
 	if (attachment) {
 		return (
-			attachment.type === AttachmentType.TEXT || attachment.type === AttachmentType.LEGACY_CONTEXT
+			attachment.type === AttachmentType.TEXT ||
+			attachment.type === AttachmentType.LEGACY_CONTEXT
 		);
 	}
 

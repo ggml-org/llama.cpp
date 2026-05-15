@@ -88,7 +88,9 @@
 			switch (section.type) {
 				case AgenticSectionType.REASONING:
 				case AgenticSectionType.REASONING_PENDING:
-					parts.push(`${REASONING_TAGS.START}\n${section.content}\n${REASONING_TAGS.END}`);
+					parts.push(
+						`${REASONING_TAGS.START}\n${section.content}\n${REASONING_TAGS.END}`
+					);
 					break;
 
 				case AgenticSectionType.TEXT:
@@ -175,7 +177,8 @@
 
 	let highlightAgenticTurns = $derived(
 		isAgentic &&
-			(currentConfig.alwaysShowAgenticTurns || activeStatsView === ChatMessageStatsView.SUMMARY)
+			(currentConfig.alwaysShowAgenticTurns ||
+				activeStatsView === ChatMessageStatsView.SUMMARY)
 	);
 
 	let displayedModel = $derived(message.model ?? null);
@@ -290,8 +293,12 @@
 					<ChatMessageStatistics
 						promptTokens={agentic ? agentic.llm.prompt_n : message.timings.prompt_n}
 						promptMs={agentic ? agentic.llm.prompt_ms : message.timings.prompt_ms}
-						predictedTokens={agentic ? agentic.llm.predicted_n : message.timings.predicted_n}
-						predictedMs={agentic ? agentic.llm.predicted_ms : message.timings.predicted_ms}
+						predictedTokens={agentic
+							? agentic.llm.predicted_n
+							: message.timings.predicted_n}
+						predictedMs={agentic
+							? agentic.llm.predicted_ms
+							: message.timings.predicted_ms}
 						agenticTimings={agentic}
 						onActiveViewChange={handleStatsViewChange}
 					/>
@@ -380,8 +387,8 @@
 		background: hsl(var(--muted) / 0.3);
 		color: var(--foreground);
 		font-family:
-			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
-			'Liberation Mono', Menlo, monospace;
+			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
+			Consolas, 'Liberation Mono', Menlo, monospace;
 		font-size: 0.875rem;
 		line-height: 1.6;
 		white-space: pre-wrap;

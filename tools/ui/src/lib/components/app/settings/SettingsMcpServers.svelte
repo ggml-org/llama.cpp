@@ -44,7 +44,8 @@
 				const state = mcpStore.getHealthCheckState(server.id);
 
 				return (
-					state.status === HealthCheckStatus.SUCCESS || state.status === HealthCheckStatus.ERROR
+					state.status === HealthCheckStatus.SUCCESS ||
+					state.status === HealthCheckStatus.ERROR
 				);
 			});
 
@@ -62,7 +63,12 @@
 	</div>
 
 	<div class="sticky top-0 z-10 mt-4 flex items-start gap-4 p-4 md:justify-end md:px-8">
-		<Button variant="outline" size="sm" class="shrink-0" onclick={() => (isAddingServer = true)}>
+		<Button
+			variant="outline"
+			size="sm"
+			class="shrink-0"
+			onclick={() => (isAddingServer = true)}
+		>
 			<Plus class="h-4 w-4" />
 
 			Add New Server
@@ -91,7 +97,9 @@
 							{server}
 							enabled={conversationsStore.isMcpServerEnabledForChat(server.id)}
 							onToggle={async () => {
-								const wasEnabled = conversationsStore.isMcpServerEnabledForChat(server.id);
+								const wasEnabled = conversationsStore.isMcpServerEnabledForChat(
+									server.id
+								);
 								await conversationsStore.toggleMcpServerForChat(server.id);
 								if (!wasEnabled) {
 									toolsStore.enableAllToolsForServer(server.id);

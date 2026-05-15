@@ -72,7 +72,9 @@
 		</div>
 
 		<Dialog.Footer>
-			<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}>Cancel</Button>
+			<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}
+				>Cancel</Button
+			>
 
 			<Button
 				variant="default"

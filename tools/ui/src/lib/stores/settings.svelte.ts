@@ -37,6 +37,7 @@ import type { SettingsExportType } from '$lib/types';
 import { setMode } from 'mode-watcher';
 import {
 	CONFIG_LOCALSTORAGE_KEY,
+	readLocalStorageWithFallback,
 	SETTING_CONFIG_DEFAULT,
 	SETTINGS_KEYS,
 	USER_OVERRIDES_LOCALSTORAGE_KEY
@@ -119,7 +120,7 @@ class SettingsStore {
 		if (!browser) return;
 
 		try {
-			const storedConfigRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+			const storedConfigRaw = readLocalStorageWithFallback(CONFIG_LOCALSTORAGE_KEY);
 			const savedVal = JSON.parse(storedConfigRaw || '{}');
 
 			// Merge with defaults to prevent breaking changes
@@ -137,7 +138,7 @@ class SettingsStore {
 
 			// Load user overrides
 			const savedOverrides = JSON.parse(
-				localStorage.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
+				readLocalStorageWithFallback(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
 			);
 			this.userOverrides = new Set(savedOverrides);
 		} catch (error) {
@@ -483,7 +484,9 @@ class SettingsStore {
 		const configToExport: Record<string, string | number | boolean | undefined> =
 			includeSensitiveData
 				? { ...this.config }
-				: Object.fromEntries(Object.entries(this.config).filter(([key]) => key !== 'apiKey'));
+				: Object.fromEntries(
+						Object.entries(this.config).filter(([key]) => key !== 'apiKey')
+					);
 
 		// Handle MCP servers: exclude custom headers unless user opts in
 		if ('mcpServers' in configToExport && !includeSensitiveData) {

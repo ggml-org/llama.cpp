@@ -20,7 +20,9 @@ import { DatabaseService } from '$lib/services/database.service';
 import { MessageRole, MessageType } from '$lib/enums';
 import type { DatabaseMessage } from '$lib/types/database';
 
-const MIGRATION_DONE_KEY = 'llama-webui-migration-v2-done';
+const MIGRATION_DONE_KEY = 'llama-ui-migration-v2-done';
+// Deprecated old key for backward compat
+const DEPRECATED_MIGRATION_DONE_KEY = 'llama-webui-migration-v2-done';
 
 /**
  * @deprecated Part of legacy migration — remove with the migration module.
@@ -28,7 +30,19 @@ const MIGRATION_DONE_KEY = 'llama-webui-migration-v2-done';
  */
 export function isMigrationNeeded(): boolean {
 	try {
-		return !localStorage.getItem(MIGRATION_DONE_KEY);
+		// Check new key first, fall back to deprecated old key
+		if (localStorage.getItem(MIGRATION_DONE_KEY)) return false;
+		if (localStorage.getItem(DEPRECATED_MIGRATION_DONE_KEY)) {
+			// Migrate to new key
+			try {
+				localStorage.setItem(MIGRATION_DONE_KEY, String(Date.now()));
+				localStorage.removeItem(DEPRECATED_MIGRATION_DONE_KEY);
+			} catch {
+				// Ignore storage errors
+			}
+			return false;
+		}
+		return true;
 	} catch {
 		return false;
 	}
@@ -169,8 +183,10 @@ async function migrateConversation(convId: string): Promise<number> {
 		const turns = parseLegacyToolCalls(cleanContent);
 
 		// Parse existing toolCalls JSON to try to match IDs
-		let existingToolCalls: Array<{ id: string; function?: { name: string; arguments: string } }> =
-			[];
+		let existingToolCalls: Array<{
+			id: string;
+			function?: { name: string; arguments: string };
+		}> = [];
 		if (message.toolCalls) {
 			try {
 				existingToolCalls = JSON.parse(message.toolCalls);
@@ -289,8 +305,8 @@ async function migrateConversation(convId: string): Promise<number> {
 				if (child.role !== MessageRole.TOOL) {
 					await DatabaseService.updateMessage(childId, { parent: currentParentId });
 					// Add to new parent's children
-					const newParent = await DatabaseService.getConversationMessages(convId).then((msgs) =>
-						msgs.find((m) => m.id === currentParentId)
+					const newParent = await DatabaseService.getConversationMessages(convId).then(
+						(msgs) => msgs.find((m) => m.id === currentParentId)
 					);
 					if (newParent && !newParent.children.includes(childId)) {
 						await DatabaseService.updateMessage(currentParentId, {

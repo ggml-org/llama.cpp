@@ -31,7 +31,12 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
-	import type { GetPromptResult, MCPPromptInfo, MCPResourceInfo, PromptMessage } from '$lib/types';
+	import type {
+		GetPromptResult,
+		MCPPromptInfo,
+		MCPResourceInfo,
+		PromptMessage
+	} from '$lib/types';
 	import { isIMEComposing, parseClipboardContent, uuid } from '$lib/utils';
 	import {
 		AudioRecorder,
@@ -286,22 +291,24 @@
 
 				// Handle MCP prompt attachments as ChatUploadedFile with mcpPrompt data
 				if (parsed.mcpPromptAttachments.length > 0) {
-					const mcpPromptFiles: ChatUploadedFile[] = parsed.mcpPromptAttachments.map((att) => ({
-						id: uuid(),
-						name: att.name,
-						size: att.content.length,
-						type: SpecialFileType.MCP_PROMPT,
-						file: new File([att.content], `${att.name}${FileExtensionText.TXT}`, {
-							type: MimeTypeText.PLAIN
-						}),
-						isLoading: false,
-						textContent: att.content,
-						mcpPrompt: {
-							serverName: att.serverName,
-							promptName: att.promptName,
-							arguments: att.arguments
-						}
-					}));
+					const mcpPromptFiles: ChatUploadedFile[] = parsed.mcpPromptAttachments.map(
+						(att) => ({
+							id: uuid(),
+							name: att.name,
+							size: att.content.length,
+							type: SpecialFileType.MCP_PROMPT,
+							file: new File([att.content], `${att.name}${FileExtensionText.TXT}`, {
+								type: MimeTypeText.PLAIN
+							}),
+							isLoading: false,
+							textContent: att.content,
+							mcpPrompt: {
+								serverName: att.serverName,
+								promptName: att.promptName,
+								arguments: att.arguments
+							}
+						})
+					);
 
 					uploadedFiles = [...uploadedFiles, ...mcpPromptFiles];
 					onUploadedFilesChange?.(uploadedFiles);
@@ -548,8 +555,11 @@
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}
 				{onStop}
-				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
-				onMcpPromptClick={showMcpPromptButton ? () => (isPromptPickerOpen = true) : undefined}
+				onSystemPromptClick={() =>
+					onSystemPromptClick?.({ message: value, files: uploadedFiles })}
+				onMcpPromptClick={showMcpPromptButton
+					? () => (isPromptPickerOpen = true)
+					: undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 			/>
 		</div>

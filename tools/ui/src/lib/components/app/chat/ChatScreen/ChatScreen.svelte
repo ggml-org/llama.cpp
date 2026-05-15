@@ -34,7 +34,12 @@
 		activeConversation
 	} from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { serverLoading, serverError, serverStore, isRouterMode } from '$lib/stores/server.svelte';
+	import {
+		serverLoading,
+		serverError,
+		serverStore,
+		isRouterMode
+	} from '$lib/stores/server.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
@@ -244,7 +249,10 @@
 		autoScroll.handleScroll();
 	}
 
-	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
+	async function handleSendMessage(
+		message: string,
+		files?: ChatUploadedFile[]
+	): Promise<boolean> {
 		const plainFiles = files ? $state.snapshot(files) : undefined;
 		const result = plainFiles
 			? await parseFilesToMessageExtras(plainFiles, activeModelId ?? undefined)
@@ -394,7 +402,9 @@
 			>
 				{#if isEmpty}
 					<div class="mb-8 px-4 text-center" use:fadeInView={{ duration: 300 }}>
-						<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
+						<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">
+							Hello there
+						</h1>
 
 						<p class="text-muted-foreground md:text-lg">
 							{serverStore.props?.modalities?.audio
@@ -422,7 +432,9 @@
 									disabled={isServerLoading}
 									class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
 								>
-									<RefreshCw class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}" />
+									<RefreshCw
+										class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}"
+									/>
 									{isServerLoading ? 'Retrying...' : 'Retry'}
 								</button>
 							</Alert.Title>

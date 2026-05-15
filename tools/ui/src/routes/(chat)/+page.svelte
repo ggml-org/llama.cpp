@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
+	import {
+		conversationsStore,
+		isConversationsInitialized
+	} from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { onMount } from 'svelte';

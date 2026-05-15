@@ -10,7 +10,12 @@
 		tooltipLabel?: string;
 	}
 
-	let { canSend = false, disabled = false, showErrorState = false, tooltipLabel }: Props = $props();
+	let {
+		canSend = false,
+		disabled = false,
+		showErrorState = false,
+		tooltipLabel
+	}: Props = $props();
 
 	let isDisabled = $derived(!canSend || disabled);
 </script>

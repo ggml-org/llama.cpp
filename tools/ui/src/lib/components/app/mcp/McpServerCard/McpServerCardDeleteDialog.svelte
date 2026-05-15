@@ -17,8 +17,8 @@
 			<AlertDialog.Title>Delete Server</AlertDialog.Title>
 
 			<AlertDialog.Description>
-				Are you sure you want to delete <strong>{displayName}</strong>? This action cannot be
-				undone.
+				Are you sure you want to delete <strong>{displayName}</strong>? This action cannot
+				be undone.
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 

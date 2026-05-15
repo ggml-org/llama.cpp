@@ -104,7 +104,9 @@ export async function parseFilesToMessageExtras(
 
 				// If user had pdfAsImage enabled but model doesn't support vision, update setting and notify
 				if (currentConfig.pdfAsImage && !hasVisionSupport) {
-					console.log('Non-vision model detected: forcing PDF-to-text mode and updating settings');
+					console.log(
+						'Non-vision model detected: forcing PDF-to-text mode and updating settings'
+					);
 
 					// Update the setting in localStorage
 					settingsStore.updateConfig(SETTINGS_KEYS.PDF_AS_IMAGE, false);

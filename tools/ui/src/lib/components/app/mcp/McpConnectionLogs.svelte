@@ -67,7 +67,9 @@
 
 					{#if log.details !== undefined}
 						<details class="ml-11">
-							<summary class="cursor-pointer text-[10px] text-muted-foreground"> details </summary>
+							<summary class="cursor-pointer text-[10px] text-muted-foreground">
+								details
+							</summary>
 
 							<pre
 								class="mt-1 overflow-x-auto rounded bg-background/70 p-2 text-[10px] break-all whitespace-pre-wrap text-foreground/80">

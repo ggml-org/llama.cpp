@@ -143,7 +143,9 @@
 
 	export function editActiveConversation() {
 		if (currentChatId) {
-			const activeConversation = filteredConversations.find((conv) => conv.id === currentChatId);
+			const activeConversation = filteredConversations.find(
+				(conv) => conv.id === currentChatId
+			);
 
 			if (activeConversation) {
 				const event = new CustomEvent('edit-active-conversation', {
@@ -174,7 +176,9 @@
 		<Sidebar.Header class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
 			<div class="flex items-center justify-between">
 				<a href={ROUTES.START} onclick={handleMobileSidebarItemClick}>
-					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">{APP_NAME}</h1>
+					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">
+						{APP_NAME}
+					</h1>
 				</a>
 
 				<Button
@@ -263,7 +267,9 @@
 		<div class="flex items-center gap-2 py-2">
 			<Checkbox id="delete-with-forks" bind:checked={deleteWithForks} />
 
-			<Label for="delete-with-forks" class="text-sm">Also delete all forked conversations</Label>
+			<Label for="delete-with-forks" class="text-sm"
+				>Also delete all forked conversations</Label
+			>
 		</div>
 	{/if}
 </DialogConfirmation>

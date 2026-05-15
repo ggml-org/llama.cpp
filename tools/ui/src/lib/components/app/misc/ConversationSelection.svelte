@@ -168,7 +168,10 @@
 								</td>
 
 								<td class="p-3 text-sm">
-									<div class="max-w-[17rem] truncate" title={conv.name || 'Untitled conversation'}>
+									<div
+										class="max-w-[17rem] truncate"
+										title={conv.name || 'Untitled conversation'}
+									>
 										{conv.name || 'Untitled conversation'}
 									</div>
 								</td>

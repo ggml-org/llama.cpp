@@ -52,7 +52,8 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 				const charAfterOpen = line[openDollarIndex + 1];
 				const charBeforeClose =
 					openDollarIndex + 1 < closeDollarIndex ? line[closeDollarIndex - 1] : '';
-				const charAfterClose = closeDollarIndex + 1 < line.length ? line[closeDollarIndex + 1] : '';
+				const charAfterClose =
+					closeDollarIndex + 1 < line.length ? line[closeDollarIndex + 1] : '';
 
 				let shouldSkipAsNonLatex = false;
 
@@ -175,24 +176,27 @@ export function preprocessLaTeX(content: string): string {
 	const latexExpressions: string[] = [];
 
 	// Match \S...\[...\] and protect them and insert a line-break.
-	content = content.replace(/([\S].*?)\\\[([\s\S]*?)\\\](.*)/g, (match, group1, group2, group3) => {
-		// Check if there are characters following the formula (display-formula in a table-cell?)
-		if (group1.endsWith('\\')) {
-			return match; // Backslash before \[, do nothing.
-		}
-		const hasSuffix = /\S/.test(group3);
-		let optBreak;
+	content = content.replace(
+		/([\S].*?)\\\[([\s\S]*?)\\\](.*)/g,
+		(match, group1, group2, group3) => {
+			// Check if there are characters following the formula (display-formula in a table-cell?)
+			if (group1.endsWith('\\')) {
+				return match; // Backslash before \[, do nothing.
+			}
+			const hasSuffix = /\S/.test(group3);
+			let optBreak;
 
-		if (hasSuffix) {
-			latexExpressions.push(`\\(${group2.trim()}\\)`); // Convert into inline.
-			optBreak = '';
-		} else {
-			latexExpressions.push(`\\[${group2}\\]`);
-			optBreak = '\n';
-		}
+			if (hasSuffix) {
+				latexExpressions.push(`\\(${group2.trim()}\\)`); // Convert into inline.
+				optBreak = '';
+			} else {
+				latexExpressions.push(`\\[${group2}\\]`);
+				optBreak = '\n';
+			}
 
-		return `${group1}${optBreak}<<LATEX_${latexExpressions.length - 1}>>${optBreak}${group3}`;
-	});
+			return `${group1}${optBreak}<<LATEX_${latexExpressions.length - 1}>>${optBreak}${group3}`;
+		}
+	);
 
 	// Match \(...\), \[...\], $$...$$ and protect them
 	content = content.replace(

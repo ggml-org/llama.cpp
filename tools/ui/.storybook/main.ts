@@ -17,7 +17,10 @@ const config: StorybookConfig = {
 	viteFinal: async (config) => {
 		config.server = config.server || {};
 		config.server.fs = config.server.fs || {};
-		config.server.fs.allow = [...(config.server.fs.allow || []), resolve(__dirname, '../tests')];
+		config.server.fs.allow = [
+			...(config.server.fs.allow || []),
+			resolve(__dirname, '../tests')
+		];
 		return config;
 	}
 };

@@ -28,7 +28,9 @@
 		><g class="frame-container-wrapper"
 			><g class="frame-container-blur"
 				><g class="frame-container-shadows"
-					><g clip-path="url(#frame-clip-320b5b95-d08d-8089-8007-585a8e498184-render-1)" fill="none"
+					><g
+						clip-path="url(#frame-clip-320b5b95-d08d-8089-8007-585a8e498184-render-1)"
+						fill="none"
 						><g class="fills" id="fills-320b5b95-d08d-8089-8007-585a8e498184"
 							><rect
 								rx="0"

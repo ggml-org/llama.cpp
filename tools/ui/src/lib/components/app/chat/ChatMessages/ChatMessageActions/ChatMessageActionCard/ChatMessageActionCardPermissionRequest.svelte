@@ -58,7 +58,9 @@
 					tool
 				</DropdownMenu.Item>
 				{#if serverLabel}
-					<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}>
+					<DropdownMenu.Item
+						onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}
+					>
 						Always allow all tools from {serverLabel}
 					</DropdownMenu.Item>
 				{:else}
@@ -69,7 +71,9 @@
 							: source === ToolSource.CUSTOM
 								? TOOL_SERVER_LABELS[ToolSource.CUSTOM]
 								: 'MCP Tools'}
-					<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}>
+					<DropdownMenu.Item
+						onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}
+					>
 						Approve all tools from {providerName}
 					</DropdownMenu.Item>
 				{/if}

@@ -55,7 +55,9 @@
 			switch (section.type) {
 				case AgenticSectionType.REASONING:
 				case AgenticSectionType.REASONING_PENDING:
-					parts.push(`${REASONING_TAGS.START}\n${section.content}\n${REASONING_TAGS.END}`);
+					parts.push(
+						`${REASONING_TAGS.START}\n${section.content}\n${REASONING_TAGS.END}`
+					);
 					break;
 
 				case AgenticSectionType.TEXT:
@@ -269,7 +271,9 @@
 
 			// If content is empty, remove without deleting children
 			if (!newContent) {
-				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
+				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(
+					message.id
+				);
 				isEditing = false;
 				if (conversationDeleted) {
 					goto(ROUTES.START);
@@ -300,7 +304,11 @@
 		if (message.role === MessageRole.USER) {
 			// For user messages, trim to avoid accidental whitespace
 			const finalExtras = await getMergedExtras();
-			chatActions.editUserMessagePreserveResponses(message, editedContent.trim(), finalExtras);
+			chatActions.editUserMessagePreserveResponses(
+				message,
+				editedContent.trim(),
+				finalExtras
+			);
 		}
 
 		isEditing = false;

@@ -106,7 +106,9 @@ All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attr
 		expect(githubLink).toBeTruthy();
 		expect(githubLink?.textContent).toBe('GitHub Repository');
 
-		const openaiLink = linkList.find((link) => link.getAttribute('href') === 'https://openai.com');
+		const openaiLink = linkList.find(
+			(link) => link.getAttribute('href') === 'https://openai.com'
+		);
 		expect(openaiLink).toBeTruthy();
 		expect(openaiLink?.textContent).toBe('OpenAI Website');
 
@@ -127,6 +129,8 @@ All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attr
 		);
 		expect(pythonDocsLink).toBeTruthy();
 
-		console.log(`✅ URL Links test passed - Found ${links.length} links with proper attributes`);
+		console.log(
+			`✅ URL Links test passed - Found ${links.length} links with proper attributes`
+		);
 	}}
 />

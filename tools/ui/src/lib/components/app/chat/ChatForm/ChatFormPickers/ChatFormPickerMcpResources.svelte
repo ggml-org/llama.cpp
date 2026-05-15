@@ -119,7 +119,8 @@
 		if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
 			if (filteredResources.length > 0) {
-				selectedIndex = selectedIndex === 0 ? filteredResources.length - 1 : selectedIndex - 1;
+				selectedIndex =
+					selectedIndex === 0 ? filteredResources.length - 1 : selectedIndex - 1;
 			}
 
 			return true;

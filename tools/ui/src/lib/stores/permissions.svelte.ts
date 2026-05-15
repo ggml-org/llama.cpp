@@ -1,4 +1,7 @@
-import { ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY } from '$lib/constants';
+import {
+	ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY,
+	readLocalStorageWithFallback
+} from '$lib/constants';
 import { SvelteSet } from 'svelte/reactivity';
 
 class PermissionsStore {
@@ -6,7 +9,7 @@ class PermissionsStore {
 
 	constructor() {
 		try {
-			const stored = localStorage.getItem(ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY);
+			const stored = readLocalStorageWithFallback(ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY);
 			if (stored) {
 				for (const name of JSON.parse(stored) as string[]) {
 					if (typeof name === 'string') this._tools.add(name);
@@ -45,7 +48,10 @@ class PermissionsStore {
 
 	private _persist(): void {
 		try {
-			localStorage.setItem(ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY, JSON.stringify([...this._tools]));
+			localStorage.setItem(
+				ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY,
+				JSON.stringify([...this._tools])
+			);
 		} catch (err) {
 			console.error(
 				`Failed to persist to localStorage ("${ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY}"):`,

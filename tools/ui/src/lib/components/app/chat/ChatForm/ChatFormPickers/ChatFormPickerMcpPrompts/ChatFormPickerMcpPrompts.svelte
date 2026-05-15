@@ -114,7 +114,9 @@
 			promptError = null;
 
 			requestAnimationFrame(() => {
-				const firstInput = document.querySelector(`#arg-${args[0].name}`) as HTMLInputElement;
+				const firstInput = document.querySelector(
+					`#arg-${args[0].name}`
+				) as HTMLInputElement;
 				if (firstInput) {
 					firstInput.focus();
 				}
@@ -303,7 +305,8 @@
 		if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
 			if (filteredPrompts.length > 0) {
-				selectedIndex = selectedIndex === 0 ? filteredPrompts.length - 1 : selectedIndex - 1;
+				selectedIndex =
+					selectedIndex === 0 ? filteredPrompts.length - 1 : selectedIndex - 1;
 			}
 
 			return true;
@@ -419,7 +422,9 @@
 						{#snippet titleExtra()}
 							{#if prompt.arguments?.length}
 								<Badge variant="secondary">
-									{prompt.arguments.length} arg{prompt.arguments.length > 1 ? 's' : ''}
+									{prompt.arguments.length} arg{prompt.arguments.length > 1
+										? 's'
+										: ''}
 								</Badge>
 							{/if}
 						{/snippet}

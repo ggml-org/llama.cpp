@@ -319,7 +319,9 @@ export class ChatService {
 					userFriendlyError = new Error('Connection refused - server may be offline');
 					userFriendlyError.name = 'NetworkError';
 				} else if (error.message.includes('ETIMEDOUT')) {
-					userFriendlyError = new Error('Request timed out - the server took too long to respond');
+					userFriendlyError = new Error(
+						'Request timed out - the server took too long to respond'
+					);
 					userFriendlyError.name = 'TimeoutError';
 				} else {
 					userFriendlyError = error;
@@ -406,7 +408,9 @@ export class ChatService {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
 				const mapped: Record<string, unknown> = {
 					role: msg.role,
-					content: excludeReasoning ? ChatService.stripReasoningContent(msg.content) : msg.content,
+					content: excludeReasoning
+						? ChatService.stripReasoningContent(msg.content)
+						: msg.content,
 					tool_calls: msg.tool_calls,
 					tool_call_id: msg.tool_call_id
 				};
@@ -471,7 +475,10 @@ export class ChatService {
 		onReasoningChunk?: (chunk: string) => void,
 		onToolCallChunk?: (chunk: string) => void,
 		onModel?: (model: string) => void,
-		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
+		onTimings?: (
+			timings?: ChatMessageTimings,
+			promptProgress?: ChatMessagePromptProgress
+		) => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal
 	): Promise<void> {
@@ -613,7 +620,9 @@ export class ChatService {
 				finalizeOpenToolCallBatch();
 
 				const finalToolCalls =
-					aggregatedToolCalls.length > 0 ? JSON.stringify(aggregatedToolCalls) : undefined;
+					aggregatedToolCalls.length > 0
+						? JSON.stringify(aggregatedToolCalls)
+						: undefined;
 
 				onComplete?.(
 					aggregatedContent,
@@ -659,7 +668,9 @@ export class ChatService {
 			const responseText = await response.text();
 
 			if (!responseText.trim()) {
-				const noResponseError = new Error('No response received from server. Please try again.');
+				const noResponseError = new Error(
+					'No response received from server. Please try again.'
+				);
 
 				throw noResponseError;
 			}
@@ -689,7 +700,9 @@ export class ChatService {
 			}
 
 			if (!content.trim() && !serializedToolCalls) {
-				const noResponseError = new Error('No response received from server. Please try again.');
+				const noResponseError = new Error(
+					'No response received from server. Please try again.'
+				);
 
 				throw noResponseError;
 			}
@@ -865,7 +878,11 @@ export class ChatService {
 		for (const legacyContextFile of legacyContextFiles) {
 			contentParts.push({
 				type: ContentPartType.TEXT,
-				text: formatAttachmentText('File', legacyContextFile.name, legacyContextFile.content)
+				text: formatAttachmentText(
+					'File',
+					legacyContextFile.name,
+					legacyContextFile.content
+				)
 			});
 		}
 
@@ -900,7 +917,11 @@ export class ChatService {
 			} else {
 				contentParts.push({
 					type: ContentPartType.TEXT,
-					text: formatAttachmentText(ATTACHMENT_LABEL_PDF_FILE, pdfFile.name, pdfFile.content)
+					text: formatAttachmentText(
+						ATTACHMENT_LABEL_PDF_FILE,
+						pdfFile.name,
+						pdfFile.content
+					)
 				});
 			}
 		}
@@ -1000,7 +1021,11 @@ export class ChatService {
 			};
 			error.name = response.status === 400 ? 'ServerError' : 'HttpError';
 
-			if (errorData.error && 'n_prompt_tokens' in errorData.error && 'n_ctx' in errorData.error) {
+			if (
+				errorData.error &&
+				'n_prompt_tokens' in errorData.error &&
+				'n_ctx' in errorData.error
+			) {
 				error.contextInfo = {
 					n_prompt_tokens: errorData.error.n_prompt_tokens,
 					n_ctx: errorData.error.n_ctx

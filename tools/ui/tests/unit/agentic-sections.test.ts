@@ -64,7 +64,11 @@ describe('deriveAgenticSections', () => {
 		const msg = makeAssistant({
 			content: 'Let me check.',
 			toolCalls: JSON.stringify([
-				{ id: 'call_1', type: 'function', function: { name: 'search', arguments: '{"q":"test"}' } }
+				{
+					id: 'call_1',
+					type: 'function',
+					function: { name: 'search', arguments: '{"q":"test"}' }
+				}
 			])
 		});
 		const toolResult = makeToolMsg({
@@ -96,7 +100,11 @@ describe('deriveAgenticSections', () => {
 			id: 'ast-1',
 			content: 'Turn 1 text',
 			toolCalls: JSON.stringify([
-				{ id: 'call_1', type: 'function', function: { name: 'search', arguments: '{"q":"foo"}' } }
+				{
+					id: 'call_1',
+					type: 'function',
+					function: { name: 'search', arguments: '{"q":"foo"}' }
+				}
 			])
 		});
 		const tool1 = makeToolMsg({ id: 'tool-1', toolCallId: 'call_1', content: 'result 1' });
@@ -124,7 +132,11 @@ describe('deriveAgenticSections', () => {
 			id: 'ast-1',
 			content: '',
 			toolCalls: JSON.stringify([
-				{ id: 'call_1', type: 'function', function: { name: 'list_files', arguments: '{}' } }
+				{
+					id: 'call_1',
+					type: 'function',
+					function: { name: 'list_files', arguments: '{}' }
+				}
 			])
 		});
 		const tool1 = makeToolMsg({ id: 'tool-1', toolCallId: 'call_1', content: 'file1 file2' });
@@ -139,7 +151,11 @@ describe('deriveAgenticSections', () => {
 				}
 			])
 		});
-		const tool2 = makeToolMsg({ id: 'tool-2', toolCallId: 'call_2', content: 'contents of file1' });
+		const tool2 = makeToolMsg({
+			id: 'tool-2',
+			toolCallId: 'call_2',
+			content: 'contents of file1'
+		});
 		const assistant3 = makeAssistant({
 			id: 'ast-3',
 			content: 'Here is the analysis.',

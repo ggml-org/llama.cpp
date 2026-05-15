@@ -59,7 +59,8 @@ export function webpBase64UrlToPngDataURL(
  */
 export function isWebpFile(file: File): boolean {
 	return (
-		file.type === MimeTypeImage.WEBP || file.name.toLowerCase().endsWith(FileExtensionImage.WEBP)
+		file.type === MimeTypeImage.WEBP ||
+		file.name.toLowerCase().endsWith(FileExtensionImage.WEBP)
 	);
 }
 

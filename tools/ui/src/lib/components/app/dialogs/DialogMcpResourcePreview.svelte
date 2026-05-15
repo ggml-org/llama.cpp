@@ -27,8 +27,10 @@
 
 	function getLanguage(): string {
 		if (extra.mimeType?.includes(MimeTypeIncludes.JSON)) return MimeTypeIncludes.JSON;
-		if (extra.mimeType?.includes(MimeTypeIncludes.JAVASCRIPT)) return MimeTypeIncludes.JAVASCRIPT;
-		if (extra.mimeType?.includes(MimeTypeIncludes.TYPESCRIPT)) return MimeTypeIncludes.TYPESCRIPT;
+		if (extra.mimeType?.includes(MimeTypeIncludes.JAVASCRIPT))
+			return MimeTypeIncludes.JAVASCRIPT;
+		if (extra.mimeType?.includes(MimeTypeIncludes.TYPESCRIPT))
+			return MimeTypeIncludes.TYPESCRIPT;
 
 		const name = extra.name || extra.uri || '';
 
@@ -64,7 +66,8 @@
 									alt=""
 									class="h-3 w-3 shrink-0 rounded-sm"
 									onerror={(e) => {
-										(e.currentTarget as HTMLImageElement).style.display = 'none';
+										(e.currentTarget as HTMLImageElement).style.display =
+											'none';
 									}}
 								/>
 							{/if}
@@ -110,12 +113,18 @@
 					/>
 				</div>
 			{:else if isCodeResource(extra.mimeType, extra.uri) && extra.content}
-				<SyntaxHighlightedCode code={extra.content} language={getLanguage()} maxHeight="70vh" />
+				<SyntaxHighlightedCode
+					code={extra.content}
+					language={getLanguage()}
+					maxHeight="70vh"
+				/>
 			{:else if extra.content}
 				<pre
 					class="max-h-[70vh] overflow-auto rounded-md border bg-muted/30 p-4 font-mono text-sm break-words whitespace-pre-wrap">{extra.content}</pre>
 			{:else}
-				<div class="py-8 text-center text-sm text-muted-foreground">No content available</div>
+				<div class="py-8 text-center text-sm text-muted-foreground">
+					No content available
+				</div>
 			{/if}
 		</div>
 	</Dialog.Content>

@@ -53,7 +53,9 @@
 								<FileText class="h-4 w-4 text-white/70" />
 							{/if}
 
-							<span class="font-mono text-[9px] text-white/60">{getFileExtension(item.name)}</span>
+							<span class="font-mono text-[9px] text-white/60"
+								>{getFileExtension(item.name)}</span
+							>
 						</div>
 					{/if}
 				</button>

@@ -2,12 +2,14 @@ import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
 
-class LlamacppDatabase extends Dexie {
+const OLD_DB_NAME = 'LlamacppWebui';
+
+class LlamaUiDatabase extends Dexie {
 	conversations!: EntityTable<DatabaseConversation, string>;
 	messages!: EntityTable<DatabaseMessage, string>;
 
 	constructor() {
-		super('LlamacppWebui');
+		super('LlamaUi');
 
 		this.version(1).stores({
 			conversations: 'id, lastModified, currNode, name',
@@ -16,7 +18,44 @@ class LlamacppDatabase extends Dexie {
 	}
 }
 
-const db = new LlamacppDatabase();
+const db = new LlamaUiDatabase();
+
+/** Migrate data from the old LlamacppWebui database to the new LlamaUi database */
+async function migrateFromOldDatabase(): Promise<void> {
+	try {
+		const oldDbNames = await Dexie.getDatabaseNames();
+		if (!oldDbNames.includes(OLD_DB_NAME)) return;
+
+		console.log('[Database] Migrating data from old database:', OLD_DB_NAME);
+
+		const oldDb = new Dexie(OLD_DB_NAME);
+		oldDb.version(1).stores({
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children'
+		});
+
+		const conversations = await oldDb.table('conversations').toArray();
+		const messages = await oldDb.table('messages').toArray();
+
+		if (conversations.length > 0) {
+			await db.table('conversations').bulkAdd(conversations);
+			console.log(`[Database] Migrated ${conversations.length} conversations`);
+		}
+		if (messages.length > 0) {
+			await db.table('messages').bulkAdd(messages);
+			console.log(`[Database] Migrated ${messages.length} messages`);
+		}
+
+		oldDb.close();
+		await Dexie.delete(OLD_DB_NAME);
+		console.log('[Database] Old database deleted');
+	} catch (err) {
+		console.warn('[Database] Migration from old database failed:', err);
+	}
+}
+
+// Run migration on import
+migrateFromOldDatabase();
 import { MessageRole } from '$lib/enums';
 
 export class DatabaseService {
@@ -234,7 +273,9 @@ export class DatabaseService {
 			if (message.parent) {
 				const parent = await db.messages.get(message.parent);
 				if (parent) {
-					parent.children = parent.children.filter((childId: string) => childId !== messageId);
+					parent.children = parent.children.filter(
+						(childId: string) => childId !== messageId
+					);
 					await db.messages.put(parent);
 				}
 			}
@@ -269,7 +310,9 @@ export class DatabaseService {
 			if (message && message.parent) {
 				const parent = await db.messages.get(message.parent);
 				if (parent) {
-					parent.children = parent.children.filter((childId: string) => childId !== messageId);
+					parent.children = parent.children.filter(
+						(childId: string) => childId !== messageId
+					);
 					await db.messages.put(parent);
 				}
 			}
@@ -435,7 +478,11 @@ export class DatabaseService {
 
 			const allMessages = await db.messages.where('convId').equals(sourceConvId).toArray();
 
-			const pathMessages = filterByLeafNodeId(allMessages, atMessageId, true) as DatabaseMessage[];
+			const pathMessages = filterByLeafNodeId(
+				allMessages,
+				atMessageId,
+				true
+			) as DatabaseMessage[];
 			if (pathMessages.length === 0) {
 				throw new Error(`Could not resolve message path to ${atMessageId}`);
 			}

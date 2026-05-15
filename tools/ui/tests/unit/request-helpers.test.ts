@@ -34,7 +34,9 @@ describe('getRequestMethod', () => {
 	});
 
 	it('falls back to baseInit.method', () => {
-		expect(getRequestMethod('https://example.com', undefined, { method: 'DELETE' })).toBe('DELETE');
+		expect(getRequestMethod('https://example.com', undefined, { method: 'DELETE' })).toBe(
+			'DELETE'
+		);
 	});
 
 	it('defaults to GET', () => {

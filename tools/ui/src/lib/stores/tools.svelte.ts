@@ -5,6 +5,7 @@ import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$li
 import { config } from '$lib/stores/settings.svelte';
 import {
 	DISABLED_TOOLS_LOCALSTORAGE_KEY,
+	readLocalStorageWithFallback,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -19,7 +20,7 @@ class ToolsStore {
 
 	constructor() {
 		try {
-			const stored = localStorage.getItem(DISABLED_TOOLS_LOCALSTORAGE_KEY);
+			const stored = readLocalStorageWithFallback(DISABLED_TOOLS_LOCALSTORAGE_KEY);
 			if (stored) {
 				const parsed = JSON.parse(stored);
 				if (Array.isArray(parsed)) {
@@ -123,7 +124,11 @@ class ToolsStore {
 							function: {
 								name: tool.name,
 								description: tool.description,
-								parameters: { type: JsonSchemaType.OBJECT, properties: {}, required: [] }
+								parameters: {
+									type: JsonSchemaType.OBJECT,
+									properties: {},
+									required: []
+								}
 							}
 						}
 					});
@@ -301,7 +306,9 @@ class ToolsStore {
 	}
 
 	isGroupFullyEnabled(group: ToolGroup): boolean {
-		return group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.function.name));
+		return (
+			group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.function.name))
+		);
 	}
 
 	isGroupPartiallyEnabled(group: ToolGroup): boolean {

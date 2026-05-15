@@ -156,7 +156,10 @@
 								: 'max-height: none;'}
 						>
 							{#if currentConfig.renderUserContentAsMarkdown}
-								<div bind:this={messageElement} class={isExpanded ? 'cursor-text' : ''}>
+								<div
+									bind:this={messageElement}
+									class={isExpanded ? 'cursor-text' : ''}
+								>
 									<MarkdownContent
 										class="markdown-system-content -my-4"
 										content={message.content}
@@ -165,7 +168,9 @@
 							{:else}
 								<span
 									bind:this={messageElement}
-									class="text-md whitespace-pre-wrap {isExpanded ? 'cursor-text' : ''}"
+									class="text-md whitespace-pre-wrap {isExpanded
+										? 'cursor-text'
+										: ''}"
 								>
 									{message.content}
 								</span>

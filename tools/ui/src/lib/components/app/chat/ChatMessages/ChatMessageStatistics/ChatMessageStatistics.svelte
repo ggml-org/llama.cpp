@@ -1,5 +1,13 @@
 <script lang="ts">
-	import { Clock, Gauge, WholeWord, BookOpenText, Sparkles, Wrench, Layers } from '@lucide/svelte';
+	import {
+		Clock,
+		Gauge,
+		WholeWord,
+		BookOpenText,
+		Sparkles,
+		Wrench,
+		Layers
+	} from '@lucide/svelte';
 	import { ChatMessageStatisticsBadge } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ChatMessageStatsView } from '$lib/enums';
@@ -93,7 +101,9 @@
 	// In live mode, generation tab is disabled until we have generation stats
 	let isGenerationDisabled = $derived(isLive && !hasGenerationStats);
 
-	let hasAgenticStats = $derived(agenticTimings !== undefined && agenticTimings.toolCallsCount > 0);
+	let hasAgenticStats = $derived(
+		agenticTimings !== undefined && agenticTimings.toolCallsCount > 0
+	);
 
 	let agenticToolsPerSecond = $derived(
 		hasAgenticStats && agenticTimings!.toolsMs > 0
@@ -107,7 +117,9 @@
 
 	let agenticTotalTimeMs = $derived(
 		hasAgenticStats
-			? agenticTimings!.toolsMs + agenticTimings!.llm.predicted_ms + agenticTimings!.llm.prompt_ms
+			? agenticTimings!.toolsMs +
+					agenticTimings!.llm.predicted_ms +
+					agenticTimings!.llm.prompt_ms
 			: 0
 	);
 
@@ -148,7 +160,8 @@
 						: isGenerationDisabled
 							? 'cursor-not-allowed opacity-40'
 							: 'hover:text-foreground'}"
-					onclick={() => !isGenerationDisabled && (activeView = ChatMessageStatsView.GENERATION)}
+					onclick={() =>
+						!isGenerationDisabled && (activeView = ChatMessageStatsView.GENERATION)}
 					disabled={isGenerationDisabled}
 				>
 					<Sparkles class="h-3 w-3" />

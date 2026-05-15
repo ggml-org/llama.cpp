@@ -54,7 +54,9 @@
 				{#if icon}
 					{@const IconComponent = icon}
 
-					<IconComponent class="h-5 w-5 {variant === 'destructive' ? 'text-destructive' : ''}" />
+					<IconComponent
+						class="h-5 w-5 {variant === 'destructive' ? 'text-destructive' : ''}"
+					/>
 				{/if}
 				{title}
 			</AlertDialog.Title>
@@ -72,7 +74,9 @@
 			<AlertDialog.Cancel onclick={onCancel}>{cancelText}</AlertDialog.Cancel>
 			<AlertDialog.Action
 				onclick={onConfirm}
-				class={variant === 'destructive' ? 'bg-destructive text-white hover:bg-destructive/80' : ''}
+				class={variant === 'destructive'
+					? 'bg-destructive text-white hover:bg-destructive/80'
+					: ''}
 			>
 				{confirmText}
 			</AlertDialog.Action>

@@ -141,7 +141,9 @@ class ServerStore {
 		const newRole = props?.role === ServerRole.ROUTER ? ServerRole.ROUTER : ServerRole.MODEL;
 		if (this.role !== newRole) {
 			this.role = newRole;
-			console.info(`Server running in ${newRole === ServerRole.ROUTER ? 'ROUTER' : 'MODEL'} mode`);
+			console.info(
+				`Server running in ${newRole === ServerRole.ROUTER ? 'ROUTER' : 'MODEL'} mode`
+			);
 		}
 	}
 }

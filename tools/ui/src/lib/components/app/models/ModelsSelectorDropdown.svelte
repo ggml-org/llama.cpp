@@ -187,19 +187,28 @@
 									aria-disabled="true"
 									disabled
 								>
-									<ModelId modelId={currentModel} class="flex-1" hideQuantization />
+									<ModelId
+										modelId={currentModel}
+										class="flex-1"
+										hideQuantization
+									/>
 
-									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+									<span class="ml-2 text-xs whitespace-nowrap opacity-70"
+										>(not available)</span
+									>
 								</button>
 							{/if}
 
 							{#if ms.filteredOptions.length === 0}
-								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
+								<p class="px-4 py-3 text-sm text-muted-foreground">
+									No models found.
+								</p>
 							{/if}
 
 							{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
 								{@const { option, flatIndex } = item}
-								{@const isSelected = currentModel === option.model || ms.activeId === option.id}
+								{@const isSelected =
+									currentModel === option.model || ms.activeId === option.id}
 								{@const isHighlighted = flatIndex === highlightedIndex}
 								{@const isFav = ms.isFavorite(option.model)}
 
@@ -213,7 +222,10 @@
 									onInfoClick={ms.handleInfoClick}
 									onMouseEnter={() => (highlightedIndex = flatIndex)}
 									onKeyDown={(event) => {
-										if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
+										if (
+											event.key === KeyboardKey.ENTER ||
+											event.key === KeyboardKey.SPACE
+										) {
 											event.preventDefault();
 											ms.handleSelect(option.id);
 										}

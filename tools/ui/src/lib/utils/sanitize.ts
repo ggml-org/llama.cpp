@@ -19,5 +19,7 @@ export function sanitizeKeyValuePairKey(raw: string): string {
  * which is a valid header-value continuation character per RFC 7230.
  */
 export function sanitizeKeyValuePairValue(raw: string): string {
-	return raw.replace(KEY_VALUE_PAIR_UNSAFE_VALUE_RE, '').slice(0, KEY_VALUE_PAIR_VALUE_MAX_LENGTH);
+	return raw
+		.replace(KEY_VALUE_PAIR_UNSAFE_VALUE_RE, '')
+		.slice(0, KEY_VALUE_PAIR_VALUE_MAX_LENGTH);
 }
