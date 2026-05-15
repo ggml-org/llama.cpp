@@ -620,10 +620,7 @@ class MODEL_TENSOR(IntEnum):
     RES_SCALE_RES        = auto() # Zaya: residual_scale (+ bias)
     RES_SCALE_HS_FINAL   = auto() # Zaya: final hidden_states_scale (+ bias)
     RES_SCALE_RES_FINAL  = auto() # Zaya: final residual_scale (+ bias)
-    ZAYA_ROUTER_DOWN_B   = auto() # Zaya
-    ZAYA_ROUTER_MLP0_B   = auto() # Zaya
-    ZAYA_ROUTER_MLP2     = auto() # Zaya
-    ZAYA_ROUTER_MLP2_B   = auto() # Zaya
+    ZAYA_ROUTER_MLP2     = auto() # Zaya: router MLP layer 2 (+ bias)
     ZAYA_ROUTER_MLP4     = auto() # Zaya
     ZAYA_ROUTER_BIASES   = auto() # Zaya
     ZAYA_ROUTER_EDA_SCALE = auto() # Zaya
@@ -1150,10 +1147,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.RES_SCALE_RES:             "blk.{bid}.res_scale_res",        # Zaya
     MODEL_TENSOR.RES_SCALE_HS_FINAL:        "res_scale_hs",                   # Zaya
     MODEL_TENSOR.RES_SCALE_RES_FINAL:       "res_scale_res",                  # Zaya
-    MODEL_TENSOR.ZAYA_ROUTER_DOWN_B:        "blk.{bid}.zaya_router_down_b",   # Zaya
-    MODEL_TENSOR.ZAYA_ROUTER_MLP0_B:        "blk.{bid}.zaya_router_mlp0_b",   # Zaya
     MODEL_TENSOR.ZAYA_ROUTER_MLP2:          "blk.{bid}.zaya_router_mlp2",     # Zaya
-    MODEL_TENSOR.ZAYA_ROUTER_MLP2_B:        "blk.{bid}.zaya_router_mlp2_b",   # Zaya
     MODEL_TENSOR.ZAYA_ROUTER_MLP4:          "blk.{bid}.zaya_router_mlp4",     # Zaya
     MODEL_TENSOR.ZAYA_ROUTER_BIASES:        "blk.{bid}.zaya_router_biases",   # Zaya
     MODEL_TENSOR.ZAYA_ROUTER_EDA_SCALE:     "blk.{bid}.zaya_router_eda",      # Zaya
@@ -4045,12 +4039,9 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.RES_SCALE_HS_FINAL,
         MODEL_TENSOR.RES_SCALE_RES_FINAL,
         MODEL_TENSOR.FFN_GATE_INP,
-        MODEL_TENSOR.ZAYA_ROUTER_DOWN_B,
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_GATE,
-        MODEL_TENSOR.ZAYA_ROUTER_MLP0_B,
         MODEL_TENSOR.ZAYA_ROUTER_MLP2,
-        MODEL_TENSOR.ZAYA_ROUTER_MLP2_B,
         MODEL_TENSOR.ZAYA_ROUTER_MLP4,
         MODEL_TENSOR.ZAYA_ROUTER_BIASES,
         MODEL_TENSOR.ZAYA_ROUTER_EDA_SCALE,

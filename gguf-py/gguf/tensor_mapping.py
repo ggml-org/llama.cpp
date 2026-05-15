@@ -171,6 +171,9 @@ class TensorNameMap:
         MODEL_TENSOR.A_QF_PROJ_LINEAR: (
             "projector.linear",
         ),
+        MODEL_TENSOR.ZAYA_ROUTER_MLP2: (
+            "model.layers.{bid}.self_attn.router_mlp.2",      # zaya
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {

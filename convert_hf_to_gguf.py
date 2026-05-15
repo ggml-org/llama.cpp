@@ -6523,17 +6523,17 @@ class ZayaModel(TextModel):
         if "down_proj.weight" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_INP, bid), data_torch
         elif "down_proj.bias" in name:
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_DOWN_B, bid, suffix=".bias"), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_INP, bid, suffix=".bias"), data_torch
         elif "rmsnorm_eda" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_NORM, bid), data_torch
         elif "router_mlp.0.weight" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid), data_torch
         elif "router_mlp.0.bias" in name:
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP0_B, bid, suffix=".bias"), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid, suffix=".bias"), data_torch
         elif "router_mlp.2.weight" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP2, bid), data_torch
         elif "router_mlp.2.bias" in name:
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP2_B, bid, suffix=".bias"), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP2, bid, suffix=".bias"), data_torch
         elif "router_mlp.4.weight" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP4, bid), data_torch
         elif "balancing_biases" in name:

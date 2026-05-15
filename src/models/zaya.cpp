@@ -95,18 +95,18 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
             // Router network
             layer.zaya_router_down   = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i),
                 {n_embd, n_ff_exp}, 0);
-            layer.zaya_router_down_b = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_DOWN_B, "bias", i),
-                {n_ff_exp}, 0);
+            layer.zaya_router_down_b = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "bias", i),
+                {n_ff_exp}, TENSOR_NOT_REQUIRED);
             layer.zaya_router_norm   = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i),
                 {n_ff_exp}, 0);
             layer.zaya_router_mlp0   = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i),
                 {n_ff_exp, n_ff_exp}, 0);
-            layer.zaya_router_mlp0_b = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_MLP0_B, "bias", i),
-                {n_ff_exp}, 0);
+            layer.zaya_router_mlp0_b = create_tensor(tn(LLM_TENSOR_FFN_GATE, "bias", i),
+                {n_ff_exp}, TENSOR_NOT_REQUIRED);
             layer.zaya_router_mlp2   = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_MLP2, "weight", i),
                 {n_ff_exp, n_ff_exp}, 0);
-            layer.zaya_router_mlp2_b = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_MLP2_B, "bias", i),
-                {n_ff_exp}, 0);
+            layer.zaya_router_mlp2_b = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_MLP2, "bias", i),
+                {n_ff_exp}, TENSOR_NOT_REQUIRED);
             layer.zaya_router_mlp4   = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_MLP4, "weight", i),
                 {n_ff_exp, n_expert + 1}, 0);
             layer.zaya_router_biases = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_BIASES, "weight", i),
