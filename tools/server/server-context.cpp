@@ -2554,6 +2554,12 @@ private:
                                             // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
                                             LOG_INF("slot %12.*s: id %2d | task %d | Checking checkpoint with [%d, %d] against %d...\n", 12,
                                                 func_name, (slot).id, ((slot).task ? (slot).task->id : -1), cur.pos_min, cur.pos_max, pos_min_thold);
+                                            // for hybrid/recurrent models (DeltaNet, Mamba), pos_min always equals
+                                            // the full sequence length, so the SWA-based pos_min check always fails.
+                                            // use pos_max <= pos_next instead to find the most recent valid checkpoint.
+                                            if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
+                                                return cur.pos_max <= pos_next;
+                                            }
                                             return cur.pos_min < pos_min_thold || cur.pos_min == 0;
                                         }
                                     );
@@ -2626,12 +2632,17 @@ private:
                     SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
                     if (!llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, p0, -1)) {
-                        SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
+                        if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL && slot.n_prompt_tokens_cache > 0) {
+                            // hybrid/recurrent: partial seq_rm always fails, but checkpoint restored valid state
+                            SLT_INF(slot, "seq_rm failed (expected for hybrid) - keeping %d cached tokens from checkpoint\n", slot.n_prompt_tokens_cache);
+                        } else {
+                            SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
 
-                        slot.prompt_clear(true);
+                            slot.prompt_clear(true);
 
-                        // there is no common part left
-                        slot.n_prompt_tokens_cache = 0;
+                            // there is no common part left
+                            slot.n_prompt_tokens_cache = 0;
+                        }
                     } else {
                        if (ctx_dft && !llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, p0, -1)) {
                            GGML_ABORT("failed to truncate draft context\n");
