@@ -204,7 +204,7 @@ If the `nvidia-smi` (NVIDIA System Management Interface) command-line utility is
 
 ```bash
 nvidia-smi --list-gpus
-nvidia-smi --query-gpu=index,uuid,serial,name,memory.total,compute_cap,driver_version,kmd_version
+nvidia-smi --query-gpu=index,uuid,serial,name,memory.total,compute_cap
 ```
 
 If you have multiple GPUs and you want to run the next commands on a specific one, you can use the `-i` parameter by specifying the `index` or `uuid` identifier.
@@ -224,7 +224,7 @@ GeForce RTX 3070      8.6
 If the `nvidia-smi` (NVIDIA System Management Interface) command-line utility is installed, another option is to run the following command:
 
 ```bash
-nvidia-smi --query-gpu=id,name,compute_cap
+nvidia-smi --query-gpu=index,name,compute_cap
 ```
 
 #### 2. List each varying `Compute Capability` in the `CMAKE_CUDA_ARCHITECTURES` list
