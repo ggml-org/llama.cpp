@@ -447,7 +447,6 @@ enum llm_tensor {
     LLM_TENSOR_SSM_G_B,             // kimi: output gate projection B
     // ZAYA CCA (Compressed Convolutional Attention)
     LLM_TENSOR_CCA_CONV_GRP,        // zaya: grouped conv1d  (conv_qk.1)
-    LLM_TENSOR_CCA_QK_NORM,         // zaya: RMSNorm on concat(Q,K)
     LLM_TENSOR_CCA_K_SCALE,         // zaya: learned K temperature
     LLM_TENSOR_CCA_VAL_PROJ1,       // zaya: V projection 1
     LLM_TENSOR_CCA_VAL_PROJ2,       // zaya: V projection 2

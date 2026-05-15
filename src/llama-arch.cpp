@@ -419,7 +419,6 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_SSM_G_A,                                "blk.%d.ssm_g_a" },
     { LLM_TENSOR_SSM_G_B,                                "blk.%d.ssm_g_b" },
     { LLM_TENSOR_CCA_CONV_GRP,                           "blk.%d.cca_conv_grp" },
-    { LLM_TENSOR_CCA_QK_NORM,                            "blk.%d.cca_qk_norm" },
     { LLM_TENSOR_CCA_K_SCALE,                            "blk.%d.cca_k_scale" },
     { LLM_TENSOR_CCA_VAL_PROJ1,                          "blk.%d.cca_val_proj1" },
     { LLM_TENSOR_CCA_VAL_PROJ2,                          "blk.%d.cca_val_proj2" },
@@ -675,7 +674,6 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_SSM_G_B,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     // ZAYA CCA
     {LLM_TENSOR_CCA_CONV_GRP,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
-    {LLM_TENSOR_CCA_QK_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_CCA_K_SCALE,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_CCA_VAL_PROJ1,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CCA_VAL_PROJ2,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},

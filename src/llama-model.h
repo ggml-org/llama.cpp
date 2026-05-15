@@ -482,7 +482,6 @@ struct llama_layer {
     struct ggml_tensor * cca_conv_dw_b  = nullptr;  // depthwise conv bias
     struct ggml_tensor * cca_conv_grp   = nullptr;  // grouped conv   (conv_qk.1)
     struct ggml_tensor * cca_conv_grp_b = nullptr;  // grouped conv bias
-    struct ggml_tensor * cca_qk_norm    = nullptr;  // RMSNorm on concat(Q,K)
     struct ggml_tensor * cca_k_scale    = nullptr;  // learned K temperature
     struct ggml_tensor * cca_val_proj1  = nullptr;  // V projection stream 1
     struct ggml_tensor * cca_val_proj2  = nullptr;  // V projection stream 2

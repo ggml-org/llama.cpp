@@ -612,7 +612,6 @@ class MODEL_TENSOR(IntEnum):
     SSM_G_A              = auto() # Kimi Linear
     SSM_G_B              = auto() # Kimi Linear
     CCA_CONV_GRP         = auto() # Zaya
-    CCA_QK_NORM          = auto() # Zaya (weightless - unit RMSNorm)
     CCA_K_SCALE          = auto() # Zaya
     CCA_VAL_PROJ1        = auto() # Zaya: CCA value projection stream 1
     CCA_VAL_PROJ2        = auto() # Zaya: CCA value projection stream 2
@@ -1139,7 +1138,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_G_A:                   "blk.{bid}.ssm_g_a",              # Kimi Linear
     MODEL_TENSOR.SSM_G_B:                   "blk.{bid}.ssm_g_b",              # Kimi Linear
     MODEL_TENSOR.CCA_CONV_GRP:              "blk.{bid}.cca_conv_grp",         # Zaya
-    MODEL_TENSOR.CCA_QK_NORM:               "blk.{bid}.cca_qk_norm",          # Zaya
     MODEL_TENSOR.CCA_K_SCALE:               "blk.{bid}.cca_k_scale",          # Zaya
     MODEL_TENSOR.CCA_VAL_PROJ1:             "blk.{bid}.cca_val_proj1",        # Zaya
     MODEL_TENSOR.CCA_VAL_PROJ2:             "blk.{bid}.cca_val_proj2",        # Zaya
@@ -4030,7 +4028,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.SSM_CONV1D,
         MODEL_TENSOR.CCA_CONV_GRP,
-        MODEL_TENSOR.CCA_QK_NORM,
         MODEL_TENSOR.CCA_K_SCALE,
         MODEL_TENSOR.CCA_VAL_PROJ1,
         MODEL_TENSOR.CCA_VAL_PROJ2,
