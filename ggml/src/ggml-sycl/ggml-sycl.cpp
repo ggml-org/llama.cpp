@@ -97,7 +97,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
     for (int i = 0; i < info.device_count; ++i) {
         info.devices[i].vmm = 0;
         dpct::device_info prop;
-        sycl::device device = dpct::dev_mgr::instance().get_device(i);
+        auto & device = dpct::dev_mgr::instance().get_device(i);
 
         SYCL_CHECK(CHECK_TRY_ERROR(dpct::get_device_info(
             prop, device)));
@@ -115,7 +115,10 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
         info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
         info.devices[i].hw_info = get_device_hw_info(&device);
-
+        // Skip non-GPU: a CPU in the enumeration may disable L0 for all the GPUs
+        if (device.is_gpu() && device.default_queue().get_backend() != sycl::backend::ext_oneapi_level_zero) {
+            info.ext_oneapi_level_zero = false;
+        }
     }
 
     for (int id = 0; id < info.device_count; ++id) {
@@ -229,26 +232,10 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        g_ggml_sycl_enable_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
+        g_ggml_sycl_enable_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", ggml_sycl_info().ext_oneapi_level_zero);
 #else
         g_ggml_sycl_enable_level_zero = 0;
 #endif
-        if (g_ggml_sycl_enable_level_zero) {
-            // Verify all GPU devices use the Level Zero backend before enabling L0 APIs.
-            // Only check GPU devices; CPU devices use OpenCL and would otherwise
-            // disable Level Zero for the GPUs on systems without ONEAPI_DEVICE_SELECTOR set.
-            for (unsigned int i = 0; i < dpct::dev_mgr::instance().device_count(); i++) {
-                auto & q = dpct::dev_mgr::instance().get_device(i).default_queue();
-                if (!q.get_device().is_gpu()) {
-                    continue;
-                }
-                if (q.get_backend() != sycl::backend::ext_oneapi_level_zero) {
-                    GGML_LOG_WARN("SYCL GPU device %d does not use Level Zero backend, disabling Level Zero memory API\n", i);
-                    g_ggml_sycl_enable_level_zero = 0;
-                    break;
-                }
-            }
-        }
 
 #ifdef SYCL_FLASH_ATTN
         g_ggml_sycl_enable_flash_attention = get_sycl_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
