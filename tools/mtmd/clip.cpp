@@ -300,7 +300,8 @@ ggml_tensor * clip_graph::build_vit(
             norm_type norm_t,
             ffn_op_type ffn_t,
             ggml_tensor * learned_pos_embd,
-            std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos
+            std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos,
+            const build_vit_opts & opts
         ) {
     if (learned_pos_embd) {
         inp = ggml_add(ctx0, inp, learned_pos_embd);
@@ -427,7 +428,7 @@ ggml_tensor * clip_graph::build_vit(
             }
 
             cur = build_attn(layer.o_w, layer.o_b,
-                Qcur, Kcur, Vcur, nullptr, kq_scale, il);
+                Qcur, Kcur, Vcur, opts.attn_mask, kq_scale, il);
             cb(cur, "attn_out", il);
         }
 
@@ -663,6 +664,9 @@ ggml_tensor * clip_graph::build_attn(
 
         k = ggml_cast(ctx0, k, GGML_TYPE_F16);
         v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+        if (kq_mask) {
+            kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
+        }
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, 0.0f, 0.0f);
         ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
@@ -3244,12 +3248,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_QWEN3A:
             {
-                // 3x stride-2 conv2d: each step is floor((n-1)/2)+1
-                int n = img->nx;
-                n = (n - 1) / 2 + 1;
-                n = (n - 1) / 2 + 1;
-                n = (n - 1) / 2 + 1;
-                n_patches = n;
+                // chunk_size=100 frames --> 3x stride-2 conv2d --> 13 tokens per chunk
+                const int chunk_size       = 100;
+                const int tokens_per_chunk = 13;
+                n_patches = (img->nx / chunk_size) * tokens_per_chunk;
             } break;
         case PROJECTOR_TYPE_GLMA:
             {
@@ -4290,21 +4292,6 @@ bool clip_has_vision_encoder(const struct clip_ctx * ctx) {
 
 bool clip_has_audio_encoder(const struct clip_ctx * ctx) {
     return ctx->model.modality == CLIP_MODALITY_AUDIO;
-}
-
-bool clip_has_whisper_encoder(const struct clip_ctx * ctx) {
-    switch (ctx->proj_type()) {
-        case PROJECTOR_TYPE_ULTRAVOX:
-        case PROJECTOR_TYPE_QWEN2A:
-        case PROJECTOR_TYPE_QWEN3A:
-        case PROJECTOR_TYPE_GLMA:
-        case PROJECTOR_TYPE_VOXTRAL:
-        case PROJECTOR_TYPE_MERALION:
-        case PROJECTOR_TYPE_MUSIC_FLAMINGO:
-            return true;
-        default:
-            return false;
-    }
 }
 
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec) {

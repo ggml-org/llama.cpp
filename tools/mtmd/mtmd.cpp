@@ -515,13 +515,18 @@ struct mtmd_context {
         // set preprocessor
         switch (proj) {
             case PROJECTOR_TYPE_QWEN2A:
-            case PROJECTOR_TYPE_QWEN3A:
             case PROJECTOR_TYPE_QWEN25O:
                 {
                     // <|audio_bos|> ... (embeddings) ... <|audio_eos|>
                     aud_beg = "<|audio_bos|>";
                     aud_end = "<|audio_eos|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_QWEN3A:
+                {
+                    aud_beg = "<|audio_start|>";
+                    aud_end = "<|audio_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_qwen3a>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_VOXTRAL:
                 {
