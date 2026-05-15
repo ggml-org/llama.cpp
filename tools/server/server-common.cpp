@@ -1132,6 +1132,10 @@ json oaicompat_chat_params_parse(
     // Reasoning budget: pass parameters through to sampling layer
     {
         int reasoning_budget = opt.reasoning_budget;
+        // Read per-request override before writing to llama_params; the copy loop won't overwrite it.
+        if (body.contains("reasoning_budget_tokens")) {
+            reasoning_budget = json_value(body, "reasoning_budget_tokens", reasoning_budget);
+        }
         if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
             reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
         }
