@@ -97,7 +97,7 @@ set(_UBER_ME_KERNELS mul_mat_f16_matrix_engine mul_mat_f32_matrix_engine flash_a
 foreach(UK_KERNEL ${UBERKERNEL_SUPPORTED_KERNELS})
     set(_obj uber_${UK_KERNEL})
     add_library(${_obj} OBJECT src/${UK_KERNEL}.c)
-    target_compile_definitions(${_obj} PRIVATE "entry_point=${UK_KERNEL}_entry")
+    target_compile_definitions(${_obj} PRIVATE "entry_point=${UK_KERNEL}_entry" ET_UBERKERNEL)
     target_include_directories(${_obj} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/..

@@ -393,5 +393,11 @@ int entry_point(struct ggml_et_mm_q8_params* params, void* env) {
         }
     }
 
+#ifdef ET_UBERKERNEL
+    FENCE;
+    evict_region_past_l2(params->dst.data, tensor_bytes(&params->dst));
+    WAIT_CACHEOPS;
+    FENCE;
+#endif
     return 0;
 }
