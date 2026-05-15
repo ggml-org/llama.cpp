@@ -13169,8 +13169,9 @@ class Granite4VisionMmprojModel(MmprojModel):
         if (embed_mult := text_config.get("embedding_multiplier")) is not None:
             self.gguf_writer.add_embedding_scale(embed_mult)
 
-        # Add image grind pinpoints (resolution candidates internally)
+        # Add flattened image grind pinpoints (resolution candidates internally)
         if pinpoints := self.global_config.get("image_grid_pinpoints"):
+            pinpoints = [x for pair in pinpoints for x in pair]
             self.gguf_writer.add_vision_image_grid_pinpoints(pinpoints)
 
     @classmethod
