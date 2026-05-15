@@ -13156,6 +13156,10 @@ class Granite4VisionMmprojModel(MmprojModel):
         self.gguf_writer.add_vision_projector_query_side(query_side)
         self.gguf_writer.add_vision_projector_window_side(window_side)
 
+        # Layer norm epsilon for ViT (use text model epsilon as fallback)
+        eps = v.get("rms_norm_eps", self.global_config.get("text_config", {}).get("rms_norm_eps", 1e-5))
+        self.gguf_writer.add_vision_attention_layernorm_eps(eps)
+
         # Set vision feature layers
         self.gguf_writer.add_vision_feature_layers(self._vision_feature_layers)
 
