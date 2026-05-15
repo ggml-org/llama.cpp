@@ -25,6 +25,8 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
     {"eagle3",        COMMON_SPECULATIVE_TYPE_EAGLE3},
     {"mtp",           COMMON_SPECULATIVE_TYPE_MTP},
+    // Backward-compatible alias used by older harnesses and notes.
+    {"draft-mtp",     COMMON_SPECULATIVE_TYPE_MTP},
     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
