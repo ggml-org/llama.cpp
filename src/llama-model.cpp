@@ -1060,6 +1060,25 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key_or_arr(LLM_KV_FEED_FORWARD_LENGTH,  hparams.n_ff_arr,   hparams.n_layer, false);
     ml.get_key_or_arr(LLM_KV_ATTENTION_HEAD_COUNT, hparams.n_head_arr, hparams.n_layer, false);
 
+    // populate deepstack_layers_arr
+    //
+    // If single-valued, it's the equivalent of n_deepstack_layers (qwen3vl).
+    // This implies a 1:1 correspondence between entries in inp_embed and the
+    // layers < n (offset by 1).
+    //
+    // If multi-valued (Granite4 Vision), the elements are themselves index
+    // values into the entries in inp_embed
+    std::fill(hparams.deepstack_layers_arr.begin(), hparams.deepstack_layers_arr.end(), -1.0f);
+    uint32_t _n_deepstack_layers = 0;
+    ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS, _n_deepstack_layers, false);
+    if (_n_deepstack_layers > 0) {
+        for (int32_t i = 0; i < _n_deepstack_layers; ++i) {
+            hparams.deepstack_layers_arr[i] = i + 1;
+        }
+    } else {
+        ml.get_arr(LLM_KV_NUM_DEEPSTACK_LAYERS, hparams.deepstack_layers_arr, false);
+    }
+
     // n_head_kv is optional, default to n_head
     hparams.n_head_kv_arr = hparams.n_head_arr;
 
