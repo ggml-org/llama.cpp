@@ -183,6 +183,9 @@ class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
         if name.startswith("model.visual."):
             name = name.replace("model.visual.", "visual.", 1)
 
+        if name.startswith("thinker.audio_tower."):
+            name = name.replace("thinker.audio_tower.", "audio_tower.", 1)
+
         if "visual." not in name and "audio_tower." not in name:
             return None
 
