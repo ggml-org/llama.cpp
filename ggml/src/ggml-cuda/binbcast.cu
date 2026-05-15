@@ -73,10 +73,10 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
     const size_t i_dst  =  i3*s3  +  i2*s2  +  i1*s1;
 
-    ggml_cuda_pdl_sync();
     const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
     dst_t * dst_row = dst + i_dst;
 
+    ggml_cuda_pdl_sync();
     for (int i0 = i0s; i0 < ne0; i0 += blockDim.x * gridDim.x) {
         const uint32_t i10 = fastmodulo(i0, ne10);
 
@@ -141,12 +141,12 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
     const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
     const size_t i_dst  =  i3*s3  +  i2*s2  +  i1*s1;
 
-    ggml_cuda_pdl_sync();
     const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
     dst_t * dst_row = dst + i_dst;
 
     const int i10 = fastmodulo(i0, ne10);
 
+    ggml_cuda_pdl_sync();
     float result = src0_row ? (float) src0_row[i0*s00] : 0.0f;
     if constexpr (sizeof...(src1_ptrs) > 0) {
         result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10*s10])));

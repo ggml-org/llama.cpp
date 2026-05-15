@@ -629,7 +629,6 @@ static __global__ void flash_attn_mask_to_KV_max(
     const int tid      = threadIdx.x;
     const int sequence = blockIdx.y;
     const int jt       = blockIdx.x;
-    ggml_cuda_pdl_sync();
 
     mask += sequence*s33 + jt*ncols1*s31;
 
@@ -637,6 +636,7 @@ static __global__ void flash_attn_mask_to_KV_max(
     if (tid < WARP_SIZE) {
         buf_iw[tid] = 1;
     }
+    ggml_cuda_pdl_sync();
     __syncthreads();
 
     int KV_max_sj = (ne30 - 1) * FATTN_KQ_STRIDE;

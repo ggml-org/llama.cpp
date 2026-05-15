@@ -13,12 +13,12 @@ static __global__ void norm_f32(
     const int sample    = blockIdx.z;
     const int tid       = threadIdx.x;
 
-    ggml_cuda_pdl_sync();
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
     dst += ((sample*nchannels + channel)*nrows + row)*ncols;
 
     float2 mean_var = make_float2(0.0f, 0.0f);
 
+    ggml_cuda_pdl_sync();
     for (int col = tid; col < ncols; col += block_size) {
         const float xi = x[col];
         mean_var.x += xi;
@@ -160,7 +160,6 @@ static __global__ void rms_norm_back_f32(
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
 
-    ggml_cuda_pdl_sync();
     grad += int64_t(row)*ncols;
     xf   += int64_t(row)*ncols;
     dst  += int64_t(row)*ncols;
@@ -168,6 +167,7 @@ static __global__ void rms_norm_back_f32(
     float sum_xx = 0.0f; // sum for squares of x, equivalent to forward pass
     float sum_xg = 0.0f; // sum for x * gradient, needed because RMS norm mixes inputs
 
+    ggml_cuda_pdl_sync();
     for (int col = tid; col < ncols; col += block_size) {
         const float xfi = xf[col];
         sum_xx += xfi * xfi;
