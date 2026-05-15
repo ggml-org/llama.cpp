@@ -235,14 +235,27 @@ jobs:
             -DGGML_BACKEND_DL=ON `
             -DGGML_NATIVE=OFF `
             -DGGML_CPU=OFF `
+            -DGGML_HIP=ON `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
             -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DHIP_PATH="${env:HIP_PATH}" `
-            -DCMAKE_BUILD_TYPE=Release `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
+            -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}" `
             -DGPU_TARGETS="${{ matrix.gpu_targets }}"
           cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
+
+      - name: Verify HIP backend was built
+        run: |
+          $hipDll = Get-ChildItem -Path build\bin -Filter "ggml-hip*.dll" -ErrorAction SilentlyContinue
+          if (-not $hipDll) {
+            Write-Host "##[error]ggml-hip*.dll was NOT produced. The HIP backend silently failed to build."
+            Write-Host "Contents of build\bin:"
+            Get-ChildItem build\bin | Format-Table -AutoSize
+            exit 1
+          }
+          Write-Host "HIP backend artifact found:"
+          $hipDll | Format-Table FullName, Length -AutoSize
 
       - name: Determine tag name
         id: tag
