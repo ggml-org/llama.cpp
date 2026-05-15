@@ -283,3 +283,31 @@ export { MCPService } from './mcp.service';
  * @see ROUTES in constants/routes.ts — static route base paths
  */
 export { RouterService } from './router.service';
+
+/**
+ * **MigrationService** — Unified data migration hook
+ *
+ * Centralizes all data migrations (localStorage, IndexedDB, legacy formats) into a single
+ * initialization point. All migrations are NON-DESTRUCTIVE - legacy data is preserved
+ * for downgrade compatibility (no rollback needed).
+ *
+ * **Current Migrations:**
+ * 1. **localStorage prefix**: Copy LlamaCppWebui.* → LlamaUi.* (both preserved)
+ * 2. **IndexedDB database**: Copy LlamacppWebui → LlamaUi (both preserved)
+ * 3. **Legacy message format**: Marker-based → Structured format
+ * 4. **Theme key**: Copy standalone `theme` → config object (both preserved)
+ *
+ * **Usage:**
+ * ```typescript
+ * import { MigrationService } from '$lib/services';
+ *
+ * // Run all migrations on app startup (non-destructive)
+ * await MigrationService.runAllMigrations();
+ *
+ * // Check migration status
+ * const state = MigrationService.getState();
+ * ```
+ *
+ * @see migration.service.ts — full implementation (non-destructive)
+ */
+export { MigrationService } from './migration.service';

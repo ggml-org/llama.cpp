@@ -1,11 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
-import {
-	DB_APP_NAME_DEPRECATED,
-	IDXDB_TABLES,
-	IDXDB_STORES,
-	STORAGE_APP_NAME
-} from '$lib/constants';
+import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
+import { MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 
 class LlamaUiDatabase extends Dexie {
@@ -20,41 +16,6 @@ class LlamaUiDatabase extends Dexie {
 }
 
 const db = new LlamaUiDatabase();
-
-/** Migrate data from the old LlamacppWebui database to the new LlamaUi database */
-async function migrateFromOldDatabase(): Promise<void> {
-	try {
-		const oldDbNames = await Dexie.getDatabaseNames();
-		if (!oldDbNames.includes(DB_APP_NAME_DEPRECATED)) return;
-
-		console.log('[Database] Migrating data from old database:', DB_APP_NAME_DEPRECATED);
-
-		const oldDb = new Dexie(DB_APP_NAME_DEPRECATED);
-		oldDb.version(1).stores(IDXDB_STORES);
-
-		const conversations = await oldDb.table(IDXDB_TABLES.conversations).toArray();
-		const messages = await oldDb.table(IDXDB_TABLES.messages).toArray();
-
-		if (conversations.length > 0) {
-			await db.table(IDXDB_TABLES.conversations).bulkAdd(conversations);
-			console.log(`[Database] Migrated ${conversations.length} conversations`);
-		}
-		if (messages.length > 0) {
-			await db.table(IDXDB_TABLES.messages).bulkAdd(messages);
-			console.log(`[Database] Migrated ${messages.length} messages`);
-		}
-
-		oldDb.close();
-		await Dexie.delete(DB_APP_NAME_DEPRECATED);
-		console.log('[Database] Old database deleted');
-	} catch (err) {
-		console.warn('[Database] Migration from old database failed:', err);
-	}
-}
-
-// Run migration on import
-migrateFromOldDatabase();
-import { MessageRole } from '$lib/enums';
 
 export class DatabaseService {
 	/**

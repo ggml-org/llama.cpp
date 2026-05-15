@@ -22,13 +22,9 @@ import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
+import { MigrationService } from '$lib/services/migration.service';
 import { config } from '$lib/stores/settings.svelte';
-import {
-	filterByLeafNodeId,
-	findLeafNode,
-	runLegacyMigration,
-	generateConversationTitle
-} from '$lib/utils';
+import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
 import { MessageRole, HtmlInputType, FileExtensionText } from '$lib/enums';
 import {
@@ -44,7 +40,7 @@ import {
 	MULTIPLE_UNDERSCORE_REGEX,
 	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY
 } from '$lib/constants';
-import { localStorageGetItem } from '$lib/services/localstorage.service';
+
 import { ROUTES } from '$lib/constants/routes';
 import { RouterService } from '$lib/services/router.service';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -82,7 +78,7 @@ class ConversationsStore {
 	private static loadMcpDefaults(): McpServerOverride[] {
 		if (typeof globalThis.localStorage === 'undefined') return [];
 		try {
-			const raw = localStorageGetItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
+			const raw = localStorage.getItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
 			if (!raw) return [];
 			const parsed = JSON.parse(raw);
 			if (!Array.isArray(parsed)) return [];
@@ -136,9 +132,7 @@ class ConversationsStore {
 		if (this.isInitialized) return;
 
 		try {
-			// @deprecated Legacy migration for old marker-based messages.
-			// Remove once all users have migrated to the structured format.
-			await runLegacyMigration();
+			await MigrationService.runAllMigrations();
 
 			await this.loadConversations();
 			this.isInitialized = true;

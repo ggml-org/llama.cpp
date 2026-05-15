@@ -8,7 +8,7 @@ import {
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
-import { localStorageGetItem } from '$lib/services/localstorage.service';
+
 import { SvelteSet } from 'svelte/reactivity';
 
 class ToolsStore {
@@ -20,7 +20,7 @@ class ToolsStore {
 
 	constructor() {
 		try {
-			const stored = localStorageGetItem(DISABLED_TOOLS_LOCALSTORAGE_KEY);
+			const stored = localStorage.getItem(DISABLED_TOOLS_LOCALSTORAGE_KEY);
 			if (stored) {
 				const parsed = JSON.parse(stored);
 				if (Array.isArray(parsed)) {

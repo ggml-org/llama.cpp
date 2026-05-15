@@ -10,7 +10,7 @@ import {
 	MODEL_PROPS_CACHE_MAX_ENTRIES,
 	FAVORITE_MODELS_LOCALSTORAGE_KEY
 } from '$lib/constants';
-import { localStorageGetItem } from '$lib/services/localstorage.service';
+
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 
 /**
@@ -766,7 +766,7 @@ class ModelsStore {
 
 	private loadFavoritesFromStorage(): Set<string> {
 		try {
-			const raw = localStorageGetItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
+			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
 
 			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
 		} catch {

@@ -158,9 +158,6 @@ export {
 	type ToolResultLine
 } from './agentic';
 
-// Legacy migration utilities
-export { runLegacyMigration, isMigrationNeeded } from './legacy-migration';
-
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
 
