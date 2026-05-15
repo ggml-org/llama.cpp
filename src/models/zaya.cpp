@@ -8,6 +8,7 @@
 void llama_model_zaya::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_SSM_CONV_KERNEL, hparams.ssm_d_conv);
+    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
 
     const uint32_t n_qk = (hparams.n_head() + hparams.n_head_kv()) * hparams.n_embd_head_k();
     hparams.ssm_d_inner = 2*n_qk + hparams.n_embd; // CCA conv state + delayed value stream state
@@ -45,8 +46,8 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
 
     const int64_t n_embd_head = hparams.n_embd_head_k();
     const int64_t d_conv      = hparams.ssm_d_conv;
-    // Router MLP hidden size (zaya_mlp_expansion = 256 for ZAYA1-8B)
-    const int64_t n_ff_exp    = 256;
+    // Router MLP hidden size (zaya_mlp_expansion)
+    const int64_t n_ff_exp    = hparams.n_ff_exp;
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];

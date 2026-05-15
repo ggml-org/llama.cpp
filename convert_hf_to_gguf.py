@@ -6494,6 +6494,10 @@ class ZayaModel(TextModel):
         n_expert_used = self.find_hparam(["moe_router_topk", "num_experts_per_tok"], optional=True) or 1
         self.gguf_writer.add_expert_used_count(n_expert_used)
 
+        # Router MLP hidden size (zaya_mlp_expansion)
+        n_ff_exp = self.hparams.get("zaya_mlp_expansion", 256)
+        self.gguf_writer.add_expert_feed_forward_length(n_ff_exp)
+
     def _map_cca(self, name: str, data_torch: Tensor, bid: int) -> Iterable[tuple[str, Tensor]]:
         if "linear_q" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), data_torch
