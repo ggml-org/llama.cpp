@@ -1459,6 +1459,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     cb(selected_experts->src[0], "ffn_moe_argsort", il);
     cb(selected_experts, "ffn_moe_topk", il);
 
+    selected_experts = ggml_cont(ctx0, selected_experts);
+    cb(selected_experts, "ffn_moe_topk_ids", il);
+    ggml_set_output(selected_experts);
+    // if (trace_enabled) {
+    //     moe_trace_tensors.push_back(moe_trace_tensor{il, selected_experts, n_expert_used});
+    // }
+
     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
         // TODO: Use scalar div instead when/if implemented
         ggml_tensor * f_sel = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);

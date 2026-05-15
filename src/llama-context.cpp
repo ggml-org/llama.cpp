@@ -1168,6 +1168,62 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
+static bool parse_moe_topk_layer(const char * name, int & layer_idx) {
+    static constexpr const char * prefix = "ffn_moe_topk_ids-";
+    const size_t                  n      = strlen(prefix);
+
+    if (strncmp(name, prefix, n) != 0) {
+        return false;
+    }
+
+    char *     end = nullptr;
+    const long v   = strtol(name + n, &end, 10);
+
+    if (end == name + n || *end != '\0' || v < 0 || v > UINT16_MAX) {
+        return false;
+    }
+
+    layer_idx = (int) v;
+    return true;
+}
+
+struct llama_moe_trace_rec_v1 {
+    uint32_t token_idx;
+    uint16_t layer_idx;
+    uint8_t  phase;  // 0 = prefill, 1 = decode
+    uint8_t  n_expert_used;
+    int16_t  expert_ids[8];
+};
+
+struct llama_moe_trace_state {
+    FILE *   file           = nullptr;
+    uint32_t next_token_idx = 0;
+};
+
+static llama_moe_trace_state g_moe_trace;
+
+static bool llama_moe_trace_enabled() {
+    return getenv("LLAMA_MOE_TRACE") != nullptr;
+}
+
+static FILE * llama_moe_trace_file() {
+    if (g_moe_trace.file != nullptr) {
+        return g_moe_trace.file;
+    }
+
+    const char * path = getenv("LLAMA_MOE_TRACE");
+    if (path == nullptr || path[0] == '\0') {
+        return nullptr;
+    }
+
+    g_moe_trace.file = fopen(path, "wb");
+    if (g_moe_trace.file == nullptr) {
+        fprintf(stderr, "MOE_TRACE failed to open trace file: %s\n", path);
+    }
+
+    return g_moe_trace.file;
+}
+
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
@@ -1233,6 +1289,110 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
         return nullptr;
+    }
+
+    ggml_backend_sched_synchronize(sched.get());
+
+    FILE * trace_file = llama_moe_trace_file();
+
+    if (trace_file != nullptr) {
+        ggml_cgraph * trace_gf = res->get_gf();
+
+        static constexpr int64_t trace_max_expert_used = 8;    // Trace format v1 fixed envelope.
+        static constexpr int32_t trace_n_expert        = 128;  // TODO: take from hparams.n_expert.
+
+        const uint8_t  phase      = ubatch.n_tokens > 1 ? 0 : 1;
+        const uint32_t token_base = g_moe_trace.next_token_idx;
+
+        uint64_t records_written = 0;
+        uint64_t tensors_seen    = 0;
+
+        for (int node_idx = 0; node_idx < ggml_graph_n_nodes(trace_gf); ++node_idx) {
+            ggml_tensor * t = ggml_graph_node(trace_gf, node_idx);
+
+            int layer_idx = -1;
+            if (!parse_moe_topk_layer(t->name, layer_idx)) {
+                continue;
+            }
+
+            tensors_seen++;
+
+            if (t->type != GGML_TYPE_I32) {
+                fprintf(stderr, "MOE_TRACE skip non-I32: node=%d layer=%d name=%s type=%d type_name=%s\n", node_idx,
+                        layer_idx, t->name, t->type, ggml_type_name(t->type));
+                continue;
+            }
+
+            const int64_t n_expert_used = t->ne[0];
+            const int64_t n_tokens      = t->ne[1];
+
+            if (n_expert_used <= 0 || n_expert_used > trace_max_expert_used) {
+                fprintf(stderr, "MOE_TRACE skip bad n_expert_used: node=%d layer=%d name=%s n_expert_used=%lld\n",
+                        node_idx, layer_idx, t->name, (long long) n_expert_used);
+                continue;
+            }
+
+            if (n_tokens <= 0) {
+                continue;
+            }
+
+            // We expect ggml_cont() output:
+            //   ne=[8,n_tokens,1,1]
+            //   nb=[4,32,...]
+            // So compact flat indexing is valid.
+            if (t->nb[0] != sizeof(int32_t) || t->nb[1] != (size_t) (n_expert_used * (int64_t) sizeof(int32_t))) {
+                fprintf(stderr,
+                        "MOE_TRACE skip non-compact topk ids: node=%d layer=%d name=%s "
+                        "ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu]\n",
+                        node_idx, layer_idx, t->name, (long long) t->ne[0], (long long) t->ne[1], (long long) t->ne[2],
+                        (long long) t->ne[3], t->nb[0], t->nb[1], t->nb[2], t->nb[3]);
+                continue;
+            }
+
+            std::vector<int32_t> ids(ggml_nelements(t));
+            ggml_backend_tensor_get(t, ids.data(), 0, ggml_nbytes(t));
+
+            bool valid = true;
+
+            for (int64_t i = 0; i < ggml_nelements(t); ++i) {
+                if (ids[i] < 0 || ids[i] >= trace_n_expert) {
+                    fprintf(stderr, "MOE_TRACE invalid expert id: node=%d layer=%d name=%s pos=%lld id=%d\n", node_idx,
+                            layer_idx, t->name, (long long) i, ids[i]);
+                    valid = false;
+                    break;
+                }
+            }
+
+            if (!valid) {
+                continue;
+            }
+
+            for (int64_t tok = 0; tok < n_tokens; ++tok) {
+                llama_moe_trace_rec_v1 rec = {};
+
+                rec.token_idx     = token_base + (uint32_t) tok;
+                rec.layer_idx     = (uint16_t) layer_idx;
+                rec.phase         = phase;
+                rec.n_expert_used = (uint8_t) n_expert_used;
+
+                for (int64_t k = 0; k < n_expert_used; ++k) {
+                    rec.expert_ids[k] = (int16_t) ids[tok * n_expert_used + k];
+                }
+
+                fwrite(&rec, sizeof(rec), 1, trace_file);
+                records_written++;
+            }
+        }
+
+        fflush(trace_file);
+
+        fprintf(stderr, "MOE_TRACE wrote_records=%llu tensors=%llu token_base=%u ubatch_tokens=%d phase=%u\n",
+                (unsigned long long) records_written, (unsigned long long) tensors_seen, token_base, ubatch.n_tokens,
+                (unsigned) phase);
+
+        if (records_written > 0 && tensors_seen > 0) {
+            g_moe_trace.next_token_idx += (uint32_t) ubatch.n_tokens;
+        }
     }
 
     ret = GGML_STATUS_SUCCESS;
