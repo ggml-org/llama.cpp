@@ -35,20 +35,23 @@
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
 
 // vision-specific
-#define KEY_VISION_PROJ_TYPE    "clip.vision.projector_type" // for models with mixed modalities
-#define KEY_IMAGE_SIZE          "clip.vision.image_size"
-#define KEY_IMAGE_MIN_PIXELS    "clip.vision.image_min_pixels"
-#define KEY_IMAGE_MAX_PIXELS    "clip.vision.image_max_pixels"
-#define KEY_PREPROC_MIN_TILES   "clip.vision.preproc_min_tiles"
-#define KEY_PREPROC_MAX_TILES   "clip.vision.preproc_max_tiles"
-#define KEY_PREPROC_IMAGE_SIZE  "clip.vision.preproc_image_size"
-#define KEY_PATCH_SIZE          "clip.vision.patch_size"
-#define KEY_IMAGE_MEAN          "clip.vision.image_mean"
-#define KEY_IMAGE_STD           "clip.vision.image_std"
-#define KEY_FEATURE_LAYER       "clip.vision.feature_layer"
-#define KEY_PROJ_SCALE_FACTOR   "clip.vision.projector.scale_factor"
-#define KEY_SPATIAL_MERGE_SIZE  "clip.vision.spatial_merge_size"
-#define KEY_IS_DEEPSTACK_LAYERS "clip.vision.is_deepstack_layers"
+#define KEY_VISION_PROJ_TYPE        "clip.vision.projector_type" // for models with mixed modalities
+#define KEY_IMAGE_SIZE              "clip.vision.image_size"
+#define KEY_IMAGE_MIN_PIXELS        "clip.vision.image_min_pixels"
+#define KEY_IMAGE_MAX_PIXELS        "clip.vision.image_max_pixels"
+#define KEY_PREPROC_MIN_TILES       "clip.vision.preproc_min_tiles"
+#define KEY_PREPROC_MAX_TILES       "clip.vision.preproc_max_tiles"
+#define KEY_PREPROC_IMAGE_SIZE      "clip.vision.preproc_image_size"
+#define KEY_PATCH_SIZE              "clip.vision.patch_size"
+#define KEY_IMAGE_MEAN              "clip.vision.image_mean"
+#define KEY_IMAGE_STD               "clip.vision.image_std"
+#define KEY_FEATURE_LAYER           "clip.vision.feature_layer"
+#define KEY_PROJ_SCALE_FACTOR       "clip.vision.projector.scale_factor"
+#define KEY_PROJ_SAMPLE_QUERY_SIDE  "clip.vision.projector.query_side"
+#define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
+#define KEY_PROJ_SPATIAL_OFFSETS    "clip.vision.projector.spatial_offsets"
+#define KEY_SPATIAL_MERGE_SIZE      "clip.vision.spatial_merge_size"
+#define KEY_IS_DEEPSTACK_LAYERS     "clip.vision.is_deepstack_layers"
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"
@@ -207,10 +210,9 @@
 #define TN_CTC_OUT_MID     "a.enc_ctc_out_mid.%s"
 #define TN_ATTN_REL_POS_EMB "%s.blk.%d.attn_rel_pos_emb"
 // qformer projector
-#define TN_PROJ_LAYERNORM  "v.proj_layernorm.%s" // NOTE: Disambig with QF_PROJ_NORM
-#define TN_QF_PROJ_QUERY   "%s.proj_query"
+#define TN_QF_PROJ_QUERY   "a.proj_query"
 #define TN_QF_PROJ_NORM    "%s.proj_norm.%s" // NOTE: This _should_ be qf_proj_norm
-#define TN_QF_PROJ_LINEAR  "%s.proj_linear.%s"
+#define TN_QF_PROJ_LINEAR  "a.proj_linear.%s"
 #define TN_QF_SELF_ATTN_Q  "%s.proj_blk.%d.self_attn_q.%s"
 #define TN_QF_SELF_ATTN_K  "%s.proj_blk.%d.self_attn_k.%s"
 #define TN_QF_SELF_ATTN_V  "%s.proj_blk.%d.self_attn_v.%s"
@@ -224,6 +226,12 @@
 #define TN_QF_FFN_UP       "%s.proj_blk.%d.ffn_up.%s"
 #define TN_QF_FFN_DOWN     "%s.proj_blk.%d.ffn_down.%s"
 #define TN_QF_FFN_NORM     "%s.proj_blk.%d.ffn_norm.%s"
+// multi-projector qformer (bid => projector ID)
+#define TN_MULTI_PROJ_IMG_POS   "%s.proj_blk.%d.img_pos"
+#define TN_MULTI_PROJ_QUERY     "%s.proj_blk.%d.query"
+#define TN_MULTI_PROJ_LAYERNORM "%s.proj_blk.%d.layernorm.%s" // NOTE: Disambig with QF_PROJ_NORM
+#define TN_MULTI_PROJ_LINEAR    "%s.proj_blk.%d.linear.%s"
+#define TN_MULTI_PROJ_NORM      "%s.proj_blk.%d.norm.%s"
 
 // gemma4 audio conformer
 #define TN_A_MM_INP_PROJ     "mm.a.input_projection.%s"
