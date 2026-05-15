@@ -315,6 +315,20 @@ struct yasa2_stage {
     std::vector<yasa2_block> blocks;
 };
 
+// QFormer projector block for models with 1 (or more) QFormer projectors
+// Granite Speech, Granite4 Vision
+struct qf_block {
+    ggml_tensor * qf_proj_query       = nullptr;
+    ggml_tensor * qf_proj_norm_w      = nullptr;
+    ggml_tensor * qf_proj_norm_b      = nullptr;
+    ggml_tensor * qf_proj_linear_w    = nullptr;
+    ggml_tensor * qf_proj_linear_b    = nullptr;
+    ggml_tensor * qf_proj_layernorm_w = nullptr;
+    ggml_tensor * qf_proj_layernorm_b = nullptr;
+    ggml_tensor * qf_proj_img_pos     = nullptr; // Vision only
+    std::vector<clip_layer> qf_proj_layers;
+};
+
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -566,13 +580,8 @@ struct clip_model {
     ggml_tensor * ctc_out_b     = nullptr;
     ggml_tensor * ctc_out_mid_w = nullptr;
     ggml_tensor * ctc_out_mid_b = nullptr;
-    // qformer projector
-    ggml_tensor * qf_proj_query    = nullptr;
-    ggml_tensor * qf_proj_norm_w   = nullptr;
-    ggml_tensor * qf_proj_norm_b   = nullptr;
-    ggml_tensor * qf_proj_linear_w = nullptr;
-    ggml_tensor * qf_proj_linear_b = nullptr;
-    std::vector<clip_layer> qf_proj_layers;
+    // qformer projector(s)
+    std::vector<qf_block> qf_proj_blocks;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A

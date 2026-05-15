@@ -2547,16 +2547,18 @@ struct clip_model_loader {
                         layer.conv_pw2_b  = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
 
-                    model.qf_proj_query    = get_tensor(string_format(TN_QF_PROJ_QUERY, prefix));
-                    model.qf_proj_norm_w   = get_tensor(string_format(TN_QF_PROJ_NORM, prefix, "weight"));
-                    model.qf_proj_norm_b   = get_tensor(string_format(TN_QF_PROJ_NORM, prefix, "bias"));
-                    model.qf_proj_linear_w = get_tensor(string_format(TN_QF_PROJ_LINEAR, prefix, "weight"));
-                    model.qf_proj_linear_b = get_tensor(string_format(TN_QF_PROJ_LINEAR, prefix, "bias"));
+                    model.qf_proj_blocks.resize(1);
+                    auto & qf = model.qf_proj_blocks[0];
+                    qf.qf_proj_query    = get_tensor(string_format(TN_QF_PROJ_QUERY, prefix));
+                    qf.qf_proj_norm_w   = get_tensor(string_format(TN_QF_PROJ_NORM, prefix, "weight"));
+                    qf.qf_proj_norm_b   = get_tensor(string_format(TN_QF_PROJ_NORM, prefix, "bias"));
+                    qf.qf_proj_linear_w = get_tensor(string_format(TN_QF_PROJ_LINEAR, prefix, "weight"));
+                    qf.qf_proj_linear_b = get_tensor(string_format(TN_QF_PROJ_LINEAR, prefix, "bias"));
 
                     const int n_proj_layers = 2;
-                    model.qf_proj_layers.resize(n_proj_layers);
+                    qf.qf_proj_layers.resize(n_proj_layers);
                     for (int il = 0; il < n_proj_layers; ++il) {
-                        auto & pl = model.qf_proj_layers[il];
+                        auto & pl = qf.qf_proj_layers[il];
 
                         pl.q_w    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, prefix, il, "weight"));
                         pl.q_b    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, prefix, il, "bias"));
@@ -4251,7 +4253,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GEMMA4A:
             return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
-            return ctx->model.qf_proj_linear_w->ne[1];
+            return ctx->model.qf_proj_blocks[0].qf_proj_linear_w->ne[1];
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
         default:
