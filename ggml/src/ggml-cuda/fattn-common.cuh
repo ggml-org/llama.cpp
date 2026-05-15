@@ -688,6 +688,7 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
         const uint3 fd_iter_j_z,
         const uint3 fd_iter_j) {
     constexpr int ncols = ncols1*ncols2;
+    ggml_cuda_pdl_lc();
 
     const int tile_idx = blockIdx.x; // One block per output tile.
     const int j        = blockIdx.y;
@@ -718,7 +719,7 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
     }
 
     dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (j*ne02 + c)*D + tid;
-
+    ggml_cuda_pdl_sync();
     // Load the partial result that needs a fixup
     float dst_val = *dst;
     float max_val;
@@ -775,7 +776,6 @@ static __global__ void flash_attn_stream_k_fixup_general(
     const int jc    = j*ncols2 + c;
     const int tid   = threadIdx.x;
 
-    ggml_cuda_pdl_sync();
     const float * dst_fixup_data = ((const float *) dst_fixup) + gridDim.x*(2*2*ncols);
 
     const int kbc0      = int64_t(bidx0 + 0)*total_work / gridDim.x;
@@ -811,6 +811,7 @@ static __global__ void flash_attn_stream_k_fixup_general(
     float dst_val = 0.0f;
     float max_val = 0.0f;
     float rowsum  = 0.0f;
+    ggml_cuda_pdl_sync();
     {
         dst_val = *dst;
 
@@ -1182,9 +1183,9 @@ void launch_fattn(
             const dim3 block_dim_combine(DV, 1, 1);
             const dim3 blocks_num_combine = {(unsigned)ntiles_dst, ncols1, ncols2};
 
-            flash_attn_stream_k_fixup_uniform<DV, ncols1, ncols2>
-                <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
-                ((float *) KQV->data, dst_tmp_meta.ptr,
+            auto launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, 0, main_stream);
+            ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_uniform<DV, ncols1, ncols2>, launch_params,
+                (float *) KQV->data, dst_tmp_meta.ptr,
                  Q->ne[1], Q->ne[2], K->ne[2], nblocks_sk,
                  gqa_ratio, bpt, fd0, fd1, fd2);
         } else if (ntiles_dst % blocks_num.x != 0) {
@@ -1199,9 +1200,9 @@ void launch_fattn(
             const dim3 block_dim_combine(DV, 1, 1);
             const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
 
-            flash_attn_stream_k_fixup_general<DV, ncols1, ncols2>
-                <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
-                ((float *) KQV->data, dst_tmp_meta.ptr,
+            auto launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, 0, main_stream);
+            ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_general<DV, ncols1, ncols2>, launch_params,
+                (float *) KQV->data, dst_tmp_meta.ptr,
                  Q->ne[1], Q->ne[2], gqa_ratio, total_work,
                  fd_k_j_z_ne12, fd_k_j_z, fd_k_j, fd_k);
         }
