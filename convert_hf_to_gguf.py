@@ -6525,7 +6525,7 @@ class ZayaModel(TextModel):
         elif "down_proj.bias" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_DOWN_B, bid, suffix=".bias"), data_torch
         elif "rmsnorm_eda" in name:
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_NORM, bid), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_NORM, bid), data_torch
         elif "router_mlp.0.weight" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ZAYA_ROUTER_MLP0, bid), data_torch
         elif "router_mlp.0.bias" in name:

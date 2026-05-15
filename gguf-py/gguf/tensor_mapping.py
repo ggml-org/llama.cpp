@@ -403,6 +403,7 @@ class TensorNameMap:
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
             "model.layers.{bid}.pre_mlp_layernorm",                          # kormo
             "layers.{bid}.mlp_norm"                                          # modern-bert
+            "model.layers.{bid}.self_attn.rmsnorm_eda",                      # zaya
         ),
 
         # Pre feed-forward norm

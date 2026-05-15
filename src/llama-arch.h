@@ -463,7 +463,6 @@ enum llm_tensor {
     // ZAYA Router (MoE gating)
     LLM_TENSOR_ZAYA_ROUTER_DOWN,      // zaya: router down_proj weight
     LLM_TENSOR_ZAYA_ROUTER_DOWN_B,    // zaya: router down_proj bias
-    LLM_TENSOR_ZAYA_ROUTER_NORM,      // zaya: router rmsnorm_eda weight
     LLM_TENSOR_ZAYA_ROUTER_MLP0,      // zaya: router MLP layer 0 weight
     LLM_TENSOR_ZAYA_ROUTER_MLP0_B,    // zaya: router MLP layer 0 bias
     LLM_TENSOR_ZAYA_ROUTER_MLP2,      // zaya: router MLP layer 2 weight
