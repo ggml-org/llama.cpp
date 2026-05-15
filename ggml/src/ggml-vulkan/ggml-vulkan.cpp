@@ -49,6 +49,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <mutex>
 #include <future>
 #include <thread>
@@ -254,6 +255,8 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
 static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft);
 static size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft);
 static size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor);
+// Forward decl: needed by the transposed-A pipeline-selection guards below.
+static bool ggml_backend_buffer_is_vk(ggml_backend_buffer_t buffer);
 static ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface = {
     /* .get_name         = */ ggml_backend_vk_buffer_type_name,
     /* .alloc_buffer     = */ ggml_backend_vk_buffer_type_alloc_buffer,
@@ -2029,6 +2032,12 @@ struct ggml_backend_vk_buffer_context {
     vk_device_ref device;
     vk_buffer dev_buffer;
     std::string name;
+
+    // Tensors actually repacked into transposed-A layout by set_tensor.
+    // Other upload paths (set_tensor_async chunked uploads, set_tensor_2d,
+    // buffer_from_host_ptr) bypass the repack, so pipeline selection must
+    // consult this set instead of inferring from type/name/shape.
+    std::unordered_set<const ggml_tensor *> transposed_a_tensors;
 
     ggml_backend_vk_buffer_context(vk_device_ref device, vk_buffer&& dev_buffer, std::string& name) :
         device(device),
@@ -7810,12 +7819,13 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         mmp = ggml_vk_get_mul_mat_mat_pipeline(ctx, f16_type, y_f32_kernel ? GGML_TYPE_F32 : f16_type, (ggml_prec)dst->op_params[0]);
     }
 
-    // Use transposed-A pipeline when the weight data was repacked in set_tensor.
-    // The repack only happens for 2D tensors (ne[2]==1, ne[3]==1) that are not dequantized.
-    if (ctx->device->transpose_a && !qx_needs_dequant &&
-        ne02 == 1 && ne03 == 1 &&
-        (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K) &&
-        src0->name != nullptr && strstr(src0->name, "token_embd") == nullptr) {
+    // Use transposed-A pipeline only for tensors that set_tensor actually repacked.
+    bool src0_transposed_a = false;
+    if (ctx->device->transpose_a && src0->buffer != nullptr && ggml_backend_buffer_is_vk(src0->buffer)) {
+        ggml_backend_vk_buffer_context * src0_ctx = (ggml_backend_vk_buffer_context *)src0->buffer->context;
+        src0_transposed_a = src0_ctx->transposed_a_tensors.count(src0) != 0;
+    }
+    if (src0_transposed_a && !qx_needs_dequant) {
         vk_matmul_pipeline2 & transa = ctx->device->pipeline_dequant_mul_mat_mat_transa[src0->type];
         if (ctx->device->coopmat_support) {
             vk_matmul_pipeline candidate = (ctx->device->fp16 && ctx->device->coopmat_acc_f16_support && (ggml_prec)dst->op_params[0] == GGML_PREC_DEFAULT) ? transa.f16acc : transa.f32acc;
@@ -8281,12 +8291,13 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
 
     uint32_t fusion_flags = 0;
 
-    // Token embedding weights are used as a lookup table (single-row gather),
-    // not as a matrix multiply operand, so transposing them would be incorrect.
-    if (ctx->device->transpose_a && !x_non_contig &&
-        (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K) &&
-        src0->ne[2] == 1 && src0->ne[3] == 1 &&
-        src0->name != nullptr && strstr(src0->name, "token_embd") == nullptr) {
+    // Same guard as in ggml_vk_mul_mat_q_f16.
+    bool src0_transposed_a_mv = false;
+    if (ctx->device->transpose_a && !x_non_contig && src0->buffer != nullptr && ggml_backend_buffer_is_vk(src0->buffer)) {
+        ggml_backend_vk_buffer_context * src0_ctx = (ggml_backend_vk_buffer_context *)src0->buffer->context;
+        src0_transposed_a_mv = src0_ctx->transposed_a_tensors.count(src0) != 0;
+    }
+    if (src0_transposed_a_mv) {
         fusion_flags |= MAT_VEC_FUSION_FLAGS_TRANSPOSE_A;
     }
 
@@ -13947,6 +13958,7 @@ static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml
             }
 
             ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs, transposed.data(), size);
+            buf_ctx->transposed_a_tensors.insert(tensor);
             return;
         }
     }
@@ -13980,10 +13992,8 @@ static void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, cons
 
     ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data, size);
 
-    // Un-transpose: convert back from [k_block, row] to [row, k_block] order.
-    if (buf_ctx->device.lock()->transpose_a && offset == 0 && tensor->ne[2] == 1 && tensor->ne[3] == 1
-        && (tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q5_K || tensor->type == GGML_TYPE_Q6_K)
-        && tensor->name != nullptr && strstr(tensor->name, "token_embd") == nullptr) {
+    // Un-transpose only tensors that set_tensor actually repacked.
+    if (buf_ctx->transposed_a_tensors.count(tensor) && offset == 0) {
         const size_t block_size = ggml_type_size(tensor->type);
         const int64_t n_rows = tensor->ne[1];
         const int64_t blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
