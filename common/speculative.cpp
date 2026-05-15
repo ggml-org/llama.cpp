@@ -424,7 +424,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
         for (auto & s : smpls) {
             common_params_sampling sparams;
             sparams.no_perf  = false;
-            sparams.top_k    = 1;
+            sparams.top_k    = 1; // TODO: re-enable top_k == 10 and utilize `p_min` spec param
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
             s.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
         }
@@ -1494,6 +1494,11 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, u
 
     GGML_ASSERT(impl);
 
+    // TODO: currently only the implementation that generated the draft is used to accept it
+    //       however, some implementations (such as MTP) need to also "see" the accepted tokens
+    //       extend `common_speculative_impl::accept()` with an extra argument `bool is_other` to
+    //       inform the implementation if the accepted tokens are from another implementation and
+    //       pass the accepted tokens to all remaining implementations using `is_other == true`
     {
         common_time_meas tm(impl->t_accept_us, !impl->gen_perf);
         if (n_accepted > 0) {
