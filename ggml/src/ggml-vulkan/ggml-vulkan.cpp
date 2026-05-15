@@ -13936,9 +13936,10 @@ static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml
 
     // Repack weight blocks from [row, k_block] to [k_block, row] order.
     // Token embedding is excluded: it is used as a lookup table, not a matmul operand.
+    // Note: tensor->name is a fixed-size char array, so its address is always non-null.
     if (buf_ctx->device.lock()->transpose_a && offset == 0 && tensor->ne[2] == 1 && tensor->ne[3] == 1
         && (tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q5_K || tensor->type == GGML_TYPE_Q6_K)
-        && tensor->name != nullptr && strstr(tensor->name, "token_embd") == nullptr) {
+        && strstr(tensor->name, "token_embd") == nullptr) {
         const size_t block_size = ggml_type_size(tensor->type);
         const int64_t n_rows = tensor->ne[1];
         const int64_t blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
