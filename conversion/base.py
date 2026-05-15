@@ -417,8 +417,11 @@ class ModelBase:
             elif quant_method == "fp8":
                 block_size = quant_config.get("weight_block_size")
                 for name in self.model_tensors.keys():
-                    if name.endswith("_scale_inv"):
+                    if name.endswith(".input_scale"):
+                        tensors_to_remove.append(name)
+                    if name.endswith(("_scale_inv", ".weight_scale")):
                         weight_name = name.removesuffix("_scale_inv")
+                        weight_name = name.removesuffix("_scale")
                         w = self.model_tensors[weight_name]
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
