@@ -47,7 +47,7 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
 
     // reminder: this function is not covered by httplib's exception handler; if someone does more complicated stuff, think about wrapping it in try-catch
 
-    SRV_INF("done request: %s %s %s %d\n", req.method.c_str(), req.path.c_str(), req.remote_addr.c_str(), res.status);
+    SRV_TRC("done request: %s %s %s %d\n", req.method.c_str(), req.path.c_str(), req.remote_addr.c_str(), res.status);
 
     SRV_DBG("request:  %s\n", req.body.c_str());
     SRV_DBG("response: %s\n", res.body.c_str());
@@ -89,10 +89,10 @@ bool server_http_context::init(const common_params & params) {
     hostname = params.hostname;
 
     if (gcp.enabled) {
-        LOG_INF("%s: Google Cloud Platform compat: health route = %s, predict route = %s, port = %d\n", __func__, gcp.path_health.c_str(), gcp.path_predict.c_str(), gcp.port);
+        SRV_INF("Google Cloud Platform compat: health route = %s, predict route = %s, port = %d\n", gcp.path_health.c_str(), gcp.path_predict.c_str(), gcp.port);
 
         if (port != gcp.port) {
-            LOG_WRN("%s: Google Cloud Platform compat: overriding server port %d with AIP_HTTP_PORT %d\n", __func__, port, gcp.port);
+            SRV_WRN("Google Cloud Platform compat: overriding server port %d with AIP_HTTP_PORT %d\n", port, gcp.port);
         }
 
         port = gcp.port;
@@ -102,17 +102,17 @@ bool server_http_context::init(const common_params & params) {
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
-        LOG_INF("Running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
+        SRV_INF("running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
         srv.reset(
             new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str())
         );
     } else {
-        LOG_INF("Running without SSL\n");
+        SRV_INF("%s", "running without SSL\n");
         srv.reset(new httplib::Server());
     }
 #else
     if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
-        LOG_ERR("Server is built without SSL support\n");
+        SRV_ERR("%s", "the server is built without SSL support\n");
         return false;
     }
     srv.reset(new httplib::Server());
@@ -134,7 +134,7 @@ bool server_http_context::init(const common_params & params) {
 
         res.status = 500;
         res.set_content(message, "text/plain");
-        LOG_ERR("got exception: %s\n", message.c_str());
+        SRV_ERR("got exception: %s\n", message.c_str());
     });
 
     srv->set_error_handler([](const httplib::Request &, httplib::Response & res) {
@@ -162,7 +162,7 @@ bool server_http_context::init(const common_params & params) {
 #ifdef SO_REUSEPORT
             httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEPORT, 1);
 #else
-            LOG_WRN("%s: SO_REUSEPORT is not supported\n", __func__);
+            SRV_WRN("%s", "SO_REUSEPORT is not supported\n");
 #endif
         }
     });
@@ -170,9 +170,9 @@ bool server_http_context::init(const common_params & params) {
     if (params.api_keys.size() == 1) {
         auto key = params.api_keys[0];
         std::string substr = key.substr(std::max((int)(key.length() - 4), 0));
-        LOG_INF("%s: api_keys: ****%s\n", __func__, substr.c_str());
+        SRV_INF("api_keys: ****%s\n", substr.c_str());
     } else if (params.api_keys.size() > 1) {
-        LOG_INF("%s: api_keys: %zu keys loaded\n", __func__, params.api_keys.size());
+        SRV_INF("api_keys: %zu keys loaded\n", params.api_keys.size());
     }
 
     //
@@ -232,36 +232,36 @@ bool server_http_context::init(const common_params & params) {
             "application/json; charset=utf-8"
         );
 
-        LOG_WRN("Unauthorized: Invalid API Key\n");
+        SRV_WRN("%s", "unauthorized: Invalid API Key\n");
 
         return false;
     };
 
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
+        (void)req; // suppress unused parameter warning when LLAMA_BUILD_WEBUI is not defined
         bool ready = is_ready.load();
         if (!ready) {
 #ifdef LLAMA_BUILD_WEBUI
             auto tmp = string_split<std::string>(req.path, '.');
-            if (req.path == "/" || tmp.back() == "html") {
+            if (req.path == "/" || (tmp.size() > 0 && tmp.back() == "html")) {
                 res.status = 503;
                 res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
-            } else
-#endif
-            {
-                // no endpoints is allowed to be accessed when the server is not ready
-                // this is to prevent any data races or inconsistent states
-                res.status = 503;
-                res.set_content(
-                    safe_json_to_str(json {
-                        {"error", {
-                            {"message", "Loading model"},
-                            {"type", "unavailable_error"},
-                            {"code", 503}
-                        }}
-                    }),
-                    "application/json; charset=utf-8"
-                );
+                return false;
             }
+#endif
+            // no endpoints are allowed to be accessed when the server is not ready
+            // this is to prevent any data races or inconsistent states
+            res.status = 503;
+            res.set_content(
+                safe_json_to_str(json {
+                    {"error", {
+                        {"message", "Loading model"},
+                        {"type", "unavailable_error"},
+                        {"code", 503}
+                    }}
+                }),
+                "application/json; charset=utf-8"
+            );
             return false;
         }
         return true;
@@ -292,7 +292,7 @@ bool server_http_context::init(const common_params & params) {
         // +4 threads for monitoring, health and some threads reserved for MCP and other tasks in the future
         n_threads_http = std::max(params.n_parallel + 4, (int32_t) std::thread::hardware_concurrency() - 1);
     }
-    LOG_INF("%s: using %d threads for HTTP server\n", __func__, n_threads_http);
+    SRV_INF("using %d threads for HTTP server\n", n_threads_http);
     srv->new_task_queue = [n_threads_http] {
         // spawn n_threads_http fixed thread (always alive), while allow up to 1024 max possible additional threads
         // when n_threads_http is used, server will create new "dynamic" threads that will be destroyed after processing each request
@@ -306,14 +306,14 @@ bool server_http_context::init(const common_params & params) {
     //
 
     if (!params.webui) {
-        LOG_INF("Web UI is disabled\n");
+        SRV_INF("%s", "the WebUI is disabled\n");
     } else {
         // register static assets routes
         if (!params.public_path.empty()) {
             // Set the base directory for serving static files
             bool is_found = srv->set_mount_point(params.api_prefix + "/", params.public_path);
             if (!is_found) {
-                LOG_ERR("%s: static assets path not found: %s\n", __func__, params.public_path.c_str());
+                SRV_ERR("static assets path not found: %s\n", params.public_path.c_str());
                 return 1;
             }
         } else {
@@ -348,13 +348,13 @@ bool server_http_context::start() {
     bool is_sock = false;
     if (string_ends_with(std::string(hostname), ".sock")) {
         is_sock = true;
-        LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
+        SRV_INF("%s", "setting address family to AF_UNIX\n");
         srv->set_address_family(AF_UNIX);
         // bind_to_port requires a second arg, any value other than 0 should
         // simply get ignored
         was_bound = srv->bind_to_port(hostname, 8080);
     } else {
-        LOG_INF("%s: binding port with default address family\n", __func__);
+        SRV_INF("%s", "binding port with default address family\n");
         // bind HTTP listen port
         if (port == 0) {
             int bound_port = srv->bind_to_any_port(hostname);
@@ -368,7 +368,7 @@ bool server_http_context::start() {
     }
 
     if (!was_bound) {
-        LOG_ERR("%s: couldn't bind HTTP server socket, hostname: %s, port: %d\n", __func__, hostname.c_str(), port);
+        SRV_ERR("couldn't bind HTTP server socket, hostname: %s, port: %d\n", hostname.c_str(), port);
         return false;
     }
 
@@ -580,7 +580,7 @@ void server_http_context::register_gcp_compat() {
     }
 
     if (handlers.count(gcp.path_predict)) {
-        LOG_ERR("%s: AIP_PREDICT_ROUTE=%s conflicts with an existing llama-server route\n", __func__, gcp.path_predict.c_str());
+        SRV_ERR("AIP_PREDICT_ROUTE=%s conflicts with an existing llama-server route\n", gcp.path_predict.c_str());
         exit(1);
     }
 
@@ -651,7 +651,7 @@ void server_http_context::register_gcp_compat() {
                     payload.erase("@requestFormat");
 
                     if (payload.contains("stream")) {
-                        LOG_WRN("%s: ignoring client-provided stream field in instance, streaming is not supported in predict route\n", __func__);
+                        SRV_WRN("%s", "ignoring client-provided stream field in instance, streaming is not supported in predict route\n");
                         payload["stream"] = false;
                     }
 

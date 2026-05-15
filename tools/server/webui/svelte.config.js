@@ -27,7 +27,7 @@ const config = {
 			$styles: 'src/styles'
 		},
 		version: {
-			name: 'llama-server-webui'
+			name: 'llama-ui'
 		}
 	},
 

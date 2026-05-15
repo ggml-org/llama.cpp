@@ -1,0 +1,51 @@
+name: Code Style Checker
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  model-naming:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check model naming conventions
+        run: |
+          python3 - << 'EOF'
+          import re, os, sys
+
+          pairs = re.findall(
+              r'case\s+(LLM_ARCH_\w+)\s*:\s*\n\s+return new (llama_model_\w+)\s*\(',
+              open("src/llama-model.cpp").read())
+
+          errors = []
+          for arch, cls in pairs:
+              suffix  = arch[len("LLM_ARCH_"):]
+              csuffix = cls[len("llama_model_"):]
+              fname   = csuffix.replace("_", "-") + ".cpp"
+
+              if not re.fullmatch(r'[A-Z][A-Z0-9_]*',   suffix):
+                  errors.append(f"{arch}: suffix not upper snake case, example: LLM_ARCH_MY_MODEL")
+
+              if not re.fullmatch(r'[a-z][a-z0-9_]*', csuffix):
+                  errors.append(f"{arch}: class suffix not lower snake case, example: llama_model_my_model")
+
+              elif suffix.lower() != csuffix:
+                  errors.append(f"{arch}: arch/class name mismatch, expected class 'llama_model_{suffix.lower()}' but got '{cls}'")
+
+              elif not os.path.isfile(f"src/models/{fname}"):
+                  errors.append(f"{arch}: expects model file name to be src/models/{fname}, but not found")
+
+          if errors:
+              print('\n'.join(f"  - {e}" for e in errors)); sys.exit(1)
+          print(f"OK: {len(pairs)} mappings validated.")
+          EOF
