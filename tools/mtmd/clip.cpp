@@ -2606,6 +2606,55 @@ struct clip_model_loader {
                         pl.ln_2_b    = get_tensor(string_format(TN_QF_FFN_NORM, prefix, il, "bias"));
                     }
                 } break;
+            case PROJECTOR_TYPE_GRANITE4_VISION:
+                {
+                    // image_newline lives at the top-level.
+                    model.image_newline = get_tensor(TN_IMAGE_NEWLINE);
+
+                    // Load separate layerwise and spatial projector tensors
+                    const auto projector_count = hparams.vision_feature_layer.size();
+                    model.qf_proj_blocks.resize(projector_count);
+                    for (size_t bid = 0; bid < projector_count; ++bid) {
+                        auto & b = model.qf_proj_blocks[bid];
+
+                        // non-layerwise tensors
+                        b.qf_proj_norm_w      = get_tensor(string_format(TN_MULTI_PROJ_NORM,      prefix, bid, "weight"));
+                        b.qf_proj_norm_b      = get_tensor(string_format(TN_MULTI_PROJ_NORM,      prefix, bid, "bias"));
+                        b.qf_proj_query       = get_tensor(string_format(TN_MULTI_PROJ_QUERY,     prefix, bid));
+                        b.qf_proj_img_pos     = get_tensor(string_format(TN_MULTI_PROJ_IMG_POS,           bid));
+                        b.qf_proj_layernorm_w = get_tensor(string_format(TN_MULTI_PROJ_LAYERNORM, prefix, bid, "weight"));
+                        b.qf_proj_layernorm_b = get_tensor(string_format(TN_MULTI_PROJ_LAYERNORM, prefix, bid, "bias"));
+                        b.qf_proj_linear_w    = get_tensor(string_format(TN_MULTI_PROJ_LINEAR,    prefix, bid, "weight"));
+                        b.qf_proj_linear_b    = get_tensor(string_format(TN_MULTI_PROJ_LINEAR,    prefix, bid, "bias"));
+
+                        // laywerwise tensors
+                        // NOTE: If any model uses multi-layer qformers, this will need to change
+                        b.qf_proj_layers.resize(1);
+                        auto & layer = b.qf_proj_layers[0];
+
+                        layer.attn_rel_pos_emb = get_tensor(string_format(TN_ATTN_REL_POS_EMB, prefix, bid));
+
+                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM,   prefix, bid, "weight"));
+                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, bid, "bias"));
+
+                        layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, bid, "weight"));
+                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, bid, "bias"));
+                        layer.ff_up_1_w   = get_tensor(string_format(TN_FFN_UP_1,   prefix, bid, "weight"));
+                        layer.ff_up_1_b   = get_tensor(string_format(TN_FFN_UP_1,   prefix, bid, "bias"));
+                        layer.ff_down_1_w = get_tensor(string_format(TN_FFN_DOWN_1, prefix, bid, "weight"));
+                        layer.ff_down_1_b = get_tensor(string_format(TN_FFN_DOWN_1, prefix, bid, "bias"));
+
+                        layer.norm_conv_w = get_tensor(string_format(TN_NORM_CONV, prefix, bid, "weight"));
+                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, bid, "bias"));
+                        layer.conv_norm_w = get_tensor(string_format(TN_CONV_NORM, prefix, bid, "weight"));
+                        layer.conv_norm_b = get_tensor(string_format(TN_CONV_NORM, prefix, bid, "bias"));
+                        layer.conv_dw_w   = get_tensor(string_format(TN_CONV_DW,   prefix, bid, "weight"));
+                        layer.conv_pw1_w  = get_tensor(string_format(TN_CONV_PW1,  prefix, bid, "weight"));
+                        layer.conv_pw1_b  = get_tensor(string_format(TN_CONV_PW1,  prefix, bid, "bias"));
+                        layer.conv_pw2_w  = get_tensor(string_format(TN_CONV_PW2,  prefix, bid, "weight"));
+                        layer.conv_pw2_b  = get_tensor(string_format(TN_CONV_PW2,  prefix, bid, "bias"));
+                    }
+                } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
         }
