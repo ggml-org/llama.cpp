@@ -15,13 +15,11 @@ void llama_model_qwen35moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
     ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
-    // Mark recurrent layers (linear attention layers)
-    {
-        uint32_t full_attn_interval = 4;
-        ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
-        for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-            hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
-        }
+    // Mark recurrent layers (discover based on tensor presence)
+    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "blk.%u.ssm_conv1d.weight", i);
+        hparams.recurrent_layer_arr[i] = (ml.get_tensor_meta(buf) != nullptr);
     }
 
     switch (hparams.n_layer) {
