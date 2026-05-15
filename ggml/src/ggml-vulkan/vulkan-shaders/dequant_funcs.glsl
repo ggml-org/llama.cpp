@@ -45,6 +45,16 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 #endif
 
 #if defined(DATA_A_Q4_1)
+#if defined(A_TYPE_REPACKED)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint vui = uint(data_a_quants[(a_offset + ib) * 16 + iqs]);
+    return vec2(vui & 0xF, vui >> 4);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    const uint vui = uint(data_a_quants16[(a_offset + ib) * 8 + iqs/2]);
+    return vec4(vui & 0xF, (vui >> 4) & 0xF, (vui >> 8) & 0xF, vui >> 12);
+}
+#else
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint vui = uint(data_a[a_offset + ib].qs[iqs]);
     return vec2(vui & 0xF, vui >> 4);
@@ -53,6 +63,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     const uint vui = uint(data_a_packed16[a_offset + ib].qs[iqs/2]);
     return vec4(vui & 0xF, (vui >> 4) & 0xF, (vui >> 8) & 0xF, vui >> 12);
 }
+#endif
 #endif
 
 #if defined(DATA_A_Q5_0)
@@ -88,6 +99,17 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 #endif
 
 #if defined(DATA_A_Q8_0)
+#if defined(A_TYPE_REPACKED)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    return vec2(int(int8_t(data_a_quants[(a_offset + ib) * 32 + iqs])),
+                int(int8_t(data_a_quants[(a_offset + ib) * 32 + iqs + 1])));
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    const i8vec2 v0 = unpack8(int32_t(data_a_quants16[(a_offset + ib) * 16 + iqs/2])).xy;
+    const i8vec2 v1 = unpack8(int32_t(data_a_quants16[(a_offset + ib) * 16 + iqs/2 + 1])).xy;
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+#else
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(int(data_a[a_offset + ib].qs[iqs]), int(data_a[a_offset + ib].qs[iqs + 1]));
 }
@@ -96,6 +118,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     const i8vec2 v1 = unpack8(int32_t(data_a_packed16[a_offset + ib].qs[iqs/2 + 1])).xy;
     return vec4(v0.x, v0.y, v1.x, v1.y);
 }
+#endif
 #endif
 
 #if defined(DATA_A_Q1_0)
@@ -439,6 +462,16 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 #endif
 
 #if defined(DATA_A_IQ4_NL)
+#if defined(A_TYPE_REPACKED)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint vui = uint(data_a_quants[(a_offset + ib) * 16 + iqs]);
+    return vec2(kvalues_iq4nl[vui & 0xF], kvalues_iq4nl[vui >> 4]);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    const uint vui = uint(data_a_quants16[(a_offset + ib) * 8 + iqs/2]);
+    return vec4(kvalues_iq4nl[vui & 0xF], kvalues_iq4nl[(vui >> 4) & 0xF], kvalues_iq4nl[(vui >> 8) & 0xF], kvalues_iq4nl[vui >> 12]);
+}
+#else
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint vui = uint(data_a[a_offset + ib].qs[iqs]);
     return vec2(kvalues_iq4nl[vui & 0xF], kvalues_iq4nl[vui >> 4]);
@@ -447,6 +480,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     const uint vui = uint(data_a_packed16[a_offset + ib].qs[iqs/2]);
     return vec4(kvalues_iq4nl[vui & 0xF], kvalues_iq4nl[(vui >> 4) & 0xF], kvalues_iq4nl[(vui >> 8) & 0xF], kvalues_iq4nl[vui >> 12]);
 }
+#endif
 #endif
 
 #if defined(DATA_A_MXFP4)
@@ -509,7 +543,7 @@ vec2 get_dm(uint ib, uint a_offset) {
 
 #if defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
 vec2 get_dm(uint ib, uint a_offset) {
-#if defined(DATA_A_Q4_0) && defined(A_TYPE_REPACKED)
+#if (defined(DATA_A_Q4_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ4_NL)) && defined(A_TYPE_REPACKED)
     return vec2(float(data_a_deltas[a_offset + p.deltas_offset + ib]), 0);
 #else
     return vec2(float(data_a[a_offset + ib].d), 0);
@@ -542,8 +576,13 @@ vec2 get_dm(uint ib, uint a_offset) {
 
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
 vec2 get_dm(uint ib, uint a_offset) {
+#if defined(DATA_A_Q4_1) && defined(A_TYPE_REPACKED)
+    return vec2(float(data_a_deltas[p.deltas_offset + (a_offset + ib) * 2]),
+                float(data_a_deltas[p.deltas_offset + (a_offset + ib) * 2 + 1]));
+#else
     const vec2 dm = vec2(data_a_packed32[a_offset + ib].dm);
     return dm;
+#endif
 }
 #endif
 

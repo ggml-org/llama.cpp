@@ -7339,9 +7339,66 @@ static size_t ggml_vk_repack_mxfp4_size_tensor(const ggml_tensor * tensor) {
     return ggml_vk_repack_mxfp4_size(ggml_vk_get_num_blocks(tensor));
 }
 
+static size_t ggml_vk_repack_q4_1_delta_offset(size_t n_blocks) {
+    return GGML_PAD(n_blocks * 16, VULKAN_REPACK_ALIGNMENT);
+}
+
+static size_t ggml_vk_repack_q4_1_size(size_t n_blocks) {
+    return ggml_vk_repack_q4_1_delta_offset(n_blocks) + n_blocks * 4;
+}
+
+static size_t ggml_vk_repack_q4_1_delta_offset_tensor(const ggml_tensor * tensor) {
+    return ggml_vk_repack_q4_1_delta_offset(ggml_vk_get_num_blocks(tensor));
+}
+
+static size_t ggml_vk_repack_q4_1_size_tensor(const ggml_tensor * tensor) {
+    return ggml_vk_repack_q4_1_size(ggml_vk_get_num_blocks(tensor));
+}
+
+static size_t ggml_vk_repack_q8_0_delta_offset(size_t n_blocks) {
+    return GGML_PAD(n_blocks * 32, VULKAN_REPACK_ALIGNMENT);
+}
+
+static size_t ggml_vk_repack_q8_0_size(size_t n_blocks) {
+    return ggml_vk_repack_q8_0_delta_offset(n_blocks) + n_blocks * 2;
+}
+
+static size_t ggml_vk_repack_q8_0_delta_offset_tensor(const ggml_tensor * tensor) {
+    return ggml_vk_repack_q8_0_delta_offset(ggml_vk_get_num_blocks(tensor));
+}
+
+static size_t ggml_vk_repack_q8_0_size_tensor(const ggml_tensor * tensor) {
+    return ggml_vk_repack_q8_0_size(ggml_vk_get_num_blocks(tensor));
+}
+
+static size_t ggml_vk_repack_iq4_nl_delta_offset(size_t n_blocks) {
+    return GGML_PAD(n_blocks * 16, VULKAN_REPACK_ALIGNMENT);
+}
+
+static size_t ggml_vk_repack_iq4_nl_size(size_t n_blocks) {
+    return ggml_vk_repack_iq4_nl_delta_offset(n_blocks) + n_blocks * 2;
+}
+
+static size_t ggml_vk_repack_iq4_nl_delta_offset_tensor(const ggml_tensor * tensor) {
+    return ggml_vk_repack_iq4_nl_delta_offset(ggml_vk_get_num_blocks(tensor));
+}
+
+static size_t ggml_vk_repack_iq4_nl_size_tensor(const ggml_tensor * tensor) {
+    return ggml_vk_repack_iq4_nl_size(ggml_vk_get_num_blocks(tensor));
+}
+
 static size_t ggml_vk_repack_size_tensor(const ggml_tensor * tensor) {
     if (tensor->type == GGML_TYPE_Q4_0) {
         return ggml_vk_repack_q4_0_size_tensor(tensor);
+    }
+    if (tensor->type == GGML_TYPE_Q4_1) {
+        return ggml_vk_repack_q4_1_size_tensor(tensor);
+    }
+    if (tensor->type == GGML_TYPE_Q8_0) {
+        return ggml_vk_repack_q8_0_size_tensor(tensor);
+    }
+    if (tensor->type == GGML_TYPE_IQ4_NL) {
+        return ggml_vk_repack_iq4_nl_size_tensor(tensor);
     }
     if (tensor->type == GGML_TYPE_MXFP4) {
         return ggml_vk_repack_mxfp4_size_tensor(tensor);
@@ -7993,6 +8050,12 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     uint32_t deltas_offset = 0;
     if (src0->type == GGML_TYPE_Q4_0) {
         deltas_offset = ggml_vk_repack_q4_0_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_Q4_1) {
+        deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_Q8_0) {
+        deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_IQ4_NL) {
+        deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(src0) / 2;
     } else if (src0->type == GGML_TYPE_MXFP4) {
         deltas_offset = ggml_vk_repack_mxfp4_scale_offset_tensor(src0);
     }
@@ -8300,6 +8363,12 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     uint32_t deltas_offset = 0;
     if (src0->type == GGML_TYPE_Q4_0) {
         deltas_offset = ggml_vk_repack_q4_0_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_Q4_1) {
+        deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_Q8_0) {
+        deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_IQ4_NL) {
+        deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(src0) / 2;
     } else if (src0->type == GGML_TYPE_MXFP4) {
         deltas_offset = ggml_vk_repack_mxfp4_scale_offset_tensor(src0);
     }
@@ -8861,6 +8930,12 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     uint32_t deltas_offset = 0;
     if (src0->type == GGML_TYPE_Q4_0) {
         deltas_offset = ggml_vk_repack_q4_0_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_Q4_1) {
+        deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_Q8_0) {
+        deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_IQ4_NL) {
+        deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(src0) / 2;
     } else if (src0->type == GGML_TYPE_MXFP4) {
         deltas_offset = ggml_vk_repack_mxfp4_scale_offset_tensor(src0);
     }
@@ -9091,6 +9166,12 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     uint32_t deltas_offset = 0;
     if (src0->type == GGML_TYPE_Q4_0) {
         deltas_offset = ggml_vk_repack_q4_0_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_Q4_1) {
+        deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_Q8_0) {
+        deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(src0) / 2;
+    } else if (src0->type == GGML_TYPE_IQ4_NL) {
+        deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(src0) / 2;
     } else if (src0->type == GGML_TYPE_MXFP4) {
         deltas_offset = ggml_vk_repack_mxfp4_scale_offset_tensor(src0);
     }
@@ -13911,6 +13992,66 @@ static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml
         return;
     }
 
+    if (tensor->type == GGML_TYPE_Q4_1) {
+        const size_t repacked_size = ggml_vk_repack_q4_1_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        const block_q4_1 * src = (const block_q4_1 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 16 * i, src[i].qs, 16);
+            memcpy(&deltas[i * 2], &src[i].data.dm, sizeof(ggml_half2));
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_Q8_0) {
+        const size_t repacked_size = ggml_vk_repack_q8_0_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        const block_q8_0 * src = (const block_q8_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 32 * i, src[i].qs, 32);
+            deltas[i] = src[i].d;
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ4_NL) {
+        const size_t repacked_size = ggml_vk_repack_iq4_nl_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        const block_iq4_nl * src = (const block_iq4_nl *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 16 * i, src[i].qs, 16);
+            deltas[i] = src[i].d;
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        return;
+    }
+
     if (tensor->type == GGML_TYPE_MXFP4) {
         const size_t repacked_size = ggml_vk_repack_mxfp4_size_tensor(tensor);
         const size_t scales_offset = ggml_vk_repack_mxfp4_scale_offset_tensor(tensor);
@@ -13954,6 +14095,66 @@ static void ggml_backend_vk_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, g
         ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
 
         const block_q4_0 * src = (const block_q4_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 16 * i, src[i].qs, 16);
+            deltas[i] = src[i].d;
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_Q4_1) {
+        const size_t repacked_size = ggml_vk_repack_q4_1_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        const block_q4_1 * src = (const block_q4_1 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 16 * i, src[i].qs, 16);
+            memcpy(&deltas[i * 2], &src[i].data.dm, sizeof(ggml_half2));
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_Q8_0) {
+        const size_t repacked_size = ggml_vk_repack_q8_0_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        const block_q8_0 * src = (const block_q8_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 32 * i, src[i].qs, 32);
+            deltas[i] = src[i].d;
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ4_NL) {
+        const size_t repacked_size = ggml_vk_repack_iq4_nl_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        const block_iq4_nl * src = (const block_iq4_nl *)data;
 
         for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
             memcpy(quants + 16 * i, src[i].qs, 16);
@@ -14018,6 +14219,66 @@ static void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, cons
         return;
     }
 
+    if (tensor->type == GGML_TYPE_Q4_1) {
+        const size_t repacked_size = ggml_vk_repack_q4_1_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_q4_1 * dst = (block_q4_1 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 16 * i, 16);
+            memcpy(&dst[i].data.dm, &deltas[i * 2], sizeof(ggml_half2));
+        }
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_Q8_0) {
+        const size_t repacked_size = ggml_vk_repack_q8_0_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_q8_0 * dst = (block_q8_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 32 * i, 32);
+            dst[i].d = deltas[i];
+        }
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ4_NL) {
+        const size_t repacked_size = ggml_vk_repack_iq4_nl_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_iq4_nl * dst = (block_iq4_nl *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 16 * i, 16);
+            dst[i].d = deltas[i];
+        }
+
+        return;
+    }
+
     if (tensor->type == GGML_TYPE_MXFP4) {
         const size_t repacked_size = ggml_vk_repack_mxfp4_size_tensor(tensor);
         const size_t scales_offset = ggml_vk_repack_mxfp4_scale_offset_tensor(tensor);
@@ -14064,6 +14325,66 @@ static void ggml_backend_vk_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, c
         ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
 
         block_q4_0 * dst = (block_q4_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 16 * i, 16);
+            dst[i].d = deltas[i];
+        }
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_Q4_1) {
+        const size_t repacked_size = ggml_vk_repack_q4_1_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_q4_1 * dst = (block_q4_1 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 16 * i, 16);
+            memcpy(&dst[i].data.dm, &deltas[i * 2], sizeof(ggml_half2));
+        }
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_Q8_0) {
+        const size_t repacked_size = ggml_vk_repack_q8_0_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_q8_0 * dst = (block_q8_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 32 * i, 32);
+            dst[i].d = deltas[i];
+        }
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ4_NL) {
+        const size_t repacked_size = ggml_vk_repack_iq4_nl_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_iq4_nl * dst = (block_iq4_nl *)data;
 
         for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
             memcpy(dst[i].qs, quants + 16 * i, 16);
@@ -14175,6 +14496,24 @@ static size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_typ
         const size_t num_blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
 
         return ggml_vk_repack_q4_0_size(num_blocks_per_row * tensor->ne[1] * tensor->ne[2] * tensor->ne[3]);
+    }
+
+    if (tensor->type == GGML_TYPE_Q4_1) {
+        const size_t num_blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
+
+        return ggml_vk_repack_q4_1_size(num_blocks_per_row * tensor->ne[1] * tensor->ne[2] * tensor->ne[3]);
+    }
+
+    if (tensor->type == GGML_TYPE_Q8_0) {
+        const size_t num_blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
+
+        return ggml_vk_repack_q8_0_size(num_blocks_per_row * tensor->ne[1] * tensor->ne[2] * tensor->ne[3]);
+    }
+
+    if (tensor->type == GGML_TYPE_IQ4_NL) {
+        const size_t num_blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
+
+        return ggml_vk_repack_iq4_nl_size(num_blocks_per_row * tensor->ne[1] * tensor->ne[2] * tensor->ne[3]);
     }
 
     if (tensor->type == GGML_TYPE_MXFP4) {
@@ -14332,6 +14671,66 @@ static void ggml_backend_vk_set_tensor_2d_async(ggml_backend_t backend, ggml_ten
         return;
     }
 
+    if (tensor->type == GGML_TYPE_Q4_1) {
+        const size_t repacked_size = ggml_vk_repack_q4_1_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        const block_q4_1 * src = (const block_q4_1 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 16 * i, src[i].qs, 16);
+            memcpy(&deltas[i * 2], &src[i].data.dm, sizeof(ggml_half2));
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_Q8_0) {
+        const size_t repacked_size = ggml_vk_repack_q8_0_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        const block_q8_0 * src = (const block_q8_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 32 * i, src[i].qs, 32);
+            deltas[i] = src[i].d;
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ4_NL) {
+        const size_t repacked_size = ggml_vk_repack_iq4_nl_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        const block_iq4_nl * src = (const block_iq4_nl *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(quants + 16 * i, src[i].qs, 16);
+            deltas[i] = src[i].d;
+        }
+
+        ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        return;
+    }
+
     if (tensor->type == GGML_TYPE_MXFP4) {
         const size_t repacked_size = ggml_vk_repack_mxfp4_size_tensor(tensor);
         const size_t scales_offset = ggml_vk_repack_mxfp4_scale_offset_tensor(tensor);
@@ -14431,6 +14830,66 @@ static void ggml_backend_vk_get_tensor_2d_async(ggml_backend_t backend, const gg
         ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
 
         block_q4_0 * dst = (block_q4_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 16 * i, 16);
+            dst[i].d = deltas[i];
+        }
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_Q4_1) {
+        const size_t repacked_size = ggml_vk_repack_q4_1_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_q4_1 * dst = (block_q4_1 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 16 * i, 16);
+            memcpy(&dst[i].data.dm, &deltas[i * 2], sizeof(ggml_half2));
+        }
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_Q8_0) {
+        const size_t repacked_size = ggml_vk_repack_q8_0_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_q8_0 * dst = (block_q8_0 *)data;
+
+        for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
+            memcpy(dst[i].qs, quants + 32 * i, 32);
+            dst[i].d = deltas[i];
+        }
+
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ4_NL) {
+        const size_t repacked_size = ggml_vk_repack_iq4_nl_size_tensor(tensor);
+        const size_t deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(tensor);
+
+        void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+        uint8_t * quants = (uint8_t *)data_repacked;
+        ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+        ggml_vk_buffer_read(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data_repacked, repacked_size);
+
+        block_iq4_nl * dst = (block_iq4_nl *)data;
 
         for (size_t i = 0; i < ggml_vk_get_num_blocks(tensor); i++) {
             memcpy(dst[i].qs, quants + 16 * i, 16);
@@ -16995,6 +17454,61 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
                     ggml_vk_buffer_read(buffer_gpu, offset, data_repacked, repacked_size);
 
                     block_q4_0 * dst = (block_q4_0 *)srci_clone->data;
+
+                    for (size_t i = 0; i < ggml_vk_get_num_blocks(srci); i++) {
+                        memcpy(dst[i].qs, quants + 16 * i, 16);
+                        dst[i].d = deltas[i];
+                    }
+
+                    memcpy(srci_clone->nb, srci->nb, sizeof(size_t) * GGML_MAX_DIMS);
+                } else if (srci->type == GGML_TYPE_Q4_1) {
+                    const size_t repacked_size = ggml_vk_repack_q4_1_size_tensor(srci);
+                    const size_t deltas_offset = ggml_vk_repack_q4_1_delta_offset_tensor(srci);
+
+                    void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+                    uint8_t * quants = (uint8_t *)data_repacked;
+                    ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+                    ggml_vk_buffer_read(buffer_gpu, offset, data_repacked, repacked_size);
+
+                    block_q4_1 * dst = (block_q4_1 *)srci_clone->data;
+
+                    for (size_t i = 0; i < ggml_vk_get_num_blocks(srci); i++) {
+                        memcpy(dst[i].qs, quants + 16 * i, 16);
+                        dst[i].d = deltas[i * 2];
+                        dst[i].m = deltas[i * 2 + 1];
+                    }
+
+                    memcpy(srci_clone->nb, srci->nb, sizeof(size_t) * GGML_MAX_DIMS);
+                } else if (srci->type == GGML_TYPE_Q8_0) {
+                    const size_t repacked_size = ggml_vk_repack_q8_0_size_tensor(srci);
+                    const size_t deltas_offset = ggml_vk_repack_q8_0_delta_offset_tensor(srci);
+
+                    void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+                    uint8_t * quants = (uint8_t *)data_repacked;
+                    ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+                    ggml_vk_buffer_read(buffer_gpu, offset, data_repacked, repacked_size);
+
+                    block_q8_0 * dst = (block_q8_0 *)srci_clone->data;
+
+                    for (size_t i = 0; i < ggml_vk_get_num_blocks(srci); i++) {
+                        memcpy(dst[i].qs, quants + 32 * i, 32);
+                        dst[i].d = deltas[i];
+                    }
+
+                    memcpy(srci_clone->nb, srci->nb, sizeof(size_t) * GGML_MAX_DIMS);
+                } else if (srci->type == GGML_TYPE_IQ4_NL) {
+                    const size_t repacked_size = ggml_vk_repack_iq4_nl_size_tensor(srci);
+                    const size_t deltas_offset = ggml_vk_repack_iq4_nl_delta_offset_tensor(srci);
+
+                    void * data_repacked = ggml_vk_repack_scratch(repacked_size);
+                    uint8_t * quants = (uint8_t *)data_repacked;
+                    ggml_fp16_t * deltas = (ggml_fp16_t *)((uint8_t *)data_repacked + deltas_offset);
+
+                    ggml_vk_buffer_read(buffer_gpu, offset, data_repacked, repacked_size);
+
+                    block_iq4_nl * dst = (block_iq4_nl *)srci_clone->data;
 
                     for (size_t i = 0; i < ggml_vk_get_num_blocks(srci); i++) {
                         memcpy(dst[i].qs, quants + 16 * i, 16);

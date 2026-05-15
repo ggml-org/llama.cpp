@@ -26,11 +26,20 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
 #endif
     }
 #else // DATA_A_Q4_1
+#if defined(A_TYPE_REPACKED)
+    buf_a[buf_ib].qs[iqs] = data_a_quants32[ib * 4 + iqs];
+
+    if (iqs == 0) {
+        buf_a[buf_ib].dm = FLOAT_TYPEV2(data_a_deltas[p.deltas_offset + ib * 2],
+                                         data_a_deltas[p.deltas_offset + ib * 2 + 1]);
+    }
+#else
     buf_a[buf_ib].qs[iqs] = data_a_packed32[ib].qs[iqs];
 
     if (iqs == 0) {
         buf_a[buf_ib].dm = FLOAT_TYPEV2(data_a_packed32[ib].dm);
     }
+#endif
 #endif
 }
 
@@ -123,12 +132,20 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
 #if defined(DATA_A_Q8_0)
 // 2-byte loads for Q8_0 blocks (34 bytes)
 void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+#if defined(A_TYPE_REPACKED)
+    buf_a[buf_ib].qs[iqs] = int32_t(data_a_quants32[ib * 8 + iqs]);
+
+    if (iqs == 0) {
+        buf_a[buf_ib].dm = FLOAT_TYPE(data_a_deltas[p.deltas_offset + ib]);
+    }
+#else
     buf_a[buf_ib].qs[iqs] = pack32(i16vec2(data_a_packed16[ib].qs[iqs * 2],
                                            data_a_packed16[ib].qs[iqs * 2 + 1]));
 
     if (iqs == 0) {
         buf_a[buf_ib].dm = FLOAT_TYPE(data_a_packed16[ib].d);
     }
+#endif
 }
 
 void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
