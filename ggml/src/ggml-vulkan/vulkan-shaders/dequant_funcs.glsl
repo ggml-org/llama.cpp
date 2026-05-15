@@ -101,13 +101,12 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 #if defined(DATA_A_Q8_0)
 #if defined(A_TYPE_REPACKED)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
-    return vec2(int(int8_t(data_a_quants[(a_offset + ib) * 32 + iqs])),
-                int(int8_t(data_a_quants[(a_offset + ib) * 32 + iqs + 1])));
+    const i8vec2 v = unpack8(int32_t(data_a_quants16[(a_offset + ib) * 16 + iqs/2])).xy;
+    return vec2(v);
 }
 vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
-    const i8vec2 v0 = unpack8(int32_t(data_a_quants16[(a_offset + ib) * 16 + iqs/2])).xy;
-    const i8vec2 v1 = unpack8(int32_t(data_a_quants16[(a_offset + ib) * 16 + iqs/2 + 1])).xy;
-    return vec4(v0.x, v0.y, v1.x, v1.y);
+    const i8vec4 v = unpack8(int32_t(data_a_quants32[(a_offset + ib) * 8 + iqs/4]));
+    return vec4(v);
 }
 #else
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {

@@ -136,14 +136,13 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
 #if defined(A_TYPE_REPACKED)
             const float d = float(data_a_deltas[p.deltas_offset + ib]);
-            const i8vec2 v0 = unpack8(int32_t(data_a_quants16[ib * 16 + 2*iqs])).xy;
-            const i8vec2 v1 = unpack8(int32_t(data_a_quants16[ib * 16 + 2*iqs + 1])).xy;
+            const vec4 v = vec4(unpack8(int32_t(data_a_quants32[ib * 8 + iqs]))) * d;
 #else
             const float d = float(data_a_packed16[ib].d);
             const i8vec2 v0 = unpack8(int32_t(data_a_packed16[ib].qs[2*iqs])).xy; // vec4 used due to #12147
             const i8vec2 v1 = unpack8(int32_t(data_a_packed16[ib].qs[2*iqs + 1])).xy;
-#endif
             const vec4 v = vec4(v0.x, v0.y, v1.x, v1.y) * d;
+#endif
 
             buf_a[buf_idx    ] = FLOAT_TYPEV2(v.xy);
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(v.zw);
@@ -519,8 +518,9 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
 #if defined(A_TYPE_REPACKED)
             const float d = e8m0_to_fp32(uint8_t(data_a_quants[p.deltas_offset + ib])) * 0.5;
-            const uint vui = uint(data_a_quants[ib * 16 + iqs]);
-            const uint vui2 = uint(data_a_quants[ib * 16 + iqs + 1]);
+            const uint vui16 = uint(data_a_quants16[ib * 8 + iqs/2]);
+            const uint vui = vui16 & 0xFF;
+            const uint vui2 = vui16 >> 8;
 #else
             const float d = e8m0_to_fp32(data_a[ib].e) * 0.5;
             const uint vui = uint(data_a[ib].qs[iqs]);
