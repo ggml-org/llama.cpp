@@ -88,8 +88,8 @@ describe('legacy agentic marker stripping (for migration)', () => {
 		expect(
 			LEGACY_AGENTIC_REGEX.HAS_LEGACY_MARKERS.test('text<<<AGENTIC_TOOL_CALL_START>>>more')
 		).toBe(true);
-		expect(
-			LEGACY_AGENTIC_REGEX.HAS_LEGACY_MARKERS.test('<<<reasoning_content_start>>>think')
-		).toBe(true);
+		expect(LEGACY_AGENTIC_REGEX.HAS_LEGACY_MARKERS.test('<<<reasoning_content_start>>>think')).toBe(
+			true
+		);
 	});
 });

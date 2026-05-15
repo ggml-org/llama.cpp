@@ -50,9 +50,7 @@
 					</span>
 				</div>
 			{:else if toolsStore.error}
-				<div class="px-3 py-4 text-center text-sm text-muted-foreground">
-					Failed to load tools
-				</div>
+				<div class="px-3 py-4 text-center text-sm text-muted-foreground">Failed to load tools</div>
 			{:else if toolsPanel.noToolsInfoMessage}
 				<div class="flex gap-2 px-3 py-4 text-sm text-muted-foreground">
 					<Info class="mt-0.5 h-4 w-4 shrink-0" />
@@ -60,9 +58,7 @@
 					<span>{toolsPanel.noToolsInfoMessage}</span>
 				</div>
 			{:else}
-				<div class="px-3 py-4 text-center text-sm text-muted-foreground">
-					No tools available
-				</div>
+				<div class="px-3 py-4 text-center text-sm text-muted-foreground">No tools available</div>
 			{/if}
 		{:else}
 			<div class="max-h-80 overflow-y-auto p-2 pr-1">
@@ -92,9 +88,7 @@
 											alt=""
 											class="h-4 w-4 shrink-0 rounded-sm"
 											onerror={(e) => {
-												(
-													e.currentTarget as HTMLImageElement
-												).style.display = 'none';
+												(e.currentTarget as HTMLImageElement).style.display = 'none';
 											}}
 										/>
 									{/if}
@@ -120,9 +114,7 @@
 								<Tooltip.Content side="right">
 									<p>
 										{checked ? 'Disable' : 'Enable'}
-										{group.tools.length} tool{group.tools.length !== 1
-											? 's'
-											: ''}
+										{group.tools.length} tool{group.tools.length !== 1 ? 's' : ''}
 									</p>
 								</Tooltip.Content>
 							</Tooltip.Root>
@@ -138,8 +130,7 @@
 									>
 										<Checkbox
 											checked={toolsStore.isToolEnabled(tool.function.name)}
-											onCheckedChange={() =>
-												toolsStore.toggleTool(tool.function.name)}
+											onCheckedChange={() => toolsStore.toggleTool(tool.function.name)}
 											class="h-4 w-4 shrink-0"
 										/>
 

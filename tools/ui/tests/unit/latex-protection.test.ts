@@ -8,9 +8,7 @@ describe('maskInlineLaTeX', () => {
 		const input = 'I have $10, $3.99 and $x + y$ and $100x$. The amount is $2,000.';
 		const output = maskInlineLaTeX(input, latexExpressions);
 
-		expect(output).toBe(
-			'I have $10, $3.99 and <<LATEX_0>> and <<LATEX_1>>. The amount is $2,000.'
-		);
+		expect(output).toBe('I have $10, $3.99 and <<LATEX_0>> and <<LATEX_1>>. The amount is $2,000.');
 		expect(latexExpressions).toEqual(['$x + y$', '$100x$']);
 	});
 
@@ -172,18 +170,14 @@ $$`);
 		const input = 'I have $10, $3.99 and $x + y$ and $100x$. The amount is $2,000.';
 		const output = preprocessLaTeX(input);
 
-		expect(output).toBe(
-			'I have \\$10, \\$3.99 and $x + y$ and $100x$. The amount is \\$2,000.'
-		);
+		expect(output).toBe('I have \\$10, \\$3.99 and $x + y$ and $100x$. The amount is \\$2,000.');
 	});
 
 	test('ignores dollar signs followed by digits (money), but keeps valid math $x + y$', () => {
 		const input = 'I have $10, $3.99 and $x + y$ and $100x$. The amount is $2,000.';
 		const output = preprocessLaTeX(input);
 
-		expect(output).toBe(
-			'I have \\$10, \\$3.99 and $x + y$ and $100x$. The amount is \\$2,000.'
-		);
+		expect(output).toBe('I have \\$10, \\$3.99 and $x + y$ and $100x$. The amount is \\$2,000.');
 	});
 
 	test('handles real-world word problems with amounts and no math delimiters', () => {
@@ -250,8 +244,7 @@ $$`
 	});
 
 	test('converts \\[ ... \\] even when preceded by text without space', () => {
-		const input =
-			'Some line ...\nAlgebra: \\[x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}\\]';
+		const input = 'Some line ...\nAlgebra: \\[x = \\frac{-b \\pm \\sqrt{\\,b^{2}-4ac\\,}}{2a}\\]';
 		const output = preprocessLaTeX(input);
 
 		expect(output).toBe(
@@ -378,8 +371,6 @@ $$\n\\pi_n(\\mathbb{S}^3) = \\begin{cases}
 		const output = preprocessLaTeX(input);
 
 		// All LaTeX should be converted, blockquote markers preserved
-		expect(output).toBe(
-			'Regular text with $x^2$.\n\n> Quote with $y^2$.\n\nMore text with $z^2$.'
-		);
+		expect(output).toBe('Regular text with $x^2$.\n\n> Quote with $y^2$.\n\nMore text with $z^2$.');
 	});
 });

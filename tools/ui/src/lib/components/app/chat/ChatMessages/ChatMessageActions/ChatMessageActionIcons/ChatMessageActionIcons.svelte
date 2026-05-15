@@ -110,11 +110,7 @@
 			{/if}
 
 			{#if onForkConversation}
-				<ActionIcon
-					icon={GitBranch}
-					tooltip="Fork conversation"
-					onclick={handleOpenForkDialog}
-				/>
+				<ActionIcon icon={GitBranch} tooltip="Fork conversation" onclick={handleOpenForkDialog} />
 			{/if}
 
 			<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />

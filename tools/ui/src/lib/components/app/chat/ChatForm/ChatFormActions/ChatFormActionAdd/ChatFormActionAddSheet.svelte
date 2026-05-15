@@ -107,9 +107,7 @@
 				{/each}
 
 				{#if !attachmentMenu.isItemEnabled('hasVisionModality')}
-					{@const pdfItem = ATTACHMENT_FILE_ITEMS.find(
-						(i) => i.id === AttachmentMenuItemId.PDF
-					)}
+					{@const pdfItem = ATTACHMENT_FILE_ITEMS.find((i) => i.id === AttachmentMenuItemId.PDF)}
 					{#if pdfItem}
 						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 							<Tooltip.Trigger>
@@ -125,10 +123,7 @@
 							</Tooltip.Trigger>
 
 							<Tooltip.Content side="right">
-								<p>
-									PDFs will be converted to text. Image-based PDFs may not work
-									properly.
-								</p>
+								<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
 							</Tooltip.Content>
 						</Tooltip.Root>
 					{/if}

@@ -125,8 +125,7 @@
 				{@const blobContent = getResourceBlobContent(content)}
 
 				{#if textContent}
-					<pre
-						class="font-mono text-xs break-words whitespace-pre-wrap">{textContent}</pre>
+					<pre class="font-mono text-xs break-words whitespace-pre-wrap">{textContent}</pre>
 				{/if}
 
 				{#each blobContent as blob (blob.uri)}
@@ -140,9 +139,7 @@
 							class="max-w-full rounded"
 						/>
 					{:else}
-						<div
-							class="flex items-center gap-2 rounded bg-muted p-2 text-sm text-muted-foreground"
-						>
+						<div class="flex items-center gap-2 rounded bg-muted p-2 text-sm text-muted-foreground">
 							<FileText class="h-4 w-4" />
 
 							<span>Binary content ({blob.mimeType || 'unknown type'})</span>
@@ -151,9 +148,7 @@
 				{/each}
 
 				{#if !textContent && blobContent.length === 0}
-					<div class="py-4 text-center text-sm text-muted-foreground">
-						No content available
-					</div>
+					<div class="py-4 text-center text-sm text-muted-foreground">No content available</div>
 				{/if}
 			{/if}
 		</div>

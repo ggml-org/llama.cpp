@@ -47,11 +47,11 @@
 
 				<Dialog.Description>
 					{#if mode === 'export'}
-						Choose which conversations you want to export. Selected conversations will
-						be downloaded as a JSON file.
+						Choose which conversations you want to export. Selected conversations will be downloaded
+						as a JSON file.
 					{:else}
-						Choose which conversations you want to import. Selected conversations will
-						be merged with your existing conversations.
+						Choose which conversations you want to import. Selected conversations will be merged
+						with your existing conversations.
 					{/if}
 				</Dialog.Description>
 			</Dialog.Header>

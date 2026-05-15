@@ -120,11 +120,7 @@ export class MCPService {
 			method: getRequestMethod(input, init, baseInit).toUpperCase(),
 			credentials: init?.credentials ?? baseInit.credentials,
 			mode: init?.mode ?? baseInit.mode,
-			headers: sanitizeHeaders(
-				requestHeaders,
-				extraRedactedHeaders,
-				MCP_PARTIAL_REDACT_HEADERS
-			),
+			headers: sanitizeHeaders(requestHeaders, extraRedactedHeaders, MCP_PARTIAL_REDACT_HEADERS),
 			body: summarizeRequestBody(body)
 		};
 		const jsonRpcMethods = extractJsonRpcMethods(body);
@@ -294,11 +290,7 @@ export class MCPService {
 									url,
 									status: response.status,
 									statusText: response.statusText,
-									headers: sanitizeHeaders(
-										response.headers,
-										undefined,
-										MCP_PARTIAL_REDACT_HEADERS
-									),
+									headers: sanitizeHeaders(response.headers, undefined, MCP_PARTIAL_REDACT_HEADERS),
 									durationMs
 								}
 							}
@@ -377,9 +369,7 @@ export class MCPService {
 		const requestInit: RequestInit = {};
 
 		if (config.headers) {
-			requestInit.headers = config.useProxy
-				? buildProxiedHeaders(config.headers)
-				: config.headers;
+			requestInit.headers = config.useProxy ? buildProxiedHeaders(config.headers) : config.headers;
 		}
 
 		if (useProxy) {
@@ -457,9 +447,7 @@ export class MCPService {
 				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
 				const sseMsg = sseError instanceof Error ? sseError.message : String(sseError);
 
-				throw new Error(
-					`Failed to create transport. StreamableHTTP: ${httpMsg}; SSE: ${sseMsg}`
-				);
+				throw new Error(`Failed to create transport. StreamableHTTP: ${httpMsg}; SSE: ${sseMsg}`);
 			}
 		}
 	}
@@ -545,9 +533,7 @@ export class MCPService {
 		// Setup WebSocket reconnection handler
 		if (transportType === MCPTransportType.WEBSOCKET) {
 			transport.onclose = () => {
-				console.log(
-					`[MCPService][${serverName}] WebSocket closed, notifying for reconnection`
-				);
+				console.log(`[MCPService][${serverName}] WebSocket closed, notifying for reconnection`);
 				onPhase?.(
 					MCPConnectionPhase.DISCONNECTED,
 					this.createLog(MCPConnectionPhase.DISCONNECTED, 'WebSocket connection closed')
@@ -558,10 +544,7 @@ export class MCPService {
 		// Phase: Transport ready
 		onPhase?.(
 			MCPConnectionPhase.TRANSPORT_READY,
-			this.createLog(
-				MCPConnectionPhase.TRANSPORT_READY,
-				`Transport ready (${transportType})`
-			),
+			this.createLog(MCPConnectionPhase.TRANSPORT_READY, `Transport ready (${transportType})`),
 			{ transportType }
 		);
 
@@ -999,9 +982,7 @@ export class MCPService {
 		cursor?: string
 	): Promise<{ resourceTemplates: MCPResourceTemplate[]; nextCursor?: string }> {
 		try {
-			const result = await connection.client.listResourceTemplates(
-				cursor ? { cursor } : undefined
-			);
+			const result = await connection.client.listResourceTemplates(cursor ? { cursor } : undefined);
 
 			return {
 				resourceTemplates: (result.resourceTemplates ?? []) as MCPResourceTemplate[],
@@ -1026,9 +1007,7 @@ export class MCPService {
 	 * @param connection - The MCP connection to use
 	 * @returns Array of all available resource templates
 	 */
-	static async listAllResourceTemplates(
-		connection: MCPConnection
-	): Promise<MCPResourceTemplate[]> {
+	static async listAllResourceTemplates(connection: MCPConnection): Promise<MCPResourceTemplate[]> {
 		const allTemplates: MCPResourceTemplate[] = [];
 		let cursor: string | undefined;
 
@@ -1095,9 +1074,7 @@ export class MCPService {
 		try {
 			await connection.client.unsubscribeResource({ uri });
 
-			console.log(
-				`[MCPService][${connection.serverName}] Unsubscribed from resource: ${uri}`
-			);
+			console.log(`[MCPService][${connection.serverName}] Unsubscribed from resource: ${uri}`);
 		} catch (error) {
 			console.error(
 				`[MCPService][${connection.serverName}] Failed to unsubscribe from resource:`,

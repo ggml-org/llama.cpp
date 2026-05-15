@@ -64,9 +64,7 @@
 			{#each mcpFavicons as favicon (favicon.id)}
 				<Tooltip.Root>
 					<Tooltip.Trigger>
-						<div
-							class="box-shadow-lg overflow-hidden rounded-full bg-muted ring-1 ring-muted"
-						>
+						<div class="box-shadow-lg overflow-hidden rounded-full bg-muted ring-1 ring-muted">
 							<img
 								src={favicon.url}
 								alt=""

@@ -35,12 +35,7 @@
 		<div
 			class="absolute top-10 right-2 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
 		>
-			<ActionIcon
-				icon={X}
-				tooltip="Remove"
-				stopPropagationOnClick
-				onclick={() => onRemove?.()}
-			/>
+			<ActionIcon icon={X} tooltip="Remove" stopPropagationOnClick onclick={() => onRemove?.()} />
 		</div>
 	{/if}
 </div>

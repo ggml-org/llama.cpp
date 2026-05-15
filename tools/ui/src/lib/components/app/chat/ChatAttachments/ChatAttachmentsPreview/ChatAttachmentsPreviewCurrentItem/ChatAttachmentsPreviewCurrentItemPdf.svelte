@@ -150,11 +150,7 @@
 {:else if pdfImages.length > 0}
 	{#each pdfImages as image, index (image)}
 		<p class="mb-2 text-sm text-white/50">Page {index + 1}</p>
-		<img
-			src={image}
-			alt="PDF Page {index + 1}"
-			class="mx-auto max-w-[85vw] rounded-lg shadow-lg"
-		/>
+		<img src={image} alt="PDF Page {index + 1}" class="mx-auto max-w-[85vw] rounded-lg shadow-lg" />
 		<div class="h-4"></div>
 	{/each}
 {:else}

@@ -454,8 +454,7 @@ class MCPResourceStore {
 		const normalizedUri = normalizeResourceUri(uri);
 
 		return this._attachments.some(
-			(att) =>
-				att.resource.uri === uri || normalizeResourceUri(att.resource.uri) === normalizedUri
+			(att) => att.resource.uri === uri || normalizeResourceUri(att.resource.uri) === normalizedUri
 		);
 	}
 
@@ -545,9 +544,7 @@ class MCPResourceStore {
 
 			for (const content of attachment.content) {
 				if ('text' in content && content.text) {
-					parts.push(
-						`\n\n--- Resource: ${resourceName} (from ${serverName}) ---\n${content.text}`
-					);
+					parts.push(`\n\n--- Resource: ${resourceName} (from ${serverName}) ---\n${content.text}`);
 				} else if ('blob' in content && content.blob) {
 					// For binary content, just note it exists
 					parts.push(

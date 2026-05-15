@@ -280,8 +280,7 @@ class AgenticStore {
 	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
 		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
 		const maxToolPreviewLines =
-			Number(settings.agenticMaxToolPreviewLines) ||
-			DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines;
+			Number(settings.agenticMaxToolPreviewLines) || DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines;
 		const hasTools =
 			mcpStore.hasEnabledServers(perChatOverrides) ||
 			toolsStore.builtinTools.length > 0 ||
@@ -329,8 +328,7 @@ class AgenticStore {
 						.filter((t) =>
 							t.serverName
 								? t.serverName === serverLabel
-								: toolsStore.getToolServerLabel(t.definition.function.name) ===
-									serverLabel
+								: toolsStore.getToolServerLabel(t.definition.function.name) === serverLabel
 						)
 						.map((t) => toolsStore.getPermissionKey(t.definition.function.name)!)
 						.filter((k): k is string => k !== null);
@@ -385,14 +383,7 @@ class AgenticStore {
 	}
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
-		const {
-			conversationId,
-			messages,
-			options = {},
-			callbacks,
-			signal,
-			perChatOverrides
-		} = params;
+		const { conversationId, messages, options = {}, callbacks, signal, perChatOverrides } = params;
 
 		// Clear any pending permissions/continue requests for this conversation when starting a new flow
 		this._pendingPermissions.set(conversationId, null);
@@ -488,8 +479,7 @@ class AgenticStore {
 		callbacks: AgenticFlowCallbacks;
 		signal?: AbortSignal;
 	}): Promise<void> {
-		const { conversationId, messages, options, tools, agenticConfig, callbacks, signal } =
-			params;
+		const { conversationId, messages, options, tools, agenticConfig, callbacks, signal } = params;
 		const {
 			onChunk,
 			onReasoningChunk,
@@ -582,9 +572,7 @@ class AgenticStore {
 						},
 						onToolCallChunk: (serialized: string) => {
 							try {
-								turnToolCalls = JSON.parse(
-									serialized
-								) as ApiChatCompletionToolCall[];
+								turnToolCalls = JSON.parse(serialized) as ApiChatCompletionToolCall[];
 								onToolCallsStreaming?.(turnToolCalls);
 
 								if (turnToolCalls.length > 0 && turnToolCalls[0]?.function) {
@@ -607,10 +595,7 @@ class AgenticStore {
 							}
 						},
 						onModel,
-						onTimings: (
-							timings?: ChatMessageTimings,
-							progress?: ChatMessagePromptProgress
-						) => {
+						onTimings: (timings?: ChatMessageTimings, progress?: ChatMessagePromptProgress) => {
 							onTimings?.(timings, progress);
 							if (timings) {
 								capturedTimings = timings;
@@ -652,15 +637,11 @@ class AgenticStore {
 					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 					return;
 				}
-				const normalizedError =
-					error instanceof Error ? error : new Error('LLM stream error');
+				const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
 				// Save error as content in the current turn
-				onChunk?.(
-					`${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`
-				);
+				onChunk?.(`${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`);
 				await onAssistantTurnComplete?.(
-					turnContent +
-						`${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`,
+					turnContent + `${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`,
 					turnReasoningContent || undefined,
 					this.buildFinalTimings(capturedTimings, agenticTimings),
 					undefined
@@ -672,9 +653,7 @@ class AgenticStore {
 			// === Steering check: if a user message was queued during this turn, exit the flow.
 			// The caller (chatStore) will consume the pending message and re-send it normally.
 			if (this._steeringMessages.has(conversationId)) {
-				console.log(
-					'[AgenticStore] Steering message detected after turn, exiting agentic flow'
-				);
+				console.log('[AgenticStore] Steering message detected after turn, exiting agentic flow');
 				await onAssistantTurnComplete?.(
 					turnContent,
 					turnReasoningContent || undefined,
@@ -753,8 +732,7 @@ class AgenticStore {
 					);
 					for (let j = i; j < normalizedCalls.length; j++) {
 						const remainingCall = normalizedCalls[j];
-						const interruptedContent =
-							'Tool execution was interrupted by a new user message.';
+						const interruptedContent = 'Tool execution was interrupted by a new user message.';
 						if (createToolResultMessage) {
 							await createToolResultMessage(remainingCall.id, interruptedContent);
 						}
@@ -799,11 +777,7 @@ class AgenticStore {
 					try {
 						if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const executionResult = await ToolsService.executeTool(
-								toolName,
-								args,
-								signal
-							);
+							const executionResult = await ToolsService.executeTool(toolName, args, signal);
 
 							result = executionResult.content;
 
@@ -819,9 +793,7 @@ class AgenticStore {
 						}
 					} catch (error) {
 						if (isAbortError(error)) {
-							onFlowComplete?.(
-								this.buildFinalTimings(capturedTimings, agenticTimings)
-							);
+							onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 							return;
 						}
 						result = `Error: ${error instanceof Error ? error.message : String(error)}`;

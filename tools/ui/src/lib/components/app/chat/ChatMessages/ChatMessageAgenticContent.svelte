@@ -59,9 +59,7 @@
 	let permissionDismissed = $state(false);
 
 	const pendingPermission = $derived(
-		isStreaming && isLastAssistantMessage
-			? agenticPendingPermissionRequest(message.convId)
-			: null
+		isStreaming && isLastAssistantMessage ? agenticPendingPermissionRequest(message.convId) : null
 	);
 
 	// Reset dismissed when pendingPermission changes (new request or cleared)
@@ -83,9 +81,7 @@
 	let continueDismissed = $state(false);
 
 	const pendingContinue = $derived(
-		isStreaming && isLastAssistantMessage
-			? agenticPendingContinueRequest(message.convId)
-			: false
+		isStreaming && isLastAssistantMessage ? agenticPendingContinueRequest(message.convId) : false
 	);
 
 	let prevContinueRef = false;
@@ -110,10 +106,7 @@
 		sections.map((section) => ({
 			...section,
 			parsedLines: section.toolResult
-				? parseToolResultWithImages(
-						section.toolResult,
-						section.toolResultExtras || message?.extra
-					)
+				? parseToolResultWithImages(section.toolResult, section.toolResultExtras || message?.extra)
 				: ([] as ToolResultLine[])
 		}))
 	);
@@ -180,9 +173,7 @@
 		expandedStates[index] = !currentState;
 	}
 
-	function buildTurnAgenticTimings(
-		stats: ChatMessageAgenticTurnStats
-	): ChatMessageAgenticTimings {
+	function buildTurnAgenticTimings(stats: ChatMessageAgenticTurnStats): ChatMessageAgenticTimings {
 		return {
 			turns: 1,
 			toolCallsCount: stats.toolCalls.length,
@@ -297,9 +288,7 @@
 						{/each}
 					</div>
 				{:else}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
-						No output
-					</div>
+					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">No output</div>
 				{/if}
 			</div>
 		</CollapsibleContentBlock>

@@ -29,7 +29,9 @@ export default ts.config(
 			'no-undef': 'off',
 			'svelte/no-at-html-tags': 'off',
 			// This app uses hash-based routing (#/) where resolve() from $app/paths does not apply
-			'svelte/no-navigation-without-resolve': 'off'
+			'svelte/no-navigation-without-resolve': 'off',
+			// Enforce empty line at end of file
+			'eol-last': 'error'
 		}
 	},
 	{

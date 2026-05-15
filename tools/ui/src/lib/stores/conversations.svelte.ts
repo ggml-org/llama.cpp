@@ -87,8 +87,7 @@ class ConversationsStore {
 			const parsed = JSON.parse(raw);
 			if (!Array.isArray(parsed)) return [];
 			return parsed.filter(
-				(o: unknown) =>
-					typeof o === 'object' && o !== null && 'serverId' in o && 'enabled' in o
+				(o: unknown) => typeof o === 'object' && o !== null && 'serverId' in o && 'enabled' in o
 			) as McpServerOverride[];
 		} catch {
 			return [];
@@ -319,10 +318,7 @@ class ConversationsStore {
 	 * Deletes a conversation and all its messages
 	 * @param convId - The conversation ID to delete
 	 */
-	async deleteConversation(
-		convId: string,
-		options?: { deleteWithForks?: boolean }
-	): Promise<void> {
+	async deleteConversation(convId: string, options?: { deleteWithForks?: boolean }): Promise<void> {
 		try {
 			await DatabaseService.deleteConversation(convId, options);
 
@@ -404,9 +400,7 @@ class ConversationsStore {
 	async refreshActiveMessages(): Promise<void> {
 		if (!this.activeConversation) return;
 
-		const allMessages = await DatabaseService.getConversationMessages(
-			this.activeConversation.id
-		);
+		const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
 
 		if (allMessages.length === 0) {
 			this.activeMessages = [];
@@ -415,8 +409,7 @@ class ConversationsStore {
 
 		const leafNodeId =
 			this.activeConversation.currNode ||
-			allMessages.reduce((latest, msg) => (msg.timestamp > latest.timestamp ? msg : latest))
-				.id;
+			allMessages.reduce((latest, msg) => (msg.timestamp > latest.timestamp ? msg : latest)).id;
 
 		const currentPath = filterByLeafNodeId(allMessages, leafNodeId, false) as DatabaseMessage[];
 
@@ -537,9 +530,7 @@ class ConversationsStore {
 	async navigateToSibling(siblingId: string): Promise<void> {
 		if (!this.activeConversation) return;
 
-		const allMessages = await DatabaseService.getConversationMessages(
-			this.activeConversation.id
-		);
+		const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
 		const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 		const currentFirstUserMessage = this.activeMessages.find(
 			(m) => m.role === MessageRole.USER && m.parent === rootMessage?.id
@@ -640,9 +631,7 @@ class ConversationsStore {
 		let newOverrides: McpServerOverride[];
 
 		if (enabled === undefined) {
-			newOverrides = currentOverrides.filter(
-				(o: McpServerOverride) => o.serverId !== serverId
-			);
+			newOverrides = currentOverrides.filter((o: McpServerOverride) => o.serverId !== serverId);
 		} else {
 			const existingIndex = currentOverrides.findIndex(
 				(o: McpServerOverride) => o.serverId === serverId
@@ -689,10 +678,7 @@ class ConversationsStore {
 				newOverrides[existingIndex] = { serverId, enabled };
 				this.pendingMcpServerOverrides = newOverrides;
 			} else {
-				this.pendingMcpServerOverrides = [
-					...this.pendingMcpServerOverrides,
-					{ serverId, enabled }
-				];
+				this.pendingMcpServerOverrides = [...this.pendingMcpServerOverrides, { serverId, enabled }];
 			}
 		}
 		this.saveMcpDefaults();
@@ -807,11 +793,7 @@ class ConversationsStore {
 		const conversation =
 			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
 		const msgs =
-			'messages' in data
-				? data.messages
-				: Array.isArray(data)
-					? data[0]?.messages
-					: undefined;
+			'messages' in data ? data.messages : Array.isArray(data) ? data[0]?.messages : undefined;
 
 		if (!conversation) {
 			console.error('Invalid data: missing conversation');
@@ -897,9 +879,7 @@ class ConversationsStore {
 					}
 
 					const result = await DatabaseService.importConversations(importedData);
-					toast.success(
-						`Imported ${result.imported} conversation(s), skipped ${result.skipped}`
-					);
+					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
 
 					await this.loadConversations();
 

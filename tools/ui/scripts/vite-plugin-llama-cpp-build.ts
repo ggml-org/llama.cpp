@@ -40,19 +40,13 @@ export function llamaCppBuildPlugin(): Plugin {
 						const faviconContent = readFileSync(faviconPath, 'utf-8');
 						const faviconBase64 = Buffer.from(faviconContent).toString('base64');
 						const faviconDataUrl = `data:image/svg+xml;base64,${faviconBase64}`;
-						content = content.replace(
-							/href="[^"]*favicon\.svg"/g,
-							`href="${faviconDataUrl}"`
-						);
+						content = content.replace(/href="[^"]*favicon\.svg"/g, `href="${faviconDataUrl}"`);
 						console.log('✓ Inlined favicon.svg as base64 data URL');
 					}
 
 					content = content.replace(/\r/g, '');
 					content = GUIDE_FOR_FRONTEND + '\n' + content;
-					content = content.replace(
-						/\/_app\/immutable\/bundle\.[^"]+\.js/g,
-						'./bundle.js'
-					);
+					content = content.replace(/\/_app\/immutable\/bundle\.[^"]+\.js/g, './bundle.js');
 					content = content.replace(
 						/\/_app\/immutable\/assets\/bundle\.[^"]+\.css/g,
 						'./bundle.css'
@@ -67,14 +61,9 @@ export function llamaCppBuildPlugin(): Plugin {
 					const bundleDir = resolve(outDir, '_app/immutable/assets');
 
 					if (existsSync(immutableDir)) {
-						const jsFiles = readdirSync(immutableDir).filter((f) =>
-							f.match(/^bundle\..+\.js$/)
-						);
+						const jsFiles = readdirSync(immutableDir).filter((f) => f.match(/^bundle\..+\.js$/));
 						if (jsFiles.length > 0) {
-							copyFileSync(
-								resolve(immutableDir, jsFiles[0]),
-								resolve(outDir, 'bundle.js')
-							);
+							copyFileSync(resolve(immutableDir, jsFiles[0]), resolve(outDir, 'bundle.js'));
 							// Normalize __sveltekit_<hash> to __sveltekit__ in bundle.js
 							const bundleJsPath = resolve(outDir, 'bundle.js');
 							let bundleJs = readFileSync(bundleJsPath, 'utf-8');
@@ -86,14 +75,9 @@ export function llamaCppBuildPlugin(): Plugin {
 
 					// Copy bundle.*.css -> bundle.css at output root
 					if (existsSync(bundleDir)) {
-						const cssFiles = readdirSync(bundleDir).filter((f) =>
-							f.match(/^bundle\..+\.css$/)
-						);
+						const cssFiles = readdirSync(bundleDir).filter((f) => f.match(/^bundle\..+\.css$/));
 						if (cssFiles.length > 0) {
-							copyFileSync(
-								resolve(bundleDir, cssFiles[0]),
-								resolve(outDir, 'bundle.css')
-							);
+							copyFileSync(resolve(bundleDir, cssFiles[0]), resolve(outDir, 'bundle.css'));
 							console.log(`✓ Copied ${cssFiles[0]} -> bundle.css`);
 						}
 					}

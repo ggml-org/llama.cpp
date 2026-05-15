@@ -187,8 +187,7 @@
 									: ''}"
 								onmouseenter={() => (hoveredArgKey = part.argKey)}
 								onmouseleave={() => (hoveredArgKey = null)}>{part.text}</span
-							>{:else}<span
-								class="transition-opacity {hoveredArgKey ? 'opacity-30' : ''}"
+							>{:else}<span class="transition-opacity {hoveredArgKey ? 'opacity-30' : ''}"
 								>{part.text}</span
 							>{/if}{/each}</span
 				>

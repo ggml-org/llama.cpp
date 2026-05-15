@@ -94,12 +94,7 @@
 
 {#snippet removeButton()}
 	<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
-		<ActionIcon
-			icon={X}
-			tooltip="Remove"
-			stopPropagationOnClick
-			onclick={() => onRemove?.(id)}
-		/>
+		<ActionIcon icon={X} tooltip="Remove" stopPropagationOnClick onclick={() => onRemove?.(id)} />
 	</div>
 {/snippet}
 
@@ -134,13 +129,9 @@
 			{#if readonly}
 				<div class="flex items-start gap-3">
 					<div class="flex min-w-0 flex-1 flex-col items-start text-left">
-						<span class="w-full truncate text-sm font-medium text-foreground"
-							>{name}</span
-						>
+						<span class="w-full truncate text-sm font-medium text-foreground">{name}</span>
 
-						{@render info(
-							pdfProcessingMode || (size ? formatFileSize(size) : undefined)
-						)}
+						{@render info(pdfProcessingMode || (size ? formatFileSize(size) : undefined))}
 
 						{#if textContent}
 							{@render textPreview(textContent)}

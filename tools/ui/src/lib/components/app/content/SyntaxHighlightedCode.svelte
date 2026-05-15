@@ -66,10 +66,7 @@
 			}
 		} catch {
 			// Fallback to escaped plain text
-			highlightedHtml = code
-				.replace(/&/g, '&amp;')
-				.replace(/</g, '&lt;')
-				.replace(/>/g, '&gt;');
+			highlightedHtml = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 		}
 	});
 </script>
@@ -85,8 +82,8 @@
 <style>
 	.code-preview-wrapper {
 		font-family:
-			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
-			Consolas, 'Liberation Mono', Menlo, monospace;
+			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+			'Liberation Mono', Menlo, monospace;
 	}
 
 	.code-preview-wrapper pre {

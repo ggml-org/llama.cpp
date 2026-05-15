@@ -61,8 +61,7 @@
 					in:fade={{
 						duration: ICON_STRIP_TRANSITION_DURATION,
 						delay: !initialized
-							? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER +
-								i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
+							? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
 							: 0,
 						easing: circIn
 					}}

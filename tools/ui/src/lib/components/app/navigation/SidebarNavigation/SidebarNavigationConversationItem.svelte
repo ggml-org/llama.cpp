@@ -86,10 +86,7 @@
 	});
 
 	onMount(() => {
-		document.addEventListener(
-			'edit-active-conversation',
-			handleGlobalEditEvent as EventListener
-		);
+		document.addEventListener('edit-active-conversation', handleGlobalEditEvent as EventListener);
 
 		return () => {
 			document.removeEventListener(

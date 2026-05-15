@@ -124,9 +124,7 @@
 					</Tooltip.Trigger>
 
 					<Tooltip.Content side="right">
-						<p>
-							PDFs will be converted to text. Image-based PDFs may not work properly.
-						</p>
+						<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
 					</Tooltip.Content>
 				</Tooltip.Root>
 			{/if}

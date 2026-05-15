@@ -185,8 +185,7 @@
 
 					fullImportData = importedData;
 					availableConversations = importedData.map(
-						(item: { conv: DatabaseConversation; messages: DatabaseMessage[] }) =>
-							item.conv
+						(item: { conv: DatabaseConversation; messages: DatabaseMessage[] }) => item.conv
 					);
 					messageCountMap = createMessageCountMap(importedData);
 					showImportDialog = true;

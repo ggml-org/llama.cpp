@@ -273,9 +273,7 @@ export class DatabaseService {
 			if (message.parent) {
 				const parent = await db.messages.get(message.parent);
 				if (parent) {
-					parent.children = parent.children.filter(
-						(childId: string) => childId !== messageId
-					);
+					parent.children = parent.children.filter((childId: string) => childId !== messageId);
 					await db.messages.put(parent);
 				}
 			}
@@ -310,9 +308,7 @@ export class DatabaseService {
 			if (message && message.parent) {
 				const parent = await db.messages.get(message.parent);
 				if (parent) {
-					parent.children = parent.children.filter(
-						(childId: string) => childId !== messageId
-					);
+					parent.children = parent.children.filter((childId: string) => childId !== messageId);
 					await db.messages.put(parent);
 				}
 			}
@@ -478,11 +474,7 @@ export class DatabaseService {
 
 			const allMessages = await db.messages.where('convId').equals(sourceConvId).toArray();
 
-			const pathMessages = filterByLeafNodeId(
-				allMessages,
-				atMessageId,
-				true
-			) as DatabaseMessage[];
+			const pathMessages = filterByLeafNodeId(allMessages, atMessageId, true) as DatabaseMessage[];
 			if (pathMessages.length === 0) {
 				throw new Error(`Could not resolve message path to ${atMessageId}`);
 			}

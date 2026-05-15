@@ -44,11 +44,7 @@
 			lastSyncedConversationModel = conversationModel;
 
 			modelsStore.selectModelByName(conversationModel);
-		} else if (
-			isRouter &&
-			!modelsStore.selectedModelId &&
-			modelsStore.loadedModelIds.length > 0
-		) {
+		} else if (isRouter && !modelsStore.selectedModelId && modelsStore.loadedModelIds.length > 0) {
 			lastSyncedConversationModel = null;
 			// auto-select the first loaded model only when nothing is selected yet
 			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
@@ -113,18 +109,14 @@
 		if (!isRouter) {
 			isSelectedModelInCache = true;
 		} else if (conversationModel) {
-			isSelectedModelInCache = modelOptions().some(
-				(option) => option.model === conversationModel
-			);
+			isSelectedModelInCache = modelOptions().some((option) => option.model === conversationModel);
 		} else {
 			const currentModelId = selectedModelId();
 
 			if (!currentModelId) {
 				isSelectedModelInCache = false;
 			} else {
-				isSelectedModelInCache = modelOptions().some(
-					(option) => option.id === currentModelId
-				);
+				isSelectedModelInCache = modelOptions().some((option) => option.id === currentModelId);
 			}
 		}
 	});

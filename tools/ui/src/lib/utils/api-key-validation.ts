@@ -30,9 +30,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 				throw error(401, 'Access denied');
 			}
 
-			console.warn(
-				`Server responded with status ${response.status} during API key validation`
-			);
+			console.warn(`Server responded with status ${response.status} during API key validation`);
 			return;
 		}
 	} catch (err) {

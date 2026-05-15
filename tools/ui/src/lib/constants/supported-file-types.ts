@@ -132,12 +132,7 @@ export const TEXT_FILE_TYPES = {
 			FileExtensionText.H,
 			FileExtensionText.HPP
 		],
-		mimeTypes: [
-			MimeTypeText.CPP_SRC,
-			MimeTypeText.CPP_HDR,
-			MimeTypeText.C_SRC,
-			MimeTypeText.C_HDR
-		]
+		mimeTypes: [MimeTypeText.CPP_SRC, MimeTypeText.CPP_HDR, MimeTypeText.C_SRC, MimeTypeText.C_HDR]
 	},
 	[FileTypeText.PHP]: {
 		extensions: [FileExtensionText.PHP],

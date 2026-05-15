@@ -313,9 +313,7 @@
 								<Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
 							</div>
 						{:else if templatePreviewError}
-							<div
-								class="flex flex-1 flex-col items-center justify-center gap-2 text-red-500"
-							>
+							<div class="flex flex-1 flex-col items-center justify-center gap-2 text-red-500">
 								<span class="text-sm">{templatePreviewError}</span>
 
 								<Button
@@ -341,17 +339,14 @@
 					<McpResourcePreview
 						resource={{
 							uri: templatePreviewUri ?? '',
-							name:
-								templatePreviewUri?.split('/').pop() || (templatePreviewUri ?? ''),
+							name: templatePreviewUri?.split('/').pop() || (templatePreviewUri ?? ''),
 							serverName: selectedTemplate?.serverName || ''
 						}}
 						preloadedContent={templatePreviewContent}
 					/>
 				{:else if selectedResources.size === 1}
 					{@const allResources = getAllResourcesFlatInTreeOrder()}
-					{@const selectedResource = allResources.find((r) =>
-						selectedResources.has(r.uri)
-					)}
+					{@const selectedResource = allResources.find((r) => selectedResources.has(r.uri))}
 
 					<McpResourcePreview resource={selectedResource ?? null} />
 				{:else if selectedResources.size > 1}
@@ -363,9 +358,7 @@
 						{/each}
 					</div>
 				{:else}
-					<div
-						class="flex h-full items-center justify-center text-sm text-muted-foreground"
-					>
+					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
 						Select a resource to preview
 					</div>
 				{/if}
@@ -386,10 +379,7 @@
 					Attach Resource
 				</Button>
 			{:else}
-				<Button
-					onclick={handleAttach}
-					disabled={selectedResources.size === 0 || isAttaching}
-				>
+				<Button onclick={handleAttach} disabled={selectedResources.size === 0 || isAttaching}>
 					{#if isAttaching}
 						<Loader2 class="mr-2 h-4 w-4 animate-spin" />
 					{:else}

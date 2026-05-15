@@ -48,10 +48,7 @@ class PermissionsStore {
 
 	private _persist(): void {
 		try {
-			localStorage.setItem(
-				ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY,
-				JSON.stringify([...this._tools])
-			);
+			localStorage.setItem(ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY, JSON.stringify([...this._tools]));
 		} catch (err) {
 			console.error(
 				`Failed to persist to localStorage ("${ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY}"):`,

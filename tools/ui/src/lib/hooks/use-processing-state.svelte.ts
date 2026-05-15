@@ -152,9 +152,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 			stateToUse.contextUsed >= 0 &&
 			stateToUse.contextTotal > 0
 		) {
-			const contextPercent = Math.round(
-				(stateToUse.contextUsed / stateToUse.contextTotal) * 100
-			);
+			const contextPercent = Math.round((stateToUse.contextUsed / stateToUse.contextTotal) * 100);
 
 			details.push(
 				`Context: ${stateToUse.contextUsed}/${stateToUse.contextTotal} (${contextPercent}%)`
@@ -177,9 +175,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 
 		if (stateToUse.tokensPerSecond && stateToUse.tokensPerSecond > 0) {
-			details.push(
-				`${stateToUse.tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`
-			);
+			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`);
 		}
 
 		if (stateToUse.speculative) {
@@ -206,9 +202,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 			stateToUse.contextUsed >= 0 &&
 			stateToUse.contextTotal > 0
 		) {
-			const contextPercent = Math.round(
-				(stateToUse.contextUsed / stateToUse.contextTotal) * 100
-			);
+			const contextPercent = Math.round((stateToUse.contextUsed / stateToUse.contextTotal) * 100);
 
 			details.push(
 				`Context: ${stateToUse.contextUsed}/${stateToUse.contextTotal} (${contextPercent}%)`
@@ -231,9 +225,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 
 		if (stateToUse.tokensPerSecond && stateToUse.tokensPerSecond > 0) {
-			details.push(
-				`${stateToUse.tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`
-			);
+			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`);
 		}
 
 		if (stateToUse.speculative) {
@@ -258,11 +250,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 		const actualProcessed = processed - cache;
 		const actualTotal = total - cache;
 		const percent = Math.round((actualProcessed / actualTotal) * 100);
-		const eta = getETASecs(
-			actualProcessed,
-			actualTotal,
-			processingState.promptProgress.time_ms
-		);
+		const eta = getETASecs(actualProcessed, actualTotal, processingState.promptProgress.time_ms);
 
 		if (eta !== undefined) {
 			const etaSecs = Math.ceil(eta);

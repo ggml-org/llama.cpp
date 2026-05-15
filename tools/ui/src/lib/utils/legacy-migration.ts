@@ -305,8 +305,8 @@ async function migrateConversation(convId: string): Promise<number> {
 				if (child.role !== MessageRole.TOOL) {
 					await DatabaseService.updateMessage(childId, { parent: currentParentId });
 					// Add to new parent's children
-					const newParent = await DatabaseService.getConversationMessages(convId).then(
-						(msgs) => msgs.find((m) => m.id === currentParentId)
+					const newParent = await DatabaseService.getConversationMessages(convId).then((msgs) =>
+						msgs.find((m) => m.id === currentParentId)
 					);
 					if (newParent && !newParent.children.includes(childId)) {
 						await DatabaseService.updateMessage(currentParentId, {

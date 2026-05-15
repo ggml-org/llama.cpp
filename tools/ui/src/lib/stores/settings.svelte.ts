@@ -484,9 +484,7 @@ class SettingsStore {
 		const configToExport: Record<string, string | number | boolean | undefined> =
 			includeSensitiveData
 				? { ...this.config }
-				: Object.fromEntries(
-						Object.entries(this.config).filter(([key]) => key !== 'apiKey')
-					);
+				: Object.fromEntries(Object.entries(this.config).filter(([key]) => key !== 'apiKey'));
 
 		// Handle MCP servers: exclude custom headers unless user opts in
 		if ('mcpServers' in configToExport && !includeSensitiveData) {

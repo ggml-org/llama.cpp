@@ -46,9 +46,7 @@
 										{file.name}
 									</p>
 
-									<p class="mt-1 text-xs text-muted-foreground">
-										File type not supported
-									</p>
+									<p class="mt-1 text-xs text-muted-foreground">File type not supported</p>
 								</div>
 							{/each}
 						</div>
@@ -65,8 +63,7 @@
 									</p>
 
 									<p class="mt-1 text-xs text-muted-foreground">
-										{fileErrorData.modalityReasons[file.name] ||
-											'Not supported by current model'}
+										{fileErrorData.modalityReasons[file.name] || 'Not supported by current model'}
 									</p>
 								</div>
 							{/each}
@@ -84,9 +81,7 @@
 			</div>
 
 			<AlertDialog.Footer>
-				<AlertDialog.Action onclick={() => handleOpenChange(false)}
-					>Got it</AlertDialog.Action
-				>
+				<AlertDialog.Action onclick={() => handleOpenChange(false)}>Got it</AlertDialog.Action>
 			</AlertDialog.Footer>
 		</AlertDialog.Content>
 	</AlertDialog.Portal>

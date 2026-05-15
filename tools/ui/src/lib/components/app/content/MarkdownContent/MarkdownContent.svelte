@@ -116,8 +116,7 @@
 		if (!containerRef) return;
 
 		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>('.copy-code-btn');
-		const previewButtons =
-			containerRef.querySelectorAll<HTMLButtonElement>('.preview-code-btn');
+		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>('.preview-code-btn');
 
 		for (const button of copyButtons) {
 			button.removeEventListener('click', handleCopyClick);
@@ -249,9 +248,7 @@
 		}
 
 		const singleNodeRoot = { type: 'root', children: [node] };
-		const transformedRoot = (await processorInstance.run(
-			singleNodeRoot as MdastRoot
-		)) as HastRoot;
+		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
 		const html = processorInstance.stringify(transformedRoot);
 
 		transformCache.set(hash, html);
@@ -382,11 +379,7 @@
 					}
 
 					// Transform this block (with caching)
-					const { html, hash } = await transformMdastNode(
-						processorInstance,
-						child,
-						index
-					);
+					const { html, hash } = await transformMdastNode(processorInstance, child, index);
 					const id = getHastNodeId(
 						{ position: (child as { position?: unknown }).position } as HastRootContent,
 						index
@@ -495,9 +488,7 @@
 	function setupImageErrorHandlers() {
 		if (!containerRef) return;
 
-		const images = containerRef.querySelectorAll<HTMLImageElement>(
-			IMAGE_NOT_ERROR_BOUND_SELECTOR
-		);
+		const images = containerRef.querySelectorAll<HTMLImageElement>(IMAGE_NOT_ERROR_BOUND_SELECTOR);
 
 		for (const img of images) {
 			img.dataset[DATA_ERROR_BOUND_ATTR] = BOOL_TRUE_STRING;
@@ -612,11 +603,7 @@
 		: ''}"
 >
 	{#each renderedBlocks as block (block.id)}
-		<div
-			class="markdown-block"
-			data-block-id={block.id}
-			use:fadeInView={{ skipIfVisible: true }}
-		>
+		<div class="markdown-block" data-block-id={block.id} use:fadeInView={{ skipIfVisible: true }}>
 			<!-- eslint-disable-next-line no-at-html-tags -->
 			{@html block.html}
 		</div>
@@ -756,8 +743,8 @@
 		border-radius: 0.375rem;
 		font-size: 0.875rem;
 		font-family:
-			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
-			Consolas, 'Liberation Mono', Menlo, monospace;
+			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+			'Liberation Mono', Menlo, monospace;
 	}
 
 	div :global(pre) {
@@ -960,8 +947,8 @@
 		color: var(--color-foreground);
 		font-weight: 500;
 		font-family:
-			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
-			Consolas, 'Liberation Mono', Menlo, monospace;
+			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+			'Liberation Mono', Menlo, monospace;
 		text-transform: uppercase;
 		font-size: 0.75rem;
 		letter-spacing: 0.05em;

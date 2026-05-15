@@ -124,9 +124,7 @@
 						<Table.Body>
 							<!-- Model Path -->
 							<Table.Row>
-								<Table.Cell class="h-10 align-middle font-medium"
-									>File Path</Table.Cell
-								>
+								<Table.Cell class="h-10 align-middle font-medium">File Path</Table.Cell>
 
 								<Table.Cell
 									class="inline-flex h-10 items-center gap-2 align-middle font-mono text-xs"
@@ -148,14 +146,10 @@
 							<!-- Context Size -->
 							{#if serverProps?.default_generation_settings?.n_ctx}
 								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium"
-										>Context Size</Table.Cell
-									>
+									<Table.Cell class="h-10 align-middle font-medium">Context Size</Table.Cell>
 
 									<Table.Cell
-										>{formatNumber(
-											serverProps.default_generation_settings.n_ctx
-										)} tokens</Table.Cell
+										>{formatNumber(serverProps.default_generation_settings.n_ctx)} tokens</Table.Cell
 									>
 								</Table.Row>
 							{:else}
@@ -171,22 +165,16 @@
 							<!-- Training Context -->
 							{#if modelMeta?.n_ctx_train}
 								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium"
-										>Training Context</Table.Cell
-									>
+									<Table.Cell class="h-10 align-middle font-medium">Training Context</Table.Cell>
 
-									<Table.Cell
-										>{formatNumber(modelMeta.n_ctx_train)} tokens</Table.Cell
-									>
+									<Table.Cell>{formatNumber(modelMeta.n_ctx_train)} tokens</Table.Cell>
 								</Table.Row>
 							{/if}
 
 							<!-- Model Size -->
 							{#if modelMeta?.size}
 								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium"
-										>Model Size</Table.Cell
-									>
+									<Table.Cell class="h-10 align-middle font-medium">Model Size</Table.Cell>
 
 									<Table.Cell>{formatFileSize(modelMeta.size)}</Table.Cell>
 								</Table.Row>
@@ -195,9 +183,7 @@
 							<!-- Parameters -->
 							{#if modelMeta?.n_params}
 								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium"
-										>Parameters</Table.Cell
-									>
+									<Table.Cell class="h-10 align-middle font-medium">Parameters</Table.Cell>
 
 									<Table.Cell>{formatParameters(modelMeta.n_params)}</Table.Cell>
 								</Table.Row>
@@ -206,9 +192,7 @@
 							<!-- Embedding Size -->
 							{#if modelMeta?.n_embd}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium"
-										>Embedding Size</Table.Cell
-									>
+									<Table.Cell class="align-middle font-medium">Embedding Size</Table.Cell>
 
 									<Table.Cell>{formatNumber(modelMeta.n_embd)}</Table.Cell>
 								</Table.Row>
@@ -217,32 +201,23 @@
 							<!-- Vocabulary Size -->
 							{#if modelMeta?.n_vocab}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium"
-										>Vocabulary Size</Table.Cell
-									>
+									<Table.Cell class="align-middle font-medium">Vocabulary Size</Table.Cell>
 
-									<Table.Cell>{formatNumber(modelMeta.n_vocab)} tokens</Table.Cell
-									>
+									<Table.Cell>{formatNumber(modelMeta.n_vocab)} tokens</Table.Cell>
 								</Table.Row>
 							{/if}
 
 							<!-- Vocabulary Type -->
 							{#if modelMeta?.vocab_type}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium"
-										>Vocabulary Type</Table.Cell
-									>
-									<Table.Cell class="align-middle capitalize"
-										>{modelMeta.vocab_type}</Table.Cell
-									>
+									<Table.Cell class="align-middle font-medium">Vocabulary Type</Table.Cell>
+									<Table.Cell class="align-middle capitalize">{modelMeta.vocab_type}</Table.Cell>
 								</Table.Row>
 							{/if}
 
 							<!-- Total Slots -->
 							<Table.Row>
-								<Table.Cell class="align-middle font-medium"
-									>Parallel Slots</Table.Cell
-								>
+								<Table.Cell class="align-middle font-medium">Parallel Slots</Table.Cell>
 
 								<Table.Cell>{serverProps.total_slots}</Table.Cell>
 							</Table.Row>
@@ -250,9 +225,7 @@
 							<!-- Modalities -->
 							{#if modalities.length > 0}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium"
-										>Modalities</Table.Cell
-									>
+									<Table.Cell class="align-middle font-medium">Modalities</Table.Cell>
 
 									<Table.Cell>
 										<div class="flex flex-wrap gap-1">
@@ -274,9 +247,7 @@
 							<!-- Chat Template -->
 							{#if serverProps.chat_template}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium"
-										>Chat Template</Table.Cell
-									>
+									<Table.Cell class="align-middle font-medium">Chat Template</Table.Cell>
 
 									<Table.Cell class="py-10">
 										<div class="rounded-md bg-muted p-4">

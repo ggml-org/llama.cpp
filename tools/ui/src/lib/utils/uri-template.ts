@@ -131,20 +131,15 @@ export function expandTemplate(template: string, values: Record<string, string>)
 				case URI_TEMPLATE_OPERATORS.FRAGMENT:
 					// Fragment expansion
 					return (
-						URI_TEMPLATE_OPERATORS.FRAGMENT +
-						expandedParts.join(URI_TEMPLATE_SEPARATORS.COMMA)
+						URI_TEMPLATE_OPERATORS.FRAGMENT + expandedParts.join(URI_TEMPLATE_SEPARATORS.COMMA)
 					);
 				case URI_TEMPLATE_OPERATORS.PATH_SEGMENT:
 					// Path segments
-					return (
-						URI_TEMPLATE_SEPARATORS.SLASH +
-						expandedParts.join(URI_TEMPLATE_SEPARATORS.SLASH)
-					);
+					return URI_TEMPLATE_SEPARATORS.SLASH + expandedParts.join(URI_TEMPLATE_SEPARATORS.SLASH);
 				case URI_TEMPLATE_OPERATORS.LABEL:
 					// Label expansion
 					return (
-						URI_TEMPLATE_SEPARATORS.PERIOD +
-						expandedParts.join(URI_TEMPLATE_SEPARATORS.PERIOD)
+						URI_TEMPLATE_SEPARATORS.PERIOD + expandedParts.join(URI_TEMPLATE_SEPARATORS.PERIOD)
 					);
 				case URI_TEMPLATE_OPERATORS.PATH_PARAM:
 					// Path-style parameters

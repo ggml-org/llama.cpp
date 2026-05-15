@@ -189,9 +189,9 @@ The build process:
 2. **Static Adapter** - Outputs to `../../../build/tools/ui` (llama-server's static file directory)
 3. **Post-Build Script** - Cleans up intermediate files
 4. **Custom Plugin** - Creates `index.html` with:
-    - Inlined favicon as base64
-    - GZIP compression (level 9)
-    - Deterministic output (zeroed timestamps)
+   - Inlined favicon as base64
+   - GZIP compression (level 9)
+   - Deterministic output (zeroed timestamps)
 
 ```text
 tools/ui/        →  build  →  build/tools/ui/

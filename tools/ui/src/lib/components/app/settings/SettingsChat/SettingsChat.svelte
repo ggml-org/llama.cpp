@@ -75,11 +75,7 @@
 	}
 
 	function handleSave() {
-		if (
-			localConfig.custom &&
-			typeof localConfig.custom === 'string' &&
-			localConfig.custom.trim()
-		) {
+		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
 			try {
 				JSON.parse(localConfig.custom);
 			} catch (error) {
@@ -147,9 +143,7 @@
 		<div class="mx-auto max-w-3xl flex-1">
 			<div class="space-y-6 p-4 md:p-6 md:pt-28">
 				<div class="grid">
-					<div
-						class="mb-6 flex items-center gap-2 border-b border-border/30 pb-6 md:flex"
-					>
+					<div class="mb-6 flex items-center gap-2 border-b border-border/30 pb-6 md:flex">
 						<currentSection.icon class="h-5 w-5" />
 						<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 					</div>
@@ -171,9 +165,7 @@
 				</div>
 
 				<div class="mt-8 border-t border-border/30 pt-6">
-					<p class="text-xs text-muted-foreground">
-						Settings are saved in browser's localStorage
-					</p>
+					<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
 				</div>
 			</div>
 

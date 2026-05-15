@@ -306,9 +306,7 @@ class ToolsStore {
 	}
 
 	isGroupFullyEnabled(group: ToolGroup): boolean {
-		return (
-			group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.function.name))
-		);
+		return group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.function.name));
 	}
 
 	isGroupPartiallyEnabled(group: ToolGroup): boolean {

@@ -262,12 +262,8 @@ class MCPStore {
 	): MCPCapabilitiesInfo {
 		return {
 			server: {
-				tools: serverCaps?.tools
-					? { listChanged: serverCaps.tools.listChanged }
-					: undefined,
-				prompts: serverCaps?.prompts
-					? { listChanged: serverCaps.prompts.listChanged }
-					: undefined,
+				tools: serverCaps?.tools ? { listChanged: serverCaps.tools.listChanged } : undefined,
+				prompts: serverCaps?.prompts ? { listChanged: serverCaps.prompts.listChanged } : undefined,
 				resources: serverCaps?.resources
 					? {
 							subscribe: serverCaps.resources.subscribe,
@@ -279,9 +275,7 @@ class MCPStore {
 				tasks: !!serverCaps?.tasks
 			},
 			client: {
-				roots: clientCaps?.roots
-					? { listChanged: clientCaps.roots.listChanged }
-					: undefined,
+				roots: clientCaps?.roots ? { listChanged: clientCaps.roots.listChanged } : undefined,
 				sampling: !!clientCaps?.sampling,
 				elicitation: clientCaps?.elicitation
 					? { form: !!clientCaps.elicitation.form, url: !!clientCaps.elicitation.url }
@@ -318,9 +312,7 @@ class MCPStore {
 	get isEnabled(): boolean {
 		const mcpConfig = this.#buildMcpClientConfig(config());
 		return (
-			mcpConfig !== null &&
-			mcpConfig !== undefined &&
-			Object.keys(mcpConfig.servers).length > 0
+			mcpConfig !== null && mcpConfig !== undefined && Object.keys(mcpConfig.servers).length > 0
 		);
 	}
 
@@ -397,10 +389,7 @@ class MCPStore {
 
 		if (healthState?.status === HealthCheckStatus.SUCCESS)
 			return (
-				healthState.serverInfo?.title ||
-				healthState.serverInfo?.name ||
-				server.name ||
-				server.url
+				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
 			);
 		return server.url;
 	}
@@ -539,8 +528,7 @@ class MCPStore {
 			const state = this.getHealthCheckState(s.id);
 
 			return (
-				state.status === HealthCheckStatus.IDLE ||
-				state.status === HealthCheckStatus.CONNECTING
+				state.status === HealthCheckStatus.IDLE || state.status === HealthCheckStatus.CONNECTING
 			);
 		});
 	}
@@ -569,10 +557,7 @@ class MCPStore {
 			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			useProxy: serverData.useProxy
 		};
-		settingsStore.updateConfig(
-			SETTINGS_KEYS.MCP_SERVERS,
-			JSON.stringify([...servers, newServer])
-		);
+		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));
 	}
 
 	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
@@ -670,9 +655,7 @@ class MCPStore {
 					(phase) => {
 						// Handle WebSocket disconnection
 						if (phase === MCPConnectionPhase.DISCONNECTED) {
-							console.log(
-								`[MCPStore][${name}] Connection lost, starting auto-reconnect`
-							);
+							console.log(`[MCPStore][${name}] Connection lost, starting auto-reconnect`);
 							this.autoReconnect(name);
 						}
 					},
@@ -746,10 +729,7 @@ class MCPStore {
 			prompts: {
 				onChanged: (error: Error | null) => {
 					if (error) {
-						console.warn(
-							`[MCPStore][${serverName}] Prompts list changed error:`,
-							error
-						);
+						console.warn(`[MCPStore][${serverName}] Prompts list changed error:`, error);
 						return;
 					}
 				}
@@ -851,9 +831,7 @@ class MCPStore {
 			this.connections.delete(serverName);
 		}
 
-		console.log(
-			`[MCPStore][${serverName}] Session expired, reconnecting with fresh session...`
-		);
+		console.log(`[MCPStore][${serverName}] Session expired, reconnecting with fresh session...`);
 
 		const listChangedHandlers = this.createListChangedHandlers(serverName);
 		const connection = await MCPService.connect(
@@ -863,9 +841,7 @@ class MCPStore {
 			DEFAULT_MCP_CONFIG.capabilities,
 			(phase) => {
 				if (phase === MCPConnectionPhase.DISCONNECTED) {
-					console.log(
-						`[MCPStore][${serverName}] Connection lost, starting auto-reconnect`
-					);
+					console.log(`[MCPStore][${serverName}] Connection lost, starting auto-reconnect`);
 					this.autoReconnect(serverName);
 				}
 			},
@@ -973,10 +949,7 @@ class MCPStore {
 					break;
 				} catch (error) {
 					console.warn(`[MCPStore][${serverName}] Reconnection failed:`, error);
-					backoff = Math.min(
-						backoff * MCP_RECONNECT_BACKOFF_MULTIPLIER,
-						MCP_RECONNECT_MAX_DELAY
-					);
+					backoff = Math.min(backoff * MCP_RECONNECT_BACKOFF_MULTIPLIER, MCP_RECONNECT_MAX_DELAY);
 				}
 			}
 		} finally {
@@ -1174,8 +1147,7 @@ class MCPStore {
 		args?: Record<string, string>
 	): Promise<GetPromptResult> {
 		const connection = this.connections.get(serverName);
-		if (!connection)
-			throw new Error(`Server "${serverName}" not found for prompt "${promptName}"`);
+		if (!connection) throw new Error(`Server "${serverName}" not found for prompt "${promptName}"`);
 
 		return MCPService.getPrompt(connection, promptName, args);
 	}
@@ -1192,11 +1164,7 @@ class MCPStore {
 		const args = this.parseToolArguments(toolCall.function.arguments);
 
 		try {
-			return await MCPService.callTool(
-				connection,
-				{ name: toolName, arguments: args },
-				signal
-			);
+			return await MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
 		} catch (error) {
 			// Session expired (server restarted) - reconnect and retry once
 			if (MCPService.isSessionExpiredError(error)) {
@@ -1205,11 +1173,7 @@ class MCPStore {
 				const newConnection = this.connections.get(serverName);
 				if (!newConnection) throw new Error(`Failed to reconnect to "${serverName}"`);
 
-				return MCPService.callTool(
-					newConnection,
-					{ name: toolName, arguments: args },
-					signal
-				);
+				return MCPService.callTool(newConnection, { name: toolName, arguments: args }, signal);
 			}
 
 			throw error;
@@ -1227,11 +1191,7 @@ class MCPStore {
 		if (!connection) throw new Error(`Server "${serverName}" is not connected`);
 
 		try {
-			return await MCPService.callTool(
-				connection,
-				{ name: toolName, arguments: args },
-				signal
-			);
+			return await MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
 		} catch (error) {
 			if (MCPService.isSessionExpiredError(error)) {
 				await this.reconnectServer(serverName);
@@ -1239,11 +1199,7 @@ class MCPStore {
 				const newConnection = this.connections.get(serverName);
 				if (!newConnection) throw new Error(`Failed to reconnect to "${serverName}"`);
 
-				return MCPService.callTool(
-					newConnection,
-					{ name: toolName, arguments: args },
-					signal
-				);
+				return MCPService.callTool(newConnection, { name: toolName, arguments: args }, signal);
 			}
 
 			throw error;
@@ -1266,9 +1222,7 @@ class MCPStore {
 
 				return parsed as Record<string, unknown>;
 			} catch (error) {
-				throw new Error(
-					`Failed to parse tool arguments as JSON: ${(error as Error).message}`
-				);
+				throw new Error(`Failed to parse tool arguments as JSON: ${(error as Error).message}`);
 			}
 		}
 
@@ -1391,9 +1345,7 @@ class MCPStore {
 		const BATCH_SIZE = 5;
 		for (let i = 0; i < serversToCheck.length; i += BATCH_SIZE) {
 			const batch = serversToCheck.slice(i, i + BATCH_SIZE);
-			await Promise.allSettled(
-				batch.map((server) => this.runHealthCheck(server, promoteToActive))
-			);
+			await Promise.allSettled(batch.map((server) => this.runHealthCheck(server, promoteToActive)));
 		}
 	}
 
@@ -1606,8 +1558,7 @@ class MCPStore {
 		serverTitle?: string;
 		instructions: string;
 	}> {
-		const results: Array<{ serverName: string; serverTitle?: string; instructions: string }> =
-			[];
+		const results: Array<{ serverName: string; serverTitle?: string; instructions: string }> = [];
 
 		for (const [serverName, connection] of this.connections) {
 			if (connection.instructions) {

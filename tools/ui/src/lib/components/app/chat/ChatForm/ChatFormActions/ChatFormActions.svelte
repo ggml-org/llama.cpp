@@ -134,17 +134,10 @@
 			/>
 		</Button>
 	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord
-			{disabled}
-			{hasAudioModality}
-			{isLoading}
-			{isRecording}
-			{onMicClick}
-		/>
+		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
 	{:else}
 		<ChatFormActionSubmit
-			canSend={canSend &&
-				(showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
+			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
 			{disabled}
 			tooltipLabel={submitTooltip}
 			showErrorState={showModelSelector && hasModelSelected && !isSelectedModelInCache}

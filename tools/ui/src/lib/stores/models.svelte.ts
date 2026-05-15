@@ -286,33 +286,27 @@ class ModelsStore {
 
 			const response = await ModelsService.list();
 
-			const models: ModelOption[] = response.data.map(
-				(item: ApiModelDataEntry, index: number) => {
-					const details = response.models?.[index];
-					const rawCapabilities = Array.isArray(details?.capabilities)
-						? details?.capabilities
-						: [];
-					const displayNameSource =
-						details?.name && details.name.trim().length > 0 ? details.name : item.id;
-					const displayName = this.toDisplayName(displayNameSource);
-					const modelId = details?.model || item.id;
+			const models: ModelOption[] = response.data.map((item: ApiModelDataEntry, index: number) => {
+				const details = response.models?.[index];
+				const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
+				const displayNameSource =
+					details?.name && details.name.trim().length > 0 ? details.name : item.id;
+				const displayName = this.toDisplayName(displayNameSource);
+				const modelId = details?.model || item.id;
 
-					return {
-						id: item.id,
-						name: displayName,
-						model: modelId,
-						description: details?.description,
-						capabilities: rawCapabilities.filter((value: unknown): value is string =>
-							Boolean(value)
-						),
-						details: details?.details,
-						meta: item.meta ?? null,
-						parsedId: ModelsService.parseModelId(modelId),
-						aliases: item.aliases ?? [],
-						tags: item.tags ?? []
-					} satisfies ModelOption;
-				}
-			);
+				return {
+					id: item.id,
+					name: displayName,
+					model: modelId,
+					description: details?.description,
+					capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
+					details: details?.details,
+					meta: item.meta ?? null,
+					parsedId: ModelsService.parseModelId(modelId),
+					aliases: item.aliases ?? [],
+					tags: item.tags ?? []
+				} satisfies ModelOption;
+			});
 
 			this.models = models;
 
@@ -474,15 +468,10 @@ class ModelsStore {
 
 		try {
 			await this.selectModelById(matchingModel.id);
-			console.log(
-				`[modelsStore] Automatically selected model: ${lastModel} from last message`
-			);
+			console.log(`[modelsStore] Automatically selected model: ${lastModel} from last message`);
 			return true;
 		} catch (error) {
-			console.warn(
-				'[modelsStore] Failed to automatically select model from last message:',
-				error
-			);
+			console.warn('[modelsStore] Failed to automatically select model from last message:', error);
 			return false;
 		}
 	}
